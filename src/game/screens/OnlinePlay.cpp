@@ -256,8 +256,12 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                             for (auto& member : m_travelMembers) {
                                 const auto device =
                                     m_selection->device(*m_session, static_cast<u8>(member.player));
+                                if (!device) {
+                                    continue;
+                                }
+                                const s32 localDevice = *device;
                                 for (const auto& local : m_selection->localMembers()) {
-                                    if (device && local.player == *device) {
+                                    if (local.player == localDevice) {
                                         member.slot = local.slot;
                                     }
                                 }
@@ -558,8 +562,12 @@ OnlinePlay::Phase OnlinePlay::updateShop(const SessionInputs::Frame& devices) {
                               [](const ShopLane& value) { return value.member.player; });
         if (lane != m_shop.session().lanes().end() && lane->phase == ShopPhase::Shopping &&
             m_context.config != nullptr) {
+            const auto device = m_selection->device(*m_session, seat);
+            if (!device) {
+                return fail(Failure::Input);
+            }
             input = AfterLevelScene::captureShopInput(input, *m_context.config,
-                                                      *m_selection->device(*m_session, seat));
+                                                      *device);
         }
         const auto focus = m_shop.captureOnlinePointer(static_cast<s32>(seat), input);
         if (lane == m_shop.session().lanes().end() ||

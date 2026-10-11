@@ -27,9 +27,10 @@ AutoSaveResult autoSaveParty(SaveSlots& slots, std::span<PartyMember> party) {
                 }
             }
         }
-        if (!destination) {
+        const usize selectedSlot = destination.value_or(slots.count());
+        if (selectedSlot >= slots.count()) {
             ++result.unavailable;
-        } else if (slots.write(*destination, member.save)) {
+        } else if (slots.write(selectedSlot, member.save)) {
             member.slot = destination;
             ++result.written;
         } else {

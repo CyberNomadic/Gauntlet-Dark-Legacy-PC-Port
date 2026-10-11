@@ -110,6 +110,7 @@ bool OnlineParty::checkpoint(const OnlineSession& session, const MatchParty& pro
         }
     }
     for (usize local = 0; local < m_local.size(); ++local) {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the preceding loop validates all local entries of const profiles.
         const auto& profile = *profiles[session.seats()[local]];
         auto& member = m_local[local];
         member.save.progress() = profile.progress;

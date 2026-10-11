@@ -101,10 +101,14 @@ TEST_CASE("Stop Time holds native looping platforms through entry and switch cam
     // Unequipping resumes the same clocks; re-equipping holds them again.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native inventory fixture
     auto& inventory = const_cast<PlayerActor*>(scene.actor(0))->save().progress().inventory;
-    auto slot = std::ranges::find_if(inventory.powerups, [](const PowerupSlot& item) {
-        return item.kind == powerup::kSpecial && (item.flags & powerup::kStopTime) != 0;
-    });
-    REQUIRE(slot != inventory.powerups.end());
+    PowerupSlot* slot = nullptr;
+    for (auto& item : inventory.powerups) {
+        if (item.kind == powerup::kSpecial && (item.flags & powerup::kStopTime) != 0) {
+            slot = &item;
+            break;
+        }
+    }
+    REQUIRE(slot != nullptr);
     slot->on = false;
     bool advanced = false;
     for (s32 frame = 0; frame < 30; ++frame) {
