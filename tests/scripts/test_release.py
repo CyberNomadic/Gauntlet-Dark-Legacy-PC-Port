@@ -13,7 +13,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from installer.install import retry_locked
 from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_new_version, validated_assets
-from release import check_frozen_installer, digest, installer_notices, make_payload, networking_notices, public_runtime_files
+from release import check_frozen_installer, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files
 from installer.releases import runtime_name
 
 
@@ -70,6 +70,40 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual([name for _, name in files], [
             "gauntlet.exe", "data/config.json", "data/text/en.json", "licenses/lz4.txt"])
         self.assertEqual(files[-1][0], self.root / "data/licenses/lz4.txt")
+
+    def test_project_license_and_attribution_ship_verbatim_in_payload(self):
+        root = Path(__file__).resolve().parents[2]
+        notices = project_notices(root)
+        self.assertEqual([name for _, name in notices], ["licenses/project.txt", "licenses/copyright.txt"])
+        license_text = (root / "LICENSE").read_text(encoding="utf-8")
+        self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)
+        self.assertIn("Version 3, 29 June 2007", license_text)
+        attribution = (root / "COPYRIGHT").read_text(encoding="utf-8")
+        self.assertIn("sabishii-bit", attribution)
+        self.assertIn("GPL-3.0-only", attribution)
+        self.assertEqual(json.loads((root / "vcpkg.json").read_text())["license"], "GPL-3.0-only")
+        self.assertIn('license = "GPL-3.0-only"', (root / "src/engine/net/iroh/Cargo.toml").read_text())
+        source = self.root / "inputs/windows-x64"
+        files = [(source / name, name) for name in ("gauntlet.exe", "VERSION", "portable.flag", "data/config.json")]
+        payload = self.root / "licensed-runtime.zip"
+        make_payload(payload, files + notices, self.tag[1:], "test", "windows-x64", "gauntlet.exe")
+        with zipfile.ZipFile(payload) as archive:
+            for path, destination in notices:
+                self.assertEqual(archive.read(destination), path.read_bytes())
+
+    def test_missing_or_empty_project_notice_blocks_packaging(self):
+        for name in ("LICENSE", "COPYRIGHT"):
+            for content in (None, " \n"):
+                with self.subTest(name=name, content=content):
+                    for filename in ("LICENSE", "COPYRIGHT"):
+                        (self.root / filename).write_text("Fixture notice", encoding="utf-8")
+                    path = self.root / name
+                    if content is None:
+                        path.unlink()
+                    else:
+                        path.write_text(content, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, f"Missing project notice: {name}"):
+                        project_notices(self.root)
 
     def test_public_runtime_rejects_unreviewed_tracked_media_and_notices(self):
         for name in ("data/texture.ngc", "data/texture.png", "data/audio.wav", "data/licenses/unknown.txt"):

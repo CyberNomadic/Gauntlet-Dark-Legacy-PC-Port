@@ -164,18 +164,21 @@ def installer_notices(staging):
     return files
 
 
+def project_notices(root):
+    """Require both the license terms and the project's attribution in every release."""
+    files = []
+    for name, destination in (("LICENSE", "licenses/project.txt"),
+                              ("COPYRIGHT", "licenses/copyright.txt")):
+        source = root / name
+        if not source.is_file() or not source.read_text(encoding="utf-8").strip():
+            raise ValueError(f"Missing project notice: {name}")
+        files.append((source, destination))
+    return files
+
+
 def licenses(binary, staging):
     """Carry the installed dependency copyright/license notices, not generated asset data."""
-    files = []
-    if (ROOT / "LICENSE").is_file():
-        files.append((ROOT / "LICENSE", "licenses/project.txt"))
-    else:
-        # Preserve the repository's undecided licensing; do not invent an open-source grant.
-        project_notice = staging / "PROJECT.txt"
-        project_notice.write_text("Project code license: not yet decided (see repository README).\n"
-                                  "Game data belongs to its respective owners and is not distributed.\n",
-                                  encoding="utf-8")
-        files.append((project_notice, "licenses/project.txt"))
+    files = project_notices(ROOT)
     triplet = "x64-windows" if devenv.WINDOWS else "x64-linux"
     share = binary / "vcpkg_installed" / triplet / "share"
     copyrights = sorted(share.glob("*/copyright"))

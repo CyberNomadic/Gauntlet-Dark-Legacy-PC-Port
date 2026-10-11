@@ -14,8 +14,10 @@ Requires your own USA GameCube disc image (`GUNE5D`). Game assets are not includ
 Supported systems: Windows 10/11 x64 or Ubuntu 24.04+ x86-64, with a Vulkan 1.3
 graphics driver. Extract the Linux `.tar.gz` before running its installer.
 
-To upgrade, install into a new folder and copy `saves/` and `config/` from
-your previous installation.
+To update, close the game and open the installer. Select your existing install
+folder, click **Check for updates**, then **Update**. Game assets, saves, and
+settings are preserved; no disc image is needed. Close the installer afterward
+to finish updating the installer itself.
 
 ## Build from source
 
@@ -50,4 +52,8 @@ game assets.
 
 ## License
 
-Not yet decided. The code is original; the game data belongs to its owners.
+Original project code is licensed under [GNU GPLv3](LICENSE) (`GPL-3.0-only`).
+Copyright (C) 2026 sabishii-bit and contributors; see [COPYRIGHT](COPYRIGHT).
+
+Third-party components retain their own licenses. Retail game assets are not
+covered by this license and remain the property of their respective owners.
