@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "game/screens/PlayScene.h"
+#include "game/screens/PlayerPowerups.h"
 
 namespace gdl::game {
 bool PlayScene::relicCeremonyOn() const {
@@ -63,7 +64,7 @@ void PlayScene::updateTowerRelics(s32 ticks, f32 seconds) {
             runtime.figure->animate(0, ticks, seconds);
         }
     }
-    m_world->update(seconds);
+    m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
     m_world->updateTriggers(seconds, {});
     for (const auto& opening : m_world->takeTriggerOpenings()) {
         m_audio.opening(opening);

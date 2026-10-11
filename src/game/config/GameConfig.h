@@ -206,15 +206,18 @@ struct GameConfig {
 
     f32 horizontalFovRadians() const;
 
-    /** The save directory, resolved from the settings or the user's configuration folder. */
+    /** The save directory, resolved relative to the executable unless absolute. */
     std::filesystem::path saveDirectory() const;
     /** The same, for a game standing in `gameDirectory`. */
     std::filesystem::path saveDirectory(const std::filesystem::path& gameDirectory) const;
 
-    /** Installed portable builds use config/ beside the executable; developer builds use the
-     * platform's per-user configuration directory. */
+    /** All builds keep personal settings in config/ beside the executable. */
     static std::filesystem::path userSettingsPath();
     static std::filesystem::path userSettingsPath(const std::filesystem::path& gameDirectory);
+    /** Load local settings, importing the former per-user file only when none exist. */
+    bool loadUserSettings();
+    bool loadUserSettings(const std::filesystem::path& gameDirectory,
+                          const std::filesystem::path& legacyFile);
 };
 
 } // namespace gdl::game

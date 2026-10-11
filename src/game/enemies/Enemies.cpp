@@ -18,8 +18,6 @@ namespace gdl::game {
 namespace {
 
 constexpr f32 kPi = std::numbers::pi_v<f32>;
-constexpr f32 kStepUp = 1.5f;
-constexpr f32 kDrop = 3.0f;
 // Height of the horizontal wall slice above the supported feet.
 constexpr f32 kWallHeight = 2.0f;
 constexpr f32 kSpawnDrop = 6.0f;       ///< maximum landing distance from the birth collision centre
@@ -41,28 +39,6 @@ constexpr f32 kShadowReach = 1.0f; ///< a shadow finds its floor within this of 
 constexpr s32 kRetargetEvery = 8; ///< frames between a mind looking round again
 constexpr f32 kRunFrom = 1.25f;   ///< a pace this much over a walk's runs
 constexpr f32 kStopped = 0.01f;   ///< a step that gets less than this is a dead stop
-
-Vec3 supportedPresentation(const WorldCollision* collision, const Vec3& from, const Vec3& to,
-                           f32 blend, EnemyAction action, bool active) {
-    Vec3 position = glm::mix(from, to, blend);
-    if (blend <= 0 || blend >= 1 || from.y == to.y || collision == nullptr || !active ||
-        action == EnemyAction::Start || action >= EnemyAction::HitReact1 ||
-        action == EnemyAction::Fly || action == EnemyAction::Hover ||
-        action == EnemyAction::Landing) {
-        return position;
-    }
-    // Native movement resolves both endpoints onto their floors. A straight
-    // presentation segment can nevertheless cut through the lip of a descending
-    // ramp (G2FLOOR#109). Lift only grounded interpolation, never airborne motion,
-    // above the floor beneath its centre and no higher than either endpoint.
-    if (collision->floorAt(from, 0.1f, 0.1f) && collision->floorAt(to, 0.1f, 0.1f)) {
-        const f32 above = std::max(from.y, to.y) - position.y;
-        if (const auto floor = collision->floorAt(position, above, 0)) {
-            position.y = std::max(position.y, floor->y);
-        }
-    }
-    return position;
-}
 
 // fn_8005F0F4 lets an overlapping body leave an item. Cylinders use the radial
 // dot product; boxes only do so when neither local axis is moving farther inside.
@@ -721,6 +697,7 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
         return std::nullopt;
     }
     enemy.position = where;
+    enemy.birthPosition = where;
     rememberFloor(enemy);
     enemy.yaw = yaw;
     enemy.mind.heading = yaw;
@@ -1500,12 +1477,43 @@ void Enemies::think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView
 
 std::optional<FloorHit> Enemies::stepFloor(const Enemy& enemy, const Vec3& from,
                                            const Vec3& to) const {
-    // Footprint support may reach the next tread, but a ledge behind the body must
-    // never support a step away into empty space.
-    if (flatDistance(from, to) > 0.0001f) {
-        return m_collision->floorAhead(to, to - from, kStepUp, kDrop, 0.5f * enemy.radius);
+    // do_enemy_collide / fn_80045C30 (80045488 / 80045C30) probe from the
+    // collision centre + 2, then reject excessive floor deltas separately.
+    // A short upward ray from the feet instead sees the ground UNDER a raised
+    // ramp, letting a lateral approach bury the body in its wooden deck.
+    const Vec3 step = to - from;
+    const f32 distance = glm::length(step);
+    const f32 retryDistance = flatDistance(from, to);
+    const Vec3 offset{0, enemyKind(enemy.kind).collisionHeight + 2, 0};
+    const Vec3 origin = from + offset;
+    f32 tolerance = 2 * (0.1f + retryDistance + enemy.radius);
+    if (enemy.kind == kGolemEnemyKind || enemy.reach <= 2) {
+        // Preserve the target's signed birth-reference arithmetic; this is
+        // not simply a distance from the proposed position to the birthplace.
+        const Vec3 birthDelta = enemy.birthPosition - origin;
+        const Vec3 movedDelta = birthDelta + step;
+        if (glm::dot(movedDelta, movedDelta) > glm::dot(birthDelta, birthDelta)) {
+            tolerance = 0.5f * (retryDistance + enemy.radius);
+        }
     }
-    return m_collision->floorAt(to, kStepUp, kDrop);
+    const auto probe = [&](const Vec3& at) {
+        // Forward-only footprint support cannot hold a body walking away from
+        // a ledge on the surface behind it.
+        return distance > 0.0001f ? m_collision->floorAhead(at, step, enemy.reach, enemy.reach + 5,
+                                                            0.5f * enemy.radius)
+                                  : m_collision->floorAt(at, enemy.reach, enemy.reach + 5);
+    };
+    const Vec3 ahead = distance > 0.0001f ? step * (enemy.radius / distance) : Vec3{0};
+    const auto floor = probe(to + offset + ahead);
+    if (!floor || std::abs(floor->y - from.y) > tolerance) {
+        return std::nullopt;
+    }
+    // Retail conditionally repeats at the endpoint when the ahead height
+    // changes. Our multi-wall/substep solver must always re-resolve that
+    // footprint: an equal-height surface ahead can skip a narrow rail below
+    // the actual body, especially after a lateral wall slide.
+    const auto endpoint = probe(to + offset);
+    return endpoint && std::abs(endpoint->y - from.y) <= tolerance ? endpoint : std::nullopt;
 }
 
 Vec3 Enemies::travel(const Enemy& enemy, const Vec3& from, const Vec3& to) const {
@@ -2169,6 +2177,48 @@ std::vector<s32> Enemies::reachedBy(const Vec3& centre, f32 radius, f32 arc,
 
 // ---- looking -----------------------------------------------------------------------------
 
+Vec3 Enemies::supportedPresentation(const WorldCollision* collision, const Vec3& from,
+                                    const Vec3& to, f32 blend, EnemyAction action, bool active,
+                                    const WorldCollision* fromFloor,
+                                    const WorldCollision* toFloor) {
+    Vec3 position = glm::mix(from, to, blend);
+    if (blend <= 0 || blend >= 1 || collision == nullptr || !active ||
+        action == EnemyAction::Start || action >= EnemyAction::HitReact1 ||
+        action == EnemyAction::Fly || action == EnemyAction::Hover ||
+        action == EnemyAction::Landing) {
+        return position;
+    }
+    fromFloor = fromFloor != nullptr ? fromFloor : collision;
+    toFloor = toFloor != nullptr ? toFloor : collision;
+    if (from.y == to.y && fromFloor == collision && toFloor == collision) {
+        return position;
+    }
+    const auto first = fromFloor->floorAt(from, 0.1f, 0.1f);
+    const auto last = toFloor->floorAt(to, 0.1f, 0.1f);
+    if (!first || !last || !collision->solid(first->object) || !collision->solid(last->object)) {
+        return position;
+    }
+    // Prove endpoint contact at its own clock, then carry that contact into the
+    // displayed geometry. A rotating platform can rise between equal-height
+    // endpoints; a moving floor must not be tested at its stale load-time pose.
+    const auto carriedHeight = [&](const WorldCollision& source, const FloorHit& floor,
+                                   const Vec3& endpoint) {
+        const auto old = source.objectTransform(floor.object);
+        const auto shown = collision->objectTransform(floor.object);
+        return old && shown ? (*shown * glm::inverse(*old) * Vec4{endpoint, 1}).y : endpoint.y;
+    };
+    const f32 ceiling =
+        std::max(carriedHeight(*fromFloor, *first, from), carriedHeight(*toFloor, *last, to));
+    // A straight presentation segment can cut through a descending ramp lip
+    // (G2FLOOR#109). Lift only grounded artwork, bounded by its supported contacts.
+    if (ceiling > position.y) {
+        if (const auto floor = collision->floorAt(position, ceiling - position.y, 0)) {
+            position.y = std::max(position.y, floor->y);
+        }
+    }
+    return position;
+}
+
 void Enemies::capturePresentation(Enemy& enemy) {
     enemy.presentationPosition = enemy.position;
     enemy.presentationYaw = enemy.yaw;
@@ -2228,7 +2278,8 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
                         if (first.has_value() &&
                             *first + static_cast<u32>(frame) < skins->textures.size()) {
                             body.setMaskedTexture(
-                                &skins->textures.texture(device, *first + static_cast<u32>(frame)));
+                                &skins->textures.texture(device, *first + static_cast<u32>(frame)),
+                                TreeModel::SkinAlpha::Dissolve);
                         }
                     }
                     break;

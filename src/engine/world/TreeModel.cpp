@@ -236,8 +236,16 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                           Occlusion occlusion) const {
     for (const Node& node : m_nodes) {
         const f32 opacity = alpha * node.alpha;
+        const bool dissolveSkin = m_maskedTexture != nullptr && m_skinAlpha == SkinAlpha::Dissolve;
+        const bool nodeFlash =
+            node.maskedTexture != nullptr && (m_maskedTexture == nullptr || dissolveSkin);
+        const Texture* mask = nodeFlash ? node.maskedTexture : m_maskedTexture;
+        const bool dissolving = dissolveSkin && !nodeFlash;
         const bool fading = opacity < 1.0f;
-        const bool depthWrite = node.depthWrite && m_depthWrite && !fading;
+        // Retail -4 alternate skins preserve the authored Z-write flag. This
+        // renderer splits solid/effects passes: defer dissolves like opacity
+        // fades so their partial alpha cannot mask solids drawn later.
+        const bool depthWrite = node.depthWrite && m_depthWrite && !fading && !dissolving;
         if ((pass == Pass::DepthWriting && !depthWrite) || (pass == Pass::Effects && depthWrite)) {
             continue;
         }
@@ -254,7 +262,7 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         for (usize p = 0; p < shape.mesh->parts.size(); ++p) {
             // A fading figure blends its solid parts too, so the whole of it thins together.
             const bool additive = node.additive || m_additive;
-            const bool blended = shape.translucent[p] || additive || fading;
+            const bool blended = shape.translucent[p] || additive || fading || dissolving;
             if (blended != translucent) {
                 continue;
             }
@@ -282,11 +290,10 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                     node.chrome ? Vec2{0.5f * (1.0f - normal.x), 0.5f * (1.0f - normal.y)} : v.uv;
                 const Vec4 placed = placement * Vec4{position, 1.0f};
                 // Glows add their whole texture; the original never lights them.
-                const bool flash = node.maskedTexture != nullptr && m_maskedTexture == nullptr;
                 // Baked RGB belongs to the geometry stream, including level meshes
                 // rendered as destructible items rather than by WorldScene.
                 Color color = shape.mesh->prelit ? v.color : lighting.shade(Vec3{placed}, normal);
-                if (additive || m_unlit || flash) {
+                if (additive || m_unlit || nodeFlash) {
                     color = Color::white();
                 }
                 color.r = static_cast<u8>(static_cast<u32>(color.r) * m_tint.r / 255);
@@ -308,10 +315,11 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
             }
             // This pass explicitly requests colour compositing, not coverage. Native
             // pickup shadows and gas can write depth while still requiring smooth alpha.
-            state.alphaToCoverage = pass != Pass::Blended;
+            // Native death skins (-4 in MBTreeSetAltTex) use their own alpha.
+            // Coverage replacement is only for opaque alternate skins/hit flashes.
+            state.alphaToCoverage = pass != Pass::Blended && !dissolving;
             state.cullBack = m_cullBack;
             state.blend = additive ? BlendMode::Additive : BlendMode::Alpha;
-            const Texture* mask = m_maskedTexture != nullptr ? m_maskedTexture : node.maskedTexture;
             if (mask != nullptr && !blended) {
                 state.blend = BlendMode::Opaque;
             }
@@ -378,6 +386,7 @@ void TreeModel::setTextureOffset(u32 slot, const Vec2& offset, const Vec2& scale
 
 void TreeModel::resetTextures() {
     m_maskedTexture = nullptr;
+    m_skinAlpha = SkinAlpha::PreserveCoverage;
     m_frames.clear();
     m_offsets.clear();
     for (Node& node : m_nodes) {

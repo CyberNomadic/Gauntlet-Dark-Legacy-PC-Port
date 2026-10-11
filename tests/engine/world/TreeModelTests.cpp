@@ -580,6 +580,73 @@ TEST_CASE("alternate skin preserves base coverage and the original opaque or tra
     REQUIRE(device.draws[0].state.maskedTexture == nullptr);
 }
 
+TEST_CASE("animated death skins blend their own alpha without replacing the base cutout mask",
+          "[world][model][death-dissolve]") {
+    const auto dir = sampleFigure("tree-model-death-dissolve");
+    ModelSet models;
+    TextureSet textures;
+    AnimationSet trees;
+    REQUIRE(models.load(dir));
+    REQUIRE(textures.load(dir));
+    REQUIRE(trees.load(dir));
+    test::FakeRenderDevice device;
+    TreeModel figure;
+    REQUIRE(figure.bind(trees.tree(0), models, textures, device));
+    test::FakeTexture death{1, 1};
+    death.pixels = {0, 0, 0, 0};
+    figure.setMaskedTexture(&death, TreeModel::SkinAlpha::Dissolve);
+    figure.draw(device, Mat4{1}, Mat4{1});
+    REQUIRE(device.draws.size() == 2);
+    for (usize index = 0; index < device.draws.size(); ++index) {
+        const auto& draw = device.draws[index];
+        CHECK(draw.texture == &textures.texture(device, static_cast<u32>(index)));
+        CHECK(draw.state.maskedTexture == &death);
+        CHECK(draw.state.blend == BlendMode::Alpha);
+        CHECK(draw.state.alphaTest == DrawState::kTranslucentAlphaTest);
+        CHECK_FALSE(draw.state.depthWrite);
+        CHECK_FALSE(draw.state.alphaToCoverage);
+        CHECK_FALSE(draw.state.usesAlphaToCoverage(4));
+    }
+    device.draws.clear();
+    figure.draw(device, Mat4{1}, Mat4{1}, {}, {}, nullptr, 1, TreeModel::Pass::DepthWriting);
+    CHECK(device.draws.empty());
+    figure.draw(device, Mat4{1}, Mat4{1}, {}, {}, nullptr, 1, TreeModel::Pass::Effects);
+    REQUIRE(device.draws.size() == 2);
+    for (const auto& draw : device.draws) {
+        CHECK(draw.state.blend == BlendMode::Alpha);
+        CHECK_FALSE(draw.state.depthWrite);
+    }
+    test::FakeTexture flash{1, 1};
+    figure.setMeshMaskedTexture(1, &flash);
+    device.draws.clear();
+    figure.draw(device, Mat4{1}, Mat4{1});
+    REQUIRE(device.draws.size() == 2);
+    CHECK(device.draws[0].state.maskedTexture == &flash);
+    CHECK(device.draws[0].state.blend == BlendMode::Opaque);
+    CHECK(device.draws[0].state.depthWrite);
+    CHECK(device.draws[0].state.usesAlphaToCoverage(4));
+    CHECK(device.draws[1].state.maskedTexture == &death);
+    CHECK_FALSE(device.draws[1].state.usesAlphaToCoverage(4));
+    figure.setMeshMaskedTexture(1, nullptr);
+    // Opting out or resetting must restore the original opaque-flash semantics.
+    figure.setMaskedTexture(&death);
+    device.draws.clear();
+    figure.draw(device, Mat4{1}, Mat4{1});
+    REQUIRE(device.draws.size() == 2);
+    CHECK(device.draws[0].state.blend == BlendMode::Opaque);
+    CHECK(device.draws[0].state.depthWrite);
+    CHECK(device.draws[0].state.usesAlphaToCoverage(4));
+    figure.setMaskedTexture(&death, TreeModel::SkinAlpha::Dissolve);
+    figure.resetTextures();
+    figure.setMeshMaskedTexture(1, &death);
+    device.draws.clear();
+    figure.draw(device, Mat4{1}, Mat4{1});
+    REQUIRE(device.draws.size() == 2);
+    CHECK(device.draws[0].state.maskedTexture == &death);
+    CHECK(device.draws[0].state.blend == BlendMode::Opaque);
+    CHECK(device.draws[0].state.usesAlphaToCoverage(4));
+}
+
 TEST_CASE("node texture changes affect descendants without leaking to ancestors and reset cleanly",
           "[world][model][animation]") {
     const auto dir = sampleFigure("tree-subtree-textures");

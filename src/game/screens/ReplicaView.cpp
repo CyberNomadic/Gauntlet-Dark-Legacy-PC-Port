@@ -28,6 +28,7 @@ bool ReplicaView::begin(const MatchContext& context, const LevelWorld& world, En
     m_fixtureResources = &fixtures;
     m_fighterResources = std::move(fighters);
     m_geometry = world.scene();
+    m_presentationFloors.fill(world.collision());
     return m_actors.begin(context.epoch) && m_projectiles.begin(context.epoch) &&
            m_pickups.begin(context.epoch) && m_fixtures.begin(context.epoch) &&
            m_fighters.begin(context.epoch);
@@ -60,6 +61,7 @@ void ReplicaView::clear() {
     m_fighters.clear();
     m_fighterResources = {};
     m_geometry.clear();
+    m_presentationFloors = {};
     m_hud.clear();
     m_shown.reset();
     m_resuming = false;
@@ -163,8 +165,18 @@ std::string_view ReplicaView::rejection(const CombatSnapshot& snapshot) const {
     }
     return resourceRejection(snapshot);
 }
-bool ReplicaView::show(const CombatSnapshot& snapshot) {
+bool ReplicaView::show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation) {
     if (!snapshot.geometry || !rejection(snapshot).empty()) {
+        return false;
+    }
+    if (presentation != nullptr && !presentation->matches(snapshot)) {
+        return false;
+    }
+    const bool correctGround = presentation != nullptr && !presentation->enemies.empty() &&
+                               presentation->blend > 0 && presentation->blend < 1 &&
+                               presentation->fromGeometry && presentation->toGeometry;
+    if (correctGround && (!m_geometry.acceptsGeometry(*presentation->fromGeometry) ||
+                          !m_geometry.acceptsGeometry(*presentation->toGeometry))) {
         return false;
     }
     // All resource/epoch/sequence checks happen before any renderer is changed.
@@ -176,13 +188,59 @@ bool ReplicaView::show(const CombatSnapshot& snapshot) {
         }
         m_resuming = false;
     }
-    if (!m_actors.show(snapshot, *m_enemies) || !m_projectiles.show(snapshot, *m_resources) ||
+    if (correctGround) {
+        const auto& objects = m_world->layout().objects();
+        const auto objectState = [](const SceneGeometry& geometry, u32 index) {
+            const auto found = std::ranges::lower_bound(geometry.objects, index, {},
+                                                        &SceneGeometry::Object::index);
+            return found != geometry.objects.end() && found->index == index ? &*found : nullptr;
+        };
+        std::vector<bool> continuous(objects.size(), true);
+        for (usize i = 0; i < objects.size(); ++i) {
+            if ((objects[i].flags & WorldCollision::kFloorQueryFlags) == 0) {
+                continue;
+            }
+            // A parent discontinuity also cuts a child's moving support. Missing
+            // still-node overrides mean authored visible state, not prior state.
+            for (s32 node = static_cast<s32>(i); node >= 0;
+                 node = objects[static_cast<usize>(node)].parent) {
+                const auto* from = objectState(*presentation->fromGeometry, static_cast<u32>(node));
+                const auto* to = objectState(*presentation->toGeometry, static_cast<u32>(node));
+                if ((from != nullptr ? from->continuity : 1) !=
+                        (to != nullptr ? to->continuity : 1) ||
+                    (from == nullptr || from->visible) != (to == nullptr || to->visible)) {
+                    continuous[i] = false;
+                    break;
+                }
+            }
+        }
+        const std::array clocks{&*presentation->fromGeometry, &*presentation->toGeometry,
+                                &*snapshot.geometry};
+        for (usize clock = 0; clock < clocks.size(); ++clock) {
+            m_geometry.applyGeometry(*clocks[clock]);
+            auto& floors = m_presentationFloors[clock];
+            for (usize i = 0; i < objects.size(); ++i) {
+                if ((objects[i].flags & WorldCollision::kFloorQueryFlags) == 0) {
+                    continue;
+                }
+                const auto object = static_cast<s32>(i);
+                floors.setObjectTransform(object, m_geometry.worldTransform(i));
+                floors.setSolid(object, continuous[i] && m_world->collision().solid(object) &&
+                                            m_geometry.objectVisible(i));
+            }
+        }
+    } else {
+        m_geometry.applyGeometry(*snapshot.geometry);
+    }
+    const auto floors = correctGround ? std::span<const WorldCollision>{m_presentationFloors}
+                                      : std::span<const WorldCollision>{};
+    if (!m_actors.show(snapshot, *m_enemies, presentation, floors) ||
+        !m_projectiles.show(snapshot, *m_resources) ||
         !m_pickups.show(snapshot, *m_pickupResources) ||
         !m_fixtures.show(snapshot, *m_fixtureResources) ||
         !m_fighters.show(snapshot, m_fighterResources)) {
         return false;
     }
-    m_geometry.applyGeometry(*snapshot.geometry);
     m_shown = snapshot;
     return true;
 }

@@ -1,13 +1,16 @@
 #include "engine/core/Types.h"
 
 #include "game/screens/PlayScene.h"
+#include "game/screens/PlayerPowerups.h"
 
 namespace gdl::game {
 
 void PlayScene::updateSwitchCutscene(s32 ticks, f32 seconds) {
     // A switch camera disables controls, not the player's action machine. In-flight
     // actions finish and the idle pose keeps moving; enemy AI and inventory clocks wait.
-    m_world->update(seconds);
+    // DoWorldAnimSub checks Stop Time even while a trigger camera is active;
+    // only looping tracks wait, so the one-shot target can still finish its shot.
+    m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
     m_world->updateTriggers(seconds, visitors(), true);
     // World item placement still runs while controls and combat are held.
     // The shot can reveal a placed enemy that the follow camera has never seen.

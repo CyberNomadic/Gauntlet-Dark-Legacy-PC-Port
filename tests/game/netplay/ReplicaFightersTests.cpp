@@ -78,6 +78,13 @@ void compare(test::FakeRenderDevice& device, const Combatant& actor, FighterReso
     device.draws.clear();
     actor.draw(device, Mat4{1}, lighting, &frozen, camera, &flash);
     const auto expected = device.draws;
+    for (const auto& draw : expected) {
+        const auto* skin = draw.state.maskedTexture;
+        if (skin != nullptr && skin != &flash && skin != &frozen) {
+            CHECK(draw.blend() != BlendMode::Opaque);
+            CHECK_FALSE(draw.state.alphaToCoverage);
+        }
+    }
     const auto textures = device.texturesCreated;
     auto state = blank();
     for (const auto& visual : actor.visuals(camera)) {
@@ -258,6 +265,7 @@ TEST_CASE("native boss and great-creature replication matches the local model re
     for (const auto* form : {"GAR_EAGL", "GAR_LION", "GAR_SERP"}) {
         definitions.push_back(Gargoyle::definition(form));
     }
+    usize deathSkinsChecked = 0;
     for (const auto& definition : definitions) {
         CAPTURE(definition.name);
         test::FakeRenderDevice device;
@@ -308,13 +316,23 @@ TEST_CASE("native boss and great-creature replication matches the local model re
         actor.freeze(0);
         hit.damage = 100000;
         actor.hurt(hit);
+        bool checkedDeathSkin = false;
         for (s32 tick = 0; tick < 240; ++tick) {
             actor.update(1, 1.0f / 60, {});
-            if (tick % 60 == 0) {
+            const bool newSkin = !checkedDeathSkin &&
+                                 std::ranges::any_of(actor.visuals(facing), [](const auto& visual) {
+                                     return visual.skin != nullptr;
+                                 });
+            if (newSkin) {
+                checkedDeathSkin = true;
+                ++deathSkinsChecked;
+            }
+            if (tick % 60 == 0 || newSkin) {
                 compare(device, actor, resources, facing);
             }
         }
     }
+    CHECK(deathSkinsChecked > 0);
 }
 TEST_CASE("fighter capture includes the full population and rejects incomplete resource rosters "
           "atomically",

@@ -1355,6 +1355,45 @@ TEST_CASE("timed combatant effects honor each linked record's no-loop flag",
     CHECK_FALSE(actor.present());
 }
 
+TEST_CASE("combatant death skins blend their own alpha without leaking to a living sibling",
+          "[combatant][death-dissolve]") {
+    const auto root = familyAssets();
+    writeTextFile(root / "critter/LICH.json", R"({
+        "descriptors":[{"prefix":"BODY","type":4}],
+        "types":[{"moveCount":2,"maxHealth":100,"radius":4}],
+        "moves":[{"name":"READY","anim":"STEP","type":32},
+                 {"name":"DEATH","anim":"STEP","type":17,"priority":4095,
+                  "sfx":0,"sfxFrame":1,"hold":2}],
+        "sounds":[{"name":"SKIN","flags":256,"life":0.05,"rate":0}]
+    })");
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, bossDefinition("LICH"), 'G'));
+    REQUIRE(assets.skins.contains("SKIN"));
+    Combatant actor;
+    Combatant sibling;
+    REQUIRE(actor.spawn(assets, 0, {}, 0, nullptr, {}, 'G'));
+    REQUIRE(sibling.spawn(assets, 1, {}, 0, nullptr, {}, 'G'));
+    EnemyHit hit;
+    hit.damage = 10000;
+    actor.hurt(hit);
+    actor.update(2, 1.0f / 30, {});
+    REQUIRE(actor.dying());
+    device.draws.clear();
+    actor.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.size() == 1);
+    const auto& draw = device.draws.front();
+    CHECK(draw.state.maskedTexture == assets.skins.at("SKIN").front());
+    CHECK(draw.blend() == BlendMode::Alpha);
+    CHECK_FALSE(draw.state.alphaToCoverage);
+    CHECK(draw.state.alphaTest == DrawState::kTranslucentAlphaTest);
+    device.draws.clear();
+    sibling.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.size() == 1);
+    CHECK(device.draws.front().state.maskedTexture == nullptr);
+    CHECK(device.draws.front().state.alphaToCoverage);
+}
+
 TEST_CASE("combatants preserve elemental immunity and sub-one damage", "[combatant][damage]") {
     for (const auto& definition : {Golem::definition(), bossDefinition("LICH")}) {
         CAPTURE(definition.name);
@@ -2722,6 +2761,7 @@ TEST_CASE("heavy hit skin is brief full bright and cannot leak through the share
     actor.draw(device, Mat4{1}, dark, nullptr, nullptr, &flash);
     REQUIRE_FALSE(device.draws.empty());
     CHECK(device.draws.front().state.maskedTexture == &flash);
+    CHECK(device.draws.front().state.alphaToCoverage);
     CHECK(device.draws.front().vertices.front().color == Color::white());
     device.draws.clear();
     sibling.draw(device, Mat4{1}, dark, nullptr, nullptr, &flash);
@@ -2745,6 +2785,7 @@ TEST_CASE("heavy hit skin is brief full bright and cannot leak through the share
     actor.draw(device, Mat4{1}, dark, &frozen, nullptr, &flash);
     REQUIRE_FALSE(device.draws.empty());
     CHECK(device.draws.front().state.maskedTexture == &frozen);
+    CHECK(device.draws.front().state.alphaToCoverage);
     hit.damage = 1000;
     sibling.hurt(hit);
     CHECK_FALSE(sibling.alive());

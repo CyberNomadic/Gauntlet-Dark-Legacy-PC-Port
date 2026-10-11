@@ -20,6 +20,7 @@ struct ShopSetup {
     u8 fallen = 0;
     std::array<s32, 3> maxima{};
     std::array<std::array<s32, 3>, 4> totals{};
+    bool ending = false; ///< host-confirmed defeat; local WDATA determines the ending movie
     bool valid() const;
 };
 struct ShopStep {

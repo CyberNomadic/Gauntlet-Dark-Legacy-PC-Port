@@ -26,10 +26,10 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-/** Tiny looping banks keep timing and ownership tests independent of retail assets. */
+/** Tiny banks keep timing and ownership tests independent of retail assets. */
 void writeBank(const std::filesystem::path& root, std::string_view bank,
                std::initializer_list<std::string_view> names, s16 sample = 8192,
-               bool broken = false) {
+               bool broken = false, bool loops = true) {
     const auto directory = root / "audio" / bank;
     const std::array<test::NativeSoundSample, 1> samples{
         {{48000, {sample, sample, sample, sample}}}};
@@ -41,8 +41,8 @@ void writeBank(const std::filesystem::path& root, std::string_view bank,
         }
         sounds += std::format(R"({{"index":{},"name":"{}","id":0,"duration":-1,
             "volume":127,"duck":0,"priority":0,
-            "sequence":[{{"sample":0,"loopStart":true,"loopBack":true}}]}})",
-                              index++, name);
+            "sequence":[{{"sample":0,"loopStart":{},"loopBack":{}}}]}})",
+                              index++, name, loops, loops);
     }
     test::writeNativeSoundBank(directory, std::format(R"({{"sounds":[{}]}})", sounds), samples);
     if (broken) {
@@ -570,6 +570,111 @@ TEST_CASE("opening sounds stop by target and play the settled cue", "[game][worl
     const usize voices = player.voiceCount();
     soundscape.settled(TriggerOpening{.target = 3, .atOnce = true, .sound = 0});
     REQUIRE(player.voiceCount() == voices + 1); // a settled cue needs no preceding loop
+    soundscape.close();
+}
+
+TEST_CASE("paused object motion loops resume only surviving targets and leave menu audio alone",
+          "[game][world][soundscape][pause-motion-audio]") {
+    const auto root = test::scratchDirectory("soundscape-paused-motion");
+    writeBank(root, "TOWAMB", {"S_ELVMETL", "S_ELVMETSTPL", "MENU"});
+    writeBank(root, "VOICE1", {"NARRATION"});
+    AudioMixer mixer(48000);
+    SoundPlayer player(mixer);
+    LevelSoundscape soundscape;
+    soundscape.open(root, &player, nullptr);
+    const SoundClip musicClip{48000, 1, {0.25f, 0.25f}};
+    const auto music = player.play({{{&musicClip, true, true}}}, 1, SoundCategory::Music);
+    const auto menu = soundscape.playNamed("MENU");
+    const auto narration = soundscape.narrate("NARRATION");
+    REQUIRE(player.isPlaying(music));
+    REQUIRE(player.isPlaying(menu));
+    REQUIRE(player.isPlaying(narration));
+    soundscape.opening({.target = 1, .sound = 0});
+    const auto first = soundscape.fieldSound();
+    soundscape.opening({.target = 2, .sound = 0});
+    const auto second = soundscape.fieldSound();
+    REQUIRE(player.isPlaying(first));
+    REQUIRE(player.isPlaying(second));
+    soundscape.pauseAmbience();
+    CHECK_FALSE(player.isPlaying(first));
+    CHECK_FALSE(player.isPlaying(second));
+    CHECK(soundscape.fieldSound() == kNoSound);
+    CHECK(player.isPlaying(menu));
+    CHECK(player.isPlaying(narration));
+    CHECK(player.isPlaying(music));
+    const auto pausedVoices = player.voiceCount();
+    soundscape.pauseAmbience();
+    CHECK(player.voiceCount() == pausedVoices);
+    SECTION("only movement that survives the pause is restarted exactly once") {
+        soundscape.settled({.target = 1, .sound = 0});
+        const auto beforeResume = player.voiceCount();
+        soundscape.updateAmbience({}, {}, 1);
+        const auto resumed = soundscape.fieldSound();
+        REQUIRE(player.isPlaying(resumed));
+        CHECK(resumed != second);
+        CHECK(player.voiceCount() == beforeResume + 1);
+        soundscape.updateAmbience({}, {}, 1);
+        CHECK(soundscape.fieldSound() == resumed);
+        CHECK(player.voiceCount() == beforeResume + 1);
+        soundscape.settled({.target = 2, .sound = 0});
+        CHECK_FALSE(player.isPlaying(resumed));
+        CHECK(soundscape.fieldSound() == kNoSound);
+        const auto settledVoices = player.voiceCount();
+        soundscape.updateAmbience({}, {}, 1);
+        CHECK(player.voiceCount() == settledVoices);
+    }
+    SECTION("teardown while paused cannot resurrect pending motion") {
+        soundscape.stopCues();
+        const auto closedVoices = player.voiceCount();
+        soundscape.updateAmbience({}, {}, 1);
+        CHECK(player.voiceCount() == closedVoices);
+        CHECK(soundscape.fieldSound() == kNoSound);
+    }
+    soundscape.close();
+    CHECK(player.isPlaying(music)); // separately owned music remains independent
+}
+
+TEST_CASE("pausing never restarts an opening cue that naturally finished before its target",
+          "[game][world][soundscape][pause-motion-audio]") {
+    const auto root = test::scratchDirectory("soundscape-paused-finite-motion");
+    // Retail's Tower metal opening is finite; rope has a repeating tail.
+    writeBank(root, "TOWAMB", {"S_ELVMETL"}, 8192, false, false);
+    writeBank(root, "COMMON", {"S_ELVROPEL"});
+    AudioMixer mixer(48000);
+    SoundPlayer player(mixer);
+    LevelSoundscape soundscape;
+    soundscape.open(root, &player, nullptr);
+    soundscape.opening({.target = 1, .sound = 0});
+    const auto finished = soundscape.fieldSound();
+    REQUIRE(player.isPlaying(finished));
+    std::array<f32, 1024> output{};
+    mixer.mix(output);
+    player.update();
+    REQUIRE_FALSE(player.isPlaying(finished));
+    // The target has not settled, so its opening record still exists.
+    soundscape.opening({.target = 2, .sound = 1});
+    const auto moving = soundscape.fieldSound();
+    REQUIRE(player.isPlaying(moving));
+    soundscape.pauseAmbience();
+    CHECK_FALSE(player.isPlaying(moving));
+    soundscape.pauseAmbience(); // retain the already-paused live movement
+    mixer.mix(output);          // drain the stopped voice's short fade before counting resumes
+    player.update();
+    soundscape.updateAmbience({}, {}, 1);
+    const auto resumed = soundscape.fieldSound();
+    REQUIRE(player.isPlaying(resumed));
+    CHECK(resumed != moving);
+    CHECK(player.voiceCount() == 1);
+    soundscape.updateAmbience({}, {}, 1);
+    CHECK(player.voiceCount() == 1);
+    soundscape.settled({.target = 2, .sound = 1});
+    CHECK(soundscape.fieldSound() == kNoSound);
+    CHECK_FALSE(player.isPlaying(resumed));
+    soundscape.pauseAmbience();
+    soundscape.updateAmbience({}, {}, 1);
+    mixer.mix(output);
+    player.update();
+    CHECK(player.voiceCount() == 0);
     soundscape.close();
 }
 

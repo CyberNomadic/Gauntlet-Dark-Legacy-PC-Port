@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Error.h"
+#include "engine/io/File.h"
 #include "engine/platform/Input.h"
 
 #include "TestSupport.h"
@@ -333,17 +334,17 @@ TEST_CASE("characters are saved beside the game unless the settings say where", 
     REQUIRE(plain.saveDirectory().parent_path() != GameConfig::userSettingsPath().parent_path());
 }
 
-TEST_CASE("user settings live in a per-user folder", "[game][config]") {
+TEST_CASE("user settings live beside the executable", "[game][config]") {
     const std::filesystem::path path = GameConfig::userSettingsPath();
     REQUIRE(path.filename() == "settings.json");
-    REQUIRE(path.parent_path().filename() == "GauntletDarkLegacy");
+    REQUIRE(path == GameConfig{}.saveDirectory().parent_path() / "config" / "settings.json");
 }
 
-TEST_CASE("installed portable builds keep settings beside the game without migrating user files",
+TEST_CASE("all builds keep settings beside the game regardless of the portable marker",
           "[game][config]") {
     const auto game = test::scratchDirectory("portable-settings");
     const auto original = GameConfig::userSettingsPath(game);
-    REQUIRE(original.parent_path().filename() == "GauntletDarkLegacy");
+    REQUIRE(original == game / "config" / "settings.json");
     // A directory named portable.flag is not an opt-in marker.
     std::filesystem::create_directory(game / "portable.flag");
     REQUIRE(GameConfig::userSettingsPath(game) == original);
@@ -353,6 +354,58 @@ TEST_CASE("installed portable builds keep settings beside the game without migra
     REQUIRE(GameConfig{}.saveDirectory(game) == game / "saves");
     REQUIRE_FALSE(std::filesystem::exists(game / "config"));
     std::filesystem::remove_all(game);
+}
+
+TEST_CASE("legacy settings migrate once without overwriting either existing file",
+          "[game][config]") {
+    const auto root = test::scratchDirectory("settings-migration");
+    const auto game = root / "game";
+    const auto legacy = root / "old" / "settings.json";
+    GameConfig previous;
+    previous.display.maxFrameRate = 60;
+    previous.audio.movieVolume = 0.25f;
+    previous.saveFile(legacy);
+    const auto original = readTextFile(legacy);
+    GameConfig loaded;
+    REQUIRE(loaded.loadUserSettings(game, legacy));
+    CHECK(loaded.toJson() == previous.toJson());
+    CHECK(readTextFile(GameConfig::userSettingsPath(game)) == original);
+    CHECK(readTextFile(legacy) == original);
+    loaded.display.maxFrameRate = 30;
+    loaded.saveFile(GameConfig::userSettingsPath(game));
+    GameConfig again;
+    REQUIRE(again.loadUserSettings(game, legacy));
+    CHECK(again.display.maxFrameRate == 30);
+    CHECK(again.audio.movieVolume == 0.25f);
+    CHECK(readTextFile(legacy) == original);
+}
+
+TEST_CASE("failed local settings imports preserve defaults and all existing files",
+          "[game][config]") {
+    const auto root = test::scratchDirectory("settings-migration-failure");
+    const auto game = root / "game";
+    const auto legacy = root / "old" / "settings.json";
+    GameConfig previous;
+    previous.display.maxFrameRate = 60;
+    previous.saveFile(legacy);
+    const auto local = GameConfig::userSettingsPath(game);
+    SECTION("corrupt local settings take precedence over a stale legacy file") {
+        std::filesystem::create_directories(local.parent_path());
+        writeTextFile(local, "not settings");
+    }
+    SECTION("a file blocks creation of the config directory") {
+        std::filesystem::create_directories(game);
+        writeTextFile(local.parent_path(), "keep this file");
+    }
+    SECTION("legacy settings cannot be parsed") {
+        writeTextFile(legacy, "not settings");
+    }
+    const auto expectedLegacy = readTextFile(legacy);
+    GameConfig loaded;
+    const auto defaults = loaded.toJson();
+    CHECK_FALSE(loaded.loadUserSettings(game, legacy));
+    CHECK(loaded.toJson() == defaults);
+    CHECK(readTextFile(legacy) == expectedLegacy);
 }
 
 TEST_CASE("the difficulty names a gain on the levels' own scales", "[game][config]") {

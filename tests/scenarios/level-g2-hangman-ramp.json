@@ -1,0 +1,11 @@
+{
+  "screen": "tower",
+  "level": "G2",
+  "party": [
+    {"player": 0, "class": "KNI", "color": "GRE", "name": "TEST", "level": 99,
+     "promotedLevel": 99, "health": 9999, "keys": 9, "potions": [0, 0, 0, 0, 0, 0, 0, 0, 0]}
+  ],
+  "position": [-89, 1.6, -178],
+  "yaw": 0,
+  "welcome": false
+}

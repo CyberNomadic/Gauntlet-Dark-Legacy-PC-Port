@@ -128,13 +128,16 @@ void FighterResources::draw(RenderDevice& device, const FighterMeshState& state,
     model.setAppearance(flashing || (state.flags & FighterMeshState::kUnlit) != 0,
                         flashing && entry.textured ? Color::white() : state.tint);
     const Texture* skin = state.skin != 0 ? entry.skins[state.skin - 1] : nullptr;
+    auto skinAlpha = TreeModel::SkinAlpha::Dissolve;
     if (flashing) {
         skin = flash;
+        skinAlpha = TreeModel::SkinAlpha::PreserveCoverage;
     }
     if ((state.flags & FighterMeshState::kFrozen) != 0 && frozen != nullptr) {
         skin = frozen;
+        skinAlpha = TreeModel::SkinAlpha::PreserveCoverage;
     }
-    model.setMaskedTexture(skin);
+    model.setMaskedTexture(skin, skinAlpha);
     std::vector<Mat4> matrices;
     matrices.reserve(state.nodes.size());
     for (usize i = 0; i < state.nodes.size(); ++i) {

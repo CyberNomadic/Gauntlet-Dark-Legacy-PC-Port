@@ -289,7 +289,8 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
         if (count > 0 && frame < count * (skin.skinLoops + 1) &&
             found != critter.stock->skins.end() &&
             static_cast<usize>(frame % count) < found->second.size()) {
-            critter.stock->body.setMaskedTexture(found->second[static_cast<usize>(frame % count)]);
+            critter.stock->body.setMaskedTexture(found->second[static_cast<usize>(frame % count)],
+                                                 TreeModel::SkinAlpha::Dissolve);
             critter.stock->body.setAppearance(true, critter.tint);
         }
     }

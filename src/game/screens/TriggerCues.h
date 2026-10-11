@@ -42,6 +42,10 @@ public:
 
     void handle(LevelWorld& world, LevelSoundscape& audio, SoundPlayer* sounds,
                 SwitchCutscene& cutscene, const Events& events);
+    /** Silence a turning platform while gameplay is paused. Its next movement cue
+     * restarts the loop; a platform that has settled cannot replay it. */
+    void pause(LevelSoundscape& audio);
+    SoundHandle turningSound() const { return m_rotatorSound; }
 
 private:
     void handleRotators(LevelWorld& world, LevelSoundscape& audio, SoundPlayer* sounds);

@@ -32,6 +32,8 @@ public:
     /** World-bound shots must test the already-rendered solid scene, including
      * halo nodes whose authored flags otherwise disable the depth test. */
     enum class Occlusion : u8 { Authored, SolidWorld };
+    /** Hit flashes retain the base silhouette; animated death skins also dissolve it. */
+    enum class SkinAlpha : u8 { PreserveCoverage, Dissolve };
     /** Gathers meshes and textures, resolving external slots through named lenders.
      * The mesh and texture owners must outlive this model. Missing resources fail the bind. */
     bool bind(const TreeInfo& tree, ModelSet& models, TextureSet& textures, RenderDevice& device,
@@ -71,9 +73,12 @@ public:
     void setMeshMaskedTexture(usize index, const Texture* texture);
     void setNodeMaskedTexture(usize root, const Texture* texture);
     void resetTextures();
-    /** Applies an alternate appearance without making solid skin translucent or filling
-     * its cutouts. Cleared by resetTextures(). */
-    void setMaskedTexture(const Texture* texture) { m_maskedTexture = texture; }
+    /** Alternate skins always retain the base cutouts. Dissolve additionally uses the
+     * alternate texture's alpha instead of treating it as solid coverage. */
+    void setMaskedTexture(const Texture* texture, SkinAlpha alpha = SkinAlpha::PreserveCoverage) {
+        m_maskedTexture = texture;
+        m_skinAlpha = alpha;
+    }
     /** Full ambient illumination and an optional RGB tint applied to every node. */
     void setAppearance(bool unlit, Color tint = Color::white(), bool depthWrite = true,
                        bool additive = false) {
@@ -165,6 +170,7 @@ private:
 
     std::vector<Node> m_nodes;
     const Texture* m_maskedTexture = nullptr;
+    SkinAlpha m_skinAlpha = SkinAlpha::PreserveCoverage;
     bool m_unlit = false;
     bool m_additive = false;
     bool m_depthWrite = true;

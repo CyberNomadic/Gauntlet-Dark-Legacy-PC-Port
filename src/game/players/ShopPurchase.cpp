@@ -129,7 +129,7 @@ ShopResult buyShopItem(CharacterSave& save, const ClassStats& stats, const ShopI
     default: {
         const auto& effect = kPowerups[static_cast<usize>(item.type)];
         progress.inventory.addPowerup(effect.kind, effect.flags, effect.charge,
-                                      effect.strength * stats.powerupTime);
+                                      effect.strength * stats.powerupTime, false);
         break;
     }
     }

@@ -34,7 +34,9 @@ TEST_CASE("coin goals count distinct placed coins, not denominations or bonus dr
     CHECK_FALSE(challenge.collect(2));
     CHECK(challenge.coinsLeft() == 2);
     CHECK_FALSE(challenge.collect(7));
+    CHECK_FALSE(challenge.won());
     CHECK(challenge.collect(4));
+    CHECK(challenge.won());
     CHECK(challenge.state() == SecretChallenge::State::Won);
     CHECK_FALSE(challenge.collect(4));
     CHECK(challenge.remaining() == 1);
@@ -42,6 +44,7 @@ TEST_CASE("coin goals count distinct placed coins, not denominations or bonus dr
     CHECK(challenge.state() == SecretChallenge::State::Won);
     CHECK(challenge.step(1).empty()); // no failure countdown after victory
     CHECK(challenge.state() == SecretChallenge::State::Returning);
+    CHECK(challenge.won());
 }
 
 TEST_CASE("challenge clock pauses and expires without granting an unlock", "[secret]") {
@@ -57,9 +60,11 @@ TEST_CASE("challenge clock pauses and expires without granting an unlock", "[sec
     CHECK(challenge.state() == SecretChallenge::State::Returning);
     CHECK_FALSE(challenge.collect(1));
     CHECK(challenge.coinsLeft() == 1);
+    CHECK_FALSE(challenge.won());
     challenge.clear();
     CHECK(challenge.state() == SecretChallenge::State::Inactive);
     REQUIRE(challenge.begin(0, 1, {}));
     CHECK_FALSE(challenge.collect(0)); // empty/missing coins cannot auto-award a class
+    CHECK_FALSE(challenge.won());
 }
 } // namespace

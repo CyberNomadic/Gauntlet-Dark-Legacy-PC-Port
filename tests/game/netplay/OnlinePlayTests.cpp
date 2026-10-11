@@ -87,6 +87,205 @@ struct RuntimePair {
     }
 };
 
+TEST_CASE("online secret visits preserve the parent scene results and local-only earned unlocks",
+          "[netplay][online-secret][online-play][assets]") {
+    const bool win = GENERATE(false, true);
+    const bool autoSave = GENERATE(false, true);
+    RuntimePair pair;
+    pair.config.game.autoSave = autoSave;
+    u16 hostUnlock = 0;
+    u16 guestUnlock = 0;
+    usize hostAwards = 0;
+    usize guestAwards = 0;
+    usize saves = 0;
+    auto hostContext = pair.context;
+    auto guestContext = pair.context;
+    hostContext.unlockClasses = [&](u16 mask) {
+        hostUnlock |= mask;
+        ++hostAwards;
+    };
+    guestContext.unlockClasses = [&](u16 mask) {
+        guestUnlock |= mask;
+        ++guestAwards;
+    };
+    const auto saveParty = [&](std::span<PartyMember> party) {
+        ++saves;
+        REQUIRE(win);
+        REQUIRE(autoSave);
+        REQUIRE(party.size() == 2);
+        for (auto& member : party) {
+            CHECK(member.save.gold >= 375);
+            member.slot = static_cast<usize>(100 + member.player);
+        }
+    };
+    hostContext.saveLocalParty = [&](std::span<PartyMember> party) {
+        CHECK(pair.host.phase() == OnlinePlay::Phase::Loading);
+        CHECK(party[0].player == 1);
+        CHECK(party[1].player == 3);
+        CHECK(hostAwards == 1);
+        saveParty(party);
+    };
+    guestContext.saveLocalParty = [&](std::span<PartyMember> party) {
+        CHECK(pair.guest.phase() == OnlinePlay::Phase::Loading);
+        CHECK(party[0].player == 0);
+        CHECK(party[1].player == 2);
+        CHECK(guestAwards == 1);
+        saveParty(party);
+    };
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{-36.3671875f, 90.1640625f, -85.0234375f};
+    REQUIRE(
+        pair.guest.open(pair.guestDevice, guestContext, pair.wire.guestSession, pair.guestParty));
+    REQUIRE(pair.host.open(pair.hostDevice, hostContext, pair.wire.hostSession, pair.hostParty,
+                           *pair.catalog.byName("B2"), options));
+    for (s32 tick = 0; tick < 3600 && pair.host.phase() != OnlinePlay::Phase::Playing; ++tick) {
+        pair.step();
+    }
+    REQUIRE(pair.host.hostScene());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native scene fixture
+    auto* parent = const_cast<PlayScene*>(pair.host.hostScene());
+    const auto* parentWorld = parent->world();
+    REQUIRE(parentWorld);
+    REQUIRE(parentWorld->ref().name == "B2");
+    const auto initialEpoch = pair.wire.host.context().epoch;
+    for (s32 seat = 0; seat < 4; ++seat) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native actor fixture
+        auto& actor = *const_cast<PlayerActor*>(parent->actor(seat));
+        actor.save().gold += 250 + seat;
+        parent->awardExperience(seat, 100, true);
+    }
+    const auto before = parent->levelResults();
+    usize portal = 0;
+    while (portal < parent->portals().size() && !parent->portals().portal(portal).secret) {
+        ++portal;
+    }
+    REQUIRE(portal < parent->portals().size());
+    const auto portalPosition = parent->portals().portal(portal).position;
+    SessionInputs::Frame accept;
+    for (auto& input : accept) {
+        input.menu.select = true;
+    }
+    for (s32 tick = 0; tick < 1200 && pair.wire.host.context().epoch == initialEpoch; ++tick) {
+        for (s32 seat = 0; seat < 4; ++seat) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): native contact fixture
+            const_cast<PlayerActor*>(parent->actor(seat))->place(portalPosition);
+        }
+        pair.step(accept, accept);
+    }
+    REQUIRE(pair.wire.host.context().transition == MatchTransition::SecretEnter);
+    CHECK(pair.wire.host.tick() == 0);
+    CHECK(parent->portals().portal(portal).consumed);
+    const auto frozenResults = parent->levelResults();
+    const auto frozenGeometry = parentWorld->scene().geometry();
+    for (s32 tick = 0; tick < 3600 && (pair.host.phase() != OnlinePlay::Phase::Playing ||
+                                       pair.guest.phase() != OnlinePlay::Phase::Playing);
+         ++tick) {
+        pair.step();
+    }
+    REQUIRE(pair.host.hostScene());
+    REQUIRE(pair.host.hostScene()->world()->ref().name == "S4");
+    CHECK_FALSE(pair.guest.hostScene());
+    CHECK(pair.host.hostScene() != parent);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native scene fixture
+    auto* challenge = const_cast<PlayScene*>(pair.host.hostScene());
+    REQUIRE(challenge->challenge().totalCoins() > 0);
+    for (s32 tick = 0; tick < 600 && challenge->spawning(); ++tick) {
+        pair.step(accept, accept);
+        pair.draw();
+    }
+    REQUIRE_FALSE(challenge->spawning());
+    for (s32 tick = 0; tick < 12; ++tick) {
+        pair.step();
+        pair.draw();
+    }
+    REQUIRE(pair.guest.shown());
+    REQUIRE(pair.guest.shown()->hud);
+    CHECK(pair.guest.shown()->hud->hourglass.has_value());
+    for (s32 seat = 0; seat < 4; ++seat) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native actor fixture
+        const_cast<PlayerActor*>(challenge->actor(seat))->save().gold += 125;
+        challenge->awardExperience(seat, 80, true);
+    }
+    if (win) {
+        const auto& items = challenge->world()->placedItems();
+        for (usize item = 0; item < items.size(); ++item) {
+            const auto& coin = items.item(item);
+            if (coin.subtype != 1 || !coin.visible || coin.taken) {
+                continue;
+            }
+            for (s32 seat = 0; seat < 4; ++seat) {
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): native pickup contacts
+                const_cast<PlayerActor*>(challenge->actor(seat))->place(coin.position);
+            }
+            pair.step();
+            pair.step();
+            pair.draw();
+        }
+        REQUIRE(challenge->challenge().coinsLeft() == 0);
+    }
+    const auto challengeResults = challenge->levelResults();
+    const auto reward = challenge->challenge().rewardMask();
+    for (s32 tick = 0;
+         tick < 12000 && pair.wire.host.context().transition != MatchTransition::SecretReturn;
+         ++tick) {
+        pair.step(accept, accept);
+        pair.draw();
+    }
+    REQUIRE(pair.wire.host.context().transition == MatchTransition::SecretReturn);
+    CHECK(pair.wire.host.context().challengeWon == win);
+    // This is the very same suspended world, not a reload which restores enemies/items.
+    const auto heldGeometry = parentWorld->scene().geometry();
+    CHECK(heldGeometry.layout == frozenGeometry.layout);
+    CHECK(heldGeometry.darken == frozenGeometry.darken);
+    REQUIRE(heldGeometry.objects.size() == frozenGeometry.objects.size());
+    for (usize index = 0; index < heldGeometry.objects.size(); ++index) {
+        CHECK(heldGeometry.objects[index].local == frozenGeometry.objects[index].local);
+        CHECK(heldGeometry.objects[index].visible == frozenGeometry.objects[index].visible);
+    }
+    CHECK(parent->levelResults()[0].totals == frozenResults[0].totals);
+    for (s32 tick = 0; tick < 3600 && (pair.host.phase() != OnlinePlay::Phase::Playing ||
+                                       pair.guest.phase() != OnlinePlay::Phase::Playing);
+         ++tick) {
+        pair.step();
+    }
+    REQUIRE(pair.host.phase() == OnlinePlay::Phase::Playing);
+    REQUIRE(pair.guest.phase() == OnlinePlay::Phase::Playing);
+    CHECK(pair.host.hostScene() == parent);
+    CHECK(parent->world() == parentWorld);
+    CHECK(parent->world()->ref().name == "B2");
+    CHECK(parent->portals().portal(portal).consumed);
+    CHECK_FALSE(parent->secretTravel());
+    CHECK(hostUnlock == (win ? reward : 0));
+    CHECK(guestUnlock == hostUnlock);
+    CHECK(hostAwards == (win ? 1 : 0));
+    CHECK(guestAwards == hostAwards);
+    CHECK(saves == (win && autoSave ? 2 : 0));
+    if (win && autoSave) {
+        CHECK(parent->party()[0].slot == 101);
+        CHECK(parent->party()[1].slot == 103);
+        CHECK_FALSE(parent->party()[2].slot);
+        CHECK_FALSE(parent->party()[3].slot);
+    }
+    for (usize seat = 0; seat < 4; ++seat) {
+        const auto result = parent->levelResults()[seat];
+        CHECK(result.totals == challengeResults[seat].totals);
+        CHECK(result.totals[0] >= before[seat].totals[0] + 125);
+        CHECK(result.totals[1] == before[seat].totals[1] + 1);
+        CHECK(result.totals[2] > before[seat].totals[2]);
+    }
+    for (s32 tick = 0; tick < 120; ++tick) {
+        pair.step();
+        pair.draw();
+    }
+    CHECK(hostAwards == (win ? 1 : 0));
+    CHECK(guestAwards == hostAwards);
+    CHECK(pair.wire.host.context() == pair.wire.guest.context());
+    CHECK(saves == (win && autoSave ? 2 : 0));
+    REQUIRE(pair.guest.shown());
+    CHECK(pair.guest.shown()->motion.epoch == pair.wire.host.context().epoch);
+}
+
 TEST_CASE("level exit synchronizes results purchases local checkpoints and tower return",
           "[netplay][online-shop][online-play][assets]") {
     RuntimePair pair;

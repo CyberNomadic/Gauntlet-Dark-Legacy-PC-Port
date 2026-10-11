@@ -19,9 +19,11 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
+#include "game/app/Scenario.h"
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/EnemyMissiles.h"
+#include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelOpponents.h"
 #include "game/screens/PlayerHealth.h"
 #include "game/world/HazardSurfaces.h"
@@ -492,6 +494,82 @@ TEST_CASE("enemy wall clearance admits a body's width but not an undersized pass
     } else {
         CHECK(enemies.positionOf(*id).z < 0);
     }
+}
+
+TEST_CASE("enemy floor probes distinguish reachable decks from tall ledges and upper storeys",
+          "[enemies][enemy-floor-probe][assets]") {
+    const f32 deckY = GENERATE(2.0f, 4.0f, 9.0f);
+    WorldCollision collision;
+    collision.build({
+        triangle({-30, 0, -30}, {30, 0, -30}, {30, 0, 30}, {0, 1, 0}),
+        triangle({-30, 0, -30}, {30, 0, 30}, {-30, 0, 30}, {0, 1, 0}),
+        triangle({-30, deckY, 0}, {30, deckY, 0}, {30, deckY, 30}, {0, 1, 0}),
+        triangle({-30, deckY, 0}, {30, deckY, 30}, {-30, deckY, 30}, {0, 1, 0}),
+    });
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), &collision, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const auto id = enemies.spawn(
+        {.kind = kGruntKind, .algorithm = kSeekWay, .position = {0, 0, -8}, .placed = true}, {});
+    REQUIRE(id);
+    const std::array players{playerAt({0, 0, 12})};
+    for (s32 tick = 0; tick < 360; tick += 2) {
+        enemies.update(2, kStep, players);
+        const Vec3 at = enemies.positionOf(*id);
+        CAPTURE(deckY, tick, at.x, at.y, at.z);
+        if (deckY == 4) {
+            // This is inside the native query, but beyond its separate height
+            // tolerance: it is not permission to choose ground underneath it.
+            REQUIRE(at.z < 0);
+            REQUIRE(at.y == Approx(0));
+        } else if (deckY == 9) {
+            REQUIRE(at.y == Approx(0)); // beyond the native ceiling; another storey
+        } else if (at.z >= 0) {
+            REQUIRE(at.y == Approx(deckY));
+        }
+    }
+    if (deckY != 4) {
+        CHECK(enemies.positionOf(*id).z > 4);
+    }
+}
+
+TEST_CASE("small enemies retain the native signed birth-reference floor tolerance",
+          "[enemies][enemy-floor-probe][assets]") {
+    const s32 kind = GENERATE(kGruntKind, kRatKind);
+    auto deckA = triangle({-30, 2, -2}, {30, 2, -2}, {30, 2, 2}, {0, 1, 0});
+    auto deckB = triangle({-30, 2, -2}, {30, 2, 2}, {-30, 2, 2}, {0, 1, 0});
+    deckA.object = deckB.object = 1;
+    WorldCollision collision;
+    collision.build({triangle({-30, 0, -30}, {30, 0, -30}, {30, 0, 30}, {0, 1, 0}),
+                     triangle({-30, 0, -30}, {30, 0, 30}, {-30, 0, 30}, {0, 1, 0}), deckA, deckB});
+    collision.setSolid(1, false);
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), &collision, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kind));
+    const auto id = enemies.spawn(
+        {.kind = kind, .algorithm = kSeekWay, .position = {0, 0, -8}, .placed = true}, {});
+    REQUIRE(id);
+    std::array players{playerAt({0, 0, 12})};
+    for (s32 tick = 0; tick < 300; tick += 2) {
+        enemies.update(2, kStep, players);
+    }
+    REQUIRE(enemies.positionOf(*id).z > 4);
+    collision.setSolid(1, true);
+    players[0].position.z = -12;
+    bool crossed = false;
+    for (s32 tick = 0; tick < 360; tick += 2) {
+        enemies.update(2, kStep, players);
+        const Vec3 at = enemies.positionOf(*id);
+        CAPTURE(kind, tick, at.x, at.y, at.z);
+        if (kind == kRatKind) {
+            REQUIRE(at.z > 2);
+            REQUIRE(at.y == Approx(0));
+        }
+        crossed = crossed || at.z < -3;
+    }
+    CHECK(crossed == (kind == kGruntKind));
 }
 
 TEST_CASE("dog broods use only the two native birth directions while leader broods use one",
@@ -2052,7 +2130,7 @@ TEST_CASE("swarm elemental hits use arena multipliers but retain their minimum d
 }
 
 TEST_CASE("enemy hits queue feedback once and animate masked death skins to completion",
-          "[game][enemies][enemy-feedback][assets]") {
+          "[game][enemies][enemy-feedback][death-dissolve][assets]") {
     const auto root = unpackedRoot();
     test::assetOrSkip("WEAPONS/ANIM.PS2");
     test::FakeRenderDevice device;
@@ -2097,6 +2175,17 @@ TEST_CASE("enemy hits queue feedback once and animate masked death skins to comp
     REQUIRE_FALSE(device.draws.empty());
     const auto skin = weapons.textures.find("DTH_BLOOD00");
     REQUIRE(skin);
+    const auto alphaSum = [&](u32 frame) {
+        const Image& image = weapons.textures.image(frame);
+        u64 alpha = 0;
+        for (usize offset = 3; offset < image.pixels.size(); offset += 4) {
+            alpha += image.pixels[offset];
+        }
+        return alpha;
+    };
+    // The retail animation itself supplies the fade, including transparent black
+    // texels. Original-body coverage must not turn these back into solid black.
+    CHECK(alphaSum(*skin + 9) < alphaSum(*skin));
     CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
         return draw.state.maskedTexture == &weapons.textures.texture(device, *skin);
     }));
@@ -2116,6 +2205,11 @@ TEST_CASE("enemy hits queue feedback once and animate masked death skins to comp
         enemies.draw(device, Mat4{1}, {}, &device.whiteTexture(), &weapons);
         for (const auto& draw : device.draws) {
             CHECK(draw.state.maskedTexture != nullptr);
+            CHECK(draw.state.blend == BlendMode::Alpha);
+            CHECK(draw.state.alphaTest == DrawState::kTranslucentAlphaTest);
+            CHECK_FALSE(draw.state.depthWrite);
+            CHECK_FALSE(draw.state.alphaToCoverage);
+            CHECK_FALSE(draw.state.usesAlphaToCoverage(4));
         }
     }
     CHECK(enemies.count() == 0);
@@ -3186,6 +3280,286 @@ TEST_CASE("Ghost Town swarm feet follow the native wooden railway slopes",
         }
     }
     CHECK(arrived);
+}
+
+TEST_CASE("Ghost Town zombies cannot walk underneath nearby wooden railway floors",
+          "[enemies][enemy-slopes][ghost-town-contact][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("G2")));
+    const auto kind = enemyKindOf("ZOM");
+    REQUIRE(kind);
+    const s32 ticks = GENERATE(1, 2);
+    const s32 tier = GENERATE(1, 2, 3);
+    // Every authored explosive container, including chests, plus the fire
+    // opposite G2HANG5/6's gallows. That landmark is an ambient fire, not a
+    // BAREXP pickup. Start on lower ground, not just an already-mounted ramp.
+    std::vector<Vec3> crates;
+    for (const auto& item : world.layout().itemInstances()) {
+        const auto& info = world.layout().itemInfos()[static_cast<usize>(item.info)];
+        if (((info.type == 2 || info.type == 10) && info.subtype == 44) ||
+            item.name == "S_sfireg") {
+            crates.push_back(item.position);
+        }
+    }
+    REQUIRE(crates.size() >= 30);
+    // The gallows' wooden ramp can also be reached across its side, where
+    // its floor is already higher than a single low-end stair step.
+    crates.emplace_back(-113, 3.27f, -198);
+    crates.emplace_back(-89, 1.6f, -178);
+    constexpr std::array<Vec3, 4> kDirections{Vec3{1, 0, 0}, Vec3{-1, 0, 0}, Vec3{0, 0, 1},
+                                              Vec3{0, 0, -1}};
+    usize approaches = 0;
+    usize attackDraws = 0;
+    for (usize site = 0; site < crates.size(); ++site) {
+        for (const Vec3 direction : kDirections) {
+            Vec3 from = crates[site] - direction * 12.0f;
+            const auto initial = world.collision().floorAt(from, 6, 10);
+            if (!initial) {
+                continue;
+            }
+            ++approaches;
+            from.y = initial->y;
+            Enemies enemies;
+            enemies.open(device, root, &world.collision(), 1, {}, 1);
+            REQUIRE(enemies.loadKind(*kind));
+            const auto enemy = enemies.spawn({.kind = *kind,
+                                              .tier = tier,
+                                              .position = from,
+                                              .direction = direction,
+                                              .placed = true},
+                                             {});
+            REQUIRE(enemy);
+            const std::array players{EnemyView{.player = 0, .position = crates[site]}};
+            for (s32 elapsed = 0; elapsed < 300; elapsed += ticks) {
+                enemies.update(ticks, static_cast<f32>(ticks) / 60, players);
+                const Vec3 at = enemies.positionOf(*enemy);
+                const auto* animator = enemies.animatorOf(*enemy);
+                REQUIRE(animator);
+                // Retail do_enemy_collide starts its floor query at collision
+                // centre + 2, not the feet. A second, higher query independently
+                // detects a deck missed by locomotion's narrow step-up envelope.
+                const auto support = world.collision().floorAt(
+                    at + Vec3{0, enemyKind(*kind).collisionHeight + 2, 0}, 3, 8);
+                if (support && support->y - at.y <= 3.6f) {
+                    CAPTURE(site, tier, direction.x, direction.z, ticks, elapsed, at.x, at.y, at.z,
+                            support->y, support->object, animator->action());
+                    REQUIRE(at.y >= support->y - 0.05f);
+                    if (elapsed % 30 == 0 && animator->action() != EnemyAction::Start &&
+                        animator->action() < EnemyAction::HitReact1) {
+                        // A supported origin alone cannot prove the drawn zombie
+                        // stands above the floor. Inspect the actual native meshes,
+                        // excluding the intentional below-ground START emergence.
+                        device.draws.clear();
+                        const f32 blend = (elapsed / 30) % 2 == 0 ? -1.0f : 1.0f;
+                        enemies.draw(device, Mat4{1}, {}, nullptr, nullptr, nullptr, blend);
+                        REQUIRE_FALSE(device.draws.empty());
+                        f32 lowest = at.y + enemyKind(*kind).height;
+                        for (const auto& draw : device.draws) {
+                            for (const auto& vertex : draw.vertices) {
+                                lowest = std::min(lowest, vertex.position.y);
+                            }
+                        }
+                        CAPTURE(lowest, animator->player().frame());
+                        // ZOM3's authored attack reaches 0.76 below its origin;
+                        // locomotion reaches at most 0.30 below. Neither can put
+                        // the whole lower body underneath a supported floor.
+                        const f32 poseDip = animator->swinging() ? 0.85f : 0.5f;
+                        REQUIRE(lowest >= support->y - poseDip);
+                        attackDraws += animator->swinging() ? 1 : 0;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(approaches >= 100);
+    CHECK(attackDraws > 0);
+}
+
+TEST_CASE("Ghost Town lateral ramp approach reaches the rendered wooden deck without burial",
+          "[enemies][ghost-town-lateral][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    const s32 ticks = GENERATE(1, 2);
+    const s32 tier = GENERATE(1, 2, 3);
+    const auto scenario = Scenario::load(test::dataDirectory().parent_path() /
+                                         "tests/scenarios/level-g2-hangman-ramp.json");
+    REQUIRE(scenario.level == "G2");
+    REQUIRE(scenario.tower.position);
+    REQUIRE(scenario.party.size() == 1);
+    REQUIRE(scenario.party.front().powerups.empty());
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName(scenario.level)));
+    const auto playerFloor = world.collision().floorAt(*scenario.tower.position, 2, 6);
+    REQUIRE(playerFloor);
+    CHECK(playerFloor->y == Approx(scenario.tower.position->y).margin(0.1f));
+
+    // Actual visible G2FLOOR#042 vertices; collision proxy G2FLOOR#099
+    // shares this plane. Prove the rendering surface itself, not only floorAt.
+    constexpr std::array<Vec3, 3> kFace{Vec3{-85.5859375f, 2.28125f, -172.96875f},
+                                        Vec3{-96.1015625f, -0.015625f, -172.96875f},
+                                        Vec3{-96.484375f, -0.015625f, -184.2109375f}};
+    std::array<bool, 3> drawn{};
+    WorldCamera camera;
+    camera.position = {-89, 40, -178};
+    camera.pitch = std::numbers::pi_v<f32> / 2;
+    world.draw(device, Mat4{1}, camera);
+    for (const auto& draw : device.draws) {
+        for (const auto& vertex : draw.vertices) {
+            for (usize i = 0; i < kFace.size(); ++i) {
+                drawn[i] = drawn[i] || glm::distance(vertex.position, kFace[i]) < 0.001f;
+            }
+        }
+    }
+    REQUIRE(std::ranges::all_of(drawn, [](bool found) { return found; }));
+    const Vec3 normal = glm::cross(kFace[1] - kFace[0], kFace[2] - kFace[0]);
+    const auto planeY = [&](const Vec3& at) {
+        return kFace[0].y -
+               (normal.x * (at.x - kFace[0].x) + normal.z * (at.z - kFace[0].z)) / normal.y;
+    };
+    Enemies enemies;
+    enemies.open(device, root, &world.collision(), 1, {}, 1);
+    const auto kind = enemyKindOf("ZOM");
+    REQUIRE(kind);
+    REQUIRE(enemies.loadKind(*kind));
+    const auto enemy = enemies.spawn({.kind = *kind,
+                                      .tier = tier,
+                                      .position = {-89, 0, -166},
+                                      .direction = {0, 0, -1},
+                                      .placed = true},
+                                     {});
+    REQUIRE(enemy);
+    const std::array players{EnemyView{.player = 0, .position = *scenario.tower.position}};
+    bool reached = false;
+    for (s32 elapsed = 0; elapsed < 300; elapsed += ticks) {
+        enemies.update(ticks, static_cast<f32>(ticks) / 60, players);
+        const Vec3 at = enemies.positionOf(*enemy);
+        if (at.z >= kFace[0].z || at.z < -178 || std::abs(at.x + 89) > 0.25f) {
+            continue;
+        }
+        reached = reached || at.z < -174;
+        CAPTURE(ticks, tier, elapsed, at.x, at.y, at.z);
+        REQUIRE(at.y >= planeY(at) - 0.05f);
+        if (elapsed % 30 == 0) {
+            device.draws.clear();
+            enemies.draw(device, Mat4{1}, {}, nullptr, nullptr, nullptr, 1);
+            REQUIRE_FALSE(device.draws.empty());
+            f32 low = at.y + 6;
+            for (const auto& draw : device.draws) {
+                for (const auto& vertex : draw.vertices) {
+                    low = std::min(low, vertex.position.y);
+                }
+            }
+            REQUIRE(low >= planeY(at) - 0.85f); // permits the authored attack's foot dip
+        }
+    }
+    REQUIRE(reached); // a pass may not merely mean the zombie stayed behind a fence
+}
+
+TEST_CASE("Ghost Town native generators and player contacts preserve zombie floor support",
+          "[enemies][ghost-town-generators][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    const s32 site = GENERATE(0, 1, 2, 3, 4);
+    const s32 level = GENERATE(1, 99);
+    constexpr std::array<Vec3, 5> kFocus{Vec3{-105, 0, -11}, Vec3{-35, 0, -29}, Vec3{-99, 1, -42},
+                                         Vec3{-102, 0, -201}, Vec3{-99, 0, -207}};
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("G2")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    LevelFixtures fixtures;
+    fixtures.bind({device, world, weapons, effects, audio, 1});
+    std::array<PlayerRuntime, 1> players;
+    Vec3 focus = kFocus[site];
+    const auto playerFloor = world.collision().floorAt(focus, 6, 6);
+    REQUIRE(playerFloor);
+    focus.y = playerFloor->y;
+    CharacterSave save;
+    save.progress().experience = levelExperience(level);
+    players[0].actor.spawn(0, save, nullptr, focus, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1, true}, players);
+    ViewVolume overhead;
+    overhead.position = focus + Vec3{0, 60, 0};
+    overhead.forward = {0, -1, 0};
+    overhead.up = {0, 0, 1};
+    LevelOpponents::Events events;
+    s32 contacts = 0;
+    events.hurt = [&](usize, f32, HurtKind, bool, const PlayerImpact&) { ++contacts; };
+    events.blast = [](const Vec3&, f32, f32) {};
+    events.settleBlasts = [] {};
+    events.legend = [](const LegendEvent&) {};
+    events.advanceLegend = [](f32) {};
+    events.fallen = [](const Vec3&) {};
+    events.spew = [](const CombatSpew&) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    std::array<s32, Enemies::kMost> rising{};
+    std::array<u64, Enemies::kMost> instances{};
+    usize checked = 0;
+    for (s32 elapsed = 0; elapsed < 1800; elapsed += 2) {
+        // Alternate waiting in a crowd and walking short arcs beside the crate.
+        if (elapsed >= 300 && elapsed % 600 < 300) {
+            const f32 angle = static_cast<f32>(elapsed) * 0.015f;
+            players[0].actor.slide(Vec3{std::cos(angle), 0, std::sin(angle)} * 0.15f,
+                                   &world.collision());
+        }
+        world.update(kStep);
+        opponents.watch(overhead, players[0].actor.position());
+        opponents.update(2, kStep, players, fixtures.obstacles(), events);
+        auto& enemies = opponents.enemies();
+        for (s32 id = 0; id < Enemies::kMost; ++id) {
+            if (!enemies.alive(id) || enemies.kindOf(id) != 13) {
+                continue;
+            }
+            const Vec3 at = enemies.positionOf(id);
+            if (glm::distance(at, focus) > 30) {
+                continue;
+            }
+            const auto observation = enemies.observe(id);
+            REQUIRE(observation);
+            if (instances[id] != observation->instance) {
+                instances[id] = observation->instance;
+                rising[id] = 0;
+            }
+            const auto* animator = enemies.animatorOf(id);
+            REQUIRE(animator);
+            rising[id] = animator->action() == EnemyAction::Start ? rising[id] + 2 : 0;
+            const auto support = world.collision().floorAt(at + Vec3{0, 5, 0}, 3, 8);
+            CAPTURE(site, level, elapsed, id, at.x, at.y, at.z, enemies.generatorOf(id),
+                    animator->action(), animator->player().frame(), rising[id]);
+            REQUIRE(rising[id] < 120);
+            if (support && support->y - at.y <= 3.6f) {
+                CAPTURE(support->y, support->object);
+                REQUIRE(at.y >= support->y - 0.05f);
+                ++checked;
+            }
+        }
+    }
+    s32 births = 0;
+    for (s32 id = 0; static_cast<usize>(id) < opponents.generators().count(); ++id) {
+        births += opponents.generators().bredOf(id);
+    }
+    CAPTURE(site, level, births, contacts, checked);
+    CHECK(births > 0);
+    CHECK(checked > 100);
+    CHECK(contacts > 0);
+    opponents.close();
+    fixtures.clear();
+    effects.clear();
 }
 
 TEST_CASE("a placed archer does not abandon its perch when a nearby bomber lights its fuse",

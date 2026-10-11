@@ -309,6 +309,14 @@ public:
               const CameraFrame* camera = nullptr, f32 presentationAlpha = -1,
               TreeModel::Pass pass = TreeModel::Pass::All);
 
+    /** Display-only grounded interpolation. Optional endpoint floor copies let
+     * replicas prove contact against the corresponding host geometry clocks.
+     * Does not mutate bodies, floors, animation, damage, or snapshot positions. */
+    static Vec3 supportedPresentation(const WorldCollision* collision, const Vec3& from,
+                                      const Vec3& to, f32 blend, EnemyAction action, bool active,
+                                      const WorldCollision* fromFloor = nullptr,
+                                      const WorldCollision* toFloor = nullptr);
+
     bool alive(s32 id) const;
     bool dying(s32 id) const;
     /** Read-only lifetime/health observation. Pool slots can be recycled without
@@ -406,6 +414,7 @@ private:
         f32 height = 6.0f;
         f32 reach = 3.0f; ///< half the height: how high its body is struck
         Vec3 position{0.0f, 0.0f, 0.0f};
+        Vec3 birthPosition{0}; ///< native floor-delta rule's fixed spawn reference
         Vec3 presentationPosition{0};
         f32 presentationYaw = 0;
         State presentationState = State::Inactive;

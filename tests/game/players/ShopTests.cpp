@@ -254,8 +254,8 @@ TEST_CASE("shop stat increases persist and stop at the stat cap", "[shop]") {
     REQUIRE(buyShopItem(save, stats, item(type), 1) == ShopResult::Full);
     REQUIRE(sellShopItem(save, item(type)) == ShopResult::NotOwned);
 }
-TEST_CASE("every shop powerup type creates a usable inventory slot and sells it", "[shop]") {
-    for (s32 type = 1; type <= 39; ++type) {
+TEST_CASE("every shop powerup type starts inactive and can be sold", "[shop]") {
+    for (s32 type = 1; type <= 40; ++type) {
         if (type == 1 || type == 3 || type == 17 || (type >= 5 && type <= 8)) {
             continue;
         }
@@ -266,7 +266,9 @@ TEST_CASE("every shop powerup type creates a usable inventory slot and sells it"
         REQUIRE(buyShopItem(save, stats, item(type), 1) == ShopResult::Bought);
         REQUIRE(save.progress().inventory.powerupCount() == 1);
         REQUIRE(ownsShopItem(save, item(type)));
-        save.progress().inventory.powerups[0].on = false;
+        CHECK_FALSE(save.progress().inventory.powerups[0].on);
+        const auto restored = CharacterSave::fromJson(save.toJson());
+        CHECK_FALSE(restored.progress().inventory.powerups[0].on);
         REQUIRE(sellShopItem(save, item(type)) == ShopResult::Sold);
         REQUIRE(save.progress().inventory.powerupCount() == 0);
         REQUIRE(save.gold == 4975);
@@ -286,6 +288,18 @@ TEST_CASE("shop durations scale by class and charged items retain uses", "[shop]
     REQUIRE(buyShopItem(save, stats, item(13), 1) == ShopResult::Bought);
     REQUIRE(save.progress().inventory.powerups[1].strength < 0);
     REQUIRE(save.progress().inventory.powerups[1].charge == 3);
+}
+TEST_CASE("refilling a shop powerup preserves the player's existing activation choice", "[shop]") {
+    const bool active = GENERATE(false, true);
+    auto save = shopper();
+    const ClassStats stats;
+    REQUIRE(buyShopItem(save, stats, item(20), 1) == ShopResult::Bought);
+    auto& slot = save.progress().inventory.powerups[0];
+    slot.on = active;
+    const f32 before = slot.strength;
+    REQUIRE(buyShopItem(save, stats, item(20), 1) == ShopResult::Bought);
+    CHECK(slot.strength > before);
+    CHECK(slot.on == active);
 }
 TEST_CASE("level result tally is frame independent and never awards currency", "[shop][results]") {
     const auto entry = shopper();
@@ -875,6 +889,7 @@ TEST_CASE("expanded shop offers exactly the five carried powerups between death 
         CHECK(slot.kind == kinds[index]);
         CHECK(slot.flags == flags[index]);
         CHECK(slot.strength == Approx(seconds[index] * stats.powerupTime));
+        CHECK_FALSE(slot.on);
         CHECK(ownsShopItem(save, offer));
         CHECK(sellShopItem(save, offer) == ShopResult::Sold);
         CHECK(save.gold == 750);

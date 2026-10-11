@@ -15,6 +15,7 @@ add_library(game STATIC
     netplay/InputTimeline.cpp
     netplay/MatchSession.cpp
     netplay/ShopSync.cpp
+    netplay/FeedbackSync.cpp
     netplay/ClientClock.cpp
     netplay/OnlineSession.cpp
     netplay/CharacterProfile.cpp
@@ -24,6 +25,7 @@ add_library(game STATIC
     screens/OnlineParty.cpp
     screens/OnlinePlay.cpp
     screens/OnlineLevelEntry.cpp
+    screens/OnlineCompletion.cpp
     app/OnlineRun.cpp
     screens/PlayReplication.cpp
     screens/ReplicaView.cpp

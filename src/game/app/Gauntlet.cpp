@@ -249,7 +249,7 @@ GameContext Gauntlet::context() {
         }
     };
     context.stopVibration = [this] { window().stopRumble(); };
-    context.saveLocalParty = [this](std::span<PartyMember> party) { autoSaveAfterShop(party); };
+    context.saveLocalParty = [this](std::span<PartyMember> party) { autoSave(party); };
     // Only newly earned rewards invoke this callback; preloaded scenario relics do not.
     context.unlockClasses = [this](u16 mask) {
         if (m_saves.opened() || m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
@@ -587,6 +587,9 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
             journey.returningFromChallenge = true;
             journey.destination = m_parent->world.ref();
             journey.party = m_play->scene.party();
+            if (m_play->scene.challenge().won()) {
+                autoSave(journey.party);
+            }
             m_play->scene.close();
             m_loadingPicture.load(renderDevice(), m_options.unpackedDirectory);
             m_loadingPicture.cover();
@@ -796,7 +799,7 @@ void Gauntlet::updateAfterLevel(f64 deltaSeconds) {
                                       m_afterLevel.session().visit() == ShopVisit::Completion;
         if (m_afterLevel.session().visit() == ShopVisit::Level ||
             m_afterLevel.session().visit() == ShopVisit::Shop) {
-            autoSaveAfterShop(m_journey->party);
+            autoSave(m_journey->party);
         }
         m_afterLevel.close();
         if (m_journey->completion) {
@@ -1064,7 +1067,7 @@ void Gauntlet::renderScene(RenderDevice& device) {
     m_smokeTest.render(device, projection, static_cast<f32>(clock().totalSeconds()));
 }
 
-void Gauntlet::autoSaveAfterShop(std::span<PartyMember> party) {
+void Gauntlet::autoSave(std::span<PartyMember> party) {
     if (!m_config.game.autoSave || !m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
         return;
     }

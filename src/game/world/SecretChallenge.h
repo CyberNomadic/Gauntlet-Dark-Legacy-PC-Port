@@ -27,6 +27,7 @@ public:
     f32 duration() const { return m_duration; }
     usize coinsLeft() const { return m_coins.size(); }
     usize totalCoins() const { return m_total; }
+    bool won() const { return m_total != 0 && m_coins.empty(); }
     s32 rewardClass() const { return m_reward; }
     u16 rewardMask() const;
     static s32 classFor(s32 levelIndex);

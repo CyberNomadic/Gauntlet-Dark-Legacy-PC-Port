@@ -134,6 +134,61 @@ TEST_CASE("combat playback samples camera and actor poses on one delayed clock",
     CHECK(playback.sample(14)->players[0]->hitFlash);
 }
 
+TEST_CASE("enemy floor presentation retains local endpoint provenance without changing packets",
+          "[netplay][combat-playback][enemy-presentation]") {
+    CombatPlayback playback;
+    REQUIRE(playback.begin(1, 1));
+    auto first = state(10);
+    first.enemies[0].position = {0, 1, 0};
+    auto last = first;
+    last.motion.tick = 14;
+    last.enemies[0].position = {0.2f, 0, 0};
+    bool blend = true;
+    bool interval = true;
+    SECTION("continuous supported candidates retain both host endpoints") {}
+    SECTION("an animation state transition has no grounded interval") {
+        ++last.enemies[0].animation.action;
+        interval = false;
+    }
+    SECTION("death does not interpolate the old body into the new lifetime state") {
+        last.enemies[0].life = ReplicaEnemyLife::Dying;
+        blend = interval = false;
+    }
+    SECTION("a large teleport holds until its checkpoint") {
+        last.enemies[0].position.x = 64;
+        blend = interval = false;
+    }
+    receive(playback, first);
+    receive(playback, last);
+    EnemyPresentation presentation;
+    const auto middle = playback.sample(12, 0, &presentation);
+    REQUIRE(middle);
+    REQUIRE(presentation.matches(*middle));
+    CHECK(presentation.enemies.size() == static_cast<usize>(interval));
+    CHECK(middle->enemies[0].position ==
+          (blend ? glm::mix(first.enemies[0].position, last.enemies[0].position, 0.5f)
+                 : first.enemies[0].position));
+    CHECK(CombatPacket::encode(*middle) == CombatPacket::encode(*playback.sample(12)));
+    auto foreign = *middle;
+    ++foreign.motion.epoch;
+    CHECK_FALSE(presentation.matches(foreign));
+    foreign = *middle;
+    ++foreign.motion.tick;
+    CHECK_FALSE(presentation.matches(foreign));
+    if (interval) {
+        foreign = *middle;
+        foreign.enemies[0].position.y += 0.1f;
+        CHECK_FALSE(presentation.matches(foreign));
+    }
+    const auto end = playback.sample(14, 0, &presentation);
+    REQUIRE(end);
+    CHECK(presentation.matches(*end));
+    CHECK(presentation.enemies.empty());
+    CHECK(CombatPacket::encode(*end) == CombatPacket::encode(last));
+    CHECK_FALSE(playback.sample(14, -1, &presentation));
+    CHECK(presentation.epoch == 0);
+}
+
 TEST_CASE("portal playback interpolates only a committed departure on the shared clock",
           "[netplay][combat-playback][online-departure]") {
     auto first = state(10);

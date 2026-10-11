@@ -6,9 +6,9 @@
 
 namespace gdl::game {
 void OnlineLevelEntry::open(RenderDevice& device, const GameContext& context, const LevelRef& level,
-                            std::span<const PartyMember> party) {
+                            std::span<const PartyMember> party, bool transitionOnly) {
     close();
-    m_loading.open(device, context, level, party);
+    m_loading.open(device, context, level, party, transitionOnly);
     m_wantsMovie = LevelLoadingScreen::movieWanted(m_loading.movie(), party);
     m_phase = m_loading.active() ? Phase::Map : Phase::Ready;
     log::info("Online entry: {} {}", level.name, m_loading.active() ? "map" : "ready");

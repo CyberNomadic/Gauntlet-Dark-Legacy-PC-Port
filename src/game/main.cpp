@@ -59,11 +59,10 @@ int runGauntlet(std::span<char*> rawArgs) {
     // Settings: the shipped defaults, then the player's own file, then the command line.
     gdl::game::GameConfig config;
     config.loadFile(parsed.options.dataDirectory / "config.json");
-    const std::filesystem::path userSettings = gdl::game::GameConfig::userSettingsPath();
     // The paired-window harness supplies an isolated configuration. Neither
     // window should inherit fullscreen mode or another installation's devices.
-    if (parsed.options.netplayTest.empty() && std::filesystem::exists(userSettings)) {
-        config.loadFile(userSettings);
+    if (parsed.options.netplayTest.empty()) {
+        config.loadUserSettings();
     }
     const bool vsyncFromCommandLine = !parsed.desc.vsync;
     parsed.desc.window.width = config.display.windowWidth;

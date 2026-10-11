@@ -36,7 +36,7 @@ public:
                  const StringTable* strings, const HudResources& resources = {});
     /** Takes a presentation sample, including fractional animation/motion. Missing
      * assets or stale/foreign epochs reject the whole sample, preserving the view. */
-    bool show(const CombatSnapshot& snapshot);
+    bool show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation = nullptr);
     /** Empty when a sample passes preflight; static diagnostic, no mutation or loading. */
     std::string_view rejection(const CombatSnapshot& snapshot) const;
     void draw(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth, f32 frameHeight,
@@ -69,6 +69,9 @@ private:
     FighterResources m_fighterResources;
     ReplicaFighters m_fighters;
     WorldScene m_geometry;
+    /** Private query-only floor artwork at lower, upper, and displayed clocks.
+     * Never exposed to or advanced by guest gameplay. */
+    std::array<WorldCollision, 3> m_presentationFloors;
     ReplicaHud m_hud;
     std::optional<CombatSnapshot> m_shown;
     bool m_resuming = false;

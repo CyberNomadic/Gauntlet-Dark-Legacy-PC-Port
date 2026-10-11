@@ -161,8 +161,8 @@ void ReplicaStage::clear() {
     m_assets.reset();
     m_epoch = 0;
 }
-bool ReplicaStage::show(const CombatSnapshot& snapshot) {
-    return m_assets != nullptr && m_assets->view.show(snapshot);
+bool ReplicaStage::show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation) {
+    return m_assets != nullptr && m_assets->view.show(snapshot, presentation);
 }
 void ReplicaStage::draw(RenderDevice& device, const Mat4& frameProjection, f32 width, f32 height,
                         f32 textureFrame, const GameConfig& video) {

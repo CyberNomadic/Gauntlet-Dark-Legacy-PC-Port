@@ -13,7 +13,8 @@ public:
     static constexpr u64 kCatchup = 12;
     bool begin(const MatchSession& match);
     void clear();
-    std::optional<CombatSnapshot> sample(const MatchSession& match, f64 seconds);
+    std::optional<CombatSnapshot> sample(const MatchSession& match, f64 seconds,
+                                         EnemyPresentation* presentation = nullptr);
     u64 tick() const { return m_tick; }
     f64 fraction() const { return m_fraction; }
 

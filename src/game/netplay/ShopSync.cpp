@@ -27,7 +27,7 @@ u64 wide(ByteReader& reader) {
 std::vector<u8> packet(u64 epoch, Kind kind) {
     std::vector<u8> bytes;
     word(bytes, kMagic);
-    bytes.insert(bytes.end(), {1, static_cast<u8>(kind), 0, 0});
+    bytes.insert(bytes.end(), {2, static_cast<u8>(kind), 0, 0});
     wide(bytes, epoch);
     return bytes;
 }
@@ -100,7 +100,8 @@ void ShopSync::begin(u64 epoch, u8 local, const std::array<u8, 4>& owners,
         auto bytes = packet(epoch, Kind::Setup);
         word(bytes, setup->source);
         word(bytes, setup->destination);
-        word(bytes, static_cast<u32>(setup->expanded) | (static_cast<u32>(setup->fallen) << 8));
+        word(bytes, static_cast<u32>(setup->expanded) | (static_cast<u32>(setup->ending) << 1) |
+                        (static_cast<u32>(setup->fallen) << 8));
         for (const auto value : setup->maxima) {
             word(bytes, static_cast<u32>(value));
         }
@@ -118,7 +119,7 @@ ShopSync::Admission ShopSync::receive(u8 peer, std::span<const u8> bytes) {
     }
     ByteReader reader(bytes);
     reader.readU32();
-    if (reader.readU8() != 1) {
+    if (reader.readU8() != 2) {
         return Admission::Invalid;
     }
     const auto kind = static_cast<Kind>(reader.readU8());
@@ -144,10 +145,11 @@ ShopSync::Admission ShopSync::receive(u8 peer, std::span<const u8> bytes) {
         setup.source = reader.readU32();
         setup.destination = reader.readU32();
         const auto flags = reader.readU32();
-        if ((flags & ~0xf01U) != 0) {
+        if ((flags & ~0xf03U) != 0) {
             return Admission::Invalid;
         }
         setup.expanded = (flags & 1) != 0;
+        setup.ending = (flags & 2) != 0;
         setup.fallen = static_cast<u8>(flags >> 8);
         for (auto& value : setup.maxima) {
             value = reader.readS32();

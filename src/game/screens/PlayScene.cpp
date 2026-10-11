@@ -50,6 +50,7 @@ void PlayScene::pauseGameplaySounds() {
         m_context.stopVibration();
     }
     m_audio.pauseAmbience();
+    m_triggerCues.pause(m_audio);
     m_attacks.stopDeathSounds(m_players);
     m_opponents.stopDeathSound();
 }
@@ -813,7 +814,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     if (m_gameOver.active()) {
         // The world remains behind the caption, but no player input, portal,
         // reward or victory ceremony can restart the finished session.
-        m_world->update(seconds);
+        m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
         m_portals.animate(seconds);
         m_effects.update(seconds);
         updateAmbience();
@@ -887,7 +888,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
         if (m_departure.finished()) {
             m_transition.comeUp();
         }
-        m_world->update(seconds);
+        m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
         m_effects.update(seconds);
         updateAmbience();
         return m_transition.covering() && !dying ? PlayOutcome::Travel : PlayOutcome::Running;
@@ -911,7 +912,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
             }
         }
         m_bossSequence.advanceLegend(0, m_opponents.bosses(), m_players);
-        m_world->update(seconds);
+        m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
         updateAmbience();
         const bool cameraHandoff = m_arrival.camera().active();
         // Ride to the camera that will actually take over. A boss entrance must not

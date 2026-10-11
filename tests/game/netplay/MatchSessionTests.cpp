@@ -2,6 +2,7 @@
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/platform/Input.h"
 
@@ -22,9 +23,13 @@ struct Wire final : PacketTransport {
         Delivery delivery;
     };
     SendResult result = SendResult::Sent;
+    bool feedbackCongested = false;
     usize budget = std::numeric_limits<usize>::max();
     std::vector<Packet> sent;
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
+        if (feedbackCongested && FeedbackSync::recognizes(bytes)) {
+            return SendResult::Congested;
+        }
         if (result == SendResult::Sent) {
             if (budget == 0) {
                 return SendResult::Congested;
@@ -88,10 +93,14 @@ struct Room {
             }
         }
     }
-    void ready(MatchTransition transition = MatchTransition::Start, u32 scene = 7) {
+    void ready(MatchTransition transition = MatchTransition::Start, u32 scene = 7,
+               bool challengeWon = false) {
         const auto profiles = party();
-        REQUIRE(sessions[1].prepare(scene, transition,
-                                    transition == MatchTransition::Travel ? &profiles : nullptr));
+        const bool checkpointed = transition == MatchTransition::Travel ||
+                                  transition == MatchTransition::SecretEnter ||
+                                  transition == MatchTransition::SecretReturn;
+        REQUIRE(sessions[1].prepare(scene, transition, checkpointed ? &profiles : nullptr, nullptr,
+                                    challengeWon));
         pump();
         for (u8 peer = 1; peer <= 4; ++peer) {
             if (present(peer)) {
@@ -143,14 +152,14 @@ TEST_CASE("match control has an exact bounded versioned encoding", "[netplay][ma
         CHECK(decoded->kind == static_cast<MatchControlKind>(kind));
         CHECK(decoded->stop == stop);
         CHECK(decoded->movieSkipVotes == votes);
-        CHECK(bytes[4] == 3);
+        CHECK(bytes[4] == 4);
         for (usize size = 0; size < bytes.size(); ++size) {
             CHECK_FALSE(MatchControlPacket::decode(std::span(bytes).first(size)));
         }
         auto trailing = bytes;
         trailing.push_back(0);
         CHECK_FALSE(MatchControlPacket::decode(trailing));
-        for (const usize index : {0U, 4U, 5U, 6U, 7U, 20U, 22U, 23U, 24U}) {
+        for (const usize index : {0U, 4U, 5U, 6U, 7U, 20U, 22U, 23U, 24U, 44U}) {
             auto corrupt = bytes;
             corrupt[index] = 255;
             CHECK_FALSE(MatchControlPacket::decode(corrupt));
@@ -173,6 +182,233 @@ TEST_CASE("match control has an exact bounded versioned encoding", "[netplay][ma
         context.epoch = 0;
     }
     CHECK_FALSE(MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context}));
+}
+
+TEST_CASE("secret result flags are bounded host context and secret entries have no movie votes",
+          "[netplay][match-session][secret-transition]") {
+    Room room({1, 2, 0, 0});
+    REQUIRE(room.sessions[1].prepare(7));
+    auto context = room.sessions[1].context();
+    for (const auto transition :
+         {MatchTransition::Start, MatchTransition::Travel, MatchTransition::Resume,
+          MatchTransition::Shop, MatchTransition::SecretEnter, MatchTransition::SecretReturn}) {
+        context.transition = transition;
+        context.challengeWon = false;
+        CHECK(MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context}));
+        context.challengeWon = true;
+        const auto encoded =
+            MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context});
+        CHECK(encoded.has_value() == (transition == MatchTransition::SecretReturn));
+        context.challengeWon = false;
+        const auto vote = MatchControlPacket::encode(
+            {MatchControlKind::MovieSkipVote, MatchStop::None, context, 1});
+        CHECK(vote.has_value() ==
+              (transition == MatchTransition::Start || transition == MatchTransition::Travel));
+    }
+    context.transition = MatchTransition::SecretReturn;
+    context.challengeWon = true;
+    const auto encoded =
+        MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context});
+    REQUIRE(encoded);
+    REQUIRE(encoded->size() == 48);
+    CHECK((*encoded)[44] == 1);
+    REQUIRE(MatchControlPacket::decode(*encoded));
+    CHECK(MatchControlPacket::decode(*encoded)->context.challengeWon);
+    auto invalid = *encoded;
+    invalid[4] = 3;
+    CHECK_FALSE(MatchControlPacket::decode(invalid));
+    invalid = *encoded;
+    invalid[44] = 2;
+    CHECK_FALSE(MatchControlPacket::decode(invalid));
+    invalid = *encoded;
+    invalid[45] = 1;
+    CHECK_FALSE(MatchControlPacket::decode(invalid));
+}
+
+TEST_CASE("secret enter and return form fresh authenticated checkpoint epochs without movies",
+          "[netplay][match-session][secret-transition]") {
+    Room room({1, 2, 2, 1});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    const auto startEpoch = host.context().epoch;
+    const auto party = room.party();
+    CHECK_FALSE(host.prepare(8, MatchTransition::SecretEnter, &party, nullptr, true));
+    CHECK_FALSE(host.prepare(8, MatchTransition::Travel, &party, nullptr, true));
+    CHECK(host.context().epoch == startEpoch);
+    room.ready(MatchTransition::SecretEnter, 8);
+    CHECK(host.context().epoch == startEpoch + 1);
+    CHECK(guest.context() == host.context());
+    CHECK_FALSE(host.context().challengeWon);
+    CHECK(host.travelParty());
+    CHECK(guest.travelParty());
+    const bool won = GENERATE(false, true);
+    REQUIRE(host.prepare(7, MatchTransition::SecretReturn, &party, nullptr, won));
+    room.pump();
+    CHECK_FALSE(host.requestMovieSkip(0));
+    CHECK_FALSE(guest.requestMovieSkip(1));
+    CHECK_FALSE(host.movieSkipReady());
+    CHECK_FALSE(guest.movieSkipReady());
+    CHECK(guest.context().challengeWon == won);
+    CHECK(guest.context().epoch == startEpoch + 2);
+    auto forged = guest.context();
+    forged.challengeWon = !won;
+    const auto forgedPrepare =
+        MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, forged});
+    REQUIRE(forgedPrepare);
+    CHECK(host.receive(1, *forgedPrepare) == Admission::WrongPeer);
+    const auto forgedReady =
+        MatchControlPacket::encode({MatchControlKind::Ready, MatchStop::None, forged});
+    REQUIRE(forgedReady);
+    CHECK(host.receive(1, *forgedReady) == Admission::Stale);
+    CHECK(host.context().challengeWon == won);
+    REQUIRE(host.loaded());
+    REQUIRE(guest.loaded());
+    room.pump();
+    CHECK(host.phase() == Phase::Running);
+    CHECK(guest.phase() == Phase::Running);
+}
+
+TEST_CASE("secret transitions require running gameplay and cannot leave a shop",
+          "[netplay][match-session][secret-transition]") {
+    Room room({1, 2, 0, 0});
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    const auto party = room.party();
+    CHECK_FALSE(host.prepare(8, MatchTransition::SecretEnter, &party));
+    CHECK_FALSE(host.prepare(7, MatchTransition::SecretReturn, &party));
+    room.ready();
+    REQUIRE(host.requestPause());
+    room.pump();
+    for (const auto transition : {MatchTransition::SecretEnter, MatchTransition::SecretReturn}) {
+        CHECK_FALSE(host.prepare(8, transition, &party));
+        auto context = host.context();
+        ++context.epoch;
+        context.transition = transition;
+        const auto packet =
+            MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context});
+        REQUIRE(packet);
+        CHECK(guest.receive(99, *packet) == Admission::WrongPhase);
+    }
+    room.ready(MatchTransition::Resume);
+    ShopSetup setup;
+    setup.source = 7;
+    setup.destination = 8;
+    setup.maxima = {1000, 100, 1000};
+    REQUIRE(host.prepare(7, MatchTransition::Shop, &party, &setup));
+    room.pump();
+    REQUIRE(host.loaded());
+    REQUIRE(guest.loaded());
+    room.pump();
+    for (const auto transition : {MatchTransition::SecretEnter, MatchTransition::SecretReturn}) {
+        CHECK_FALSE(host.prepare(8, transition, &party));
+        auto context = host.context();
+        ++context.epoch;
+        context.transition = transition;
+        const auto packet =
+            MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context});
+        REQUIRE(packet);
+        CHECK(guest.receive(99, *packet) == Admission::WrongPhase);
+    }
+    CHECK(guest.context().transition == MatchTransition::Shop);
+}
+
+TEST_CASE("match feedback uses authenticated reliable owner connections only",
+          "[netplay][match-session][feedback-sync][rumble]") {
+    Room room({1, 2, 3, 2});
+    room.ready();
+    auto& host = room.sessions[1];
+    REQUIRE(host.feedback().emit(0, 15, ControlFeedback::Damage));
+    REQUIRE(host.feedback().take() == FeedbackEvent{0, 15, ControlFeedback::Damage});
+    for (s32 seat = 1; seat < 4; ++seat) {
+        REQUIRE(host.feedback().emit(seat, 0, ControlFeedback::ThunderHammer));
+    }
+    auto& wire = room.wires[1];
+    host.flush(wire);
+    REQUIRE(wire.sent.size() == 3);
+    for (usize i = 0; i < wire.sent.size(); ++i) {
+        const auto& packet = wire.sent[i];
+        CHECK(packet.delivery == PacketTransport::Delivery::Reliable);
+        const auto owner = room.owners[i + 1];
+        CHECK(packet.connection == owner - 1U);
+        auto& guest = room.sessions[owner];
+        CHECK(guest.receive(42, packet.bytes) == Admission::WrongPeer);
+        CHECK(host.receive(1, packet.bytes) == Admission::WrongPeer);
+        REQUIRE(guest.receive(99, packet.bytes) == Admission::Accepted);
+        CHECK(guest.receive(99, packet.bytes) == Admission::Stale);
+        REQUIRE(guest.feedback().take() ==
+                FeedbackEvent{static_cast<u8>(i + 1), 0, ControlFeedback::ThunderHammer});
+    }
+    CHECK_FALSE(room.sessions[2].feedback().take());
+    CHECK_FALSE(room.sessions[3].feedback().take());
+}
+
+TEST_CASE("congested feedback retains reliable cues without blocking gameplay packets",
+          "[netplay][match-session][feedback-sync][rumble]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(host.feedback().emit(1, 10, ControlFeedback::Damage));
+    room.wires[1].feedbackCongested = true;
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    host.flush(room.wires[1]);
+    CHECK(host.feedback().outgoing().size() == 1);
+    REQUIRE_FALSE(room.wires[1].sent.empty());
+    for (const auto& packet : room.wires[1].sent) {
+        CHECK(packet.delivery == PacketTransport::Delivery::Unreliable);
+    }
+    REQUIRE(guest.feedback().setEnabled(1, false));
+    room.wires[2].feedbackCongested = true;
+    REQUIRE(MatchInputs::sample(guest, {}));
+    guest.flush(room.wires[2]);
+    CHECK(guest.feedback().outgoing().size() == 1);
+    REQUIRE(room.wires[2].sent.size() == 1);
+    CHECK(room.wires[2].sent.front().delivery == PacketTransport::Delivery::Unreliable);
+    room.wires[1].feedbackCongested = false;
+    room.wires[2].feedbackCongested = false;
+    room.pump();
+    CHECK(host.feedback().outgoing().empty());
+    CHECK(guest.feedback().outgoing().empty());
+    CHECK_FALSE(guest.feedback().take()); // Old cue arrived after the local pause.
+    REQUIRE(guest.feedback().setEnabled(1, true));
+    room.pump();
+    REQUIRE(host.feedback().emit(1, 0, ControlFeedback::MeleeHit));
+    room.pump();
+    REQUIRE(guest.feedback().take() == FeedbackEvent{1, 0, ControlFeedback::MeleeHit});
+}
+
+TEST_CASE("match phase barriers discard feedback before pause travel and disconnect",
+          "[netplay][match-session][feedback-sync][rumble]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(host.feedback().emit(1, 20, ControlFeedback::Damage));
+    const auto stale = host.feedback().outgoing().front().bytes;
+    REQUIRE(guest.receive(99, stale) == Admission::Accepted);
+    REQUIRE(host.requestPause());
+    CHECK(host.feedback().outgoing().empty());
+    room.pump();
+    CHECK_FALSE(guest.feedback().take());
+    CHECK(guest.receive(99, stale) == Admission::Stale);
+    room.ready(MatchTransition::Resume);
+    CHECK(guest.receive(99, stale) == Admission::Stale);
+    REQUIRE(host.feedback().emit(1, 20, ControlFeedback::Damage));
+    room.ready(MatchTransition::SecretEnter, 8);
+    CHECK(host.feedback().outgoing().empty());
+    CHECK_FALSE(guest.feedback().take());
+    CHECK(guest.receive(99, stale) == Admission::Stale);
+    REQUIRE(host.feedback().emit(1, 20, ControlFeedback::Damage));
+    room.wires[1].result = PacketTransport::SendResult::Disconnected;
+    host.flush(room.wires[1]);
+    CHECK(host.phase() == Phase::Stopped);
+    CHECK(host.feedback().outgoing().empty());
+    CHECK_FALSE(host.feedback().take());
+    guest.disconnected(99);
+    CHECK_FALSE(guest.feedback().take());
+    CHECK(guest.receive(99, stale) == Admission::WrongPeer);
 }
 
 TEST_CASE("movie skipping requires every occupied seat not just every machine",
@@ -286,8 +522,11 @@ TEST_CASE("match admission separates room peer identities from connection handle
     CHECK(session.open(1, owners, valid));
 }
 
-TEST_CASE("travel waits for every profile and rejects stale or forged progression",
-          "[netplay][match-session][party-checkpoint]") {
+TEST_CASE("travel and secret transitions wait for every profile and reject forged progression",
+          "[netplay][match-session][party-checkpoint][secret-transition]") {
+    const auto transition = GENERATE(MatchTransition::Travel, MatchTransition::SecretEnter,
+                                     MatchTransition::SecretReturn);
+    const bool won = transition == MatchTransition::SecretReturn;
     Room room({1, 2, 2, 0});
     room.ready();
     auto& host = room.sessions[1];
@@ -296,13 +535,13 @@ TEST_CASE("travel waits for every profile and rejects stale or forged progressio
     auto party = room.party();
     party[1]->gold = 7654;
     party[1]->progress.inventory.keys = 7;
-    CHECK_FALSE(host.prepare(8, MatchTransition::Travel));
+    CHECK_FALSE(host.prepare(8, transition));
     auto missing = party;
     missing[2].reset();
-    CHECK_FALSE(host.prepare(8, MatchTransition::Travel, &missing));
+    CHECK_FALSE(host.prepare(8, transition, &missing, nullptr, won));
     CHECK(host.context() == oldContext);
     CHECK(host.phase() == Phase::Running);
-    REQUIRE(host.prepare(8, MatchTransition::Travel, &party));
+    REQUIRE(host.prepare(8, transition, &party, nullptr, won));
     REQUIRE(host.travelParty());
     REQUIRE(host.loaded());
     auto& wire = room.wires[1];
@@ -310,6 +549,8 @@ TEST_CASE("travel waits for every profile and rejects stale or forged progressio
     host.flush(wire);
     REQUIRE(wire.sent.size() == 1);
     REQUIRE(guest.receive(99, wire.sent.back().bytes) == Admission::Accepted);
+    CHECK(guest.context().transition == transition);
+    CHECK(guest.context().challengeWon == won);
     wire.sent.clear();
     CHECK_FALSE(guest.travelParty());
     CHECK_FALSE(guest.loaded());

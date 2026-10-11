@@ -17,7 +17,11 @@ bool ClientClock::begin(const MatchSession& match) {
 void ClientClock::clear() {
     *this = ClientClock{};
 }
-std::optional<CombatSnapshot> ClientClock::sample(const MatchSession& match, f64 seconds) {
+std::optional<CombatSnapshot> ClientClock::sample(const MatchSession& match, f64 seconds,
+                                                  EnemyPresentation* presentation) {
+    if (presentation != nullptr) {
+        *presentation = {};
+    }
     if (match.host() || match.context() != m_context || !std::isfinite(seconds) || seconds < 0 ||
         (match.phase() != MatchSession::Phase::Running &&
          match.phase() != MatchSession::Phase::Paused)) {
@@ -60,6 +64,6 @@ std::optional<CombatSnapshot> ClientClock::sample(const MatchSession& match, f64
     }
     // f32 rounding near 1 must not produce a forbidden sample fraction.
     const f32 fraction = std::min(static_cast<f32>(m_fraction), std::nextafter(1.0f, 0.0f));
-    return match.playback().sample(m_tick, fraction);
+    return match.playback().sample(m_tick, fraction, presentation);
 }
 } // namespace gdl::game

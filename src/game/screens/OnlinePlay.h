@@ -2,6 +2,7 @@
 
 #include "game/netplay/ClientClock.h"
 #include "game/screens/AfterLevelScene.h"
+#include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
 #include "game/screens/OnlineParty.h"
 #include "game/screens/PlayReplication.h"
@@ -58,7 +59,8 @@ public:
     const ReplicaView* replica() const { return m_replica.view(); }
     const CombatSnapshot* shown() const;
     OnlineLevelEntry::Phase entryPhase() const { return m_entry.phase(); }
-    bool entryVisible() const { return m_entry.visible(); }
+    bool entryVisible() const { return m_entry.visible() || m_completion.visible(); }
+    const OnlineCompletion& completion() const { return m_completion; }
     const AfterLevelScene* shopScene() const { return m_shop.isOpen() ? &m_shop : nullptr; }
 
     /** Stable native realm/index encoding, not directory-enumeration order.
@@ -74,20 +76,29 @@ private:
     Phase updateShop(const SessionInputs::Frame& devices);
     Phase fail(Failure reason);
     void quiet();
+    void feedback();
     RenderDevice* m_device = nullptr;
     GameContext m_context;
+    std::function<void(s32, s32, ControlFeedback)> m_vibrate;
+    std::function<void(u16)> m_unlockClasses;
     OnlineSession* m_session = nullptr;
     OnlineParty* m_selection = nullptr;
     PlayOptions m_options;
     std::vector<PartyMember> m_travelMembers;
     std::unique_ptr<Host> m_host;
+    std::unique_ptr<Host> m_parent;
+    std::optional<LevelRef> m_level;
+    std::optional<LevelRef> m_secretParent;
     ReplicaStage m_replica;
     ClientClock m_clock;
     OnlineLevelEntry m_entry;
+    OnlineCompletion m_completion;
     AfterLevelScene m_shop;
     GameConfig m_shopConfig;
     bool m_afterShop = false;
+    bool m_saveAfterShop = false;
     u64 m_entryEpoch = 0;
+    u64 m_completionEpoch = 0;
     Phase m_phase = Phase::Closed;
     Failure m_failure = Failure::None;
     PlayReplication::Result m_outcome = PlayReplication::Result::Held;

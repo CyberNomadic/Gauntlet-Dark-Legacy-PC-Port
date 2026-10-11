@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -475,11 +476,12 @@ std::filesystem::path GameConfig::userSettingsPath() {
 }
 
 std::filesystem::path GameConfig::userSettingsPath(const std::filesystem::path& gameDirectory) {
-    if (std::filesystem::is_regular_file(gameDirectory / "portable.flag")) {
-        return gameDirectory / "config" / kSettingsFile;
-    }
+    return gameDirectory / "config" / kSettingsFile;
+}
+
+bool GameConfig::loadUserSettings() {
 #if defined(_WIN32)
-    std::filesystem::path base = environmentPath("APPDATA");
+    const std::filesystem::path base = environmentPath("APPDATA");
 #else
     std::filesystem::path base = environmentPath("XDG_CONFIG_HOME");
     if (base.empty()) {
@@ -490,9 +492,43 @@ std::filesystem::path GameConfig::userSettingsPath(const std::filesystem::path& 
     }
 #endif
     if (base.empty()) {
-        base = std::filesystem::current_path();
+        return loadUserSettings(paths::executableDirectory(), {});
     }
-    return base / kSettingsFolder / kSettingsFile;
+    return loadUserSettings(paths::executableDirectory(), base / kSettingsFolder / kSettingsFile);
+}
+
+bool GameConfig::loadUserSettings(const std::filesystem::path& gameDirectory,
+                                  const std::filesystem::path& legacyFile) {
+    const auto local = userSettingsPath(gameDirectory);
+    try {
+        // A damaged local file must not silently be replaced by stale settings.
+        const bool installed = std::filesystem::exists(local);
+        if (!installed && (legacyFile.empty() || !std::filesystem::is_regular_file(legacyFile))) {
+            return false;
+        }
+        auto loaded = *this;
+        if (!loaded.loadFile(installed ? local : legacyFile)) {
+            return false;
+        }
+        if (!installed) {
+            std::filesystem::create_directories(local.parent_path());
+            // Another game instance may have created local settings since the
+            // existence check. Never replace that instance's settings during migration.
+            if (std::filesystem::copy_file(legacyFile, local,
+                                           std::filesystem::copy_options::skip_existing)) {
+                log::info("Imported existing settings into {}", local.string());
+            }
+            loaded = *this;
+            if (!loaded.loadFile(local)) {
+                return false;
+            }
+        }
+        *this = std::move(loaded);
+        return true;
+    } catch (const std::exception& error) {
+        log::warn("Could not load local settings {}: {}", local.string(), error.what());
+        return false;
+    }
 }
 
 } // namespace gdl::game

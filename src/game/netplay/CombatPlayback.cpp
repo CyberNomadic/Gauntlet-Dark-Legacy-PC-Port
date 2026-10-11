@@ -60,6 +60,50 @@ Mat4 placementBetween(const Mat4& start, const Mat4& end, f32 t) {
 }
 } // namespace
 
+bool EnemyPresentation::matches(const CombatSnapshot& snapshot) const {
+    if (epoch != snapshot.motion.epoch || tick != snapshot.motion.tick || !std::isfinite(blend) ||
+        blend < 0 || blend > 1 || enemies.size() > CombatSnapshot::kMaxEnemies ||
+        shownGeometry.has_value() != snapshot.geometry.has_value()) {
+        return false;
+    }
+    if (shownGeometry) {
+        const auto& expected = *shownGeometry;
+        const auto& actual = *snapshot.geometry;
+        if (expected.layout != actual.layout || expected.objectCount != actual.objectCount ||
+            expected.darken != actual.darken || expected.objects.size() != actual.objects.size()) {
+            return false;
+        }
+        for (usize i = 0; i < expected.objects.size(); ++i) {
+            const auto& a = expected.objects[i];
+            const auto& b = actual.objects[i];
+            if (a.index != b.index || a.continuity != b.continuity || a.local != b.local ||
+                a.alpha != b.alpha || a.visible != b.visible) {
+                return false;
+            }
+        }
+    }
+    u64 previous = 0;
+    for (const auto& interval : enemies) {
+        const auto& from = interval.from;
+        const auto& to = interval.to;
+        const auto found = std::ranges::lower_bound(snapshot.enemies, from.instance, {},
+                                                    &EnemyCombatState::instance);
+        if (from.instance <= previous || found == snapshot.enemies.end() ||
+            found->instance != from.instance || to.instance != from.instance ||
+            from.kind != to.kind || from.kind != found->kind || from.tier != to.tier ||
+            from.tier != found->tier || from.variant != to.variant ||
+            from.variant != found->variant || from.life != to.life || from.life != found->life ||
+            from.animation.action != to.animation.action ||
+            from.animation.action != found->animation.action ||
+            glm::distance(from.position, to.position) > 32 ||
+            glm::mix(from.position, to.position, blend) != found->position) {
+            return false;
+        }
+        previous = from.instance;
+    }
+    return true;
+}
+
 bool CombatPlayback::begin(PacketTransport::Connection host, u64 epoch) {
     if (!m_receiver.begin(host, epoch)) {
         return false;
@@ -92,12 +136,24 @@ CombatReplica::Admission CombatPlayback::receive(PacketTransport::Connection sen
     }
     return admitted;
 }
-std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction) const {
+std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
+                                                     EnemyPresentation* presentation) const {
+    if (presentation != nullptr) {
+        *presentation = {};
+    }
+    const auto stamp = [&](const CombatSnapshot& snapshot) {
+        if (presentation != nullptr) {
+            presentation->epoch = snapshot.motion.epoch;
+            presentation->tick = snapshot.motion.tick;
+            presentation->shownGeometry = snapshot.geometry;
+        }
+    };
     const auto motion = m_motion.sample(tick, fraction);
     if (!motion || m_history.empty()) {
         return std::nullopt;
     }
     if (tick < m_history.front().motion.tick) {
+        stamp(m_history.front());
         return m_history.front();
     }
     for (usize i = 1; i < m_history.size(); ++i) {
@@ -110,6 +166,11 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction) con
                                        static_cast<f64>(upper.motion.tick - lower.motion.tick));
         auto shown = lower;
         shown.motion = *motion;
+        if (presentation != nullptr) {
+            presentation->blend = t;
+            presentation->fromGeometry = lower.geometry;
+            presentation->toGeometry = upper.geometry;
+        }
         if (shown.geometry && upper.geometry && shown.geometry->layout == upper.geometry->layout &&
             shown.geometry->objectCount == upper.geometry->objectCount) {
             shown.geometry->darken = std::lerp(shown.geometry->darken, upper.geometry->darken, t);
@@ -170,8 +231,12 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction) con
                                                         &EnemyCombatState::instance);
             if (found == upper.enemies.end() || found->instance != enemy.instance ||
                 found->life != enemy.life || found->kind != enemy.kind ||
-                found->tier != enemy.tier || found->variant != enemy.variant) {
+                found->tier != enemy.tier || found->variant != enemy.variant ||
+                glm::distance(enemy.position, found->position) > 32) {
                 continue;
+            }
+            if (presentation != nullptr && enemy.animation.action == found->animation.action) {
+                presentation->enemies.push_back({enemy, *found});
             }
             enemy.position = glm::mix(enemy.position, found->position, t);
             enemy.yaw = std::remainder(
@@ -270,8 +335,10 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction) con
                 }
             }
         }
+        stamp(shown);
         return shown;
     }
+    stamp(m_history.back());
     return m_history.back();
 }
 } // namespace gdl::game

@@ -17,7 +17,7 @@ public:
     OnlineLevelEntry& operator=(OnlineLevelEntry&&) = delete;
     ~OnlineLevelEntry() { close(); }
     void open(RenderDevice& device, const GameContext& context, const LevelRef& level,
-              std::span<const PartyMember> party);
+              std::span<const PartyMember> party, bool transitionOnly = false);
     void close();
     /** skipMovie is the host-confirmed unanimous result, never a local button press. */
     void update(RenderDevice& device, const GameContext& context, bool skipMovie);

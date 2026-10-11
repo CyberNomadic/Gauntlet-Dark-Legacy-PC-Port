@@ -86,9 +86,12 @@ bool ReplicaActors::companionsReady(const CombatSnapshot& snapshot) const {
 void ReplicaActors::loadPortalSkin(RenderDevice& device, TextureSet& weapons) {
     m_portalSkin.loadSkin(device, weapons);
 }
-bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources) {
+bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
+                         const EnemyPresentation* presentation,
+                         std::span<const WorldCollision> presentationFloors) {
     if (m_epoch == 0 || snapshot.motion.epoch != m_epoch || !snapshot.valid() ||
-        (m_tick && snapshot.motion.tick < *m_tick) || !companionsReady(snapshot)) {
+        (m_tick && snapshot.motion.tick < *m_tick) || !companionsReady(snapshot) ||
+        (presentation != nullptr && !presentation->matches(snapshot))) {
         return false;
     }
     m_tick = snapshot.motion.tick;
@@ -140,7 +143,22 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources) {
         enemy.shown = statue ? enemy.pose.rest() : enemy.pose.show(state.animation);
         enemy.animation = state.animation;
         enemy.hitFlash = state.hitFlash;
-        enemy.placement = placement(state.position, state.yaw);
+        Vec3 shown = state.position;
+        if (presentation != nullptr && presentationFloors.size() == 3) {
+            const auto interval =
+                std::ranges::lower_bound(presentation->enemies, state.instance, {},
+                                         [](const auto& row) { return row.from.instance; });
+            if (interval != presentation->enemies.end() &&
+                interval->from.instance == state.instance &&
+                state.animation.action < kEnemyActionCount) {
+                shown = Enemies::supportedPresentation(
+                    &presentationFloors[2], interval->from.position, interval->to.position,
+                    presentation->blend, static_cast<EnemyAction>(state.animation.action),
+                    state.life == ReplicaEnemyLife::Active, presentationFloors.data(),
+                    &presentationFloors[1]);
+            }
+        }
+        enemy.placement = placement(shown, state.yaw);
     }
     return true;
 }

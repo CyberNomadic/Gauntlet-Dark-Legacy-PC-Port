@@ -79,6 +79,13 @@ void LevelSoundscape::updateAmbience(std::span<const Vec3> listeners, const Ambi
                                      f32 volume, bool ducked, const WorldScene* world) {
     m_ear = ear;
     if (m_output != nullptr) {
+        // Motion loops belong to their still-moving target, not to the menu's
+        // clock. Restore only the records that survived a gameplay pause.
+        for (auto& opening : m_openings) {
+            if (opening.handle == kNoSound) {
+                opening.handle = playOpening(opening.slot, false);
+            }
+        }
         m_ambience.update(*m_output, listeners, ear, volume,
                           ducked ? std::optional<f32>{kDuckedLevel} : std::nullopt, world);
         if (const auto scale = m_ambience.musicScale(); scale.has_value()) {
@@ -93,6 +100,16 @@ void LevelSoundscape::pauseAmbience() {
     }
     stopLoop(m_exitFlame);
     stopLoop(m_hourglass);
+    // Some opening slots are finite (TOWAMB S_ELVMETL), even when the target
+    // keeps moving. Do not replay a cue that ended before the initial pause.
+    // A zero handle already belongs to a live cue retained by an earlier pause.
+    std::erase_if(m_openings, [this](const Opening& opening) {
+        return opening.handle != kNoSound && !isPlaying(opening.handle);
+    });
+    for (auto& opening : m_openings) {
+        stop(opening.handle);
+        opening.handle = kNoSound;
+    }
 }
 
 void LevelSoundscape::updateMusicAreas(std::span<const Vec3> listeners, const WorldScene* world) {
@@ -677,7 +694,7 @@ void LevelSoundscape::opening(const TriggerOpening& event) {
         return;
     }
     if (const SoundHandle handle = playOpening(event.sound, false); handle != kNoSound) {
-        m_openings.push_back(Opening{event.target, handle});
+        m_openings.push_back(Opening{event.target, event.sound, handle});
     }
 }
 

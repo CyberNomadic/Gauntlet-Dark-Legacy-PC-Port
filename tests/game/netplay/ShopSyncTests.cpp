@@ -89,6 +89,28 @@ TEST_CASE("shop wire rejects malformed packets and bounds congestion", "[netplay
     CHECK_FALSE(shops.host.advance());
     CHECK(shops.host.outgoing().size() <= ShopSync::kBudget);
 }
+TEST_CASE("shop setup authenticates the ending flag and rejects old or undefined wire flags",
+          "[netplay][online-shop][online-completion]") {
+    ShopSync host;
+    ShopSync guest;
+    ShopSetup setup{1793, 3585, true, 0, {1000, 100, 1000}, {}};
+    setup.ending = true;
+    host.begin(2, 1, {1, 2, 0, 0}, {11, 22, 0, 0}, &setup);
+    guest.begin(2, 2, {1, 2, 0, 0}, {11, 22, 0, 0});
+    REQUIRE(host.outgoing().size() == 1);
+    auto packet = host.outgoing().front().bytes;
+    CHECK(guest.receive(3, packet) == Admission::WrongPeer);
+    packet[4] = 1;
+    CHECK(guest.receive(1, packet) == Admission::Invalid);
+    packet[4] = 2;
+    packet[24] |= 4;
+    CHECK(guest.receive(1, packet) == Admission::Invalid);
+    CHECK_FALSE(guest.setup());
+    Shops::relay(host, guest, 1);
+    REQUIRE(guest.setup());
+    CHECK(guest.setup()->expanded);
+    CHECK(guest.setup()->ending);
+}
 TEST_CASE("a two-peer post-level epoch waits for profiles setup and every shop close",
           "[netplay][online-shop]") {
     test::OnlinePair pair;

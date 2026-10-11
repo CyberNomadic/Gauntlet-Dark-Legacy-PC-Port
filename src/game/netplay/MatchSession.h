@@ -3,6 +3,7 @@
 #include <deque>
 
 #include "game/netplay/CombatPlayback.h"
+#include "game/netplay/FeedbackSync.h"
 #include "game/netplay/InputTimeline.h"
 #include "game/netplay/PartyCheckpoint.h"
 #include "game/netplay/ShopSync.h"
@@ -16,7 +17,7 @@ struct MatchLink {
     u8 peer = 0;
     PacketTransport::Connection connection = 0;
 };
-enum class MatchTransition : u8 { Start, Travel, Resume, Shop };
+enum class MatchTransition : u8 { Start, Travel, Resume, Shop, SecretEnter, SecretReturn };
 enum class MatchStop : u8 { None, Left, Disconnected, LoadTimeout, TransportFailure };
 enum class MatchControlKind : u8 {
     Prepare,
@@ -35,6 +36,7 @@ struct MatchContext {
     MatchTransition transition = MatchTransition::Start;
     MatchOwners owners{};
     std::array<u32, InputCommand::kSeats> grants{};
+    bool challengeWon = false; ///< authenticated completion only on SecretReturn
     bool valid() const;
     bool operator==(const MatchContext&) const = default;
 };
@@ -47,7 +49,7 @@ struct MatchControl {
 };
 class MatchControlPacket {
 public:
-    static constexpr usize kBytes = 44;
+    static constexpr usize kBytes = 48;
     static std::optional<std::vector<u8>> encode(const MatchControl& control);
     static std::optional<MatchControl> decode(std::span<const u8> bytes);
 };
@@ -74,13 +76,17 @@ public:
     bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links);
     /** A new transport/room lifetime is required before opening again after clear(). */
     void clear();
-    /** Travel/Shop require a complete host checkpoint; Shop also requires its setup.
+    /** Travel/Shop/SecretEnter/SecretReturn require a complete host checkpoint;
+     * Shop also requires its setup, and only SecretReturn may carry challengeWon.
      * Start/Resume take neither. A shop cannot travel before every peer finishes.
      * Invalid or congested preparation leaves the current epoch unchanged. */
     bool prepare(u32 scene, MatchTransition transition = MatchTransition::Start,
-                 const MatchParty* party = nullptr, const ShopSetup* shop = nullptr);
+                 const MatchParty* party = nullptr, const ShopSetup* shop = nullptr,
+                 bool challengeWon = false);
     ShopSync& shop() { return m_shop; }
     const ShopSync& shop() const { return m_shop; }
+    FeedbackSync& feedback() { return m_feedback; }
+    const FeedbackSync& feedback() const { return m_feedback; }
     /** Complete travel/shop profiles only, never a partially received roster. */
     const MatchParty* travelParty() const;
     bool loaded();
@@ -146,6 +152,7 @@ private:
     MatchContext m_context;
     MatchParty m_travelParty;
     ShopSync m_shop;
+    FeedbackSync m_feedback;
     InputTimeline m_timeline;
     InputHistory m_history;
     CombatPlayback m_playback;

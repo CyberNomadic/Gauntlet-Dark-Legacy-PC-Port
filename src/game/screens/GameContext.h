@@ -43,7 +43,7 @@ struct GameContext {
     std::function<void()> stopVibration;
     /** A completed secret challenge grants shared class availability, even before saving. */
     std::function<void(u16)> unlockClasses;
-    /** Completed online shop checkpoint, containing only this machine's owned characters. */
+    /** Shop or successful challenge checkpoint, containing only locally owned characters. */
     std::function<void(std::span<PartyMember>)> saveLocalParty;
 };
 

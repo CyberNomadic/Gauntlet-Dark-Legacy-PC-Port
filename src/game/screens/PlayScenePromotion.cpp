@@ -4,6 +4,7 @@
 
 #include "game/players/PickupVoices.h"
 #include "game/screens/PlayScene.h"
+#include "game/screens/PlayerPowerups.h"
 
 namespace gdl::game {
 s32 PlayScene::familiarTier(s32 player) const {
@@ -26,7 +27,7 @@ void PlayScene::updatePromotion(s32 ticks, f32 seconds) {
         }
     }
     m_promotion.animate(seconds);
-    m_world->update(seconds);
+    m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
     m_sumner.update(seconds);
     m_effects.update(seconds);
     updateAmbience();

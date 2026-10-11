@@ -11,6 +11,10 @@ add_executable(tests
     game/netplay/InputTimelineTests.cpp
     game/netplay/MatchSessionTests.cpp
     game/netplay/ShopSyncTests.cpp
+    game/netplay/FeedbackSyncTests.cpp
+    game/netplay/OnlineFeedbackTests.cpp
+    game/netplay/OnlineEndingTests.cpp
+    game/screens/OnlineCompletionTests.cpp
     game/netplay/ClientClockTests.cpp
     game/netplay/OnlineSessionTests.cpp
     game/netplay/CharacterProfileTests.cpp
@@ -338,6 +342,26 @@ add_executable(tests
     engine/assets/StringTableTests.cpp)
 
 target_link_libraries(tests PRIVATE gdl::engine gdl::formats gdl::game Catch2::Catch2WithMain SDL3::SDL3)
+# Focused native gameplay/presentation checks without unrelated GPU or full-suite builds.
+add_executable(gameplayregressions
+    game/enemies/EnemiesTests.cpp game/enemies/CombatantTests.cpp engine/world/TreeModelTests.cpp
+    game/netplay/ReplicaFightersTests.cpp game/screens/PostShopReturnTests.cpp
+    game/screens/LevelFixturesTests.cpp
+    game/world/PowerupCompanionTests.cpp game/config/GameConfigTests.cpp
+    game/players/ShopTests.cpp game/players/AutoSaveTests.cpp
+    game/world/SecretChallengeTests.cpp game/screens/PlaySceneChallengeTests.cpp
+    game/world/LevelSoundscapeTests.cpp game/screens/PlaySceneAmbienceTests.cpp
+    game/screens/PlaySceneSwitchTests.cpp game/screens/TriggerCuesTests.cpp
+    engine/world/WorldAnimatorTests.cpp
+    fixtures/NativeModelFixture.cpp fixtures/ReferenceObj.cpp fixtures/NativeSoundBank.cpp)
+target_link_libraries(gameplayregressions PRIVATE gdl::game Catch2::Catch2WithMain)
+target_include_directories(gameplayregressions PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(gameplayregressions PRIVATE
+    GDL_TEST_ASSET_DIR="${GDL_ASSET_DIR}" GDL_TEST_UNPACKED_DIR="${GDL_UNPACKED_DIR}"
+    GDL_TEST_DATA_DIR="${GDL_DATA_DIR}")
+gdl_apply_compiler_options(gameplayregressions)
+set_target_properties(gameplayregressions PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
 # Focused character-form, inventory and progression regressions with native gameplay checks.
 add_executable(playerformtests game/world/PojoTests.cpp game/world/PojoVoiceTests.cpp game/players/NameCheatsTests.cpp
     game/players/InventoryTests.cpp game/players/CharacterSaveTests.cpp
@@ -367,6 +391,9 @@ if(GDL_ENABLE_NETPLAY)
     set_target_properties(netplaytests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
     # Focused native gameplay regressions without rebuilding unrelated test suites.
     add_executable(netplayplaytests game/netplay/OnlinePlayTests.cpp game/netplay/OnlinePartyTests.cpp
+        game/netplay/OnlineEndingTests.cpp game/screens/OnlineCompletionTests.cpp
+        game/netplay/FeedbackSyncTests.cpp
+        game/netplay/OnlineFeedbackTests.cpp
         game/netplay/OnlineRunTests.cpp
         game/screens/TitleSceneTests.cpp
         game/netplay/ReplicaViewTests.cpp game/netplay/ReplicaActorsTests.cpp

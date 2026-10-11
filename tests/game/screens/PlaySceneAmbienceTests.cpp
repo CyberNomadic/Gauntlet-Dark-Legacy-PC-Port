@@ -80,4 +80,67 @@ TEST_CASE("Castle Treasury coffin audio obeys the native party restriction and a
     scene.close();
 }
 
+TEST_CASE("pausing a native moving crossing silences its loop until gameplay resumes",
+          "[game][screens][pause-motion-audio][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root));
+    const GameConfig config;
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    GameContext context;
+    context.config = &config;
+    context.levels = &levels;
+    context.sounds = &sounds;
+    context.unpackedRoot = root;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{0};
+    const std::array party{PartyMember{0, CharacterSave{}}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    for (s32 frame = 0; frame < 600 && scene.spawning(); ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    REQUIRE_FALSE(scene.spawning());
+    const LevelTrigger* crossing = nullptr;
+    for (usize i = 0; i < world.triggers().size(); ++i) {
+        const auto& trigger = world.triggers().trigger(i);
+        if (trigger.target >= 0 &&
+            world.layout().objects()[static_cast<usize>(trigger.target)].name ==
+                "L1CROSSING_EASY") {
+            crossing = &trigger;
+            break;
+        }
+    }
+    REQUIRE(crossing);
+    const std::array visitors{TriggerVisitor{.position = crossing->spot}};
+    world.updateTriggers(1.0f / 60, visitors);
+    scene.update(1.0 / 60, {});
+    const auto first = scene.fieldSound();
+    REQUIRE(sounds.isPlaying(first));
+    scene.pauseGameplaySounds();
+    CHECK_FALSE(sounds.isPlaying(first));
+    CHECK(scene.fieldSound() == kNoSound);
+    scene.pauseGameplaySounds();
+    CHECK(scene.fieldSound() == kNoSound);
+    scene.update(1.0 / 60, {});
+    const auto resumed = scene.fieldSound();
+    REQUIRE(sounds.isPlaying(resumed));
+    CHECK(resumed != first);
+    for (s32 frame = 0; frame < 1200 && sounds.isPlaying(resumed); ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    CHECK_FALSE(sounds.isPlaying(resumed));
+    scene.pauseGameplaySounds();
+    scene.close();
+    CHECK(scene.fieldSound() == kNoSound);
+    scene.update(1.0 / 60, {});
+    CHECK(scene.fieldSound() == kNoSound);
+}
+
 } // namespace

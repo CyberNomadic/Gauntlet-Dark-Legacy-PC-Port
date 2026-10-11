@@ -30,11 +30,20 @@ u8 seatsOf(const MatchOwners& owners, u8 peer = 0) {
     }
     return mask;
 }
+bool checkpointed(MatchTransition transition) {
+    return transition == MatchTransition::Travel || transition == MatchTransition::Shop ||
+           transition == MatchTransition::SecretEnter ||
+           transition == MatchTransition::SecretReturn;
+}
+bool hasEntryMovie(MatchTransition transition) {
+    return transition == MatchTransition::Start || transition == MatchTransition::Travel;
+}
 } // namespace
 
 bool MatchContext::valid() const {
     if (epoch == 0 || scene == 0 || scene > 65535 || tickRate != 60 || inputLead > 12 ||
-        static_cast<u8>(transition) > 3 || !validOwners(owners)) {
+        static_cast<u8>(transition) > 5 || !validOwners(owners) ||
+        (challengeWon && transition != MatchTransition::SecretReturn)) {
         return false;
     }
     for (usize seat = 0; seat < owners.size(); ++seat) {
@@ -49,7 +58,7 @@ bool MatchControl::valid() const {
     return context.valid() && static_cast<u8>(kind) <= 6 && static_cast<u8>(stop) <= 4 &&
            ((kind == MatchControlKind::Stop) == (stop != MatchStop::None)) &&
            (vote == (movieSkipVotes != 0)) && (movieSkipVotes & ~seatsOf(context.owners)) == 0 &&
-           (!vote || context.transition != MatchTransition::Resume);
+           (!vote || hasEntryMovie(context.transition));
 }
 std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& control) {
     if (!control.valid()) {
@@ -58,7 +67,7 @@ std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& co
     std::vector<u8> bytes;
     bytes.reserve(kBytes);
     word(bytes, kMagic);
-    bytes.insert(bytes.end(), {3, static_cast<u8>(control.kind), static_cast<u8>(control.stop),
+    bytes.insert(bytes.end(), {4, static_cast<u8>(control.kind), static_cast<u8>(control.stop),
                                control.movieSkipVotes});
     const auto& context = control.context;
     word(bytes, static_cast<u32>(context.epoch));
@@ -71,6 +80,7 @@ std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& co
     for (const auto grant : context.grants) {
         word(bytes, grant);
     }
+    word(bytes, static_cast<u32>(context.challengeWon));
     return bytes;
 }
 std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes) {
@@ -78,7 +88,7 @@ std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes
         return std::nullopt;
     }
     ByteReader reader(bytes);
-    if (reader.readU32() != kMagic || reader.readU8() != 3) {
+    if (reader.readU32() != kMagic || reader.readU8() != 4) {
         return std::nullopt;
     }
     MatchControl control;
@@ -98,6 +108,11 @@ std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes
     for (auto& grant : context.grants) {
         grant = reader.readU32();
     }
+    const auto challengeWon = reader.readU32();
+    if (challengeWon > 1) {
+        return std::nullopt;
+    }
+    context.challengeWon = challengeWon != 0;
     return control.valid() ? std::optional{control} : std::nullopt;
 }
 
@@ -167,6 +182,7 @@ bool MatchSession::broadcast(MatchControlKind kind, MatchStop reason, u8 votes) 
     return true;
 }
 void MatchSession::discardGameplay() {
+    m_feedback.clear();
     m_history.clear();
     m_pendingPress = {};
     m_input.clear();
@@ -174,14 +190,15 @@ void MatchSession::discardGameplay() {
     m_published.reset();
 }
 bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party,
-                           const ShopSetup* shop) {
-    const bool checkpointed =
-        transition == MatchTransition::Travel || transition == MatchTransition::Shop;
+                           const ShopSetup* shop, bool challengeWon) {
+    const bool withCheckpoint = checkpointed(transition);
     const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-                         (checkpointed && m_phase == Phase::Running) ||
+                         (withCheckpoint && m_phase == Phase::Running) ||
                          (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
                           scene == m_context.scene);
-    if (!host() || !allowed || scene == 0 || scene > 65535 || checkpointed != (party != nullptr) ||
+    if (!host() || !allowed || scene == 0 || scene > 65535 ||
+        withCheckpoint != (party != nullptr) ||
+        (challengeWon && transition != MatchTransition::SecretReturn) ||
         (transition == MatchTransition::Shop) != (shop != nullptr) ||
         (shop != nullptr && (!shop->valid() || shop->source != scene)) ||
         m_timeline.epoch() == std::numeric_limits<u64>::max()) {
@@ -219,12 +236,14 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
     m_context.epoch = m_timeline.epoch();
     m_context.scene = scene;
     m_context.transition = transition;
+    m_context.challengeWon = challengeWon;
     m_context.owners = m_owners;
     m_travelParty = std::move(nextParty);
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
         m_context.grants[seat] = m_owners[seat] == 0 ? 0 : m_timeline.grant(seat);
     }
     discardGameplay();
+    m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
     m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants, shop);
     m_loaded = {};
     m_movieSkipVotes = 0;
@@ -245,8 +264,7 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
     return true;
 }
 const MatchParty* MatchSession::travelParty() const {
-    if ((m_context.transition != MatchTransition::Travel &&
-         m_context.transition != MatchTransition::Shop) ||
+    if (!checkpointed(m_context.transition) ||
         (m_phase != Phase::Loading && m_phase != Phase::Running && m_phase != Phase::Paused)) {
         return nullptr;
     }
@@ -264,9 +282,7 @@ MatchSession::Admission MatchSession::checkpoint(u8 peer, const PartyCheckpoint&
     if (message.epoch < m_context.epoch) {
         return Admission::Stale;
     }
-    if (message.epoch != m_context.epoch ||
-        (m_context.transition != MatchTransition::Travel &&
-         m_context.transition != MatchTransition::Shop) ||
+    if (message.epoch != m_context.epoch || !checkpointed(m_context.transition) ||
         m_owners[message.seat] == 0) {
         return Admission::Invalid;
     }
@@ -300,9 +316,7 @@ void MatchSession::tryCommit() {
 }
 bool MatchSession::loaded() {
     if (m_phase != Phase::Loading || m_loaded[m_local] ||
-        ((m_context.transition == MatchTransition::Travel ||
-          m_context.transition == MatchTransition::Shop) &&
-         travelParty() == nullptr) ||
+        (checkpointed(m_context.transition) && travelParty() == nullptr) ||
         (m_context.transition == MatchTransition::Shop && m_shop.setup() == nullptr)) {
         return false;
     }
@@ -316,9 +330,8 @@ bool MatchSession::loaded() {
     return true;
 }
 bool MatchSession::requestMovieSkip(u8 seat) {
-    if (m_phase != Phase::Loading || m_context.transition == MatchTransition::Resume ||
-        m_context.transition == MatchTransition::Shop || seat >= m_owners.size() ||
-        m_owners[seat] != m_local) {
+    if (m_phase != Phase::Loading || !hasEntryMovie(m_context.transition) ||
+        seat >= m_owners.size() || m_owners[seat] != m_local) {
         return false;
     }
     const auto bit = static_cast<u8>(1U << seat);
@@ -339,8 +352,7 @@ bool MatchSession::requestMovieSkip(u8 seat) {
 }
 bool MatchSession::movieSkipReady() const {
     const auto required = seatsOf(m_owners);
-    return m_phase == Phase::Loading && m_context.transition != MatchTransition::Resume &&
-           m_context.transition != MatchTransition::Shop && required != 0 &&
+    return m_phase == Phase::Loading && hasEntryMovie(m_context.transition) && required != 0 &&
            m_movieSkipVotes == required;
 }
 bool MatchSession::requestPause() {
@@ -424,19 +436,19 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
             return Admission::Invalid;
         }
         const auto transition = message.context.transition;
-        const bool allowed =
-            (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-            ((transition == MatchTransition::Travel || transition == MatchTransition::Shop) &&
-             m_phase == Phase::Running) ||
-            (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
-             message.context.scene == m_context.scene);
-        if (!allowed) {
+        const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
+                             (checkpointed(transition) && m_phase == Phase::Running) ||
+                             (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
+                              message.context.scene == m_context.scene);
+        if (!allowed || (m_context.transition == MatchTransition::Shop &&
+                         transition != MatchTransition::Travel)) {
             return Admission::WrongPhase;
         }
         m_context = message.context;
         m_travelParty = {};
         m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
         discardGameplay();
+        m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
         m_loaded = {};
         m_movieSkipVotes = 0;
         m_movieSkipRequests = 0;
@@ -541,6 +553,17 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         case ShopSync::Admission::Stale: return Admission::Stale;
         case ShopSync::Admission::WrongPeer: return Admission::WrongPeer;
         case ShopSync::Admission::Invalid: return Admission::Invalid;
+        }
+    }
+    if (FeedbackSync::recognizes(bytes)) {
+        if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
+            return Admission::Stale;
+        }
+        switch (m_feedback.receive(peer, bytes)) {
+        case FeedbackSync::Admission::Accepted: return Admission::Accepted;
+        case FeedbackSync::Admission::Stale: return Admission::Stale;
+        case FeedbackSync::Admission::WrongPeer: return Admission::WrongPeer;
+        case FeedbackSync::Admission::Invalid: return Admission::Invalid;
         }
     }
     if (m_context.transition == MatchTransition::Shop) {
@@ -727,6 +750,19 @@ void MatchSession::flush(PacketTransport& transport) {
     }
     if (m_phase != Phase::Running) {
         return;
+    }
+    while (!m_feedback.outgoing().empty()) {
+        const auto& delivery = m_feedback.outgoing().front();
+        const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
+                                           PacketTransport::Delivery::Reliable);
+        if (result == PacketTransport::SendResult::Congested) {
+            break; // Optional feedback must not stall gameplay on another channel.
+        }
+        if (result != PacketTransport::SendResult::Sent) {
+            disconnected(m_links[delivery.peer]);
+            return;
+        }
+        m_feedback.sent();
     }
     if (!host() && !m_input.empty()) {
         const auto result =

@@ -21,7 +21,7 @@ public:
               const StringTable* strings = nullptr);
     bool resume(const MatchContext& context);
     void clear();
-    bool show(const CombatSnapshot& snapshot);
+    bool show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation = nullptr);
     void draw(RenderDevice& device, const Mat4& frameProjection, f32 width, f32 height,
               f32 textureFrame, const GameConfig& video = {});
     const ReplicaView* view() const;

@@ -15,6 +15,11 @@ constexpr s32 kMineRealm = 9;
 
 } // namespace
 
+void TriggerCues::pause(LevelSoundscape& audio) {
+    audio.stop(m_rotatorSound);
+    m_rotatorSound = kNoSound;
+}
+
 TriggerCues::RotatorSounds TriggerCues::rotatorSoundsOf(s32 realm) {
     if (realm == kCastleRealm) {
         return {"S_ROCKROTATE", "S_ROCKSTOP"};

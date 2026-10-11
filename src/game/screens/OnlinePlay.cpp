@@ -78,25 +78,25 @@ bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSe
     }
     m_device = &device;
     m_context = context;
+    m_vibrate = context.vibrate;
+    m_unlockClasses = context.unlockClasses;
     m_session = &session;
     m_selection = &selection;
     m_options = options;
-    // Remote progression has no disk authority. The owning application will
-    // apply acknowledged local checkpoints when post-level persistence is wired.
+    // Live remote characters have no disk authority. Apply only acknowledged
+    // local checkpoints and newly earned awards through the owning application.
     m_context.unlockClasses = {};
     m_context.saveSettings = {};
     m_context.tower = nullptr;
-    // PlayScene addresses room seats, while local feedback addresses devices.
-    if (context.vibrate) {
-        m_context.vibrate = [&session, &selection, callback = context.vibrate](
-                                s32 seat, s32 frames, ControlFeedback feedback) {
-            if (seat >= 0 && seat < static_cast<s32>(InputCommand::kSeats)) {
-                if (const auto local = selection.device(session, static_cast<u8>(seat))) {
-                    callback(*local, frames, feedback);
-                }
-            }
-        };
-    }
+    // The simulation emits room-seat cues even when the host has no controller.
+    // Only the owning machine resolves capability, profile, and physical device.
+    m_context.vibrate = [&session](s32 seat, s32 frames, ControlFeedback cue) {
+        auto& active = session.match();
+        if (active.phase() == MatchSession::Phase::Running &&
+            active.context().transition != MatchTransition::Shop) {
+            active.feedback().emit(seat, frames, cue);
+        }
+    };
     m_phase = Phase::Loading;
     return true;
 }
@@ -111,14 +111,22 @@ void OnlinePlay::quiet() {
 void OnlinePlay::close() {
     quiet();
     m_entry.close();
+    m_completion.close();
     m_shop.close();
     m_afterShop = false;
+    m_saveAfterShop = false;
     m_entryEpoch = 0;
+    m_completionEpoch = 0;
     m_host.reset();
+    m_parent.reset();
+    m_level.reset();
+    m_secretParent.reset();
     m_replica.clear();
     m_clock.clear();
     m_device = nullptr;
     m_context = {};
+    m_vibrate = {};
+    m_unlockClasses = {};
     m_session = nullptr;
     m_selection = nullptr;
     m_options = {};
@@ -132,6 +140,7 @@ void OnlinePlay::close() {
 OnlinePlay::Phase OnlinePlay::fail(Failure reason) {
     quiet();
     m_entry.close();
+    m_completion.close();
     m_failure = reason;
     m_phase = Phase::Failed;
     if (m_session != nullptr) {
@@ -150,7 +159,10 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
         fail(Failure::Scene);
         return false;
     }
-    const bool travelling = context.transition == MatchTransition::Travel;
+    const bool enteringSecret = context.transition == MatchTransition::SecretEnter;
+    const bool returningSecret = context.transition == MatchTransition::SecretReturn;
+    const bool travelling =
+        context.transition == MatchTransition::Travel || enteringSecret || returningSecret;
     const auto* profiles = travelling ? match.travelParty() : m_session->party();
     if (travelling && profiles == nullptr) {
         return false; // Reliable profiles can arrive in a later receive batch.
@@ -176,7 +188,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 fail(Failure::Party);
                 return false;
             }
-            if (m_context.saveLocalParty) {
+            if (m_saveAfterShop && m_context.saveLocalParty) {
                 m_context.saveLocalParty(m_selection->localMembers());
             }
             // Slot allocation is local-only, and must survive the next host scene.
@@ -193,6 +205,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 }
             }
             m_afterShop = false;
+            m_saveAfterShop = false;
             m_shop.close();
         }
     }
@@ -203,9 +216,62 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 return false;
             }
             if (m_entryEpoch != context.epoch) {
+                if (enteringSecret) {
+                    if (!level->isSecret() || !m_level || m_level->isSecret() || m_secretParent ||
+                        (match.host() && !m_host)) {
+                        fail(Failure::Scene);
+                        return false;
+                    }
+                    m_secretParent = m_level;
+                    if (match.host()) {
+                        m_host->scene.suspendForChallenge();
+                        m_parent = std::move(m_host);
+                    }
+                } else if (returningSecret) {
+                    if (!m_level || !m_level->isSecret() || !m_secretParent ||
+                        *m_secretParent != *level || (match.host() && !m_parent)) {
+                        fail(Failure::Scene);
+                        return false;
+                    }
+                    if (!m_selection->checkpoint(*m_session, *profiles)) {
+                        fail(Failure::Party);
+                        return false;
+                    }
+                    // Award and save during the exit transition, before reopening the
+                    // suspended world. Never import remote/preloaded unlock masks.
+                    const s32 character = SecretChallenge::classFor(m_level->index);
+                    if (context.challengeWon && character >= 8 && character < kClassCount) {
+                        const auto reward = static_cast<u16>(1U << static_cast<u32>(character - 8));
+                        for (auto& member : m_selection->localMembers()) {
+                            member.save.classUnlock |= reward;
+                        }
+                        if (m_unlockClasses) {
+                            m_unlockClasses(reward);
+                        }
+                        if (m_context.config != nullptr && m_context.config->game.autoSave &&
+                            m_context.saveLocalParty) {
+                            m_context.saveLocalParty(m_selection->localMembers());
+                        }
+                        if (match.host()) {
+                            for (auto& member : m_travelMembers) {
+                                const auto device =
+                                    m_selection->device(*m_session, static_cast<u8>(member.player));
+                                for (const auto& local : m_selection->localMembers()) {
+                                    if (device && local.player == *device) {
+                                        member.slot = local.slot;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (level->isSecret() || m_secretParent) {
+                    fail(Failure::Scene);
+                    return false;
+                }
                 // Dispose the old scene before entry audio starts, but preserve its
                 // party checkpoint. The guest never constructs a gameplay scene.
                 m_host.reset();
+                m_completion.close();
                 m_replica.clear();
                 m_clock.clear();
                 std::vector<PartyMember> preview;
@@ -218,7 +284,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                         preview.push_back(std::move(member));
                     }
                 }
-                m_entry.open(*m_device, m_context, *level, preview);
+                m_entry.open(*m_device, m_context, *level, preview, returningSecret);
                 m_entryEpoch = context.epoch;
             } else {
                 const auto local = m_selection->inputs(*m_session, devices);
@@ -257,6 +323,13 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
         } else if ((m_epoch != 0) != travelling) {
             fail(Failure::Scene);
             return false;
+        } else if (match.host() && returningSecret) {
+            m_host = std::move(m_parent);
+            m_host->scene.resumeFromChallenge(m_travelMembers);
+            if (!m_host->driver.bind(m_host->scene, match, m_host->pickups, m_host->fixtures)) {
+                fail(Failure::Scene);
+                return false;
+            }
         } else if (match.host()) {
             const auto members =
                 travelling ? std::optional{m_travelMembers} : m_selection->members(*m_session);
@@ -293,6 +366,10 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
         fail(Failure::Session);
         return false;
     }
+    if (returningSecret) {
+        m_secretParent.reset();
+    }
+    m_level = *level;
     log::info("Online stage loaded: {} (epoch {}, {})", level->name, m_epoch,
               match.host() ? "host" : "guest");
     return true;
@@ -302,20 +379,18 @@ bool OnlinePlay::travel() {
         return false;
     }
     const auto& scene = m_host->scene;
-    const auto& destination = scene.destination();
-    // Suspended secret parents and the two ending movies need separate synchronized
-    // ownership. Never silently discard a parent or skip an ending movie.
-    const auto* info = m_host->world.level();
-    if (scene.secretTravel() ||
-        (info != nullptr && (info->bossType == 43 || info->bossType == 44))) {
-        log::warn("Online travel unsupported: {} (secret {}, boss {})", m_host->world.ref().name,
-                  scene.secretTravel(), info != nullptr ? info->bossType : -1);
+    const bool returningSecret = scene.secretTravel() && m_host->world.ref().isSecret();
+    const bool enteringSecret = scene.secretTravel() && !returningSecret;
+    if (returningSecret && (!m_parent || !m_secretParent)) {
+        fail(Failure::Scene);
         return false;
     }
+    const auto destination = returningSecret ? *m_secretParent : scene.destination();
+    const auto* info = m_host->world.level();
     const auto id = sceneId(*m_context.levels, destination);
     auto members = scene.party();
     const auto& world = m_host->world;
-    if (!world.isTower()) {
+    if (!world.isTower() && !scene.secretTravel()) {
         recordLevelBeaten(members, world.ref().realmId, world.ref().index,
                           info != nullptr ? info->rune : 0, info != nullptr ? info->legend : 0);
     }
@@ -333,11 +408,22 @@ bool OnlinePlay::travel() {
             return false;
         }
     }
-    if (!world.isTower() && destination.isTower()) {
+    if (enteringSecret || returningSecret) {
+        const bool won = returningSecret && scene.challenge().won();
+        if (!id || !m_session->match().prepare(*id,
+                                               enteringSecret ? MatchTransition::SecretEnter
+                                                              : MatchTransition::SecretReturn,
+                                               &profiles, nullptr, won)) {
+            fail(Failure::Session);
+            return false;
+        }
+    } else if (!world.isTower() && destination.isTower()) {
         ShopSetup setup;
         setup.source = m_session->match().context().scene;
         setup.destination = id.value_or(0);
         setup.expanded = m_context.config != nullptr && m_context.config->game.expandedShop;
+        setup.ending = info != nullptr && (info->bossType == 43 || info->bossType == 44) &&
+                       scene.victory().finished();
         setup.maxima = info != nullptr ? info->shopMaxima : std::array<s32, 3>{1000, 100, 1000};
         for (const auto& result : scene.levelResults()) {
             setup.totals[static_cast<usize>(result.player)] = result.totals;
@@ -375,13 +461,45 @@ bool OnlinePlay::loadShop() {
     const auto source = levelOf(*m_context.levels, setup->source);
     const auto destination = levelOf(*m_context.levels, setup->destination);
     if (!source || !destination || setup->source != match.context().scene || source->isTower() ||
-        !destination->isTower()) {
+        source->isSecret() || !destination->isTower() || m_secretParent) {
         fail(Failure::Scene);
+        return false;
+    }
+    if (m_completionEpoch != match.context().epoch) {
+        WorldData data;
+        if (!data.load(m_context.unpackedRoot / source->worldDataFile())) {
+            fail(Failure::Assets);
+            return false;
+        }
+        const auto* info = data.level(source->name);
+        if (info == nullptr || (setup->ending && info->bossType != 43 && info->bossType != 44)) {
+            fail(Failure::Scene);
+            return false;
+        }
+        quiet();
+        m_host.reset();
+        m_replica.clear();
+        m_clock.clear();
+        m_entry.close();
+        m_completion.open(*m_device, m_context, *source, info->bossType, setup->ending);
+        m_completionEpoch = match.context().epoch;
+    } else {
+        m_completion.update(m_context);
+    }
+    if (m_completion.phase() == OnlineCompletion::Phase::Failed) {
+        fail(Failure::Assets);
+        return false;
+    }
+    if (m_completion.phase() != OnlineCompletion::Phase::Ready) {
         return false;
     }
     std::vector<PartyMember> members;
     std::vector<LevelResults> results;
     const auto* admitted = m_session->party();
+    if (admitted == nullptr) {
+        fail(Failure::Party);
+        return false;
+    }
     for (usize seat = 0; seat < profiles->size(); ++seat) {
         const auto& profile = (*profiles)[seat];
         const auto& original = (*admitted)[seat];
@@ -404,21 +522,18 @@ bool OnlinePlay::loadShop() {
     if (match.host()) {
         members = m_travelMembers;
     }
-    quiet();
-    m_host.reset();
-    m_replica.clear();
-    m_clock.clear();
-    m_entry.close();
     m_shopConfig = m_context.config != nullptr ? *m_context.config : GameConfig{};
     m_shopConfig.game.expandedShop = setup->expanded;
     auto context = m_context;
     context.config = &m_shopConfig;
-    if (!m_shop.open(*m_device, context, members, results, setup->maxima, source->name)) {
+    const auto visit = m_completion.selection().visit;
+    if (!m_shop.open(*m_device, context, members, results, setup->maxima, source->name, visit)) {
         fail(Failure::Assets);
         return false;
     }
     m_epoch = match.context().epoch;
     m_afterShop = true;
+    m_saveAfterShop = visit != ShopVisit::Completion;
     m_travelMembers.clear();
     m_pausedDevices = 0;
     if (!match.loaded()) {
@@ -428,6 +543,7 @@ bool OnlinePlay::loadShop() {
     return true;
 }
 OnlinePlay::Phase OnlinePlay::updateShop(const SessionInputs::Frame& devices) {
+    m_completion.close();
     auto& match = m_session->match();
     auto& sync = match.shop();
     const auto local = m_selection->inputs(*m_session, devices);
@@ -548,6 +664,14 @@ OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
     if (match.context().transition == MatchTransition::Shop) {
         return updateShop(gameplay);
     }
+    // New epochs reset gates. Reapply local pause state before consuming any cue.
+    for (const auto seat : m_session->seats()) {
+        if (const auto local = m_selection->device(*m_session, seat)) {
+            match.feedback().setEnabled(seat,
+                                        (m_pausedDevices & (1U << static_cast<u32>(*local))) == 0);
+        }
+    }
+    feedback();
     const auto local = m_selection->inputs(*m_session, gameplay);
     if (!local) {
         return fail(Failure::Input);
@@ -560,6 +684,7 @@ OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
         m_entry.close();
     }
     m_outcome = m_host->driver.advance(match, *local, m_host->projectiles);
+    feedback();
     if (m_outcome == PlayReplication::Result::Failed) {
         return fail(Failure::Capture);
     }
@@ -573,6 +698,14 @@ OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
     }
     return phase();
 }
+void OnlinePlay::feedback() {
+    while (const auto event = m_session->match().feedback().take()) {
+        const auto local = m_selection->device(*m_session, event->seat);
+        if (local && m_vibrate && (m_pausedDevices & (1U << static_cast<u32>(*local))) == 0) {
+            m_vibrate(*local, event->frames, event->feedback);
+        }
+    }
+}
 bool OnlinePlay::pause(s32 device) {
     if (m_session == nullptr || m_phase != Phase::Playing || device < -1 ||
         device >= static_cast<s32>(InputCommand::kSeats)) {
@@ -583,9 +716,13 @@ bool OnlinePlay::pause(s32 device) {
         if (const auto local = m_selection->device(*m_session, seat);
             local && (device == -1 || *local == device)) {
             mask |= 1U << static_cast<u32>(*local);
+            m_session->match().feedback().setEnabled(seat, false);
         }
     }
     m_pausedDevices |= mask;
+    if (mask != 0 && m_context.stopVibration) {
+        m_context.stopVibration();
+    }
     return mask != 0;
 }
 bool OnlinePlay::resume(s32 device) {
@@ -595,11 +732,23 @@ bool OnlinePlay::resume(s32 device) {
     const u32 mask = device == -1 ? m_pausedDevices : (1U << static_cast<u32>(device));
     const bool captured = (m_pausedDevices & mask) != 0;
     m_pausedDevices &= ~mask;
+    if (captured && m_session != nullptr) {
+        for (const auto seat : m_session->seats()) {
+            if (const auto local = m_selection->device(*m_session, seat);
+                local && (mask & (1U << static_cast<u32>(*local))) != 0) {
+                m_session->match().feedback().setEnabled(seat, true);
+            }
+        }
+    }
     return captured;
 }
 void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width, f32 height,
                         f64 seconds, f32 frameBlend) {
     if (m_phase == Phase::Closed || m_phase == Phase::Failed) {
+        return;
+    }
+    if (m_phase == Phase::Loading && m_completion.visible()) {
+        m_completion.render(device, projection, width, height);
         return;
     }
     if (m_shop.isOpen()) {
@@ -618,8 +767,9 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
     if (m_session == nullptr) {
         return;
     }
-    if (const auto sample = m_clock.sample(m_session->match(), seconds)) {
-        if (!m_replica.show(*sample)) {
+    EnemyPresentation presentation;
+    if (const auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
+        if (!m_replica.show(*sample, &presentation)) {
             if (const auto* view = m_replica.view()) {
                 log::error("Online presentation rejected: {}", view->rejection(*sample));
                 for (usize seat = 0; seat < sample->players.size(); ++seat) {

@@ -7,6 +7,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/screens/ReplicaCompanions.h"
 #include "game/world/PowerupCompanion.h"
 
 namespace {
@@ -15,6 +16,102 @@ using namespace gdl::game;
 using Catch::Approx;
 using Kind = PowerupCompanion::Kind;
 using Action = PlayerAnimator::Action;
+
+TEST_CASE("native levitation wings follow the animated back on local and replicated figures",
+          "[game][world][companion][levitation][netplay][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive powerups;
+    ItemArchive weapons;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    const auto treeIndex = powerups.trees.find("WINGS");
+    REQUIRE(treeIndex);
+    const auto& tree = powerups.trees.tree(*treeIndex);
+    // WINGS is static feather artwork carried by the player's animated back,
+    // not a missing flap sequence or a texture flipbook.
+    REQUIRE(tree.sequences.size() == 1);
+    CHECK(tree.sequences.front().frames == 0);
+    CHECK(tree.sequences.front().tracks.empty());
+    CHECK(tree.sequences.front().textureAnimationCount == 0);
+    REQUIRE(tree.nodes.size() == 2);
+    CHECK(tree.nodes[1].object == "WINGSXN_WINGS");
+    CHECK(tree.nodes[1].objectFrames.empty());
+    CHECK(tree.nodes[1].textureAnimation == -1);
+    const auto meshIndex = powerups.models.find(tree.nodes[1].object);
+    REQUIRE(meshIndex);
+    const auto& mesh = powerups.models.mesh(*meshIndex);
+    REQUIRE(mesh.parts.size() == 1);
+    for (const auto& animation : powerups.trees.textureAnimations()) {
+        CHECK(animation.texture != static_cast<s32>(mesh.parts.front().texture));
+    }
+
+    CharacterSave save;
+    save.character = 5;
+    save.color = 3;
+    auto& inventory = save.progress().inventory;
+    inventory.addPowerup(powerup::kSpecial, powerup::kLevitation, 0, 60);
+    const auto figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(figure);
+    figure->setCompanionPowerups(device, powerups, inventory, &weapons);
+    REQUIRE(figure->companion().shown());
+    REQUIRE(figure->companion().kind() == Kind::Wings);
+    REQUIRE(figure->familiarTier() == 0);
+    CompanionResources guest;
+    REQUIRE(guest.bindPowerups(device, powerups, &weapons));
+    const Mat4 body = PlayerFigure::bodyPlacement(Mat4{1}, save, PowerupEffects::of(inventory));
+    const auto camera = CameraFrame::at({0, 15, 20});
+    const auto first = figure->companionVisuals(body, 1)[1];
+    REQUIRE(first);
+    bool backMoved = false;
+    for (s32 tick = 0; tick < 60; ++tick) {
+        figure->animate(1, 1, 1.0f / 60);
+        const auto visual = figure->companionVisuals(body, 1)[1];
+        REQUIRE(visual);
+        backMoved = backMoved || visual->placement != first->placement;
+        CHECK(visual->sequence == 0);
+        CHECK(visual->frame == 0);
+        CHECK(visual->generation == first->generation);
+        const auto playerFrame = figure->animator().player().frame();
+        device.draws.clear();
+        figure->drawCompanions(device, Mat4{1}, body, {}, 1, &camera, 1, TreeModel::Pass::All);
+        const auto local = device.draws;
+        REQUIRE_FALSE(local.empty());
+        CompanionState state;
+        state.form = visual->form;
+        state.placement = visual->placement;
+        state.animation.sequence = visual->sequence;
+        state.animation.generation = visual->generation;
+        state.animation.frame = visual->frame;
+        state.textureClock = visual->textureClock;
+        state.alpha = visual->alpha;
+        REQUIRE(guest.accepts(1, state));
+        device.draws.clear();
+        guest.draw(device, 1, state, Mat4{1}, {}, camera, TreeModel::Pass::All);
+        REQUIRE(device.draws.size() == local.size());
+        for (usize draw = 0; draw < local.size(); ++draw) {
+            REQUIRE(device.draws[draw].vertices.size() == local[draw].vertices.size());
+            CHECK(device.draws[draw].texture == local[draw].texture);
+            for (usize vertex = 0; vertex < local[draw].vertices.size(); ++vertex) {
+                CHECK(device.draws[draw].vertices[vertex].position ==
+                      local[draw].vertices[vertex].position);
+            }
+        }
+        CHECK(figure->animator().player().frame() == playerFrame);
+        CHECK(figure->companionVisuals(body, 1)[1]->placement == visual->placement);
+    }
+    CHECK(backMoved);
+    const auto held = figure->companionVisuals(body, 1)[1];
+    figure->capturePresentation();
+    CHECK(figure->companionVisuals(body, 1)[1]->placement == held->placement);
+    const Vec3 displacement{3, 5, 7};
+    const auto carried =
+        figure->companionVisuals(glm::translate(Mat4{1}, displacement) * body, 1)[1];
+    REQUIRE(carried);
+    CHECK(glm::length(Vec3{carried->placement[3] - held->placement[3]} - displacement) < 0.0001f);
+    figure->setCompanionPowerups(device, powerups, Inventory{}, &weapons);
+    CHECK_FALSE(figure->companionVisuals(body, 1)[1]);
+}
 
 TEST_CASE("successive Pojo shots restart their one-shot without restarting held actions",
           "[pojo][companion][animation][assets]") {

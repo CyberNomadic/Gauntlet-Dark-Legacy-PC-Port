@@ -23,6 +23,109 @@ using namespace gdl;
 using namespace gdl::game;
 using Catch::Approx;
 
+TEST_CASE("Stop Time holds native looping platforms through entry and switch camera shots",
+          "[stop-time][platform-contact][switch-camera][assets]") {
+    const bool cameraShot = GENERATE(false, true);
+    CAPTURE(cameraShot);
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("G1")));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.levels = &catalog;
+    PlayOptions options;
+    options.welcome = false;
+    // Fields has independent windmill/cog loops alongside its triggered bridge.
+    // Temple's animated platforms all start held by their trigger, so they cannot
+    // demonstrate Stop Time pausing an already-running loop during a camera shot.
+    options.position =
+        cameraShot ? Vec3{40.828125f, 10.0703125f, -88.390625f} : Vec3{18.8f, 0.2f, 0.7f};
+    CharacterSave save;
+    save.progress().inventory.addPowerup(powerup::kSpecial, powerup::kStopTime, 0, 60);
+    save.progress().inventory.addPowerup(powerup::kArmor, powerup::kInvulnerable, 0, -1);
+    const std::array party{PartyMember{0, save}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const auto& animator = world.worldAnimator();
+    std::vector<usize> loops;
+    std::vector<f32> initial;
+    for (usize track = 0; track < animator.size(); ++track) {
+        const auto& object = world.layout().objects()[static_cast<usize>(animator.object(track))];
+        if (!animator.held(track) && !animator.finished(track) &&
+            (object.flags & (WorldObject::kOnce | WorldObject::kReverse)) == 0) {
+            loops.push_back(track);
+            initial.push_back(animator.frame(track));
+        }
+    }
+    REQUIRE_FALSE(loops.empty());
+    for (s32 frame = 0; frame < 600 && scene.spawning(); ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    REQUIRE_FALSE(scene.spawning());
+    for (usize i = 0; i < loops.size(); ++i) {
+        INFO(world.layout().objects()[static_cast<usize>(animator.object(loops[i]))].name);
+        CHECK(animator.frame(loops[i]) == initial[i]);
+    }
+    if (cameraShot) {
+        const LevelTrigger* bridge = nullptr;
+        for (usize i = 0; i < world.triggers().size(); ++i) {
+            if (world.triggers().trigger(i).instance == 436) {
+                bridge = &world.triggers().trigger(i);
+                break;
+            }
+        }
+        REQUIRE(bridge);
+        const std::array visitors{TriggerVisitor{.position = bridge->spot}};
+        world.updateTriggers(1.0f / 60, visitors);
+        scene.update(1.0 / 60, {});
+        REQUIRE(scene.switchCutscene().active());
+        REQUIRE(scene.switchCutscene().target() == 836);
+        const auto target = animator.trackOf(836);
+        REQUIRE(target);
+        const auto before = animator.frame(*target);
+        for (s32 frame = 0; frame < 600 && scene.switchCutscene().active(); ++frame) {
+            scene.update(1.0 / 60, {});
+            for (usize i = 0; i < loops.size(); ++i) {
+                CHECK(animator.frame(loops[i]) == initial[i]);
+            }
+        }
+        CHECK_FALSE(scene.switchCutscene().active());
+        CHECK(animator.frame(*target) > before); // one-shot bridge movement is exempt
+    }
+    // Unequipping resumes the same clocks; re-equipping holds them again.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable native inventory fixture
+    auto& inventory = const_cast<PlayerActor*>(scene.actor(0))->save().progress().inventory;
+    auto slot = std::ranges::find_if(inventory.powerups, [](const PowerupSlot& item) {
+        return item.kind == powerup::kSpecial && (item.flags & powerup::kStopTime) != 0;
+    });
+    REQUIRE(slot != inventory.powerups.end());
+    slot->on = false;
+    bool advanced = false;
+    for (s32 frame = 0; frame < 30; ++frame) {
+        scene.update(1.0 / 60, {});
+        for (usize i = 0; i < loops.size(); ++i) {
+            advanced |= animator.frame(loops[i]) != initial[i];
+        }
+    }
+    CHECK(advanced);
+    slot->on = true;
+    for (usize i = 0; i < loops.size(); ++i) {
+        initial[i] = animator.frame(loops[i]);
+    }
+    for (s32 frame = 0; frame < 30; ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    for (usize i = 0; i < loops.size(); ++i) {
+        CHECK(animator.frame(loops[i]) == initial[i]);
+    }
+}
+
 TEST_CASE("a player activates and crosses the first Underworld descending pillar",
           "[pillar-crossing][assets]") {
     const auto root =

@@ -3,6 +3,7 @@
 #include <map>
 
 #include "game/enemies/Enemies.h"
+#include "game/netplay/CombatPlayback.h"
 #include "game/netplay/ReplicaPose.h"
 #include "game/screens/PortalDeparture.h"
 #include "game/screens/ReplicaCompanions.h"
@@ -22,7 +23,9 @@ public:
     bool bindCompanions(RenderDevice& device, ItemArchive& powerups, ItemArchive* weapons);
     void loadPortalSkin(RenderDevice& device, TextureSet& weapons);
     bool companionsReady(const CombatSnapshot& snapshot) const;
-    bool show(const CombatSnapshot& snapshot, Enemies& resources);
+    bool show(const CombatSnapshot& snapshot, Enemies& resources,
+              const EnemyPresentation* presentation = nullptr,
+              std::span<const WorldCollision> presentationFloors = {});
     void draw(RenderDevice& device, Enemies& resources, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera, f32 textureFrame,
               const Texture* hitFlash, TreeModel::Pass pass = TreeModel::Pass::All) const;

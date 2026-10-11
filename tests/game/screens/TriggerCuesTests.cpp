@@ -8,6 +8,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "engine/assets/SoundSet.h"
+#include "engine/audio/AudioMixer.h"
 #include "engine/core/Types.h"
 
 #include "FakeRenderDevice.h"
@@ -26,6 +27,56 @@ TEST_CASE("the castle's and mines' turntables sound their turning and their stop
     CHECK(TriggerCues::rotatorSoundsOf(9).stopping == "S_METLROTATESTO");
     CHECK(TriggerCues::rotatorSoundsOf(0).turning.empty());
     CHECK(TriggerCues::rotatorSoundsOf(2).stopping.empty());
+}
+
+TEST_CASE("a native turntable loop stops on pause and resumes only while its platform turns",
+          "[game][screens][trigger-cues][pause-motion-audio][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELI2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    usize pad = 0;
+    while (pad < world.rotators().size() &&
+           world.rotators().rotator(pad).subtype != Rotators::kTurnedByPad) {
+        ++pad;
+    }
+    REQUIRE(pad < world.rotators().size());
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    LevelSoundscape audio;
+    audio.open(root, &sounds, world.audio(), 'I');
+    TriggerCues cues;
+    SwitchCutscene cutscene;
+    const std::array visitors{TriggerVisitor{.position = world.rotators().rotator(pad).spot}};
+    world.updateTriggers(1.0f / 60, visitors);
+    cues.handle(world, audio, &sounds, cutscene, {});
+    const auto first = cues.turningSound();
+    REQUIRE(sounds.isPlaying(first));
+    cues.pause(audio);
+    CHECK_FALSE(sounds.isPlaying(first));
+    CHECK(cues.turningSound() == kNoSound);
+    cues.pause(audio);
+    CHECK(cues.turningSound() == kNoSound);
+    world.updateTriggers(1.0f / 60, {});
+    cues.handle(world, audio, &sounds, cutscene, {});
+    const auto resumed = cues.turningSound();
+    REQUIRE(sounds.isPlaying(resumed));
+    CHECK(resumed != first);
+    for (s32 frame = 0; frame < 1800 && !world.rotators().rotator(pad).done; ++frame) {
+        world.updateTriggers(1.0f / 60, {});
+        cues.handle(world, audio, &sounds, cutscene, {});
+    }
+    REQUIRE(world.rotators().rotator(pad).done);
+    CHECK_FALSE(sounds.isPlaying(resumed));
+    CHECK(cues.turningSound() == kNoSound);
+    cues.pause(audio);
+    world.updateTriggers(1.0f / 60, {});
+    cues.handle(world, audio, &sounds, cutscene, {});
+    CHECK(cues.turningSound() == kNoSound);
+    audio.close();
 }
 
 TEST_CASE("a party refused by a crystal gate is told what it wants, once a frame",

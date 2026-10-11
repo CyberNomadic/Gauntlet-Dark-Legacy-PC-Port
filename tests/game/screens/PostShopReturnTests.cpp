@@ -1,6 +1,7 @@
 #include <filesystem>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/assets/StringTable.h"
 #include "engine/core/Types.h"
@@ -11,6 +12,7 @@
 #include "game/app/Scenario.h"
 #include "game/config/GameConfig.h"
 #include "game/players/CharacterSave.h"
+#include "game/players/ShopPurchase.h"
 #include "game/screens/AfterLevelScene.h"
 #include "game/screens/PlayScene.h"
 #include "game/screens/PlayerSelectScene.h"
@@ -19,6 +21,48 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+
+TEST_CASE("new shop powerups stay inactive through the Tower arrival with either auto-use setting",
+          "[post-shop-return][shop][assets]") {
+    const auto root = test::assetOrSkip("SHPDATA/SHOP.WAD").parent_path().parent_path();
+    test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2");
+    const auto scenario = Scenario::load(test::dataDirectory().parent_path() /
+                                         "tests/scenarios/after-level-return-province.json");
+    auto party = scenario.partyMembers();
+    REQUIRE(party.size() == 1);
+    auto& save = party.front().save;
+    save.progress().inventory = {};
+    save.gold = 5000;
+    const ClassStats stats;
+    for (const s32 type : {13, 20}) {
+        REQUIRE(buyShopItem(save, stats, {"", "", 1, type, 100, 1}, 1) == ShopResult::Bought);
+    }
+    const auto purchased = save.progress().inventory;
+    REQUIRE(purchased.powerupCount() == 2);
+    CHECK_FALSE(purchased.powerups[0].on);
+    CHECK_FALSE(purchased.powerups[1].on);
+    test::FakeRenderDevice device;
+    GameConfig config;
+    config.combat.autoActivateItems = GENERATE(false, true);
+    LevelWorld world;
+    REQUIRE(world.load(device, root));
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.tower = &world;
+    PlayOptions options;
+    options.welcome = false;
+    options.arriving = true;
+    options.arrivalWorld = 7;
+    PlayScene play;
+    REQUIRE(play.open(device, context, world, party, options));
+    for (s32 frame = 0; frame < 180; ++frame) {
+        CHECK(play.party().front().save.progress().inventory == purchased);
+        REQUIRE(play.update(1.0 / 30, {}) == PlayOutcome::Running);
+    }
+    CHECK(play.party().front().save.progress().inventory == purchased);
+    play.close();
+}
 
 TEST_CASE("completed shop saves its character before returning to the province wing",
           "[post-shop-return][shop][select][assets]") {
