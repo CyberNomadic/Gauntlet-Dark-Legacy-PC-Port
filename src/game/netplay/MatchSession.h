@@ -5,6 +5,7 @@
 #include "game/netplay/CombatPlayback.h"
 #include "game/netplay/InputTimeline.h"
 #include "game/netplay/PartyCheckpoint.h"
+#include "game/netplay/ShopSync.h"
 
 namespace gdl::game {
 
@@ -15,7 +16,7 @@ struct MatchLink {
     u8 peer = 0;
     PacketTransport::Connection connection = 0;
 };
-enum class MatchTransition : u8 { Start, Travel, Resume };
+enum class MatchTransition : u8 { Start, Travel, Resume, Shop };
 enum class MatchStop : u8 { None, Left, Disconnected, LoadTimeout, TransportFailure };
 enum class MatchControlKind : u8 {
     Prepare,
@@ -73,11 +74,14 @@ public:
     bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links);
     /** A new transport/room lifetime is required before opening again after clear(). */
     void clear();
-    /** Travel requires a complete host checkpoint; Start/Resume take none.
+    /** Travel/Shop require a complete host checkpoint; Shop also requires its setup.
+     * Start/Resume take neither. A shop cannot travel before every peer finishes.
      * Invalid or congested preparation leaves the current epoch unchanged. */
     bool prepare(u32 scene, MatchTransition transition = MatchTransition::Start,
-                 const MatchParty* party = nullptr);
-    /** Complete travel profiles only, never a partially received roster. */
+                 const MatchParty* party = nullptr, const ShopSetup* shop = nullptr);
+    ShopSync& shop() { return m_shop; }
+    const ShopSync& shop() const { return m_shop; }
+    /** Complete travel/shop profiles only, never a partially received roster. */
     const MatchParty* travelParty() const;
     bool loaded();
     /** Entry movies may skip only after the host acknowledges every occupied seat.
@@ -141,6 +145,7 @@ private:
     u8 m_movieSkipRequests = 0;
     MatchContext m_context;
     MatchParty m_travelParty;
+    ShopSync m_shop;
     InputTimeline m_timeline;
     InputHistory m_history;
     CombatPlayback m_playback;

@@ -40,6 +40,7 @@ struct ItemTaking {
         Taken,     ///< all of it
         PartTaken, ///< as much as there was room for; the rest lies there still
         Shown,     ///< it goes, though nothing is carried: a scroll read
+        GoldFull,
         KeysFull,
         PotionsFull,
         HealthFull,
@@ -65,8 +66,11 @@ struct ItemTaking {
 /** The most health a character of `level` holds. */
 s32 mostHealth(s32 level);
 
+/** How much more gold this character's wallet can hold. */
+s32 goldCapacity(const CharacterSave& save);
+
 /**
- * Gives a touched item to a character the way the original does: gold up to 99999, keys and
+ * Gives a touched item to a character: gold while below 99999, keys and
  * potions while there is room (a key ring too big leaves its rest lying), food unless health
  * is full (food gone bad always, down to a last point of health), powerups into their slots
  * at `powerupTime` times their strength, a runestone unless held, a legend item, a gargoyle

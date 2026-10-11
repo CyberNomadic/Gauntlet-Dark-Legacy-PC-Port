@@ -29,6 +29,35 @@ TEST_CASE("the defaults describe the original's screen and clock", "[game][confi
     REQUIRE(config.menu.padStart.front() == PadButton::Start);
 }
 
+TEST_CASE("expanded shop and autosave are independent opt-in settings", "[game][config]") {
+    GameConfig config;
+    CHECK_FALSE(config.game.expandedShop);
+    CHECK_FALSE(config.game.autoSave);
+    REQUIRE(config.loadFile(test::dataDirectory() / "config.json"));
+    CHECK_FALSE(config.game.expandedShop);
+    CHECK_FALSE(config.game.autoSave);
+    config.mergeJson(R"({"game":{"expandedShop":true}})");
+    CHECK(config.game.expandedShop);
+    CHECK_FALSE(config.game.autoSave);
+    config.mergeJson(R"({"game":{"autoSave":true}})");
+    GameConfig restored;
+    restored.mergeJson(config.toJson());
+    CHECK(restored.game.expandedShop);
+    CHECK(restored.game.autoSave);
+    config.mergeJson(R"({"game":{"expandedShop":false,"autoSave":false}})");
+    CHECK_FALSE(config.game.expandedShop);
+    CHECK_FALSE(config.game.autoSave);
+}
+
+TEST_CASE("Escape cannot be rebound from pause to a gameplay or menu action", "[game][config]") {
+    GameConfig config;
+    config.mergeJson(R"({"controls":{"keyboard":{"escape":["R"],"select":["Escape","Enter"]},
+        "play":{"keyboard":{"attack":["Escape","Space"]}}}})");
+    CHECK(config.menu.escape == std::vector{Key::Escape});
+    CHECK(config.menu.select == std::vector{Key::Enter});
+    CHECK(config.play.attack == std::vector{Key::Space});
+}
+
 TEST_CASE("combat is opt-in and movie volume persists independently of other audio",
           "[game][config][combat-settings][movie-volume]") {
     GameConfig config;
@@ -134,7 +163,8 @@ TEST_CASE("JSON merges over the defaults and leaves the rest alone", "[game][con
     REQUIRE(config.audio.musicVolume == 0.25f);
     REQUIRE(config.audio.masterVolume == 1.0f);
     REQUIRE(config.text.language == "fr");
-    REQUIRE(config.menu.back == std::vector<Key>{Key::Escape, Key::Q});
+    REQUIRE(config.menu.back == std::vector<Key>{Key::Q});
+    REQUIRE(config.menu.escape == std::vector<Key>{Key::Escape});
     REQUIRE(config.menu.padSelect == std::vector<PadButton>{PadButton::A, PadButton::X});
     REQUIRE(config.menu.up == std::vector<Key>{Key::Up, Key::W});
 }

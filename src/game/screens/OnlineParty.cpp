@@ -97,4 +97,29 @@ std::optional<s32> OnlineParty::device(const OnlineSession& session, u8 seat) co
     }
     return m_local[static_cast<usize>(found - session.seats().begin())].player;
 }
+bool OnlineParty::checkpoint(const OnlineSession& session, const MatchParty& profiles) {
+    if (!admitted(session)) {
+        return false;
+    }
+    for (usize local = 0; local < m_local.size(); ++local) {
+        const auto& profile = profiles[session.seats()[local]];
+        const auto& save = m_local[local].save;
+        if (!profile || !profile->valid() || profile->name != save.name ||
+            profile->character != save.character || profile->color != save.color) {
+            return false;
+        }
+    }
+    for (usize local = 0; local < m_local.size(); ++local) {
+        const auto& profile = *profiles[session.seats()[local]];
+        auto& member = m_local[local];
+        member.save.progress() = profile.progress;
+        member.save.gold = profile.gold;
+        member.save.levelTotal = profile.levelTotal;
+        member.save.autoAttack = profile.autoAttack;
+        member.save.helpSeen = profile.helpSeen;
+        member.fallen = false;
+        member.resultsCheckpoint.reset();
+    }
+    return true;
+}
 } // namespace gdl::game

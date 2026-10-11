@@ -965,6 +965,9 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
         targets.opponents.strikeEnemy(slot, 0.0f, 0, at - actor.position(), actor.player(),
                                       players);
     }
+    if (!enemies.alive(slot) || enemies.dying(slot)) {
+        return release();
+    }
     SoundPlayer* sounds = m_resources->sounds;
     if (sounds == nullptr || !sounds->isPlaying(runtime.deathHeldCry)) {
         runtime.deathHeldCry = m_resources->audio.playNamed(kDeathCry, kDeathVolume);

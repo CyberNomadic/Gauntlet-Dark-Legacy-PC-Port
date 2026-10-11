@@ -14,6 +14,7 @@ add_library(game STATIC
     netplay/InputCommand.cpp
     netplay/InputTimeline.cpp
     netplay/MatchSession.cpp
+    netplay/ShopSync.cpp
     netplay/ClientClock.cpp
     netplay/OnlineSession.cpp
     netplay/CharacterProfile.cpp
@@ -76,6 +77,7 @@ add_library(game STATIC
     screens/ShopSession.cpp
     screens/AfterLevelScene.h
     screens/AfterLevelScene.cpp
+    screens/AutoSaveIcon.cpp
     screens/AfterLevelPresentation.cpp
     screens/FinalStatsPresentation.cpp
     screens/ShopLayout.cpp
@@ -109,6 +111,7 @@ add_library(game STATIC
     players/Progression.cpp
     players/CharacterSave.h
     players/CharacterSave.cpp
+    players/AutoSave.cpp
     players/NameCheats.h
     players/NameCheats.cpp
     players/TurboMeter.h

@@ -1637,6 +1637,12 @@ TEST_CASE("retail item attacks play authored effects and spend one charge on the
     for (const u32 mask : {powerup::kFireBreath, powerup::kAcidBreath, powerup::kLightningBreath,
                            powerup::kSkorneHorns, powerup::kSkorneMask, powerup::kThunderHammer}) {
         Fixture f;
+        std::vector<s32> impacts;
+        PlayerAttacks::Resources resources{f.device,  f.classes, f.world, f.weapons,
+                                           f.effects, f.audio,   nullptr, f.arsenal,
+                                           f.dimmer,  &f.shake,  &f.mode};
+        resources.hammerImpact = [&](s32 player) { impacts.push_back(player); };
+        f.attacks.bind(resources);
         CAPTURE(mask);
         LevelCatalog catalog;
         REQUIRE(catalog.load(root));
@@ -1655,6 +1661,8 @@ TEST_CASE("retail item attacks play authored effects and spend one charge on the
         REQUIRE(item);
         const auto deed = f.attacks.attackDeed(player.actor, false, f.targets);
         REQUIRE(deed == item->deed);
+        f.attacks.useItemAttack(0, f.players);
+        CHECK(impacts.empty());
         player.figure->animate(0, 2, 1.0f / 30, deed);
         for (s32 frame = 0;
              frame < 180 && player.figure->animator().itemReleased() == PlayerDeed::None; ++frame) {
@@ -1663,6 +1671,7 @@ TEST_CASE("retail item attacks play authored effects and spend one charge on the
         REQUIRE(player.figure->animator().itemReleased() == deed);
         f.attacks.useItemAttack(0, f.players);
         CHECK(f.shake.active() == hammer);
+        CHECK(impacts == (hammer ? std::vector<s32>{player.actor.player()} : std::vector<s32>{}));
         if (hammer) {
             CHECK(glm::length(f.shake.offset()) == Approx(0.3f));
         }
@@ -1673,10 +1682,13 @@ TEST_CASE("retail item attacks play authored effects and spend one charge on the
         REQUIRE(slot);
         CHECK(slot->charge == (item->chargeKind != 0 ? 1 : 2));
         for (s32 frame = 0; frame < 20; ++frame) {
+            player.figure->animate(0, 2, 1.0f / 30);
+            f.attacks.useItemAttack(0, f.players);
             f.effects.update(1.0f / 30);
             f.effects.draw(f.device, Mat4{1}, f.world.fullLighting());
         }
         CHECK_FALSE(f.device.draws.empty());
+        CHECK(impacts.size() == static_cast<usize>(hammer));
         f.attacks.clear();
         CHECK(f.effects.count() == 0);
     }
@@ -3036,6 +3048,17 @@ TEST_CASE("a halo wearer drains Death only while touching the nearest target ahe
     actor.place(enemies.positionOf(*death) - Vec3{0, 0, 2});
     REQUIRE(f.attacks.grabDeath(0, 2, true, f.players, f.targets));
     CHECK(sounds.voiceCount() == 2); // a new use of the item can announce again
+    EnemyHit drained;
+    drained.antiDeath = true;
+    while (enemies.healthOf(*death) > 1) {
+        enemies.hurt(*death, drained);
+    }
+    CHECK_FALSE(f.attacks.grabDeath(0, 2, true, f.players, f.targets));
+    CHECK(enemies.dying(*death));
+    CHECK(f.players[0].deathHeld == -1);
+    CHECK(f.players[0].deathHeldEffect == 0);
+    CHECK(f.players[0].deathHeldSuck == kNoSound);
+    CHECK(f.players[0].deathHeldCry == kNoSound);
     f.opponents.close();
     f.audio.close();
 }
@@ -3100,16 +3123,22 @@ TEST_CASE("a halo wearer can catch and drain a retreating Death during resolved 
     };
     const f32 full = enemies.healthOf(*death);
     f32 nearestContact = 1000;
+    std::optional<Vec3> caughtAt;
     for (s32 elapsed = 0; elapsed < 120; elapsed += ticks) {
         const f32 before = enemies.healthOf(*death);
         PartyMotion::step(f.players, inputs, false, 0, ticks, seconds, floor, events);
+        if (f.players[0].deathHeld == *death && !caughtAt) {
+            caughtAt = enemies.positionOf(*death);
+        }
         nearestContact =
             std::min(nearestContact, glm::distance(actor.position(), enemies.positionOf(*death)));
         CHECK(before - enemies.healthOf(*death) <= 1);
         enemies.update(ticks, seconds, LevelOpponents::enemyViews(f.players));
+        if (caughtAt) {
+            CHECK(enemies.positionOf(*death) == *caughtAt);
+        }
     }
-    CHECK(enemies.positionOf(*death).z > start.z + 2);
-    CHECK(actor.position().z > start.z);
+    REQUIRE(caughtAt);
     CAPTURE(tier, ticks, nearestContact, actor.position().y, actor.radius(),
             enemies.targets()[0].radius, f.players[0].deathHeld, f.players[0].deathDrainTicks);
     CHECK(nearestContact == Approx(actor.radius() + enemies.targets()[0].radius));
@@ -3119,14 +3148,21 @@ TEST_CASE("a halo wearer can catch and drain a retreating Death during resolved 
     CHECK(std::ranges::count_if(returns, [](const DeathEvent& event) {
               return event.kind == DeathEvent::Kind::Return;
           }) == static_cast<s32>(full - enemies.healthOf(*death)));
-    // Let him escape: keeping him ahead cannot continue draining at a distance.
+    // Unequipping releases the enemy and the player's grab in the same update.
     inputs[3].move = {};
-    const f32 caughtHealth = enemies.healthOf(*death);
+    for (auto& powerup : actor.save().progress().inventory.powerups) {
+        powerup.on = false;
+    }
     for (s32 elapsed = 0; elapsed < 30; elapsed += ticks) {
         PartyMotion::step(f.players, inputs, false, 0, ticks, seconds, floor, events);
+        CHECK(f.players[0].deathHeld == -1);
         enemies.update(ticks, seconds, LevelOpponents::enemyViews(f.players));
     }
-    CHECK(enemies.healthOf(*death) == caughtHealth);
+    // The unprotected wearer may now be drained normally, which also spends
+    // Death's health. Only Anti-Death's return transfers must stop immediately.
+    const auto released = enemies.takeDeathEvents();
+    CHECK(std::ranges::none_of(
+        released, [](const DeathEvent& event) { return event.kind == DeathEvent::Kind::Return; }));
     CHECK(f.players[0].deathHeld == -1);
     f.opponents.close();
 }

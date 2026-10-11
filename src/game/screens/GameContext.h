@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <span>
 
 #include "engine/assets/StringTable.h"
 #include "engine/audio/SoundPlayer.h"
@@ -11,6 +12,7 @@
 #include "game/config/ControlProfiles.h"
 #include "game/config/GameConfig.h"
 #include "game/menu/ControlPrompts.h"
+#include "game/players/Party.h"
 #include "game/world/LevelCatalog.h"
 #include "game/world/LevelWorld.h"
 
@@ -41,6 +43,8 @@ struct GameContext {
     std::function<void()> stopVibration;
     /** A completed secret challenge grants shared class availability, even before saving. */
     std::function<void(u16)> unlockClasses;
+    /** Completed online shop checkpoint, containing only this machine's owned characters. */
+    std::function<void(std::span<PartyMember>)> saveLocalParty;
 };
 
 } // namespace gdl::game

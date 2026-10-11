@@ -38,6 +38,20 @@ def changelog(tag):
     heading, _, body = notes.partition("\n")
     if heading != f"# {tag[1:]}" or not body.strip():
         raise ValueError(f"Changelog must have a matching version heading and release notes: {path}")
+    sections = []
+    has_notes = False
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            sections.append(line)
+        elif not sections:
+            raise ValueError(f"Changelog notes must be under Added or Fixed: {path}")
+        else:
+            has_notes = True
+    if sections != ["## Added", "## Fixed"] or not has_notes:
+        raise ValueError(f"Changelog must contain only Added and Fixed sections: {path}")
     return notes
 
 
@@ -106,29 +120,7 @@ def main(argv=None):
         return
     assets = validated_assets(ROOT / "release-assets", tag)
     prerelease = publication_is_prerelease(tag)
-    heading = ("Prerelease QA build — expect bugs and keep backups of your saves.\n\n"
-               if prerelease else "Keep backups of your saves before updating.\n\n")
-    notes = (
-        changelog(tag) + "\n\n## Installation and updates\n\n" + heading +
-        "Windows 10/11 x64: download and run the `windows-x64-setup.exe`. "
-        "It is unsigned; only use downloads from this project's release page.\n\n"
-        "Linux x64: extract the `linux-x64-setup.tar.gz`, then open the executable "
-        "inside (or run it in a terminal). Baseline: Ubuntu 24.04+ desktop. "
-        "Minimal desktops may need libegl1, libopengl0, libxkbcommon-x11-0 and libxcb-cursor0.\n\n"
-        "Both: provide your own USA GameCube Gauntlet Dark Legacy ISO/CISO (GUNE5D), "
-        "choose a writable installation folder, and press Install. No Python, compiler, "
-        "console emulator or asset conversion is required. A Vulkan 1.3 graphics driver is required. "
-        "No game assets are included in these downloads.\n\n"
-        "For an upgrade, open the installer and select your existing game folder. "
-        "It checks all published releases, including prereleases; press Update to download and install the newer game and installer. "
-        "Close the installer window when finished so it can replace itself in place. "
-        "No disc image is needed again. Close the game first. "
-        "Game assets, `saves/` and `config/` are preserved. Fresh installations also retain "
-        "a GauntletDarkLegacy-Update executable beside the game for future checks. "
-        "Settings and saves stay beside the executable. Check `VERSION`, `installation.json` "
-        "or `gauntlet --version` when reporting a bug.\n\n"
-        "Checksums and third-party licenses accompany both downloads.\n"
-    )
+    notes = changelog(tag) + "\n"
     with tempfile.TemporaryDirectory(prefix="gdl-release-notes-") as temporary:
         path = Path(temporary) / "notes.txt"
         path.write_text(notes, encoding="utf-8")

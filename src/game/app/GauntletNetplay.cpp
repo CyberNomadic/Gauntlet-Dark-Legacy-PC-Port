@@ -57,8 +57,8 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
                     ? readPauseMenuInput(input(), m_config, ui.pauseOwner)
                     : readSharedMenuInput(input(), m_config);
     if (m_online) {
-        if (!ui.overlay && (menu.start || menu.escape)) {
-            ui.pauseOwner = playerPressingStart();
+        if (!ui.overlay && (menu.start || menu.escape || input().wasKeyPressed(Key::Escape))) {
+            ui.pauseOwner = input().wasKeyPressed(Key::Escape) ? -1 : playerPressingStart();
             if (m_online->pause(ui.pauseOwner)) {
                 ui.overlay = true;
                 ui.view.page = Page::Pause;

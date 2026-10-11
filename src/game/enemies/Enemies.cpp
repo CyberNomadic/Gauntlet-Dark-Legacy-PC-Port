@@ -42,6 +42,28 @@ constexpr s32 kRetargetEvery = 8; ///< frames between a mind looking round again
 constexpr f32 kRunFrom = 1.25f;   ///< a pace this much over a walk's runs
 constexpr f32 kStopped = 0.01f;   ///< a step that gets less than this is a dead stop
 
+Vec3 supportedPresentation(const WorldCollision* collision, const Vec3& from, const Vec3& to,
+                           f32 blend, EnemyAction action, bool active) {
+    Vec3 position = glm::mix(from, to, blend);
+    if (blend <= 0 || blend >= 1 || from.y == to.y || collision == nullptr || !active ||
+        action == EnemyAction::Start || action >= EnemyAction::HitReact1 ||
+        action == EnemyAction::Fly || action == EnemyAction::Hover ||
+        action == EnemyAction::Landing) {
+        return position;
+    }
+    // Native movement resolves both endpoints onto their floors. A straight
+    // presentation segment can nevertheless cut through the lip of a descending
+    // ramp (G2FLOOR#109). Lift only grounded interpolation, never airborne motion,
+    // above the floor beneath its centre and no higher than either endpoint.
+    if (collision->floorAt(from, 0.1f, 0.1f) && collision->floorAt(to, 0.1f, 0.1f)) {
+        const f32 above = std::max(from.y, to.y) - position.y;
+        if (const auto floor = collision->floorAt(position, above, 0)) {
+            position.y = std::max(position.y, floor->y);
+        }
+    }
+    return position;
+}
+
 // fn_8005F0F4 lets an overlapping body leave an item. Cylinders use the radial
 // dot product; boxes only do so when neither local axis is moving farther inside.
 // This belongs to enemy item queries, not the swept walls/projectiles API.
@@ -922,6 +944,27 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
         // The tick's default action (do_enemies' daction): the stance, or for the scorpion
         // the walk, which then also refuses the stance and, as loud, a run.
         enemy.animator.request(enemyKind(enemy.kind).idle);
+        const bool held =
+            enemy.kind == kDeathKind && std::ranges::any_of(players, [&](const EnemyView& player) {
+                constexpr f32 kContactTolerance = 0.001f;
+                return player.heldDeath == i && !player.hidden && !player.captured &&
+                       player.antiDeath &&
+                       flatDistance(player.position, enemy.position) <=
+                           player.radius + enemy.radius + kContactTolerance &&
+                       enemy.position.y <= player.position.y + player.height &&
+                       enemy.position.y + enemyKind(enemy.kind).height >= player.position.y;
+            });
+        if (held) {
+            // A live halo contact owns this frame. Do not keep a sticky stun or
+            // change the AI route: releasing the last holder resumes it immediately.
+            enemy.contact = -1;
+            enemy.draining = false;
+            enemy.stunTicks = std::max(0, enemy.stunTicks - kMotionTicks);
+            enemy.animator.stopWalking();
+            enemy.animator.update(kMotionTicks, kMotionSeconds, false);
+            decayPush(enemy, kMotionSeconds);
+            continue;
+        }
         think(enemy, i, kMotionTicks, players, obstacles);
         if (enemy.kind == kDeathKind) {
             drain(enemy, i, 2, players);
@@ -2193,9 +2236,9 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
             }
         }
         // The flip-book kinds change their whole mesh with the frame; the rest are posed.
-        const Vec3 position = blend == 1
-                                  ? enemy.position
-                                  : glm::mix(enemy.presentationPosition, enemy.position, blend);
+        const Vec3 position =
+            supportedPresentation(m_collision, enemy.presentationPosition, enemy.position, blend,
+                                  enemy.animator.action(), enemy.state == State::Active);
         const f32 yaw = blend == 1
                             ? enemy.yaw
                             : enemy.presentationYaw +
@@ -2241,8 +2284,9 @@ void Enemies::drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& ey
             continue;
         }
         const auto tier = static_cast<usize>(std::clamp(enemy.tier, 1, 3) - 1);
-        Vec3 ground = glm::mix(enemy.presentationPosition, enemy.position,
-                               presentationBlend(enemy, presentationAlpha));
+        Vec3 ground = supportedPresentation(m_collision, enemy.presentationPosition, enemy.position,
+                                            presentationBlend(enemy, presentationAlpha),
+                                            enemy.animator.action(), enemy.state == State::Active);
         Vec3 normal{0.0f, 1.0f, 0.0f};
         if (m_collision != nullptr) {
             if (const auto floor = m_collision->floorAt(ground, kShadowReach, kShadowReach)) {

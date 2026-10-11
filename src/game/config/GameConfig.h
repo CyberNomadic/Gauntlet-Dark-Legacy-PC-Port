@@ -78,6 +78,11 @@ struct CombatConfig {
     bool autoActivateItems = true; ///< newly collected powerups start enabled
 };
 
+struct GameOptionsConfig {
+    bool expandedShop = false;
+    bool autoSave = false;
+};
+
 /** Where characters are saved: a `saves` folder beside the game when the directory is
  * empty, the directory itself when it is absolute, else that directory beside the game. */
 struct SaveConfig {
@@ -184,6 +189,7 @@ struct GameConfig {
     DifficultyConfig difficulty;
     MultiplayerConfig multiplayer;
     CombatConfig combat;
+    GameOptionsConfig game;
     MenuBindings menu;
     PlayBindings play;
     std::array<PlayerControlConfig, 4> controls;

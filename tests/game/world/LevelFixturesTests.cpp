@@ -737,7 +737,7 @@ TEST_CASE("a locked chest wants a key, opens, and gives up what it held",
     REQUIRE(events[0].contents == -1);
     REQUIRE(chests.update(1.0f, {}).empty());
     REQUIRE_FALSE(chests.chest(1).gone);
-    CHECK(chests.obstacles().size() == 1); // gold retains its touch collection obstacle
+    CHECK(chests.obstacles().empty()); // open gold remains touchable without blocking
     const std::array otherVisitor{ChestVisitor{Vec3{100, 0, 0}, 0.75f, 0}, party[0]};
     events = chests.update(0, otherVisitor);
     REQUIRE(events.size() == 1);
@@ -755,6 +755,79 @@ TEST_CASE("a locked chest wants a key, opens, and gives up what it held",
     REQUIRE(events.size() == 1);
     REQUIRE(events[0].explodes);
     REQUIRE(events[0].contents == -1);
+}
+
+TEST_CASE("an open gold chest ignores full wallets and waits for an eligible visitor",
+          "[fixtures][chest][gold-cap]") {
+    Fixture f("fixtures-full-gold-chest");
+    Chests chests;
+    REQUIRE(chests.bind(f.device, f.layout, f.items, nullptr));
+    chests.setPlayerCount(1);
+    std::array party{ChestVisitor{Vec3{20, 0, 0}, 0.75f, 1}};
+    party[0].goldCapacity = 0;
+    chests.update(0, party);
+    chests.update(1, party);
+    REQUIRE(chests.chest(1).state == Chests::kOpen);
+    CHECK_FALSE(std::ranges::any_of(chests.obstacles(),
+                                    [](const Obstacle& box) { return box.centre.x == 20; }));
+    CHECK(chests.update(5, party).empty());
+    CHECK_FALSE(chests.chest(1).gone);
+    CHECK_FALSE(chests.chest(1).collectedSeconds);
+
+    std::vector<ChestEvent> events;
+    SECTION("the same player spends gold and comes back") {
+        party[0].goldCapacity = 1;
+        events = chests.update(0, party);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].visitor == 0);
+    }
+    SECTION("a second player has room without spending the opener's gold") {
+        const std::array visitors{party[0], ChestVisitor{Vec3{20, 0, 0}, 0.75f, 0}};
+        events = chests.update(0, visitors);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].visitor == 1);
+    }
+    CHECK(events[0].kind == ChestEvent::Kind::Collected);
+    CHECK(events[0].gold == 200);
+    chests.update(Chests::kCollectedSeconds, party);
+    CHECK(chests.chest(1).gone);
+}
+
+TEST_CASE("simultaneous gold chests reserve wallet room before retiring", "[chest][gold-cap]") {
+    const auto directory = test::scratchDirectory("fixtures-simultaneous-gold");
+    writeTextFile(directory / "world.json", R"({
+        "objects": [{"name": "GROUND", "position": [0, 0, 0]}],
+        "animations": [], "particles": [], "locators": [],
+        "itemInfos": [
+            {"type": 2, "subtype": 47, "name": "CHESTG0", "radius": 3.9,
+             "height": 2, "xSize": 1.2, "zSize": 1, "activeType": 22},
+            {"type": 1, "subtype": 1, "name": "TREAS_GOLD", "radius": 1.25,
+             "height": 2, "value": 200}],
+        "itemInstances": [
+            {"info": 0, "minPlayers": 1, "position": [0, 0, 0], "rotation": [0, 0, 0],
+             "params": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
+            {"info": 0, "minPlayers": 1, "position": [0, 0, 0], "rotation": [0, 0, 0],
+             "params": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]})");
+    test::FakeRenderDevice device;
+    WorldLayout layout;
+    ItemArchive items;
+    REQUIRE(layout.load(directory));
+    Chests chests;
+    REQUIRE(chests.bind(device, layout, items, nullptr));
+    chests.setPlayerCount(1);
+    std::array party{ChestVisitor{Vec3{0}, 0.75f, 2}};
+    party[0].goldCapacity = 1;
+    chests.update(0, party);
+    chests.update(1, party);
+    const auto events = chests.update(0, party);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].chest == 0);
+    CHECK(events[0].gold == 200);
+    CHECK(chests.chest(0).collectedSeconds);
+    CHECK_FALSE(chests.chest(1).collectedSeconds);
+    party[0].goldCapacity = 0;
+    CHECK(chests.update(1, party).empty());
+    CHECK_FALSE(chests.chest(1).gone);
 }
 
 TEST_CASE("a gate bars the way until a key is spent on it", "[game][world][fixtures]") {

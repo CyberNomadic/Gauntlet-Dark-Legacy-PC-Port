@@ -3010,6 +3010,184 @@ TEST_CASE("the swarm runs from a lit suicide bomber near it", "[game][enemies][a
     CHECK(apart() > before);
 }
 
+TEST_CASE("suicide bombers acquire at their authored scaled sight boundary",
+          "[enemies][bomber-sight][assets]") {
+    // move_logic18 8004ABFC..8004AC24 compares actual distance to sight and
+    // starts a sixty-tick fuse. Range is not a separate bomber-specific constant.
+    const f32 sight = GENERATE(12.0f, 30.0f, 50.0f);
+    const f32 scale = GENERATE(0.667f, 1.0f, 1.5f);
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    EnemyScales scales;
+    scales.sight = scale;
+    enemies.open(device, unpackedRoot(), nullptr, 1, scales, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const auto bomber = enemies.spawn({.kind = kGruntKind,
+                                       .tier = kSuicideStrength,
+                                       .algorithm = 0,
+                                       .placed = true,
+                                       .sight = sight},
+                                      {});
+    REQUIRE(bomber);
+    const f32 range = sight * scale;
+    CHECK(enemies.sightOf(*bomber) == Approx(range));
+    std::array players{EnemyView{.player = 0, .position = {0, 0, range + 0.01f}}};
+    for (s32 frame = 0; frame < 40; ++frame) {
+        enemies.update(kTicks, kStep, players);
+    }
+    CHECK(enemies.targetOf(*bomber) == -1);
+    CHECK(enemies.memoryOf(*bomber).mode == 0);
+    players[0].position.z = range;
+    enemies.update(kTicks, kStep, players);
+    CHECK(enemies.targetOf(*bomber) == 0);
+    CHECK(enemies.memoryOf(*bomber).mode == 1);
+    CHECK(enemies.memoryOf(*bomber).fuse == 60);
+}
+
+TEST_CASE("Ghost Town swarm feet follow the native wooden railway slopes",
+          "[enemies][enemy-slopes][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    const s32 route = GENERATE(0, 1, 2);
+    const bool backwards = GENERATE(false, true);
+    const s32 ticks = GENERATE(1, 2);
+    const f32 lateral = GENERATE(-1.0f, 0.0f, 1.0f);
+    const bool approaches = GENERATE(false, true);
+    constexpr std::array<Vec3, 3> kStarts{Vec3{-49, 7.2f, -226}, Vec3{-94, 0.5f, -178},
+                                          Vec3{-109, 1.5f, -196}};
+    constexpr std::array<Vec3, 3> kEnds{Vec3{-32, 11.2f, -226}, Vec3{-87, 2.0f, -178},
+                                        Vec3{-115, 4.5f, -196}};
+    // Native G2FLOOR#094, #099 and #109 collision vertices/normals. This oracle
+    // is independent of the floor query used by enemy locomotion.
+    constexpr std::array<Vec3, 3> kPlanePoints{Vec3{-29.5859375f, 11.7109375f, -229.265625f},
+                                               Vec3{-85.5859375f, 2.28125f, -172.96875f},
+                                               Vec3{-107.2109375f, 0.640625f, -193.2578125f}};
+    constexpr std::array<Vec3, 3> kPlaneNormals{Vec3{-0.23238438f, 0.97262400f, 0},
+                                                Vec3{-0.21338810f, 0.97694004f, 0.00732670f},
+                                                Vec3{0.41248477f, 0.91096449f, 0}};
+    const auto checkNativePlane = [&](const Vec3& at) {
+        if (at.x < std::min(kStarts[route].x, kEnds[route].x) ||
+            at.x > std::max(kStarts[route].x, kEnds[route].x)) {
+            return;
+        }
+        const Vec3 origin = kPlanePoints[route];
+        Vec3 normal = kPlaneNormals[route];
+        if (route == 0) {
+            // The long wooden ramp has a slight twist across its diagonal.
+            constexpr Vec3 kDiagonalEnd{-51.0900459f, 6.57306194f, -222.84375f};
+            const f32 diagonalZ = origin.z + (at.x - origin.x) * (kDiagonalEnd.z - origin.z) /
+                                                 (kDiagonalEnd.x - origin.x);
+            if (at.z < diagonalZ) {
+                normal = {-0.22642554f, 0.97380453f, 0.02088392f};
+            }
+        }
+        const f32 height =
+            origin.y - (normal.x * (at.x - origin.x) + normal.z * (at.z - origin.z)) / normal.y;
+        // Footprint support can lift a body over a neighboring tread/rail, but
+        // must never leave its feet below the authored ramp underneath it.
+        CHECK(at.y >= height - 0.05f);
+    };
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("G2")));
+    Vec3 from = backwards ? kEnds[route] : kStarts[route];
+    Vec3 destination = backwards ? kStarts[route] : kEnds[route];
+    const Vec3 direction = glm::normalize(Vec3{destination.x - from.x, 0, 0});
+    if (approaches) {
+        from -= direction * 3.0f;
+        destination += direction * 3.0f;
+    }
+    from.z += lateral;
+    destination.z += lateral;
+    CAPTURE(route, backwards, ticks, lateral, approaches);
+    const auto floor = world.collision().floorAt(from, 2, 2);
+    REQUIRE(floor);
+    from.y = floor->y;
+    Enemies enemies;
+    enemies.open(device, root, &world.collision(), 1, {}, 1);
+    const auto kind = enemyKindOf("ZOM");
+    REQUIRE(kind);
+    REQUIRE(enemies.loadKind(*kind));
+    const auto enemy = enemies.spawn({.kind = *kind,
+                                      .algorithm = kSeekWay,
+                                      .position = from,
+                                      .direction = direction,
+                                      .placed = true},
+                                     {});
+    REQUIRE(enemy);
+    const std::array players{EnemyView{.player = 0, .position = destination + direction * 6.0f}};
+    bool arrived = false;
+    for (s32 elapsed = 0; elapsed < 480; elapsed += ticks) {
+        const Vec3 before = enemies.positionOf(*enemy);
+        const f32 beforeYaw = enemies.yawOf(*enemy);
+        enemies.update(ticks, static_cast<f32>(ticks) / 60, players);
+        const Vec3 at = enemies.positionOf(*enemy);
+        const auto support = world.collision().floorAt(at, 3, 3);
+        CAPTURE(elapsed, at.x, at.y, at.z);
+        REQUIRE(support);
+        CHECK(at.y >= support->y - 0.05f);
+        checkNativePlane(at);
+        // Measure the actual rendered translation, not a second copy of the
+        // interpolation formula. Subtract the same native pose drawn at origin.
+        const f32 blend = ticks == 1 && elapsed % 2 == 0 ? 1.0f : 0.5f;
+        device.draws.clear();
+        enemies.draw(device, Mat4{1}, {}, nullptr, nullptr, nullptr, 1);
+        REQUIRE_FALSE(device.draws.empty());
+        const Vec3 vertex = device.draws.front().vertices.front().position;
+        const auto* animator = enemies.animatorOf(*enemy);
+        TreePose pose;
+        animator->evaluatePresentation(pose, blend);
+        const f32 yaw = beforeYaw + TreePose::wrapAngle(enemies.yawOf(*enemy) - beforeYaw) * blend;
+        device.draws.clear();
+        enemies.drawPose(
+            device, Mat4{1}, glm::rotate(Mat4{1}, yaw, Vec3{0, 1, 0}), {},
+            {.kind = *kind, .tier = enemies.tierOf(*enemy), .variant = enemies.variantOf(*enemy)},
+            pose, animator->player().sequence(), animator->presentationFrame(blend), 0, nullptr,
+            nullptr);
+        REQUIRE_FALSE(device.draws.empty());
+        const Vec3 middle = vertex - device.draws.front().vertices.front().position;
+        CHECK(middle.x == Approx(glm::mix(before.x, at.x, blend)).margin(0.0001f));
+        CHECK(middle.z == Approx(glm::mix(before.z, at.z, blend)).margin(0.0001f));
+        CHECK(enemies.positionOf(*enemy) == at); // Rendering must not change simulation.
+        if (std::abs(at.y - before.y) > 0.5f) {
+            // The discontinuity may lift an interior presentation point, never
+            // the unblended native draw at the lower supported endpoint.
+            device.draws.clear();
+            enemies.draw(device, Mat4{1}, {}, nullptr, nullptr, nullptr, -1);
+            REQUIRE_FALSE(device.draws.empty());
+            const Vec3 nativeVertex = device.draws.front().vertices.front().position;
+            device.draws.clear();
+            enemies.drawPose(device, Mat4{1},
+                             glm::rotate(Mat4{1}, enemies.yawOf(*enemy), Vec3{0, 1, 0}), {},
+                             {.kind = *kind,
+                              .tier = enemies.tierOf(*enemy),
+                              .variant = enemies.variantOf(*enemy)},
+                             animator->pose(), animator->player().sequence(),
+                             animator->player().frame(), 0, nullptr, nullptr);
+            REQUIRE_FALSE(device.draws.empty());
+            CHECK(glm::distance(nativeVertex - device.draws.front().vertices.front().position, at) <
+                  0.0001f);
+        }
+        const auto middleFloor = world.collision().floorAt(middle, 3, 3);
+        if (middleFloor) {
+            CHECK(middle.y >= middleFloor->y - 0.05f);
+        } else {
+            // A tiny authored seam can miss the center ray while still lying
+            // within the body's footprint. Do not compare height to a nearby
+            // higher deck: it may be behind the body or outside this triangle.
+            REQUIRE(world.collision().floorAt(middle, 3, 3, 0.5f * enemies.radiusOf(*enemy)));
+        }
+        checkNativePlane(middle);
+        if (glm::dot(at - destination, direction) >= 0) {
+            arrived = true;
+            break;
+        }
+    }
+    CHECK(arrived);
+}
+
 TEST_CASE("a placed archer does not abandon its perch when a nearby bomber lights its fuse",
           "[enemies][bomber-placement][assets]") {
     test::FakeRenderDevice device;

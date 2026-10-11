@@ -33,6 +33,8 @@ public:
         CameraShake* shake = nullptr;
         const MultiplayerMode* multiplayer = nullptr;
         f32 acquisitionCone = TargetAssist::kFacingDot;
+        std::function<void(s32)>
+            hammerImpact{}; // NOLINT(readability-redundant-member-init): preserve aggregate callers
     };
     struct Targets {
         LevelOpponents& opponents;

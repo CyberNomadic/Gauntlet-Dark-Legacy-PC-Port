@@ -830,6 +830,7 @@ std::vector<EnemyView> LevelOpponents::enemyViews(std::span<const PlayerRuntime>
         const auto powerups = PowerupEffects::of(actor.save().progress().inventory);
         view.invisible = powerups.invisible();
         view.antiDeath = (powerups.armor & DeathRules::kProtection) != 0;
+        view.heldDeath = player.deathHeld;
         view.reflects = (powerups.armor & kReflectingArmor) != 0;
         if ((powerups.special & powerup::kHealthVamp) != 0) {
             view.meleeWard = EnemyMeleeWard::HealthVamp;

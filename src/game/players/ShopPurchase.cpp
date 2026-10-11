@@ -11,7 +11,7 @@ namespace gdl::game {
 namespace {
 // Shop type is not an inventory subtype. These are the buy driver's effects,
 // including charged weapons (-1 lifetime), not field-pickup amounts.
-constexpr std::array<PowerupSlot, 40> kPowerups{{{},
+constexpr std::array<PowerupSlot, 41> kPowerups{{{},
                                                  {},
                                                  {90, 5, 0, 0x200000},
                                                  {},
@@ -50,7 +50,8 @@ constexpr std::array<PowerupSlot, 40> kPowerups{{{},
                                                  {120, 9, 0, 0x200000},
                                                  {120, 9, 0, 0x400000},
                                                  {120, 9, 0, 0x100000},
-                                                 {25, 9, 0, 8}}};
+                                                 {25, 9, 0, 8},
+                                                 {60, 9, 0, 0x400}}};
 bool valid(const ShopItem& item) {
     return item.type >= 0 && item.type < static_cast<s32>(kPowerups.size()) && item.price >= 0 &&
            item.price <= 99999 && item.amount >= 0 && item.amount <= 99999;
@@ -61,6 +62,20 @@ bool matches(const PowerupSlot& slot, const ShopItem& item) {
     return effect.held() && slot.held() && slot.kind == effect.kind && slot.flags == effect.flags;
 }
 } // namespace
+bool expandShopCatalog(ShopCatalog& catalog, const StringTable& strings) {
+    constexpr s32 kPrice = 1000;
+    // Four offers retain their existing buy-driver effects; Pojo uses its field
+    // pickup's 60-second duration and the ordinary class powerup-time scale.
+    const std::array<ShopItem, 5> offers{{
+        {"SHP_SUPER_INVULN", std::string(strings.get("shop.goldInvulnerability")), 0.825f, 16,
+         kPrice, 1},
+        {"SHP_POJOEGG", std::string(strings.get("shop.pojo")), 0.95f, 40, kPrice, 1},
+        {"SHP_5WAY", std::string(strings.get("shop.fiveWayShot")), 0.95f, 34, kPrice, 1},
+        {"SHP_SHRINK", std::string(strings.get("shop.shrink")), 0.95f, 29, kPrice, 1},
+        {"SHP_HOURGLASS", std::string(strings.get("shop.timestop")), 0.95f, 39, kPrice, 1},
+    }};
+    return catalog.insertBefore(36, offers);
+}
 ShopResult shopEligibility(const CharacterSave& save, const ClassStats& stats,
                            const ShopItem& item) {
     if (!valid(item)) {

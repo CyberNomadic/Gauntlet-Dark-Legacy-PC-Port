@@ -39,6 +39,8 @@
     "slots": 8
   },
   "game": {
+    "expandedShop": false,
+    "autoSave": false,
     "difficulty": "normal",
     "multiplayer": "normal",
     "combat": { "autoMelee": false, "enemyHealthBars": true, "autoActivateItems": true }

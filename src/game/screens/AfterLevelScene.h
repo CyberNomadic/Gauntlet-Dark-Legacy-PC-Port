@@ -25,7 +25,13 @@ public:
     void close();
     bool isOpen() const { return m_open; }
     /** True once every lane is done and the effects it set off have died away. */
-    bool update(f64 seconds, const ShopSession::Inputs& inputs);
+    bool update(f64 seconds, const ShopSession::Inputs& inputs,
+                const std::array<s32, 4>* potions = nullptr,
+                ShopSession::Inputs* accepted = nullptr, bool committed = false);
+    static MenuInput captureShopInput(MenuInput input, const GameConfig& config, s32 player);
+    /** Translate this peer's mouse into an authenticated row request, without buying locally. */
+    std::optional<usize> captureOnlinePointer(s32 seat, MenuInput& input);
+    bool focusOnline(s32 seat, usize row);
     void render(RenderDevice& device, const Mat4& projection, f32 width, f32 height);
     const ShopSession& session() const { return m_session; }
     /** The sounds the last update asked for, by name, whether or not audio is on. */
@@ -40,7 +46,8 @@ private:
         usize row = 0;
         Rect area;
     };
-    void pointerInput(ShopSession::Inputs& inputs, const std::array<bool, 4>& scrolling);
+    void pointerInput(ShopSession::Inputs& inputs, const std::array<bool, 4>& scrolling,
+                      std::array<s32, 4>* focus = nullptr, s32 onlyPlayer = -1);
     void pointerTarget(const ShopLane& lane, PointerAction action, const Rect& area, usize row = 0);
     bool pointerHovered(const ShopLane& lane, PointerAction action, usize row = 0) const;
     void drawContinue(const ShopLane& lane, s32 y);

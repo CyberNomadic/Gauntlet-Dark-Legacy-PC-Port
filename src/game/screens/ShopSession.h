@@ -78,7 +78,7 @@ public:
     void start(std::span<const PartyMember> party, std::span<const LevelResults> results,
                const std::array<s32, 3>& maxima, const ClassDataSet& classes, ShopCatalog catalog,
                ShopVisit visit = ShopVisit::Level);
-    void update(f64 seconds, const Inputs& inputs);
+    void update(f64 seconds, const Inputs& inputs, const std::array<s32, 4>* potions = nullptr);
     /** Focus a visible mouse-picked row; transactions still use update's ordinary rules. */
     bool focus(s32 player, usize row);
     bool finished() const;

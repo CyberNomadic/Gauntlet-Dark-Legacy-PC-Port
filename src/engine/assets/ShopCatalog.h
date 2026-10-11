@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +23,8 @@ public:
     /** Resolves SHPDATA/SHOP.WAD; exported catalog remains a development fixture. */
     bool loadRoot(const std::filesystem::path& root);
     static ShopCatalog fromJson(std::string_view text);
+    /** Inserts additional offers before an existing type, leaving an absent anchor unchanged. */
+    bool insertBefore(s32 type, std::span<const ShopItem> offers);
     const std::vector<ShopItem>& items() const { return m_items; }
 
 private:

@@ -17,6 +17,7 @@ struct RuntimePair {
     test::FakeRenderDevice hostDevice;
     test::FakeRenderDevice guestDevice;
     GameConfig config;
+    StringTable strings;
     LevelCatalog catalog;
     GameContext context;
     test::OnlinePair wire{{}, false, 2, 2};
@@ -28,6 +29,8 @@ struct RuntimePair {
     explicit RuntimePair(s32 classOffset = 0) {
         REQUIRE(catalog.load(root));
         context.config = &config;
+        REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+        context.strings = &strings;
         context.levels = &catalog;
         context.unpackedRoot = root;
         const auto choice = [](s32 device, s32 character, s32 color) {
@@ -83,6 +86,173 @@ struct RuntimePair {
         REQUIRE(guest.phase() != OnlinePlay::Phase::Failed);
     }
 };
+
+TEST_CASE("level exit synchronizes results purchases local checkpoints and tower return",
+          "[netplay][online-shop][online-play][assets]") {
+    RuntimePair pair;
+    pair.config.game.expandedShop = true;
+    GameConfig guestConfig = pair.config;
+    guestConfig.game.expandedShop = false; // The authenticated host owns the shop roster.
+    usize hostSaved = 0;
+    usize guestSaved = 0;
+    auto hostContext = pair.context;
+    auto guestContext = pair.context;
+    guestContext.config = &guestConfig;
+    hostContext.saveLocalParty = [&](std::span<PartyMember> members) {
+        ++hostSaved;
+        REQUIRE(members.size() == 2);
+        CHECK(members[0].player == 1);
+        CHECK(members[1].player == 3);
+        for (auto& member : members) {
+            CHECK(member.slot == static_cast<usize>(10 + member.player));
+            CHECK(member.save.moviesSeen == std::vector<std::string>{"PRIVATE"});
+            member.slot = static_cast<usize>(100 + member.player); // local slot allocation
+        }
+    };
+    guestContext.saveLocalParty = [&](std::span<PartyMember> members) {
+        ++guestSaved;
+        REQUIRE(members.size() == 2);
+        CHECK(members[0].player == 0);
+        CHECK(members[1].player == 2);
+        for (const auto& member : members) {
+            CHECK(member.slot == static_cast<usize>(10 + member.player));
+            CHECK(member.save.moviesSeen == std::vector<std::string>{"PRIVATE"});
+        }
+    };
+    PlayOptions options;
+    options.welcome = false;
+    REQUIRE(
+        pair.guest.open(pair.guestDevice, guestContext, pair.wire.guestSession, pair.guestParty));
+    REQUIRE(pair.host.open(pair.hostDevice, hostContext, pair.wire.hostSession, pair.hostParty,
+                           *pair.catalog.byName("G1"), options));
+    for (s32 tick = 0; tick < 3600 && pair.host.phase() != OnlinePlay::Phase::Playing; ++tick) {
+        pair.step();
+    }
+    REQUIRE(pair.host.hostScene());
+    const auto& exits = pair.host.hostScene()->portals();
+    usize exit = 0;
+    // Authored normal exit tags point at the next stage; leaveBy redirects the journey to Tower.
+    while (exit < exits.size() && (exits.portal(exit).secret || !exits.portal(exit).destination)) {
+        ++exit;
+    }
+    REQUIRE(exit < exits.size());
+    for (s32 seat = 0; seat < 4; ++seat) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable scene test fixture
+        auto& actor = *const_cast<PlayerActor*>(pair.host.hostScene()->actor(seat));
+        actor.save().gold = 10000 + seat;
+        actor.place(exits.portal(exit).position);
+    }
+    for (s32 tick = 0; tick < 1800 && (pair.host.phase() != OnlinePlay::Phase::Shopping ||
+                                       pair.guest.phase() != OnlinePlay::Phase::Shopping);
+         ++tick) {
+        pair.step();
+    }
+    REQUIRE(pair.host.shopScene());
+    REQUIRE(pair.guest.shopScene());
+    CHECK(pair.host.shopScene()->session().catalog().items().size() == 39);
+    CHECK(pair.guest.shopScene()->session().catalog().items().size() == 39);
+    CHECK(hostSaved == 0);
+    CHECK(guestSaved == 0);
+    for (const auto& lane : pair.guest.shopScene()->session().lanes()) {
+        CHECK(lane.tally.results().totals[0] == 10000 + lane.member.player);
+    }
+    const auto allShopping = [&] {
+        return pair.host.shopScene() != nullptr &&
+               std::ranges::all_of(
+                   pair.host.shopScene()->session().lanes(),
+                   [](const ShopLane& lane) { return lane.phase == ShopPhase::Shopping; });
+    };
+    for (s32 tick = 0; tick < 1500 && !allShopping(); ++tick) {
+        SessionInputs::Frame hostInputs;
+        SessionInputs::Frame guestInputs;
+        if (tick % 60 == 0) {
+            hostInputs[1].menu.select = hostInputs[3].menu.select = true;
+            guestInputs[0].menu.select = guestInputs[2].menu.select = true;
+        }
+        pair.step(hostInputs, guestInputs);
+    }
+    REQUIRE(allShopping());
+    for (s32 tick = 0; tick < 60; ++tick) {
+        pair.step();
+    }
+    const auto lane = [&](const OnlinePlay& play, usize seat) -> const ShopLane& {
+        REQUIRE(play.shopScene());
+        return play.shopScene()->session().lanes().at(seat);
+    };
+    const auto& catalog = pair.host.shopScene()->session().catalog().items();
+    for (usize attempt = 0;
+         attempt < catalog.size() && catalog[lane(pair.host, 2).cursor].type != 3; ++attempt) {
+        SessionInputs::Frame guestInputs;
+        guestInputs[0].menu.down = true;
+        pair.step({}, guestInputs);
+        for (s32 tick = 0; tick < 45; ++tick) {
+            pair.step();
+        }
+    }
+    REQUIRE(catalog[lane(pair.host, 2).cursor].type == 3);
+    const auto price = catalog[lane(pair.host, 2).cursor].price;
+    const auto beforeGold = lane(pair.host, 2).member.save.gold;
+    SessionInputs::Frame buy;
+    buy[0].menu.select = true;
+    // A slow peer's stale page/row confirmations cannot become purchases on the current row.
+    REQUIRE(pair.wire.guest.shop().sample(2, buy[0].menu, -1, static_cast<u8>(ShopPhase::Tally),
+                                          lane(pair.host, 2).cursor));
+    for (s32 tick = 0; tick < 30; ++tick) {
+        pair.step();
+    }
+    CHECK(lane(pair.host, 2).member.save.gold == beforeGold);
+    REQUIRE(
+        pair.wire.guest.shop().sample(2, buy[0].menu, -1, static_cast<u8>(ShopPhase::Shopping), 0));
+    for (s32 tick = 0; tick < 30; ++tick) {
+        pair.step();
+    }
+    CHECK(lane(pair.host, 2).member.save.gold == beforeGold);
+    pair.step({}, buy);
+    for (s32 tick = 0; tick < 30; ++tick) {
+        pair.step();
+    }
+    CHECK(lane(pair.host, 2).member.save.gold == beforeGold - price);
+    CHECK(lane(pair.guest, 2).member.save.gold == beforeGold - price);
+    CHECK(lane(pair.host, 2).member.save.progress().inventory.potions ==
+          lane(pair.guest, 2).member.save.progress().inventory.potions);
+    // Finish the host's seats first. A remote machine still shopping holds the barrier.
+    for (s32 tick = 0; tick < 900; ++tick) {
+        SessionInputs::Frame inputs;
+        if (tick % 60 == 0) {
+            inputs[1].menu.start = inputs[3].menu.start = true;
+        } else if (tick % 60 == 30) {
+            inputs[1].menu.select = inputs[3].menu.select = true;
+        }
+        pair.step(inputs);
+    }
+    CHECK(pair.host.phase() == OnlinePlay::Phase::Shopping);
+    CHECK(hostSaved == 0);
+    for (s32 tick = 0; tick < 3600; ++tick) {
+        SessionInputs::Frame inputs;
+        if (tick % 60 == 0) {
+            inputs[0].menu.start = inputs[2].menu.start = true;
+        } else if (tick % 60 == 30) {
+            inputs[0].menu.select = inputs[2].menu.select = true;
+        }
+        pair.step({}, inputs);
+        if (pair.host.phase() == OnlinePlay::Phase::Playing &&
+            pair.guest.phase() == OnlinePlay::Phase::Playing) {
+            break;
+        }
+    }
+    REQUIRE(pair.host.phase() == OnlinePlay::Phase::Playing);
+    REQUIRE(pair.guest.phase() == OnlinePlay::Phase::Playing);
+    REQUIRE(pair.host.hostScene());
+    CHECK(pair.host.hostScene()->world()->isTower());
+    CHECK(pair.wire.host.context() == pair.wire.guest.context());
+    CHECK(hostSaved == 1);
+    CHECK(guestSaved == 1);
+    CHECK(pair.host.hostScene()->party()[0].slot == 101);
+    CHECK(pair.host.hostScene()->party()[1].slot == 103);
+    CHECK_FALSE(pair.host.hostScene()->party()[2].slot);
+    CHECK_FALSE(pair.host.hostScene()->party()[3].slot);
+    CHECK(pair.guestParty.localMembers()[0].save.gold == beforeGold - price);
+}
 
 TEST_CASE("an online tower portal loads the same stage and retained party on both machines",
           "[netplay][online-play][online-travel][online-departure][assets]") {

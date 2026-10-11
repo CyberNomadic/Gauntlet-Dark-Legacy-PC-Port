@@ -239,6 +239,7 @@ bool OnlineRun::playing() const {
 #if GDL_ENABLE_NETPLAY
     return m_impl && (m_impl->play.phase() == OnlinePlay::Phase::Loading ||
                       m_impl->play.phase() == OnlinePlay::Phase::Playing ||
+                      m_impl->play.phase() == OnlinePlay::Phase::Shopping ||
                       m_impl->play.phase() == OnlinePlay::Phase::Paused);
 #else
     return false;
@@ -307,9 +308,9 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                     session.ready();
                 }
                 if (run.interactive) {
-                    status(*run.device,
-                           run.selected ? "Ready when you are. Online progress is not saved yet."
-                                        : "Select your characters, then mark yourself ready.");
+                    status(*run.device, run.selected
+                                            ? "Ready when you are."
+                                            : "Select your characters, then mark yourself ready.");
                 } else {
                     status(*run.device, std::format("Test room {} - {} machine(s). {}", room->code,
                                                     room->members.size(),
@@ -373,16 +374,15 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             }
             status(*run.device, run.interactive ? ""
                                                 : "Online scene test - Start opens a local menu; "
-                                                  "Escape exits. No saves are written.");
+                                                  "Escape exits.");
             break;
+        case OnlinePlay::Phase::Shopping: status(*run.device, ""); break;
         case OnlinePlay::Phase::Paused:
             status(*run.device, "Local menu open - the game continues for everyone.");
             break;
         case OnlinePlay::Phase::Finished:
             // Do not fall through into local post-level menus or reset guest progress.
-            status(
-                *run.device,
-                "Stage finished. Online results/shop travel is not connected yet. Escape exits.");
+            status(*run.device, "This online transition is not supported. Escape exits.");
             session.leave();
             run.finished = true;
             break;

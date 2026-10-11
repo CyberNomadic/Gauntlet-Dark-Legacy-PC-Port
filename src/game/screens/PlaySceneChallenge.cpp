@@ -129,6 +129,12 @@ void PlayScene::resumeFromChallenge(std::span<const PartyMember> party) {
         runtime.actor.save() = member->save;
         runtime.slot = member->slot;
         runtime.helpHeard = member->helpHeard;
+        if (member->resultsCheckpoint) {
+            // The returned history includes the suspended stage's kills already.
+            // Resume that same run without replacing its death/abort checkpoint.
+            runtime.resultsCheckpoint = member->resultsCheckpoint;
+            runtime.levelKills = 0;
+        }
         if (runtime.life == PlayerLife::Standing) {
             runtime.actor.place(m_secretReturnPosition +
                                 Vec3{static_cast<f32>(standing++) * kSpawnSpacing, 0, 0});

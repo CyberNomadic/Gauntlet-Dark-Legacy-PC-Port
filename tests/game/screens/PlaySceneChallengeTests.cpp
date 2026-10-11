@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -12,6 +13,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/app/Scenario.h"
 #include "game/players/ClassData.h"
 #include "game/players/PowerupEffects.h"
 #include "game/screens/PlayScene.h"
@@ -70,15 +72,16 @@ TEST_CASE("coin stages retain Stop Time but reject entry activation and selector
     scene.close();
 }
 
-TEST_CASE("the secret coin hunt awards both participants and waits for its scroll",
-          "[secret][assets]") {
+TEST_CASE("the secret coin hunt persists earned unlocks for regular and unsaved scenario parties",
+          "[secret][scenario-unlock][assets]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELS4/WORLDS.PS2").parent_path().parent_path().parent_path();
     test::assetOrSkip("TEXT/scroll_e.rom");
     test::FakeRenderDevice device;
     LevelCatalog levels;
     REQUIRE(levels.load(root));
-    const s32 levelIndex = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8);
+    const s32 sample = GENERATE(-1, 0, 1, 2, 3, 4, 5, 6, 7, 8);
+    const s32 levelIndex = std::max(sample, 0);
     const auto ref = levels.byName(std::format("S{}", levelIndex + 1));
     REQUIRE(ref);
     test::assetOrSkip(ref->directory + "/WORLDS.PS2");
@@ -98,7 +101,17 @@ TEST_CASE("the secret coin hunt awards both participants and waits for its scrol
         REQUIRE(unlocks.unlockClasses(mask));
     };
     PlayScene scene;
-    const std::array party{PartyMember{0, CharacterSave{}}, PartyMember{2, CharacterSave{}}};
+    std::vector party{PartyMember{0, CharacterSave{}}, PartyMember{2, CharacterSave{}}};
+    if (sample < 0) {
+        // A full-wallet scenario character must still collect challenge objectives.
+        party = Scenario::fromJson(R"({"level":"S1","party":[
+            {"player":0,"class":"ARC","color":"BLU","level":99,"gold":99999},
+            {"player":2}]})")
+                    .partyMembers();
+        CHECK_FALSE(party[0].slot);
+        CHECK_FALSE(party[1].slot);
+        CHECK(unlocks.classUnlocks() == 0);
+    }
     PlayOptions options;
     options.position = world.startPoint(0)->position;
     REQUIRE(scene.open(device, context, world, party, options));
@@ -124,6 +137,11 @@ TEST_CASE("the secret coin hunt awards both participants and waits for its scrol
     }
     CHECK(scene.challenge().coinsLeft() == 0);
     REQUIRE(scene.challenge().state() == SecretChallenge::State::Won);
+    if (sample < 0) {
+        CHECK(collector->save().gold == 99999);
+        CHECK(collector->save().progress().lifetime.goldFound ==
+              party[0].save.progress().lifetime.goldFound);
+    }
     REQUIRE(scene.scroll().active());
     REQUIRE_FALSE(scene.pickups().cards().empty());
     for (const auto& card : scene.pickups().cards()) {
@@ -265,5 +283,79 @@ TEST_CASE("a consumed secret portal stays gone when the party returns to the par
         CHECK(scene.update(1.0 / 30, {}) == PlayOutcome::Running);
     }
     scene.close();
+}
+
+TEST_CASE("secret visits retain the parent run's gold kills and experience through the tally",
+          "[secret][linked-results][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELB2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("LEVELS/LEVELS4/WORLDS.PS2");
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld parentWorld;
+    LevelWorld challengeWorld;
+    REQUIRE(parentWorld.load(device, root, *levels.byName("B2")));
+    REQUIRE(challengeWorld.load(device, root, *levels.byName("S4")));
+    GameContext context;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    std::array party{PartyMember{3, CharacterSave{}, 1}, PartyMember{1, CharacterSave{}, 0}};
+    for (auto& member : party) {
+        member.save.gold = 400;
+        member.save.progress().experience = 1000;
+        member.resultsCheckpoint = LevelResults::Checkpoint{100, 700, 2};
+    }
+    PlayOptions options;
+    options.position = parentWorld.startPoint(0)->position;
+    PlayScene parent;
+    REQUIRE(parent.open(device, context, parentWorld, party, options));
+    for (const auto& member : party) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        auto& save = const_cast<PlayerActor*>(parent.actor(member.player))->save();
+        save.gold += 250;
+        parent.awardExperience(member.player, 100, true);
+    }
+    const auto before = parent.levelResults();
+    REQUIRE(before.size() == party.size());
+    parent.suspendForChallenge();
+    PlayScene challenge;
+    options.position = challengeWorld.startPoint(0)->position;
+    REQUIRE(challenge.open(device, context, challengeWorld, parent.party(), options));
+    for (const auto& member : party) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        auto& save = const_cast<PlayerActor*>(challenge.actor(member.player))->save();
+        save.gold += 125;
+        challenge.awardExperience(member.player, 80, true);
+    }
+    const auto challengeResults = challenge.levelResults();
+    parent.resumeFromChallenge(challenge.party());
+    challenge.close();
+    for (usize i = 0; i < party.size(); ++i) {
+        const auto results = parent.levelResults();
+        CHECK(results[i].player == party[i].player);
+        CHECK(results[i].totals == challengeResults[i].totals);
+        CHECK(results[i].totals[0] == before[i].totals[0] + 125);
+        CHECK(results[i].totals[1] == before[i].totals[1] + 1);
+        CHECK(results[i].totals[2] > before[i].totals[2]);
+        CHECK(parent.party()[i].slot == party[i].slot);
+        // Resuming the parent does not turn the visit into its rollback checkpoint.
+        CHECK(parent.abandonedParty(parent.party())[i].save.gold == party[i].save.gold);
+    }
+    for (const auto& member : party) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        auto& save = const_cast<PlayerActor*>(parent.actor(member.player))->save();
+        save.gold += 75;
+        parent.awardExperience(member.player, 40, true);
+    }
+    const auto finalResults = parent.levelResults();
+    for (usize i = 0; i < party.size(); ++i) {
+        CHECK(finalResults[i].totals[0] == challengeResults[i].totals[0] + 75);
+        CHECK(finalResults[i].totals[1] == challengeResults[i].totals[1] + 1);
+        CHECK(finalResults[i].totals[2] > challengeResults[i].totals[2]);
+        CHECK(parent.levelResults()[i].totals == finalResults[i].totals);
+        CHECK(parent.party()[i].resultsCheckpoint->kills == finalResults[i].totals[1]);
+    }
+    parent.close();
 }
 } // namespace

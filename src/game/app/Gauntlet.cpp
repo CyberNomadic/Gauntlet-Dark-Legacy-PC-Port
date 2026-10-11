@@ -21,6 +21,7 @@
 #include "game/app/Scenario.h"
 #include "game/config/ControlProfiles.h"
 #include "game/menu/MenuInput.h"
+#include "game/players/AutoSave.h"
 #include "game/players/PlayerControls.h"
 
 namespace gdl::game {
@@ -75,6 +76,7 @@ void Gauntlet::onInit() {
         }
     }
     m_buildLabel.load(renderDevice());
+    m_autoSaveIcon.load(renderDevice(), m_options.unpackedDirectory);
     if (!m_strings.load(m_options.dataDirectory / kTextDirectory, m_config.text.language)) {
         log::warn("No text tables under {}; identifiers will show instead of text",
                   (m_options.dataDirectory / kTextDirectory).string());
@@ -85,6 +87,7 @@ void Gauntlet::onInit() {
     m_sounds->setMasterVolume(m_config.audio.masterVolume);
     m_sounds->setCategoryVolume(SoundCategory::Music, m_config.audio.musicVolume);
     m_sounds->setCategoryVolume(SoundCategory::Effects, m_config.audio.effectsVolume);
+    m_sounds->setCategoryVolume(SoundCategory::Movie, m_config.audio.movieVolume);
     m_assets = std::make_unique<AssetLocator>(assetDirectory());
     m_smokeTest.init(renderDevice());
 
@@ -246,17 +249,17 @@ GameContext Gauntlet::context() {
         }
     };
     context.stopVibration = [this] { window().stopRumble(); };
-    // QA scenarios must not grant permanent unlocks to the player's real installation.
-    if (m_options.scenario.empty()) {
-        context.unlockClasses = [this](u16 mask) {
-            if (m_saves.opened() || m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
-                m_saves.unlockClasses(mask);
-            }
-        };
-    }
+    context.saveLocalParty = [this](std::span<PartyMember> party) { autoSaveAfterShop(party); };
+    // Only newly earned rewards invoke this callback; preloaded scenario relics do not.
+    context.unlockClasses = [this](u16 mask) {
+        if (m_saves.opened() || m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
+            m_saves.unlockClasses(mask);
+        }
+    };
     context.previewAudio = [this](const AudioConfig& audio) {
         m_sounds->setCategoryVolume(SoundCategory::Music, audio.musicVolume);
         m_sounds->setCategoryVolume(SoundCategory::Effects, audio.effectsVolume);
+        m_sounds->setCategoryVolume(SoundCategory::Movie, audio.movieVolume);
         m_movie.setVolume(audio.masterVolume * audio.movieVolume);
         m_audio->mixer().setStereo(audio.stereo);
     };
@@ -264,6 +267,7 @@ GameContext Gauntlet::context() {
 }
 
 void Gauntlet::onUpdate(f64 deltaSeconds) {
+    m_autoSaveIcon.update(deltaSeconds);
     m_promptDevices.update(input(), m_config);
     if (m_netplay) {
         updateNetplay(deltaSeconds);
@@ -511,7 +515,6 @@ bool Gauntlet::startTower(std::span<const PartyMember> party, const PlayOptions&
 
 bool Gauntlet::joinTower(const PlayerSelectScene::Inputs& joining) {
     std::vector<PartyMember> party = m_play->scene.party();
-    keepParty();
     if (!startPlayerSelect(-1, party)) {
         return false;
     }
@@ -555,7 +558,8 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
             continue;
         }
         const auto menu = readPlayerMenuInput(input(), m_config, player);
-        if (!m_play->scene.leaving() && ((menu.start && !menu.select) || menu.escape) &&
+        if (!m_play->scene.leaving() &&
+            ((menu.start && !menu.select) || menu.escape || input().wasKeyPressed(Key::Escape)) &&
             m_pause.open(renderDevice(), context(), m_play->scene.party(), player)) {
             m_play->scene.pauseGameplaySounds();
             resetPlayInput();
@@ -578,9 +582,15 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     }
     if (outcome == PlayOutcome::Travel) {
         if (m_play->scene.secretTravel() && m_play->world.ref().isSecret() && m_parent) {
-            const auto party = m_play->scene.party();
-            returnFromChallenge(party);
-            keepParty();
+            Journey journey;
+            journey.secret = true;
+            journey.returningFromChallenge = true;
+            journey.destination = m_parent->world.ref();
+            journey.party = m_play->scene.party();
+            m_play->scene.close();
+            m_loadingPicture.load(renderDevice(), m_options.unpackedDirectory);
+            m_loadingPicture.cover();
+            m_journey = std::move(journey);
             return;
         }
         // The party goes on with all it carries; back in the tower it arrives at the way in
@@ -611,7 +621,6 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
                     left.name};
             }
         }
-        keepParty(journey.party);
         if (journey.secret && !m_play->world.ref().isSecret()) {
             m_play->scene.suspendForChallenge();
             m_parent = std::move(m_play);
@@ -626,8 +635,7 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     }
     if (outcome == PlayOutcome::GameOver) {
         m_parent.reset();
-        // The game was quit: keep the characters, then play the failure movie.
-        keepParty();
+        // The game was quit: play the failure movie without overwriting manual saves.
         m_play->scene.close();
         m_play->world.clear();
         m_exitSpeech.close();
@@ -637,7 +645,6 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
         return;
     }
     if (outcome == PlayOutcome::Leave) {
-        keepParty();
         m_play->scene.close();
         log::info("Leaving the tower for the title screen");
         if (!startTitleScreen()) {
@@ -687,6 +694,7 @@ bool Gauntlet::applySettings(const GameConfig& config, bool persist) {
         m_sounds->setMasterVolume(config.audio.masterVolume);
         m_sounds->setCategoryVolume(SoundCategory::Music, config.audio.musicVolume);
         m_sounds->setCategoryVolume(SoundCategory::Effects, config.audio.effectsVolume);
+        m_sounds->setCategoryVolume(SoundCategory::Movie, config.audio.movieVolume);
         m_movie.setVolume(config.audio.masterVolume * config.audio.movieVolume);
         m_audio->mixer().setStereo(config.audio.stereo);
         if (presentationChanged) {
@@ -722,7 +730,6 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         return;
     }
     if (outcome == PauseOutcome::Manage) {
-        keepParty(party);
         if (startPlayerSelect(pausePlayer, party, true)) {
             m_play->scene.close();
         }
@@ -730,8 +737,7 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
     }
     if (outcome == PauseOutcome::Title) {
         // Quitting the game is the defeat sequence and then the failure movie (opt_quit_request
-        // sets MG_OVER); the characters are kept as they stand.
-        keepParty();
+        // sets MG_OVER); it does not overwrite the character's manual save.
         m_play->scene.startGameOver();
         return;
     }
@@ -746,7 +752,6 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         if (m_afterLevel.open(
                 renderDevice(), context(), party, {}, {1000, 100, 1000}, m_play->world.ref().name,
                 outcome == PauseOutcome::Shop ? ShopVisit::Shop : ShopVisit::Inventory)) {
-            keepParty();
             m_play->scene.close();
             m_loadingPicture.load(renderDevice(), m_options.unpackedDirectory);
             m_loadingPicture.cover();
@@ -757,7 +762,6 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
     if (outcome == PauseOutcome::ReturnTower) {
         // Quitting a level gives up what it gave, as dying in it does.
         party = m_play->scene.abandonedParty(party);
-        keepParty(party);
         Journey journey;
         journey.destination = LevelRef::tower();
         journey.party = party;
@@ -790,7 +794,10 @@ void Gauntlet::updateAfterLevel(f64 deltaSeconds) {
         m_journey->party = m_afterLevel.session().party();
         const bool manageCharacters = m_afterLevel.session().visit() == ShopVisit::Level ||
                                       m_afterLevel.session().visit() == ShopVisit::Completion;
-        keepParty();
+        if (m_afterLevel.session().visit() == ShopVisit::Level ||
+            m_afterLevel.session().visit() == ShopVisit::Shop) {
+            autoSaveAfterShop(m_journey->party);
+        }
         m_afterLevel.close();
         if (m_journey->completion) {
             m_journey->completion->flow.advance();
@@ -860,13 +867,10 @@ void Gauntlet::updateJourney(f64 deltaSeconds) {
     if (updateCompletion(deltaSeconds)) {
         return;
     }
-    if (journey.secret) {
-        finishJourney();
-        return;
-    }
     if (!journey.presentationStarted) {
         journey.presentationStarted = true;
-        m_levelLoading.open(renderDevice(), context(), journey.destination, journey.party);
+        m_levelLoading.open(renderDevice(), context(), journey.destination, journey.party,
+                            journey.secret);
         journey.movie = m_levelLoading.movie();
         // Present at least one frame of the map before advancing its clock.
         return;
@@ -903,6 +907,10 @@ void Gauntlet::finishJourney() {
     m_journey.reset();
     m_loadingPicture.release();
     m_levelLoading.close();
+    if (journey.returningFromChallenge && m_parent) {
+        returnFromChallenge(journey.party);
+        return;
+    }
     if (startLevel(journey.destination, journey.party, journey.options)) {
         return;
     }
@@ -927,6 +935,7 @@ void Gauntlet::onRender(RenderDevice& device) {
     renderScene(device);
     // One final pass covers movies, loading, menus, play, pause and the idle screen.
     m_buildLabel.render(device, device.framebufferExtent());
+    m_autoSaveIcon.render(device, device.framebufferExtent());
 }
 
 PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
@@ -1055,32 +1064,18 @@ void Gauntlet::renderScene(RenderDevice& device) {
     m_smokeTest.render(device, projection, static_cast<f32>(clock().totalSeconds()));
 }
 
-/** The party's characters go back into the slots they came from (or were first saved to),
- * with all they have gathered; a character never saved has no slot and is not kept. */
-void Gauntlet::keepParty() {
-    std::vector<PartyMember> party;
-    if (m_pause.isOpen()) {
-        party = m_pause.party();
-    } else if (m_afterLevel.isOpen()) {
-        party = m_afterLevel.session().party();
-    } else if (m_select.isOpen()) {
-        party = m_select.party();
-    } else if (m_play->scene.isOpen()) {
-        party = m_play->scene.party();
-    } else if (m_journey.has_value()) {
-        party = m_journey->party;
-    }
-    keepParty(party);
-}
-
-void Gauntlet::keepParty(std::span<const PartyMember> party) {
-    const bool anySlot = std::ranges::any_of(
-        party, [](const PartyMember& member) { return member.slot.has_value(); });
-    if (!anySlot || !m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
+void Gauntlet::autoSaveAfterShop(std::span<PartyMember> party) {
+    if (!m_config.game.autoSave || !m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
         return;
     }
-    const usize written = saveParty(m_saves, party);
-    log::info("Saved {} of the party to {}", written, m_config.saveDirectory().string());
+    const auto result = autoSaveParty(m_saves, party);
+    if (result.written > 0) {
+        m_autoSaveIcon.show();
+    }
+    if (result.failed > 0 || result.unavailable > 0) {
+        log::warn("Auto-save: {} saved, {} failed, {} without an available slot", result.written,
+                  result.failed, result.unavailable);
+    }
 }
 
 void Gauntlet::onShutdown() {
@@ -1088,9 +1083,9 @@ void Gauntlet::onShutdown() {
     window().stopRumble();
     m_online.reset();
     m_buildLabel.release();
+    m_autoSaveIcon.release();
     m_idleScreen.close();
     m_demo.close();
-    keepParty();
     m_parent.reset();
     m_pause.close();
     m_movie.close();

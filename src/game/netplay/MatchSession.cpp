@@ -34,7 +34,7 @@ u8 seatsOf(const MatchOwners& owners, u8 peer = 0) {
 
 bool MatchContext::valid() const {
     if (epoch == 0 || scene == 0 || scene > 65535 || tickRate != 60 || inputLead > 12 ||
-        static_cast<u8>(transition) > 2 || !validOwners(owners)) {
+        static_cast<u8>(transition) > 3 || !validOwners(owners)) {
         return false;
     }
     for (usize seat = 0; seat < owners.size(); ++seat) {
@@ -173,14 +173,22 @@ void MatchSession::discardGameplay() {
     m_states = {};
     m_published.reset();
 }
-bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party) {
+bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party,
+                           const ShopSetup* shop) {
+    const bool checkpointed =
+        transition == MatchTransition::Travel || transition == MatchTransition::Shop;
     const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-                         (transition == MatchTransition::Travel && m_phase == Phase::Running) ||
+                         (checkpointed && m_phase == Phase::Running) ||
                          (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
                           scene == m_context.scene);
-    if (!host() || !allowed || scene == 0 || scene > 65535 ||
-        (transition == MatchTransition::Travel) != (party != nullptr) ||
+    if (!host() || !allowed || scene == 0 || scene > 65535 || checkpointed != (party != nullptr) ||
+        (transition == MatchTransition::Shop) != (shop != nullptr) ||
+        (shop != nullptr && (!shop->valid() || shop->source != scene)) ||
         m_timeline.epoch() == std::numeric_limits<u64>::max()) {
+        return false;
+    }
+    if (m_context.transition == MatchTransition::Shop &&
+        (transition != MatchTransition::Travel || !m_shop.finished())) {
         return false;
     }
     std::vector<std::vector<u8>> profiles;
@@ -217,6 +225,7 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
         m_context.grants[seat] = m_owners[seat] == 0 ? 0 : m_timeline.grant(seat);
     }
     discardGameplay();
+    m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants, shop);
     m_loaded = {};
     m_movieSkipVotes = 0;
     m_movieSkipRequests = 0;
@@ -236,7 +245,8 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
     return true;
 }
 const MatchParty* MatchSession::travelParty() const {
-    if (m_context.transition != MatchTransition::Travel ||
+    if ((m_context.transition != MatchTransition::Travel &&
+         m_context.transition != MatchTransition::Shop) ||
         (m_phase != Phase::Loading && m_phase != Phase::Running && m_phase != Phase::Paused)) {
         return nullptr;
     }
@@ -254,7 +264,9 @@ MatchSession::Admission MatchSession::checkpoint(u8 peer, const PartyCheckpoint&
     if (message.epoch < m_context.epoch) {
         return Admission::Stale;
     }
-    if (message.epoch != m_context.epoch || m_context.transition != MatchTransition::Travel ||
+    if (message.epoch != m_context.epoch ||
+        (m_context.transition != MatchTransition::Travel &&
+         m_context.transition != MatchTransition::Shop) ||
         m_owners[message.seat] == 0) {
         return Admission::Invalid;
     }
@@ -288,7 +300,10 @@ void MatchSession::tryCommit() {
 }
 bool MatchSession::loaded() {
     if (m_phase != Phase::Loading || m_loaded[m_local] ||
-        (m_context.transition == MatchTransition::Travel && travelParty() == nullptr)) {
+        ((m_context.transition == MatchTransition::Travel ||
+          m_context.transition == MatchTransition::Shop) &&
+         travelParty() == nullptr) ||
+        (m_context.transition == MatchTransition::Shop && m_shop.setup() == nullptr)) {
         return false;
     }
     m_loaded[m_local] = true;
@@ -302,7 +317,8 @@ bool MatchSession::loaded() {
 }
 bool MatchSession::requestMovieSkip(u8 seat) {
     if (m_phase != Phase::Loading || m_context.transition == MatchTransition::Resume ||
-        seat >= m_owners.size() || m_owners[seat] != m_local) {
+        m_context.transition == MatchTransition::Shop || seat >= m_owners.size() ||
+        m_owners[seat] != m_local) {
         return false;
     }
     const auto bit = static_cast<u8>(1U << seat);
@@ -324,10 +340,11 @@ bool MatchSession::requestMovieSkip(u8 seat) {
 bool MatchSession::movieSkipReady() const {
     const auto required = seatsOf(m_owners);
     return m_phase == Phase::Loading && m_context.transition != MatchTransition::Resume &&
-           required != 0 && m_movieSkipVotes == required;
+           m_context.transition != MatchTransition::Shop && required != 0 &&
+           m_movieSkipVotes == required;
 }
 bool MatchSession::requestPause() {
-    if (m_phase != Phase::Running) {
+    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
         return false;
     }
     if (!host()) {
@@ -354,6 +371,7 @@ void MatchSession::stop(MatchStop reason, bool notify) {
     }
     discardGameplay();
     m_controls.clear();
+    m_shop.begin(0, 0, {}, {});
     m_playback.clear();
     m_phase = Phase::Stopped;
     m_stop = reason;
@@ -406,15 +424,18 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
             return Admission::Invalid;
         }
         const auto transition = message.context.transition;
-        const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-                             (transition == MatchTransition::Travel && m_phase == Phase::Running) ||
-                             (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
-                              message.context.scene == m_context.scene);
+        const bool allowed =
+            (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
+            ((transition == MatchTransition::Travel || transition == MatchTransition::Shop) &&
+             m_phase == Phase::Running) ||
+            (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
+             message.context.scene == m_context.scene);
         if (!allowed) {
             return Admission::WrongPhase;
         }
         m_context = message.context;
         m_travelParty = {};
+        m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
         discardGameplay();
         m_loaded = {};
         m_movieSkipVotes = 0;
@@ -511,6 +532,20 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         const auto message = PartyCheckpointPacket::decode(bytes);
         return message ? checkpoint(peer, *message) : Admission::Invalid;
     }
+    if (ShopSync::recognizes(bytes)) {
+        if (m_context.transition != MatchTransition::Shop) {
+            return Admission::Stale;
+        }
+        switch (m_shop.receive(peer, bytes)) {
+        case ShopSync::Admission::Accepted: return Admission::Accepted;
+        case ShopSync::Admission::Stale: return Admission::Stale;
+        case ShopSync::Admission::WrongPeer: return Admission::WrongPeer;
+        case ShopSync::Admission::Invalid: return Admission::Invalid;
+        }
+    }
+    if (m_context.transition == MatchTransition::Shop) {
+        return Admission::Stale;
+    }
     if (m_phase != Phase::Running) {
         // Reliable control and unreliable gameplay are not ordered together.
         // A snapshot can overtake Commit/Prepare, or old inputs can trail Pause.
@@ -562,7 +597,8 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     return Admission::Invalid;
 }
 bool MatchSession::inputReady() const {
-    if (m_phase != Phase::Running || inputTick() == std::numeric_limits<u64>::max()) {
+    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
+        inputTick() == std::numeric_limits<u64>::max()) {
         return false;
     }
     if (host()) {
@@ -573,7 +609,8 @@ bool MatchSession::inputReady() const {
     return m_nextInput <= confirmed || m_nextInput - confirmed <= m_context.inputLead + kInputSlack;
 }
 bool MatchSession::sample(std::span<const InputCommand> frame) {
-    if (m_phase != Phase::Running || inputTick() == std::numeric_limits<u64>::max() ||
+    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
+        inputTick() == std::numeric_limits<u64>::max() ||
         frame.size() != static_cast<usize>(std::ranges::count(m_owners, m_local))) {
         return false;
     }
@@ -615,15 +652,16 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
     return true;
 }
 std::optional<InputTimeline::Frame> MatchSession::advance() {
-    if (!host() || m_phase != Phase::Running ||
+    if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
         m_timeline.tick() == std::numeric_limits<u64>::max()) {
         return std::nullopt;
     }
     return m_timeline.advance();
 }
 bool MatchSession::publish(const CombatSnapshot& state) {
-    if (!host() || m_phase != Phase::Running || m_timeline.tick() == 0 ||
-        state.motion.epoch != m_context.epoch || state.motion.tick != m_timeline.tick() - 1 ||
+    if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
+        m_timeline.tick() == 0 || state.motion.epoch != m_context.epoch ||
+        state.motion.tick != m_timeline.tick() - 1 ||
         (m_published && state.motion.tick <= *m_published)) {
         return false;
     }
@@ -670,6 +708,22 @@ void MatchSession::flush(PacketTransport& transport) {
             return;
         }
         m_controls.pop_front();
+    }
+    if (m_context.transition == MatchTransition::Shop) {
+        while (!m_shop.outgoing().empty()) {
+            const auto& delivery = m_shop.outgoing().front();
+            const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
+                                               PacketTransport::Delivery::Reliable);
+            if (result == PacketTransport::SendResult::Congested) {
+                return;
+            }
+            if (result != PacketTransport::SendResult::Sent) {
+                disconnected(m_links[delivery.peer]);
+                return;
+            }
+            m_shop.sent();
+        }
+        return;
     }
     if (m_phase != Phase::Running) {
         return;

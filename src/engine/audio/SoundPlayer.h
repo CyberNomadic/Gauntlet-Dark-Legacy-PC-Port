@@ -16,7 +16,7 @@ using SoundHandle = u32;
 inline constexpr SoundHandle kNoSound = 0;
 
 /** Mixing groups with their own volume setting. */
-enum class SoundCategory : u8 { Effects, Music, Count };
+enum class SoundCategory : u8 { Effects, Music, Movie, Count };
 
 /**
  * Plays sound sequences through the mixer, feeding each voice's stream clip by clip so that
@@ -104,8 +104,8 @@ private:
     std::vector<f32> m_scratch; ///< frames read from a source on their way to its stream
     SoundHandle m_nextHandle = 1;
     f32 m_masterVolume = 1.0f;
-    std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryVolumes{1.0f, 1.0f};
-    std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryScales{1.0f, 1.0f};
+    std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryVolumes{1.0f, 1.0f, 1.0f};
+    std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryScales{1.0f, 1.0f, 1.0f};
 };
 
 } // namespace gdl

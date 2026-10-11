@@ -61,8 +61,7 @@ std::optional<LevelRef> OnlinePlay::levelOf(const LevelCatalog& catalog, u32 sce
     return std::nullopt;
 }
 bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSession& session,
-                      const OnlineParty& selection, const LevelRef& initial,
-                      const PlayOptions& options) {
+                      OnlineParty& selection, const LevelRef& initial, const PlayOptions& options) {
     const auto& match = session.match();
     const bool initialLoad = !session.host() && match.phase() == MatchSession::Phase::Loading &&
                              match.context().transition == MatchTransition::Start;
@@ -112,6 +111,8 @@ void OnlinePlay::quiet() {
 void OnlinePlay::close() {
     quiet();
     m_entry.close();
+    m_shop.close();
+    m_afterShop = false;
     m_entryEpoch = 0;
     m_host.reset();
     m_replica.clear();
@@ -141,6 +142,9 @@ OnlinePlay::Phase OnlinePlay::fail(Failure reason) {
 bool OnlinePlay::load(const SessionInputs::Frame& devices) {
     auto& match = m_session->match();
     const auto& context = match.context();
+    if (context.transition == MatchTransition::Shop) {
+        return loadShop();
+    }
     const auto level = levelOf(*m_context.levels, context.scene);
     if (!level) {
         fail(Failure::Scene);
@@ -166,6 +170,30 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 fail(Failure::Party);
                 return false;
             }
+        }
+        if (m_afterShop) {
+            if (!m_selection->checkpoint(*m_session, *profiles)) {
+                fail(Failure::Party);
+                return false;
+            }
+            if (m_context.saveLocalParty) {
+                m_context.saveLocalParty(m_selection->localMembers());
+            }
+            // Slot allocation is local-only, and must survive the next host scene.
+            if (match.host()) {
+                for (auto& member : m_travelMembers) {
+                    if (const auto device =
+                            m_selection->device(*m_session, static_cast<u8>(member.player))) {
+                        for (const auto& local : m_selection->localMembers()) {
+                            if (local.player == *device) {
+                                member.slot = local.slot;
+                            }
+                        }
+                    }
+                }
+            }
+            m_afterShop = false;
+            m_shop.close();
         }
     }
     try {
@@ -275,16 +303,19 @@ bool OnlinePlay::travel() {
     }
     const auto& scene = m_host->scene;
     const auto& destination = scene.destination();
-    // Results/shop and secret-level return need their own synchronized owners.
-    // Never discard a suspended parent stage or skip the completion screens.
-    if (scene.secretTravel() || destination.isTower()) {
+    // Suspended secret parents and the two ending movies need separate synchronized
+    // ownership. Never silently discard a parent or skip an ending movie.
+    const auto* info = m_host->world.level();
+    if (scene.secretTravel() ||
+        (info != nullptr && (info->bossType == 43 || info->bossType == 44))) {
+        log::warn("Online travel unsupported: {} (secret {}, boss {})", m_host->world.ref().name,
+                  scene.secretTravel(), info != nullptr ? info->bossType : -1);
         return false;
     }
     const auto id = sceneId(*m_context.levels, destination);
     auto members = scene.party();
     const auto& world = m_host->world;
     if (!world.isTower()) {
-        const auto* info = world.level();
         recordLevelBeaten(members, world.ref().realmId, world.ref().index,
                           info != nullptr ? info->rune : 0, info != nullptr ? info->legend : 0);
     }
@@ -302,7 +333,26 @@ bool OnlinePlay::travel() {
             return false;
         }
     }
-    if (!id || !m_session->match().prepare(*id, MatchTransition::Travel, &profiles)) {
+    if (!world.isTower() && destination.isTower()) {
+        ShopSetup setup;
+        setup.source = m_session->match().context().scene;
+        setup.destination = id.value_or(0);
+        setup.expanded = m_context.config != nullptr && m_context.config->game.expandedShop;
+        setup.maxima = info != nullptr ? info->shopMaxima : std::array<s32, 3>{1000, 100, 1000};
+        for (const auto& result : scene.levelResults()) {
+            setup.totals[static_cast<usize>(result.player)] = result.totals;
+        }
+        for (const auto& member : members) {
+            if (member.fallen) {
+                setup.fallen |= static_cast<u8>(1U << static_cast<u32>(member.player));
+            }
+        }
+        if (!id ||
+            !m_session->match().prepare(setup.source, MatchTransition::Shop, &profiles, &setup)) {
+            fail(Failure::Session);
+            return false;
+        }
+    } else if (!id || !m_session->match().prepare(*id, MatchTransition::Travel, &profiles)) {
         fail(Failure::Session);
         return false;
     }
@@ -314,6 +364,147 @@ bool OnlinePlay::travel() {
     quiet();
     m_phase = Phase::Loading;
     return true;
+}
+bool OnlinePlay::loadShop() {
+    auto& match = m_session->match();
+    const auto* profiles = match.travelParty();
+    const auto* setup = match.shop().setup();
+    if (profiles == nullptr || setup == nullptr) {
+        return false;
+    }
+    const auto source = levelOf(*m_context.levels, setup->source);
+    const auto destination = levelOf(*m_context.levels, setup->destination);
+    if (!source || !destination || setup->source != match.context().scene || source->isTower() ||
+        !destination->isTower()) {
+        fail(Failure::Scene);
+        return false;
+    }
+    std::vector<PartyMember> members;
+    std::vector<LevelResults> results;
+    const auto* admitted = m_session->party();
+    for (usize seat = 0; seat < profiles->size(); ++seat) {
+        const auto& profile = (*profiles)[seat];
+        const auto& original = (*admitted)[seat];
+        if (profile.has_value() != original.has_value() ||
+            (profile &&
+             (profile->name != original->name || profile->character != original->character ||
+              profile->color != original->color))) {
+            fail(Failure::Party);
+            return false;
+        }
+        if (profile) {
+            PartyMember member;
+            member.player = static_cast<s32>(seat);
+            member.save = profile->gameplayCopy();
+            member.fallen = (setup->fallen & (1U << seat)) != 0;
+            members.push_back(std::move(member));
+            results.push_back({static_cast<s32>(seat), setup->totals[seat]});
+        }
+    }
+    if (match.host()) {
+        members = m_travelMembers;
+    }
+    quiet();
+    m_host.reset();
+    m_replica.clear();
+    m_clock.clear();
+    m_entry.close();
+    m_shopConfig = m_context.config != nullptr ? *m_context.config : GameConfig{};
+    m_shopConfig.game.expandedShop = setup->expanded;
+    auto context = m_context;
+    context.config = &m_shopConfig;
+    if (!m_shop.open(*m_device, context, members, results, setup->maxima, source->name)) {
+        fail(Failure::Assets);
+        return false;
+    }
+    m_epoch = match.context().epoch;
+    m_afterShop = true;
+    m_travelMembers.clear();
+    m_pausedDevices = 0;
+    if (!match.loaded()) {
+        fail(Failure::Session);
+        return false;
+    }
+    return true;
+}
+OnlinePlay::Phase OnlinePlay::updateShop(const SessionInputs::Frame& devices) {
+    auto& match = m_session->match();
+    auto& sync = match.shop();
+    const auto local = m_selection->inputs(*m_session, devices);
+    if (!local) {
+        return fail(Failure::Input);
+    }
+    for (usize index = 0; index < m_session->seats().size(); ++index) {
+        const auto seat = m_session->seats()[index];
+        auto input = (*local)[index].menu;
+        const auto lane =
+            std::ranges::find(m_shop.session().lanes(), static_cast<s32>(seat),
+                              [](const ShopLane& value) { return value.member.player; });
+        if (lane != m_shop.session().lanes().end() && lane->phase == ShopPhase::Shopping &&
+            m_context.config != nullptr) {
+            input = AfterLevelScene::captureShopInput(input, *m_context.config,
+                                                      *m_selection->device(*m_session, seat));
+        }
+        const auto focus = m_shop.captureOnlinePointer(static_cast<s32>(seat), input);
+        if (lane == m_shop.session().lanes().end() ||
+            !sync.sample(seat, input, focus ? static_cast<s32>(*focus) : -1,
+                         static_cast<u8>(lane->phase), lane->cursor)) {
+            return fail(Failure::Input);
+        }
+    }
+    m_phase = Phase::Shopping;
+    auto step = match.host() ? sync.advance() : sync.take();
+    if (step) {
+        for (usize seat = 0; seat < step->focus.size(); ++seat) {
+            if (match.host() && step->observedPhase[seat] != 255) {
+                const auto lane =
+                    std::ranges::find(m_shop.session().lanes(), static_cast<s32>(seat),
+                                      [](const ShopLane& value) { return value.member.player; });
+                if (lane == m_shop.session().lanes().end() ||
+                    step->observedPhase[seat] != static_cast<u8>(lane->phase)) {
+                    step->inputs[seat] = {};
+                    step->focus[seat] = -1;
+                } else if (step->focus[seat] == -1 && step->observedCursor[seat] != lane->cursor) {
+                    // A delayed Buy/Sell must not transact against a different row.
+                    step->inputs[seat].select = false;
+                    step->inputs[seat].back = false;
+                }
+            }
+            if (step->focus[seat] >= 0 &&
+                !m_shop.focusOnline(static_cast<s32>(seat),
+                                    static_cast<usize>(step->focus[seat]))) {
+                if (!match.host()) {
+                    return fail(Failure::Presentation);
+                }
+                step->focus[seat] = -1;
+                step->inputs[seat].select = false;
+                step->inputs[seat].back = false;
+            }
+        }
+        const bool finished = m_shop.update(1.0 / 60, step->inputs, &step->potions,
+                                            match.host() ? &step->inputs : nullptr, !match.host());
+        if (match.host() && !sync.publish(*step)) {
+            return fail(Failure::Session);
+        }
+        if (finished && !sync.finish()) {
+            return fail(Failure::Session);
+        }
+    }
+    if (match.host() && sync.finished()) {
+        MatchParty profiles;
+        auto members = m_shop.session().party();
+        for (auto& member : members) {
+            profiles[static_cast<usize>(member.player)] = CharacterProfile::capture(member.save);
+            member.resultsCheckpoint.reset();
+        }
+        const auto destination = sync.setup()->destination;
+        if (!match.prepare(destination, MatchTransition::Travel, &profiles)) {
+            return fail(Failure::Session);
+        }
+        m_travelMembers = std::move(members);
+        m_phase = Phase::Loading;
+    }
+    return m_phase;
 }
 OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
     if (m_session == nullptr) {
@@ -353,6 +544,9 @@ OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
     }
     if (m_epoch == 0 || m_epoch != match.context().epoch) {
         return fail(Failure::Scene);
+    }
+    if (match.context().transition == MatchTransition::Shop) {
+        return updateShop(gameplay);
     }
     const auto local = m_selection->inputs(*m_session, gameplay);
     if (!local) {
@@ -406,6 +600,10 @@ bool OnlinePlay::resume(s32 device) {
 void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width, f32 height,
                         f64 seconds, f32 frameBlend) {
     if (m_phase == Phase::Closed || m_phase == Phase::Failed) {
+        return;
+    }
+    if (m_shop.isOpen()) {
+        m_shop.render(device, projection, width, height);
         return;
     }
     if (m_phase == Phase::Loading && m_entry.visible()) {

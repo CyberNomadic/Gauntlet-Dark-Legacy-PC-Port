@@ -31,6 +31,35 @@ PartyMember selected(s32 device, const std::string& name, usize slot) {
     member.save.moviesSeen = {"private/history"};
     return member;
 }
+TEST_CASE("post-shop checkpoint updates only locally owned selected classes",
+          "[netplay][online-shop][online-party]") {
+    test::OnlinePair pair({}, false);
+    OnlineParty host;
+    OnlineParty guest;
+    const auto local = selected(3, "HOST", 27);
+    const auto remote = selected(2, "GUEST", 4);
+    REQUIRE(host.select(pair.hostSession, std::array{local}));
+    REQUIRE(guest.select(pair.guestSession, std::array{remote}));
+    pair.start();
+    auto profiles = *pair.hostSession.party();
+    profiles[0]->gold = profiles[0]->progress.gold = 789;
+    profiles[1]->gold = profiles[1]->progress.gold = 456;
+    profiles[1]->progress.inventory.keys = 7;
+    REQUIRE(guest.checkpoint(pair.guestSession, profiles));
+    REQUIRE(guest.localMembers().size() == 1);
+    const auto& kept = guest.localMembers()[0];
+    CHECK(kept.player == remote.player);
+    CHECK(kept.slot == remote.slot);
+    CHECK(kept.save.gold == 456);
+    CHECK(kept.save.progress().inventory.keys == 7);
+    CHECK(kept.save.classUnlock == remote.save.classUnlock);
+    CHECK(kept.save.moviesSeen == remote.save.moviesSeen);
+    CHECK(kept.save.classes[0].experience == remote.save.classes[0].experience);
+    CHECK(host.localMembers()[0].save.gold == local.save.gold);
+    profiles[1]->name = "SPOOF";
+    CHECK_FALSE(guest.checkpoint(pair.guestSession, profiles));
+    CHECK(kept.save.gold == 456);
+}
 TEST_CASE("online party keeps physical devices and save slots local while remapping room seats",
           "[netplay][online-party]") {
     test::OnlinePair pair({}, false);

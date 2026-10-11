@@ -282,6 +282,92 @@ TEST_CASE("Death flees the nearest protected player in three dimensions",
     CHECK(enemies.positionOf(*slot).z == Catch::Approx(0).margin(0.001));
 }
 
+TEST_CASE("Anti Death holds movement and outgoing drain only while a live contact remains",
+          "[death][enemies][death-hold][multiplayer]") {
+    const s32 ticks = GENERATE(1, 2);
+    const f32 seconds = static_cast<f32>(ticks) / 60;
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, test::deathArchive(), nullptr, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kDeathKind));
+    const auto slot = enemies.spawn({.kind = kDeathKind, .tier = 1, .placed = true}, {});
+    REQUIRE(slot);
+    std::array players{EnemyView{.player = 3, .position = {0, 0, 2}, .antiDeath = true},
+                       EnemyView{.player = 0, .position = {15, 0, 0}}};
+    // Clear placement stun before the hold, so a stuck body cannot hide an AI error.
+    for (s32 elapsed = 0; elapsed < 90; elapsed += ticks) {
+        enemies.update(ticks, seconds, players);
+    }
+    const Vec3 held = enemies.positionOf(*slot);
+    players[0].position = held + Vec3{0, 0, 2};
+    players[0].heldDeath = *slot;
+    for (s32 elapsed = 0; elapsed < 60; elapsed += ticks) {
+        enemies.update(ticks, seconds, players);
+        CHECK(enemies.positionOf(*slot) == held);
+        CHECK_FALSE(enemies.draining(*slot));
+    }
+    CHECK(enemies.takeDeathEvents().empty());
+    const f32 heldHeading = enemies.memoryOf(*slot).seekHeading;
+    SECTION("unequipping releases even a stale held slot") {
+        players[0].antiDeath = false;
+    }
+    SECTION("losing contact releases even a stale held slot") {
+        players[0].position += Vec3{0, 0, 10};
+    }
+    SECTION("losing height overlap releases even a stale held slot") {
+        players[0].position.y += 20;
+    }
+    SECTION("falling releases even a stale held slot") {
+        players[0].hidden = true;
+    }
+    SECTION("being captured releases even a stale held slot") {
+        players[0].captured = true;
+    }
+    SECTION("no held target releases") {
+        players[0].heldDeath = -1;
+    }
+    SECTION("another holder keeps Death held after the first releases") {
+        players[1].position = held + Vec3{2, 0, 0};
+        players[1].antiDeath = true;
+        players[1].heldDeath = *slot;
+        players[0].heldDeath = -1;
+        for (s32 elapsed = 0; elapsed < 30; elapsed += ticks) {
+            enemies.update(ticks, seconds, players);
+            CHECK(enemies.positionOf(*slot) == held);
+        }
+        players[1].heldDeath = -1;
+    }
+    // Change the unprotected target's bearing. Even where the old wearer's body
+    // still blocks movement, one native update must resume thinking about it.
+    players[1].position = held + Vec3{-10, 0, 0};
+    players[1].antiDeath = false;
+    for (s32 elapsed = 0; elapsed < 2; elapsed += ticks) {
+        enemies.update(ticks, seconds, players);
+    }
+    CHECK((enemies.positionOf(*slot) != held || enemies.draining(*slot) ||
+           enemies.memoryOf(*slot).seekHeading != heldHeading));
+}
+
+TEST_CASE("holding Death does not preserve an expired placement stun", "[death][death-hold]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, test::deathArchive(), nullptr, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kDeathKind));
+    const auto slot = enemies.spawn({.kind = kDeathKind, .tier = 1, .placed = true}, {});
+    REQUIRE(slot);
+    std::array players{
+        EnemyView{.player = 0, .position = {0, 0, 2}, .antiDeath = true, .heldDeath = *slot}};
+    const Vec3 before = enemies.positionOf(*slot);
+    for (s32 frame = 0; frame < 30; ++frame) {
+        enemies.update(2, 1.0f / 30, players);
+    }
+    CHECK(enemies.positionOf(*slot) == before);
+    players[0].position.z = 12;
+    players[0].antiDeath = false;
+    enemies.update(2, 1.0f / 30, players);
+    CHECK(enemies.positionOf(*slot) != before);
+}
+
 TEST_CASE("retail Death bodies and drain effects are present", "[death][assets]") {
     const auto root =
         test::assetOrSkip("MONSTERS/DEATH/ANIM.PS2").parent_path().parent_path().parent_path();

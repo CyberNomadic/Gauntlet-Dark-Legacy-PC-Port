@@ -36,6 +36,30 @@ TEST_CASE("gold adds up to its limit and shows as treasure or junk", "[game][pla
     REQUIRE(save.progress().lifetime.goldFound == 710);
 }
 
+TEST_CASE("a full wallet leaves gold untouched until some of it is spent", "[items][gold-cap]") {
+    CharacterSave save;
+    save.gold = 99999;
+    save.progress().lifetime.goldFound = 1500;
+    CHECK(goldCapacity(save) == 0);
+    const auto taking = takeItem(save, offer(ItemKind::Gold, 200));
+    CHECK(taking.outcome == Outcome::GoldFull);
+    CHECK_FALSE(taking.took());
+    CHECK(taking.left == 200);
+    CHECK(taking.count == 0);
+    CHECK(taking.card.empty());
+    CHECK(taking.sound.empty());
+    CHECK(save.gold == 99999);
+    CHECK(save.progress().lifetime.goldFound == 1500);
+
+    save.gold -= 100;
+    CHECK(goldCapacity(save) == 100);
+    const auto later = takeItem(save, offer(ItemKind::Gold, taking.left));
+    CHECK(later.took());
+    CHECK(later.count == 200);
+    CHECK(save.gold == 99999);
+    CHECK(save.progress().lifetime.goldFound == 1700);
+}
+
 TEST_CASE("keys are taken while there is room, a ring leaving what does not fit",
           "[game][players][items]") {
     CharacterSave save;

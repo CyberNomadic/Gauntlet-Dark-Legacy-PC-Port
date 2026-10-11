@@ -18,7 +18,7 @@ struct LevelRef;
 struct PlayOptions;
 /** Online runtime shared by the menu and development launcher. Transport/admission are
  * independent of presentation; selected local characters remain owned by their machine.
- * No saves are written here; online results/shop persistence is separate work. */
+ * Completed shops return authenticated local checkpoints to the application. */
 class OnlineRun {
 public:
     static bool available();

@@ -10,6 +10,7 @@ add_executable(tests
     game/netplay/InputCommandTests.cpp
     game/netplay/InputTimelineTests.cpp
     game/netplay/MatchSessionTests.cpp
+    game/netplay/ShopSyncTests.cpp
     game/netplay/ClientClockTests.cpp
     game/netplay/OnlineSessionTests.cpp
     game/netplay/CharacterProfileTests.cpp
@@ -63,6 +64,7 @@ add_executable(tests
     formats/ShopWadTests.cpp
     game/players/ShopTests.cpp
     game/screens/AfterLevelSceneTests.cpp
+    game/screens/AutoSaveIconTests.cpp
     game/screens/PostShopReturnTests.cpp
     game/screens/InventoryPanelTests.cpp
     TestSupport.h
@@ -204,6 +206,7 @@ add_executable(tests
     game/players/MagicPerksTests.cpp
     game/players/ProgressionTests.cpp
     game/players/CharacterSaveTests.cpp
+    game/players/AutoSaveTests.cpp
     game/players/NameCheatsTests.cpp
     game/players/PartyTests.cpp
     game/players/TurboMeterTests.cpp
@@ -370,7 +373,7 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/CombatCaptureTests.cpp game/netplay/CombatSnapshotTests.cpp
         game/netplay/CombatPlaybackTests.cpp game/netplay/InputCommandTests.cpp
         game/netplay/InputTimelineTests.cpp game/netplay/SessionInputsTests.cpp
-        game/netplay/MatchSessionTests.cpp game/players/CursorAimTests.cpp
+        game/netplay/MatchSessionTests.cpp game/netplay/ShopSyncTests.cpp game/players/CursorAimTests.cpp
         game/screens/PartyMotionTests.cpp game/screens/PartyFiguresTests.cpp
         fixtures/NativeModelFixture.cpp fixtures/ReferenceObj.cpp)
     target_link_libraries(netplayplaytests PRIVATE gdl::game Catch2::Catch2WithMain)

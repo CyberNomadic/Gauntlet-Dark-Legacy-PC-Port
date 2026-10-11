@@ -20,6 +20,10 @@ public:
                                                const SessionInputs::Frame& devices) const;
     /** Resolve a locally owned room seat back to its physical input device. */
     std::optional<s32> device(const OnlineSession& session, u8 seat) const;
+    /** Apply only selected-class state after an authenticated host checkpoint.
+     * Local slot/name/history ownership is never taken from the network. */
+    bool checkpoint(const OnlineSession& session, const MatchParty& profiles);
+    std::span<PartyMember> localMembers() { return m_local; }
     void clear() {
         m_local.clear();
         m_session = nullptr;

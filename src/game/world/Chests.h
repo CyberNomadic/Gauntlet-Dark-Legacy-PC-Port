@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -24,7 +25,8 @@ struct ChestVisitor {
     f32 radius = 0.75f;
     s32 keys = 0;
     bool xray = false;
-    Vec3 step{0.0f, 0.0f, 0.0f}; ///< how far it moved since the last update
+    Vec3 step{0.0f, 0.0f, 0.0f};                        ///< how far it moved since the last update
+    s32 goldCapacity = std::numeric_limits<s32>::max(); ///< remaining wallet space
 };
 
 /** What a chest did this update. */
@@ -116,7 +118,7 @@ public:
      * within ten units. Returns the number of newly revealed chests for the cue. */
     usize updateXray(RenderDevice& device, ItemArchive& items, ItemArchive& powerups, f32 seconds,
                      std::span<const ChestVisitor> party, ItemArchive* realmItems = nullptr);
-    /** Blocking boxes; open pickup chests are passable until their contents are taken. */
+    /** Blocking boxes; open pickup and gold chests are passable until emptied. */
     std::vector<Obstacle> obstacles() const;
     /** Magic on a shut chest (fn_8005C1DC): what is in it becomes `record` and it rocks for
      * three ticks a point of `power`. The subtype the original writes lands in the record

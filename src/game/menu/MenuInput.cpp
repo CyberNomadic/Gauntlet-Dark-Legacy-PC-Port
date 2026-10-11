@@ -182,10 +182,17 @@ bool readOnlineMovieSkipInput(const Input& input, const GameConfig& config, s32 
 }
 
 MenuInput readPauseMenuInput(const Input& input, const GameConfig& config, s32 owner) {
+    if (owner < 0 || static_cast<usize>(owner) >= config.controls.size()) {
+        auto result = readSharedMenuInput(input, config);
+        result.escape |= input.wasKeyPressed(Key::Escape);
+        return result;
+    }
     const auto source = playerInputSource(input, config, owner);
-    return source.keyboard || input.isPadConnected(source.pad)
-               ? readPlayerMenuInput(input, config, owner)
-               : readSharedMenuInput(input, config);
+    auto result = source.keyboard || input.isPadConnected(source.pad)
+                      ? readPlayerMenuInput(input, config, owner)
+                      : readSharedMenuInput(input, config);
+    result.escape |= input.wasKeyPressed(Key::Escape);
+    return result;
 }
 
 MenuInput mapMenuPointer(MenuInput input, const Mat4& canvasTransform) {

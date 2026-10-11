@@ -28,6 +28,7 @@
 #include "game/players/PlayerControls.h"
 #include "game/screens/AfterLevelScene.h"
 #include "game/screens/AttractScene.h"
+#include "game/screens/AutoSaveIcon.h"
 #include "game/screens/GameContext.h"
 #include "game/screens/IdleScreen.h"
 #include "game/screens/LevelExitSpeech.h"
@@ -77,9 +78,7 @@ private:
     void finishJourney();
     void updateJourney(f64 deltaSeconds);
     bool updateCompletion(f64 deltaSeconds);
-    /** Writes the party in play back into its save slots. */
-    void keepParty();
-    void keepParty(std::span<const PartyMember> party);
+    void autoSaveAfterShop(std::span<PartyMember> party);
     bool startTower(std::span<const PartyMember> party, const PlayOptions& options = {});
     /** Loads `level` and brings the party into it. */
     bool startLevel(const LevelRef& level, std::span<const PartyMember> party,
@@ -144,6 +143,7 @@ private:
     PauseMenu m_pause;
     MusicDuck m_musicDuck; ///< the music under the pause menu
     AfterLevelScene m_afterLevel;
+    AutoSaveIcon m_autoSaveIcon;
     LevelExitSpeech m_exitSpeech;
     /** A journey between levels: the picture is drawn over an empty view for a frame, so
      * that it is on screen while the next level loads, which holds everything up. */
@@ -163,6 +163,7 @@ private:
         bool movieStarted = false;
         std::string movie;
         bool secret = false;
+        bool returningFromChallenge = false;
     };
     std::optional<Journey> m_journey;
     void returnFromChallenge(std::span<const PartyMember> party);

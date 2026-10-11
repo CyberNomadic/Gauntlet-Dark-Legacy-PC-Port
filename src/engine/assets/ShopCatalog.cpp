@@ -1,5 +1,6 @@
 #include "engine/assets/ShopCatalog.h"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 
@@ -21,7 +22,7 @@ void ShopCatalog::validate() const {
     for (usize i = 0; i < m_items.size(); ++i) {
         const auto& item = m_items[i];
         if (!std::isfinite(item.scale) || item.scale <= 0 || item.scale > 16 || item.type < 0 ||
-            item.type > 39 || item.price < 0 || item.price > 99999 || item.amount < 0 ||
+            item.type > 40 || item.price < 0 || item.price > 99999 || item.amount < 0 ||
             item.amount > 99999 || (item.type == 0 && (i != 0 || item.price != 0))) {
             throw FormatError("shop: invalid item");
         }
@@ -29,6 +30,17 @@ void ShopCatalog::validate() const {
     if (m_items.front().type != 0) {
         throw FormatError("shop: first item must be Exit");
     }
+}
+bool ShopCatalog::insertBefore(s32 type, std::span<const ShopItem> offers) {
+    auto candidate = *this;
+    const auto anchor = std::ranges::find(candidate.m_items, type, &ShopItem::type);
+    if (anchor == candidate.m_items.end()) {
+        return false;
+    }
+    candidate.m_items.insert(anchor, offers.begin(), offers.end());
+    candidate.validate();
+    *this = std::move(candidate);
+    return true;
 }
 ShopCatalog ShopCatalog::fromJson(std::string_view text) {
     ShopCatalog catalog;

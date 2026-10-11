@@ -23,6 +23,7 @@
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/players/ClassData.h"
+#include "game/players/ItemPickup.h"
 #include "game/players/Progression.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/LevelFixtures.h"
@@ -1323,6 +1324,97 @@ TEST_CASE("Temple platform chest contents can be collected after descending",
         ++tested;
     }
     REQUIRE(tested > 0);
+}
+
+TEST_CASE("full players can walk through opened native food and gold chests without consuming them",
+          "[level-fixtures][chest][gold-cap][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    Fixture f;
+    f.fixtures.clear();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    REQUIRE(f.world.load(f.device, root, *catalog.byName("G1")));
+    f.fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio, 1});
+    f.fixtures.setPlayerCount(1);
+    f.events.help = [](s32, usize) { return true; };
+    std::vector<s32> cards;
+    f.events.card = [&](s32 player, std::string_view) { cards.push_back(player); };
+    bool gold = false;
+    SECTION("gold") {
+        gold = true;
+    }
+    SECTION("food") {}
+    const auto& chests = f.fixtures.chests();
+    const auto& infos = f.world.layout().itemInfos();
+    usize index = 0;
+    while (index < chests.size()) {
+        const auto& chest = chests.chest(index);
+        if (chest.shown && chest.contents >= 0) {
+            const auto& inside = infos[static_cast<usize>(chest.contents)];
+            if ((gold && chest.subtype == Chests::kGoldChest) ||
+                (!gold && chest.subtype == Chests::kChest && inside.type == 1 &&
+                 inside.subtype == 3 && inside.value > 0)) {
+                break;
+            }
+        }
+        ++index;
+    }
+    REQUIRE(index < chests.size());
+    const auto& chest = chests.chest(index);
+    auto& actor = f.players[0].actor;
+    actor.place(chest.box.centre);
+    actor.save().progress().inventory.keys = 9;
+    actor.save().gold = 99999;
+    actor.save().progress().health = mostHealth(experienceLevel(actor.save().experience()));
+    const auto party = std::span{f.players}.first(1);
+    for (s32 frame = 0; frame < 300 && chest.state != Chests::kOpen; ++frame) {
+        f.fixtures.update(2, 1.0f / 30, party, f.events);
+    }
+    REQUIRE(chest.state == Chests::kOpen);
+    const auto collectFood = [&] {
+        REQUIRE(chest.held >= 0);
+        const auto held = static_cast<usize>(chest.held);
+        const auto& item = f.world.placedItems().item(held);
+        const std::array collectors{Collector{item.position, actor.reach(), actor.height() / 2}};
+        return f.world.collect(
+            f.device, collectors, [&](const Pickup& pickup) -> std::optional<s32> {
+                if (pickup.item != held) {
+                    return std::nullopt;
+                }
+                const auto taking =
+                    takeItem(actor.save(), ItemOffer{pickup.subtype, pickup.amount});
+                return taking.took() ? std::optional{taking.left} : std::nullopt;
+            });
+    };
+    if (!gold) {
+        CHECK(collectFood().empty());
+    }
+    actor.place(chest.box.centre);
+    f.fixtures.update(2, 1.0f / 30, party, f.events);
+    CHECK(actor.position() == chest.box.centre);
+    CHECK_FALSE(chest.gone);
+    CHECK(cards.empty());
+    CHECK(actor.save().gold == 99999);
+    CHECK(actor.save().progress().lifetime.goldFound == 0);
+    CHECK_FALSE(std::ranges::any_of(f.fixtures.obstacles(), [&](const Obstacle& box) {
+        return box.centre == chest.box.centre;
+    }));
+    if (gold) {
+        actor.save().gold -= 1;
+        f.fixtures.update(2, 1.0f / 30, party, f.events);
+        CHECK(actor.save().gold == 99999);
+        CHECK(actor.save().progress().lifetime.goldFound ==
+              infos[static_cast<usize>(chest.contents)].value);
+        CHECK(cards == std::vector<s32>{actor.player()});
+        f.fixtures.update(8, Chests::kCollectedSeconds, party, f.events);
+        CHECK(chest.gone);
+    } else {
+        actor.save().progress().health -= 1;
+        CHECK(collectFood().size() == 1);
+        CHECK(f.world.placedItems().item(static_cast<usize>(chest.held)).taken);
+    }
+    f.fixtures.clear();
 }
 
 TEST_CASE("chest pickups follow NULL1 while opening and cannot be collected early",

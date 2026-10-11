@@ -228,6 +228,52 @@ TEST_CASE("vibration follows the input player's assigned controller not their pa
     CHECK_FALSE(controlVibration(config, input, 0, 31));
 }
 
+TEST_CASE("hammer rumble is a heavier pulse routed only to its user's controller",
+          "[controls][rumble][hammer]") {
+    GameConfig config;
+    Input input;
+    input.setPad(7, pad("hammer-pad"));
+    config.controls[2].device = "hammer-pad";
+    const auto impact = controlVibration(config, input, 2, 0, ControlFeedback::ThunderHammer);
+    const auto melee = controlVibration(config, input, 2, 0, ControlFeedback::MeleeHit);
+    REQUIRE(impact);
+    REQUIRE(melee);
+    CHECK(impact->pad == 7);
+    CHECK(impact->low == 0xFFFF);
+    CHECK(impact->milliseconds == 300);
+    CHECK(impact->milliseconds > melee->milliseconds);
+    CHECK(impact->priority > melee->priority);
+    config.controls[2].rumble = false;
+    CHECK_FALSE(controlVibration(config, input, 2, 0, ControlFeedback::ThunderHammer));
+    config.controls[2].rumble = true;
+    input.setPad(7, {});
+    CHECK_FALSE(controlVibration(config, input, 2, 0, ControlFeedback::ThunderHammer));
+}
+
+TEST_CASE("Escape closes controller-owned pause menus without remapping the controller",
+          "[controls][pause]") {
+    GameConfig config;
+    Input input;
+    input.setPad(1, pad("controller"));
+    config.controls[1].device = "controller";
+    input.setKey(Key::Escape, true);
+    CHECK(readPauseMenuInput(input, config, 1).escape);
+    CHECK(readPauseMenuInput(input, config, -1).escape);
+    CHECK_FALSE(readPlayerMenuInput(input, config, 1).escape);
+    input.beginPoll();
+    CHECK_FALSE(readPauseMenuInput(input, config, 1).escape);
+}
+
+TEST_CASE("profile imports cannot bind Escape to an attack or selection", "[controls][config]") {
+    GameConfig config;
+    config.mergeJson(R"({"controls":{"players":[{}, {},
+        {"device":"keyboard","bindings":{"attack":{"keys":["Escape","Space"]},
+         "menuSelect":{"keys":["Escape","Enter"]}}}, {}]}})");
+    CHECK(config.controls[2].play.attack == std::vector{Key::Space});
+    CHECK(config.controls[2].menu.select == std::vector{Key::Enter});
+    CHECK(config.controls[2].menu.escape == std::vector{Key::Escape});
+}
+
 TEST_CASE("native vibration periods include the final zero countdown independent of FPS",
           "[controls][rumble]") {
     GameConfig config;

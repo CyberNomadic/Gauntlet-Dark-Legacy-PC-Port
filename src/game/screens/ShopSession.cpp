@@ -177,7 +177,7 @@ bool ShopSession::focus(s32 player, usize row) {
     found->repeatStep = 0;
     return true;
 }
-void ShopSession::update(f64 seconds, const Inputs& inputs) {
+void ShopSession::update(f64 seconds, const Inputs& inputs, const std::array<s32, 4>* potions) {
     if (!std::isfinite(seconds) || seconds < 0) {
         return;
     }
@@ -247,9 +247,13 @@ void ShopSession::update(f64 seconds, const Inputs& inputs) {
             const auto& item = m_catalog.items()[lane.cursor];
             if (input.select) {
                 // Only potion purchases need entropy, and never during deterministic tallying.
-                static std::mt19937 random(std::random_device{}());
-                const s32 potion =
-                    item.type == 3 ? std::uniform_int_distribution<s32>(1, 4)(random) : 1;
+                s32 potion = 1;
+                if (potions != nullptr) {
+                    potion = (*potions)[static_cast<usize>(lane.member.player)];
+                } else if (item.type == 3) {
+                    static std::mt19937 random(std::random_device{}());
+                    potion = std::uniform_int_distribution<s32>(1, 4)(random);
+                }
                 lane.feedback = buyShopItem(lane.member.save, lane.stats, item, potion);
                 lane.transacted = true;
                 if (lane.feedback == ShopResult::Exit) {

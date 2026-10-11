@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/netplay/ClientClock.h"
+#include "game/screens/AfterLevelScene.h"
 #include "game/screens/OnlineLevelEntry.h"
 #include "game/screens/OnlineParty.h"
 #include "game/screens/PlayReplication.h"
@@ -10,11 +11,12 @@ namespace gdl::game {
 /** Scene owner for an admitted online party. The host alone constructs a
  * PlayScene; a guest owns only native artwork and checkpoint presentation.
  * update() pumps the session once per 60 Hz application tick, including pause.
- * render() advances only presentation. No save I/O or results/shop decisions.
+ * render() advances only presentation. Post-level transactions are host-ordered;
+ * save I/O remains in the application's local-only checkpoint callback.
  * The session, selection, device and context dependencies must outlive us. */
 class OnlinePlay {
 public:
-    enum class Phase : u8 { Closed, Loading, Playing, Paused, Finished, Failed };
+    enum class Phase : u8 { Closed, Loading, Playing, Paused, Shopping, Finished, Failed };
     enum class Failure : u8 {
         None,
         Session,
@@ -37,7 +39,7 @@ public:
      * guests ignore those arguments and wait for the authenticated host scene ID.
      * Selection is frozen by OnlineSession before this call. */
     bool open(RenderDevice& device, const GameContext& context, OnlineSession& session,
-              const OnlineParty& selection, const LevelRef& initial = LevelRef::tower(),
+              OnlineParty& selection, const LevelRef& initial = LevelRef::tower(),
               const PlayOptions& options = {});
     void close();
     Phase update(const SessionInputs::Frame& devices);
@@ -57,6 +59,7 @@ public:
     const CombatSnapshot* shown() const;
     OnlineLevelEntry::Phase entryPhase() const { return m_entry.phase(); }
     bool entryVisible() const { return m_entry.visible(); }
+    const AfterLevelScene* shopScene() const { return m_shop.isOpen() ? &m_shop : nullptr; }
 
     /** Stable native realm/index encoding, not directory-enumeration order.
      * A packet can select only a playable entry in the trusted local catalog. */
@@ -67,18 +70,23 @@ private:
     struct Host;
     bool load(const SessionInputs::Frame& devices);
     bool travel();
+    bool loadShop();
+    Phase updateShop(const SessionInputs::Frame& devices);
     Phase fail(Failure reason);
     void quiet();
     RenderDevice* m_device = nullptr;
     GameContext m_context;
     OnlineSession* m_session = nullptr;
-    const OnlineParty* m_selection = nullptr;
+    OnlineParty* m_selection = nullptr;
     PlayOptions m_options;
     std::vector<PartyMember> m_travelMembers;
     std::unique_ptr<Host> m_host;
     ReplicaStage m_replica;
     ClientClock m_clock;
     OnlineLevelEntry m_entry;
+    AfterLevelScene m_shop;
+    GameConfig m_shopConfig;
+    bool m_afterShop = false;
     u64 m_entryEpoch = 0;
     Phase m_phase = Phase::Closed;
     Failure m_failure = Failure::None;

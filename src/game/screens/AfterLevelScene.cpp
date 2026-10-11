@@ -54,6 +54,9 @@ MenuInput shopInput(MenuInput input, const GameConfig& config, s32 player) {
     return input;
 }
 } // namespace
+MenuInput AfterLevelScene::captureShopInput(MenuInput input, const GameConfig& config, s32 player) {
+    return shopInput(std::move(input), config, player);
+}
 bool AfterLevelScene::open(RenderDevice& device, const GameContext& context,
                            std::span<const PartyMember> party,
                            std::span<const LevelResults> results, const std::array<s32, 3>& maxima,
@@ -78,6 +81,9 @@ bool AfterLevelScene::open(RenderDevice& device, const GameContext& context,
         }
         if (context.strings != nullptr) {
             m_titles.translate(*context.strings, kHelpTextPrefix);
+            if (context.config != nullptr && context.config->game.expandedShop) {
+                expandShopCatalog(catalog, *context.strings);
+            }
         }
         const auto* font = texture("FONT32");
         m_glow = texture("FONT32_GLOW");
@@ -255,7 +261,9 @@ void AfterLevelScene::playCue(const ShopEvent& event) {
     case ShopCue::LevelGained: announceLevel(event.player); break;
     }
 }
-bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs) {
+bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs,
+                             const std::array<s32, 4>* potions, ShopSession::Inputs* accepted,
+                             bool committed) {
     if (!m_open || !std::isfinite(seconds) || seconds < 0) {
         return false;
     }
@@ -266,7 +274,7 @@ bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs) {
     auto heard = inputs;
     for (const auto& lane : m_session.lanes()) {
         const auto player = static_cast<usize>(lane.member.player);
-        if (lane.phase == ShopPhase::Shopping && m_context.config != nullptr) {
+        if (!committed && lane.phase == ShopPhase::Shopping && m_context.config != nullptr) {
             heard[player] = shopInput(heard[player], *m_context.config, lane.member.player);
         }
         const auto layout =
@@ -274,13 +282,18 @@ bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs) {
         wasScrolling[player] = m_scroll[player] != layout.target;
         // do_shopping reads buy/sell edges only when the prior scroll speed is zero.
         // Discard the edge rather than queueing a transaction for a different row.
-        if (lane.phase == ShopPhase::Shopping && wasScrolling[player]) {
+        if (!committed && lane.phase == ShopPhase::Shopping && wasScrolling[player]) {
             heard[player].select = false;
             heard[player].back = false;
         }
     }
-    pointerInput(heard, wasScrolling);
-    m_session.update(seconds, heard);
+    if (!committed) {
+        pointerInput(heard, wasScrolling);
+    }
+    if (accepted != nullptr) {
+        *accepted = heard;
+    }
+    m_session.update(seconds, heard, potions);
     updateTallySound();
     for (const auto& lane : m_session.lanes()) {
         const auto player = static_cast<usize>(lane.member.player);
@@ -311,9 +324,37 @@ bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs) {
     return m_session.finished() && !effectsPlaying();
 }
 
-void AfterLevelScene::pointerInput(ShopSession::Inputs& inputs,
-                                   const std::array<bool, 4>& scrolling) {
+std::optional<usize> AfterLevelScene::captureOnlinePointer(s32 seat, MenuInput& input) {
+    if (!m_open || seat < 0 || seat >= 4) {
+        return std::nullopt;
+    }
+    std::array<bool, 4> scrolling{};
     for (const auto& lane : m_session.lanes()) {
+        const auto player = static_cast<usize>(lane.member.player);
+        const auto layout =
+            ShopLayout::make(m_session.catalog().items(), lane.cursor, m_font.height());
+        scrolling[player] = m_scroll[player] != layout.target;
+    }
+    ShopSession::Inputs inputs{};
+    inputs[static_cast<usize>(seat)] = input;
+    std::array<s32, 4> focus{-1, -1, -1, -1};
+    pointerInput(inputs, scrolling, &focus, seat);
+    input = std::move(inputs[static_cast<usize>(seat)]);
+    const auto row = focus[static_cast<usize>(seat)];
+    return row < 0 ? std::nullopt : std::optional{static_cast<usize>(row)};
+}
+
+bool AfterLevelScene::focusOnline(s32 seat, usize row) {
+    return m_open && m_session.focus(seat, row);
+}
+
+void AfterLevelScene::pointerInput(ShopSession::Inputs& inputs,
+                                   const std::array<bool, 4>& scrolling, std::array<s32, 4>* focus,
+                                   s32 onlyPlayer) {
+    for (const auto& lane : m_session.lanes()) {
+        if (onlyPlayer >= 0 && lane.member.player != onlyPlayer) {
+            continue;
+        }
         const auto player = static_cast<usize>(lane.member.player);
         const bool rightClick = inputs[player].pointerBack;
         inputs[player].pointerBack = false; // Sell needs a row, not just the lane's background.
@@ -360,13 +401,25 @@ void AfterLevelScene::pointerInput(ShopSession::Inputs& inputs,
         m_hoverTargets[player] = *hit;
         switch (hit->action) {
         case PointerAction::Buy:
-        case PointerAction::Sell:
-            if (m_session.focus(lane.member.player, hit->row) && !scrolling[player]) {
+        case PointerAction::Sell: {
+            const auto& catalog = m_session.catalog().items();
+            const bool selectable = hit->row < catalog.size() && lane.selectable(catalog[hit->row]);
+            bool focused = false;
+            if (focus != nullptr) {
+                if (selectable && lane.phase == ShopPhase::Shopping) {
+                    (*focus)[player] = static_cast<s32>(hit->row);
+                    focused = true;
+                }
+            } else {
+                focused = m_session.focus(lane.member.player, hit->row);
+            }
+            if (focused && !scrolling[player]) {
                 input.back =
                     (rightClick || (input.pointerPressed && hit->action == PointerAction::Sell));
                 input.select = input.pointerPressed && !input.back;
             }
             break;
+        }
         case PointerAction::Previous: input.up = input.pointerPressed; break;
         case PointerAction::Next: input.down = input.pointerPressed; break;
         case PointerAction::Continue: input.select = input.pointerPressed; break;

@@ -59,7 +59,9 @@ void readKeys(const Json& object, const char* key, std::vector<Key>& keys) {
     for (const Json& name : object.at(key)) {
         const auto parsed = keyFromName(name.get<std::string>());
         if (parsed.has_value()) {
-            keys.push_back(*parsed);
+            if (*parsed != Key::Escape || std::string_view{key} == "shopExit") {
+                keys.push_back(*parsed);
+            }
         } else {
             log::warn("Config: unknown key '{}' for '{}'", name.get<std::string>(), key);
         }
@@ -192,18 +194,20 @@ void GameConfig::mergeJson(std::string_view json) {
         read(s, "slots", save.slots);
     }
     if (root.contains("game")) {
+        read(root.at("game"), "expandedShop", game.expandedShop);
+        read(root.at("game"), "autoSave", game.autoSave);
         read(root.at("game"), "difficulty", difficulty.level);
-        const auto& game = root.at("game");
-        if (game.contains("combat")) {
-            read(game.at("combat"), "autoMelee", combat.autoMelee);
-            read(game.at("combat"), "enemyHealthBars", combat.enemyHealthBars);
-            read(game.at("combat"), "autoActivateItems", combat.autoActivateItems);
+        const auto& options = root.at("game");
+        if (options.contains("combat")) {
+            read(options.at("combat"), "autoMelee", combat.autoMelee);
+            read(options.at("combat"), "enemyHealthBars", combat.enemyHealthBars);
+            read(options.at("combat"), "autoActivateItems", combat.autoActivateItems);
         }
-        if (game.contains("multiplayer")) {
-            if (!game.at("multiplayer").is_string()) {
+        if (options.contains("multiplayer")) {
+            if (!options.at("multiplayer").is_string()) {
                 throw FormatError("multiplayer mode must be normal, stun or hurt");
             }
-            const auto name = game.at("multiplayer").get<std::string>();
+            const auto name = options.at("multiplayer").get<std::string>();
             const auto index = std::distance(MultiplayerConfig::kNames.begin(),
                                              std::ranges::find(MultiplayerConfig::kNames, name));
             if (index == std::ssize(MultiplayerConfig::kNames)) {
@@ -223,7 +227,7 @@ void GameConfig::mergeJson(std::string_view json) {
             readKeys(k, "select", menu.select);
             readKeys(k, "back", menu.back);
             readKeys(k, "start", menu.start);
-            readKeys(k, "escape", menu.escape);
+            menu.escape = {Key::Escape}; // fixed safety control, not a configurable action
             readKeys(k, "shopSell", menu.shopSell);
             readKeys(k, "shopExit", menu.shopExit);
         }
@@ -362,6 +366,8 @@ std::string GameConfig::toJson() const {
     root["text"] = {{"language", text.language}};
     root["save"] = {{"directory", save.directory}, {"slots", save.slots}};
     root["game"] = {
+        {"expandedShop", game.expandedShop},
+        {"autoSave", game.autoSave},
         {"difficulty", difficulty.level},
         {"combat",
          {{"autoMelee", combat.autoMelee},

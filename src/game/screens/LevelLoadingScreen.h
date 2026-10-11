@@ -13,6 +13,7 @@
 #include "game/players/Party.h"
 #include "game/screens/GameContext.h"
 #include "game/screens/StatusBox.h"
+#include "game/screens/TransitionScreen.h"
 
 namespace gdl::game {
 
@@ -23,8 +24,10 @@ public:
     static constexpr f32 kMapSeconds = 3.5f;
     static constexpr f32 kPreviewSeconds = 3.0f;
     static constexpr f32 kCrossfadeSeconds = 255.0f / 240.0f;
+    static constexpr f32 kTransitionSeconds = 2.0f;
+    /** Secret visits use the static picture; transitionOnly also selects it on return. */
     void open(RenderDevice& device, const GameContext& context, const LevelRef& level,
-              std::span<const PartyMember> party = {});
+              std::span<const PartyMember> party = {}, bool transitionOnly = false);
     void close();
     bool update(f32 seconds);
     /** Draws map and status panels together in the retail 512x384 canvas. */
@@ -36,11 +39,11 @@ public:
     static bool movieWanted(std::string_view movie, std::span<const PartyMember> party);
 
 private:
-    SoundHandle play(std::string_view name, SoundHandle after = kNoSound,
-                     SoundCategory category = SoundCategory::Effects);
+    SoundHandle play(std::string_view name, SoundHandle after = kNoSound);
     void tile(Canvas& canvas, RenderDevice& device, std::string_view name, const Vec2& position,
               f32 alpha);
     TextureSet m_textures;
+    TransitionScreen m_transition;
     StatusBoxPainter m_boxes;
     std::array<StatusBoxView, 4> m_status;
     SoundSet m_bank;
@@ -52,6 +55,7 @@ private:
     f32 m_seconds = 0;
     usize m_dashes = 0;
     bool m_active = false;
+    bool m_transitionOnly = false;
 };
 
 } // namespace gdl::game

@@ -67,6 +67,7 @@ struct EnemyView {
     bool blockableAttack = false; ///< slow/power attack groups that provoke a critter's BLOCK
     std::optional<Vec3> decoy = std::nullopt; ///< swarm range/bearing, never a collision body
     std::optional<f32> collisionRadius = std::nullopt; ///< native contact radius, else radius
+    s32 heldDeath = -1; ///< current Anti-Death contact, refreshed with the player's state
 };
 
 /** A blow an enemy has landed on a player. */

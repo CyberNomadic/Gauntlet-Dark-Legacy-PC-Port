@@ -79,6 +79,26 @@ struct Fixture {
     }
 };
 
+TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings][autosave][shop]") {
+    Fixture f;
+    f.choose(1);
+    REQUIRE(f.menu.page() == SettingsMenu::Page::Game);
+    REQUIRE(f.menu.menu().definition().items.size() == 5);
+    CHECK(f.menu.menu().definition().items.front().text == "Difficulty");
+    f.choose(3);
+    CHECK(f.config.game.expandedShop);
+    CHECK_FALSE(f.config.game.autoSave);
+    f.release();
+    f.focus(4);
+    f.right();
+    CHECK(f.config.game.autoSave);
+    f.release();
+    f.fail = true;
+    f.right();
+    CHECK(f.config.game.autoSave);
+    CHECK(f.writes == 2);
+}
+
 TEST_CASE("mouse operates settings pages sliders and graphics without keyboard confirmation",
           "[settings][mouse]") {
     Fixture f;

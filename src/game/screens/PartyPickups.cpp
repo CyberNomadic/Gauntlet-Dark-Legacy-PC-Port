@@ -136,9 +136,17 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     const bool activate =
         services.autoActivateItems &&
         (!world.ref().isSecret() || powerupAllowedInChallenge(pickup.subtype, pickup.flags));
-    const ItemTaking taking = takeItem(
+    ItemTaking taking = takeItem(
         actor.save(), ItemOffer{pickup.subtype, pickup.amount, pickup.flags, pickup.strength},
         stats != nullptr ? stats->powerupTime : 1.0f, activate);
+    if (secretCoin && taking.outcome == ItemTaking::Outcome::GoldFull) {
+        // A challenge coin is still an objective when the wallet cannot accept gold.
+        // Keep both the capped wallet and its lifetime gold total unchanged.
+        taking = {.outcome = ItemTaking::Outcome::Taken,
+                  .count = pickup.amount,
+                  .card = kSecretCoinCard,
+                  .sound = {}};
+    }
     if (!taking.took()) {
         switch (taking.outcome) {
         case ItemTaking::Outcome::KeysFull: help(HelpMessages::kKeysFull); break;
@@ -222,12 +230,10 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     if (taking.message >= 0) {
         help(taking.message);
     }
-    if (!taking.sound.empty()) {
-        if (secretCoin) {
-            services.audio.playNamed(PickupVoices::bonusGold(actor.player(), pickup.amount));
-        } else {
-            services.audio.playNamed(taking.sound);
-        }
+    if (secretCoin) {
+        services.audio.playNamed(PickupVoices::bonusGold(actor.player(), pickup.amount));
+    } else if (!taking.sound.empty()) {
+        services.audio.playNamed(taking.sound);
     } else if (PlayerFigure* figure = runtime.figure.get();
                (taking.ate || taking.hurt) && figure != nullptr && services.sounds != nullptr) {
         const bool pojo = PickupVoices::carriesPojo(actor.save());

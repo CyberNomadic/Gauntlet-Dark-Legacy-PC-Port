@@ -26,7 +26,7 @@ struct ControlDevice {
     s32 pad = -2;
 };
 std::array<ControlDevice, 4> controlDevices(const GameConfig& config, const Input& input);
-enum class ControlFeedback : u8 { Damage, MeleeHit, GeneratorDestroyed };
+enum class ControlFeedback : u8 { Damage, MeleeHit, GeneratorDestroyed, ThunderHammer };
 struct ControlVibration {
     s32 pad = -1;
     u32 milliseconds = 0;

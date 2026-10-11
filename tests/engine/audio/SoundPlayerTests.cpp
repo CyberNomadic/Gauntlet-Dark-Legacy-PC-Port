@@ -177,6 +177,27 @@ TEST_CASE("category and master volumes scale voices, live and on start", "[audio
     REQUIRE(out[out.size() - 2] == Approx(0.25f));
 }
 
+TEST_CASE("movie cues have an independent live volume and are not ducked with music",
+          "[audio][player][movie-volume]") {
+    AudioMixer mixer(48000);
+    SoundPlayer player(mixer);
+    const SoundClip clip = tone(48000, 4000, 1.0f);
+    SoundSequence sequence;
+    sequence.steps.push_back(SoundSequenceStep{&clip, false, false});
+    player.setCategoryVolume(SoundCategory::Effects, 0);
+    player.setCategoryVolume(SoundCategory::Music, 0);
+    player.setCategoryScale(SoundCategory::Music, 0);
+    player.play(sequence, 0.5f, SoundCategory::Movie);
+    auto out = pull(mixer, 10);
+    CHECK(out[0] == Approx(0.5f));
+    player.setCategoryVolume(SoundCategory::Movie, 0.25f);
+    out = pull(mixer, kRampFrames);
+    CHECK(out[out.size() - 2] == Approx(0.125f));
+    player.setCategoryVolume(SoundCategory::Movie, 0);
+    out = pull(mixer, kRampFrames);
+    CHECK(out[out.size() - 2] == Approx(0));
+}
+
 TEST_CASE("a category's scale ducks its voices under the volume the player set",
           "[audio][player]") {
     AudioMixer mixer(48000);

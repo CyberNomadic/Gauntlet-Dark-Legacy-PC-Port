@@ -27,9 +27,10 @@ bool LevelLoadingScreen::movieWanted(std::string_view movie, std::span<const Par
 }
 
 void LevelLoadingScreen::open(RenderDevice& device, const GameContext& context,
-                              const LevelRef& level, std::span<const PartyMember> party) {
+                              const LevelRef& level, std::span<const PartyMember> party,
+                              bool transitionOnly) {
     close();
-    if (level.isTower()) {
+    if (level.isTower() && !transitionOnly) {
         return;
     }
     m_active = true;
@@ -55,6 +56,12 @@ void LevelLoadingScreen::open(RenderDevice& device, const GameContext& context,
         // A new level starts with an empty meter, but keeps its frame above the panel.
         status.turbo = TurboMeter{}.look();
     }
+    m_transitionOnly = transitionOnly || level.isSecret();
+    if (m_transitionOnly) {
+        m_transition.load(device, context.unpackedRoot);
+        m_transition.cover();
+        return;
+    }
     m_name = level.name;
     m_sounds = context.sounds;
     m_textures.load(context.unpackedRoot / "MAPS" / ("LEVEL" + level.name));
@@ -66,7 +73,7 @@ void LevelLoadingScreen::open(RenderDevice& device, const GameContext& context,
             const auto* audio = data.audio(info->audioIndex);
             if (!level.name.empty() &&
                 m_bank.load(context.unpackedRoot / "audio" / ("MAP_" + level.name.substr(0, 1)))) {
-                play("S_MAP_" + level.name.substr(0, 1), kNoSound, SoundCategory::Music);
+                play("S_MAP_" + level.name.substr(0, 1));
                 const auto entering =
                     audio != nullptr ? play(data.soundName(audio->enterSound)) : kNoSound;
                 play("S_" + level.name + "NAME", entering);
@@ -88,23 +95,24 @@ void LevelLoadingScreen::close() {
     m_bank = {};
     m_textures.releaseTextures();
     m_textures = {};
+    m_transition.release();
     m_points.clear();
     m_name.clear();
     m_movie.clear();
     m_seconds = 0;
     m_dashes = 0;
     m_active = false;
+    m_transitionOnly = false;
 }
 
-SoundHandle LevelLoadingScreen::play(std::string_view name, SoundHandle after,
-                                     SoundCategory category) {
+SoundHandle LevelLoadingScreen::play(std::string_view name, SoundHandle after) {
     const auto sound = m_bank.find(name);
     if (m_sounds == nullptr || !sound) {
         return kNoSound;
     }
     try {
-        const auto handle =
-            m_sounds->playAfter(after, m_bank.sequence(*sound), 224.0f / 255.0f, category);
+        const auto handle = m_sounds->playAfter(after, m_bank.sequence(*sound), 224.0f / 255.0f,
+                                                SoundCategory::Movie);
         m_handles.push_back(handle);
         return handle;
     } catch (const std::exception& e) {
@@ -134,6 +142,9 @@ bool LevelLoadingScreen::update(f32 seconds) {
         return true;
     }
     m_seconds += std::max(seconds, 0.0f);
+    if (m_transitionOnly) {
+        return m_seconds >= kTransitionSeconds;
+    }
     const auto count = dashCount();
     while (m_dashes < count) {
         play("S_MAPDOT" + m_name.substr(0, 1));
@@ -156,24 +167,29 @@ void LevelLoadingScreen::tile(Canvas& canvas, RenderDevice& device, std::string_
 
 void LevelLoadingScreen::draw(Canvas& canvas, RenderDevice& device) {
     canvas.fillScreen(Color::black());
-    for (s32 i = 0; i < 4; ++i) {
-        tile(canvas, device, std::format("MAP_{}_{:02}", m_name, i),
-             kTilePositions[static_cast<usize>(i)], 1);
-    }
-    for (usize i = 0; i < m_dashes; ++i) {
-        tile(canvas, device, std::format("DASH_{}_{}", m_name, i + 1), m_points[i + 1], 1);
-    }
-    if (!m_points.empty() && m_points.front().x >= 0) {
-        const f32 routeSeconds = static_cast<f32>(m_dashes > 0 ? m_dashes - 1 : 0) * kDashSeconds;
-        const auto frame = static_cast<s32>(std::max(0.0f, m_seconds - routeSeconds) * 60);
-        const s32 phase = frame % 130;
-        const s32 ramp = std::max(0, phase > 60 ? 120 - phase : phase);
-        const f32 glow = static_cast<f32>(std::clamp((59 + ramp * 255) / 60, 4, 250)) / 255;
-        tile(canvas, device, "MAP_" + m_name + "GLOW", m_points.front(), glow);
-    }
-    for (s32 i = 0; i < 4; ++i) {
-        tile(canvas, device, std::format("LDMAP_{}_{:02}", m_name, i),
-             kTilePositions[static_cast<usize>(i)], previewAlpha());
+    if (m_transitionOnly) {
+        m_transition.draw(canvas, 512);
+    } else {
+        for (s32 i = 0; i < 4; ++i) {
+            tile(canvas, device, std::format("MAP_{}_{:02}", m_name, i),
+                 kTilePositions[static_cast<usize>(i)], 1);
+        }
+        for (usize i = 0; i < m_dashes; ++i) {
+            tile(canvas, device, std::format("DASH_{}_{}", m_name, i + 1), m_points[i + 1], 1);
+        }
+        if (!m_points.empty() && m_points.front().x >= 0) {
+            const f32 routeSeconds =
+                static_cast<f32>(m_dashes > 0 ? m_dashes - 1 : 0) * kDashSeconds;
+            const auto frame = static_cast<s32>(std::max(0.0f, m_seconds - routeSeconds) * 60);
+            const s32 phase = frame % 130;
+            const s32 ramp = std::max(0, phase > 60 ? 120 - phase : phase);
+            const f32 glow = static_cast<f32>(std::clamp((59 + ramp * 255) / 60, 4, 250)) / 255;
+            tile(canvas, device, "MAP_" + m_name + "GLOW", m_points.front(), glow);
+        }
+        for (s32 i = 0; i < 4; ++i) {
+            tile(canvas, device, std::format("LDMAP_{}_{:02}", m_name, i),
+                 kTilePositions[static_cast<usize>(i)], previewAlpha());
+        }
     }
     // Keep the complete status panels, including their upper strips and meter artwork,
     // above both the map and the crossfading preview.

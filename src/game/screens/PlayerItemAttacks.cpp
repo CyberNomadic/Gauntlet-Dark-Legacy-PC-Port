@@ -69,6 +69,9 @@ void PlayerAttacks::useItemAttack(usize index, std::span<PlayerRuntime> players)
     if (selected->deed == PlayerDeed::Hammer && m_resources->shake != nullptr) {
         m_resources->shake->start(CameraShake::Target::Attention, 0, 30, 0.3f, 200);
     }
+    if (selected->deed == PlayerDeed::Hammer && m_resources->hammerImpact) {
+        m_resources->hammerImpact(player.actor.player());
+    }
     area.attack = *selected;
     area.actor = index;
     area.pojoTurbo = pojoBreath && player.pojoTurbo;

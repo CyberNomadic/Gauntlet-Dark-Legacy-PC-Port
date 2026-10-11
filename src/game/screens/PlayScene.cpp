@@ -217,7 +217,12 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
                     context.config != nullptr ? &context.config->multiplayer.mode : nullptr,
                     context.config != nullptr && context.config->difficulty.level == "easy"
                         ? TargetAssist::kEasyFacingDot
-                        : TargetAssist::kFacingDot});
+                        : TargetAssist::kFacingDot,
+                    [this](s32 player) {
+                        if (m_context.vibrate) {
+                            m_context.vibrate(player, 0, ControlFeedback::ThunderHammer);
+                        }
+                    }});
     m_bossSequence.bind(
         {device, world, m_weapons, m_staticTextures, m_effects, m_audio, context.levels});
     m_bossSequence.advanceLegend(0, m_opponents.bosses(), m_players);

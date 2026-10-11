@@ -280,9 +280,23 @@ void SettingsMenu::rebuild(s32 selection) {
     }
     case Page::Game:
         definition.title = text("menu.gameOptions");
+        definition.x = 96;
+        definition.y = 128;
+        definition.scale = 0.7f;
+        definition.cursorScale = definition.scale;
+        definition.valueX = 344;
+        definition.valueWidth =
+            std::max(m_painter->measure(text("settings.on"), definition.scale),
+                     m_painter->measure(text("settings.off"), definition.scale));
         add(text("settings.difficulty"), 0);
         add(text("settings.multiplayer"), 1);
         add(text("settings.combat"), 2);
+        add(text("settings.expandedShop"), 3);
+        definition.items.back().value =
+            text(m_config.game.expandedShop ? "settings.on" : "settings.off");
+        add(text("settings.autoSave"), 4);
+        definition.items.back().value =
+            text(m_config.game.autoSave ? "settings.on" : "settings.off");
         break;
     case Page::Combat:
         definition.title = text("settings.combat");
@@ -448,7 +462,15 @@ void SettingsMenu::change(s32 direction) {
         rebuild(m_menu.selection());
         return;
     }
-    if (m_page == Page::Difficulty) {
+    if (m_page == Page::Game) {
+        if (code == 3) {
+            next.game.expandedShop = !next.game.expandedShop;
+        } else if (code == 4) {
+            next.game.autoSave = !next.game.autoSave;
+        } else {
+            return;
+        }
+    } else if (m_page == Page::Difficulty) {
         next.difficulty.level = DifficultyConfig::kNames[static_cast<usize>(code)];
     } else if (m_page == Page::Multiplayer) {
         next.multiplayer.mode = static_cast<MultiplayerMode>(code);
@@ -507,7 +529,8 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
         return {};
     }
     const bool horizontal = input.left || input.right || input.leftHeld || input.rightHeld;
-    if (m_page == Page::Combat && !m_menu.closing() && (input.left || input.right)) {
+    if ((m_page == Page::Combat || m_page == Page::Game) && !m_menu.closing() &&
+        (input.left || input.right)) {
         change(input.left ? -1 : 1);
         return {MenuAction::Moved, 0};
     }

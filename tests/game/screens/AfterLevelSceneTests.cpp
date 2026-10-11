@@ -25,6 +25,57 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+TEST_CASE("expanded shop option changes only the enabled native shop catalog", "[shop][assets]") {
+    const auto root = test::assetOrSkip("SHPDATA/SHOP.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    GameConfig config;
+    StringTable strings;
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    GameContext context;
+    context.config = &config;
+    context.strings = &strings;
+    context.unpackedRoot = root;
+    std::array<PartyMember, 1> party{{{0, CharacterSave{}}}};
+    party[0].save.gold = 99999;
+    AfterLevelScene scene;
+    REQUIRE(scene.open(device, context, party, {}, {}, "L1", ShopVisit::Shop));
+    CHECK(scene.session().catalog().items().size() == 34);
+    config.game.expandedShop = true;
+    REQUIRE(scene.open(device, context, party, {}, {}, "L1", ShopVisit::Shop));
+    const auto& offers = scene.session().catalog().items();
+    REQUIRE(offers.size() == 39);
+    const auto halo = std::ranges::find(offers, 35, &ShopItem::type);
+    REQUIRE(halo != offers.end());
+    const auto start = static_cast<usize>(halo - offers.begin());
+    const std::array<s32, 7> order{35, 16, 40, 34, 29, 39, 36};
+    for (usize index = 0; index < order.size(); ++index) {
+        CHECK(offers[start + index].type == order[index]);
+    }
+    TextureSet select;
+    TextureSet inventory;
+    REQUIRE(select.load(root / "SELECT"));
+    REQUIRE(inventory.load(root / "INVENTORY"));
+    for (usize index = 1; index <= 5; ++index) {
+        CAPTURE(offers[start + index].texture);
+        // SELECT owns shop art when a name is also present in INVENTORY.
+        auto& bank = select.find(offers[start + index].texture) ? select : inventory;
+        const auto icon = bank.find(offers[start + index].texture);
+        REQUIRE(icon);
+        const auto& expected = dynamic_cast<const test::FakeTexture&>(bank.texture(device, *icon));
+        REQUIRE(scene.focusOnline(0, start + index));
+        scene.update(60, {}); // settle the full retail scroll to this newly available row
+        device.draws.clear();
+        scene.render(device, makeScreenProjection(512, 384), 512, 384);
+        CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
+            const auto* actual = dynamic_cast<const test::FakeTexture*>(draw.texture);
+            return actual != nullptr && actual->width() == expected.width() &&
+                   actual->height() == expected.height() && actual->pixels == expected.pixels;
+        }));
+    }
+    config.game.expandedShop = false;
+    REQUIRE(scene.open(device, context, party, {}, {}, "L1", ShopVisit::Shop));
+    CHECK(scene.session().catalog().items().size() == 34);
+}
 TEST_CASE("retail frame sweep travels across corners every 150 ticks", "[shop][render]") {
     CHECK(shopFrameLight(0, 0, 0) == 128);
     CHECK(shopFrameLight(0, 0, 2.5 / 7) == 255);
@@ -527,6 +578,33 @@ TEST_CASE("shop mouse targets rendered rows prices arrows and wheel in only the 
     };
     constexpr f32 kLaneX = 3 * 128;
     render();
+    SECTION("online pointer capture waits for authoritative focus and transaction") {
+        auto input = pointer({kLaneX + 60, rowY(0, 2) - 3}, true)[3];
+        const auto row = scene.captureOnlinePointer(3, input);
+        REQUIRE(row == 2);
+        CHECK(input.select);
+        CHECK(scene.session().lanes()[0].cursor == 0);
+        CHECK(scene.session().party()[0].save.gold == 5000);
+        CHECK_FALSE(scene.focusOnline(0, *row));
+        CHECK_FALSE(scene.focusOnline(3, scene.session().catalog().items().size()));
+        REQUIRE(scene.focusOnline(3, *row));
+        ShopSession::Inputs committed{};
+        committed[3].select = input.select;
+        scene.update(0, committed, nullptr, nullptr, true);
+        CHECK(scene.session().party()[0].save.gold == 4900);
+        CHECK(scene.session().party()[0].save.progress().inventory.keys == 2);
+        CHECK(scene.session().party()[1].save.gold == 5000);
+    }
+    SECTION("online pointer capture does not steer a different seat") {
+        auto input = pointer({kLaneX + 60, rowY(0, 2) - 3}, true)[1];
+        CHECK_FALSE(scene.captureOnlinePointer(1, input));
+        CHECK_FALSE(input.select);
+        CHECK(scene.session().lanes()[1].cursor == 0);
+        auto wheel = pointer({kLaneX + 80, 180}, false, false, -1)[3];
+        CHECK_FALSE(scene.captureOnlinePointer(3, wheel));
+        CHECK(wheel.down);
+        CHECK(scene.session().lanes()[0].cursor == 0);
+    }
     SECTION("one click buys the pointed row and the sell price performs a sale") {
         scene.update(0, pointer({kLaneX + 60, rowY(0, 2) - 3}, true));
         REQUIRE(scene.session().lanes()[0].cursor == 2);

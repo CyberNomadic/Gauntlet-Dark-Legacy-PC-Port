@@ -1,6 +1,7 @@
 #include "game/config/ControlProfiles.h"
 
 #include <array>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
@@ -89,7 +90,9 @@ void readControlProfiles(const nlohmann::json& json, GameConfig& config) {
                         if (!key) {
                             throw FormatError("unknown control key");
                         }
-                        keys.push_back(*key);
+                        if (*key != Key::Escape || std::string_view{action.id} == "shopExit") {
+                            keys.push_back(*key);
+                        }
                     }
                 }
                 if (binding.contains("buttons")) {
@@ -203,6 +206,11 @@ std::optional<ControlVibration> controlVibration(const GameConfig& config, const
         constexpr u16 kDestroyedLow = 0x4000;
         constexpr u16 kDestroyedHigh = 0xA000;
         return ControlVibration{pad, kDestroyedMilliseconds, kDestroyedLow, kDestroyedHigh, 0};
+    }
+    if (feedback == ControlFeedback::ThunderHammer) {
+        // Ground impact: a sustained low-frequency thump, with a short sharp motor accent.
+        // Lower-priority melee taps cannot cut off the pulse; damage retains equal priority.
+        return ControlVibration{pad, 300, 0xFFFF, 0xA000, 1};
     }
     // PlayerControls decrements once per native rendered frame (30 Hz), stopping below
     // zero, not at zero. Keep that inclusive final frame independent of presentation FPS.

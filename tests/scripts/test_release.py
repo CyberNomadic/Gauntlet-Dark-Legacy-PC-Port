@@ -26,7 +26,7 @@ class ReleaseTests(unittest.TestCase):
         patcher = mock.patch("publish_release.ROOT", self.root)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.notes = "# 0.1.0-alpha.1\n\n- A reviewed gameplay fix.\n"
+        self.notes = "# 0.1.0-alpha.1\n\n## Added\n\n## Fixed\n\n- A reviewed gameplay fix.\n"
         self.notes_path = self.root / "docs/changelog/0.1.0-alpha.1.md"
         self.notes_path.parent.mkdir(parents=True)
         self.notes_path.write_text(self.notes, encoding="utf-8")
@@ -61,6 +61,20 @@ class ReleaseTests(unittest.TestCase):
         self.notes_path.unlink()
         with self.assertRaisesRegex(ValueError, "Missing release changelog"):
             changelog(self.tag)
+
+    def test_changelog_allows_only_added_then_fixed_without_introductory_details(self):
+        for body in (
+                "Changes since the last release.\n\n## Added\n\n## Fixed\n\n- A fix.",
+                "## Fixed\n\n- A fix.\n\n## Added",
+                "## Added\n\n- A feature.\n\n## Fixed\n\n## Development\n\n- Notes.",
+                "## Added\n\n- A feature.\n\n## Fixed\n\n  ### More details\n\n- Notes.",
+                "## Added\n\n- A feature.\n\n## Fixed\n\n## Added\n\n- More.",
+                "## Added\n\n- A feature.",
+                "## Added\n\n## Fixed"):
+            with self.subTest(body=body):
+                self.notes_path.write_text(f"# {self.tag[1:]}\n\n{body}\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Added.*Fixed"):
+                    changelog(self.tag)
 
     def test_public_runtime_keeps_lz4_notice_and_excludes_untracked_data(self):
         names = ("gauntlet.exe", "data/config.json", "data/text/en.json",
@@ -124,6 +138,13 @@ class ReleaseTests(unittest.TestCase):
         tag = "v" + (root / "VERSION").read_text(encoding="utf-8").strip()
         with mock.patch("publish_release.ROOT", root):
             self.assertTrue(changelog(tag).startswith(f"# {tag[1:]}\n"))
+
+    def test_all_checked_in_changelogs_follow_the_same_structure(self):
+        root = Path(__file__).resolve().parents[2]
+        with mock.patch("publish_release.ROOT", root):
+            for path in (root / "docs/changelog").glob("*.md"):
+                with self.subTest(version=path.stem):
+                    self.assertTrue(changelog(f"v{path.stem}").startswith(f"# {path.stem}\n"))
 
     def test_missing_changelog_blocks_preflight_before_remote_operations(self):
         self.notes_path.unlink()
@@ -202,8 +223,8 @@ class ReleaseTests(unittest.TestCase):
             with mock.patch("publish_release.validated_assets", return_value=[self.root / "setup.exe"]):
                 def inspect_notes(command, **kwargs):
                     notes = Path(command[command.index("--notes-file") + 1]).read_text(encoding="utf-8")
-                    self.assertTrue(notes.startswith(self.notes.strip()))
-                    self.assertIn("## Installation and updates", notes)
+                    self.assertEqual(notes, self.notes)
+                    self.assertNotIn("## Installation and updates", notes)
                     self.assertNotIn("--generate-notes", command)
                 publish.side_effect = inspect_notes
                 publish_main([])
@@ -218,7 +239,7 @@ class ReleaseTests(unittest.TestCase):
                                 ("v1.0.0-rc.1", True), ("v1.0.0", False),
                                 ("v1.0.0+build-tag", False)):
             (self.notes_path.parent / f"{tag[1:]}.md").write_text(
-                f"# {tag[1:]}\n\n- Reviewed changes.\n", encoding="utf-8")
+                f"# {tag[1:]}\n\n## Added\n\n## Fixed\n\n- Reviewed changes.\n", encoding="utf-8")
             with self.subTest(tag=tag), mock.patch("publish_release.check_publication", return_value=tag), mock.patch(
                     "publish_release.validated_assets", return_value=[self.root / "setup.exe"]), mock.patch(
                     "publish_release.subprocess.run") as publish:

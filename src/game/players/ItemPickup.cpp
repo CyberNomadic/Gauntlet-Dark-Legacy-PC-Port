@@ -118,6 +118,10 @@ s32 mostHealth(s32 level) {
     return std::min(kHealthPerLevel * (level - 1) + kBaseHealth, kHealthLimit);
 }
 
+s32 goldCapacity(const CharacterSave& save) {
+    return kMostGold - std::clamp(save.gold, 0, kMostGold);
+}
+
 ItemTaking takeItem(CharacterSave& save, const ItemOffer& offer, f32 powerupTime,
                     bool activatePowerups) {
     Inventory& inventory = save.progress().inventory;
@@ -127,6 +131,9 @@ ItemTaking takeItem(CharacterSave& save, const ItemOffer& offer, f32 powerupTime
     }
     switch (static_cast<ItemKind>(offer.kind)) {
     case ItemKind::Gold:
+        if (goldCapacity(save) == 0) {
+            return refused(ItemTaking::Outcome::GoldFull, offer.amount);
+        }
         save.gold = std::min(save.gold + offer.amount, kMostGold);
         // do_got_it records the offered gold independently of the capped wallet.
         save.progress().lifetime.goldFound += offer.amount;

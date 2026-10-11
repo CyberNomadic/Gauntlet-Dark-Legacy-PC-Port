@@ -186,7 +186,7 @@ TEST_CASE("shop money and capacity checks do not partially mutate saves", "[shop
     REQUIRE(save.toJson() == before);
     REQUIRE(buyShopItem(save, stats, item(3), 0) == ShopResult::Invalid);
     REQUIRE(save.toJson() == before);
-    REQUIRE(buyShopItem(save, stats, item(40), 1) == ShopResult::Invalid);
+    REQUIRE(buyShopItem(save, stats, item(41), 1) == ShopResult::Invalid);
     REQUIRE(buyShopItem(save, stats, item(-1), 1) == ShopResult::Invalid);
     REQUIRE(buyShopItem(save, stats, item(0, 0), 1) == ShopResult::Exit);
     REQUIRE(save.toJson() == before);
@@ -839,5 +839,49 @@ TEST_CASE("native shop contains the retail catalog and every item can be bought"
         REQUIRE(buyShopItem(save, stats, row, 1) ==
                 (row.type == 0 ? ShopResult::Exit : ShopResult::Bought));
     }
+}
+TEST_CASE("expanded shop offers exactly the five carried powerups between death items", "[shop]") {
+    auto data = ShopCatalog::fromJson(R"({"items":[
+        {"texture":"","description":"EXIT","scale":1,"type":0,"price":0,"amount":0},
+        {"texture":"SHP_HALO","description":"Anti-Death","scale":1,"type":35,"price":750,"amount":1},
+        {"texture":"SHP_HANDOFDEATH","description":"Hand of Death","scale":1,"type":36,"price":1000,"amount":1}
+    ]})");
+    StringTable strings;
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    REQUIRE(expandShopCatalog(data, strings));
+    REQUIRE(data.items().size() == 8);
+    const std::array<s32, 8> types{0, 35, 16, 40, 34, 29, 39, 36};
+    for (usize index = 0; index < types.size(); ++index) {
+        CHECK(data.items()[index].type == types[index]);
+    }
+    ClassStats stats;
+    stats.powerupTime = 1.25f;
+    const std::array<s32, 5> kinds{6, 9, 5, 9, 9};
+    const std::array<u32, 5> flags{0x110000, 0x400, 0x400000, 0x200, 8};
+    const std::array<f32, 5> seconds{20, 60, 45, 15, 25};
+    for (usize index = 0; index < kinds.size(); ++index) {
+        CAPTURE(index);
+        const auto& offer = data.items()[index + 2];
+        REQUIRE(offer.price == 1000);
+        auto save = shopper();
+        save.gold = 999;
+        const auto before = save.toJson();
+        CHECK(buyShopItem(save, stats, offer, 1) == ShopResult::InsufficientGold);
+        CHECK(save.toJson() == before);
+        save.gold = 1000;
+        REQUIRE(buyShopItem(save, stats, offer, 1) == ShopResult::Bought);
+        CHECK(save.gold == 0);
+        const auto& slot = save.progress().inventory.powerups[0];
+        CHECK(slot.kind == kinds[index]);
+        CHECK(slot.flags == flags[index]);
+        CHECK(slot.strength == Approx(seconds[index] * stats.powerupTime));
+        CHECK(ownsShopItem(save, offer));
+        CHECK(sellShopItem(save, offer) == ShopResult::Sold);
+        CHECK(save.gold == 750);
+        CHECK_FALSE(ownsShopItem(save, offer));
+    }
+    auto incomplete = catalog();
+    CHECK_FALSE(expandShopCatalog(incomplete, strings));
+    CHECK(incomplete.items().size() == 3);
 }
 } // namespace

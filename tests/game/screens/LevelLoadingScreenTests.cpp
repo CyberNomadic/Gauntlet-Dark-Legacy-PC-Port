@@ -1,9 +1,14 @@
+#include <algorithm>
 #include <array>
 #include <format>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/assets/TextureSet.h"
+#include "engine/assets/WorldData.h"
+#include "engine/audio/AudioMixer.h"
+#include "engine/audio/SoundPlayer.h"
 #include "engine/core/Types.h"
 
 #include "FakeRenderDevice.h"
@@ -194,6 +199,113 @@ TEST_CASE("loading pictures retain complete native HUD tops through crossfades a
             CHECK(meters == 1); // The two meter layers share one texture batch.
         }
     }
+    screen.close();
+}
+
+TEST_CASE("secret entry and return hold the transition picture above the HUD without movies",
+          "[level-loading][secret][assets]") {
+    const auto root = test::assetOrSkip("STATIC/textures.ngc").parent_path().parent_path();
+    test::assetOrSkip("WDATA/TOWN.WAD");
+    test::assetOrSkip("WDATA/SECRET.WAD");
+    test::FakeRenderDevice device;
+    GameContext context;
+    context.unpackedRoot = root;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName(GENERATE("S1", "S4", "S9", "G1"));
+    REQUIRE(level);
+    if (level->isSecret()) {
+        WorldData authored;
+        REQUIRE(authored.load(root / level->worldDataFile()));
+        const auto* info = authored.level(level->name);
+        REQUIRE(info);
+        CHECK(info->mapPoints.empty()); // Retail init_mapscreen selects its fallback picture.
+    }
+    std::array<PartyMember, 1> party;
+    party[0].player = 2;
+    party[0].save.name = "HERO";
+    LevelLoadingScreen screen;
+    screen.open(device, context, *level, party, !level->isSecret());
+    CHECK(screen.active());
+    CHECK(screen.movie().empty());
+    CHECK(screen.dashCount() == 0);
+    CHECK_FALSE(screen.update(-1));
+    CHECK_FALSE(screen.update(1.75f));
+    CHECK(screen.update(0.25f));
+
+    TextureSet artwork;
+    REQUIRE(artwork.load(root / "STATIC"));
+    const auto index = artwork.find(TransitionScreen::kTexture);
+    REQUIRE(index);
+    const auto& picture = dynamic_cast<const test::FakeTexture&>(artwork.texture(device, *index));
+    Canvas canvas;
+    canvas.begin(device, makeScreenProjection(512, 384));
+    screen.draw(canvas, device);
+    canvas.end();
+    bool pictureDrawn = false;
+    std::array<bool, 4> panels{};
+    for (const auto& draw : device.draws) {
+        const auto& texture = dynamic_cast<const test::FakeTexture&>(*draw.texture);
+        if (texture.width() == picture.width() && texture.height() == picture.height() &&
+            texture.pixels == picture.pixels) {
+            CHECK(test::minCorner(draw) == Vec2{0, 0});
+            CHECK(test::maxCorner(draw) == Vec2{512, 320});
+            CHECK(draw.vertices.front().color.a == 255);
+            pictureDrawn = true;
+        }
+        if (test::minCorner(draw).y == StatusBoxPainter::kY &&
+            test::maxCorner(draw).y == StatusBoxPainter::kY + StatusBoxPainter::kHeight &&
+            test::maxCorner(draw).x - test::minCorner(draw).x == StatusBoxPainter::kWidth) {
+            CHECK(pictureDrawn);
+            const auto slot =
+                static_cast<usize>(test::minCorner(draw).x / StatusBoxPainter::kWidth);
+            REQUIRE(slot < panels.size());
+            panels[slot] = true;
+        }
+    }
+    CHECK(pictureDrawn);
+    CHECK(panels == std::array{true, true, true, true});
+    screen.close();
+    CHECK_FALSE(screen.active());
+    CHECK(screen.update(0));
+    // The next ordinary visit restores its map, preview and authored movie.
+    screen.open(device, context, *catalog.byName("G1"), party);
+    CHECK(screen.movie() == "movieG1");
+    CHECK_FALSE(screen.update(LevelLoadingScreen::kTransitionSeconds));
+    screen.close();
+}
+
+TEST_CASE("stage map music narration and route dots obey only the movie volume",
+          "[level-loading][audio][assets]") {
+    const auto root = test::assetOrSkip("AUDIO/AUDATPS2.ROM").parent_path().parent_path();
+    test::assetOrSkip("WDATA/TOWN.WAD");
+    test::FakeRenderDevice device;
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    const bool muted = GENERATE(false, true);
+    sounds.setCategoryVolume(SoundCategory::Movie, muted ? 0.0f : 1.0f);
+    sounds.setCategoryVolume(SoundCategory::Effects, muted ? 1.0f : 0.0f);
+    sounds.setCategoryVolume(SoundCategory::Music, muted ? 1.0f : 0.0f);
+    GameContext context;
+    context.unpackedRoot = root;
+    context.sounds = &sounds;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("G2");
+    REQUIRE(level);
+    LevelLoadingScreen screen;
+    screen.open(device, context, *level);
+    REQUIRE(sounds.voiceCount() > 0);
+    std::array<f32, 1600> samples{};
+    bool audible = false;
+    for (usize frame = 0; frame < 600; ++frame) {
+        screen.update(1.0f / 60.0f);
+        sounds.update();
+        mixer.mix(samples);
+        audible = audible || std::ranges::any_of(samples, [](f32 value) { return value != 0; });
+    }
+    CHECK(screen.dashCount() > 0);
+    CHECK(audible == !muted);
     screen.close();
 }
 } // namespace

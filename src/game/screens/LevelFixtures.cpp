@@ -494,7 +494,8 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         const Vec3 step = player.fixtureSpot ? position - *player.fixtureSpot : Vec3{0.0f};
         player.fixtureSpot = position;
         visitors.push_back(ChestVisitor{position, actor.radius(),
-                                        actor.save().progress().inventory.keys, worn.xray(), step});
+                                        actor.save().progress().inventory.keys, worn.xray(), step,
+                                        goldCapacity(actor.save())});
         // Traps pass under a levitating body (ItemTouch's trap case).
         const bool floating = (worn.special & powerup::kLevitation) != 0;
         // Item contact uses col_radius (the WAD's whole width), not the half-width

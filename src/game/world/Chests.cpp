@@ -132,6 +132,11 @@ void Chests::setPlayerCount(s32 players) {
 std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor> party) {
     syncFloors();
     std::vector<ChestEvent> events;
+    std::vector<s32> goldCapacity;
+    goldCapacity.reserve(party.size());
+    for (const auto& visitor : party) {
+        goldCapacity.push_back(visitor.goldCapacity);
+    }
     for (usize index = 0; index < m_chests.size(); ++index) {
         Chest& chest = *m_chests[index];
         if (!chest.shown || chest.gone) {
@@ -196,13 +201,17 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
             // ItemTouch (8005D730) grants the touching player gold, not necessarily
             // the opener, then retires the container eight ticks later.
             for (usize visitor = 0; visitor < party.size(); ++visitor) {
-                if (chest.box.touchedBy(party[visitor].position, party[visitor].radius)) {
+                if (goldCapacity[visitor] > 0 &&
+                    chest.box.touchedBy(party[visitor].position, party[visitor].radius)) {
                     ChestEvent event;
                     event.kind = ChestEvent::Kind::Collected;
                     event.chest = index;
                     event.visitor = visitor;
                     event.position = chest.figure.position();
                     event.gold = m_infos[static_cast<usize>(chest.contents)].value;
+                    // Events apply after this pass; reserve capacity now so a full
+                    // wallet cannot consume another touching chest in the same update.
+                    goldCapacity[visitor] = std::max(0, goldCapacity[visitor] - event.gold);
                     chest.collectedSeconds = kCollectedSeconds;
                     events.push_back(event);
                     break;
@@ -363,9 +372,10 @@ std::vector<Obstacle> Chests::obstacles() const {
     std::vector<Obstacle> boxes;
     for (const std::unique_ptr<Chest>& chest : m_chests) {
         // ItemTouch (8005D730) leaves an open pickup chest passable even when a
-        // full-health player cannot take its food. Gold uses its own touch path.
+        // full-health player cannot take its food. Open gold chests likewise stay
+        // reachable without trapping someone whose wallet cannot take their gold.
         const bool holdsPickup =
-            chest->state == kOpen && chest->held >= 0 && chest->subtype != kGoldChest;
+            chest->state == kOpen && (chest->held >= 0 || chest->subtype == kGoldChest);
         if (chest->shown && !chest->gone && !holdsPickup) {
             boxes.push_back(chest->box);
         }

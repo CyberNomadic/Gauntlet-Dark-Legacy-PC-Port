@@ -1,11 +1,14 @@
 #pragma once
 #include "engine/assets/ShopCatalog.h"
+#include "engine/assets/StringTable.h"
 #include "engine/core/Types.h"
 
 #include "game/players/CharacterSave.h"
 
 namespace gdl::game {
 enum class ShopResult : u8 { Bought, Sold, Exit, InsufficientGold, Full, NotOwned, Invalid };
+/** Adds the five optional carried powerups between Anti-Death and Hand of Death. */
+bool expandShopCatalog(ShopCatalog& catalog, const StringTable& strings);
 /** Eligibility is side-effect free. A refused transaction changes neither money nor inventory. */
 ShopResult shopEligibility(const CharacterSave& save, const ClassStats& stats,
                            const ShopItem& item);
