@@ -13,7 +13,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from installer.install import retry_locked
 from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_new_version, validated_assets
-from release import check_frozen_installer, digest, installer_notices, make_payload, networking_notices
+from release import check_frozen_installer, digest, installer_notices, make_payload, networking_notices, public_runtime_files
 from installer.releases import runtime_name
 
 
@@ -61,6 +61,27 @@ class ReleaseTests(unittest.TestCase):
         self.notes_path.unlink()
         with self.assertRaisesRegex(ValueError, "Missing release changelog"):
             changelog(self.tag)
+
+    def test_public_runtime_keeps_lz4_notice_and_excludes_untracked_data(self):
+        names = ("gauntlet.exe", "data/config.json", "data/text/en.json",
+                 "data/licenses/lz4.txt", "data/private.json", "data/texture.ngc")
+        planned = [(self.root / name, Path(name)) for name in names]
+        files = public_runtime_files(planned, set(names[1:4]))
+        self.assertEqual([name for _, name in files], [
+            "gauntlet.exe", "data/config.json", "data/text/en.json", "licenses/lz4.txt"])
+        self.assertEqual(files[-1][0], self.root / "data/licenses/lz4.txt")
+
+    def test_public_runtime_rejects_unreviewed_tracked_media_and_notices(self):
+        for name in ("data/texture.ngc", "data/texture.png", "data/audio.wav", "data/licenses/unknown.txt"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Unexpected public data input"):
+                public_runtime_files([(self.root / name, Path(name))], {name})
+
+    def test_checked_in_data_matches_the_public_release_allowlist(self):
+        root = Path(__file__).resolve().parents[2]
+        tracked = subprocess.check_output(["git", "ls-files", "data"], cwd=root, text=True).splitlines()
+        self.assertIn("data/licenses/lz4.txt", tracked)
+        files = public_runtime_files([(root / name, Path(name)) for name in tracked], set(tracked))
+        self.assertIn("licenses/lz4.txt", [name for _, name in files])
         for tag in ("main", "0.1.0-alpha.1", "v../../outside", "v1.0.0/../../outside"):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 changelog(tag)

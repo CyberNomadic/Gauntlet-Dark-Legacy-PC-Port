@@ -67,6 +67,23 @@ def digest(path):
     return result.hexdigest()
 
 
+def public_runtime_files(planned_files, tracked_data):
+    """Ship checked-in configuration and reviewed notices, never local game media."""
+    notices = {"data/licenses/lz4.txt": "licenses/lz4.txt"}
+    files = []
+    for source, destination in planned_files:
+        relative = destination.as_posix()
+        if relative.startswith("data/"):
+            if relative not in tracked_data:
+                continue
+            if relative in notices:
+                relative = notices[relative]
+            elif not relative.endswith(".json"):
+                raise ValueError(f"Unexpected public data input: {relative}; review the release allowlist")
+        files.append((source, relative))
+    return files
+
+
 def freezer_environment():
     """Do not harvest unrelated Qt/ICU/SSL DLLs from a developer's tool PATH.
 
@@ -254,11 +271,7 @@ def build_release(args):
         # Public packages use the checked-in defaults only, never local debug/test data.
         tracked_data = set(subprocess.check_output(
             ["git", "ls-files", "data"], cwd=ROOT, text=True).splitlines())
-        files = [(source, relative.as_posix()) for source, relative in plan.files
-                 if relative.parts[0] != "data" or relative.as_posix() in tracked_data]
-        # The data tree is configuration/text, not an alternative path for game media.
-        if any(relative.startswith("data/") and not relative.endswith(".json") for _, relative in files):
-            raise ValueError("Unexpected public data input; review the release allowlist")
+        files = public_runtime_files(plan.files, tracked_data)
         files.extend(licenses(binary, staging))
         if not devenv.WINDOWS:
             for library in ("libstdc++.so.6", "libgcc_s.so.1"):
