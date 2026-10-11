@@ -74,13 +74,12 @@ class ReleaseTests(unittest.TestCase):
     def test_project_license_and_attribution_ship_verbatim_in_payload(self):
         root = Path(__file__).resolve().parents[2]
         notices = project_notices(root)
-        self.assertEqual([name for _, name in notices], ["licenses/project.txt", "licenses/copyright.txt"])
+        self.assertEqual([name for _, name in notices], ["licenses/project.txt"])
         license_text = (root / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)
         self.assertIn("Version 3, 29 June 2007", license_text)
-        attribution = (root / "COPYRIGHT").read_text(encoding="utf-8")
-        self.assertIn("sabishii-bit", attribution)
-        self.assertIn("GPL-3.0-only", attribution)
+        self.assertIn("sabishii-bit", license_text)
+        self.assertIn("GPL-3.0-only", license_text)
         self.assertEqual(json.loads((root / "vcpkg.json").read_text())["license"], "GPL-3.0-only")
         self.assertIn('license = "GPL-3.0-only"', (root / "src/engine/net/iroh/Cargo.toml").read_text())
         source = self.root / "inputs/windows-x64"
@@ -92,10 +91,10 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(archive.read(destination), path.read_bytes())
 
     def test_missing_or_empty_project_notice_blocks_packaging(self):
-        for name in ("LICENSE", "COPYRIGHT"):
+        for name in ("LICENSE",):
             for content in (None, " \n"):
                 with self.subTest(name=name, content=content):
-                    for filename in ("LICENSE", "COPYRIGHT"):
+                    for filename in ("LICENSE",):
                         (self.root / filename).write_text("Fixture notice", encoding="utf-8")
                     path = self.root / name
                     if content is None:

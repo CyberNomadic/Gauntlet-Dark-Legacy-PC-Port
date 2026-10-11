@@ -165,10 +165,9 @@ def installer_notices(staging):
 
 
 def project_notices(root):
-    """Require both the license terms and the project's attribution in every release."""
+    """Require the license terms and embedded project attribution in every release."""
     files = []
-    for name, destination in (("LICENSE", "licenses/project.txt"),
-                              ("COPYRIGHT", "licenses/copyright.txt")):
+    for name, destination in (("LICENSE", "licenses/project.txt"),):
         source = root / name
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():
             raise ValueError(f"Missing project notice: {name}")

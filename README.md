@@ -53,7 +53,7 @@ game assets.
 ## License
 
 Original project code is licensed under [GNU GPLv3](LICENSE) (`GPL-3.0-only`).
-Copyright (C) 2026 sabishii-bit and contributors; see [COPYRIGHT](COPYRIGHT).
+Copyright (C) 2026 sabishii-bit and contributors.
 
 Third-party components retain their own licenses. Retail game assets are not
 covered by this license and remain the property of their respective owners.
