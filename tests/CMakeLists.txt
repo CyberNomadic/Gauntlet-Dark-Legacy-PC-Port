@@ -379,7 +379,7 @@ gdl_apply_compiler_options(playerformtests)
 set_target_properties(playerformtests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
 if(GDL_ENABLE_NETPLAY)
     target_link_libraries(tests PRIVATE gdl::engine_net)
-    target_sources(tests PRIVATE engine/net/SessionTransportTests.cpp)
+    target_sources(tests PRIVATE engine/net/SessionTransportTests.cpp game/netplay/OnlineRunTests.cpp)
     # Fast, asset-free native adapter and room checks, separate from GPU fixtures.
     add_executable(netplaytests engine/net/SessionTransportTests.cpp
         engine/io/Sha256Tests.cpp game/netplay/AssetDigestTests.cpp game/screens/NetplayMenuTests.cpp

@@ -62,6 +62,9 @@ public:
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> rgba8Pixels) override {
         ++texturesCreated;
+        if (desc.width == 0 || desc.height == 0) {
+            ++emptyTexturesCreated;
+        }
         lastTextureDesc = desc;
         auto texture = std::make_unique<FakeTexture>(desc.width, desc.height);
         texture->pixels.assign(rgba8Pixels.begin(), rgba8Pixels.end());
@@ -112,6 +115,7 @@ public:
     std::vector<DepthOfField> depthOfFieldSettings;
     u32 frames = 0;
     u32 texturesCreated = 0;
+    u32 emptyTexturesCreated = 0;
     u32 textureUpdates = 0;
     TextureDesc lastTextureDesc;
     bool presentationVsync = true;

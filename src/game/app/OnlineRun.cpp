@@ -63,6 +63,10 @@ void OnlineRun::status(RenderDevice& device, std::string message) {
     }
     m_status = std::move(message);
     log::info("Online run: {}", m_status);
+    if (m_status.empty()) {
+        m_statusTexture.reset();
+        return;
+    }
     try {
         const auto image = rasterizeSystemText(m_status, 32);
         m_statusTexture = device.createTexture(
