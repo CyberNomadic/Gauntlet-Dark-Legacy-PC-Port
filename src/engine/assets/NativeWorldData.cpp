@@ -78,6 +78,7 @@ bool WorldData::loadNative(const std::filesystem::path& file) {
             level.audioIndex = from.audioIndex;
             level.maxEnemies = from.maxEnemies;
             level.bossType = from.bossType;
+            level.earlyEnemies = from.earlyEnemies != 0;
             level.rune = from.rune;
             level.legend = from.legend;
             if (from.bossCameraIndex >= 0 &&

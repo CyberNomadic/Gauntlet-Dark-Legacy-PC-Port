@@ -498,7 +498,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
         scales.speed = level->tuning.enemySpeedScale(gain);
         scales.sight = level->tuning.enemySightScale(gain);
         scales.damage = level->tuning.enemyDamage;
-        scales.missileRate = level->tuning.enemyMissileRate;
+        scales.missileRate = level->tuning.enemyMissileWaitScale(gain);
         scales.missileAim = level->tuning.enemyMissileAim;
         scales.playerLevel = level->tuning.playerLevel;
         scales.bossEncounter = level->bossType >= 0;

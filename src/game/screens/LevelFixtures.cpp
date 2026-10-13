@@ -6,7 +6,10 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <ranges>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "engine/assets/AssetScope.h"
@@ -62,9 +65,56 @@ constexpr std::string_view kWoodHitSound = "S_WEAPONHITWOOD";
 constexpr std::string_view kBarrelBreakSound = "S_BARREL_WOOD"; ///< with the realm's letter
 constexpr std::string_view kBarrelBlastSound = "S_BARREL_EXPLO";
 constexpr std::string_view kBarrelGasSound = "S_BARREL_GAS";
-constexpr std::string_view kFireTrapSound = "S_FIREHOLE";
-constexpr std::string_view kCastleLightTrapSound = "S_FFIELDZAPA";
 constexpr f32 kTrapHitVolume = 127.0f / 255.0f;
+constexpr f32 kTentacleHitVolume = 180.0f / 255.0f;
+constexpr std::string_view kDesertSpikeGate = "FLAMEH"; ///< the Desert's flame named so
+constexpr s32 kDesertRealm = 3;
+constexpr s32 kDragonBoss = 34;
+constexpr std::string_view kFireHoleSound = "S_FIREHOLE";
+constexpr std::string_view kDragonFireHoleSound = "S_FIREHOLE2";
+/** AudioDamageTile's table: what a trap sounds when it catches someone, by the level's realm
+ * and the trap's subtype (spikes, fire, forcefield, blade, tentacle, tentacle wall, and the
+ * Desert's gate of spikes). Empty where the realm has no such trap. */
+constexpr usize kTrapSubtypes = 7;
+constexpr std::array<std::array<std::string_view, kTrapSubtypes>, 14> kTrapHitSounds{{
+    {},
+    {"S_SPIKEA", "", "S_FFIELDZAPA", "S_BUZZSAW", "S_TENTACLES", "S_TENTACLES", ""},
+    {"", "S_FIREHOLE", "", "", "", "", ""},
+    {"S_SPIKEC", "S_FIREHOLEC", "S_FFIELDZAPC", "", "", "", "S_SPIKEGATE"},
+    {"S_LOGSPIKE", "S_FIREHOLED", "", "S_SWINGBLADE", "S_TENTACLESD", "S_TENTACLESD", ""},
+    {},
+    {"", "S_FIREHOLEF", "", "", "", "", ""},
+    {"", "S_FIREHOLEG", "", "", "", "", ""},
+    {"", "S_FIREHOLEH", "", "", "", "", ""},
+    {"", "S_FIREHOLEI", "", "", "", "", ""},
+    {"", "S_FIREHOLEJ", "", "", "", "", ""},
+    {"", "S_FIREHOLEK", "", "", "", "", ""},
+    {},
+    {"S_WARN", "S_WARN", "S_WARN", "S_WARN", "S_WARN", "S_WARN", "S_WARN"},
+}};
+
+/** The sound a trap of `subtype` named `name` makes catching someone in `realm`, and how
+ * loud: tentacles louder than the rest, and the Mountain's fire holes otherwise in the
+ * dragon's lair. Nothing for a realm without one. */
+std::optional<std::pair<std::string_view, f32>>
+trapHitSoundOf(s32 realm, s32 subtype, std::string_view name, s32 bossType) {
+    if (realm < 0 || static_cast<usize>(realm) >= kTrapHitSounds.size() || subtype < 0 ||
+        static_cast<usize>(subtype) >= kTrapSubtypes) {
+        return std::nullopt;
+    }
+    if (realm == kDesertRealm && subtype == 1 && name == kDesertSpikeGate) {
+        subtype = static_cast<s32>(kTrapSubtypes) - 1;
+    }
+    std::string_view sound = kTrapHitSounds[static_cast<usize>(realm)][static_cast<usize>(subtype)];
+    if (sound.empty()) {
+        return std::nullopt;
+    }
+    if (sound == kFireHoleSound && bossType == kDragonBoss) {
+        sound = kDragonFireHoleSound;
+    }
+    const bool tentacle = sound == "S_TENTACLES" || sound == "S_TENTACLESD";
+    return std::pair{sound, tentacle ? kTentacleHitVolume : kTrapHitVolume};
+}
 constexpr std::string_view kBarrelBlast = "EXPLOSION";
 constexpr std::string_view kBarrelGas = "POISONEXP1";
 constexpr std::string_view kBarrelSmoke = "DESTSMOKE";
@@ -75,9 +125,6 @@ constexpr f32 kGasDamage = 10.0f;
 constexpr f32 kGasRadius = 6.5f;
 constexpr f32 kGasSeconds = 4.0f;
 constexpr f32 kGasGapSeconds = 0.5f;
-constexpr s32 kFireTrap = 1;
-constexpr s32 kLightTrap = 2;
-constexpr s32 kCastleRealm = 1;
 constexpr std::string_view kChestBlast = "EXPCHEST"; ///< a trapped chest going up
 const Vec3 kNowhere{0.0f, -1.0e6f, 0.0f};
 constexpr std::string_view kPickupSound = "S_PICKUPMAGIC";
@@ -581,20 +628,21 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         if (hit.victim >= players.size()) {
             continue;
         }
-        if (hit.subtype == kFireTrap) {
-            playRealmSound(kFireTrapSound);
-        }
         // ItemTouch passes the authored elements and impact flags through damage_player;
         // tentacles knock down along their facing, whereas spikes carry their own flinch.
         const bool directed =
             (hit.impact.flags & (PlayerImpact::kKnockBack | PlayerImpact::kKnockDown)) != 0;
         events.hurt(hit.victim, hit.damage, hit.pierces ? HurtKind::Pierce : HurtKind::Burn,
                     directed, hit.impact);
-        // The forcefield zap belongs to accepted contact, not its light's activation.
-        // Armor can absorb the damage without suppressing the contact sound.
-        if (hit.subtype == kLightTrap && m_resources->world.ref().realmId == kCastleRealm) {
-            m_resources->audio.playAt(kCastleLightTrapSound, players[hit.victim].actor.position(),
-                                      0, kTrapHitVolume);
+        // The trap's own sound belongs to accepted contact, not its activation, and sounds
+        // where the victim stands (AudioDamageTile); armor absorbing the damage does not
+        // silence it.
+        const LevelInfo* level = m_resources->world.level();
+        if (const auto sound = trapHitSoundOf(m_resources->world.ref().realmId, hit.subtype,
+                                              m_traps.trap(hit.trap).name,
+                                              level != nullptr ? level->bossType : -1)) {
+            m_resources->audio.playAt(sound->first, players[hit.victim].actor.position(), 0,
+                                      sound->second);
         }
         events.help(HelpMessages::kTrapsHurt, hit.victim);
     }

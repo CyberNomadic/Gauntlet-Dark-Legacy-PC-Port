@@ -79,6 +79,7 @@ std::vector<u8> sampleWad() {
     level.textAt(0x14, "Tower");
     level.textAt(0x34, "intro");
     level.u32At(0x44, 0xFFFFFFFF);
+    level.u32At(0x48, 1);
     level.u16At(0x58, 0);
     level.u16At(0x5A, 0);
     level.u16At(0x5C, 0xFFFF);
@@ -226,6 +227,7 @@ TEST_CASE("world data wads describe a realm's levels, cameras, audio and sounds"
     REQUIRE(level.title == "Tower");
     REQUIRE(level.movie == "intro");
     REQUIRE(level.bossType == -1);
+    REQUIRE(level.earlyEnemies == 1);
     REQUIRE(level.cameraIndex == 0);
     REQUIRE(level.audioIndex == 0);
     REQUIRE(level.mapIndex == -1);

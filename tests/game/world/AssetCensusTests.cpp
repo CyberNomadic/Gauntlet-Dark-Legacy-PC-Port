@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/world/WorldLighting.h"
@@ -17,7 +18,10 @@
 #include "game/players/CharacterSave.h"
 #include "game/players/ClassData.h"
 #include "game/players/NameCheats.h"
+#include "game/world/LevelCatalog.h"
+#include "game/world/LevelItemArchives.h"
 #include "game/world/PlayerFigure.h"
+#include "game/world/Traps.h"
 
 namespace {
 
@@ -141,6 +145,73 @@ TEST_CASE("every realm's golem and general costume, and every gargoyle form, bui
     for (const std::string_view form : {"GAR_EAGL", "GAR_LION", "GAR_SERP"}) {
         check(CombatantKind::Gargoyle, 'A', form);
     }
+}
+
+/** The kinds of placed item the level loader knows how to stand, by the record's type and
+ * subtype (SetItem's switch, and the per-subtype branches of the binders). A level naming
+ * any other pair would stand something the port does not know. */
+bool fixtureKindKnown(s32 type, s32 subtype) {
+    switch (type) {
+    case ItemInfo::kChoiceList:
+    case ItemInfo::kPowerup:
+    case ItemInfo::kContainer:
+    case ItemInfo::kGenerator:
+    case ItemInfo::kPlacedEnemy:
+    case ItemInfo::kGate:
+    case 11: // transporter
+    case 13: // sound, or a music area
+        return true;
+    case ItemInfo::kTrigger: return subtype >= 20 && subtype <= 31;
+    case ItemInfo::kTrap: return subtype >= 0 && subtype <= 5;
+    case 9: return subtype == 0 || subtype == 50; // an exit, or the secret realm's
+    case 10:
+        return subtype == 0 || (subtype >= 40 && subtype <= 45) || subtype == 49 ||
+               (subtype >= 51 && subtype <= 53);
+    case ItemInfo::kRotator: return subtype == 0 || subtype == 2;
+    default: return false;
+    }
+}
+
+TEST_CASE("every catalogued level's fixtures are of kinds the loader stands, and its traps bind",
+          "[census][fixtures][assets]") {
+    const auto root = nativeRoot();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    usize visited = 0;
+    usize traps = 0;
+    for (const auto& realm : catalog.realms()) {
+        for (const auto& name : realm.levels) {
+            const auto ref = catalog.byName(name);
+            REQUIRE(ref);
+            CAPTURE(name);
+            WorldLayout layout;
+            REQUIRE(layout.load(root / ref->directory));
+            const auto& infos = layout.itemInfos();
+            for (const ItemInstance& instance : layout.itemInstances()) {
+                if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
+                    continue;
+                }
+                const ItemInfo& info = infos[static_cast<usize>(instance.info)];
+                CAPTURE(info.type, info.subtype, info.name);
+                CHECK(fixtureKindKnown(info.type, info.subtype));
+            }
+            LevelItemArchives items;
+            REQUIRE(items.load(root, *ref));
+            Traps bound;
+            bound.bind(device, layout, items.scope(), nullptr, 1, 1.0f, 1.0f);
+            for (usize i = 0; i < bound.size(); ++i) {
+                const Traps::Trap& trap = bound.trap(i);
+                CAPTURE(trap.name, trap.subtype);
+                // Its figure, with the rest, the wind-up, the strike and the recovery.
+                CHECK(trap.figure.sequenceCount() >= 3);
+                ++traps;
+            }
+            ++visited;
+        }
+    }
+    CHECK(visited >= 62);
+    CHECK(traps > 100);
 }
 
 } // namespace

@@ -3,6 +3,7 @@
 #include <memory>
 #include <random>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -68,6 +69,7 @@ public:
         f32 damage = 0.0f;
         s32 offTime = 0; ///< the record's, in its own units
         s32 subtype = 0;
+        std::string name; ///< the record's, which its sound may go by
         u32 properties = 0;
         s32 action = kResting;
         s32 ticksLeft = 0;

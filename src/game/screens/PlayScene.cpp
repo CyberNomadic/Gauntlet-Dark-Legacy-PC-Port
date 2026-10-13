@@ -913,6 +913,11 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
         }
         m_bossSequence.advanceLegend(0, m_opponents.bosses(), m_players);
         m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
+        // The entrance holds the enemies still, unless the level has them early (world_update's
+        // earlyenemies: the Mountain's Peak).
+        if (const LevelInfo* level = m_world->level(); level != nullptr && level->earlyEnemies) {
+            updateEnemies(ticks, seconds);
+        }
         updateAmbience();
         const bool cameraHandoff = m_arrival.camera().active();
         // Ride to the camera that will actually take over. A boss entrance must not

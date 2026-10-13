@@ -36,6 +36,7 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, const AssetSco
         std::memcpy(&ownRest, &instance.params[2], sizeof(ownRest));
         trap->damage = static_cast<f32>(ownDamage != 0 ? ownDamage : info.value) * damageScale;
         trap->subtype = info.subtype;
+        trap->name = info.name;
         trap->properties = info.properties;
         trap->rectangularContact = info.collisionType == 3;
         trap->offTime = ownRest != 0 ? -ownRest * 3 : info.activeOff;
@@ -126,6 +127,11 @@ bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout,
  * random from half of it to one and a half. */
 s32 Traps::restTicks(const Trap& trap) {
     s32 time = trap.offTime * kTicksPerTimeUnit;
+    // A trap of more than four sequences (the Forest's blades) does not rest at random at
+    // all (ProcessItems: its negative off time is taken as nought).
+    if (time < 0 && trap.figure.sequenceCount() > 4) {
+        return 0;
+    }
     if (time < 0) {
         const s32 span = -time;
         time = static_cast<s32>(m_random() % static_cast<u32>(span)) + span / 2;
