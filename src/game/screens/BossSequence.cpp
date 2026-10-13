@@ -239,13 +239,22 @@ BossCameraSubject BossSequence::victorySubject() const {
 }
 
 /** As the death throws them out, the boss's coins for the party fly from where it stands
- * and its blast takes the rest of the level's enemies with it. */
+ * and its blast takes the rest of the level's enemies with it. BossSpewCoins starts an
+ * unseen effect of 1000 damage over 1000 units that hits items too, so the arena's safe
+ * rocks break and no longer keep the coins from the party. */
 void BossSequence::spewCoins(const CombatSpew& spew, LevelOpponents& opponents,
-                             std::span<PlayerRuntime> players) {
+                             LevelFixtures& fixtures, std::span<PlayerRuntime> players) {
     if (!m_resources) {
         return;
     }
     auto& r = *m_resources;
+    const SafeRocks& rocks = fixtures.safeRocks();
+    for (usize rock = 0; rock < rocks.size(); ++rock) {
+        if (rocks.standing(rock) &&
+            glm::distance(rocks.rock(rock).position, spew.origin) <= kBossDeathBlastRadius) {
+            fixtures.strikeSafeRock(rock, kBossDeathBlast);
+        }
+    }
     for (const s32 enemy : opponents.enemies().within(spew.origin, kBossDeathBlastRadius)) {
         const Vec3 away = opponents.enemies().positionOf(enemy) - spew.origin;
         opponents.strikeEnemy(enemy, kBossDeathBlast, EnemyHit::kKnockDown,

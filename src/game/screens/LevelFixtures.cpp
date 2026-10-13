@@ -26,6 +26,8 @@
 namespace gdl::game {
 namespace {
 constexpr std::string_view kChestSound = "S_CHEST";
+constexpr std::string_view kSafeRockBurst = "SAFEREXP"; ///< a level's own cover-breaking burst
+constexpr std::string_view kGenericBurst = "GENDEST";   ///< FX_GENDEST of the effects archive
 constexpr std::string_view kChestFuseSound = "S_TICKY";
 constexpr f32 kChestFuseVolume = 224.0f / 255.0f;
 constexpr std::string_view kApple = "APPLE"; ///< what magic makes of Death in a chest
@@ -862,7 +864,11 @@ void LevelFixtures::strikeSafeRock(usize index, f32 power) {
         return;
     }
     if (m_safeRocks.strike(index, power)) {
-        m_resources->effects.start(m_resources->device, m_resources->world.items(), "SAFEREXP",
+        // FX_GENDEST, which only the lair and the Yeti's cave replace with their own SAFEREXP.
+        ItemArchive& items = m_resources->world.items();
+        const bool own = items.loaded() && items.trees.find(kSafeRockBurst).has_value();
+        m_resources->effects.start(m_resources->device, own ? items : m_resources->weapons,
+                                   own ? kSafeRockBurst : kGenericBurst,
                                    m_safeRocks.rock(index).position);
     }
 }

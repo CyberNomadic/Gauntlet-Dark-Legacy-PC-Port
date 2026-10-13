@@ -610,7 +610,7 @@ LevelOpponents::Events PlayScene::opponentEvents() {
             },
         .spew =
             [this](const CombatSpew& spew) {
-                m_bossSequence.spewCoins(spew, m_opponents, m_players);
+                m_bossSequence.spewCoins(spew, m_opponents, m_fixtures, m_players);
             },
         .advanceVictory = [this](s32 elapsed, f32 duration) { updateVictory(elapsed, duration); },
         .levels = [this] { updateLevels(); },

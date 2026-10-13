@@ -10,6 +10,7 @@
 
 #include "game/screens/BossVictoryPresentation.h"
 #include "game/screens/LegendPresentation.h"
+#include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelOpponents.h"
 #include "game/screens/PlayerRuntime.h"
 #include "game/world/LevelCatalog.h"
@@ -46,7 +47,9 @@ public:
                     std::span<const PlayerRuntime> players);
     void advanceLegend(f32 seconds, Bosses& bosses, std::span<PlayerRuntime> players);
     void fallen(const Vec3& where, const Bosses& bosses, std::span<PlayerRuntime> players);
-    void spewCoins(const CombatSpew& spew, LevelOpponents& opponents,
+    /** The death's blast takes the level's enemies, generators and arena cover with it
+     * before the coins fly. */
+    void spewCoins(const CombatSpew& spew, LevelOpponents& opponents, LevelFixtures& fixtures,
                    std::span<PlayerRuntime> players);
     /** True only on the update that completes the visit; the caller chooses how to travel. */
     bool advanceVictory(s32 ticks, f32 seconds, std::span<const PlayerRuntime> players,
