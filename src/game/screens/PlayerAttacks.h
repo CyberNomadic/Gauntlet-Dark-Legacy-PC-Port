@@ -267,7 +267,13 @@ private:
         f32 radius = 0.0f;
         f32 damage = 0.0f;
         f32 secondsLeft = 0.0f;
-        f32 harmIn = 0.0f;
+        /** What it has struck and how long until it may again (fxhittime per owner). */
+        struct Mark {
+            s32 kind = 0;
+            s32 id = 0;
+            f32 wait = 0.0f;
+        };
+        std::vector<Mark> marks;
         std::vector<s32> blessed; ///< what its bearer's class perk has reached
     };
     std::vector<PotionShield> m_shields;
