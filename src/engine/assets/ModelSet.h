@@ -17,6 +17,7 @@ namespace gdl {
 struct ModelSetEntry {
     std::string name;
     u32 triangles = 0;
+    u32 flags = 0; ///< the object's header flags; bit 0 marks an alpha-textured object
 };
 
 /** Named meshes decoded on first use from a native archive. */

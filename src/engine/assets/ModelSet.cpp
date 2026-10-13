@@ -47,6 +47,7 @@ const Mesh& ModelSet::mesh(u32 index) {
     }
     if (!m_loaded[index]) {
         Mesh decoded;
+        decoded.flags = m_native->objects()[index].flags;
         for (const auto& sub : m_native->objects()[index].subObjects) {
             formats::decodeGeometryStream(sub.geometry, sub.textureIndex, sub.lightmapIndex,
                                           decoded);
@@ -75,6 +76,7 @@ bool ModelSet::loadNative(const std::filesystem::path& file) {
         for (usize i = 0; i < m_entries.size(); ++i) {
             const auto count = m_native->objects()[i].triangleCount;
             m_entries[i].triangles = count > 0 ? static_cast<u32>(count) : 0;
+            m_entries[i].flags = m_native->objects()[i].flags;
         }
         m_meshes.resize(m_entries.size());
         m_loaded.assign(m_entries.size(), false);

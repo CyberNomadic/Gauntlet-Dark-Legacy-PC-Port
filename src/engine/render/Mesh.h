@@ -29,6 +29,10 @@ struct Mesh {
     std::vector<MeshVertex> vertices;
     std::vector<MeshPart> parts;
     bool prelit = false; ///< the vertices' colours are the lighting the level was built with
+    u32 flags = 0;       ///< the archive object's header flags
+
+    /** Whether the exporter marked the object as using an alpha texture (header bit 0). */
+    bool alphaTextured() const { return (flags & 1U) != 0; }
 
     usize triangleCount() const {
         usize count = 0;

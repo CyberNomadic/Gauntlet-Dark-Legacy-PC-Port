@@ -226,6 +226,17 @@ void convertModelFixture(const std::filesystem::path& directory) {
             continue;
         }
         const Mesh mesh = loadObj(directory / object.at("file").get<std::string>());
+        u32 objectFlags = object.value("flags", u32{0});
+        if (!object.contains("flags")) {
+            for (const auto& part : mesh.parts) {
+                if (part.texture < bitmaps.size() &&
+                    (bitmaps[part.texture].value("flags", u16{0}) &
+                     formats::bitmap_flags::kHasAlpha) != 0) {
+                    objectFlags |= 1U;
+                }
+            }
+        }
+        archive.u32At(record + 8, objectFlags);
         archive.u32At(record + 12, static_cast<u32>(mesh.parts.size()));
         archive.u32At(record + 32, static_cast<u32>(mesh.vertices.size()));
         archive.u32At(record + 36, static_cast<u32>(mesh.triangleCount()));

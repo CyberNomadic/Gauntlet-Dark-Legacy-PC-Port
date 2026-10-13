@@ -109,8 +109,6 @@ WorldScene::Slot& WorldScene::slotFor(u32 index, TextureSet& textures, RenderDev
         const TextureSetEntry& entry = textures.entry(index);
         if (const auto binding = TextureBindings(textures, lenders).slot(index)) {
             slot.texture = &binding->set->texture(device, binding->index);
-            slot.translucent =
-                binding->set->entry(binding->index).translucent() || entry.translucent();
             slot.thermal = ThermalMaterial::surface(entry.name);
             slot.usable = true;
             return slot;
@@ -118,7 +116,6 @@ WorldScene::Slot& WorldScene::slotFor(u32 index, TextureSet& textures, RenderDev
         log::warn("World scene: external texture {} ({}) was not lent; drawn white", index,
                   entry.name);
         slot.texture = &device.whiteTexture();
-        slot.translucent = entry.translucent();
         slot.usable = true;
     } catch (const std::exception& e) {
         log::warn("World scene: texture {} skipped: {}", index, e.what());
@@ -176,7 +173,6 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             batch.lightmapScale = Vec2{1.0f / static_cast<f32>(std::max(map.width, 1U)),
                                        1.0f / static_cast<f32>(std::max(map.height, 1U))};
         }
-        batch.translucent = m_slots[slot].translucent;
         batch.additive = additive;
         batch.depthWrite = depthWrite;
         batch.depthTest = depthTest;
@@ -222,6 +218,8 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         placedUnit.mesh = mesh;
         placedUnit.chrome = chrome;
         placedUnit.sorted = material.sorted;
+        placedUnit.deferAlways = material.deferAlways;
+        placedUnit.meshAlpha = mesh->alphaTextured();
         placedUnit.background = background;
         placedUnit.depthWrite = depthWrite;
         placedUnit.depthTest = depthTest;
@@ -247,7 +245,6 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                             Vec2{1.0f / static_cast<f32>(std::max(map.width, 1U)),
                                  1.0f / static_cast<f32>(std::max(map.height, 1U))};
                     }
-                    unitPart.translucent = slot.translucent;
                     unitPart.additive = additive;
                     placedUnit.parts.push_back(unitPart);
                 } else {
@@ -287,16 +284,10 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         batch.geometry.end();
     }
     std::erase_if(m_batches, [](const Batch& batch) { return batch.geometry.empty(); });
-    // Opaque first so translucent surfaces blend over what stands behind them, and the glows
-    // last so they add onto everything.
-    const auto pass = [](const Batch& batch) {
-        if (batch.additive) {
-            return 2;
-        }
-        return batch.translucent ? 1 : 0;
-    };
-    std::stable_sort(m_batches.begin(), m_batches.end(),
-                     [&](const Batch& a, const Batch& b) { return pass(a) < pass(b); });
+    // The solids first, the glows last so they add onto everything.
+    std::stable_sort(m_batches.begin(), m_batches.end(), [](const Batch& a, const Batch& b) {
+        return static_cast<int>(a.additive) < static_cast<int>(b.additive);
+    });
     m_world.assign(objects.size(), Mat4{1.0f});
     m_worldValid.assign(objects.size(), 0);
     m_presentedWorld.assign(objects.size(), Mat4{1.0f});
@@ -650,20 +641,18 @@ Color WorldScene::shadeAt(bool additive, bool prelit, const MeshVertex& vertex,
                   : lighting.shade(position, normal);
 }
 
-/** Places, lights and draws a unit's parts: its opaque ones when `opaque`, its translucent
- * and glowing ones when `translucent`. */
+/** Places, lights and draws a unit's parts: the plain ones when `plainParts`, the glowing
+ * ones when `additiveParts`. A fading unit blends and stops writing depth as a whole. */
 void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& clip,
-                          const CameraFrame& camera, bool opaque, bool translucent, f32 alpha,
-                          std::optional<f32> textureFrameOffset) const {
+                          const CameraFrame& camera, bool plainParts, bool additiveParts,
+                          f32 alpha, std::optional<f32> textureFrameOffset) const {
     if (!unit.visible || unit.alpha <= 0.0f) {
         return;
     }
     const Mat4 world = camera.face(presentedWorldOf(unit.object, alpha), unit.facing);
     const Mat3 normalMatrix{world};
     for (const UnitPart& part : unit.parts) {
-        // A fading unit's solid parts blend too, so the whole of it thins together.
-        const bool blended = part.translucent || part.additive || unit.alpha < 1.0f;
-        if (blended ? !translucent : !opaque) {
+        if (part.additive ? !additiveParts : !plainParts) {
             continue;
         }
         const Slot& slot = m_slots.at(part.slot);
@@ -726,12 +715,13 @@ void WorldScene::drawOpaque(RenderDevice& device, const Mat4& clip, const Camera
         }
     }
     usize next = 0;
-    while (next < m_batches.size() && !m_batches[next].translucent && !m_batches[next].additive) {
+    while (next < m_batches.size() && !m_batches[next].additive) {
         drawBatch(device, m_batches[next++], clip, textureFrameOffset);
     }
-    // Moving objects' solid parts join the opaque; everything blended sorts by depth.
+    // Whatever the original draws at once joins the solids, cutouts included; only the
+    // units it defers wait, and the glows add themselves after everything.
     for (const Unit& unit : m_units) {
-        if (!unit.sorted && !unit.background) {
+        if (!unit.background && !unit.deferred()) {
             drawUnit(device, unit, clip, camera, true, false, presentationAlpha,
                      textureFrameOffset);
         }
@@ -744,11 +734,8 @@ void WorldScene::drawDeferred(RenderDevice& device, const Mat4& clip, const Came
     std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
     std::fill(m_presentedValid.begin(), m_presentedValid.end(), u8{0});
     usize next = 0;
-    while (next < m_batches.size() && !m_batches[next].translucent && !m_batches[next].additive) {
-        ++next;
-    }
     while (next < m_batches.size() && !m_batches[next].additive) {
-        drawBatch(device, m_batches[next++], clip, textureFrameOffset);
+        ++next;
     }
     // Larger view depths draw first. Negative authored biases defer overlays until after
     // ordinary translucent surfaces; depth testing still occludes them behind solid walls.
@@ -764,7 +751,7 @@ void WorldScene::drawDeferred(RenderDevice& device, const Mat4& clip, const Came
     for (const usize i : m_order) {
         const Unit& unit = m_units[i];
         if (!unit.background) {
-            drawUnit(device, unit, clip, camera, unit.sorted, true, presentationAlpha,
+            drawUnit(device, unit, clip, camera, unit.deferred(), true, presentationAlpha,
                      textureFrameOffset);
         }
     }
