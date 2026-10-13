@@ -5,6 +5,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/assets/StringTable.h"
 #include "engine/core/Types.h"
@@ -250,6 +251,29 @@ TEST_CASE("native costume tiers bind their own models and shared class animation
         figure->draw(device, Mat4{1}, Mat4{1}, {}, 1.0f, false);
         CHECK_FALSE(device.draws.empty());
     }
+}
+
+TEST_CASE("native Sumner wears the wizard's SUM costume and plays as a wizard",
+          "[game][figure][native-gameplay][sumner][assets]") {
+    const auto root = nativeRoot();
+    test::FakeRenderDevice device;
+    CharacterSave save;
+    save.character = kSumnerClass;
+    save.color = GENERATE(0, 3);
+    CAPTURE(save.color);
+    const auto directory = PlayerFigure::costumeDirectory(root, save);
+    CHECK(directory.filename() == "SUM");
+    CHECK(directory.parent_path().filename() == "WIZ");
+    REQUIRE(AssetLocator(directory).find("objects.ngc"));
+    auto figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(figure);
+    REQUIRE(figure->heldWeaponBound());
+    REQUIRE(figure->animator().bound());
+    REQUIRE(figure->missile().bound());
+    figure->animate(1.0f, 2, 1.0f / 30);
+    device.draws.clear();
+    figure->draw(device, Mat4{1}, Mat4{1}, {}, 1.0f, false);
+    CHECK_FALSE(device.draws.empty());
 }
 
 TEST_CASE("native shop screen opens with retail catalog tuning fonts and artwork",

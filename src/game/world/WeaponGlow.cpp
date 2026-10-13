@@ -8,7 +8,6 @@
 
 namespace gdl::game {
 namespace {
-constexpr s32 kWizardClass = 2;
 constexpr s32 kSorceressClass = 6;
 } // namespace
 
@@ -19,7 +18,7 @@ u32 WeaponGlow::elementOf(const PowerupEffects& worn) {
 }
 
 bool WeaponGlow::throwsEffectAlone(s32 character) {
-    const s32 shadowed = character % kStartingClassCount;
+    const s32 shadowed = baseClassOf(character);
     return shadowed == kWizardClass || shadowed == kSorceressClass;
 }
 

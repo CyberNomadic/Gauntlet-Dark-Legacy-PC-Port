@@ -1980,9 +1980,15 @@ Enemies::Figure Enemies::bodyOf(const Appearance& appearance) {
             return {&stock->variantBodies[v], stock->variantTrees[v], &stock->textures};
         }
     }
+    // A tier the archive lacks wears the nearest it has, as treeOf does: below, else any.
     s32 tier = appearance.tier;
     while (tier > 1 && stock->trees[static_cast<usize>(tier - 1)] == nullptr) {
         --tier;
+    }
+    for (s32 t = 1; stock->trees[static_cast<usize>(tier - 1)] == nullptr && t <= 3; ++t) {
+        if (stock->trees[static_cast<usize>(t - 1)] != nullptr) {
+            tier = t;
+        }
     }
     const auto index = static_cast<usize>(tier - 1);
     TreeModel& body = stock->bodies[index];

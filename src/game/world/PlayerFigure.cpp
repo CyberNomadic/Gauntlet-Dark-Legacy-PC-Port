@@ -54,12 +54,21 @@ Mat4 PlayerFigure::bodyPlacement(const Mat4& base, const CharacterSave& save,
            glm::scale(base, Vec3{size, size, size});
 }
 
+/** The costume a save wears beside the colour's: a name's hidden costume, or Sumner's. */
+std::string_view costumeOverride(const CharacterSave& save) {
+    if (save.character == kSumnerClass) {
+        return kSumnerCostume;
+    }
+    const auto* hidden = hiddenCostume(save.name);
+    return hidden != nullptr && hidden->character == save.character ? hidden->directory
+                                                                    : std::string_view{};
+}
+
 std::filesystem::path PlayerFigure::costumeDirectory(const std::filesystem::path& unpackedRoot,
                                                      const CharacterSave& save) {
-    const std::string_view cls = classCode(save.character);
-    if (const auto* hidden = hiddenCostume(save.name);
-        hidden != nullptr && hidden->character == save.character) {
-        return unpackedRoot / kPlayersDirectory / cls / hidden->directory;
+    const std::string_view cls = classCode(archiveClassOf(save.character));
+    if (const std::string_view override = costumeOverride(save); !override.empty()) {
+        return unpackedRoot / kPlayersDirectory / cls / override;
     }
     const std::string_view costume = colorCode(save.color);
     const std::filesystem::path base =
@@ -73,7 +82,7 @@ std::filesystem::path PlayerFigure::costumeDirectory(const std::filesystem::path
 std::unique_ptr<PlayerFigure> PlayerFigure::load(RenderDevice& device,
                                                  const std::filesystem::path& root,
                                                  const CharacterSave& save, bool enter) {
-    const std::string_view cls = classCode(save.character);
+    const std::string_view cls = classCode(archiveClassOf(save.character));
     const std::string_view costume = colorCode(save.color);
     const std::filesystem::path directory = costumeDirectory(root, save);
     auto figure = std::make_unique<PlayerFigure>();
@@ -86,9 +95,8 @@ std::unique_ptr<PlayerFigure> PlayerFigure::load(RenderDevice& device,
         log::warn("Tower: no model for the {} {} under {}", costume, cls, directory.string());
         return nullptr;
     }
-    const auto* hidden = hiddenCostume(save.name);
-    const std::string_view suffix =
-        hidden != nullptr && hidden->character == save.character ? hidden->directory : costume;
+    const std::string_view override = costumeOverride(save);
+    const std::string_view suffix = override.empty() ? costume : override;
     const auto tree = figure->m_costumeArchive.trees.find(std::format("{}_{}", cls, suffix));
     if (!tree.has_value() ||
         !figure->bindModel(figure->m_model, figure->m_costumeArchive.trees.tree(*tree),
@@ -226,7 +234,7 @@ void PlayerFigure::loadWeapon(const CharacterSave& save, RenderDevice& device) {
     held.name = weapon;
     held.object = weapon;
     held.objectFlags = kHeldWeaponFlags;
-    if (save.character % kStartingClassCount == kJesterClass) {
+    if (baseClassOf(save.character) == kJesterClass) {
         // Native char_type 7 includes the Jackal: the held bomb is a billboard.
         held.objectFlags |= CameraFrame::kFacingFull << CameraFrame::kFacingShift;
     }
@@ -284,16 +292,18 @@ bool PlayerFigure::bindModel(TreeModel& model, const TreeInfo& tree, ItemArchive
 
 std::filesystem::path PlayerFigure::classFolder(const std::filesystem::path& root, s32 character,
                                                 std::string_view sub) {
+    // A class's own files, else those of the class it shadows (the unlockables share them).
     const std::filesystem::path players = root / kPlayersDirectory;
-    if (const auto found = AssetLocator(players / classCode(character)).find(sub)) {
+    if (const auto found = AssetLocator(players / classCode(archiveClassOf(character))).find(sub)) {
         return *found;
     }
-    return players / classCode(character % kStartingClassCount) / sub;
+    return players / classCode(baseClassOf(character)) / sub;
 }
 
 std::string_view PlayerFigure::actionsClassOf(const std::filesystem::path& root, s32 character) {
-    const AssetLocator own(root / kPlayersDirectory / classCode(character));
-    return classCode(own.find(kClassAnimations) ? character : character % kStartingClassCount);
+    const AssetLocator own(root / kPlayersDirectory / classCode(archiveClassOf(character)));
+    return classCode(own.find(kClassAnimations) ? archiveClassOf(character)
+                                                : baseClassOf(character));
 }
 
 void PlayerFigure::loadActions(const std::filesystem::path& root, const CharacterSave& save,

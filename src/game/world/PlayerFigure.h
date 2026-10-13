@@ -49,6 +49,12 @@ public:
     static std::unique_ptr<PlayerFigure> load(RenderDevice& device,
                                               const std::filesystem::path& root,
                                               const CharacterSave& save, bool enter = true);
+    /** A class's folder `sub` ("ANIM", "SFXRED"): its own archive's, else that of the class
+     * it shadows (the unlockables without their own, Sumner the wizard's). */
+    static std::filesystem::path classFolder(const std::filesystem::path& root, s32 character,
+                                             std::string_view sub);
+    /** The class whose actions a character plays ("WIZ" for Sumner). */
+    static std::string_view actionsClassOf(const std::filesystem::path& root, s32 character);
     static std::filesystem::path costumeDirectory(const std::filesystem::path& root,
                                                   const CharacterSave& save);
     void animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed = PlayerDeed::None);
@@ -158,10 +164,6 @@ private:
     void preparePresentation(f32 frameBlend) const;
     std::optional<Mat4> visualAttachment(const Mat4& body, s32 node) const;
     std::optional<Mat4> visualAttachment(const Mat4& body, std::string_view suffix) const;
-    /** An unlockable class without its own archive borrows the class it shadows. */
-    static std::filesystem::path classFolder(const std::filesystem::path& root, s32 character,
-                                             std::string_view sub);
-    static std::string_view actionsClassOf(const std::filesystem::path& root, s32 character);
     void loadWeapon(const CharacterSave& save, RenderDevice& device);
     void loadMissile(const std::filesystem::path& root, const CharacterSave& save,
                      RenderDevice& device);

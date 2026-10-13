@@ -16,7 +16,19 @@ namespace gdl::game {
 inline constexpr s32 kClassCount = 17;
 inline constexpr s32 kStartingClassCount = 8;
 inline constexpr s32 kSumnerClass = 16;
+inline constexpr s32 kWizardClass = 2;
 inline constexpr s32 kColorCount = 4;
+/** The costume Sumner wears, under the wizard's archive. */
+inline constexpr std::string_view kSumnerCostume = "SUM";
+
+/** The starting class a character plays as: a starting class itself, an unlockable the one it
+ * shadows, and Sumner the wizard (change_player's character 2 behind the "sum" costume). An
+ * index out of range is returned as it is. */
+s32 baseClassOf(s32 classIndex);
+
+/** The class whose archives a character wears: its own, except Sumner, who wears the
+ * wizard's (load_player_model's players/wiz/sum). */
+s32 archiveClassOf(s32 classIndex);
 
 /** The asset code of a class ("WAR"), as the texture and data names use it. */
 std::string_view classCode(s32 classIndex);

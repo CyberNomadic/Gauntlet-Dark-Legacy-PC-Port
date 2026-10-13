@@ -157,6 +157,7 @@ add_executable(tests
     game/world/BodyCollisionTests.cpp
     game/world/BlobShadowTests.cpp
     game/world/PlayerFigureTests.cpp
+    game/world/AssetCensusTests.cpp
     game/world/PlayerFamiliarTests.cpp
     game/world/MikeyFigureTests.cpp
     game/world/WeaponGlowTests.cpp

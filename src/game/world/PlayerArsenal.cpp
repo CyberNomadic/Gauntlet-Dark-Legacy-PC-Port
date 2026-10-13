@@ -100,8 +100,8 @@ MissileStreak PlayerArsenal::weaponStreak(const PlayerActor& actor, bool superSh
     streak.color = superShot
                        ? Color::rgba(255, 255, 255, 190)
                        : kColors[static_cast<usize>(std::clamp(save.color, 0, kColorCount - 1))];
-    const s32 family = save.character == kSumnerClass ? 2 : save.character % kStartingClassCount;
-    if (!superShot && (family == 2 || family == 6)) {
+    const s32 family = baseClassOf(save.character);
+    if (!superShot && (family == kWizardClass || family == 6)) {
         streak.color.a = 62;
     }
     if (const auto* stats = m_resources->classes.stats(save.character)) {

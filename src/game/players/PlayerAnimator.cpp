@@ -17,7 +17,6 @@ constexpr usize index(PlayerAnimator::Action action) {
 }
 
 // The classes whose power swings keep their feet, in ClassData's table order.
-constexpr s32 kWizardClass = 2;
 constexpr s32 kArcherClass = 3;
 constexpr s32 kKnightClass = 5;
 constexpr s32 kSorceressClass = 6;
@@ -1158,8 +1157,7 @@ MeleeBlow PlayerAnimator::blowOf(Action swing) {
 }
 
 void PlayerAnimator::setCharacter(s32 character) {
-    m_character =
-        character >= 0 && character < kSumnerClass ? character % kStartingClassCount : character;
+    m_character = baseClassOf(character);
 }
 
 f32 PlayerAnimator::meleePace() const {
