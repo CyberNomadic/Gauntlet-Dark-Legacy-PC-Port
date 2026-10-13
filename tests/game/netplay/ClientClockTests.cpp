@@ -112,6 +112,36 @@ TEST_CASE("client clock holds missing state and pause then explicitly rebinds on
     CHECK_FALSE(clock.sample(pair.guest, 1));
 }
 
+TEST_CASE("guest presentation adds one checkpoint of delay and survives missing checkpoints",
+          "[netplay][client-clock]") {
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    checkpoint(pair, 57);
+    checkpoint(pair, 60);
+    ClientClock clock;
+    REQUIRE(clock.begin(pair.guest));
+    const auto first = clock.sample(pair.guest, 0);
+    REQUIRE(first);
+    CHECK(clock.tick() == 57);
+    CHECK(static_cast<f64>(60 - clock.tick()) / 60 == Approx(0.05));
+    f32 previous = first->motion.players[0]->position.x;
+    for (u64 tick = 61; tick < 181; ++tick) {
+        // A 150-ms hole and then irregular arrivals must never rewind or
+        // invent a position beyond the newest authoritative checkpoint.
+        if (tick % 3 == 0 && (tick < 90 || tick > 99) && tick % 15 != 0) {
+            checkpoint(pair, tick);
+        }
+        const auto state = clock.sample(pair.guest, 1.0 / 60);
+        REQUIRE(state);
+        const f32 position = state->motion.players[0]->position.x;
+        CHECK(position >= previous);
+        CHECK(position <= static_cast<f32>(pair.guest.playback().latest()->motion.tick));
+        previous = position;
+    }
+    CHECK(previous > 170);
+}
+
 TEST_CASE("client clock rejects invalid elapsed time and retains integer tick precision",
           "[netplay][client-clock]") {
     test::OnlinePair pair;
@@ -121,8 +151,7 @@ TEST_CASE("client clock rejects invalid elapsed time and retains integer tick pr
     REQUIRE(clock.begin(pair.guest));
     constexpr u64 kOrigin = (u64{1} << 54U);
     checkpoint(pair, kOrigin, kOrigin);
-    checkpoint(pair, kOrigin + 3, kOrigin);
-    checkpoint(pair, kOrigin + 6, kOrigin);
+    checkpoint(pair, kOrigin + ClientClock::kDelay, kOrigin);
     const auto start = clock.sample(pair.guest, 0);
     REQUIRE(start);
     CHECK(clock.tick() == kOrigin);

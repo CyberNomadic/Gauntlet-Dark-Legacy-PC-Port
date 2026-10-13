@@ -31,7 +31,39 @@ void ReplicaActors::clear() {
     m_tick.reset();
     m_players = {};
     m_portalSkin.clear();
+    m_deathSkins.clear();
     m_enemies.clear();
+}
+void ReplicaActors::loadDeathSkins(RenderDevice& device, Enemies& enemies, ItemArchive& weapons) {
+    m_deathSkins.clear();
+    for (u32 skin = 1; skin <= Enemies::kDeathSkins.size(); ++skin) {
+        for (const s32 kind : {-1, 5, 11}) {
+            if ((skin == 6) != (kind != -1)) {
+                continue;
+            }
+            auto* archive = kind == -1 ? &weapons : enemies.archive(kind);
+            if (archive == nullptr) {
+                continue;
+            }
+            for (const auto& animation : archive->trees.textureAnimations()) {
+                if (animation.name != Enemies::kDeathSkins[skin - 1]) {
+                    continue;
+                }
+                const auto first = animation.source >= 0
+                                       ? std::optional{static_cast<u32>(animation.source)}
+                                       : archive->textures.find(animation.frameName);
+                if (first && *first < archive->textures.size()) {
+                    auto& frames = m_deathSkins[{skin, kind}];
+                    for (u32 frame = 0; frame < static_cast<u32>(std::max(0, animation.frames)) &&
+                                        *first + frame < archive->textures.size();
+                         ++frame) {
+                        frames.push_back(&archive->textures.texture(device, *first + frame));
+                    }
+                }
+                break;
+            }
+        }
+    }
 }
 bool ReplicaActors::setPlayer(u8 seat, u32 grant, std::unique_ptr<PlayerFigure> figure, f32 scale) {
     if (seat >= m_players.size() || grant == 0 || !figure || !std::isfinite(scale) || scale <= 0 ||
@@ -57,7 +89,8 @@ bool ReplicaActors::bindCompanions(RenderDevice& device, ItemArchive& powerups,
         const auto& player = m_players[seat];
         if (player.figure) {
             ready[seat].bindEarned(*player.figure);
-            if (!ready[seat].bindPowerups(device, powerups, weapons)) {
+            if (weapons == nullptr || !ready[seat].bindPowerups(device, powerups, weapons) ||
+                !player.figure->bindArmEquipment(device, powerups, *weapons)) {
                 return false;
             }
         }
@@ -72,6 +105,11 @@ bool ReplicaActors::companionsReady(const CombatSnapshot& snapshot) const {
         const auto& player = snapshot.players[seat];
         if (!player) {
             continue;
+        }
+        if (player->armEquipment != 0 &&
+            (!m_players[seat].figure ||
+             !m_players[seat].figure->armEquipmentReady(player->armEquipment))) {
+            return false;
         }
         const auto& companions = player->companions;
         for (usize slot = 0; slot < companions.size(); ++slot) {
@@ -113,9 +151,13 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
             player.pose.bind(player.figure->actionTree());
             player.continuity = motion->continuity;
         }
-        player.shown = player.pose.show(state->animation);
+        player.shown = state->transitionPose && state->animation.transition < 1
+                           ? player.pose.show(state->animation, *state->transitionPose)
+                           : player.pose.show(state->animation);
         player.action = static_cast<PlayerAnimator::Action>(state->animation.action);
         player.hitFlash = state->hitFlash;
+        player.weaponHidden = state->weaponHidden;
+        player.armEquipment = state->armEquipment;
         player.portalPhase = state->portalPhase;
         player.shadow = state->shadow;
         player.placement = placement(motion->position, motion->yaw, player.scale);
@@ -143,6 +185,14 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
         enemy.shown = statue ? enemy.pose.rest() : enemy.pose.show(state.animation);
         enemy.animation = state.animation;
         enemy.hitFlash = state.hitFlash;
+        enemy.alpha = state.alpha;
+        enemy.dying = state.life == ReplicaEnemyLife::Dying;
+        enemy.deathSkin = nullptr;
+        const auto skin = m_deathSkins.find(
+            {state.deathSkin, state.deathSkin == 6 ? static_cast<s32>(state.kind) : -1});
+        if (skin != m_deathSkins.end() && state.deathFrame < skin->second.size()) {
+            enemy.deathSkin = skin->second[state.deathFrame];
+        }
         Vec3 shown = state.position;
         if (presentation != nullptr && presentationFloors.size() == 3) {
             const auto interval =
@@ -158,7 +208,7 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
                     &presentationFloors[1]);
             }
         }
-        enemy.placement = placement(shown, state.yaw);
+        enemy.placement = placement(shown, state.yaw, state.scale);
     }
     return true;
 }
@@ -179,7 +229,7 @@ void ReplicaActors::draw(RenderDevice& device, Enemies& resources, const Mat4& c
             if (!form || form->form != static_cast<u32>(PowerupCompanion::Kind::Pojo)) {
                 player.figure->drawPose(device, clip, player.placement, lighting,
                                         player.pose.pose(), player.action, textureFrame, skin,
-                                        &camera, pass);
+                                        &camera, pass, player.weaponHidden, player.armEquipment);
             }
             for (usize slot = 0; slot < player.companions.size(); ++slot) {
                 if (const auto& companion = player.companions[slot]) {
@@ -189,10 +239,11 @@ void ReplicaActors::draw(RenderDevice& device, Enemies& resources, const Mat4& c
         }
     }
     for (const auto& [instance, enemy] : m_enemies) {
-        if (enemy.shown) {
+        if (enemy.shown && enemy.alpha > 0) {
             resources.drawPose(device, clip, enemy.placement, lighting, enemy.appearance,
                                enemy.pose.pose(), enemy.animation.sequence, enemy.animation.frame,
-                               textureFrame, enemy.hitFlash ? hitFlash : nullptr, &camera, pass);
+                               textureFrame, enemy.hitFlash ? hitFlash : nullptr, &camera, pass,
+                               enemy.alpha, enemy.deathSkin, enemy.dying);
         }
     }
 }
@@ -213,5 +264,11 @@ usize ReplicaActors::visiblePlayers() const {
 }
 const PlayerFigure* ReplicaActors::playerFigure(u8 seat) const {
     return seat < m_players.size() ? m_players[seat].figure.get() : nullptr;
+}
+const TreeInfo* ReplicaActors::fireShieldTree(u8 seat) const {
+    return seat < m_players.size() ? m_players[seat].resources.fireShieldTree() : nullptr;
+}
+f32 ReplicaActors::playerScale(u8 seat) const {
+    return seat < m_players.size() ? m_players[seat].scale : 1;
 }
 } // namespace gdl::game

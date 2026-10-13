@@ -1,7 +1,8 @@
 #include "game/screens/MatchInputs.h"
 
 namespace gdl::game {
-bool MatchInputs::sample(MatchSession& session, const SessionInputs::Frame& local) {
+std::vector<InputCommand> MatchInputs::commands(const MatchSession& session,
+                                                const SessionInputs::Frame& local) {
     const auto& context = session.context();
     std::vector<InputCommand> commands;
     for (usize seat = 0; seat < context.owners.size(); ++seat) {
@@ -11,7 +12,10 @@ bool MatchInputs::sample(MatchSession& session, const SessionInputs::Frame& loca
                                                       static_cast<u8>(seat)));
         }
     }
-    return session.sample(commands);
+    return commands;
+}
+bool MatchInputs::sample(MatchSession& session, const SessionInputs::Frame& local) {
+    return session.sample(commands(session, local));
 }
 std::optional<SessionInputs::Frame> MatchInputs::advance(MatchSession& session) {
     const auto commands = session.advance();

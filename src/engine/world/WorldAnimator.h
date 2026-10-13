@@ -40,6 +40,26 @@ public:
     void cycle(s32 object, bool active);
     bool held(usize index) const { return m_tracks[index].held; }
 
+    /** Mutable cursor only; authored keys remain in the bound layout. frame is
+     * the next pose to sample, since step poses before advancing its clock. */
+    struct Cursor {
+        s32 object = -1;
+        s32 frames = 0;
+        f32 frame = 0;
+        bool reverse = false;
+        bool once = false;
+        bool finished = false;
+        bool held = false;
+        bool presentationCut = true;
+        bool valid() const;
+        bool operator==(const Cursor&) const = default;
+    };
+    std::vector<Cursor> checkpoint() const;
+    /** Restores every cursor atomically against the bound track roster. Does not
+     * pose geometry, fire triggers or repeat prior cycle events. The caller keeps
+     * the corresponding scene geometry until the next step samples these cursors. */
+    bool restore(std::span<const Cursor> cursors);
+
     /** Poses every object at its current frame. */
     void apply(WorldScene& scene) const;
     /** Poses every object, then moves `seconds` on. */

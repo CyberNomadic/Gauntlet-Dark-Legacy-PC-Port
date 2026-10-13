@@ -58,6 +58,7 @@ private:
     std::unordered_map<std::string, u32> m_byName;
     std::vector<SampleInfo> m_samples;
     Restoration m_restoration = Restoration::Enabled;
+    std::string m_bank;
 };
 
 } // namespace gdl

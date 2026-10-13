@@ -37,6 +37,61 @@ TEST_CASE("replica viewport uses the local display without host aspect masks",
     CHECK_FALSE(ReplicaView::viewport(65537, 600));
 }
 
+TEST_CASE("guest level textures advance with host time and hold without new simulation",
+          "[netplay][replica-view][assets][guest-textures]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root));
+    Enemies enemies;
+    enemies.open(device, root, nullptr, 4, {}, 1);
+    ProjectileResources shots;
+    PickupResources pickups;
+    FixtureResources fixtures;
+    MatchContext context;
+    context.epoch = context.scene = 1;
+    context.owners = {1, 0, 0, 0};
+    context.grants = {1, 0, 0, 0};
+    ReplicaView view;
+    REQUIRE(view.begin(context, world, enemies, shots, pickups, fixtures));
+    REQUIRE(view.setPlayer(0, PlayerFigure::load(device, root, {}, false)));
+    CombatSnapshot snapshot;
+    snapshot.motion.epoch = snapshot.motion.cameraContinuity = 1;
+    snapshot.motion.players[0] = SeatMotion{1, 1, {}, 0};
+    snapshot.players[0] = PlayerCombatState{};
+    snapshot.players[0]->life = ReplicaPlayerLife::InTower;
+    snapshot.geometry = world.scene().geometry();
+    auto reference = world.scene();
+    auto clock = world.textureAnimator();
+    REQUIRE(clock.size() > 0);
+    bool changed = false;
+    for (const u32 tick : {0U, 1U, 17U, 80U, 1U, 70U}) {
+        snapshot.motion.tick += 3;
+        snapshot.worldTextureFrame = static_cast<f32>(tick);
+        REQUIRE(view.show(snapshot));
+        view.draw(device, Mat4{1}, 640, 448, 999); // render clock is deliberately unrelated
+        clock = world.textureAnimator();
+        clock.step(tick);
+        clock.apply(reference);
+        for (usize index = 0; index < clock.size(); ++index) {
+            const auto slot = clock.slot(index);
+            CHECK(view.geometry().textureOf(slot) == reference.textureOf(slot));
+            CHECK(view.geometry().textureOffset(slot) == reference.textureOffset(slot));
+            changed |= reference.textureOf(slot) != world.scene().textureOf(slot) ||
+                       reference.textureOffset(slot) != world.scene().textureOffset(slot);
+        }
+    }
+    CHECK(changed);
+    CHECK(world.textureAnimator().frame() == 0);
+    view.draw(device, Mat4{1}, 640, 448, 5000);
+    for (usize index = 0; index < clock.size(); ++index) {
+        const auto slot = clock.slot(index);
+        CHECK(view.geometry().textureOf(slot) == reference.textureOf(slot));
+        CHECK(view.geometry().textureOffset(slot) == reference.textureOffset(slot));
+    }
+}
+
 TEST_CASE("replica view stays blank until an entire trusted sample can be drawn",
           "[netplay][replica-view][assets]") {
     const auto root =

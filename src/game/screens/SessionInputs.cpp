@@ -16,10 +16,10 @@ constexpr std::array kPlayHeld{
     Binding{CommandHeld::StrongAttack, &PlayInput::strongAttack},
     Binding{CommandHeld::Turbo, &PlayInput::turbo},
     Binding{CommandHeld::Combo, &PlayInput::combo},
+    Binding{CommandHeld::ThrowPotion, &PlayInput::throwPotion},
 };
 constexpr std::array kPlayPress{
     Binding{CommandPress::UsePotion, &PlayInput::usePotion},
-    Binding{CommandPress::ThrowPotion, &PlayInput::throwPotion},
     Binding{CommandPress::Defend, &PlayInput::defendPressed},
     Binding{CommandPress::Charge, &PlayInput::chargePressed},
     Binding{CommandPress::Attack, &PlayInput::attackPressed},

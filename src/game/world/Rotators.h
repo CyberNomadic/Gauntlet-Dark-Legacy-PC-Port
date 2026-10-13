@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -54,17 +55,34 @@ public:
     };
 
     void bind(const WorldLayout& layout);
-    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items);
+    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                     ItemArchive* realmItems = nullptr);
     void clear() { m_rotators.clear(); }
     usize size() const { return m_rotators.size(); }
     const Rotator& rotator(usize index) const { return m_rotators[index]; }
     /** Turns what turns for `seconds`, starting pads that are stepped on. */
     std::vector<RotatorCue> update(f32 seconds, std::span<const TriggerVisitor> visitors,
                                    WorldScene& scene);
+    static constexpr usize kMaxCursors = 2048;
+    struct Cursor {
+        s32 instance = -1;
+        s32 object = -1;
+        f32 turned = 0;
+        bool started = false;
+        bool done = false;
+        bool valid() const;
+        bool operator==(const Cursor&) const = default;
+    };
+    std::vector<Cursor> checkpoint() const;
+    bool accepts(std::span<const Cursor> state) const;
+    bool restore(std::span<const Cursor> state);
+    /** Advance already-started rotators only; no pad contact or sound cue dispatch. */
+    bool advanceMotion(f32 seconds, WorldScene& scene);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
 
 private:
     static void place(const Rotator& rotator, WorldScene& scene);
+    static std::optional<RotatorCue::Kind> advance(Rotator& rotator, f32 ticks, WorldScene& scene);
 
     std::vector<Rotator> m_rotators;
 };

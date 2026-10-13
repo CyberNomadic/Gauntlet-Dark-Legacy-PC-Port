@@ -182,8 +182,17 @@ bool MatchSession::broadcast(MatchControlKind kind, MatchStop reason, u8 votes) 
     return true;
 }
 void MatchSession::discardGameplay() {
+    m_latency.begin(m_context.epoch);
+    m_statisticsAt = {};
+    m_adaptiveLead = 0;
+    m_feedbackInput = {};
+    m_leadFeedbackFloor = 0;
+    m_sampleClock = 0;
+    m_sentInputs.clear();
+    m_audio.clear();
     m_feedback.clear();
     m_history.clear();
+    m_sampled.clear();
     m_pendingPress = {};
     m_input.clear();
     m_states = {};
@@ -244,6 +253,7 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
     }
     discardGameplay();
     m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
+    m_audio.begin(m_context.epoch, m_local, m_owners);
     m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants, shop);
     m_loaded = {};
     m_movieSkipVotes = 0;
@@ -449,6 +459,7 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
         m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
         discardGameplay();
         m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
+        m_audio.begin(m_context.epoch, m_local, m_owners);
         m_loaded = {};
         m_movieSkipVotes = 0;
         m_movieSkipRequests = 0;
@@ -566,6 +577,18 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         case FeedbackSync::Admission::Invalid: return Admission::Invalid;
         }
     }
+    if (AudioSync::recognizes(bytes)) {
+        if ((m_phase != Phase::Running && m_phase != Phase::Loading) ||
+            m_context.transition == MatchTransition::Shop) {
+            return Admission::Stale;
+        }
+        switch (m_audio.receive(peer, bytes)) {
+        case AudioSync::Admission::Accepted: return Admission::Accepted;
+        case AudioSync::Admission::Stale: return Admission::Stale;
+        case AudioSync::Admission::WrongPeer: return Admission::WrongPeer;
+        case AudioSync::Admission::Invalid: return Admission::Invalid;
+        }
+    }
     if (m_context.transition == MatchTransition::Shop) {
         return Admission::Stale;
     }
@@ -604,10 +627,40 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     const auto admission = m_playback.receive(connection, bytes);
     switch (admission) {
     case CombatReplica::Admission::Committed:
+        if (const auto* state = m_playback.latest()) {
+            m_latency.checkpoint(*state);
+            for (usize seat = 0; seat < state->players.size(); ++seat) {
+                if (m_context.owners[seat] != m_local || !state->players[seat]) {
+                    continue;
+                }
+                const auto& feedback = state->players[seat]->movement;
+                if (feedback.receivedInput <= m_feedbackInput[seat]) {
+                    continue;
+                }
+                m_feedbackInput[seat] = feedback.receivedInput;
+                if (feedback.arrivalMargin < 2 && feedback.receivedInput > m_leadFeedbackFloor) {
+                    // Measure actual admission deadlines, not an assumed LAN RTT. Wait
+                    // for commands sampled after this adjustment before adjusting again.
+                    s32 needed = inputLead() + 2 - feedback.arrivalMargin;
+                    const auto sent =
+                        std::ranges::find(m_sentInputs, feedback.receivedInput, &SentInput::tick);
+                    if (sent != m_sentInputs.end()) {
+                        // Receipt feedback traverses both directions, including the
+                        // checkpoint cadence. Cover that measured interval at once,
+                        // rather than converging over several long-distance round trips.
+                        needed = std::max(needed,
+                                          2 + static_cast<s32>(std::min<u64>(
+                                                  kMaxInputLead, m_sampleClock - sent->sampled)));
+                    }
+                    m_adaptiveLead = static_cast<u8>(std::min<s32>(kMaxInputLead, needed));
+                    m_leadFeedbackFloor = m_nextInput;
+                }
+            }
+        }
         if (const auto* state = m_playback.latest();
             state != nullptr &&
-            state->motion.tick <= std::numeric_limits<u64>::max() - m_context.inputLead) {
-            m_nextInput = std::max(m_nextInput, state->motion.tick + m_context.inputLead);
+            state->motion.tick <= std::numeric_limits<u64>::max() - inputLead()) {
+            m_nextInput = std::max(m_nextInput, state->motion.tick + inputLead());
         }
         return Admission::Accepted;
     case CombatReplica::Admission::Pending:
@@ -629,14 +682,16 @@ bool MatchSession::inputReady() const {
     }
     const auto* latest = m_playback.latest();
     const u64 confirmed = latest == nullptr ? 0 : latest->motion.tick;
-    return m_nextInput <= confirmed || m_nextInput - confirmed <= m_context.inputLead + kInputSlack;
+    return m_nextInput <= confirmed || m_nextInput - confirmed <= inputLead() + kInputSlack;
 }
 bool MatchSession::sample(std::span<const InputCommand> frame) {
+    m_sampled.clear();
     if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
         inputTick() == std::numeric_limits<u64>::max() ||
         frame.size() != static_cast<usize>(std::ranges::count(m_owners, m_local))) {
         return false;
     }
+    ++m_sampleClock;
     std::array<bool, InputCommand::kSeats> seen{};
     for (const auto& command : frame) {
         if (!command.valid() || command.epoch != m_context.epoch || command.tick != inputTick() ||
@@ -659,6 +714,10 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
     if (!m_history.record(pending)) {
         return false;
     }
+    m_sampled = std::move(pending);
+    if (!host()) {
+        m_latency.sampled(m_sampled);
+    }
     if (host()) {
         for (const auto& command : frame) {
             m_timeline.submit(m_local, command);
@@ -669,6 +728,10 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
             return false;
         }
         m_input = *bytes;
+        m_sentInputs.push_back({m_nextInput, m_sampleClock});
+        if (m_sentInputs.size() > InputTimeline::kMaxAhead) {
+            m_sentInputs.pop_front();
+        }
         ++m_nextInput;
     }
     m_pendingPress = {};
@@ -718,6 +781,32 @@ bool MatchSession::publish(const CombatSnapshot& state) {
     return true;
 }
 void MatchSession::flush(PacketTransport& transport) {
+    if (!host() && m_phase == Phase::Running) {
+        const auto now = LatencyTelemetry::Clock::now();
+        if (now - m_statisticsAt >= std::chrono::seconds(1)) {
+            m_statisticsAt = now;
+            if (const auto stats = transport.statistics(m_links[1])) {
+                m_latency.network(*stats);
+                if (m_sampleClock == 0 && stats->pingMs >= 0) {
+                    // Seed the first commands of each scene from the already
+                    // established transport, before receipt feedback is possible.
+                    // A command follows a delayed host clock and then travels back,
+                    // so cover the round trip, not just the outbound half.
+                    const u32 maxRoundTrip =
+                        static_cast<u32>(kMaxInputLead) * 1000 / m_context.tickRate;
+                    const auto roundTrip = std::min(static_cast<u32>(stats->pingMs), maxRoundTrip);
+                    const u32 ticks = (roundTrip * m_context.tickRate + 999) / 1000;
+                    m_adaptiveLead =
+                        static_cast<u8>(std::min<u32>(kMaxInputLead, m_context.inputLead + ticks));
+                    const auto* latest = m_playback.latest();
+                    const u64 tick = latest != nullptr ? latest->motion.tick : 0;
+                    if (tick <= std::numeric_limits<u64>::max() - inputLead()) {
+                        m_nextInput = std::max(m_nextInput, tick + inputLead());
+                    }
+                }
+            }
+        }
+    }
     while (!m_controls.empty()) {
         const auto& control = m_controls.front();
         const auto result =
@@ -751,6 +840,23 @@ void MatchSession::flush(PacketTransport& transport) {
     if (m_phase != Phase::Running) {
         return;
     }
+    if (m_audio.failed()) {
+        stop(MatchStop::TransportFailure, true);
+        return;
+    }
+    while (!m_audio.outgoing().empty()) {
+        const auto& delivery = m_audio.outgoing().front();
+        const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
+                                           PacketTransport::Delivery::Reliable);
+        if (result == PacketTransport::SendResult::Congested) {
+            break;
+        }
+        if (result != PacketTransport::SendResult::Sent) {
+            disconnected(m_links[delivery.peer]);
+            return;
+        }
+        m_audio.sent();
+    }
     while (!m_feedback.outgoing().empty()) {
         const auto& delivery = m_feedback.outgoing().front();
         const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
@@ -768,6 +874,7 @@ void MatchSession::flush(PacketTransport& transport) {
         const auto result =
             transport.send(m_links[1], m_input, PacketTransport::Delivery::Unreliable);
         if (result == PacketTransport::SendResult::Sent) {
+            m_latency.sent(m_history.commands());
             m_input.clear();
         } else if (result != PacketTransport::SendResult::Congested) {
             stop(MatchStop::TransportFailure, false);

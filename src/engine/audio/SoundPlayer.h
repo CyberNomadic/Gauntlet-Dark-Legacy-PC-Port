@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -25,6 +26,30 @@ enum class SoundCategory : u8 { Effects, Music, Movie, Count };
  */
 class SoundPlayer {
 public:
+    struct Event {
+        enum class Kind : u8 { Play, Stop, Volume, Pan };
+        Kind kind = Kind::Play;
+        SoundHandle handle = kNoSound;
+        SoundHandle after = kNoSound;
+        std::string bank;
+        u32 call = 0;
+        f32 value = 1;
+        SoundCategory category = SoundCategory::Effects;
+    };
+    using Observer = std::function<void(const Event&)>;
+    /** Observe only the simulation calls inside this scope, not local menu cues,
+     * mixer gains or streamed music. The observer must not mutate this player. */
+    class Capture {
+    public:
+        Capture(SoundPlayer* player, Observer observer);
+        ~Capture();
+        Capture(const Capture&) = delete;
+        Capture& operator=(const Capture&) = delete;
+
+    private:
+        SoundPlayer* m_player;
+        Observer m_previous;
+    };
     static constexpr f64 kLookaheadSeconds = 1.5;
 
     explicit SoundPlayer(AudioMixer& mixer);
@@ -75,6 +100,7 @@ private:
         SoundSequence sequence;
         SoundCategory category = SoundCategory::Effects;
         f32 volume = 1.0f;
+        f32 pan = 0;
         usize nextStep = 0;
         bool finished = false; ///< fed to the end
         bool stopped = false;  ///< cut short: fading out, no longer playing
@@ -99,6 +125,7 @@ private:
     static void pushClip(AudioStream& stream, const SoundClip& clip);
 
     AudioMixer& m_mixer;
+    Observer m_observer;
     std::vector<Voice> m_voices;
     std::vector<Pending> m_pending;
     std::vector<f32> m_scratch; ///< frames read from a source on their way to its stream

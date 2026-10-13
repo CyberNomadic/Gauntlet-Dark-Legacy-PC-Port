@@ -1,6 +1,8 @@
 #pragma once
 
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "engine/assets/AnimationSet.h"
@@ -16,6 +18,7 @@ struct NodePose {
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
     bool pitchYawRoll = false; ///< rotation order, from the track
+    bool operator==(const NodePose&) const = default;
 };
 
 /**
@@ -28,6 +31,29 @@ class TreePose {
 public:
     static constexpr f32 kHoldAngle = kHalfPi; ///< angle steps this large are not interpolated
     static constexpr f32 kKeyWindow = 0.125f;  ///< nearer a key than this shows the key itself
+
+    /** Exact local transforms with a value-only hierarchy identity. Rest offsets
+     * belong to that identity: equal node counts alone do not make poses compatible. */
+    struct Checkpoint {
+        static constexpr usize kMaxNodes = 256;
+        static constexpr usize kMaxName = 64;
+        static constexpr f32 kMaxMagnitude = 1'000'000;
+        struct Node {
+            std::string name;
+            s32 parent = -1;
+            Vec3 rest{0};
+            bool operator==(const Node&) const = default;
+        };
+        std::string tree;
+        std::vector<Node> nodes;
+        std::vector<NodePose> poses;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    /** Resolves only against the caller's already trusted tree. Invalid values,
+     * changed topology and overflowing composed transforms leave this pose intact. */
+    bool restore(const TreeInfo& tree, const Checkpoint& state);
 
     /** Poses the tree at `frame` of `sequence`; nodes without keys stay at rest. Mirroring
      * flips the pose across the model's x axis. Visual-only smooth sampling skips the

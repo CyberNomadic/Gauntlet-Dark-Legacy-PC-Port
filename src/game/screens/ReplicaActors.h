@@ -13,8 +13,8 @@ namespace gdl::game {
 /** Client base-actor presentation. Player assets are supplied by the trusted
  * roster/load step; enemy assets must already be loaded in the resource owner.
  * No packets cause file loading, spawning, AI, input, saves or damage callbacks.
- * The resource owner must outlive this view. This does not yet draw replicated
- * equipment, death skins, projectiles or transient VFX. */
+ * The resource owner must outlive this view. Arm equipment uses a trusted
+ * preloaded catalog; projectiles and transient VFX have separate owners. */
 class ReplicaActors {
 public:
     bool begin(u64 epoch);
@@ -22,6 +22,7 @@ public:
     bool setPlayer(u8 seat, u32 grant, std::unique_ptr<PlayerFigure> figure, f32 scale = 1);
     bool bindCompanions(RenderDevice& device, ItemArchive& powerups, ItemArchive* weapons);
     void loadPortalSkin(RenderDevice& device, TextureSet& weapons);
+    void loadDeathSkins(RenderDevice& device, Enemies& enemies, ItemArchive& weapons);
     bool companionsReady(const CombatSnapshot& snapshot) const;
     bool show(const CombatSnapshot& snapshot, Enemies& resources,
               const EnemyPresentation* presentation = nullptr,
@@ -34,6 +35,8 @@ public:
                      const Vec3& eye) const;
     usize visiblePlayers() const;
     const PlayerFigure* playerFigure(u8 seat) const;
+    const TreeInfo* fireShieldTree(u8 seat) const;
+    f32 playerScale(u8 seat) const;
 
 private:
     struct Player {
@@ -42,6 +45,8 @@ private:
         f32 scale = 1;
         bool shown = false;
         bool hitFlash = false;
+        bool weaponHidden = false;
+        u32 armEquipment = 0;
         std::optional<f32> portalPhase;
         std::optional<PlayerShadowState> shadow;
         Mat4 placement{1};
@@ -55,6 +60,9 @@ private:
         const TreeInfo* tree = nullptr;
         Enemies::Appearance appearance;
         CombatAnimation animation;
+        f32 alpha = 1;
+        bool dying = false;
+        const Texture* deathSkin = nullptr;
         bool shown = false;
         bool hitFlash = false;
         Mat4 placement{1};
@@ -65,5 +73,6 @@ private:
     std::array<Player, InputCommand::kSeats> m_players;
     PortalDeparture m_portalSkin;
     std::map<u64, Enemy> m_enemies;
+    std::map<std::pair<u32, s32>, std::vector<const Texture*>> m_deathSkins;
 };
 } // namespace gdl::game

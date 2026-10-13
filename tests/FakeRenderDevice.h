@@ -81,6 +81,9 @@ public:
 
     void draw(const ImmediateBatch& batch, const Texture& texture, const Mat4& transform,
               const DrawState& state) override {
+        if (!recordDraws) {
+            return;
+        }
         RecordedDraw record;
         record.texture = &texture;
         record.vertices.assign(batch.triangles().begin(), batch.triangles().end());
@@ -107,6 +110,7 @@ public:
     }
 
     std::vector<RecordedDraw> draws;
+    bool recordDraws = true;
     std::vector<usize> bloomDrawOffsets;
     HeatDistortion heat;
     std::vector<usize> ambientOcclusionDrawOffsets;

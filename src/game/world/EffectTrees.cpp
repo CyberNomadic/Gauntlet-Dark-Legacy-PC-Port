@@ -60,13 +60,239 @@ f32 EffectTrees::Effect::opacity() const {
            (fadeSeconds > 0 ? std::clamp(secondsLeftOf(*this) / fadeSeconds, 0.0f, 1.0f) : 1);
 }
 
+bool EffectTrees::Checkpoint::valid() const {
+    const auto finite = [](f32 value) { return std::isfinite(value) && std::abs(value) <= 1e6f; };
+    const auto vector = [&](const Vec3& value) {
+        return finite(value.x) && finite(value.y) && finite(value.z);
+    };
+    const auto text = [](const std::string& value) {
+        return value.size() <= 256 && value.find('\0') == std::string::npos;
+    };
+    const auto& s = setting;
+    if (!text(name) || !text(s.then) || continuity == 0 || continuity > 1'000'000 ||
+        !finite(s.scale) || !vector(s.stretch) || !finite(s.fadeSeconds) || s.fadeSeconds < 0 ||
+        !finite(s.yaw) || !vector(s.velocity) || !finite(s.seconds) ||
+        (s.morphIn && !finite(*s.morphIn)) || !finite(s.alpha) || s.alpha < 0 || s.alpha > 1 ||
+        !finite(s.playbackRate) || s.playbackRate < 0 || s.playbackRate > 1024 ||
+        !vector(position) || !finite(lived) || lived < 0 || !animation.valid() || !trails.valid() ||
+        !particles.valid() ||
+        (s.light && (!vector(s.light->color) || !finite(s.light->radius) || s.light->radius < 0)) ||
+        (flightDirection && !vector(*flightDirection)) ||
+        (particleTextureSlot && *particleTextureSlot > 1'000'000) ||
+        (!tree && (animation.playing || !particles.nodes.empty())) || s.settled) {
+        return false;
+    }
+    if (attachment) {
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 4; ++row) {
+                if (!finite((*attachment)[column][row])) {
+                    return false;
+                }
+            }
+        }
+        if ((*attachment)[0][3] != 0 || (*attachment)[1][3] != 0 || (*attachment)[2][3] != 0 ||
+            (*attachment)[3][3] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<EffectTrees::Checkpoint> EffectTrees::checkpoint(u32 id) const {
+    for (const auto& effect : m_effects) {
+        if (effect->id != id) {
+            continue;
+        }
+        Checkpoint state;
+        state.name = effect->name;
+        state.tree = effect->tree != nullptr;
+        state.continuity = effect->continuity;
+        auto& s = state.setting;
+        s.scale = effect->scale;
+        s.stretch = effect->stretch;
+        s.fadeSeconds = effect->fadeSeconds;
+        s.yaw = effect->yaw;
+        s.velocity = effect->velocity;
+        s.seconds = effect->secondsLeft;
+        s.loop = effect->repeats;
+        s.persistent = effect->persistent;
+        s.emitParticles = effect->emitParticles;
+        s.missingObjectsAreEmpty = effect->missingObjectsAreEmpty;
+        s.additive = effect->additive;
+        s.then = effect->then;
+        s.morphIn = effect->morphIn;
+        s.holdForMorph = effect->holdForMorph;
+        s.shrinks = effect->shrinks;
+        s.unlit = effect->unlit;
+        s.depthWrite = effect->depthWrite;
+        s.tint = effect->tint;
+        s.alpha = effect->alpha;
+        s.playbackRate = effect->playbackRate;
+        s.light = effect->light;
+        state.position = effect->position;
+        state.timed = effect->timed;
+        state.retiring = effect->retiring;
+        state.lived = effect->lived;
+        state.animation = effect->player.checkpoint();
+        state.trails = effect->trails.checkpoint();
+        state.particles = effect->particles.checkpoint();
+        state.attachment = effect->attachment;
+        state.flightDirection = effect->flightDirection;
+        state.particleTextureSlot = effect->particleTextureSlot;
+        return state;
+    }
+    return std::nullopt;
+}
+
+bool EffectTrees::restore(u32 id, const Checkpoint& state) {
+    if (!state.valid()) {
+        return false;
+    }
+    for (auto& effect : m_effects) {
+        if (effect->id != id) {
+            continue;
+        }
+        const auto& s = state.setting;
+        if (state.name != effect->name || state.tree != (effect->tree != nullptr) ||
+            s.then != effect->then || s.emitParticles != effect->emitParticles ||
+            s.missingObjectsAreEmpty != effect->missingObjectsAreEmpty ||
+            state.particleTextureSlot != effect->particleTextureSlot ||
+            !effect->trails.canRestore(state.trails) ||
+            !effect->particles.canRestore(state.particles)) {
+            return false;
+        }
+        const TreeSequenceInfo* sequence = nullptr;
+        if (state.animation.playing) {
+            if (effect->tree == nullptr ||
+                state.animation.sequence >= effect->tree->sequences.size()) {
+                return false;
+            }
+            sequence = &effect->tree->sequences[state.animation.sequence];
+        } else if (effect->tree != nullptr && !effect->tree->sequences.empty()) {
+            return false;
+        }
+        AnimationPlayer player;
+        if (!player.restore(state.animation, sequence)) {
+            return false;
+        }
+        auto trails = effect->trails;
+        auto particles = effect->particles;
+        if (!trails.restore(state.trails) || !particles.restore(state.particles)) {
+            return false;
+        }
+        TreePose pose;
+        if (effect->tree != nullptr) {
+            if (sequence != nullptr) {
+                pose.evaluate(*effect->tree, player.sequence(), player.frame());
+            } else {
+                pose.rest(*effect->tree);
+            }
+        }
+        effect->continuity = state.continuity;
+        effect->scale = s.scale;
+        effect->stretch = s.stretch;
+        effect->fadeSeconds = s.fadeSeconds;
+        effect->yaw = s.yaw;
+        effect->velocity = s.velocity;
+        effect->secondsLeft = s.seconds;
+        effect->repeats = s.loop;
+        effect->persistent = s.persistent;
+        effect->additive = s.additive;
+        effect->morphIn = s.morphIn;
+        effect->holdForMorph = s.holdForMorph;
+        effect->shrinks = s.shrinks;
+        effect->unlit = s.unlit;
+        effect->depthWrite = s.depthWrite;
+        effect->tint = s.tint;
+        effect->alpha = s.alpha;
+        effect->playbackRate = s.playbackRate;
+        effect->light = s.light;
+        effect->position = state.position;
+        effect->timed = state.timed;
+        effect->retiring = state.retiring;
+        effect->lived = state.lived;
+        effect->player = player;
+        effect->pose = std::move(pose);
+        effect->trails = std::move(trails);
+        effect->particles = std::move(particles);
+        effect->attachment = state.attachment;
+        effect->flightDirection = state.flightDirection;
+        effect->presentationCaptured = false;
+        effect->model.setAppearance(s.unlit, s.tint, s.depthWrite, s.additive);
+        effect->model.setFrame(player.sequence(), static_cast<s32>(player.frame()));
+        for (const auto& motion : m_motions) {
+            if (motion->archive != effect->archive || motion->lenders != effect->lenders) {
+                continue;
+            }
+            if (effect->tree != nullptr) {
+                motion->animator.apply(effect->model, *effect->tree, player.sequence(),
+                                       player.frame());
+                motion->animator.apply(effect->particles, *effect->tree, player.sequence(),
+                                       player.frame());
+            } else if (effect->particleTextureSlot) {
+                for (usize i = 0; i < motion->animator.size(); ++i) {
+                    if (!motion->animator.keyed(i) &&
+                        motion->animator.slot(i) == *effect->particleTextureSlot) {
+                        if (const auto sprite = motion->animator.motion(i);
+                            sprite.frame != nullptr) {
+                            effect->trails.setTexture(0, *sprite.frame);
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+std::optional<TextureAnimator::Checkpoint>
+EffectTrees::textureCheckpoint(const ItemArchive& archive,
+                               std::span<TextureSet* const> lenders) const {
+    for (const auto& motion : m_motions) {
+        if (motion->archive == &archive && std::ranges::equal(motion->lenders, lenders)) {
+            return motion->animator.checkpoint();
+        }
+    }
+    return std::nullopt;
+}
+
+bool EffectTrees::restoreTextureClock(const ItemArchive& archive,
+                                      std::span<TextureSet* const> lenders,
+                                      const TextureAnimator::Checkpoint& state) {
+    for (auto& motion : m_motions) {
+        if (motion->archive == &archive && std::ranges::equal(motion->lenders, lenders)) {
+            return motion->animator.restore(state);
+        }
+    }
+    return false;
+}
+
 f32 EffectTrees::textureFrame(const Effect& effect) const {
     for (const auto& motion : m_motions) {
         if (motion->archive == effect.archive && motion->lenders == effect.lenders) {
-            return static_cast<f32>(motion->animator.frame());
+            return static_cast<f32>(motion->animator.frame()) +
+                   motion->animator.presentationOffset(1).value_or(0);
         }
     }
     return 0;
+}
+
+std::optional<f32> EffectTrees::textureFrame(const ItemArchive& archive,
+                                             std::span<TextureSet* const> textureLenders) const {
+    for (const auto& motion : m_motions) {
+        if (motion->archive != &archive ||
+            motion->lenders.size() != textureLenders.size() + m_lenders.size()) {
+            continue;
+        }
+        const std::span<TextureSet* const> lenders{motion->lenders};
+        if (std::ranges::equal(lenders.first(textureLenders.size()), textureLenders) &&
+            std::ranges::equal(lenders.subspan(textureLenders.size()), m_lenders)) {
+            return static_cast<f32>(motion->animator.frame()) +
+                   motion->animator.presentationOffset(1).value_or(0);
+        }
+    }
+    return std::nullopt;
 }
 
 void EffectTrees::placeAt(u32 id, const Mat4& attachment, std::optional<Vec3> flightDirection) {
@@ -157,6 +383,22 @@ void EffectTrees::finish(u32 id) {
     }
 }
 
+bool EffectTrees::tag(u32 id, const Provenance& provenance) {
+    if (provenance.player < 0 || provenance.player >= 4 || provenance.generation == 0) {
+        return false;
+    }
+    for (const auto& effect : m_effects) {
+        if (effect->id == id) {
+            if (effect->provenance && *effect->provenance != provenance) {
+                return false;
+            }
+            effect->provenance = provenance;
+            return true;
+        }
+    }
+    return false;
+}
+
 void EffectTrees::moveTo(u32 id, const Vec3& position) {
     for (const std::unique_ptr<Effect>& effect : m_effects) {
         if (effect->id == id) {
@@ -224,13 +466,9 @@ u32 EffectTrees::startParticles(RenderDevice& device, ItemArchive& archive,
     auto effect = std::make_unique<Effect>();
     effect->instance = m_nextInstance++;
     effect->id = m_nextId++;
-    effect->name = descriptor.texture;
-    effect->attachment = attachment;
-    effect->position = Vec3{attachment[3]};
     effect->archive = &archive;
-    effect->particleTextureSlot = textureSlot;
-    effect->trails.start(descriptor, attachment, &archive.textures.texture(device, textureSlot),
-                         effect->id);
+    initializeParticles(*effect, descriptor, archive.textures.texture(device, textureSlot),
+                        textureSlot, attachment, effect->id);
     const bool known = std::ranges::any_of(m_motions, [&](const auto& motion) {
         return motion->archive == &archive && motion->lenders.empty();
     });
@@ -245,23 +483,18 @@ u32 EffectTrees::startParticles(RenderDevice& device, ItemArchive& archive,
     return id;
 }
 
-u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::string_view tree,
-                          const Vec3& position, const Setting& setting,
-                          std::span<TextureSet* const> textureLenders) {
-    if (m_nextInstance == 0) {
-        return 0;
-    }
-    const auto index = archive.loaded() ? archive.trees.find(tree) : std::nullopt;
-    if (!index.has_value()) {
-        log::warn("Effects: no tree {} to play", tree);
-        return 0;
-    }
-    auto effect = std::make_unique<Effect>();
-    effect->instance = m_nextInstance++;
-    effect->tree = &archive.trees.tree(*index);
-    effect->name = std::string(tree);
-    effect->id = m_nextId++;
-    effect->position = position;
+void EffectTrees::initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
+                                      const Texture& texture, u32 textureSlot,
+                                      const Mat4& attachment, u32 seed) {
+    effect.name = descriptor.texture;
+    effect.attachment = attachment;
+    effect.position = Vec3{attachment[3]};
+    effect.particleTextureSlot = textureSlot;
+    effect.trails.start(descriptor, attachment, &texture, seed);
+}
+
+void EffectTrees::initializeTree(Effect& value, const Setting& setting) {
+    auto* effect = &value;
     effect->scale = setting.scale;
     effect->stretch = setting.stretch;
     effect->fadeSeconds = setting.fadeSeconds;
@@ -283,10 +516,6 @@ u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::strin
     effect->morphIn = setting.morphIn;
     effect->holdForMorph = setting.holdForMorph;
     effect->shrinks = setting.shrinks;
-    effect->device = &device;
-    effect->archive = &archive;
-    effect->lenders.assign(textureLenders.begin(), textureLenders.end());
-    effect->lenders.insert(effect->lenders.end(), m_lenders.begin(), m_lenders.end());
     if (setting.seconds > 0.0f) {
         effect->secondsLeft = setting.seconds;
     }
@@ -309,6 +538,30 @@ u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::strin
             effect->secondsLeft = 30.0f * effect->player.secondsPerFrame();
         }
     }
+}
+
+u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::string_view tree,
+                          const Vec3& position, const Setting& setting,
+                          std::span<TextureSet* const> textureLenders) {
+    if (m_nextInstance == 0) {
+        return 0;
+    }
+    const auto index = archive.loaded() ? archive.trees.find(tree) : std::nullopt;
+    if (!index.has_value()) {
+        log::warn("Effects: no tree {} to play", tree);
+        return 0;
+    }
+    auto effect = std::make_unique<Effect>();
+    effect->instance = m_nextInstance++;
+    effect->tree = &archive.trees.tree(*index);
+    effect->name = std::string(tree);
+    effect->id = m_nextId++;
+    effect->position = position;
+    effect->device = &device;
+    effect->archive = &archive;
+    effect->lenders.assign(textureLenders.begin(), textureLenders.end());
+    effect->lenders.insert(effect->lenders.end(), m_lenders.begin(), m_lenders.end());
+    initializeTree(*effect, setting);
     if (!bindVisuals(*effect)) {
         return 0;
     }
@@ -335,6 +588,85 @@ u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::strin
     }
     m_effects.push_back(std::move(effect));
     return id;
+}
+
+u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
+                               const Setting& setting, const Mat4& particleAttachment,
+                               std::optional<u32> particleSeed) {
+    if (m_nextInstance == 0 || m_nextId == 0 || prepared.archive == nullptr ||
+        prepared.textures == nullptr || !setting.then.empty() || setting.morphIn ||
+        setting.holdForMorph) {
+        return 0;
+    }
+    auto effect = std::make_unique<Effect>();
+    effect->archive = prepared.archive;
+    effect->lenders.assign(prepared.lenders.begin(), prepared.lenders.end());
+    if (prepared.tree != nullptr) {
+        if (prepared.model == nullptr || prepared.particles == nullptr ||
+            prepared.descriptor != nullptr ||
+            (!prepared.model->bound() && prepared.particles->field().size() == 0)) {
+            return 0;
+        }
+        effect->tree = prepared.tree;
+        effect->name = prepared.tree->name;
+        effect->position = position;
+        initializeTree(*effect, setting);
+        effect->model = *prepared.model;
+        effect->model.setAppearance(effect->unlit, effect->tint, effect->depthWrite,
+                                    effect->additive);
+        effect->model.setFrame(0, static_cast<s32>(effect->player.frame()));
+        if (effect->emitParticles) {
+            effect->particles = *prepared.particles;
+            // The prototype has not advanced. Updating its nodes at zero seconds
+            // recreates bind's placement without reseeding or allocating artwork.
+            effect->particles.setLocalScales(effect->pose.poses());
+            effect->particles.step(0, effect->transform(), effect->pose.matrices());
+        }
+        if (!effect->model.bound() && effect->particles.field().size() == 0) {
+            return 0;
+        }
+    } else {
+        if (prepared.descriptor == nullptr || prepared.texture == nullptr ||
+            !prepared.textureSlot || !prepared.lenders.empty() || !particleSeed) {
+            return 0;
+        }
+        initializeParticles(*effect, *prepared.descriptor, *prepared.texture, *prepared.textureSlot,
+                            particleAttachment, *particleSeed);
+    }
+    if (!prepareBank(prepared)) {
+        return 0;
+    }
+    if (effect->tree != nullptr) {
+        for (const auto& motion : m_motions) {
+            if (motion->archive == effect->archive && motion->lenders == effect->lenders) {
+                motion->animator.apply(effect->model, *effect->tree, 0, effect->player.frame());
+                motion->animator.apply(effect->particles, *effect->tree, 0, effect->player.frame());
+            }
+        }
+    }
+    effect->instance = m_nextInstance++;
+    effect->id = m_nextId++;
+    const u32 id = effect->id;
+    m_effects.push_back(std::move(effect));
+    return id;
+}
+
+bool EffectTrees::prepareBank(const Prepared& prepared) {
+    if (prepared.archive == nullptr || prepared.textures == nullptr) {
+        return false;
+    }
+    const bool known = std::ranges::any_of(m_motions, [&](const auto& motion) {
+        return motion->archive == prepared.archive &&
+               std::ranges::equal(motion->lenders, prepared.lenders);
+    });
+    if (!known) {
+        auto motion = std::make_unique<Motion>();
+        motion->archive = prepared.archive;
+        motion->lenders.assign(prepared.lenders.begin(), prepared.lenders.end());
+        motion->animator = *prepared.textures;
+        m_motions.push_back(std::move(motion));
+    }
+    return true;
 }
 
 void EffectTrees::lights(std::vector<PointLight>& out) const {

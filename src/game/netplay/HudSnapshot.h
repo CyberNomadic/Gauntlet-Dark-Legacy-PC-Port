@@ -142,10 +142,19 @@ struct HudHelp {
     bool valid() const;
 };
 struct HudSnapshot {
+    struct Ceremony {
+        enum class Kind : u8 { None, Promotion, Rune, Shard, Followup };
+        Kind kind = Kind::None;
+        u32 index = 0;
+        u32 page = 0;
+        u32 letters = 0;
+        bool valid() const;
+    };
     static constexpr usize kMaxCards = 24;
     static constexpr usize kMaxBossBars = 3;
     bool visible = true;
     HudScreen screen;
+    Ceremony ceremony;
     std::optional<HudHourglass> hourglass;
     std::optional<f32> runeFill;
     std::optional<HudScroll> scroll;
@@ -158,7 +167,7 @@ struct HudSnapshot {
 };
 class HudPacket {
 public:
-    static constexpr usize kHeaderBytes = 104;
+    static constexpr usize kHeaderBytes = 120;
     static constexpr usize kSeatBytes = 116;
     static constexpr usize kCardBytes = 12;
     static constexpr usize kCountBytes = 12;

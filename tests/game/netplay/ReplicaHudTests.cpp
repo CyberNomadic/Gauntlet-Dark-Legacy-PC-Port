@@ -44,6 +44,28 @@ HudPlayer player() {
     result.labelY = StatusBoxPainter::kY - PowerupSelector::kLabelRise;
     return result;
 }
+TEST_CASE("ceremony captions carry bounded native identities and typing progress",
+          "[netplay][replica-hud]") {
+    HudSnapshot state;
+    state.players[2] = player();
+    state.ceremony = {HudSnapshot::Ceremony::Kind::Promotion, 2, 0, 45};
+    const auto encoded = HudPacket::encode(state);
+    REQUIRE(encoded);
+    const auto decoded = HudPacket::decode(*encoded);
+    REQUIRE(decoded);
+    CHECK(HudPacket::encode(*decoded) == encoded);
+    state.ceremony.index = 1;
+    CHECK_FALSE(state.valid()); // A promotion cannot name an empty player slot.
+    state.ceremony = {HudSnapshot::Ceremony::Kind::Followup, 4, 2, 120};
+    CHECK(state.valid());
+    state.ceremony.index = 5;
+    CHECK_FALSE(state.valid());
+    state.ceremony = {HudSnapshot::Ceremony::Kind::Shard, 8, 0, 0};
+    CHECK(state.valid());
+    state.ceremony.letters = 4097;
+    CHECK_FALSE(state.valid());
+}
+
 TEST_CASE("HUD wire records are bounded canonical display values for each sparse seat roster",
           "[netplay][replica-hud]") {
     for (u32 mask = 0; mask < 16; ++mask) {

@@ -158,8 +158,12 @@ TEST_CASE("native final bosses synchronize ending movies results and the correct
     REQUIRE_FALSE(scene.bossView()->alive);
     CHECK_FALSE(scene.victory().finished());
     bool farewell = false;
+    // Same-update delivery can let the guest open its movie before the host's
+    // next local loading step. Await both machines, not a fixed polling order.
     for (s32 tick = 0;
-         tick < 9000 && pair.guest.completion().phase() != OnlineCompletion::Phase::Movie; ++tick) {
+         tick < 9000 && (pair.guest.completion().phase() != OnlineCompletion::Phase::Movie ||
+                         pair.host.completion().phase() != OnlineCompletion::Phase::Movie);
+         ++tick) {
         if (const auto* current = pair.host.hostScene(); current && current->victory().caption()) {
             farewell |= current->victory().caption()->message ==
                         (kind == 44 ? "GARM2_SPEECH" : "SKORNE2_SPEECH");

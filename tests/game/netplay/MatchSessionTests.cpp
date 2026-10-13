@@ -26,6 +26,7 @@ struct Wire final : PacketTransport {
     bool feedbackCongested = false;
     usize budget = std::numeric_limits<usize>::max();
     std::vector<Packet> sent;
+    std::optional<Statistics> stats;
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
         if (feedbackCongested && FeedbackSync::recognizes(bytes)) {
             return SendResult::Congested;
@@ -40,9 +41,7 @@ struct Wire final : PacketTransport {
         return result;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection /*connection*/) const override {
-        return std::nullopt;
-    }
+    std::optional<Statistics> statistics(Connection /*connection*/) const override { return stats; }
     void close(Connection /*connection*/) override {}
 };
 
@@ -756,7 +755,7 @@ TEST_CASE("local devices map to frozen global seats without UI pointers",
         CHECK(input.menu.typed.empty());
         CHECK_FALSE(input.menu.pointer);
     }
-    CHECK_FALSE((*MatchInputs::advance(host))[1].throwPotion);
+    CHECK((*MatchInputs::advance(host))[1].throwPotion);
 }
 
 TEST_CASE("spoofed trailing input cannot partially apply an otherwise valid command",
@@ -768,7 +767,7 @@ TEST_CASE("spoofed trailing input cannot partially apply an otherwise valid comm
     input.epoch = host.context().epoch;
     input.grant = host.context().grants[1];
     input.seat = 1;
-    input.pressedButtons = static_cast<u32>(CommandPress::ThrowPotion);
+    input.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
     auto spoof = input;
     spoof.seat = 0;
     const std::array commands{input, spoof};
@@ -777,8 +776,8 @@ TEST_CASE("spoofed trailing input cannot partially apply an otherwise valid comm
     CHECK(host.receive(1, *packet) == Admission::WrongPeer);
     const auto frame = host.advance();
     REQUIRE(frame);
-    CHECK_FALSE((*frame)[1].pressed(CommandPress::ThrowPotion));
-    CHECK_FALSE((*frame)[0].pressed(CommandPress::ThrowPotion));
+    CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
+    CHECK_FALSE((*frame)[0].pressed(CommandPress::UsePotion));
     input.tick = host.tick() + InputTimeline::kMaxAhead + 1;
     const auto future = InputPacket::encode(std::span(&input, 1));
     REQUIRE(future);
@@ -810,7 +809,7 @@ TEST_CASE("a stalled host bounds guest input lead and coalesces pending actions"
     auto& guest = room.sessions[2];
     SessionInputs::Frame input;
     for (u32 tick = 0; tick < 600; ++tick) {
-        input[0].throwPotion = tick == 200;
+        input[0].usePotion = tick == 200;
         input[1].selector.up = tick == 300;
         input[0].attack = tick < 500;
         REQUIRE(MatchInputs::sample(guest, input));
@@ -834,7 +833,7 @@ TEST_CASE("a stalled host bounds guest input lead and coalesces pending actions"
         const auto frame = host.advance();
         REQUIRE(frame);
         for (usize seat = 0; seat < 4; ++seat) {
-            potions[seat] += (*frame)[seat].pressed(CommandPress::ThrowPotion) ? 1U : 0U;
+            potions[seat] += (*frame)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
             selections[seat] += (*frame)[seat].pressed(CommandPress::SelectorUp) ? 1U : 0U;
         }
         if (tick >= pendingTick) {
@@ -861,7 +860,7 @@ TEST_CASE("pending guest presses are atomic and cannot leak across pause or trav
         REQUIRE(MatchInputs::sample(guest, {}));
     }
     SessionInputs::Frame input;
-    input[0].throwPotion = true;
+    input[0].usePotion = true;
     REQUIRE(MatchInputs::sample(guest, input));
     SECTION("pause discards pending gameplay") {
         REQUIRE(host.requestPause());
@@ -895,7 +894,7 @@ TEST_CASE("pending guest presses are atomic and cannot leak across pause or trav
             const auto received = host.advance();
             REQUIRE(received);
             CHECK_FALSE((*received)[1].pressed(CommandPress::Attack));
-            potions += (*received)[1].pressed(CommandPress::ThrowPotion) ? 1U : 0U;
+            potions += (*received)[1].pressed(CommandPress::UsePotion) ? 1U : 0U;
         }
         CHECK(potions == 1);
         return;
@@ -906,7 +905,7 @@ TEST_CASE("pending guest presses are atomic and cannot leak across pause or trav
         room.pump();
         const auto frame = host.advance();
         REQUIRE(frame);
-        CHECK_FALSE((*frame)[1].pressed(CommandPress::ThrowPotion));
+        CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
         REQUIRE(host.publish(snapshot(host)));
         room.pump();
     }
@@ -952,7 +951,7 @@ TEST_CASE("pause resume and travel isolate queued actions and replicated state b
     auto& guest = room.sessions[2];
     const auto oldReady = message(guest, MatchControlKind::Ready);
     SessionInputs::Frame input;
-    input[0].throwPotion = true;
+    input[0].usePotion = true;
     input[0].attack = true;
     REQUIRE(MatchInputs::sample(guest, input));
     room.pump();
@@ -985,7 +984,7 @@ TEST_CASE("pause resume and travel isolate queued actions and replicated state b
         const auto frame = host.advance();
         REQUIRE(frame);
         CHECK_FALSE((*frame)[1].held(CommandHeld::Attack));
-        CHECK_FALSE((*frame)[1].pressed(CommandPress::ThrowPotion));
+        CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
     }
     room.ready(MatchTransition::Travel, 8);
     CHECK(host.tick() == 0);
@@ -1257,4 +1256,150 @@ TEST_CASE("match lifecycle drives real four player movement events and one share
         CHECK(glm::length(players[seat].actor.position() - starts[seat]) > 1);
     }
 }
+TEST_CASE("input scheduling adapts to delayed lossy links without repeating late edges",
+          "[netplay][prediction][match-session]") {
+    const u64 latency = GENERATE(0, 3, 6, 9);
+    const bool measuredPath = GENERATE(false, true);
+    Room room({1, 2, 0, 0});
+    if (measuredPath) {
+        room.wires[2].stats = PacketTransport::Statistics{static_cast<s32>(latency * 1000 / 30)};
+    }
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    struct Delayed {
+        u64 due;
+        bool toHost;
+        std::vector<u8> bytes;
+    };
+    std::vector<Delayed> pending;
+    usize serial = 0;
+    u32 lateAtWarmup = 0;
+    usize actions = 0;
+    for (u64 tick = 0; tick < 900; ++tick) {
+        std::ranges::stable_sort(pending, {}, &Delayed::due);
+        for (const auto& packet : pending) {
+            if (packet.due > tick) {
+                break;
+            }
+            const auto admitted =
+                packet.toHost ? host.receive(1, packet.bytes) : guest.receive(99, packet.bytes);
+            REQUIRE((admitted == Admission::Accepted || admitted == Admission::Stale));
+        }
+        std::erase_if(pending, [tick](const auto& packet) { return packet.due <= tick; });
+        SessionInputs::Frame local;
+        local[0].move = {{0, 1}, 1};
+        local[0].usePotion = tick % 60 == 0 && (tick >= 400 || measuredPath);
+        REQUIRE(MatchInputs::sample(guest, local));
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        actions += (*frame)[1].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        if (tick % 3 == 0) {
+            auto state = snapshot(host);
+            const auto& diagnostics = host.inputDiagnostics(1);
+            state.players[1]->movement.receivedInput = diagnostics.received.value_or(0);
+            state.players[1]->movement.arrivalMargin = diagnostics.arrivalMargin;
+            state.players[1]->movement.lateInputs = diagnostics.late;
+            REQUIRE(host.publish(state));
+        }
+        for (const u8 peer : {u8{1}, u8{2}}) {
+            room.sessions[peer].flush(room.wires[peer]);
+            for (const auto& packet : room.wires[peer].sent) {
+                ++serial;
+                if (serial % 11 == 0) {
+                    continue;
+                }
+                const Delayed delivery{tick + latency + serial % 3, peer == 2, packet.bytes};
+                pending.push_back(delivery);
+                if (serial % 7 == 0) {
+                    auto duplicate = delivery;
+                    duplicate.due += 4;
+                    pending.push_back(std::move(duplicate));
+                }
+            }
+            room.wires[peer].sent.clear();
+        }
+        if (tick == 400) {
+            lateAtWarmup = host.inputDiagnostics(1).late;
+        }
+        CHECK(guest.inputLead() <= 30);
+    }
+    CAPTURE(latency, guest.inputLead(), lateAtWarmup, host.inputDiagnostics(1).late);
+    CHECK(host.inputDiagnostics(1).late == lateAtWarmup);
+    CHECK(actions == (measuredPath ? 15 : 8));
+    CHECK(guest.inputTick() < host.tick() + 36);
+}
+
+TEST_CASE("new scenes seed their first input deadline from measured path RTT",
+          "[netplay][latency][match-session]") {
+    const s32 rtt = GENERATE(-1, 0, 1, 50, 150, 300, 2000);
+    Room room({1, 2, 0, 0});
+    room.wires[2].stats = PacketTransport::Statistics{rtt};
+    room.ready();
+    auto& guest = room.sessions[2];
+    const auto expected =
+        static_cast<u8>(rtt < 0 ? 3 : std::min(30, 3 + (std::min(rtt, 500) * 60 + 999) / 1000));
+    CHECK(guest.inputLead() == expected);
+    CHECK(guest.inputTick() == expected);
+    REQUIRE(MatchInputs::sample(guest, {}));
+    CHECK(guest.sampledInputs().front().tick == expected);
+    // Travel remeasures the path instead of keeping the old scene's high lead.
+    room.wires[2].stats = PacketTransport::Statistics{0};
+    room.ready(MatchTransition::Travel, 8);
+    CHECK(guest.inputLead() == 3);
+    CHECK(guest.inputTick() == 3);
+}
+
+TEST_CASE("clean links do not impose a six-tick input floor on guests",
+          "[netplay][latency][match-session]") {
+    const bool sampleAfterHost = GENERATE(false, true);
+    // Two local guest seats and a separate remote seat must share neither input
+    // counters nor pressed edges. Both independently paced update orders work.
+    Room room({1, 2, 2, 3});
+    room.ready();
+    auto& host = room.sessions[1];
+    std::array<s32, 4> actions{};
+    for (u64 tick = 0; tick < 180; ++tick) {
+        const auto sample = [&] {
+            for (u8 peer = 2; peer <= 3; ++peer) {
+                auto& guest = room.sessions[peer];
+                CHECK(guest.inputLead() == 3);
+                CHECK(guest.inputTick() <= host.tick() + 3);
+                SessionInputs::Frame input;
+                for (auto& seat : input) {
+                    seat.usePotion = tick < 160 && tick % 20 == 0;
+                }
+                REQUIRE(MatchInputs::sample(guest, input));
+            }
+            room.pump();
+        };
+        if (!sampleAfterHost) {
+            sample();
+        }
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        for (usize seat = 1; seat < frame->size(); ++seat) {
+            actions[seat] += (*frame)[seat].pressed(CommandPress::UsePotion) ? 1 : 0;
+        }
+        if (tick % 3 == 0) {
+            auto state = snapshot(host);
+            for (usize seat = 1; seat < actions.size(); ++seat) {
+                const auto& feedback = host.inputDiagnostics(seat);
+                state.players[seat]->movement.receivedInput = feedback.received.value_or(0);
+                state.players[seat]->movement.arrivalMargin = feedback.arrivalMargin;
+                state.players[seat]->movement.lateInputs = feedback.late;
+            }
+            REQUIRE(host.publish(state));
+            room.pump();
+        }
+        if (sampleAfterHost) {
+            sample();
+        }
+    }
+    for (usize seat = 1; seat < actions.size(); ++seat) {
+        CHECK(host.inputDiagnostics(seat).late == 0);
+        CHECK(actions[seat] == 8);
+    }
+}
+
 } // namespace

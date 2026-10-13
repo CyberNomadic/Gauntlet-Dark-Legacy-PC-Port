@@ -399,8 +399,10 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         }
     }
     if (!run.finished && session.phase() == OnlineSession::Phase::Failed) {
-        status(*run.device, std::format("Connection failed ({}). Escape exits.",
-                                        static_cast<u32>(session.failure())));
+        status(*run.device, session.failureDetail().empty()
+                                ? std::format("Connection failed ({}). Escape exits.",
+                                              static_cast<u32>(session.failure()))
+                                : session.failureDetail() + ". Escape exits.");
     }
 #else
     (void)devices;

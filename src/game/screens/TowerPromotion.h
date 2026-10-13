@@ -47,6 +47,9 @@ public:
     const Entry* current() const { return active() ? &m_entries[m_current] : nullptr; }
     const std::optional<WorldCamera>& camera() const { return m_camera; }
     const Mat4& wizardTransform() const { return m_transform; }
+    const TreeInfo* tree() const { return m_tree; }
+    const AnimationPlayer& animation() const { return m_player; }
+    f32 textureFrame() const { return static_cast<f32>(m_textures.frame()); }
     usize shown() const;
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 renderAlpha = -1.0f) const;

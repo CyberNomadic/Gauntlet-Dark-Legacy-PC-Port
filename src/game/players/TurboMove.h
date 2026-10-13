@@ -14,11 +14,48 @@ namespace gdl::game {
  * Events run synchronously, with payment settled before the first damaging strike. */
 class TurboMove {
 public:
+    static constexpr usize kMaxCheckpointRows = 128;
+    static constexpr s32 kMaxCheckpointVolleys = 65536;
+    struct Checkpoint {
+        std::vector<s32> pending;
+        std::vector<s32> all;
+        f32 owed = 0;
+        bool named = false;
+        bool weaponHidden = false;
+        std::vector<s32> volleysShot;
+        bool operator==(const Checkpoint&) const = default;
+    };
+
+    Checkpoint checkpoint() const;
+    static bool valid(const Checkpoint& state);
+    /** Validates row references against local class data; no events or payment occur. */
+    bool restore(const Checkpoint& state, const ClassStats* stats);
+    /** Additionally requires the retained rows and debt to belong to this native action. */
+    bool restore(const Checkpoint& state, const ClassStats* stats, PlayerAnimator::Action action);
+
+    struct Volley {
+        Vec3 direction{0};
+        usize slot = 0; // occurrence in the retained chain, not the authored row ID
+        s32 index = 0;  // counter before this emission, including skipped-frame catch-up
+        /** Zero means outside the bounded replay domain. The action generation
+         * and seat/epoch are supplied by the caller, not this native timeline. */
+        u32 emissionIdentity() const;
+        bool operator==(const Volley&) const = default;
+    };
+    struct Strike {
+        s32 row = -1;
+        usize slot = 0; ///< occurrence in the complete retained chain, not the pending list
+        bool operator==(const Strike&) const = default;
+    };
     struct Events {
         std::function<void(s32)> announce;
         std::function<void(f32)> dim;
         std::function<void(const Vec3&)> volley;
         std::function<void(s32)> strike;
+        /** When supplied, replaces volley rather than dispatching the same shot twice. */
+        std::function<void(const Volley&)> identifiedVolley;
+        /** When supplied, replaces strike, after the same native payment and volley phases. */
+        std::function<void(const Strike&)> identifiedStrike;
     };
     /** Returns a fallback cry when a turbo attack has no rows and is paid immediately. */
     std::string_view begin(PlayerAnimator::Action action, const ClassStats* known,

@@ -63,7 +63,8 @@ void Rotators::bind(const WorldLayout& layout) {
     }
 }
 
-void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items) {
+void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                           ItemArchive* realmItems) {
     for (Rotator& rotator : m_rotators) {
         rotator.pad.reset();
         if (rotator.subtype != kTurnedByPad) {
@@ -76,7 +77,8 @@ void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, Item
         }
         const ItemInfo& info = layout.itemInfos()[static_cast<usize>(instance.info)];
         auto pad = std::make_unique<ItemFigure>();
-        if (pad->place(device, items, info.name, instance, nullptr)) {
+        ItemArchive& art = itemArchiveForTree(items, info.name, realmItems);
+        if (pad->place(device, art, info.name, instance, nullptr)) {
             rotator.pad = std::move(pad);
         }
     }
@@ -89,15 +91,7 @@ std::vector<RotatorCue> Rotators::update(f32 seconds, std::span<const TriggerVis
     for (usize i = 0; i < m_rotators.size(); ++i) {
         Rotator& rotator = m_rotators[i];
         const Vec3 at = scene.worldTransform(static_cast<usize>(rotator.object))[3];
-        if (rotator.subtype == kSpinning) {
-            rotator.turned = std::remainder(rotator.turned + rotator.speed * ticks, 2.0f * kPi);
-            place(rotator, scene);
-            continue;
-        }
-        if (rotator.done) {
-            continue;
-        }
-        if (!rotator.started) {
+        if (rotator.subtype != kSpinning && !rotator.done && !rotator.started) {
             for (const TriggerVisitor& visitor : visitors) {
                 const Vec3 away = visitor.position - rotator.spot;
                 const f32 reach = rotator.radius + visitor.radius;
@@ -106,24 +100,91 @@ std::vector<RotatorCue> Rotators::update(f32 seconds, std::span<const TriggerVis
                     rotator.started = true;
                 }
             }
-            if (!rotator.started) {
-                continue;
-            }
         }
-        // It turns until it has gone its angle, then stops where it is (the last step may
-        // carry it a little past, as the original's does).
-        const bool reached = rotator.speed >= 0.0f ? rotator.turned >= rotator.limit
-                                                   : rotator.turned <= -rotator.limit;
-        if (reached) {
-            rotator.done = true;
-            cues.push_back(RotatorCue{RotatorCue::Kind::Stopped, i, at});
-            continue;
+        if (const auto cue = advance(rotator, ticks, scene)) {
+            cues.push_back(RotatorCue{*cue, i, at});
         }
-        rotator.turned += rotator.speed * ticks;
-        place(rotator, scene);
-        cues.push_back(RotatorCue{RotatorCue::Kind::Turning, i, at});
     }
     return cues;
+}
+
+std::optional<RotatorCue::Kind> Rotators::advance(Rotator& rotator, f32 ticks, WorldScene& scene) {
+    if (rotator.subtype == kSpinning) {
+        rotator.turned = std::remainder(rotator.turned + rotator.speed * ticks, 2.0f * kPi);
+        place(rotator, scene);
+        return std::nullopt;
+    }
+    if (rotator.done || !rotator.started) {
+        return std::nullopt;
+    }
+    // It turns until it has gone its angle, then stops where it is (the last step may
+    // carry it a little past, as the original's does).
+    const bool reached =
+        rotator.speed >= 0.0f ? rotator.turned >= rotator.limit : rotator.turned <= -rotator.limit;
+    if (reached) {
+        rotator.done = true;
+        return RotatorCue::Kind::Stopped;
+    }
+    rotator.turned += rotator.speed * ticks;
+    place(rotator, scene);
+    return RotatorCue::Kind::Turning;
+}
+
+bool Rotators::Cursor::valid() const {
+    return instance >= 0 && instance < 65535 && object >= 0 && object < 65535 &&
+           std::isfinite(turned) && std::abs(turned) <= 1'000'000 && (!done || started);
+}
+
+std::vector<Rotators::Cursor> Rotators::checkpoint() const {
+    std::vector<Cursor> result;
+    result.reserve(m_rotators.size());
+    for (const auto& rotator : m_rotators) {
+        result.push_back(
+            {rotator.instance, rotator.object, rotator.turned, rotator.started, rotator.done});
+    }
+    return result;
+}
+
+bool Rotators::accepts(std::span<const Cursor> state) const {
+    if (state.size() != m_rotators.size() || state.size() > kMaxCursors) {
+        return false;
+    }
+    for (usize index = 0; index < state.size(); ++index) {
+        const auto& cursor = state[index];
+        const auto& rotator = m_rotators[index];
+        if (!cursor.valid() || cursor.object != rotator.object ||
+            cursor.instance != rotator.instance || !std::isfinite(rotator.speed) ||
+            !std::isfinite(rotator.limit) ||
+            (rotator.subtype == kSpinning &&
+             (cursor.started || cursor.done || std::abs(cursor.turned) > kPi))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Rotators::restore(std::span<const Cursor> state) {
+    if (!accepts(state)) {
+        return false;
+    }
+    for (usize index = 0; index < state.size(); ++index) {
+        auto& rotator = m_rotators[index];
+        const auto& cursor = state[index];
+        rotator.turned = cursor.turned;
+        rotator.started = cursor.started;
+        rotator.done = cursor.done;
+    }
+    return true;
+}
+
+bool Rotators::advanceMotion(f32 seconds, WorldScene& scene) {
+    if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) {
+        return false;
+    }
+    for (auto& rotator : m_rotators) {
+        advance(rotator, seconds * kTicksPerSecond, scene);
+    }
+    return true;
 }
 
 void Rotators::place(const Rotator& rotator, WorldScene& scene) {

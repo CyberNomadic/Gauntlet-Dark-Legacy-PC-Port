@@ -68,7 +68,7 @@ TEST_CASE("duplicate reordered and late packets cannot replay or rewrite actions
     CHECK(timeline.submit(2, second) == Admission::TooLate);
 }
 
-TEST_CASE("lost inputs repeat held state briefly but never potions selectors or press edges",
+TEST_CASE("lost inputs repeat held state briefly but never potion-use selectors or press edges",
           "[netplay][input-timeline]") {
     InputTimeline timeline;
     REQUIRE(timeline.assign(0, 2));
@@ -152,5 +152,23 @@ TEST_CASE("future input storage is bounded by seats and the allowed tick window"
         CHECK(timeline.advance()[0].tick == tick);
     }
     CHECK(timeline.advance()[0].pressedButtons == 0);
+}
+TEST_CASE("input admission telemetry ignores duplicate late commands and resets with the epoch",
+          "[netplay][prediction][input-timeline]") {
+    InputTimeline timeline;
+    REQUIRE(timeline.assign(0, 2));
+    auto command = commandFor(timeline);
+    timeline.advance();
+    CHECK(timeline.submit(2, command) == Admission::TooLate);
+    CHECK(timeline.diagnostics(0).late == 1);
+    CHECK(timeline.diagnostics(0).arrivalMargin == -1);
+    CHECK(timeline.submit(2, command) == Admission::TooLate);
+    CHECK(timeline.diagnostics(0).late == 1);
+    command.tick = timeline.tick() + 3;
+    CHECK(timeline.submit(2, command) == Admission::Accepted);
+    CHECK(timeline.diagnostics(0).arrivalMargin == 3);
+    timeline.beginEpoch();
+    CHECK_FALSE(timeline.diagnostics(0).received);
+    CHECK(timeline.diagnostics(0).late == 0);
 }
 } // namespace

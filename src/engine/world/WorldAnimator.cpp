@@ -44,6 +44,55 @@ void WorldAnimator::clear() {
     m_cycleEvents.clear();
 }
 
+bool WorldAnimator::Cursor::valid() const {
+    if (object < 0 || frames <= 0 || !std::isfinite(frame) || frame < 0 ||
+        frame > static_cast<f32>(frames - 1)) {
+        return false;
+    }
+    if (held) {
+        return once && reverse && finished && frame == 0;
+    }
+    if (finished) {
+        return reverse ? frame == 0 : once && frame == static_cast<f32>(frames - 1);
+    }
+    return true;
+}
+
+std::vector<WorldAnimator::Cursor> WorldAnimator::checkpoint() const {
+    std::vector<Cursor> result;
+    result.reserve(m_tracks.size());
+    for (const auto& track : m_tracks) {
+        result.push_back({track.object, track.frames, track.frame, track.reverse, track.once,
+                          track.finished, track.held, track.presentationCut});
+    }
+    return result;
+}
+
+bool WorldAnimator::restore(std::span<const Cursor> cursors) {
+    if (cursors.size() != m_tracks.size()) {
+        return false;
+    }
+    for (usize i = 0; i < cursors.size(); ++i) {
+        const auto& cursor = cursors[i];
+        const auto& track = m_tracks[i];
+        if (!cursor.valid() || cursor.object != track.object || cursor.frames != track.frames) {
+            return false;
+        }
+    }
+    for (usize i = 0; i < cursors.size(); ++i) {
+        const auto& cursor = cursors[i];
+        auto& track = m_tracks[i];
+        track.frame = cursor.frame;
+        track.reverse = cursor.reverse;
+        track.once = cursor.once;
+        track.finished = cursor.finished;
+        track.held = cursor.held;
+        track.presentationCut = cursor.presentationCut;
+    }
+    m_cycleEvents.clear();
+    return true;
+}
+
 std::optional<usize> WorldAnimator::trackOf(s32 object) const {
     for (usize i = 0; i < m_tracks.size(); ++i) {
         if (m_tracks[i].object == object) {

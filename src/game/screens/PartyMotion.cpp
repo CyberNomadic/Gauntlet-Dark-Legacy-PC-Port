@@ -18,7 +18,8 @@ constexpr f32 kChargeStick = 0.25f;
 /** A shoved body moving less than this a second shows no push (0.01 a 30 Hz frame,
  * pmotion.c 2042). */
 constexpr f32 kPushedStep = 0.3f;
-f32 turboHeading(f32 current, f32 wanted, f32 seconds, f32 turnScale) {
+} // namespace
+f32 PartyMotion::turboHeading(f32 current, f32 wanted, f32 seconds, f32 turnScale) {
     // PlayerMotion (80085450): 900 degrees/second times the action's turn scale,
     // clamped to the shortest remaining angle, not a fraction of that angle.
     constexpr f32 kTurnRate = 5.0f * std::numbers::pi_v<f32>;
@@ -26,27 +27,32 @@ f32 turboHeading(f32 current, f32 wanted, f32 seconds, f32 turnScale) {
     const f32 delta = std::remainder(wanted - current, 2.0f * std::numbers::pi_v<f32>);
     return current + std::clamp(delta, -limit, limit);
 }
-} // namespace
 PlayerDeed PartyMotion::turboDeed(const PlayerRuntime& runtime, const PlayInput& in) {
     if (runtime.figure == nullptr) {
         return PlayerDeed::None;
     }
-    const TurboMeter& meter = runtime.turbo;
+    const bool pojo = in.turboAttackPressed &&
+                      (PowerupEffects::of(runtime.actor.save().progress().inventory).special &
+                       powerup::kPojo) != 0;
+    return turboDeed(runtime.figure->animator(), runtime.turbo.held(), in, pojo);
+}
+
+PlayerDeed PartyMotion::turboDeed(const PlayerAnimator& animator, f32 meter, const PlayInput& in,
+                                  bool pojo) {
     PlayerDeed deed = PlayerDeed::None;
     if (in.turboAttackPressed) {
-        const auto worn = PowerupEffects::of(runtime.actor.save().progress().inventory);
-        if ((worn.special & powerup::kPojo) != 0 && meter.held() >= TurboMeter::kStrongCost) {
+        if (pojo && meter >= TurboMeter::kStrongCost) {
             // PlayerMotion case 21: Pojo uses ATTBREATHE at 40, even with a full bar.
             deed = PlayerDeed::Breathe;
-        } else if (meter.held() >= TurboMeter::kFullCost) {
+        } else if (meter >= TurboMeter::kFullCost) {
             deed = PlayerDeed::TurboFull;
-        } else if (meter.held() >= TurboMeter::kStrongCost) {
+        } else if (meter >= TurboMeter::kStrongCost) {
             deed = PlayerDeed::TurboStrong;
         }
-    } else if (in.chargePressed && meter.held() >= TurboMeter::kShoveFrom) {
+    } else if (in.chargePressed && meter >= TurboMeter::kShoveFrom) {
         deed = PlayerDeed::Shove;
     }
-    return runtime.figure->animator().canBegin(deed) ? deed : PlayerDeed::None;
+    return animator.canBegin(deed) ? deed : PlayerDeed::None;
 }
 
 MoveInput PartyMotion::chargeInput(const PlayerActor& actor, const MoveInput& stick,
@@ -108,6 +114,58 @@ StrafeWay PartyMotion::strafeWayOf(f32 heading, f32 facing) {
         return StrafeWay::Right; // the original's sense of a positive turn
     }
     return off < -kEighth ? StrafeWay::Left : StrafeWay::Forward;
+}
+
+f32 PartyMotion::actionPace(const PlayerAnimator* animator, PlayerDeed deed, bool webbed) {
+    const bool closeAttack = deed == PlayerDeed::AutoMelee || deed == PlayerDeed::AutoMeleeLow ||
+                             deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow ||
+                             deed == PlayerDeed::MeleeSlow || deed == PlayerDeed::MeleeSlowLow;
+    f32 pace = animator != nullptr ? animator->moveScale() : 1.0f;
+    const bool itemAttack = deed == PlayerDeed::SuperShot || deed == PlayerDeed::Hammer ||
+                            deed == PlayerDeed::Breathe || deed == PlayerDeed::FireLeft ||
+                            deed == PlayerDeed::FireRight;
+    const bool swingStarts = closeAttack && (animator == nullptr || !animator->meleeing());
+    if (swingStarts && (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee)) {
+        // The first input frame moves before the animation changes. Do not
+        // bypass an existing reaction/arrival lock to start a quick swing.
+        pace = std::min(pace, PlayerAnimator::kQuickMeleePace);
+    } else if (swingStarts || itemAttack) {
+        pace = 0;
+    } else if (deed == PlayerDeed::StrongAttack && animator != nullptr &&
+               animator->canBegin(deed)) {
+        // PlayerMotion consumes PWRA_THROW's A48=.25 even on its first frame.
+        // Held heavy input must not override a spin or power swing already playing.
+        pace = std::min(pace, PlayerAnimator::kStrongThrowPace);
+    }
+    return webbed ? PlayerAnimator::kWebPace : pace;
+}
+
+MoveInput PartyMotion::attackMove(const PlayerActor& actor, const PlayerAnimator* animator,
+                                  const MoveInput& move, PlayerDeed deed, f32 cameraYaw,
+                                  f32 seconds, bool mayLunge, bool steeringTurbo) {
+    MoveInput result = move;
+    // A quick swing starts without turning; a step carries along the facing
+    // even after the stick is released. Do not confuse that motion with Stand.
+    const bool quickStarts = (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee) &&
+                             (animator == nullptr || !animator->meleeing());
+    f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
+    if (quickStarts) {
+        turn = 0;
+    }
+    if (move.any() && (turn < 1.0f || steeringTurbo)) {
+        const f32 wanted = PlayerActor::headingOf(move, cameraYaw);
+        const f32 share = 1.0f - std::pow(1.0f - turn, seconds * kTurnFrames);
+        const f32 heading =
+            steeringTurbo
+                ? turboHeading(actor.yaw(), wanted, seconds, turn)
+                : actor.yaw() +
+                      std::remainder(wanted - actor.yaw(), 2.0f * std::numbers::pi_v<f32>) * share;
+        result.direction = Vec2{std::sin(heading - cameraYaw), std::cos(heading - cameraYaw)};
+    } else if (!move.any() && animator != nullptr && animator->lunging() && mayLunge) {
+        const f32 heading = actor.yaw() - cameraYaw;
+        result = MoveInput{Vec2{std::sin(heading), std::cos(heading)}, 1.0f};
+    }
+    return result;
 }
 
 void PartyMotion::passIt(std::span<PlayerRuntime> players, s32 ticks, const Events& events,
@@ -353,28 +411,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         actor.setPaceBonus(powerups.paceAdd);
         // Each attack's action controls how far the body may move.
         const bool automatic = deed == PlayerDeed::AutoMelee || deed == PlayerDeed::AutoMeleeLow;
-        const bool closeAttack = automatic || deed == PlayerDeed::Melee ||
-                                 deed == PlayerDeed::MeleeLow || deed == PlayerDeed::MeleeSlow ||
-                                 deed == PlayerDeed::MeleeSlowLow;
-        f32 actionPace = animator != nullptr ? animator->moveScale() : 1.0f;
-        const bool itemAttack = deed == PlayerDeed::SuperShot || deed == PlayerDeed::Hammer ||
-                                deed == PlayerDeed::Breathe || deed == PlayerDeed::FireLeft ||
-                                deed == PlayerDeed::FireRight;
-        // A close attack under way paces the body by its own action.
-        const bool swingStarts = closeAttack && (animator == nullptr || !animator->meleeing());
-        if (swingStarts && (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee)) {
-            // The first input frame moves before the animation changes. Do not
-            // bypass an existing reaction/arrival lock to start a quick swing.
-            actionPace = std::min(actionPace, PlayerAnimator::kQuickMeleePace);
-        } else if (swingStarts || itemAttack) {
-            actionPace = 0;
-        } else if (deed == PlayerDeed::StrongAttack && animator != nullptr &&
-                   animator->canBegin(deed)) {
-            // PlayerMotion consumes PWRA_THROW's A48=.25 even on its first frame.
-            // Held heavy input must not override a spin or power swing already playing.
-            actionPace = std::min(actionPace, PlayerAnimator::kStrongThrowPace);
-        }
-        const f32 pace = webbed ? PlayerAnimator::kWebPace : actionPace;
+        const f32 pace = actionPace(animator, deed, webbed);
         const bool charging =
             players[i].figure != nullptr && players[i].figure->animator().shoving();
         // Strafing, the character steps the way the stick is pushed without turning to it.
@@ -409,31 +446,9 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                 actor.turnTo(*heading);
             }
         }
-        MoveInput attackMove = move;
-        // AnimAction turns a close attack to the stick only part of the way, or not at all
-        // (the quick swings); a step carries on along the facing with the stick let go.
-        const bool quickStarts =
-            (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee) && swingStarts;
-        f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
-        if (quickStarts) {
-            turn = 0.0f;
-        }
-        if (move.any() && (turn < 1.0f || steeringTurbo)) {
-            const f32 wanted = PlayerActor::headingOf(move, cameraYaw);
-            const f32 share = 1.0f - std::pow(1.0f - turn, seconds * kTurnFrames);
-            const f32 heading = steeringTurbo
-                                    ? turboHeading(actor.yaw(), wanted, seconds, turn)
-                                    : actor.yaw() + std::remainder(wanted - actor.yaw(),
-                                                                   2.0f * std::numbers::pi_v<f32>) *
-                                                        share;
-            attackMove.direction =
-                Vec2{std::sin(heading - cameraYaw), std::cos(heading - cameraYaw)};
-        } else if (!move.any() && animator != nullptr && animator->lunging() && !held && !down &&
-                   !immobilized) {
-            const f32 heading = actor.yaw() - cameraYaw;
-            attackMove = MoveInput{Vec2{std::sin(heading), std::cos(heading)}, 1.0f};
-        }
-        actor.update(charging ? chargeInput(actor, move, cameraYaw) : attackMove, cameraYaw,
+        const auto plannedMove = attackMove(actor, animator, move, deed, cameraYaw, seconds,
+                                            !held && !down && !immobilized, steeringTurbo);
+        actor.update(charging ? chargeInput(actor, move, cameraYaw) : plannedMove, cameraYaw,
                      seconds, &collision, pace, strafes);
         if (!down) {
             players[i].attackStep = PlayerRuntime::AttackStep{attackFrom, actor.followPoint()};

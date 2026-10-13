@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "engine/core/Types.h"
 
@@ -29,6 +30,100 @@ bool isFreeMove(PlayerAnimator::Action action) {
            action == PlayerAnimator::Action::PowerMed || action == PlayerAnimator::Action::Spin;
 }
 } // namespace
+
+TurboMove::Checkpoint TurboMove::checkpoint() const {
+    return {m_pending, m_all, m_owed, m_named, m_weaponHidden, m_volleysShot};
+}
+
+u32 TurboMove::Volley::emissionIdentity() const {
+    if (slot >= kMaxCheckpointRows || index < 0 || index >= kMaxCheckpointVolleys) {
+        return 0;
+    }
+    return (static_cast<u32>(slot + 1) << 16U) | static_cast<u32>(index);
+}
+
+bool TurboMove::valid(const Checkpoint& state) {
+    if (state.pending.size() > kMaxCheckpointRows || state.all.size() > kMaxCheckpointRows ||
+        state.volleysShot.size() > kMaxCheckpointRows || !std::isfinite(state.owed) ||
+        (state.owed != 0 && state.owed != TurboMeter::kStrongCost &&
+         state.owed != TurboMeter::kFullCost) ||
+        std::ranges::any_of(state.all, [](s32 row) { return row < 0; }) ||
+        std::ranges::any_of(state.volleysShot,
+                            [](s32 count) { return count < 0 || count > kMaxCheckpointVolleys; })) {
+        return false;
+    }
+    if (state.all.empty()) {
+        // Interruption leaves the named latch and old volley counters intact;
+        // they are harmless until begin() replaces the entire timeline.
+        return state.pending.empty() && state.owed == 0 && !state.weaponHidden;
+    }
+    if (state.volleysShot.size() != state.all.size()) {
+        return false;
+    }
+    usize next = 0;
+    for (const s32 pending : state.pending) {
+        while (next < state.all.size() && state.all[next] != pending) {
+            ++next;
+        }
+        if (next == state.all.size()) {
+            return false;
+        }
+        ++next;
+        // Both full-turbo chains can contain the same row. A native frame
+        // consumes every occurrence together, without sorting or deduplication.
+        if (std::ranges::count(state.pending, pending) != std::ranges::count(state.all, pending)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool TurboMove::restore(const Checkpoint& state, const ClassStats* stats) {
+    if (!valid(state)) {
+        return false;
+    }
+    if (!state.all.empty()) {
+        if (stats == nullptr) {
+            return false;
+        }
+        for (usize slot = 0; slot < state.all.size(); ++slot) {
+            const auto index = static_cast<usize>(state.all[slot]);
+            if (index >= stats->moveStrikes.size() ||
+                (stats->moveStrikes[index].type != MoveStrike::kVolley &&
+                 state.volleysShot[slot] != 0)) {
+                return false;
+            }
+        }
+    }
+    // Copy before replacing any field so a failed allocation cannot leave a
+    // mixture of old and new pending strikes.
+    Checkpoint restored = state;
+    m_pending = std::move(restored.pending);
+    m_all = std::move(restored.all);
+    m_owed = restored.owed;
+    m_named = restored.named;
+    m_weaponHidden = restored.weaponHidden;
+    m_volleysShot = std::move(restored.volleysShot);
+    return true;
+}
+
+bool TurboMove::restore(const Checkpoint& state, const ClassStats* stats,
+                        PlayerAnimator::Action action) {
+    if (!valid(state) || (PlayerAnimator::rollbackShoveAction(action) &&
+                          (state.named || !state.volleysShot.empty()))) {
+        // A charge always begins a fresh, rowless timeline. Unlike a canceled
+        // action's Ready checkpoint it cannot retain old naming/volley residue.
+        return false;
+    }
+    TurboMove expected;
+    TurboMeter meter;
+    expected.begin(action, stats, meter);
+    if (state.all != expected.m_all || (state.owed != 0 && state.owed != expected.m_owed)) {
+        return false;
+    }
+    return restore(state, stats);
+}
+
 std::string_view TurboMove::begin(PlayerAnimator::Action action, const ClassStats* known,
                                   TurboMeter& meter) {
     m_pending.clear();
@@ -125,21 +220,33 @@ void TurboMove::advance(PlayerAnimator::Action action, f32 frame, const Vec3& fa
             volley(slot, row, frame, facing, events);
         }
     }
-    std::vector<s32> due;
+    std::vector<Strike> due;
+    usize nextSlot = 0;
     std::erase_if(m_pending, [&](s32 strike) {
+        // Pending rows are a stable subsequence of m_all. Earlier frames may
+        // consume nonadjacent rows; searching by the remaining occurrence order
+        // also distinguishes repeated authored rows in the two full-turbo chains.
+        while (nextSlot < m_all.size() && m_all[nextSlot] != strike) {
+            ++nextSlot;
+        }
+        const usize slot = nextSlot++;
         const bool now =
             frame >= static_cast<f32>(stats->moveStrikes[static_cast<usize>(strike)].startFrame);
         if (now) {
-            due.push_back(strike);
+            due.push_back({strike, slot});
         }
         return now;
     });
-    for (const s32 strike : due) {
-        if (stats->moveStrikes[static_cast<usize>(strike)].amount != 0.0f && m_owed > 0.0f) {
+    for (const auto& strike : due) {
+        if (stats->moveStrikes[static_cast<usize>(strike.row)].amount != 0.0f && m_owed > 0.0f) {
             meter.spend(m_owed);
             m_owed = 0.0f;
         }
-        events.strike(strike);
+        if (events.identifiedStrike) {
+            events.identifiedStrike(strike);
+        } else {
+            events.strike(strike.row);
+        }
     }
 }
 
@@ -163,7 +270,12 @@ void TurboMove::volley(usize slot, const MoveStrike& strike, f32 frame, const Ve
             angle *= through;
         }
         const f32 heading = std::atan2(facing.x, facing.z) + angle;
-        events.volley(Vec3{std::sin(heading), 0.0f, std::cos(heading)});
+        const Vec3 direction{std::sin(heading), 0.0f, std::cos(heading)};
+        if (events.identifiedVolley) {
+            events.identifiedVolley({direction, slot, m_volleysShot[slot]});
+        } else {
+            events.volley(direction);
+        }
         ++m_volleysShot[slot];
     }
 }

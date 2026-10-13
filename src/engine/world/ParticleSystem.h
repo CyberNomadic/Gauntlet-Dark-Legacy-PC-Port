@@ -23,6 +23,7 @@ struct ParticleEnvelope {
 
     /** The value at `age` frames of a particle living `life` frames and fading `fade` more. */
     f32 at(f32 age, f32 life, f32 fade) const;
+    bool operator==(const ParticleEnvelope&) const = default;
 };
 
 /**
@@ -75,6 +76,7 @@ struct ParticleDescriptor {
     void apply(const ParticleTemplate& source);
     /** How many particles can live at once. */
     u32 capacity() const;
+    bool operator==(const ParticleDescriptor&) const = default;
 };
 
 /** The console's built-in presets, found by their `preset` number. */
@@ -85,6 +87,7 @@ struct Particle {
     Vec3 origin{0.0f, 0.0f, 0.0f};
     Vec3 velocity{0.0f, 0.0f, 0.0f};
     f32 age = 0.0f;
+    bool operator==(const Particle&) const = default;
 };
 
 /**
@@ -97,6 +100,25 @@ class ParticleEmitter {
 public:
     enum class Phase : u8 { Delay, Emitting, Fading, Done };
     static constexpr u32 kMostFramesAtOnce = 15; ///< a longer gap counts as one frame
+
+    /** Value-only state; restore requires the same locally bound descriptor. */
+    struct Checkpoint {
+        ParticleDescriptor descriptor;
+        Mat4 node{1};
+        std::vector<Particle> particles;
+        Phase phase = Phase::Done;
+        u32 age = 0;
+        f32 saved = 0;
+        bool emitting = true;
+        f32 spriteScale = 1;
+        u32 random = 1;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    bool canRestore(const Checkpoint& state) const;
+    /** Rejects invalid or differently bound state without modifying this emitter. */
+    bool restore(const Checkpoint& state);
 
     void start(const ParticleDescriptor& descriptor, const Mat4& node, u32 seed = 1);
     /** Moves the marker; new particles leave from there. */
@@ -132,6 +154,7 @@ private:
     Vec3 newOrigin();
     Vec3 newVelocity();
     f32 random01();
+    u32 randomInteger();
 
     ParticleDescriptor m_descriptor;
     Mat4 m_node{1.0f};
@@ -142,6 +165,7 @@ private:
     bool m_emitting = true;
     f32 m_spriteScale = 1.0f;
     std::minstd_rand m_random;
+    u32 m_randomState = 1; ///< exact scalar state of the unchanged native random engine
 };
 
 } // namespace gdl

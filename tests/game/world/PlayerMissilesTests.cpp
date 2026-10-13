@@ -1,6 +1,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -22,6 +23,384 @@ using namespace gdl::game;
 using Catch::Approx;
 
 constexpr f32 kStep = 1.0f / 60.0f;
+
+TEST_CASE("weapon replay admits only authored elemental and ordinary spread modifiers",
+          "[game][missiles][weapon-replay][elemental-prediction]") {
+    for (u32 element = 0; element < 16; ++element) {
+        for (const u32 flags : {0U, PlayerMissiles::kPlainModifiers}) {
+            CHECK(PlayerMissiles::replayModifiers(flags | element) == (element <= 4));
+        }
+    }
+    for (u32 bit = 4; bit < 32; ++bit) {
+        const u32 flag = 1U << bit;
+        CHECK(PlayerMissiles::replayModifiers(flag) ==
+              ((flag & PlayerMissiles::kPlainModifiers) != 0));
+    }
+}
+
+TEST_CASE("native flight retains a value copy of its immutable release provenance",
+          "[game][missiles][weapon-replay]") {
+    PlayerMissiles pool;
+    MissileLaunch launch;
+    launch.spec = &MissileSpec::of(1);
+    launch.position = {0, 8, 0};
+    launch.release = MissileRelease{1, 72, true};
+    const auto expected = launch.release;
+    REQUIRE(pool.launch(launch));
+    launch.release.reset();
+    REQUIRE(pool.missile(0).release == expected);
+    pool.update(kStep, nullptr);
+    const auto flight = PlayerMissiles::flightCheckpoint(pool.missile(0));
+    const u64 instance = pool.missile(0).instance;
+    pool.update(kStep, nullptr);
+    REQUIRE(pool.restoreFlight(instance, flight));
+    CHECK(pool.missile(0).release == expected);
+    REQUIRE(pool.launch(launch));
+    CHECK_FALSE(pool.missile(1).release);
+}
+
+TEST_CASE("native projectile particle history preserves birth and the exact stopped emitter",
+          "[game][missiles][particle-flight][elemental-prediction]") {
+    PlayerMissiles pool;
+    MissileLaunch launch;
+    launch.spec = &MissileSpec::of(1);
+    launch.owner = 2;
+    launch.position = {0, 8, 0};
+    launch.velocity = Vec3{0, 0, 30};
+    launch.flags = 1;
+    launch.release = MissileRelease{1, 72, true};
+    REQUIRE(pool.launch(launch));
+    REQUIRE(pool.visualHistory().size() == 1);
+    const auto birth = pool.visualHistory().front().flight.birth;
+    pool.update(kStep, nullptr);
+    REQUIRE(pool.visualHistory().size() == 1);
+    const auto active = pool.visualHistory().front();
+    CHECK(active.owner == 2);
+    CHECK(active.character == 1);
+    CHECK(active.release == launch.release);
+    CHECK(active.flight.birth == birth);
+    CHECK(active.flight.activeSteps == 1);
+    CHECK(active.flight.totalSteps == 1);
+    CHECK_FALSE(active.flight.retiring);
+    const auto target = MissileTarget{4, {0, 7, 1}, 0.1f, 3};
+    const std::array targets{target};
+    pool.update(kStep, nullptr, targets);
+    REQUIRE(pool.count() == 0);
+    REQUIRE(pool.visualHistory().size() == 1);
+    const auto stopped = pool.visualHistory().front();
+    CHECK(stopped.flight.birth == birth);
+    CHECK(stopped.flight.activeSteps == 1);
+    CHECK(stopped.flight.totalSteps == 2);
+    CHECK(stopped.flight.retiring);
+    REQUIRE(stopped.flight.valid());
+    const auto impacts = pool.takeImpacts();
+    REQUIRE(impacts.size() == 1);
+    CHECK(Vec3{stopped.placement[3]} == impacts.front().position);
+    pool.update(kStep, nullptr);
+    REQUIRE(pool.visualHistory().size() == 1);
+    CHECK(pool.visualHistory().front().flight.totalSteps == 3);
+    CHECK(pool.visualHistory().front().flight.activeSteps == 1);
+    CHECK(pool.visualHistory().front().placement == stopped.placement);
+    CHECK(pool.takeImpacts().empty());
+    pool.clear();
+    CHECK(pool.visualHistory().empty());
+}
+
+TEST_CASE("particle flight history rejects unsafe clocks and private corrections preserve birth",
+          "[game][missiles][particle-flight][elemental-prediction]") {
+    PlayerMissiles::ParticleFlight state;
+    REQUIRE(state.valid());
+    auto invalid = state;
+    invalid.stepSeconds = std::numeric_limits<f32>::quiet_NaN();
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.birth.age = 0.1f;
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.activeSteps = 1;
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.totalSteps = 1;
+    CHECK_FALSE(invalid.valid());
+    invalid.retiring = true;
+    CHECK(invalid.valid());
+    invalid.totalSteps = 4802;
+    CHECK_FALSE(invalid.valid());
+    PlayerMissiles pool;
+    MissileLaunch launch;
+    launch.spec = &MissileSpec::of(0);
+    launch.position = {0, 8, 0};
+    REQUIRE(pool.launch(launch));
+    pool.update(kStep, nullptr);
+    const auto history = pool.visualHistory().front().flight;
+    const auto checkpoint = PlayerMissiles::flightCheckpoint(pool.missile(0));
+    PlayerMissiles replay;
+    REQUIRE(replay.launch(launch));
+    const auto instance = replay.missile(0).instance;
+    REQUIRE(replay.restoreFlight(instance, checkpoint));
+    REQUIRE(replay.restoreVisualFlight(instance, history));
+    pool.update(kStep, nullptr);
+    replay.update(kStep, nullptr);
+    CHECK(replay.visualHistory().front().flight == pool.visualHistory().front().flight);
+    CHECK(replay.visualHistory().front().placement == pool.visualHistory().front().placement);
+    CHECK_FALSE(replay.restoreVisualFlight(instance, invalid));
+    replay.update(kStep * 2, nullptr);
+    CHECK(replay.visualHistory().empty());
+    CHECK(replay.count() == 1);
+}
+
+TEST_CASE("weapon release preparation preserves native muzzle hold spread and strong scaling",
+          "[game][missiles][weapon-replay]") {
+    for (s32 character = 0; character <= 16; ++character) {
+        for (const f32 scale : {1.0f, 2.0f}) {
+            for (const f32 held : {0.0f, 0.32f, 1.0f}) {
+                for (const s32 shots : {1, 3, 5}) {
+                    CAPTURE(character, scale, held, shots);
+                    PlayerMissiles::WeaponThrow weapon;
+                    weapon.owner = 3;
+                    weapon.character = character;
+                    weapon.position = {10, 5, -7};
+                    weapon.center = {10, 9, -7};
+                    weapon.hand = {1.25f, -0.5f, 0.75f};
+                    weapon.direction = {0.6f, 0, 0.8f};
+                    weapon.speed = 47;
+                    weapon.damage = 11;
+                    weapon.attackSeconds = held;
+                    weapon.scale = scale;
+                    weapon.flags = 4;
+                    weapon.shots = shots;
+                    weapon.multiplayer = MultiplayerMode::Stun;
+                    const auto launches = PlayerMissiles::weaponLaunches(weapon);
+                    REQUIRE(launches.size() == static_cast<usize>(shots));
+                    const auto directions = PlayerMissiles::spread(weapon.direction, shots);
+                    auto centerSound = MissileWallSound::Level;
+                    if (shots == 5) {
+                        centerSound = MissileWallSound::FiveWay;
+                    } else if (shots == 3) {
+                        centerSound = MissileWallSound::ThreeWay;
+                    }
+                    for (usize i = 0; i < launches.size(); ++i) {
+                        const auto& launch = launches[i];
+                        CHECK(glm::distance(launch.position, Vec3{12.65f, 8.5f, -5.55f}) <
+                              0.00001f);
+                        CHECK(launch.direction == directions[i]);
+                        CHECK(launch.speed == 47);
+                        CHECK(launch.damage == 11 * scale);
+                        CHECK(launch.reach == PlayerMissiles::reachFor(held));
+                        CHECK(launch.spec == &MissileSpec::of(character));
+                        CHECK(launch.owner == 3);
+                        CHECK(launch.scale == scale);
+                        CHECK(launch.flags == 4);
+                        CHECK(launch.multiplayer == MultiplayerMode::Stun);
+                        CHECK_FALSE(launch.velocity);
+                        CHECK(launch.model == nullptr);
+                        CHECK(launch.archive == nullptr);
+                        CHECK(launch.textureLender == nullptr);
+                        CHECK(launch.riderArchive == nullptr);
+                        CHECK(launch.streak.texture == nullptr);
+                        CHECK(launch.tree.empty());
+                        CHECK(launch.riderTree.empty());
+                        CHECK(launch.wallSound ==
+                              (i == 0 ? centerSound : MissileWallSound::Silent));
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("assisted prepared volleys share the native muzzle and retain spread after aiming",
+          "[game][missiles][weapon-replay]") {
+    PlayerMissiles::WeaponThrow weapon;
+    weapon.position = {5, 1, 10};
+    weapon.center = {5, 5, 10};
+    weapon.hand = {1, -1, 0.5f};
+    weapon.direction = {-1, 0, 0};
+    weapon.speed = 50;
+    weapon.target = Vec3{11, 8, 18};
+    weapon.shots = 5;
+    const auto launches = PlayerMissiles::weaponLaunches(weapon);
+    REQUIRE(launches.size() == 5);
+    const Vec3 facing{0.6f, 0, 0.8f};
+    const Vec3 muzzle = weapon.center + Vec3{0.8f, 0, -0.6f} + Vec3{0, -1, 0} + facing * 2.5f;
+    const auto& center = launches.front();
+    CHECK(center.position == muzzle);
+    REQUIRE(center.velocity);
+    const Vec3 distance = *weapon.target - muzzle;
+    const f32 flight = std::hypot(distance.x, distance.z) / weapon.speed;
+    const Vec3 reached = muzzle + *center.velocity * flight -
+                         Vec3{0, 0.5f * center.spec->weight * flight * flight, 0};
+    CHECK(glm::distance(reached, *weapon.target) < 0.00001f);
+    for (const auto& launch : launches) {
+        REQUIRE(launch.velocity);
+        CHECK(launch.position == muzzle);
+        CHECK(launch.velocity->y == center.velocity->y);
+        CHECK(std::hypot(launch.velocity->x, launch.velocity->z) == Approx(weapon.speed));
+        const f32 turn = std::atan2(launch.direction.x, launch.direction.z) -
+                         std::atan2(center.direction.x, center.direction.z);
+        const Vec3 rotated{
+            center.velocity->x * std::cos(turn) + center.velocity->z * std::sin(turn),
+            center.velocity->y,
+            center.velocity->z * std::cos(turn) - center.velocity->x * std::sin(turn)};
+        CHECK(*launch.velocity == rotated);
+    }
+    // A target directly overhead keeps the supplied facing for its muzzle.
+    weapon.target = weapon.position + Vec3{0, 9, 0};
+    const auto vertical = PlayerMissiles::weaponLaunches(weapon);
+    CHECK(vertical.front().direction == weapon.direction);
+}
+
+TEST_CASE("ordinary flight checkpoints rewind and replay every native class exactly",
+          "[game][missiles][weapon-replay]") {
+    for (s32 character = 0; character <= 16; ++character) {
+        for (const f32 scale : {1.0f, 2.0f}) {
+            for (const s32 hz : {30, 60, 120}) {
+                CAPTURE(character, scale, hz);
+                PlayerMissiles::WeaponThrow weapon;
+                weapon.character = character;
+                weapon.center = {3, 12, 4};
+                weapon.speed = 53;
+                weapon.direction = {0.6f, 0, 0.8f};
+                weapon.scale = scale;
+                weapon.attackSeconds = 0.34f;
+                const auto launch = PlayerMissiles::weaponLaunches(weapon).front();
+                PlayerMissiles live;
+                REQUIRE(live.launch(launch));
+                const f32 seconds = 1.0f / static_cast<f32>(hz);
+                for (s32 tick = 0; tick < 12; ++tick) {
+                    live.update(seconds, nullptr);
+                }
+                const auto checkpoint = PlayerMissiles::flightCheckpoint(live.missile(0));
+                REQUIRE(checkpoint.valid());
+                std::vector<PlayerMissiles::FlightCheckpoint> expected;
+                for (s32 tick = 0; tick < 24; ++tick) {
+                    live.update(seconds, nullptr);
+                    expected.push_back(PlayerMissiles::flightCheckpoint(live.missile(0)));
+                }
+                PlayerMissiles replay;
+                REQUIRE(replay.launch(launch));
+                const u64 instance = replay.missile(0).instance;
+                for (s32 correction = 0; correction < 3; ++correction) {
+                    REQUIRE(replay.restoreFlight(instance, checkpoint));
+                    CHECK(PlayerMissiles::flightCheckpoint(replay.missile(0)) == checkpoint);
+                    CHECK_FALSE(replay.missile(0).presentationCaptured);
+                    for (const auto& step : expected) {
+                        replay.update(seconds, nullptr);
+                        REQUIRE(replay.count() == 1);
+                        CHECK(PlayerMissiles::flightCheckpoint(replay.missile(0)) == step);
+                    }
+                    CHECK(replay.visuals().count() == 0);
+                    CHECK(replay.takeImpacts().empty());
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("flight restore rejects malformed or stateful shots without changing the pool",
+          "[game][missiles][weapon-replay]") {
+    PlayerMissiles missiles;
+    auto launch = PlayerMissiles::weaponLaunches({}).front();
+    REQUIRE(missiles.launch(launch));
+    missiles.update(kStep, nullptr);
+    const auto baseline = PlayerMissiles::flightCheckpoint(missiles.missile(0));
+    const u64 instance = missiles.missile(0).instance;
+    std::vector<PlayerMissiles::FlightCheckpoint> invalid;
+    auto value = baseline;
+    value.position.x = std::numeric_limits<f32>::quiet_NaN();
+    invalid.push_back(value);
+    value = baseline;
+    value.velocity.y = std::numeric_limits<f32>::infinity();
+    invalid.push_back(value);
+    value = baseline;
+    value.velocity.z = 10'001;
+    invalid.push_back(value);
+    value = baseline;
+    value.position.z = 1'000'001;
+    invalid.push_back(value);
+    value = baseline;
+    value.age = -0.1f;
+    invalid.push_back(value);
+    value.age = PlayerMissiles::kLifeSeconds;
+    invalid.push_back(value);
+    value = baseline;
+    value.scale = 0;
+    invalid.push_back(value);
+    value.scale = 101;
+    invalid.push_back(value);
+    value = baseline;
+    value.tumble = std::numeric_limits<f32>::quiet_NaN();
+    invalid.push_back(value);
+    value = baseline;
+    value.continuity = 0;
+    invalid.push_back(value);
+    for (const auto& checkpoint : invalid) {
+        CHECK_FALSE(checkpoint.valid());
+        CHECK_FALSE(missiles.restoreFlight(instance, checkpoint));
+        CHECK(PlayerMissiles::flightCheckpoint(missiles.missile(0)) == baseline);
+    }
+    CHECK_FALSE(missiles.restoreFlight(instance + 1, baseline));
+    for (const auto mode : {MultiplayerMode::Stun, MultiplayerMode::Hurt}) {
+        launch.multiplayer = mode;
+        REQUIRE(missiles.launch(launch));
+        CHECK_FALSE(
+            missiles.restoreFlight(missiles.missile(missiles.count() - 1).instance, baseline));
+    }
+    launch.multiplayer = MultiplayerMode::Normal;
+    launch.flags = 4;
+    REQUIRE(missiles.launch(launch));
+    CHECK_FALSE(missiles.restoreFlight(missiles.missile(missiles.count() - 1).instance, baseline));
+    launch.flags = 0;
+    launch.potion = 1;
+    REQUIRE(missiles.launch(launch));
+    CHECK_FALSE(missiles.restoreFlight(missiles.missile(missiles.count() - 1).instance, baseline));
+    test::FakeRenderDevice device;
+    missiles.bindVisuals(device);
+    launch.potion = 0;
+    REQUIRE(missiles.launch(launch));
+    CHECK_FALSE(missiles.restoreFlight(missiles.missile(0).instance, baseline));
+}
+
+TEST_CASE("replayed plain weapons retire at the native wall contact and expiration",
+          "[game][missiles][weapon-replay]") {
+    CollisionTriangle wall;
+    wall.object = 42;
+    wall.normal = {0, 0, -1};
+    wall.vertices = {Vec3{-50, -20, 20}, Vec3{50, -20, 20}, Vec3{0, 80, 20}};
+    WorldCollision collision;
+    collision.build({wall});
+    PlayerMissiles::WeaponThrow weapon;
+    weapon.center = {0, 8, 0};
+    weapon.speed = 60;
+    weapon.scale = 2;
+    const auto launch = PlayerMissiles::weaponLaunches(weapon).front();
+    for (const bool withWall : {false, true}) {
+        PlayerMissiles live;
+        PlayerMissiles replay;
+        REQUIRE(live.launch(launch));
+        live.update(kStep, &collision);
+        const auto checkpoint = PlayerMissiles::flightCheckpoint(live.missile(0));
+        REQUIRE(replay.launch(launch));
+        REQUIRE(replay.restoreFlight(replay.missile(0).instance, checkpoint));
+        for (s32 tick = 0; tick < 240 && live.count() > 0; ++tick) {
+            const auto* world = withWall ? &collision : nullptr;
+            live.update(kStep, world);
+            replay.update(kStep, world);
+            CHECK(replay.count() == live.count());
+            const auto impacts = live.takeImpacts();
+            const auto repeated = replay.takeImpacts();
+            REQUIRE(impacts.size() == repeated.size());
+            if (!impacts.empty()) {
+                CHECK(repeated.front().position == impacts.front().position);
+                CHECK(repeated.front().worldObject == 42);
+                CHECK(repeated.front().damage == impacts.front().damage);
+                CHECK(replay.takeImpacts().empty());
+            }
+        }
+        CHECK(live.count() == 0);
+        CHECK(replay.count() == 0);
+    }
+}
 
 TEST_CASE("companion shots pass through potions and still hit the enemy behind them",
           "[game][missiles][shot-potion]") {

@@ -179,6 +179,27 @@ void LevelSoundscape::selectMusicArea(s32 area, MusicSwitch how) {
     m_musicSwitch = how;
 }
 
+void LevelSoundscape::followMusic(const AssetLocator* assets, s32 area, s32 level, f32 volume) {
+    if (m_output == nullptr || assets == nullptr || area < -1 || area >= m_streamAreas ||
+        level < 0 || level > kFullLevel) {
+        return;
+    }
+    m_assets = assets;
+    m_musicVolume = volume;
+    m_musicLevel = level;
+    if (area == -1) {
+        stopMusic();
+        m_playingArea = -1;
+        return;
+    }
+    if (area != m_playingArea) {
+        playArea(area);
+    }
+    if (m_music != kNoSound) {
+        m_output->setVolume(m_music, musicVolume());
+    }
+}
+
 void LevelSoundscape::bossAwake(bool awake) {
     if (awake && !m_bossAwake) {
         selectMusicArea(1, MusicSwitch::Faded);

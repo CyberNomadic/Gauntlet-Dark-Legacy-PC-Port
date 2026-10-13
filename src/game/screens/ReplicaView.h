@@ -11,6 +11,7 @@
 #include "game/world/LevelWorld.h"
 
 namespace gdl::game {
+class LocalTurboEffectPrediction;
 /** Development client view of the replicated combat slice. There is deliberately
  * no PlayScene, update(), input dispatch or persistence here. The trusted loading
  * step supplies all assets before show(); packets cannot open files or spawn AI.
@@ -32,6 +33,9 @@ public:
                    const ClassStats* stats = nullptr);
     bool bindCompanions(RenderDevice& device, ItemArchive& powerups, ItemArchive* weapons);
     void loadPortalSkin(RenderDevice& device, TextureSet& weapons);
+    void loadDeathSkins(RenderDevice& device, ItemArchive& weapons) {
+        m_actors.loadDeathSkins(device, *m_enemies, weapons);
+    }
     bool loadHud(RenderDevice& device, const std::filesystem::path& root,
                  const StringTable* strings, const HudResources& resources = {});
     /** Takes a presentation sample, including fractional animation/motion. Missing
@@ -41,7 +45,8 @@ public:
     std::string_view rejection(const CombatSnapshot& snapshot) const;
     void draw(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth, f32 frameHeight,
               f32 textureFrame, const Texture* hitFlash = nullptr, const Texture* frozen = nullptr,
-              const GameConfig& video = {});
+              const GameConfig& video = {}, const LocalTurboEffectPrediction* effects = nullptr,
+              f32 effectBlend = 1);
     static std::optional<Rect> viewport(f32 width, f32 height);
     const CombatSnapshot* shown() const { return m_shown ? &*m_shown : nullptr; }
     const ReplicaActors& actors() const { return m_actors; }
@@ -69,6 +74,7 @@ private:
     FighterResources m_fighterResources;
     ReplicaFighters m_fighters;
     WorldScene m_geometry;
+    TextureAnimator m_textures;
     /** Private query-only floor artwork at lower, upper, and displayed clocks.
      * Never exposed to or advanced by guest gameplay. */
     std::array<WorldCollision, 3> m_presentationFloors;

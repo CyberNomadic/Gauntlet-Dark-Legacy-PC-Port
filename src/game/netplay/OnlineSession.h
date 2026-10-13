@@ -40,6 +40,9 @@ public:
     OnlineSession& operator=(OnlineSession&&) = delete;
 
     void update(f64 seconds);
+    /** Send newly sampled input/checkpoints after gameplay, without another poll,
+     * simulation step or clock advance. Congestion retains pending output. */
+    bool flush();
     /** Local-device order, mapped to the room's assigned seats on start. Select
      * before ready; unready before changing an existing lobby selection. */
     bool select(std::span<const CharacterProfile> selections);
@@ -48,6 +51,7 @@ public:
     void leave();
     Phase phase() const { return m_phase; }
     Failure failure() const { return m_failure; }
+    const std::string& failureDetail() const { return m_failureDetail; }
     bool host() const { return m_host; }
     bool connected() const;
     const RoomSnapshot* room() const { return m_room ? &*m_room : nullptr; }
@@ -77,6 +81,7 @@ private:
     u8 m_localPlayers;
     Phase m_phase = Phase::Joining;
     Failure m_failure = Failure::None;
+    std::string m_failureDetail;
     std::optional<RoomSnapshot> m_room;
     std::string m_peer;
     std::vector<u8> m_seats;

@@ -50,10 +50,12 @@ bool ProjectileResources::addArchive(u32 firstId, ItemArchive& archive, RenderDe
                 }
             }
         }
-        if (!hasMesh(geometry)) {
-            continue; // Particle-only trees are not part of the mesh stream.
+        const bool mesh = hasMesh(geometry);
+        if (!mesh && !tree.name.starts_with("WEAP_TW_")) {
+            continue; // Only ordinary weapon riders have bounded particle histories.
         }
-        if (!prototype.model.bind(geometry, archive.models, archive.textures, device, lenders) ||
+        if ((mesh &&
+             !prototype.model.bind(geometry, archive.models, archive.textures, device, lenders)) ||
             !addEffect(firstId + static_cast<u32>(index), prototype, device)) {
             log::warn("Netplay: cannot preload projectile tree {}", tree.name);
             return false;

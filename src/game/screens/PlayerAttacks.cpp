@@ -43,7 +43,6 @@ constexpr f32 kBlockLeast = 0.333f;
 constexpr f32 kBlockMost = 1.0f;
 constexpr f32 kRamDamage = 3.0f;   ///< what a charge does to what it runs into
 constexpr f32 kChargeBlow = 32.0f; ///< and to an enemy or a great one (PlayerMotion's anim 8)
-constexpr f32 kRamReach = 0.3f;    ///< how near counts as run into
 constexpr u32 kFireElement = 1;    ///< the fire shield's harm
 constexpr u32 kShockFlags = 0x22;  ///< the lightning shield's: lightning, knocking down
 constexpr f32 kFramesPerSecond = 30.0f;
@@ -290,8 +289,8 @@ ItemArchive* PlayerAttacks::moveEffectArchive(usize index, std::span<PlayerRunti
 }
 
 /** Base melee damage, also used by the authored effect-strike multipliers. */
-f32 PlayerAttacks::meleeDamageOf(usize index, std::span<PlayerRuntime> players) const {
-    if (!m_resources.has_value()) {
+f32 PlayerAttacks::meleeDamageOf(usize index, std::span<const PlayerRuntime> players) const {
+    if (!m_resources.has_value() || index >= players.size()) {
         return PlayerMissiles::kLeastDamage;
     }
     const CharacterSave& save = players[index].actor.save();
@@ -310,7 +309,7 @@ f32 PlayerAttacks::meleeDamageOf(usize index, std::span<PlayerRuntime> players) 
 /** One strike of a move: its effects show and sound where the character stands, the meter
  * pays what the move still owes if the strike does harm, and the harm is set going. */
 void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRuntime> players,
-                               std::optional<Vec3> at) {
+                               std::optional<Vec3> at, std::optional<usize> occurrence) {
     if (!m_resources.has_value() || index >= players.size() || players[index].figure == nullptr) {
         return;
     }
@@ -327,32 +326,27 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
     if (strike.effect >= 0 && static_cast<usize>(strike.effect) < stats->moveEffects.size()) {
         const MoveEffect& effect = stats->moveEffects[static_cast<usize>(strike.effect)];
         if (const auto* archive = moveEffectArchive(index, players, effect.tree)) {
-            const auto& sequences =
-                archive->trees.tree(*archive->trees.find(effect.tree)).sequences;
             // DoPlyrSfx gives the primary tree's authored maxlen to the same effect
             // that carries damage. Animation length is only its untimed fallback.
-            if (effect.lifetime > 0) {
-                effectSeconds = effect.lifetime;
-            } else if (!sequences.empty()) {
-                const auto& sequence = sequences.front();
-                constexpr s32 kEmptyFrames = 30;
-                const auto frames =
-                    static_cast<f32>(sequence.frames > 0 ? sequence.frames : kEmptyFrames);
-                const f32 rate = sequence.frameRate > 0 ? static_cast<f32>(sequence.frameRate)
-                                                        : AnimationPlayer::kDefaultRate;
-                effectSeconds = frames * rate * AnimationPlayer::kRateUnit;
-            }
+            effectSeconds = TurboEmission::effectSeconds(
+                effect, &archive->trees.tree(*archive->trees.find(effect.tree)));
         }
+    }
+    const s32 partner = players[index].combo.partner;
+    const bool partnerAvailable = partner >= 0 && static_cast<usize>(partner) < players.size();
+    const f32 meleeDamage = meleeDamageOf(index, players);
+    const auto prepared = TurboEmission::prepare(
+        *stats, strikeIndex,
+        {actor.save().character, base, facing, at.has_value(), partnerAvailable}, meleeDamage,
+        effectSeconds);
+    if (!prepared) {
+        return;
     }
     // A span that only lasts, or a volley, harms nothing of itself; the rest are set going.
     u32 id = 0;
-    const f32 meleeDamage = meleeDamageOf(index, players);
-    if (strike.harms() && MoveStrikes::damageOf(strike, meleeDamage) > 0) {
-        MoveStrike volume = strike;
-        if (strike.effect >= 0 && static_cast<usize>(strike.effect) < stats->moveEffects.size()) {
-            volume.offset += stats->moveEffects[static_cast<usize>(strike.effect)].offset;
-        }
-        id = m_strikes.start(volume, actor.player(), base, facing, meleeDamage, effectSeconds);
+    if (prepared->carrier) {
+        id = m_strikes.start(prepared->volume, actor.player(), base, facing, meleeDamage,
+                             effectSeconds);
         m_strikeSources.push_back(StrikeSource{id,
                                                index,
                                                strikeIndex,
@@ -362,21 +356,27 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
                                                    : MultiplayerMode::Normal,
                                                strike.damageType});
     }
-    const Vec3 origin = MoveStrikes::originOf(strike, base, facing);
-    const MoveStrikes::Strike* started = m_strikes.find(id);
     // An effect may bring another with it.
-    usize followed = 0;
     u32 previousEffect = 0;
-    for (s32 effectIndex = strike.effect;
-         effectIndex >= 0 && static_cast<usize>(effectIndex) < stats->moveEffects.size() &&
-         followed < stats->moveEffects.size();
-         effectIndex = stats->moveEffects[static_cast<usize>(effectIndex)].next, ++followed) {
-        const MoveEffect& effect = stats->moveEffects[static_cast<usize>(effectIndex)];
-        if ((effect.flags & 2U) != 0 && m_resources->shake != nullptr) {
+    const auto& animator = players[index].figure->animator();
+    const auto tag = [&](u32 effect, usize ordinal) {
+        if (effect != 0 && occurrence && *occurrence < TurboMove::kMaxCheckpointRows &&
+            ordinal <= std::numeric_limits<u16>::max() && !at && !partnerAvailable &&
+            PlayerAnimator::rollbackTurboAction(animator.action())) {
+            m_resources->effects.tag(effect,
+                                     {actor.player(), animator.player().generation(),
+                                      static_cast<u16>(*occurrence), static_cast<u16>(ordinal)});
+        }
+    };
+    for (usize ordinal = 0; ordinal < prepared->effects.size(); ++ordinal) {
+        const auto& emission = prepared->effects[ordinal];
+        const MoveEffect& effect = emission.authored;
+        if (emission.shake && m_resources->shake != nullptr) {
             m_resources->shake->start();
         }
-        if (effect.particle()) {
-            startParticles(index, effect, previousEffect, players);
+        if (emission.particle) {
+            const u32 shown = startParticles(index, *emission.particle, previousEffect, players);
+            tag(shown, ordinal);
             previousEffect = 0;
             continue;
         }
@@ -391,26 +391,15 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
             }
         }
         std::optional<MoveAttachment> attachment;
-        // Stationary area trees follow the player's first posed node. Saved matrices,
-        // floor placement and stage/effect parents have separate SFXX policies.
-        constexpr u32 kOtherParents = 0x10U | 0x40U | 0x80U | 0x800U | 0x40000U;
-        if (!at && strike.type != MoveStrike::kFlies && strike.speed == 0 &&
-            (effect.flags & kOtherParents) == 0) {
+        if (emission.attachment) {
+            const auto& authored = *emission.attachment;
             MoveAttachment parent;
-            parent.actor = index;
-            parent.strike = effectIndex == strike.effect ? id : 0;
-            parent.bodyParent = (effect.flags & 1U) != 0;
-            if ((effect.flags & 0x2000U) != 0) {
-                const s32 partner = players[index].combo.partner;
-                if (partner >= 0 && static_cast<usize>(partner) < players.size()) {
-                    parent.actor = static_cast<usize>(partner);
-                }
-            }
-            const Vec3 offset = effect.offset + (parent.bodyParent ? Vec3{0} : strike.offset);
-            parent.local = glm::translate(Mat4{1}, offset);
-            if (effectIndex == strike.effect) {
-                parent.local = glm::rotate(parent.local, strike.angle, Vec3{0, 1, 0});
-            }
+            parent.actor = authored.actor == TurboEmission::Actor::Partner
+                               ? static_cast<usize>(partner)
+                               : index;
+            parent.strike = authored.carrier ? id : 0;
+            parent.bodyParent = authored.bodyParent;
+            parent.local = authored.local;
             attachment = parent;
         }
         ItemArchive* archive = moveEffectArchive(index, players, effect.tree);
@@ -420,42 +409,15 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
             }
             continue;
         }
-        EffectTrees::Setting setting;
-        setting.scale = effect.scale;
-        setting.tint = effect.tint();
-        setting.yaw = std::atan2(facing.x, facing.z) + strike.angle;
-        setting.seconds = effect.lifetime;
-        setting.shrinks = (effect.flags & 0x10000U) != 0 && strike.hitEffect < 0;
-        if (effectIndex == strike.effect && started != nullptr && started->flies) {
-            setting.velocity = started->facing * started->speed;
-            setting.seconds = started->secondsLeft;
-            // What flies launches once, then its looping tree carries it on.
-            if (strike.loopEffect >= 0 &&
-                static_cast<usize>(strike.loopEffect) < stats->moveEffects.size()) {
-                setting.then = stats->moveEffects[static_cast<usize>(strike.loopEffect)].tree;
-                setting.morphIn = started->secondsLeft - strike.maxTime;
-                setting.holdForMorph = (strike.flags & 0x800) != 0;
-            }
-        }
-        const Vec3 side{facing.z, 0.0f, -facing.x};
-        const Vec3 at3 = origin + side * effect.offset.x + Vec3{0.0f, effect.offset.y, 0.0f} +
-                         facing * effect.offset.z;
-        // The strike's first effect gives off a light twice its reach in the class's colour,
-        // swelling over a burst's life and steady on what flies (PlyrSfxDoDamageSub).
-        if (effectIndex == strike.effect && started != nullptr) {
-            const f32 reach = strike.radius > 0.0f ? strike.radius : strike.hitRadius;
-            setting.light =
-                EffectTrees::Light{DynamicLights::ofClass(players[index].actor.save().character),
-                                   DynamicLights::kBlastRadiusScale * reach, !started->flies};
-        }
-        const u32 shown =
-            m_resources->effects.startSet(m_resources->device, *archive, effect.tree, at3, setting);
+        const u32 shown = m_resources->effects.startSet(m_resources->device, *archive, effect.tree,
+                                                        emission.position, emission.setting);
+        tag(shown, ordinal);
         previousEffect = shown;
         if (attachment && (shown != 0 || attachment->strike != 0)) {
             attachment->effect = shown;
             m_moveAttachments.push_back(*attachment);
         }
-        if (shown != 0 && effectIndex == strike.effect && started != nullptr && started->flies) {
+        if (shown != 0 && emission.carriesFlight) {
             m_strikeEffects.push_back(StrikeEffect{id, shown});
         }
     }
@@ -491,10 +453,10 @@ void PlayerAttacks::updateMoveAttachments(std::span<PlayerRuntime> players) {
     });
 }
 
-void PlayerAttacks::startParticles(usize index, const MoveEffect& effect, u32 parent,
-                                   std::span<PlayerRuntime> players) {
+u32 PlayerAttacks::startParticles(usize index, const TurboEmission::Particle& emission, u32 parent,
+                                  std::span<PlayerRuntime> players) {
     if (!m_resources || index >= players.size()) {
-        return;
+        return 0;
     }
     ItemArchive* archive = moveEffectsOf(index, players);
     ItemArchive* textureArchive = nullptr;
@@ -503,7 +465,7 @@ void PlayerAttacks::startParticles(usize index, const MoveEffect& effect, u32 pa
         if (candidate == nullptr) {
             continue;
         }
-        const auto slot = candidate->textures.find(effect.tree);
+        const auto slot = candidate->textures.find(emission.descriptor.texture);
         if (slot && !candidate->textures.entry(*slot).external() &&
             !candidate->textures.entry(*slot).noPicture) {
             textureArchive = candidate;
@@ -512,45 +474,27 @@ void PlayerAttacks::startParticles(usize index, const MoveEffect& effect, u32 pa
         }
     }
     if (textureArchive == nullptr) {
-        log::warn("Player particles: no texture {}", effect.tree);
-        return;
+        log::warn("Player particles: no texture {}", emission.descriptor.texture);
+        return 0;
     }
-    // PsfxDoParticle starts a default emitter, not one of the authored presets.
-    // Its named setters configure a spherical cone and particle life/fade, not a volume.
-    ParticleDescriptor descriptor;
-    descriptor.texture = effect.tree;
-    descriptor.emitFrames =
-        effect.lifetime < 0.0f
-            ? ParticleDescriptor::kEndless
-            : static_cast<u32>(
-                  std::clamp(effect.lifetime * ParticleDescriptor::kFrameRate, 1.0f, 65535.0f));
-    descriptor.fadeFrames = 1; // 0.034 seconds, truncated at 30 Hz
-    descriptor.angle = ParticleDescriptor::kSphere;
-    descriptor.rate.fill(effect.radius);
-    descriptor.speed = static_cast<f32>(effect.alphaMod) * 0.01f / ParticleDescriptor::kFrameRate;
-    const bool shortLife = (effect.flags & MoveEffect::kParticleFlags) == 0x02000000U;
-    descriptor.particleLife = shortLife ? 6 : 15;
-    descriptor.particleFade = shortLife ? 0 : 15;
-    descriptor.red = descriptor.green = descriptor.blue = descriptor.alpha =
-        ParticleEnvelope{255, 255, 255, 255};
-    const f32 width = 0.5f * effect.scale;
-    descriptor.width = ParticleEnvelope{width, width, width, width};
     ParticleEffect particle;
     particle.actor = index;
-    particle.parent = (effect.flags & 0x40000U) != 0 ? parent : 0;
-    particle.node = effect.sound;
-    particle.offset = effect.offset;
-    if (particle.parent == 0 && (effect.flags & 0x2000U) != 0) {
+    particle.parent = emission.previousEffect ? parent : 0;
+    particle.node = emission.node;
+    particle.offset = emission.offset;
+    if (particle.parent == 0 && emission.partnerFallback) {
         const s32 partner = players[index].combo.partner;
         if (partner >= 0 && static_cast<usize>(partner) < players.size()) {
             particle.actor = static_cast<usize>(partner);
             particle.node.clear();
         }
     }
-    particle.effect = m_resources->effects.startParticles(m_resources->device, *textureArchive,
-                                                          descriptor, textureSlot, Mat4{1});
+    particle.effect = m_resources->effects.startParticles(
+        m_resources->device, *textureArchive, emission.descriptor, textureSlot, Mat4{1});
+    const u32 shown = particle.effect;
     m_particleEffects.push_back(std::move(particle));
     updateParticles(players);
+    return shown;
 }
 
 void PlayerAttacks::updateParticles(std::span<PlayerRuntime> players) {
@@ -1191,21 +1135,46 @@ void PlayerAttacks::updateTurbo(usize index, s32 ticks, f32 seconds,
             cry(index, voice, players);
         }
     }
-    move.advance(body.action(), body.player().frame(), players[index].actor.facing(), stats, meter,
-                 {.announce = [&help, index](s32 id) { help(id, index); },
-                  .dim =
-                      [this, index, players](f32 amount) {
-                          // The striker blazes against the dark it brings (PlyrSfxDoDamage).
-                          m_resources->dimmer.ask(amount);
-                          players[index].glow.raise(BodyGlow::kStrike);
-                      },
-                  .volley =
-                      [this, index, players](const Vec3& direction) {
-                          m_resources->arsenal.launchWeapon(players[index].actor,
-                                                            players[index].figure.get(), direction,
-                                                            1.0f, false);
-                      },
-                  .strike = [this, index, players](s32 row) { fireStrike(index, row, players); }});
+    move.advance(
+        body.action(), body.player().frame(), players[index].actor.facing(), stats, meter,
+        {.announce = [&help, index](s32 id) { help(id, index); },
+         .dim =
+             [this, index, players](f32 amount) {
+                 // The striker blazes against the dark it brings (PlyrSfxDoDamage).
+                 m_resources->dimmer.ask(amount);
+                 players[index].glow.raise(BodyGlow::kStrike);
+             },
+         .identifiedVolley =
+             [this, index, players](const TurboMove::Volley& volley) {
+                 const auto& actor = players[index].actor;
+                 auto* figure = players[index].figure.get();
+                 if (const auto weapon = m_resources->arsenal.weaponThrow(
+                         actor, figure->animator().attackSeconds())) {
+                     const auto emission = TurboEmission::volley(
+                         *weapon, volley.direction,
+                         PowerupEffects::of(actor.save().progress().inventory).weapon);
+                     std::optional<MissileRelease> release;
+                     if (const u32 identity = volley.emissionIdentity();
+                         identity != 0 &&
+                         PlayerAnimator::rollbackTurboAction(figure->animator().action())) {
+                         release = MissileRelease{actor.save().character,
+                                                  figure->animator().player().generation(), false,
+                                                  0, identity};
+                     }
+                     m_resources->arsenal.launchWeapon(actor, figure, emission.weapon.direction,
+                                                       emission.weapon.scale, emission.spreads,
+                                                       emission.weapon.target, release);
+                 }
+             },
+         .identifiedStrike =
+             [this, index, players](const TurboMove::Strike& strike) {
+                 // Other native timelines (strong A and combo) keep their
+                 // normal effects, but do not claim the B/C replay domain.
+                 const auto action = players[index].figure->animator().action();
+                 fireStrike(index, strike.row, players, std::nullopt,
+                            PlayerAnimator::rollbackTurboAction(action) ? std::optional{strike.slot}
+                                                                        : std::nullopt);
+             }});
     if (body.action() == PlayerAnimator::Action::Shove) {
         meter.drain(seconds);
     } else if (players[index].life == PlayerLife::Standing && !body.turboing() &&
@@ -1414,17 +1383,50 @@ PlayerDeed PlayerAttacks::attackDeed(const PlayerActor& actor, bool strong, cons
         return ranged;
     }
     const MeleeSense sense = meleeSense(actor, true, targets, facing);
-    // What is a step away is struck only by stepping to it (never at something low), or
-    // mid-chain by the slow swing.
-    const bool steps = sense.range == MeleeRange::Step && moved && !sense.low;
-    const bool slowInChain = strong && chain != 0 && moved && sense.range != MeleeRange::Beyond;
-    if (sense.range != MeleeRange::Swing && !steps && !slowInChain) {
-        return ranged;
+    return MeleeSelection::deed(sense, strong, moved, chain);
+}
+
+bool PlayerAttacks::rangedOnly(const PlayerActor& actor, const Targets& targets) const {
+    if (ItemAttack::select(PowerupEffects::of(actor.save().progress().inventory))) {
+        return false;
     }
-    if (strong) {
-        return sense.low ? PlayerDeed::MeleeSlowLow : PlayerDeed::MeleeSlow;
+    if (!m_resources) {
+        return true;
     }
-    return sense.low ? PlayerDeed::MeleeLow : PlayerDeed::Melee;
+    const f32 reach = actor.reach() + kStepReach + kHeldReach;
+    const auto candidates = acquisitionTargets(targets);
+    // ahead() narrows its cone with distance, leaving gaps between cardinal
+    // heading probes. Its angle-independent around() precondition is
+    // a conservative superset of every possible swing/step selection instead.
+    // Deliberately retain low and acquisition-disabled bodies here: accepting
+    // fewer predicted throws is safer than predicting a native melee action.
+    if (TargetAssist::around(actor.position(), actor.height(), candidates, reach,
+                             &m_resources->world.collision())) {
+        return false;
+    }
+    // A same-step swarm contact precedes fresh acquisition and can bypass its
+    // visibility/vertical-overlap checks. Preserve that path's 3D surface range
+    // as well, without depending on the last authoritative facing/contact seed.
+    for (const auto& target : candidates) {
+        if (target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase &&
+            target.acquisition &&
+            glm::distance(target.acquisition->point, actor.followPoint()) - target.radius < reach) {
+            return false;
+        }
+    }
+    // Party fallback uses centre distance minus radius, not around()'s vertical
+    // overlap test. As with meleePlayer(), only live Hurt-mode partners qualify.
+    if (targets.multiplayer == MultiplayerMode::Hurt) {
+        for (const auto& player : targets.players) {
+            if (player.actor.player() != actor.player() && player.life == PlayerLife::Standing &&
+                !player.departed &&
+                glm::distance(player.actor.position(), actor.position()) - player.actor.radius() <
+                    reach) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 PlayerDeed PlayerAttacks::automaticMeleeDeed(const PlayerActor& actor, const Targets& targets,
@@ -1514,9 +1516,12 @@ std::optional<PlayerAttacks::MeleeTarget> PlayerAttacks::meleeTarget(const Playe
         }
         return std::nullopt;
     }
-    auto target = TargetAssist::ahead(
-        actor.position(), actor.height(), facing, acquisitionTargets(targets), reach, range,
-        &m_resources->world.collision(), m_resources->acquisitionCone);
+    const auto query = meleeQuery(actor, targets, facing);
+    const auto selected = MeleeSelection::select(query.selection, facing, reach);
+    std::optional<MissileTarget> target;
+    if (selected) {
+        target = query.bodies[selected->index];
+    }
     if (!target) {
         target = meleePlayer(actor, targets, reach, facing);
     }
@@ -1530,11 +1535,20 @@ std::optional<PlayerAttacks::MeleeTarget> PlayerAttacks::meleeTarget(const Playe
 std::optional<MissileTarget> PlayerAttacks::contactEnemy(const PlayerActor& actor,
                                                          const Targets& targets, const Vec3& facing,
                                                          f32 range) {
+    const auto body = contactSeed(actor, targets, false);
+    if (body && MeleeSelection::accepts(meleeContact(actor, *body, targets), facing, range)) {
+        return body;
+    }
+    return std::nullopt;
+}
+
+std::optional<MissileTarget> PlayerAttacks::contactSeed(const PlayerActor& actor,
+                                                        const Targets& targets, bool stationary) {
     const Vec3 origin = actor.followPoint();
     Vec3 from = origin;
     Vec3 to = origin;
     for (const PlayerRuntime& player : targets.players) {
-        if (&player.actor == &actor && player.attackStep) {
+        if (!stationary && &player.actor == &actor && player.attackStep) {
             from = player.attackStep->from;
             to = player.attackStep->to;
             break;
@@ -1564,18 +1578,155 @@ std::optional<MissileTarget> PlayerAttacks::contactEnemy(const PlayerActor& acto
     if (!acquisition) {
         return std::nullopt;
     }
-    const Vec3 offset = acquisition->point - origin;
-    const f32 distance = glm::length(offset);
-    const f32 surface = distance - body->radius;
-    const f32 facingLength = glm::length(facing);
-    if (surface >= range || facingLength <= 0 ||
-        ((surface > 0 || enemies.kindOf(*id) == kDeathKind) &&
-         (distance <= 0 || glm::dot(offset, facing) < distance * facingLength * kHeldCone))) {
-        return std::nullopt;
-    }
     MissileTarget selected = *body;
     selected.id += kEnemyTargetBase;
     return selected;
+}
+
+MeleeSelection::Target PlayerAttacks::meleeCandidate(const PlayerActor& actor,
+                                                     const MissileTarget& body) {
+    const bool swarm = body.id >= kEnemyTargetBase && body.id < kGeneratorTargetBase;
+    const bool thing = !isCreature(body.id) && body.id < kPlayerTargetBase;
+    return MeleeGeometry::candidate(actor.position(), actor.height(), body,
+                                    (swarm && body.height <= kLowEnemy) ||
+                                        (thing && body.height <= kLowThing));
+}
+
+MeleeSelection::Contact PlayerAttacks::meleeContact(const PlayerActor& actor,
+                                                    const MissileTarget& body,
+                                                    const Targets& targets) {
+    auto target = meleeCandidate(actor, body);
+    const Vec3 origin = actor.followPoint();
+    const auto& acquisition = body.acquisition;
+    target.offset = (acquisition ? acquisition->point : body.pointNear(origin)) - origin;
+    target.distance = glm::length(target.offset) - body.radius;
+    return {target, targets.opponents.enemies().kindOf(body.id - kEnemyTargetBase) == kDeathKind};
+}
+
+PlayerAttacks::MeleeQuery PlayerAttacks::meleeQuery(const PlayerActor& actor,
+                                                    const Targets& targets,
+                                                    std::optional<Vec3> facing) const {
+    MeleeQuery query;
+    if (!m_resources) {
+        return query;
+    }
+    const auto& resources = *m_resources;
+    auto& snapshot = query.selection;
+    snapshot.feet = actor.position();
+    snapshot.reach = actor.reach();
+    snapshot.range =
+        targets.opponents.bosses().present() ? TargetAssist::kBossRange : TargetAssist::kRange;
+    snapshot.facingDot = resources.acquisitionCone;
+    const f32 reach = actor.reach() + kStepReach + kHeldReach;
+    for (const auto& body : acquisitionTargets(targets)) {
+        const auto target = meleeCandidate(actor, body);
+        if ((body.acquisition && (!body.acquisition->enabled ||
+                                  std::abs(target.offset.y) > body.acquisition->maxHeight)) ||
+            target.distance >= reach || target.score >= snapshot.range ||
+            (facing &&
+             !MeleeSelection::accepts(target, *facing, snapshot.range, snapshot.facingDot))) {
+            continue;
+        }
+        // around() owns the native vertical/body validity and line-of-sight tests.
+        // They are independent of facing at these fixed feet, including surface meshes.
+        if (!TargetAssist::around(actor.position(), actor.height(), std::span{&body, 1}, reach,
+                                  &resources.world.collision())) {
+            continue;
+        }
+        query.bodies.push_back(body);
+        snapshot.targets.push_back(target);
+    }
+    return query;
+}
+
+std::optional<MeleeSelection::Snapshot>
+PlayerAttacks::meleeAcquisition(const PlayerActor& actor, const Targets& targets) const {
+    if (!m_resources || targets.multiplayer == MultiplayerMode::Hurt) {
+        return std::nullopt;
+    }
+    auto snapshot = meleeQuery(actor, targets, std::nullopt).selection;
+    if (const auto contact = contactSeed(actor, targets, true)) {
+        snapshot.contact = meleeContact(actor, *contact, targets);
+    }
+    return snapshot;
+}
+
+std::optional<std::vector<MeleeGeometry::Target>>
+PlayerAttacks::meleeGeometry(const PlayerActor& actor, const Targets& targets, f32 movementRadius,
+                             bool requireClose) const {
+    if (!m_resources || targets.multiplayer != MultiplayerMode::Normal ||
+        targets.opponents.bosses().present() || !std::isfinite(movementRadius) ||
+        movementRadius <= 0) {
+        return std::nullopt;
+    }
+    // Dying critter roots leave acquisition queries before their solid movement
+    // bodies disappear. Replay does not carry those bodies, so keep the same
+    // movement query as LevelOpponents when excluding an unsupported contact.
+    for (const auto& body : targets.opponents.critters().targets(true)) {
+        const Vec3 offset = body.base - actor.position();
+        if (std::hypot(offset.x, offset.z) <= movementRadius + actor.radius() + body.radius) {
+            return std::nullopt;
+        }
+    }
+    const auto enemies = targets.opponents.enemies().meleeGeometry();
+    std::vector<MeleeGeometry::Target> result;
+    const f32 closeReach = actor.reach() + kStepReach + kHeldReach + movementRadius;
+    bool close = false;
+    for (const auto& body : acquisitionTargets(targets)) {
+        // Capture the whole reachable disk, not just today's cone or line of
+        // sight. A later turn or wall slide can expose any of these candidates.
+        const f32 distance = TargetAssist::distanceTo(actor.position(), actor.height(), body);
+        const f32 physical =
+            glm::length(Vec2{body.base.x - actor.position().x, body.base.z - actor.position().z}) -
+            body.radius;
+        const bool nearby = distance < closeReach || physical < closeReach;
+        const auto& acquisition = body.acquisition;
+        const bool aimable =
+            acquisition
+                ? acquisition->enabled &&
+                      (glm::distance(acquisition->point, actor.followPoint()) - movementRadius) *
+                                  acquisition->distanceScale -
+                              acquisition->radius <
+                          TargetAssist::kRange
+                : glm::distance(body.pointNear(actor.followPoint()), actor.followPoint()) -
+                          (body.surface.empty() ? body.radius : 0) - movementRadius <
+                      TargetAssist::kRange;
+        if (!nearby && !aimable) {
+            continue;
+        }
+        if (!body.surface.empty() || body.node >= 0 || body.potionBottle || !acquisition) {
+            return std::nullopt;
+        }
+        if (body.id >= kEnemyTargetBase && body.id < kGeneratorTargetBase) {
+            const auto found =
+                std::ranges::find(enemies, body.id - kEnemyTargetBase, &MeleeGeometry::Target::id);
+            if (found == enemies.end()) {
+                return std::nullopt;
+            }
+            result.push_back(*found);
+            result.back().id = body.id;
+        } else if (body.id >= kGeneratorTargetBase && body.id < kCritterTargetBase) {
+            MeleeGeometry::Target target;
+            target.id = body.id;
+            target.base = body.base;
+            target.radius = body.radius;
+            target.height = body.height;
+            target.acquisition = *acquisition;
+            target.low = body.height <= kLowThing;
+            // Native movement uses generators' rotated obstacle boxes, not
+            // their broader acquisition cylinders.
+            target.blocksMovement = false;
+            result.push_back(target);
+        } else {
+            // Mixed critter contacts, mesh items and multipart bosses need
+            // their own contact ordering and geometry before local replay.
+            return std::nullopt;
+        }
+        close = close || nearby;
+    }
+    // Leave open areas on the ordinary ranged path; a melee context must not
+    // suppress local projectile previews when no close attack can be acquired.
+    return close || !requireClose ? std::optional{std::move(result)} : std::nullopt;
 }
 
 MeleeSense PlayerAttacks::meleeSense(const PlayerActor& actor, bool held, const Targets& targets,
@@ -1596,27 +1747,9 @@ MeleeSense PlayerAttacks::meleeSense(const PlayerActor& actor, bool held, const 
 
 MeleeSense PlayerAttacks::senseOf(const PlayerActor& actor, bool held,
                                   const MeleeTarget& selected) {
-    MeleeSense sense;
-    const MissileTarget& target = selected.body;
-    const f32 distance = selected.distance;
-    const f32 bias = held ? kHeldReach : 0.0f;
-    // PlayerMotion uses col_radius (the full PDAT width), not the half-width
-    // cylinder used for horizontal movement. Target distance already excludes
-    // the target's radius, so only the player's reach and authored margin remain.
-    sense.range =
-        distance < actor.reach() + kSwingReach + bias ? MeleeRange::Swing : MeleeRange::Step;
-    const bool swarm = target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase;
-    const bool thing = !isCreature(target.id) && target.id < kPlayerTargetBase;
-    // PlayerMotion tests the swarm's height or the item's height, but never a
-    // critter's small NODE collision part, when setting the low-attack bit.
-    sense.low = distance < actor.reach() + kStepReach &&
-                ((swarm && target.height <= kLowEnemy) || (thing && target.height <= kLowThing));
-    const Vec3 toward = target.base - actor.position();
-    if (std::hypot(toward.x, toward.z) > 1e-5f) {
-        const f32 bearing = std::atan2(toward.x, toward.z) - actor.yaw();
-        sense.yaw = std::remainder(bearing, 2.0f * std::numbers::pi_v<f32>);
-    }
-    return sense;
+    auto target = meleeCandidate(actor, selected.body);
+    target.distance = selected.distance;
+    return MeleeSelection::senseOf(target, actor.position(), actor.reach(), actor.yaw(), held);
 }
 
 void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const Targets& targets) {

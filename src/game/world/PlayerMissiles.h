@@ -15,6 +15,7 @@
 #include "engine/world/WorldLighting.h"
 
 #include "game/config/MultiplayerMode.h"
+#include "game/players/PowerupEffects.h"
 #include "game/world/EffectTrees.h"
 #include "game/world/MissileStreak.h"
 
@@ -46,6 +47,23 @@ struct MissileSpec {
 /** Spread volleys sound only on the centre projectile. */
 enum class MissileWallSound : u8 { Level, ThreeWay, FiveWay, Silent, Ricochet };
 
+/** Immutable weapon-release provenance captured before later world updates can
+ * interrupt its animation. Session tick/grant identity belongs to the caller. */
+struct MissileRelease {
+    s32 character = 0;
+    u64 generation = 0;
+    bool strong = false;
+    u8 ordinal = 0;   ///< native fan order, before any projectile collides or disappears
+    u32 emission = 0; ///< zero for ordinary throws, otherwise TurboMove's slot/counter identity
+    bool operator==(const MissileRelease&) const = default;
+};
+
+/** Potion throws have their own action generation and never alias weapon volleys. */
+struct MissilePotionRelease {
+    u64 generation = 0;
+    bool operator==(const MissilePotionRelease&) const = default;
+};
+
 /** What sets a missile off. */
 struct MissileLaunch {
     s32 owner = 0;
@@ -71,6 +89,8 @@ struct MissileLaunch {
     MultiplayerMode multiplayer = MultiplayerMode::Normal;
     f32 playerHitGap = 0.25f;  ///< hit-effect frames / 30, when authored
     bool breaksPotions = true; ///< companion shots pass through collectible bottles
+    std::optional<MissileRelease> release;
+    std::optional<MissilePotionRelease> potionRelease;
 };
 
 /** Something a missile stops against: a cylinder, or an authored triangle surface. */
@@ -137,6 +157,11 @@ struct MissilePlayer {
  */
 class PlayerMissiles {
 public:
+    static constexpr u32 kPlainModifiers =
+        powerup::kRapidFire | powerup::kThreeWayShot | powerup::kFiveWayShot;
+    static constexpr u32 kReplayModifiers = kPlainModifiers | 0xFU;
+    /** Ordinary elemental or plain throws only; other weapon modes remain authoritative. */
+    static bool replayModifiers(u32 flags);
     static constexpr f32 kSlowest = 20.0f; ///< units a second with no strength at all
     static constexpr f32 kFastest = 60.0f; ///< and at a stat of 1000
     static constexpr f32 kStatScale = 0.001f;
@@ -149,6 +174,64 @@ public:
     static constexpr f32 kLifeSeconds = 3.0f;
     static constexpr f32 kLeastDamage = 5.0f; ///< of a missile, with no strength at all
     static constexpr f32 kMostDamage = 20.0f; ///< and at a stat of 1000
+
+    /** Release-time inputs for the native weapon muzzle, spread and ballistic aim.
+     * Contains no artwork, audio, inventory mutation or collision side effects. */
+    struct WeaponThrow {
+        s32 owner = 0;
+        s32 character = 0;
+        Vec3 position{0}; ///< feet; target-facing correction is measured from here
+        Vec3 center{0};   ///< body follow point, before the authored hand offset
+        Vec3 hand{0};
+        Vec3 direction{0, 0, 1};
+        f32 speed = kSlowest;
+        f32 damage = 0;
+        f32 attackSeconds = 0;
+        f32 scale = 1;
+        u32 flags = 0;
+        s32 shots = 1;
+        MultiplayerMode multiplayer = MultiplayerMode::Normal;
+        std::optional<Vec3> target;
+    };
+
+    /** Resumable flight of one ordinary weapon. Resource bindings and identity
+     * remain in the local pool; impact/piercing state is deliberately excluded. */
+    struct FlightCheckpoint {
+        Vec3 position{0};
+        Vec3 velocity{0};
+        f32 tumble = 0;
+        f32 age = 0;
+        f32 scale = 1;
+        u32 continuity = 1;
+        bool valid() const;
+        bool operator==(const FlightCheckpoint&) const = default;
+    };
+
+    /** Cosmetic history for native particle nodes. An impact stops emission before
+     * that tick's visual update; its final placement is carried by the effect. */
+    struct ParticleFlight {
+        FlightCheckpoint birth;
+        f32 stepSeconds = 1.0f / 60;
+        u32 activeSteps = 0;
+        u32 totalSteps = 0;
+        bool retiring = false;
+        bool valid() const;
+        bool operator==(const ParticleFlight&) const = default;
+    };
+
+    struct VisualHistory {
+        u64 instance = 0;
+        s32 owner = 0;
+        s32 character = 0;
+        std::optional<MissileRelease> release;
+        u32 effect = 0;
+        u32 rider = 0;
+        ParticleFlight flight;
+        Mat4 placement{1};
+        Vec3 direction{0};
+        s32 potion = 0; ///< zero selects the ordinary class spec; 1..4 use MissileSpec::potion
+        std::optional<MissilePotionRelease> potionRelease;
+    };
 
     /** One weapon in flight. */
     struct Missile {
@@ -175,7 +258,9 @@ public:
         MissileWallSound wallSound = MissileWallSound::Level;
         u32 flags = 0;
         std::vector<s32> pierced;
+        std::optional<MissileRelease> release;
         MissileStreak streak;
+        std::optional<MissilePotionRelease> potionRelease;
         MultiplayerMode multiplayer = MultiplayerMode::Normal;
         f32 playerHitGap = 0.25f;
         bool breaksPotions = true;
@@ -196,12 +281,26 @@ public:
     static f32 reachFor(f32 attackSeconds);
     /** The velocity that sets a missile off along `direction` to come down at its reach. */
     static Vec3 launchVelocity(const Vec3& direction, f32 speed, f32 reach, f32 weight);
+    /** Builds the same release as the live arsenal, without starting it. The
+     * returned specs are stable class-table entries; visual pointers are empty. */
+    static std::vector<MissileLaunch> weaponLaunches(const WeaponThrow& weapon);
+    static FlightCheckpoint flightCheckpoint(const Missile& missile);
+    /** Correct an existing plain shot in an unbound physics-only pool. Rejects
+     * expired/invalid flight or any shot whose omitted impact state matters. */
+    bool restoreFlight(u64 instance, const FlightCheckpoint& checkpoint);
+    /** A native bottle in an unbound pool. It cannot carry piercing/reflection,
+     * player contacts or ordinary-weapon provenance. Impact queues remain private. */
+    bool restorePotionFlight(u64 instance, const FlightCheckpoint& checkpoint);
+    /** Restore cosmetic counters only in a private physics-only pool. */
+    bool restoreVisualFlight(u64 instance, const ParticleFlight& history);
 
     /** Sets a missile flying; false when the launch names no spec. */
     bool launch(const MissileLaunch& launch);
     /** Binds rendering separately from physics. Texture lenders outlive clear(). */
     void bindVisuals(RenderDevice& device, std::span<TextureSet* const> lenders = {});
     const EffectTrees& visuals() const { return m_visuals; }
+    std::span<const VisualHistory> visualHistory() const { return m_visualHistory; }
+    const VisualHistory* visualHistory(u32 effect) const;
     /** Flies every missile on by `seconds`; those a wall or floor stops are taken away. */
     void update(f32 seconds, const WorldCollision* collision,
                 std::span<const MissileTarget> targets = {},
@@ -224,6 +323,7 @@ private:
     u64 m_nextInstance = 1; ///< never reset by clear; network identities cannot be recycled
     std::vector<Missile> m_missiles;
     std::vector<MissileImpact> m_impacts;
+    std::vector<VisualHistory> m_visualHistory;
     f32 m_ricochetIn = 0;
     RenderDevice* m_device = nullptr;
     EffectTrees m_visuals;

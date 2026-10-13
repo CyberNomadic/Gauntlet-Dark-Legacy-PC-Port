@@ -38,6 +38,7 @@ bool SoundSet::loadNative(const std::filesystem::path& path) {
         const auto filename =
             explicitFile ? path.filename().string() : (names ? names->file : name) + ".vbk";
         auto bank = formats::SoundBank::parse(readFile(audio.require(filename)));
+        m_bank = normalizeAssetName(std::filesystem::path(filename).stem().string());
         const usize namedCount = names ? names->soundCount : 0;
         if (names && static_cast<usize>(names->firstSound) + namedCount > directory.sounds.size()) {
             throw FormatError("bank sound names exceed audio directory");

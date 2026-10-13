@@ -22,6 +22,7 @@ struct ZigZag {
     s32 spread = 0; ///< grows with each fresh aim and dies away a tick at a time
     s32 hold = 0;   ///< ticks before it may aim afresh
     s32 swings = 0; ///< since the last aim
+    bool operator==(const ZigZag&) const = default;
 };
 
 /** What an enemy remembers between ticks for its mind's sake. */
@@ -44,6 +45,7 @@ struct MindMemory {
     s32 lookout = -1;         ///< the lookout a patroller is making for; none until chosen
     bool primed = false;      ///< a mind that starts on a random wait has drawn it
     ZigZag zigZag;
+    bool operator==(const MindMemory&) const = default;
 };
 
 /** The collision outcome of an actual seek movement step, not a route probe. */
@@ -63,6 +65,7 @@ struct LookoutRoute {
     static constexpr usize kMost = 20;
     std::vector<Vec3> points;
     std::vector<s32> next;
+    bool operator==(const LookoutRoute&) const = default;
 
     static LookoutRoute of(std::span<const WorldLocator> locators);
     bool empty() const { return points.empty(); }

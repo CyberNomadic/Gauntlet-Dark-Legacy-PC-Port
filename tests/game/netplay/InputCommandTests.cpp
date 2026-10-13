@@ -31,7 +31,7 @@ TEST_CASE("input packets have a fixed endian and version independent of C++ layo
     const auto encoded = InputPacket::encode(commands);
     REQUIRE(encoded);
     const std::vector<u8> expected{
-        0x47, 0x44, 0x4c, 0x49, 2,    0,    1,    0,                   // header
+        0x47, 0x44, 0x4c, 0x49, 3,    0,    1,    0,                   // header
         1,    0,    0,    0,    0,    0,    0,    0,                   // epoch
         0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,                // tick
         4,    3,    2,    1,    2,    1,    0,    0,                   // grant, seat, aim, reserved
@@ -121,6 +121,29 @@ TEST_CASE("input validation rejects impossible movement and nonfinite cursor tar
     command = good;
     command.pressedButtons = ~InputCommand::kPressMask;
     rejects(command);
+}
+
+TEST_CASE("potion throws use the held wire domain and reject the retired press encoding",
+          "[netplay][protocol][potion-input]") {
+    auto command = sample();
+    command.heldButtons = static_cast<u32>(CommandHeld::ThrowPotion);
+    command.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
+    const auto bytes = InputPacket::encode(std::array{command});
+    REQUIRE(bytes);
+    const auto decoded = InputPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->size() == 1);
+    CHECK(decoded->front().held(CommandHeld::ThrowPotion));
+    CHECK(decoded->front().pressed(CommandPress::UsePotion));
+    auto legacyVersion = *bytes;
+    legacyVersion[4] = 2;
+    CHECK_FALSE(InputPacket::decode(legacyVersion));
+    command.pressedButtons = 1U << 1U;
+    CHECK_FALSE(command.valid());
+    CHECK_FALSE(InputPacket::encode(std::array{command}));
+    auto legacyPress = *bytes;
+    legacyPress[InputPacket::kHeaderBytes + InputPacket::kCommandBytes - 4] = 2;
+    CHECK_FALSE(InputPacket::decode(legacyPress));
 }
 
 TEST_CASE("redundant input batches stay bounded and fail atomically", "[netplay][protocol]") {

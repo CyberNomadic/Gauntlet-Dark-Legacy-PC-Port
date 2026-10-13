@@ -101,6 +101,13 @@ bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSe
     return true;
 }
 void OnlinePlay::quiet() {
+    m_prediction.clear();
+    m_projectilePrediction.clear();
+    m_potionPrediction.clear();
+    m_effectPrediction.clear();
+    m_presentEffects = false;
+    m_latencyReportAt = {};
+    m_audio.clear();
     if (m_host) {
         m_host->scene.pauseGameplaySounds();
     }
@@ -276,6 +283,8 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 // party checkpoint. The guest never constructs a gameplay scene.
                 m_host.reset();
                 m_completion.close();
+                m_effectPrediction.clear();
+                m_presentEffects = false;
                 m_replica.clear();
                 m_clock.clear();
                 std::vector<PartyMember> preview;
@@ -328,6 +337,8 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
             fail(Failure::Scene);
             return false;
         } else if (match.host() && returningSecret) {
+            const SoundPlayer::Capture capture(
+                m_context.sounds, [&match](const auto& event) { match.audio().emit(event); });
             m_host = std::move(m_parent);
             m_host->scene.resumeFromChallenge(m_travelMembers);
             if (!m_host->driver.bind(m_host->scene, match, m_host->pickups, m_host->fixtures)) {
@@ -335,6 +346,8 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 return false;
             }
         } else if (match.host()) {
+            const SoundPlayer::Capture capture(
+                m_context.sounds, [&match](const auto& event) { match.audio().emit(event); });
             const auto members =
                 travelling ? std::optional{m_travelMembers} : m_selection->members(*m_session);
             auto candidate = std::make_unique<Host>();
@@ -356,6 +369,23 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 !m_clock.begin(match)) {
                 fail(Failure::Assets);
                 return false;
+            }
+        }
+        if (!match.host()) {
+            const auto* world = m_replica.world();
+            m_audio.open(m_context.unpackedRoot, m_context.sounds, world->audio(),
+                         world->level() != nullptr ? world->level()->musicVolume : 1.0f);
+            if (!m_audio.beginPrediction(context, match.localPeer())) {
+                fail(Failure::Presentation);
+                return false;
+            }
+            for (usize seat = 0; seat < context.owners.size(); ++seat) {
+                if (context.owners[seat] == match.localPeer()) {
+                    // Decode local release cues while loading, not on the first attack.
+                    // Missing optional audio falls back to the host's ordinary stream.
+                    m_audio.prepareWeapon(static_cast<u8>(seat),
+                                          m_replica.character(static_cast<u8>(seat)));
+                }
             }
         }
     } catch (const std::exception& error) {
@@ -566,8 +596,7 @@ OnlinePlay::Phase OnlinePlay::updateShop(const SessionInputs::Frame& devices) {
             if (!device) {
                 return fail(Failure::Input);
             }
-            input = AfterLevelScene::captureShopInput(input, *m_context.config,
-                                                      *device);
+            input = AfterLevelScene::captureShopInput(input, *m_context.config, *device);
         }
         const auto focus = m_shop.captureOnlinePointer(static_cast<s32>(seat), input);
         if (lane == m_shop.session().lanes().end() ||
@@ -631,6 +660,16 @@ OnlinePlay::Phase OnlinePlay::updateShop(const SessionInputs::Frame& devices) {
     return m_phase;
 }
 OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
+    const auto result = updateFrame(devices);
+    // Poll before simulation, then submit its output in the same update. Waiting
+    // until the next poll adds a full 60 Hz tick on each side of the connection.
+    // Keep this outside the frame's branches so shop/travel/loading also flush.
+    if (m_session != nullptr && result != Phase::Failed && !m_session->flush()) {
+        return fail(Failure::Session);
+    }
+    return result;
+}
+OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
     if (m_session == nullptr) {
         return m_phase;
     }
@@ -686,15 +725,166 @@ OnlinePlay::Phase OnlinePlay::update(const SessionInputs::Frame& devices) {
     }
     m_phase = Phase::Playing;
     if (!match.host()) {
-        return MatchInputs::sample(match, *local) ? phase() : fail(Failure::Input);
+        if (!m_audio.consume(match.audio())) {
+            return fail(Failure::Presentation);
+        }
+        if (const auto* state = shown()) {
+            m_audio.music(*state);
+        }
+        const auto commands = MatchInputs::commands(match, *local);
+        match.latency().update();
+        match.latency().motionRequest(commands, shown());
+        if (!match.sample(commands)) {
+            return fail(Failure::Input);
+        }
+        if (m_prediction.epoch() != match.context().epoch) {
+            const auto* world = m_replica.world();
+            const auto* view = m_replica.view();
+            if (world == nullptr || view == nullptr) {
+                return fail(Failure::Presentation);
+            }
+            m_prediction.begin(match.context(), match.localPeer(), world->collision(),
+                               &world->scene(), &world->layout());
+            m_projectilePrediction.begin(match.context(), match.localPeer(), world->collision(),
+                                         &world->scene(), &world->layout());
+            if (const auto* weapons = m_replica.weapons()) {
+                if (const auto* resources = m_replica.projectiles()) {
+                    m_potionPrediction.begin(match.context(), match.localPeer(), world->collision(),
+                                             *weapons, *resources, &world->scene(),
+                                             &world->layout());
+                }
+            }
+            m_effectPrediction.begin(match.context(), match.localPeer());
+            for (usize seat = 0; seat < match.context().owners.size(); ++seat) {
+                if (match.context().owners[seat] == match.localPeer()) {
+                    const auto* figure = view->actors().playerFigure(static_cast<u8>(seat));
+                    if (figure != nullptr && figure->actionTree() != nullptr) {
+                        const auto* stats = m_replica.classStats(static_cast<u8>(seat));
+                        m_prediction.setPlayer(
+                            static_cast<u8>(seat), *figure->actionTree(), stats,
+                            stats != nullptr ? m_replica.character(static_cast<u8>(seat)) : -1);
+                        const auto* effects = m_replica.turboEffects(static_cast<u8>(seat));
+                        const auto* weapons = m_replica.weapons();
+                        if (effects != nullptr && weapons != nullptr) {
+                            m_effectPrediction.bind(
+                                static_cast<u8>(seat), *effects, *figure, *weapons,
+                                view->actors().playerScale(static_cast<u8>(seat)));
+                        }
+                        if (const auto* fire =
+                                view->actors().fireShieldTree(static_cast<u8>(seat))) {
+                            m_prediction.setFireShield(
+                                static_cast<u8>(seat), *fire,
+                                view->actors().playerScale(static_cast<u8>(seat)));
+                        }
+                    }
+                }
+            }
+        }
+        m_prediction.update(match.playback().latest(), match.sampledInputs());
+        m_potionPrediction.update(match.playback().latest(), m_prediction, match.sampledInputs());
+        m_effectPrediction.update(match.playback().latest(), m_prediction);
+        if (const auto* authority = match.playback().latest()) {
+            for (usize seat = 0; seat < authority->players.size(); ++seat) {
+                const auto* replay = m_prediction.replayed(static_cast<u8>(seat));
+                if (replay == nullptr || !authority->players[seat] ||
+                    !authority->players[seat]->weapon) {
+                    continue;
+                }
+                for (const auto& release : replay->releases) {
+                    match.latency().localRelease({match.context().epoch, release.tick,
+                                                  release.generation, release.motion.grant,
+                                                  static_cast<u8>(seat), release.strong, 0,
+                                                  release.emission});
+                }
+            }
+        }
+        if (const auto* resources = m_replica.projectiles()) {
+            m_projectilePrediction.update(match.playback().latest(), m_prediction, *resources,
+                                          match.sampledInputs());
+            if (const auto* authority = match.playback().latest()) {
+                std::vector<ShotIdentity> pending;
+                if (m_predictMovement) {
+                    for (const auto& release : m_projectilePrediction.soundReleases()) {
+                        pending.push_back(release.origin);
+                    }
+                }
+                if (!m_audio.reconcile(*authority, pending)) {
+                    return fail(Failure::Presentation);
+                }
+                if (m_predictMovement) {
+                    for (const auto& release : m_projectilePrediction.soundReleases()) {
+                        m_audio.predict(release.origin, release.shots, release.weaponFlags);
+                    }
+                }
+            }
+        }
+        const auto now = LatencyTelemetry::Clock::now();
+        if (m_latencyReportAt == LatencyTelemetry::Time{}) {
+            m_latencyReportAt = now;
+        }
+        if (now - m_latencyReportAt >= std::chrono::seconds(10)) {
+            m_latencyReportAt = now;
+            const auto& metrics = m_prediction.metrics();
+            log::info("Netplay movement: lead={} ticks, pending={}, resolved deadline={} ms, "
+                      "corrections={}, largest={} units, cuts={}, stalled={}",
+                      match.inputLead(), metrics.pending, metrics.resolvedDeadlineMs,
+                      metrics.corrections, metrics.largestCorrection, metrics.cuts,
+                      metrics.stalled);
+            log::info("Netplay latency: {}", match.latency().report());
+        }
+        return phase();
     }
     if (m_entry.phase() != OnlineLevelEntry::Phase::Closed) {
         m_entry.close();
     }
-    m_outcome = m_host->driver.advance(match, *local, m_host->projectiles);
+    std::vector<SoundPlayer::Event> sounds;
+    std::vector<PlayerArsenal::WeaponSound> releases;
+    bool overflow = false;
+    {
+        // The native cue precedes the completed checkpoint. Buffer only this step
+        // so its identity uses the same post-step tick as projectile replication.
+        const SoundPlayer::Capture capture(m_context.sounds, [&](const auto& event) {
+            if (sounds.size() < AudioSync::kBudget) {
+                sounds.push_back(event);
+            } else {
+                overflow = true;
+            }
+        });
+        const auto weapons = m_host->scene.captureWeaponSounds([&](const auto& release) {
+            if (releases.size() < AudioSync::kBudget) {
+                releases.push_back(release);
+            } else {
+                overflow = true;
+            }
+        });
+        m_outcome = m_host->driver.advance(match, *local, m_host->projectiles);
+    }
     feedback();
-    if (m_outcome == PlayReplication::Result::Failed) {
+    if (overflow || m_outcome == PlayReplication::Result::Failed) {
         return fail(Failure::Capture);
+    }
+    for (const auto& event : sounds) {
+        std::optional<ShotIdentity> origin;
+        const auto* state = m_host->driver.latest();
+        if (state != nullptr && event.kind == SoundPlayer::Event::Kind::Play) {
+            const auto release =
+                std::ranges::find(releases, event.handle, &PlayerArsenal::WeaponSound::handle);
+            if (release != releases.end() && release->owner >= 0 &&
+                release->owner < static_cast<s32>(InputCommand::kSeats)) {
+                const auto seat = static_cast<u8>(release->owner);
+                origin = ShotIdentity{match.context().epoch,
+                                      state->motion.tick,
+                                      release->release.generation,
+                                      match.context().grants[seat],
+                                      seat,
+                                      release->release.strong,
+                                      0,
+                                      release->release.emission};
+            }
+        }
+        if (!match.audio().emit(event, origin)) {
+            return fail(Failure::Capture);
+        }
     }
     if (m_outcome != PlayReplication::Result::Advanced &&
         m_outcome != PlayReplication::Result::Held) {
@@ -776,7 +966,14 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
         return;
     }
     EnemyPresentation presentation;
-    if (const auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
+    if (auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
+        m_presentEffects = false;
+        if (m_predictMovement) {
+            m_prediction.present(*sample, frameBlend);
+            m_projectilePrediction.present(*sample, frameBlend);
+            m_potionPrediction.present(*sample, frameBlend);
+            m_presentEffects = m_effectPrediction.present(*sample);
+        }
         if (!m_replica.show(*sample, &presentation)) {
             if (const auto* view = m_replica.view()) {
                 log::error("Online presentation rejected: {}", view->rejection(*sample));
@@ -811,7 +1008,12 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
         static_cast<f32>(m_clock.tick()) / 2 + static_cast<f32>(m_clock.fraction()) / 2;
     static const GameConfig kDefaultVideo;
     m_replica.draw(device, projection, width, height, textureFrame,
-                   m_context.config != nullptr ? *m_context.config : kDefaultVideo);
+                   m_context.config != nullptr ? *m_context.config : kDefaultVideo,
+                   m_predictMovement && m_presentEffects ? &m_effectPrediction : nullptr,
+                   frameBlend);
+    if (const auto* state = shown()) {
+        m_session->match().latency().presented(*state);
+    }
 }
 const PlayScene* OnlinePlay::hostScene() const {
     return m_host ? &m_host->scene : nullptr;

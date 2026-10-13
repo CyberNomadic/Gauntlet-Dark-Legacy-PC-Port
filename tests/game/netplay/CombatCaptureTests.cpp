@@ -172,6 +172,35 @@ TEST_CASE("enemy identities survive hits and distinguish recycled pool occupants
     CHECK_FALSE(enemies.observe(Enemies::kMost));
 }
 
+TEST_CASE("equipment capture is independent of local movement prediction eligibility",
+          "[netplay][combat-capture][shield-rollback]") {
+    const Enemies enemies;
+    std::array<PlayerRuntime, 1> players;
+    auto& player = players.front();
+    player.actor.spawn(2, {}, nullptr, {4, 0, 6}, 0);
+    auto& inventory = player.actor.save().progress().inventory;
+    for (const u32 shield :
+         {powerup::kReflectShield, powerup::kFireShield, powerup::kLightningShield}) {
+        inventory = {};
+        inventory.addPowerup(powerup::kArmor, shield, 0, 30);
+        const auto state = capture(motionFor(players), players, enemies);
+        CHECK(state.players[2]->armEquipment == shield);
+        CHECK_FALSE(state.players[2]->movement.enabled);
+        CHECK_FALSE(state.players[2]->modifiers);
+        CombatReplica replica;
+        REQUIRE(replica.begin(1, 1));
+        receive(replica, state);
+        CHECK(replica.latest()->players[2]->armEquipment == shield);
+        inventory.addPowerup(powerup::kSpecial, powerup::kLeftGauntlet, 0, 30);
+        const auto combined = capture(motionFor(players), players, enemies);
+        CHECK(combined.players[2]->armEquipment == (shield | powerup::kLeftGauntlet));
+        for (auto& slot : inventory.powerups) {
+            slot.on = false;
+        }
+        CHECK(capture(motionFor(players), players, enemies).players[2]->armEquipment == 0);
+    }
+}
+
 TEST_CASE("combat capture rejects mismatched motion and duplicate seats",
           "[netplay][combat-capture]") {
     const Enemies enemies;

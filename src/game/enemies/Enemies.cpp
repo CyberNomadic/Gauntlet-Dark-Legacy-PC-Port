@@ -5,6 +5,7 @@
 #include <format>
 #include <limits>
 #include <numbers>
+#include <tuple>
 
 #include "engine/core/Types.h"
 
@@ -35,6 +36,100 @@ constexpr s32 kDogKind = 18;
 constexpr s32 kLeaderWay = 12;
 constexpr s32 kAcidKind = 21;
 constexpr f32 kShadowReach = 1.0f; ///< a shadow finds its floor within this of the feet
+
+constexpr f32 kCheckpointMagnitude = 1'000'000;
+constexpr s32 kCheckpointCounter = 100'000'000;
+
+bool checkpointNumber(f32 value, f32 minimum = -kCheckpointMagnitude,
+                      f32 maximum = kCheckpointMagnitude) {
+    return std::isfinite(value) && value >= minimum && value <= maximum;
+}
+
+bool checkpointCounter(s32 value, s32 minimum = -kCheckpointCounter) {
+    return value >= minimum && value <= kCheckpointCounter;
+}
+
+bool checkpointPoint(const Vec3& value) {
+    return checkpointNumber(value.x) && checkpointNumber(value.y) && checkpointNumber(value.z);
+}
+
+bool checkpointPlayer(s32 player) {
+    return player >= -1 && player < 4;
+}
+
+bool checkpointKind(s32 kind) {
+    return kind >= 0 && kind < kEnemyKindCount;
+}
+
+bool checkpointSlot(s32 slot) {
+    return slot >= -1 && slot < Enemies::kMost;
+}
+
+bool checkpointMind(const MindMemory& mind) {
+    if (!checkpointNumber(mind.heading) || !checkpointNumber(mind.headingBefore) ||
+        !checkpointNumber(mind.seekHeading) || mind.effectiveWay < -1 || mind.effectiveWay > 31 ||
+        !checkpointCounter(mind.turns, 0) || (mind.effectiveWay == kFleeWay && mind.counter < 0)) {
+        return false;
+    }
+    for (const s32 value : {mind.route, mind.collided, mind.stuck, mind.deadEnd, mind.counter,
+                            mind.mode, mind.fuse, mind.lookout, mind.zigZag.count, mind.zigZag.side,
+                            mind.zigZag.spread, mind.zigZag.hold, mind.zigZag.swings}) {
+        if (!checkpointCounter(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto checkpointView(const ViewVolume& view) {
+    return std::tie(view.position, view.right, view.up, view.forward, view.sinX, view.cosX,
+                    view.sinY, view.cosY);
+}
+
+bool checkpointEvent(const EnemyBlow& value) {
+    return checkpointPlayer(value.player) && checkpointKind(value.kind) && value.tier >= 1 &&
+           value.tier <= 3 && checkpointNumber(value.damage, 0) &&
+           checkpointPoint(value.direction) && value.ward <= EnemyMeleeWard::HealthVamp;
+}
+bool checkpointEvent(const EnemyLoss& value) {
+    return checkpointSlot(value.enemy) && checkpointKind(value.kind) && value.tier >= 1 &&
+           value.tier <= 3 && checkpointPlayer(value.player) &&
+           checkpointCounter(value.experience, 0) && checkpointPoint(value.position);
+}
+bool checkpointEvent(const EnemyBurst& value) {
+    return checkpointSlot(value.enemy) && (value.kind == -1 || checkpointKind(value.kind)) &&
+           checkpointNumber(value.damage, 0) && checkpointPoint(value.position);
+}
+bool checkpointEvent(const EnemyCue& value) {
+    return value.kind <= EnemyCue::Kind::Yell && checkpointKind(value.enemyKind) &&
+           checkpointPoint(value.position);
+}
+bool checkpointEvent(const EnemyFeedback& value) {
+    return checkpointKind(value.kind) && value.tier >= 1 && value.tier <= 3 &&
+           checkpointCounter(value.hitCount, 0) && checkpointPoint(value.position) &&
+           checkpointNumber(value.yaw) && checkpointNumber(value.halfHeight, 0);
+}
+bool checkpointEvent(const DeathEvent& value) {
+    return value.kind <= DeathEvent::Kind::Unmoved && checkpointSlot(value.enemy) &&
+           checkpointPlayer(value.player) && value.form <= DeathForm::Black &&
+           checkpointNumber(value.amount, 0) && checkpointPoint(value.position);
+}
+bool checkpointEvent(const EnemyDeathShot& value) {
+    return checkpointSlot(value.enemy) && checkpointKind(value.kind) &&
+           checkpointPoint(value.position) && checkpointPoint(value.direction);
+}
+bool checkpointEvent(const EnemyGeneratorEvent& value) {
+    return checkpointCounter(value.generator, -1) &&
+           value.kind <= EnemyGeneratorEvent::Kind::PatrolDetached;
+}
+bool checkpointEvent(s32 player) {
+    return checkpointPlayer(player);
+}
+
+template <class T> bool checkpointEvents(const std::vector<T>& events) {
+    return events.size() <= Enemies::Checkpoint::kMaxEvents &&
+           std::ranges::all_of(events, [](const T& value) { return checkpointEvent(value); });
+}
 
 constexpr s32 kRetargetEvery = 8; ///< frames between a mind looking round again
 constexpr f32 kRunFrom = 1.25f;   ///< a pace this much over a walk's runs
@@ -201,6 +296,239 @@ s32 resolvedWayOf(s32 kind, s32 strength, s32 way, bool mirrored) {
         way = kChaseWay;
     }
     return way;
+}
+
+bool Enemies::BodyState::valid() const {
+    if (state > State::Dying || presentationState > State::Dying || birth > Birth::Patrol ||
+        !checkpointKind(kind) || tier < 1 || tier > 3 || algorithm < 0 || algorithm > 31 ||
+        !checkpointCounter(variant, 0) || !checkpointCounter(generator, -1) ||
+        !checkpointPoint(position) || !checkpointPoint(birthPosition) ||
+        !checkpointPoint(presentationPosition) || !checkpointPoint(push) ||
+        !checkpointPoint(hurtDirection) || !checkpointMind(mind) || !checkpointPlayer(target) ||
+        !checkpointPlayer(targetBefore) || !checkpointPlayer(contact) ||
+        !checkpointPlayer(attackIndex) || !checkpointPlayer(hurtBy) ||
+        !checkpointNumber(veil, 0, kVeiled) || !checkpointNumber(health) ||
+        !checkpointNumber(yaw) || !checkpointNumber(presentationYaw) ||
+        !checkpointNumber(deathSeconds) ||
+        (floor && (!checkpointCounter(floor->object, 0) || !checkpointPoint(floor->local))) ||
+        (!deathSkin.empty() && std::ranges::find(kDeathSkins, deathSkin) == kDeathSkins.end())) {
+        return false;
+    }
+    for (const f32 value : {fullHealth, sight, radius, height, reach, pushMagnitude, targetDistance,
+                            weightedDistance, hurtPending, flashSeconds, burnGap}) {
+        if (!checkpointNumber(value, 0)) {
+            return false;
+        }
+    }
+    for (const s32 value : {pushes, attackCount, stunTicks, drainTicks, endurance, otherSide,
+                            hitCount, veilClock, deathSkinFrames}) {
+        if (!checkpointCounter(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Enemies::Checkpoint::valid() const {
+    if (nextInstance == 0 || most < 1 || most > kMost || stocks.size() > kEnemyKindCount ||
+        !checkpointSlot(bomber) || inView < 0 || inView > kMost || pendingTicks < 0 ||
+        pendingTicks >= 2 || !checkpointNumber(pendingSeconds, 0, 3600) ||
+        (pendingTicks == 0 && pendingSeconds != 0) || !checkpointNumber(shrink, 0.001f, 16) ||
+        !checkpointNumber(contactGridOrigin.x) || !checkpointNumber(contactGridOrigin.y) ||
+        !checkpointNumber(contactGridInverseWidth, 0) || scales.players < 0 || scales.players > 4 ||
+        lookouts.points.size() > LookoutRoute::kMost ||
+        lookouts.points.size() != lookouts.next.size() || combatants.size() > kMaxCombatants ||
+        !checkpointEvents(blows) || !checkpointEvents(losses) || !checkpointEvents(bursts) ||
+        !checkpointEvents(cues) || !checkpointEvents(feedback) || !checkpointEvents(deathEvents) ||
+        !checkpointEvents(deathShots) || !checkpointEvents(tagged) ||
+        !checkpointEvents(generatorEvents)) {
+        return false;
+    }
+    for (const f32 scale : {scales.health, scales.speed, scales.sight, scales.damage,
+                            scales.missileRate, scales.missileAim, scales.playerLevel}) {
+        if (!checkpointNumber(scale, 0, 10000)) {
+            return false;
+        }
+    }
+    if (view && (!checkpointPoint(view->position) || !checkpointPoint(view->right) ||
+                 !checkpointPoint(view->up) || !checkpointPoint(view->forward) ||
+                 !checkpointNumber(view->sinX, -1, 1) || !checkpointNumber(view->cosX, -1, 1) ||
+                 !checkpointNumber(view->sinY, -1, 1) || !checkpointNumber(view->cosY, -1, 1))) {
+        return false;
+    }
+    for (usize index = 0; index < lookouts.points.size(); ++index) {
+        // An authored route may refer past the retained twenty lookouts. Native
+        // patrol logic reselects next tick; preserve that value, not a fabricated edge.
+        if (!checkpointPoint(lookouts.points[index]) || !checkpointCounter(lookouts.next[index])) {
+            return false;
+        }
+    }
+    for (const auto& body : combatants) {
+        if (!checkpointCounter(body.id) || !checkpointPoint(body.centre) ||
+            !checkpointNumber(body.radius, 0) || !checkpointNumber(body.halfHeight, 0)) {
+            return false;
+        }
+    }
+    for (usize index = 0; index < stocks.size(); ++index) {
+        const auto& stock = stocks[index];
+        if (!checkpointKind(stock.kind) || !stock.textures.valid()) {
+            return false;
+        }
+        for (usize prior = 0; prior < index; ++prior) {
+            if (stocks[prior].kind == stock.kind) {
+                return false;
+            }
+        }
+    }
+    for (usize index = 0; index < enemies.size(); ++index) {
+        const auto& body = enemies[index];
+        if (!body.valid() || body.instance >= nextInstance ||
+            (body.animator && !body.animator->valid()) ||
+            (body.state != State::Inactive &&
+             (index >= static_cast<usize>(most) || body.instance == 0 || !body.animator))) {
+            return false;
+        }
+        for (usize prior = 0; body.instance != 0 && prior < index; ++prior) {
+            if (enemies[prior].instance == body.instance) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool Enemies::Checkpoint::operator==(const Checkpoint& other) const {
+    const auto fields = [](const Checkpoint& value) {
+        return std::tie(
+            value.enemies, value.stocks, value.nextInstance, value.random, value.most, value.scales,
+            value.lookouts, value.blows, value.losses, value.bursts, value.cues, value.feedback,
+            value.deathEvents, value.deathShots, value.tagged, value.generatorEvents,
+            value.combatants, value.contactGridOrigin, value.contactGridInverseWidth, value.bomber,
+            value.inView, value.frame, value.pendingTicks, value.pendingSeconds, value.shrink);
+    };
+    return fields(*this) == fields(other) && view.has_value() == other.view.has_value() &&
+           (!view || checkpointView(*view) == checkpointView(*other.view));
+}
+
+std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
+    if (m_device == nullptr) {
+        return std::nullopt;
+    }
+    Checkpoint state;
+    for (usize index = 0; index < m_enemies.size(); ++index) {
+        const auto& enemy = m_enemies[index];
+        auto& body = state.enemies[index];
+        static_cast<BodyState&>(body) = enemy;
+        body.animator = enemy.animator.checkpoint();
+        if (enemy.animator.bound() && !body.animator) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& stock : m_stocks) {
+        state.stocks.push_back({stock->kind, stock->textures.checkpoint()});
+    }
+    state.nextInstance = m_nextInstance;
+    state.random = m_random;
+    state.most = m_most;
+    state.scales = m_scales;
+    state.lookouts = m_lookouts;
+    state.blows = m_blows;
+    state.losses = m_losses;
+    state.bursts = m_bursts;
+    state.cues = m_cues;
+    state.feedback = m_feedback;
+    state.deathEvents = m_deathEvents;
+    state.deathShots = m_deathShots;
+    state.tagged = m_tagged;
+    state.generatorEvents = m_generatorEvents;
+    state.combatants = m_combatants;
+    state.contactGridOrigin = m_contactGridOrigin;
+    state.contactGridInverseWidth = m_contactGridInverseWidth;
+    state.bomber = m_bomber;
+    state.view = m_view;
+    state.inView = m_inView;
+    state.frame = m_frame;
+    state.pendingTicks = m_pendingTicks;
+    state.pendingSeconds = m_pendingSeconds;
+    state.shrink = m_shrink;
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+
+bool Enemies::restore(const Checkpoint& state) {
+    if (m_device == nullptr || !state.valid() || state.stocks.size() != m_stocks.size()) {
+        return false;
+    }
+    std::vector<TextureAnimator> textures;
+    textures.reserve(m_stocks.size());
+    for (usize index = 0; index < m_stocks.size(); ++index) {
+        if (state.stocks[index].kind != m_stocks[index]->kind) {
+            return false;
+        }
+        textures.push_back(m_stocks[index]->textures);
+        if (!textures.back().restore(state.stocks[index].textures)) {
+            return false;
+        }
+    }
+    std::array<Enemy, kMost> enemies;
+    for (usize index = 0; index < state.enemies.size(); ++index) {
+        const auto& body = state.enemies[index];
+        auto& enemy = enemies[index];
+        static_cast<BodyState&>(enemy) = body;
+        if (body.floor &&
+            (m_collision == nullptr || !m_collision->objectTransform(body.floor->object))) {
+            return false;
+        }
+        if (!body.animator) {
+            continue;
+        }
+        const Stock* stock = stockOf(body.kind);
+        if (stock == nullptr) {
+            return false;
+        }
+        const TreeInfo* tree = treeOf(body.kind, body.tier);
+        if (body.variant >= kArcherStrength) {
+            const auto variant = static_cast<usize>(body.variant - kArcherStrength);
+            if (variant < stock->variantTrees.size() && stock->variantTrees[variant] != nullptr) {
+                tree = stock->variantTrees[variant];
+            }
+        }
+        if (tree == nullptr || !enemy.animator.bind(*tree) ||
+            !enemy.animator.restore(*body.animator)) {
+            return false;
+        }
+    }
+    // Copy the remaining value buffers before committing any state; resource
+    // validation and allocation failure cannot leave a partly restored pool.
+    Checkpoint values = state;
+    m_enemies = std::move(enemies);
+    for (usize index = 0; index < m_stocks.size(); ++index) {
+        m_stocks[index]->textures = std::move(textures[index]);
+    }
+    m_nextInstance = values.nextInstance;
+    m_random = values.random;
+    m_most = values.most;
+    m_scales = values.scales;
+    m_lookouts = std::move(values.lookouts);
+    m_blows = std::move(values.blows);
+    m_losses = std::move(values.losses);
+    m_bursts = std::move(values.bursts);
+    m_cues = std::move(values.cues);
+    m_feedback = std::move(values.feedback);
+    m_deathEvents = std::move(values.deathEvents);
+    m_deathShots = std::move(values.deathShots);
+    m_tagged = std::move(values.tagged);
+    m_generatorEvents = std::move(values.generatorEvents);
+    m_combatants = std::move(values.combatants);
+    m_contactGridOrigin = values.contactGridOrigin;
+    m_contactGridInverseWidth = values.contactGridInverseWidth;
+    m_bomber = values.bomber;
+    m_view = values.view;
+    m_inView = values.inView;
+    m_frame = values.frame;
+    m_pendingTicks = values.pendingTicks;
+    m_pendingSeconds = values.pendingSeconds;
+    m_shrink = values.shrink;
+    return true;
 }
 
 Enemies::~Enemies() {
@@ -1992,7 +2320,8 @@ const TreeInfo* Enemies::appearanceTree(const Appearance& appearance) {
 void Enemies::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& placement,
                        const WorldLighting& lighting, const Appearance& appearance,
                        const TreePose& pose, u32 sequence, f32 frame, f32 textureFrame,
-                       const Texture* hitFlash, const CameraFrame* camera, TreeModel::Pass pass) {
+                       const Texture* hitFlash, const CameraFrame* camera, TreeModel::Pass pass,
+                       f32 alpha, const Texture* deathSkin, bool dying) {
     const Figure found = bodyOf(appearance);
     if (found.model == nullptr || found.tree == nullptr || found.textures == nullptr) {
         return;
@@ -2001,11 +2330,13 @@ void Enemies::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& place
     auto& body = *found.model;
     found.textures->apply(body, *found.tree, statue ? 0 : sequence, statue ? 0 : frame,
                           textureFrame - static_cast<f32>(found.textures->frame()));
-    body.setAppearance(hitFlash != nullptr);
-    body.setMaskedTexture(hitFlash);
+    body.setAppearance(hitFlash != nullptr || (dying && appearance.kind != kDeathKind));
+    body.setMaskedTexture(deathSkin != nullptr ? deathSkin : hitFlash,
+                          deathSkin != nullptr ? TreeModel::SkinAlpha::Dissolve
+                                               : TreeModel::SkinAlpha::PreserveCoverage);
     body.setPresentationFrame(statue ? 0 : sequence, statue ? 0 : frame);
     body.draw(device, clip, placement, lighting, statue ? std::span<const Mat4>{} : pose.matrices(),
-              camera, 1, pass);
+              camera, alpha, pass);
     body.setAppearance(false);
     body.setMaskedTexture(nullptr);
 }
@@ -2051,59 +2382,60 @@ std::vector<EnemyBody> Enemies::movementBodies() const {
     return bodies;
 }
 
+MeleeGeometry::Target Enemies::meleeBody(s32 id) const {
+    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    const auto coordinate = [this](f32 value, f32 origin) {
+        return static_cast<s32>(std::clamp((value - origin) * m_contactGridInverseWidth, 0.0f,
+                                           static_cast<f32>(kContactGridDimension - 1)));
+    };
+    constexpr f32 kAimHeightLimit = 10;
+    constexpr f32 kLowEnemyHeight = 4;
+    MeleeGeometry::Target target;
+    target.id = id;
+    target.instance = enemy.instance;
+    target.base = enemy.position;
+    target.radius = enemy.radius;
+    target.height = enemy.height;
+    target.acquisition = {enemy.position + Vec3{0, enemyKind(enemy.kind).collisionHeight, 0},
+                          enemy.radius, 1, kAimHeightLimit};
+    target.contactCell =
+        coordinate(enemy.position.z, m_contactGridOrigin.y) * kContactGridDimension +
+        coordinate(enemy.position.x, m_contactGridOrigin.x);
+    target.contact = true;
+    target.requireFacing = enemy.kind == kDeathKind;
+    target.low = enemy.height <= kLowEnemyHeight;
+    target.blocksMovement = enemy.kind != kDeathKind;
+    return target;
+}
+
+std::vector<MeleeGeometry::Target> Enemies::meleeGeometry() const {
+    std::vector<MeleeGeometry::Target> targets;
+    targets.reserve(static_cast<usize>(m_most));
+    for (s32 i = 0; i < m_most; ++i) {
+        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+        if (alive(i) && enemy.kind != kItKind) {
+            targets.push_back(meleeBody(i));
+        }
+    }
+    return targets;
+}
+
 std::optional<s32> Enemies::playerContact(const Vec3& from, const Vec3& to, f32 width,
                                           f32 halfHeight, f32* endpointDistance) const {
-    std::optional<s32> best;
-    f32 bestDistance = 0;
-    s32 bestCell = 0;
-    const auto contactCell = [this](const Vec3& position) {
-        const auto coordinate = [this](f32 value, f32 origin) {
-            return static_cast<s32>(std::clamp((value - origin) * m_contactGridInverseWidth, 0.0f,
-                                               static_cast<f32>(kContactGridDimension - 1)));
-        };
-        return coordinate(position.z, m_contactGridOrigin.y) * kContactGridDimension +
-               coordinate(position.x, m_contactGridOrigin.x);
-    };
-    // NextGridItem scans x inside z; SetupDynGrid head insertion reverses slots
-    // within each cell. Reducing equal-distance contacts by cell gives the same
-    // winner without sorting or changing any physical movement query.
-    for (s32 i = m_most - 1; i >= 0; --i) {
+    std::array<MeleeGeometry::Target, kMost> targets;
+    usize count = 0;
+    for (s32 i = 0; i < m_most; ++i) {
         const Enemy& enemy = m_enemies[static_cast<usize>(i)];
-        if (!alive(i) || enemy.kind == kItKind) {
-            continue;
-        }
-        const Vec3 centre = enemy.position + Vec3{0, enemyKind(enemy.kind).collisionHeight, 0};
-        const f32 radius = width + enemy.radius;
-        const f32 enemyHalfHeight = enemy.height * 0.5f;
-        const Vec3 away = centre - to;
-        Vec3 contact;
-        if (away.x * away.x + away.z * away.z >= radius * radius ||
-            std::abs(away.y) >= enemyHalfHeight ||
-            !movementTouchesBody(from, to, centre, radius, halfHeight + enemyHalfHeight,
-                                 &contact)) {
-            continue;
-        }
-        const f32 distance = std::hypot(contact.x - to.x, contact.z - to.z);
-        const s32 cell = contactCell(enemy.position);
-        if (!best || distance < bestDistance || (distance == bestDistance && cell < bestCell)) {
-            best = i;
-            bestDistance = distance;
-            bestCell = cell;
+        if (alive(i) && enemy.kind != kItKind) {
+            targets[count++] = meleeBody(i);
         }
     }
-    if (best && m_collision != nullptr) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(*best)];
-        const Vec3 centre = enemy.position + Vec3{0, enemyKind(enemy.kind).collisionHeight, 0};
-        // Reject the selected contact across a wall; do not promote a second
-        // touching enemy after rejection (PlayerCollideItems' FastWallCollide).
-        if (m_collision->wallBetween(from, centre)) {
-            return std::nullopt;
-        }
-    }
+    const auto best = MeleeGeometry::contact(std::span{targets}.first(count), from, to, width,
+                                             halfHeight, m_collision);
     if (best && endpointDistance != nullptr) {
-        *endpointDistance = bestDistance;
+        *endpointDistance = best->endpointDistance;
     }
-    return best;
+    return best ? std::optional{targets[best->index].id} : std::nullopt;
 }
 
 std::optional<s32> Enemies::struckBy(const Vec3& from, const Vec3& to, f32 radius) const {
@@ -2370,8 +2702,23 @@ std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
     if (enemy.state == State::Inactive) {
         return std::nullopt;
     }
-    return Observation{enemy.instance, enemy.health, enemy.fullHealth, enemy.state == State::Asleep,
+    Observation result{enemy.instance, enemy.health, enemy.fullHealth, enemy.state == State::Asleep,
                        enemy.flashSeconds > 0};
+    result.scale = m_shrink;
+    result.alpha = opacityOf(id);
+    if (enemy.killed && enemy.algorithm == kSuicideWay) {
+        result.alpha = 0; // the explosion replaces the body immediately
+    } else if (enemy.killed && enemy.kind == kDeathKind) {
+        result.alpha *= std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds);
+    }
+    const auto skin = std::ranges::find(kDeathSkins, enemy.deathSkin);
+    const auto frame = static_cast<u32>(enemy.deathSeconds * kDeathSkinRate);
+    if (enemy.killed && skin != kDeathSkins.end() &&
+        frame < static_cast<u32>(std::max(0, enemy.deathSkinFrames))) {
+        result.deathSkin = static_cast<u32>(skin - kDeathSkins.begin()) + 1;
+        result.deathFrame = frame;
+    }
+    return result;
 }
 
 usize Enemies::count() const {
@@ -2400,6 +2747,13 @@ f32 Enemies::healthOf(s32 id) const {
 }
 const Vec3& Enemies::positionOf(s32 id) const {
     return m_enemies[static_cast<usize>(id)].position;
+}
+s32 Enemies::floorOf(s32 id) const {
+    if (id < 0 || id >= m_most) {
+        return -1;
+    }
+    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    return enemy.state != State::Inactive && enemy.floor ? enemy.floor->object : -1;
 }
 f32 Enemies::yawOf(s32 id) const {
     return m_enemies[static_cast<usize>(id)].yaw;

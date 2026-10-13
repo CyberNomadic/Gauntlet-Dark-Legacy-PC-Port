@@ -26,6 +26,24 @@ public:
     static constexpr std::string_view kTag = "PSYS";
     static constexpr f32 kFrameRate = ParticleDescriptor::kFrameRate;
 
+    struct Checkpoint {
+        struct Entry {
+            ParticleEmitter::Checkpoint emitter;
+            s32 worldObject = -1;
+            bool operator==(const Entry&) const = default;
+        };
+        std::vector<Entry> entries;
+        f32 frameRemainder = 0;
+        f32 lastAdvance = 0;
+        f64 heatFrames = 0;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    bool canRestore(const Checkpoint& state) const;
+    /** Keeps prebound textures and draw policy; topology and descriptors must match. */
+    bool restore(const Checkpoint& state);
+
     /** Starts an emitter per marker; textures are found by name in the level's set, then
      * in `lenders`. Markers naming no template are skipped with a warning. */
     void bind(const WorldLayout& layout, TextureSet& textures, RenderDevice& device,

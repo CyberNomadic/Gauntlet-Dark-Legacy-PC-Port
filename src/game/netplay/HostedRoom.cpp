@@ -9,8 +9,9 @@
 
 namespace gdl::game {
 namespace {
-// Revision 3 includes host room rules in every roster and readiness revision.
-constexpr u8 kProtocol = 3;
+// Match checkpoint capabilities at admission, including development builds that
+// share a semver but cannot safely consume one another's replay envelopes.
+constexpr u8 kProtocol = 21;
 constexpr usize kPending = 16;
 enum class Kind : u8 { Game, Join, Roster, Ready, Reject };
 std::vector<u8> packet(Kind kind) {
@@ -307,7 +308,15 @@ RoomService::Update HostedRoom::poll() {
     Update update;
     update.closed = m_closed;
     if (m_failure != Failure::None) {
-        update.error = "Room admission failed";
+        switch (m_failure) {
+        case Failure::Connection: update.error = "Connection to the room was lost"; break;
+        case Failure::Version: update.error = "Game versions do not match"; break;
+        case Failure::Assets: update.error = "Game assets do not match"; break;
+        case Failure::Full: update.error = "Room has no free player slots"; break;
+        case Failure::Started: update.error = "Game has already started"; break;
+        case Failure::Protocol: update.error = "Room protocol does not match"; break;
+        case Failure::None: break;
+        }
     } else if (std::exchange(m_dirty, false)) {
         update.room = m_room;
         update.peer = m_peer;

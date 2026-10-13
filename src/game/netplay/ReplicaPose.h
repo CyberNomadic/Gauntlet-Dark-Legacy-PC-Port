@@ -14,6 +14,8 @@ public:
     void bind(const TreeInfo* tree);
     bool rest();
     bool show(const CombatAnimation& animation);
+    /** Exact interrupted player stance blend, independent of render history. */
+    bool show(const CombatAnimation& animation, const PlayerAnimator::TransitionPose& transition);
     const TreePose& pose() const { return m_pose; }
 
 private:

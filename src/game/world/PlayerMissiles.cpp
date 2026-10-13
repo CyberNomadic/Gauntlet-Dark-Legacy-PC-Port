@@ -8,7 +8,9 @@
 
 #include "engine/core/Types.h"
 
+#include "game/combat/DamageTypes.h"
 #include "game/players/PowerupEffects.h"
+#include "game/world/TargetAssist.h"
 
 namespace gdl::game {
 
@@ -53,6 +55,20 @@ usize specIndex(s32 classIndex) {
     return static_cast<usize>(std::clamp(classIndex, 0, static_cast<s32>(kSpecs.size()) - 1));
 }
 
+void restoreMotion(PlayerMissiles::Missile& shot, const PlayerMissiles::FlightCheckpoint& state) {
+    shot.position = state.position;
+    shot.velocity = state.velocity;
+    shot.tumble = state.tumble;
+    shot.age = state.age;
+    shot.scale = state.scale;
+    shot.continuity = state.continuity;
+    shot.previousPosition = shot.position;
+    shot.previousVelocity = shot.velocity;
+    shot.previousTumble = shot.tumble;
+    shot.previousAge = shot.age;
+    shot.presentationCaptured = false;
+}
+
 } // namespace
 
 const MissileSpec& MissileSpec::of(s32 classIndex) {
@@ -89,6 +105,10 @@ f32 PlayerMissiles::speedFor(s32 stat) {
            kStatScale * static_cast<f32>(std::clamp(stat, 0, 1000)) * (kFastest - kSlowest);
 }
 
+bool PlayerMissiles::replayModifiers(u32 flags) {
+    return (flags & ~kReplayModifiers) == 0 && (flags & 0xFU) <= 4;
+}
+
 f32 PlayerMissiles::reachFor(f32 attackSeconds) {
     return kReach + kReachPerSecond * std::clamp(attackSeconds - kHoldDelay, 0.0f, kHoldMost);
 }
@@ -97,6 +117,132 @@ Vec3 PlayerMissiles::launchVelocity(const Vec3& direction, f32 speed, f32 reach,
     // Over the time the reach takes, gravity is cancelled and the drop made up.
     const f32 flight = reach / speed;
     return Vec3{direction.x * speed, 0.5f * weight * flight - kDrop / flight, direction.z * speed};
+}
+
+std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& weapon) {
+    Vec3 facing = weapon.direction;
+    if (weapon.target) {
+        const Vec3 offset = *weapon.target - weapon.position;
+        const f32 distance = std::hypot(offset.x, offset.z);
+        if (distance > 1e-5f) {
+            facing = Vec3{offset.x / distance, 0, offset.z / distance};
+        }
+    }
+    const Vec3 side{facing.z, 0, -facing.x};
+    MissileLaunch launch;
+    launch.owner = weapon.owner;
+    launch.scale = weapon.scale;
+    launch.position = weapon.center + side * weapon.hand.x + Vec3{0, weapon.hand.y, 0} +
+                      facing * (weapon.hand.z + kMuzzle);
+    launch.speed = weapon.speed;
+    launch.damage = weapon.damage * weapon.scale;
+    launch.flags = weapon.flags;
+    launch.multiplayer = weapon.multiplayer;
+    launch.reach = reachFor(weapon.attackSeconds);
+    launch.spec = &MissileSpec::of(weapon.character);
+    if (weapon.shots == 5) {
+        launch.wallSound = MissileWallSound::FiveWay;
+    } else if (weapon.shots == 3) {
+        launch.wallSound = MissileWallSound::ThreeWay;
+    }
+    std::vector<MissileLaunch> launches;
+    for (const Vec3& way : spread(facing, weapon.shots)) {
+        launch.direction = way;
+        if (weapon.target) {
+            const Vec3 aim = TargetAssist::velocity(launch.position, *weapon.target, launch.speed,
+                                                    launch.spec->weight);
+            // Each spread keeps its authored bearing instead of converging on the target.
+            const f32 turn = std::atan2(way.x, way.z) - std::atan2(facing.x, facing.z);
+            launch.velocity = Vec3{aim.x * std::cos(turn) + aim.z * std::sin(turn), aim.y,
+                                   aim.z * std::cos(turn) - aim.x * std::sin(turn)};
+        }
+        launches.push_back(launch);
+        launch.wallSound = MissileWallSound::Silent;
+    }
+    return launches;
+}
+
+bool PlayerMissiles::FlightCheckpoint::valid() const {
+    constexpr f32 kPositionLimit = 1'000'000;
+    constexpr f32 kVelocityLimit = 10'000;
+    constexpr f32 kTumbleLimit = 1'000'000;
+    constexpr f32 kScaleLimit = 100;
+    const auto within = [](const Vec3& value, f32 limit) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) &&
+               std::abs(value.x) <= limit && std::abs(value.y) <= limit &&
+               std::abs(value.z) <= limit;
+    };
+    return within(position, kPositionLimit) && within(velocity, kVelocityLimit) &&
+           std::isfinite(tumble) && std::abs(tumble) <= kTumbleLimit && std::isfinite(age) &&
+           age >= 0 && age < kLifeSeconds && std::isfinite(scale) && scale > 0 &&
+           scale <= kScaleLimit && continuity != 0;
+}
+
+bool PlayerMissiles::ParticleFlight::valid() const {
+    if (!birth.valid() || birth.age != 0 || birth.tumble != 0 || birth.continuity != 1 ||
+        !std::isfinite(stepSeconds) || stepSeconds < 1.0f / 240 || stepSeconds > 0.25f ||
+        activeSteps > totalSteps || totalSteps > 4801 ||
+        (retiring ? activeSteps == totalSteps : activeSteps != totalSteps)) {
+        return false;
+    }
+    return activeSteps <= static_cast<u32>(std::ceil(kLifeSeconds / stepSeconds)) &&
+           totalSteps <= static_cast<u32>(std::ceil(20.0f / stepSeconds)) + 1;
+}
+
+const PlayerMissiles::VisualHistory* PlayerMissiles::visualHistory(u32 effect) const {
+    if (effect == 0) {
+        return nullptr;
+    }
+    const auto found = std::ranges::find_if(m_visualHistory, [effect](const auto& history) {
+        return history.effect == effect || history.rider == effect;
+    });
+    return found != m_visualHistory.end() ? &*found : nullptr;
+}
+
+PlayerMissiles::FlightCheckpoint PlayerMissiles::flightCheckpoint(const Missile& missile) {
+    return {missile.position, missile.velocity, missile.tumble,
+            missile.age,      missile.scale,    missile.continuity};
+}
+
+bool PlayerMissiles::restoreFlight(u64 instance, const FlightCheckpoint& checkpoint) {
+    if (m_device != nullptr || !checkpoint.valid()) {
+        return false;
+    }
+    const auto shot = std::ranges::find(m_missiles, instance, &Missile::instance);
+    if (shot == m_missiles.end() || shot->potion != 0 || shot->potionRelease || shot->flags != 0 ||
+        shot->multiplayer != MultiplayerMode::Normal || !shot->pierced.empty() ||
+        !shot->playerContacts.empty()) {
+        return false;
+    }
+    restoreMotion(*shot, checkpoint);
+    return true;
+}
+
+bool PlayerMissiles::restorePotionFlight(u64 instance, const FlightCheckpoint& checkpoint) {
+    if (m_device != nullptr || !checkpoint.valid()) {
+        return false;
+    }
+    const auto shot = std::ranges::find(m_missiles, instance, &Missile::instance);
+    if (shot == m_missiles.end() || shot->potion < 1 || shot->potion > 4 ||
+        shot->spec != &MissileSpec::potion() || (shot->flags & ~damage::kHeal) != 0 ||
+        shot->release || shot->multiplayer != MultiplayerMode::Normal || !shot->pierced.empty() ||
+        !shot->playerContacts.empty()) {
+        return false;
+    }
+    restoreMotion(*shot, checkpoint);
+    return true;
+}
+
+bool PlayerMissiles::restoreVisualFlight(u64 instance, const ParticleFlight& history) {
+    if (m_device != nullptr || !history.valid() || history.retiring) {
+        return false;
+    }
+    const auto found = std::ranges::find(m_visualHistory, instance, &VisualHistory::instance);
+    if (found == m_visualHistory.end()) {
+        return false;
+    }
+    found->flight = history;
+    return true;
 }
 
 bool PlayerMissiles::launch(const MissileLaunch& launch) {
@@ -122,6 +268,8 @@ bool PlayerMissiles::launch(const MissileLaunch& launch) {
     missile.multiplayer = launch.multiplayer;
     missile.playerHitGap = launch.playerHitGap;
     missile.breaksPotions = launch.breaksPotions;
+    missile.release = launch.release;
+    missile.potionRelease = launch.potionRelease;
     if (m_device != nullptr && launch.archive != nullptr && !launch.tree.empty()) {
         EffectTrees::Setting setting;
         setting.persistent = true;
@@ -142,6 +290,33 @@ bool PlayerMissiles::launch(const MissileLaunch& launch) {
             launch.textureLender != nullptr ? std::span{lenders} : std::span<TextureSet* const>{});
         m_visuals.placeAt(missile.rider, transformOf(missile),
                           missile.spec->spin == 0 ? std::optional{missile.velocity} : std::nullopt);
+    }
+    std::optional<s32> character;
+    if (launch.release && launch.release->character >= 0 && launch.release->character <= 16 &&
+        launch.spec == &MissileSpec::of(launch.release->character)) {
+        character = launch.release->character;
+    } else if (!launch.release) {
+        for (s32 candidate = 0; candidate <= 16; ++candidate) {
+            if (launch.spec == &MissileSpec::of(candidate)) {
+                character = candidate;
+                break;
+            }
+        }
+    }
+    const bool potion = launch.potion >= 1 && launch.potion <= 4 &&
+                        launch.spec == &MissileSpec::potion() && !launch.release &&
+                        (launch.flags & ~damage::kHeal) == 0;
+    const bool weapon =
+        character && launch.potion == 0 && !launch.potionRelease && replayModifiers(launch.flags);
+    if ((weapon || potion) && launch.multiplayer == MultiplayerMode::Normal) {
+        ParticleFlight flight;
+        flight.birth = flightCheckpoint(missile);
+        if (flight.valid()) {
+            m_visualHistory.push_back({missile.instance, missile.owner, character.value_or(0),
+                                       launch.release, missile.effect, missile.rider, flight,
+                                       transformOf(missile), missile.velocity,
+                                       potion ? launch.potion : 0, launch.potionRelease});
+        }
     }
     m_missiles.push_back(missile);
     return true;
@@ -177,6 +352,16 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                             std::span<const MissileTarget> targets,
                             std::span<const MissilePlayer> players) {
     m_visuals.capturePresentation();
+    if (seconds > 0) {
+        std::erase_if(m_visualHistory, [seconds](const auto& history) {
+            return !std::isfinite(seconds) || seconds < 1.0f / 240 || seconds > 0.25f ||
+                   (history.flight.totalSteps != 0 && history.flight.stepSeconds != seconds);
+        });
+        for (auto& history : m_visualHistory) {
+            history.flight.stepSeconds = seconds;
+            ++history.flight.totalSteps;
+        }
+    }
     m_ricochetIn = std::max(0.0f, m_ricochetIn - seconds);
     for (Missile& missile : m_missiles) {
         missile.previousPosition = missile.position;
@@ -366,9 +551,24 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
             m_visuals.finish(missile.effect);
             m_visuals.finish(missile.rider);
         }
+        if (seconds > 0) {
+            const auto history =
+                std::ranges::find(m_visualHistory, missile.instance, &VisualHistory::instance);
+            if (history != m_visualHistory.end()) {
+                history->flight.retiring = missile.age >= kLifeSeconds;
+                history->flight.activeSteps += history->flight.retiring ? 0 : 1;
+                history->placement = transformOf(missile);
+                history->direction = missile.velocity;
+            }
+        }
     }
     m_visuals.update(seconds);
     std::erase_if(m_missiles, [](const Missile& m) { return m.age >= kLifeSeconds; });
+    std::erase_if(m_visualHistory, [&](const auto& history) {
+        return !history.flight.valid() ||
+               (m_device != nullptr && !m_visuals.playing(history.effect) &&
+                !m_visuals.playing(history.rider));
+    });
 }
 
 Mat4 PlayerMissiles::transformOf(const Missile& missile, f32 frameBlend) {
@@ -425,6 +625,7 @@ void PlayerMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLig
 }
 
 void PlayerMissiles::clear() {
+    m_visualHistory.clear();
     m_ricochetIn = 0;
     m_missiles.clear();
     m_impacts.clear();

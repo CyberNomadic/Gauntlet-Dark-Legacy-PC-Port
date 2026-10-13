@@ -136,6 +136,8 @@ public:
     static f32 roarThreshold(s32 players);
     f32 maxHealth() const { return m_actor.maxHealth; }
     const Vec3& position() const { return m_actor.position; }
+    /** Retained native support, including the dying pose. */
+    s32 floorObject() const { return present() && m_actor.floor ? m_actor.floor->object : -1; }
     f32 yaw() const { return m_actor.yaw; }
     f32 radius() const { return data() != nullptr ? data()->radius() : 0; }
     s32 target() const { return m_actor.target; }

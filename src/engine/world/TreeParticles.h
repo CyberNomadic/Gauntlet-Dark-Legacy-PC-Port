@@ -14,6 +14,20 @@ namespace gdl {
  * each emitter follows its posed node, while particle lifetimes follow its template. */
 class TreeParticles {
 public:
+    struct Binding {
+        usize node = 0;
+        std::optional<u32> texture;
+        bool operator==(const Binding&) const = default;
+    };
+    struct Checkpoint {
+        ParticleField::Checkpoint field;
+        std::vector<Binding> nodes;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    bool canRestore(const Checkpoint& state) const;
+    bool restore(const Checkpoint& state);
     void bind(const TreeInfo& tree, ItemArchive& archive, RenderDevice& device, const Mat4& root,
               std::span<const Mat4> pose, std::span<TextureSet* const> lenders = {});
     void step(f32 seconds, const Mat4& root, std::span<const Mat4> pose);
@@ -31,10 +45,6 @@ public:
 
 private:
     ParticleField m_field;
-    struct Binding {
-        usize node = 0;
-        std::optional<u32> texture;
-    };
     std::vector<Binding> m_nodes; ///< emitter index -> posed tree node and texture slot
 };
 } // namespace gdl

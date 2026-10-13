@@ -5,11 +5,14 @@
 
 #include "engine/core/Log.h"
 
+#include "game/menu/ScrollBox.h"
 #include "game/screens/CinematicBars.h"
 #include "game/screens/GameOver.h"
 #include "game/screens/LevelArrivalPresentation.h"
 #include "game/screens/PartyNames.h"
 #include "game/screens/RuneMeter.h"
+#include "game/screens/TowerCompletion.h"
+#include "game/screens/TowerPromotion.h"
 
 namespace gdl::game {
 namespace {
@@ -231,6 +234,39 @@ bool ReplicaHud::accepts(const HudSnapshot& snapshot) const {
                return !count || m_countsAvailable[static_cast<usize>(count->kind)];
            });
 }
+std::string ReplicaHud::ceremonyText(const HudSnapshot& snapshot) const {
+    const auto& cue = snapshot.ceremony;
+    using Kind = HudSnapshot::Ceremony::Kind;
+    if (cue.kind == Kind::None) {
+        return {};
+    }
+    if (cue.kind == Kind::Promotion) {
+        const auto& player = snapshot.players[cue.index];
+        if (!player) {
+            return {};
+        }
+        CharacterSave save;
+        save.character = player->character;
+        save.color = player->color;
+        save.progress().experience = levelExperience(player->level);
+        return TowerPromotion::caption(save, m_helpText);
+    }
+    std::string_view name;
+    switch (cue.kind) {
+    case Kind::Rune: name = "NEWRUNES"; break;
+    case Kind::Shard: name = "NEWSHARDS"; break;
+    case Kind::Followup:
+        name = TowerCompletion::message(static_cast<TowerCompletion::Kind>(cue.index));
+        break;
+    default: return {};
+    }
+    const auto message = m_helpText.find(name);
+    const usize page = cue.kind == Kind::Shard ? cue.index : cue.page;
+    if (!message || page >= m_helpText.message(*message).pages.size()) {
+        return {};
+    }
+    return m_helpText.message(*message).pages[page];
+}
 std::string_view ReplicaHud::cardTexture(HudCardKind kind) {
     return kind < HudCardKind::Count ? kCards[static_cast<usize>(kind)] : std::string_view{};
 }
@@ -328,6 +364,22 @@ void ReplicaHud::draw(Canvas& canvas, const HudSnapshot& snapshot, const Mat4& w
     }
     if (snapshot.scroll) {
         m_messages.drawReplica(canvas, scrollLook(*snapshot.scroll));
+    }
+    if (snapshot.ceremony.kind != HudSnapshot::Ceremony::Kind::None) {
+        TextStyle style;
+        style.scale = 0.667f;
+        f32 y = 312;
+        usize remaining = snapshot.ceremony.letters;
+        for (const auto& line : ScrollBox::splitLines(ceremonyText(snapshot))) {
+            const auto shown = std::min(remaining, line.size());
+            const auto x = m_text.leftEdge(-256, line, style.scale);
+            m_text.draw(canvas, x, static_cast<s32>(y), line.substr(0, shown), style);
+            if (remaining <= line.size()) {
+                break;
+            }
+            remaining -= line.size() + 1;
+            y += 32 * style.scale;
+        }
     }
 }
 } // namespace gdl::game

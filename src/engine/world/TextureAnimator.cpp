@@ -263,6 +263,38 @@ void TextureAnimator::step(u32 ticks) {
         }
     }
 }
+void TextureAnimator::seek(u32 frame) {
+    for (auto& entry : m_entries) {
+        if (entry.keyed || entry.period <= 0) {
+            continue;
+        }
+        const auto rate = static_cast<u32>(std::max(entry.rate, 1));
+        const s64 steps = static_cast<s64>(frame / rate) - static_cast<s64>(m_frame / rate);
+        const s64 counter = (static_cast<s64>(entry.counter) + steps) % entry.period;
+        entry.counter = static_cast<s32>(counter < 0 ? counter + entry.period : counter);
+    }
+    m_frame = frame;
+    m_remainder = m_advance = 0;
+}
+
+bool TextureAnimator::Checkpoint::valid() const {
+    return frame <= 30U * 24U * 60U * 60U * 30U && std::isfinite(remainder) && remainder >= 0 &&
+           remainder < 1 && std::isfinite(advance) && advance >= 0 && advance <= 450;
+}
+
+TextureAnimator::Checkpoint TextureAnimator::checkpoint() const {
+    return {m_frame, m_remainder, m_advance};
+}
+
+bool TextureAnimator::restore(const Checkpoint& state) {
+    if (!state.valid()) {
+        return false;
+    }
+    seek(state.frame);
+    m_remainder = state.remainder;
+    m_advance = state.advance;
+    return true;
+}
 
 void TextureAnimator::apply(WorldScene& scene) const {
     scene.setTextureTime(m_frame);

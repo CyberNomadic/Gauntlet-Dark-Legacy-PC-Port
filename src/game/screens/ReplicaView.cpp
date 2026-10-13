@@ -9,6 +9,7 @@
 
 #include "game/players/CursorAim.h"
 #include "game/players/PlayerActor.h"
+#include "game/screens/LocalTurboEffectPrediction.h"
 
 namespace gdl::game {
 bool ReplicaView::begin(const MatchContext& context, const LevelWorld& world, Enemies& enemies,
@@ -28,6 +29,7 @@ bool ReplicaView::begin(const MatchContext& context, const LevelWorld& world, En
     m_fixtureResources = &fixtures;
     m_fighterResources = std::move(fighters);
     m_geometry = world.scene();
+    m_textures = world.textureAnimator();
     m_presentationFloors.fill(world.collision());
     return m_actors.begin(context.epoch) && m_projectiles.begin(context.epoch) &&
            m_pickups.begin(context.epoch) && m_fixtures.begin(context.epoch) &&
@@ -61,6 +63,7 @@ void ReplicaView::clear() {
     m_fighters.clear();
     m_fighterResources = {};
     m_geometry.clear();
+    m_textures.clear();
     m_presentationFloors = {};
     m_hud.clear();
     m_shown.reset();
@@ -253,7 +256,8 @@ std::optional<Rect> ReplicaView::viewport(f32 width, f32 height) {
 }
 void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth,
                        f32 frameHeight, f32 textureFrame, const Texture* hitFlash,
-                       const Texture* frozen, const GameConfig& video) {
+                       const Texture* frozen, const GameConfig& video,
+                       const LocalTurboEffectPrediction* effects, f32 effectBlend) {
     Canvas canvas;
     canvas.begin(device, frameProjection);
     const auto area = m_shown ? viewport(frameWidth, frameHeight) : std::nullopt;
@@ -276,7 +280,14 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     }
     const auto frame = CameraFrame::of(camera);
     // Draw only host-controlled pickups; never tick the local world's item physics.
-    m_geometry.drawOpaque(device, clip, frame);
+    // Advance only presentation textures, never triggers, AI or item physics.
+    // Discrete cutouts need whole-frame updates too; fractional sampling alone
+    // deliberately applies only to soft blended flipbooks.
+    const auto wholeFrame = static_cast<u32>(m_shown->worldTextureFrame);
+    m_textures.seek(wholeFrame);
+    m_textures.apply(m_geometry);
+    const f32 textureOffset = m_shown->worldTextureFrame - static_cast<f32>(wholeFrame);
+    m_geometry.drawOpaque(device, clip, frame, -1, textureOffset);
     m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
                     TreeModel::Pass::Opaque);
     m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
@@ -293,7 +304,7 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
         device.applyAmbientOcclusion(occlusion);
     }
     m_actors.drawShadows(device, clip, m_world->lighting(), camera.position);
-    m_geometry.drawDeferred(device, clip, frame);
+    m_geometry.drawDeferred(device, clip, frame, -1, textureOffset);
     m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
                     TreeModel::Pass::Blended);
     m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
@@ -304,6 +315,9 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
                        TreeModel::Pass::Blended);
     m_fighters.draw(device, m_fighterResources, clip, m_world->lighting(), hitFlash, frozen,
                     TreeModel::Pass::Effects);
+    if (effects != nullptr) {
+        effects->draw(device, *m_shown, clip, m_world->fullLighting(), frame, effectBlend);
+    }
     canvas.end();
     if (video.display.bloom) {
         device.applyBloom();

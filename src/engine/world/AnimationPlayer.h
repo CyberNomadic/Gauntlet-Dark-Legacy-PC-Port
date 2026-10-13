@@ -18,6 +18,38 @@ public:
     static constexpr f32 kDefaultRate = 30.0f;
     static constexpr f32 kSnapWindow = 0.125f; ///< nearer a whole frame than this snaps to it
     static constexpr f32 kTick = 1.0f / 30.0f; ///< frames shorter than a tick always snap
+    // Beyond a month without a clock reset, prediction must take a fresh seed
+    // instead of admitting near-overflow clocks from an untrusted packet.
+    static constexpr f64 kCheckpointSeconds = 30.0 * 24.0 * 60.0 * 60.0;
+    static constexpr f32 kCheckpointFrames = 1'000'000;
+    static constexpr f32 kCheckpointMinPeriod = 0.000001f;
+    static constexpr f32 kCheckpointMaxPeriod = 3600;
+    static constexpr f32 kCheckpointMaxSpeed = 1024;
+    static constexpr u64 kCheckpointGenerationHeadroom = 1'000'000;
+
+    /** Resumable clock state, without a borrowed asset pointer. The elapsed clock,
+     * held-end flag and transition credit are necessary to reproduce boundaries;
+     * restoring just the displayed frame can release an attack on a different tick. */
+    struct Checkpoint {
+        u32 sequence = 0;
+        u64 generation = 0;
+        f32 secondsPerFrame = kDefaultRate * kRateUnit;
+        f64 time = 0;
+        f32 frame = 0;
+        f32 speed = 1;
+        f32 transitionLength = 0;
+        f32 transitionTime = 0;
+        bool playing = false;
+        bool finished = false;
+        bool held = false;
+        bool smooth = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    /** The caller resolves the sequence index against its trusted asset table.
+     * A stopped checkpoint requires nullptr. Invalid input leaves the player intact. */
+    bool restore(const Checkpoint& state, const TreeSequenceInfo* sequence);
 
     /** Starts `sequence` at `frame`, holding it for `transitionSeconds` first.
      * An elapsed blend credit changes only the blend, never sequence playback. */

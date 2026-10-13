@@ -767,6 +767,7 @@ bool PlayScene::anyButton(const Inputs& inputs) const {
 }
 
 PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
+    m_movementUpdated = false;
     if (!m_open) {
         return PlayOutcome::Running;
     }
@@ -1002,6 +1003,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
         }
     }
     updateTransporters(ticks, seconds, held);
+    m_movementUpdated = !held;
     const std::vector<CameraSubject> subjects = PartyMotion::step(
         m_players, inputs, held, bossCameraOn() ? m_bossCamera.yaw() : m_camera.yaw(), ticks,
         seconds, m_world->collision(), motionEvents());

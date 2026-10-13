@@ -76,7 +76,12 @@ public:
     void drawPose(RenderDevice& device, const Mat4& clip, const Mat4& body,
                   const WorldLighting& lighting, const TreePose& pose,
                   PlayerAnimator::Action action, f32 textureFrame, const Texture* hitFlash,
-                  const CameraFrame* camera, TreeModel::Pass pass = TreeModel::Pass::All) const;
+                  const CameraFrame* camera, TreeModel::Pass pass = TreeModel::Pass::All,
+                  bool hideWeapon = false, u32 armEquipment = 0) const;
+    /** Trusted load-time arm catalog for externally sampled poses. Neither receipt
+     * nor drawing loads textures or changes native equipment ownership. */
+    bool bindArmEquipment(RenderDevice& device, ItemArchive& powerups, ItemArchive& weapons);
+    bool armEquipmentReady(u32 equipment) const;
     const TreeInfo* actionTree() const { return m_actionTree; }
     /** Companion effects can composite after scenery without redrawing the body or held gear. */
     void drawCompanions(RenderDevice& device, const Mat4& clip, const Mat4& body,
@@ -110,7 +115,12 @@ public:
     std::optional<Mat4> handAttachment(const Mat4& body) const;
     /** The costume's first posed node, native player.node->child; body when unbound. */
     Mat4 rootAttachment(const Mat4& body) const;
+    /** The same costume mapping using a caller-owned exact class pose, without
+     * changing the live animator or cached native attachment transforms. */
+    Mat4 rootAttachment(const Mat4& body, const TreePose& pose) const;
     std::optional<Mat4> attachment(const Mat4& body, std::string_view objectSuffix) const;
+    std::optional<Mat4> attachment(const Mat4& body, std::string_view objectSuffix,
+                                   const TreePose& pose) const;
     bool heldWeaponBound() const { return m_handNode >= 0 && m_weapon.bound(); }
     s32 familiarTier() const { return m_familiar.tier(); }
     bool phoenixActive() const { return m_companion.kind() == PowerupCompanion::Kind::Phoenix; }
@@ -142,11 +152,14 @@ public:
     const PlayerAnimator& animator() const { return m_animator; }
     const TreeModel& missile() const { return m_missile; }
     ItemArchive* missileArchive() { return m_missileArchive; }
+    const ItemArchive* missileArchive() const { return m_missileArchive; }
     std::string_view missileTree() const { return m_missileName; }
     SoundSet& voice() { return m_voice; }
     std::optional<u32> throwSound() const { return m_throwSound; }
     /** Lazily loads the costume colour's effect archive; null when unavailable. */
     ItemArchive* effects();
+    /** Read-only access for post-step capture; never loads an archive. */
+    const ItemArchive* loadedEffects() const { return m_effects.loaded() ? &m_effects : nullptr; }
     /** A temporary full-bright skin; null restores the costume's normal appearance. */
     void setSkinTexture(const Texture* texture) {
         m_model.setMaskedTexture(texture);
@@ -170,6 +183,7 @@ private:
     bool bindModel(TreeModel& model, const TreeInfo& tree, ItemArchive& archive,
                    RenderDevice& device);
     void applyCostumeTextures(TreeModel& model, f32 frameBlend) const;
+    Mat4 poseTransform(usize node, const TreePose& pose) const;
     /** Binds `object` of `archive` as the lone node of `tree` into `model` when it changed. */
     static void bindObject(RenderDevice& device, ItemArchive& archive, std::string_view object,
                            TreeInfo& tree, TreeModel& model);
@@ -202,6 +216,11 @@ private:
     s32 m_armNode = -1;   ///< the second hand, found as the costume loads
     s32 m_armHidden = -1; ///< what a borne shield hides: the class's own shield, or the hand
     bool m_armHeld = false;
+    struct ArmResource {
+        TreeInfo tree;
+        TreeModel model;
+    };
+    std::array<ArmResource, 4> m_replicaArms;
     BlobShadow m_shadow;
     s32 m_handNode = -1;
     std::vector<s32> m_classNodeOfNode;

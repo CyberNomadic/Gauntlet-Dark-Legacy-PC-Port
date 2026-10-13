@@ -2,9 +2,11 @@
 
 #include <deque>
 
+#include "game/netplay/AudioSync.h"
 #include "game/netplay/CombatPlayback.h"
 #include "game/netplay/FeedbackSync.h"
 #include "game/netplay/InputTimeline.h"
+#include "game/netplay/LatencyTelemetry.h"
 #include "game/netplay/PartyCheckpoint.h"
 #include "game/netplay/ShopSync.h"
 
@@ -32,7 +34,9 @@ struct MatchContext {
     u64 epoch = 0;
     u32 scene = 0; // trusted build's scene roster, never a path supplied by a peer
     u16 tickRate = 60;
-    u8 inputLead = 6;
+    // Start one checkpoint interval ahead. Admission feedback raises this on
+    // slower/jittery paths; a local connection need not pay a fixed 100 ms lead.
+    u8 inputLead = 3;
     MatchTransition transition = MatchTransition::Start;
     MatchOwners owners{};
     std::array<u32, InputCommand::kSeats> grants{};
@@ -72,6 +76,7 @@ public:
     // Two 20 Hz snapshot intervals of slack beyond the negotiated input lead.
     // A quiet/stalled host must never let client input numbering run away.
     static constexpr u64 kInputSlack = 6;
+    static constexpr u8 kMaxInputLead = 30;
 
     bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links);
     /** A new transport/room lifetime is required before opening again after clear(). */
@@ -86,6 +91,7 @@ public:
     ShopSync& shop() { return m_shop; }
     const ShopSync& shop() const { return m_shop; }
     FeedbackSync& feedback() { return m_feedback; }
+    AudioSync& audio() { return m_audio; }
     const FeedbackSync& feedback() const { return m_feedback; }
     /** Complete travel/shop profiles only, never a partially received roster. */
     const MatchParty* travelParty() const;
@@ -109,6 +115,8 @@ public:
      * latest held state/aim plus one pending edge per action, not a replay backlog.
      * Acceptance need not advance inputTick() when the host has fallen behind. */
     bool sample(std::span<const InputCommand> frame);
+    /** Exact last accepted sample, including coalesced edges; empty while throttled. */
+    std::span<const InputCommand> sampledInputs() const { return m_sampled; }
     bool inputReady() const;
     std::optional<InputTimeline::Frame> advance();
     bool publish(const CombatSnapshot& state);
@@ -120,6 +128,15 @@ public:
     Phase phase() const { return m_phase; }
     MatchStop stopReason() const { return m_stop; }
     const CombatPlayback& playback() const { return m_playback; }
+    const InputTimeline::Diagnostics& inputDiagnostics(usize seat) const {
+        return m_timeline.diagnostics(seat);
+    }
+    const std::optional<InputCommand>& resolvedInput(usize seat) const {
+        return m_timeline.previous(seat);
+    }
+    u8 inputLead() const { return std::max(m_context.inputLead, m_adaptiveLead); }
+    LatencyTelemetry& latency() { return m_latency; }
+    const LatencyTelemetry& latency() const { return m_latency; }
     usize queuedControls() const { return m_controls.size(); }
 
 private:
@@ -153,15 +170,28 @@ private:
     MatchParty m_travelParty;
     ShopSync m_shop;
     FeedbackSync m_feedback;
+    AudioSync m_audio;
     InputTimeline m_timeline;
     InputHistory m_history;
+    std::vector<InputCommand> m_sampled;
     CombatPlayback m_playback;
     u64 m_nextInput = 0;
+    u8 m_adaptiveLead = 0;
+    u64 m_leadFeedbackFloor = 0;
+    u64 m_sampleClock = 0;
+    struct SentInput {
+        u64 tick;
+        u64 sampled;
+    };
+    std::deque<SentInput> m_sentInputs;
+    std::array<u64, InputCommand::kSeats> m_feedbackInput{};
     std::array<u32, InputCommand::kSeats> m_pendingPress{};
     std::optional<u64> m_published;
     f64 m_loadingSeconds = 0;
     std::deque<ControlDelivery> m_controls;
     std::vector<u8> m_input;
     std::array<StateDelivery, 5> m_states;
+    LatencyTelemetry m_latency;
+    LatencyTelemetry::Time m_statisticsAt;
 };
 } // namespace gdl::game

@@ -136,6 +136,12 @@ public:
     s32 bredOf(s32 id) const;
     s32 livingOf(s32 id) const { return m_generators[static_cast<usize>(id)].living; }
     const Vec3& positionOf(s32 id) const;
+    /** Actual native attachment, including a breaking generator's final pose. */
+    s32 floorOf(s32 id) const {
+        return id >= 0 && static_cast<usize>(id) < m_generators.size()
+                   ? m_generators[static_cast<usize>(id)].support
+                   : -1;
+    }
     const Obstacle& boxOf(s32 id) const;
     MissileTarget target(s32 index, s32 id) const;
     /** The generator's parameters as a level's record gives them, for tests and tools. */

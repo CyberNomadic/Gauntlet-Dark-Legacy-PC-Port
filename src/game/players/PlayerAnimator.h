@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string_view>
 
 #include "engine/assets/AnimationSet.h"
@@ -67,6 +68,7 @@ struct MeleeSense {
     MeleeRange range = MeleeRange::Swing;
     bool low = false; ///< short enough, and near enough, for a low strike
     f32 yaw = 0.0f;   ///< the way to it against the facing, from -pi to pi
+    bool operator==(const MeleeSense&) const = default;
 };
 
 /** What a completed swing does to what it strikes. */
@@ -237,6 +239,74 @@ public:
     };
     /** The foot that came down as a walk or run half cycle ended. */
     enum class Foot : u8 { None, First, Second };
+
+    /** Native action-machine state at a completed simulation tick. No pointers,
+     * assets or world side effects are owned here. Presentation blending restarts
+     * from the corrected pose; decision clocks, input latches and releases resume
+     * exactly when the retained inputs are replayed. */
+    struct Checkpoint {
+        static constexpr s32 kMaxTicks = static_cast<s32>(AnimationPlayer::kCheckpointSeconds * 60);
+        static constexpr f32 kMaxGuardArmor = 1000;
+        AnimationPlayer::Checkpoint animation;
+        Action action = Action::Ready;
+        Foot footfall = Foot::None;
+        MeleeBlow meleeBlow = MeleeBlow::None;
+        MeleeSense melee;
+        s32 character = -1;
+        s32 chain = 0;
+        s32 potionThrowTicks = 0;
+        s32 comboClass = -1;
+        s32 stillTicks = 0;
+        s32 fidgetTicks = 0;
+        PlayerDeed itemReleased = PlayerDeed::None;
+        StrafeWay strafe = StrafeWay::None;
+        f32 guardArmor = 5;
+        f32 attackSeconds = 0;
+        f64 phaseSeconds = 0;
+        f32 shotFrame = 0;
+        bool entered = true;
+        bool released = false;
+        bool quickPress = false;
+        bool strongPress = false;
+        bool quickHeld = false;
+        bool strongHeld = false;
+        bool moved = false;
+        bool shielded = false;
+        bool pushed = false;
+        bool potionUsed = false;
+        bool potionThrown = false;
+        bool potionThrowReleased = false;
+        bool dead = false;
+        bool turboBegan = false;
+        bool strongReleased = false;
+        bool potionShielded = false;
+        bool shieldAsked = false;
+        bool legendAsked = false;
+        bool legendReleased = false;
+        bool superReleased = false;
+        bool superHeld = false;
+        bool rapid = false;
+        bool speed = false;
+        bool comboRide = false;
+        bool potionLatch = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    /** The stance blend retains an arbitrary source pose, including a prior
+     * interrupted blend. A sequence/frame pair cannot reconstruct that source. */
+    struct TransitionPose {
+        TreePose::Checkpoint current;
+        TreePose::Checkpoint previous;
+        bool valid() const;
+        bool operator==(const TransitionPose&) const = default;
+    };
+    std::optional<TransitionPose> transitionPose() const;
+    /** Exact attachment-pose restore. A transitioning clock requires a matching
+     * pose pair; outside a transition the payload must be absent. */
+    bool restore(const Checkpoint& state, const std::optional<TransitionPose>& transition);
+    /** Requires a bound trusted class tree. Failure does not mutate the animator. */
+    bool restore(const Checkpoint& state);
     static constexpr usize kActionCount = 132;
     static constexpr std::array<std::string_view, kActionCount> kSequenceNames{
         "READY",        "IDLE1",        "IDLE2",        "IDLE2_LOOP",   "WALK1",
@@ -278,6 +348,27 @@ public:
     bool bind(const TreeInfo& tree, bool enter = true);
     void unbind();
     bool bound() const { return m_tree != nullptr; }
+    /** Prediction can restore only ordinary locomotion, never an attack/event cursor. */
+    static bool locomotion(Action action);
+    /** Actions whose decisions can be replayed without world targeting, resource
+     * spending or another participant's simulation state. */
+    static bool rollbackAction(Action action);
+    /** Stationary close attacks additionally require a host-approved targeting
+     * descriptor. Stepping swings/recoveries advance the feet even with no stick
+     * input and cannot be replayed by that stationary envelope. */
+    static bool rollbackMeleeAction(Action action);
+    /** Stepping swings additionally require re-queryable target geometry and a
+     * certified static movement region, not the fixed-foot melee descriptor. */
+    static bool rollbackMovingMeleeAction(Action action);
+    static bool rollbackTurboAction(Action action);
+    /** A plain charge also needs a host-certified ram-free movement region;
+     * it drains the meter rather than executing the B/C strike timeline. */
+    static bool rollbackShoveAction(Action action);
+    /** Grounded reactions with no grab, flight or partner-owned body state. They
+     * still require the host's impulse checkpoint and a clear movement corridor. */
+    static bool rollbackReactionAction(Action action);
+    static bool rollbackReactionDeed(PlayerDeed deed);
+    bool restoreLocomotion(Action action, u32 sequence, f32 frame);
 
     /** Steps `ticks` of the game clock (`seconds` long) under `motion`, throwing while
      * `attack` is held. */

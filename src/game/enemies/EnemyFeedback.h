@@ -21,6 +21,7 @@ struct EnemyFeedback {
     Vec3 position{0};
     f32 yaw = 0;
     f32 halfHeight = 0;
+    bool operator==(const EnemyFeedback&) const = default;
 
     std::string sound(std::span<const LevelEnemy> roster, s32 bossType = -1) const;
     /** A dedicated melee impact, or nullopt for the ordinary player pain path.

@@ -58,6 +58,9 @@ public:
     /** Starts the first area's stream at `volume`, the level's; `assets` is borrowed for the
      * other areas' streams until the music stops. */
     void startMusic(const AssetLocator* assets, f32 volume);
+    /** Presentation-only follower: the host chooses area/ducking, the local
+     * mixer retains its own volume. Never evaluates triggers or advances AI. */
+    void followMusic(const AssetLocator* assets, s32 area, s32 level, f32 volume);
     /** Asks for an area's stream and how to go over to it (sMusicSubIndex and sMusicSubState);
      * `updateMusic` carries it out. A level with one area ignores it. */
     void selectMusicArea(s32 area, MusicSwitch how);

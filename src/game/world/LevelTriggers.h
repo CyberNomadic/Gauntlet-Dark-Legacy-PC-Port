@@ -137,8 +137,11 @@ public:
 
     /** Takes the layout's trigger items, chains them, and holds their animated targets. */
     void bind(const WorldLayout& layout, WorldAnimator& animator, WorldCollision* collision);
-    /** Visible pressure pads are separate from the world objects they activate. */
-    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items);
+    /** Visible pressure pads are separate from the world objects they activate. Their art is
+     * looked up the way the original searches its headers: the level's archive, then the
+     * realm's. */
+    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                     ItemArchive* realmItems = nullptr);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
     void clear();
     usize size() const { return m_triggers.size(); }
@@ -183,6 +186,34 @@ public:
     /** Fires the triggers visitors stand in and carries the fades on by `seconds`. */
     void update(f32 seconds, std::span<const TriggerVisitor> visitors, WorldAnimator& animator,
                 WorldScene& scene, WorldCollision* collision);
+    /** Target motion only. Switch contacts, sounds and other trigger events are not replayed. */
+    struct Motion {
+        static constexpr usize kMaxTargets = 2048;
+        struct Target {
+            s32 object = -1;
+            bool open = false;
+            bool settled = true;
+            bool pressed = false;
+            bool wholePartyReady = false;
+            bool returning = false;
+            bool forced = false;
+            f32 alpha = 1;
+            f32 height = 0;
+            bool valid() const;
+            bool operator==(const Target&) const = default;
+        };
+        f32 frameRemainder = 0;
+        std::vector<Target> targets;
+        bool valid() const;
+        bool operator==(const Motion&) const = default;
+    };
+    Motion motion() const;
+    bool acceptsMotion(const Motion& state) const;
+    /** Restore target clocks atomically; geometry and collision are a separate checkpoint. */
+    bool restoreMotion(const Motion& state);
+    /** Continue the captured commands, without evaluating new contacts or emitting events. */
+    bool advanceMotion(f32 seconds, const WorldAnimator& animator, WorldScene& scene,
+                       WorldCollision* collision);
     /** The refusals and openings since the last call, and the targets that have just finished
      * opening before the party (faded to nothing or run to the end of their animation); each is
      * handed out once. */
@@ -236,6 +267,8 @@ private:
     /** True when the target's commanded state changes. */
     static bool openTarget(Target& target, bool open, bool atOnce, WorldAnimator& animator,
                            WorldScene& scene, WorldCollision* collision);
+    void stepMotion(f32 seconds, WorldScene& scene, WorldCollision* collision, bool report);
+    void finishMotion(const WorldAnimator& animator, WorldCollision* collision, bool report);
 
     std::vector<LevelTrigger> m_triggers;
     std::vector<Target> m_targets;

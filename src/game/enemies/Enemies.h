@@ -6,6 +6,7 @@
 #include <optional>
 #include <random>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "engine/world/WorldCollision.h"
 #include "engine/world/WorldLighting.h"
 
+#include "game/combat/MeleeGeometry.h"
 #include "game/enemies/DeathRules.h"
 #include "game/enemies/EnemyAnimator.h"
 #include "game/enemies/EnemyFeedback.h"
@@ -42,6 +44,7 @@ struct EnemyScales {
     f32 playerLevel = 0.0f;     ///< the level the place is meant for; none when nought
     bool bossEncounter = false; ///< applies to every opponent in the arena, not just the boss
     s32 players = 1;            ///< how many are in the game: a boss's share of harm and worth
+    bool operator==(const EnemyScales&) const = default;
 };
 
 /** Protection that returns a swarm enemy's melee blow to its attacker. */
@@ -80,6 +83,7 @@ struct EnemyBlow {
     u32 flags = 0;                    ///< damage modifiers, including low attacks and knockback
     Vec3 direction{0.0f, 0.0f, 1.0f}; ///< from the enemy to the player
     EnemyMeleeWard ward = EnemyMeleeWard::None; ///< returned damage; only Health Vamp also heals
+    bool operator==(const EnemyBlow&) const = default;
 };
 
 /** An enemy hurt or killed by a player, and what that is worth. */
@@ -91,6 +95,7 @@ struct EnemyLoss {
     s32 experience = 0;
     bool killed = false;
     Vec3 position{0.0f, 0.0f, 0.0f};
+    bool operator==(const EnemyLoss&) const = default;
 };
 
 /** A living swarm member's collision body, independent of its render/aiming bounds. */
@@ -99,6 +104,7 @@ struct EnemyBody {
     Vec3 centre{0};
     f32 radius = 0;
     f32 halfHeight = 0;
+    bool operator==(const EnemyBody&) const = default;
 };
 
 /** Ordered generator bookkeeping, including patrol offspring's change to future births. */
@@ -106,6 +112,7 @@ struct EnemyGeneratorEvent {
     enum class Kind : u8 { Born, Detached, PatrolHit, PatrolDetached };
     s32 generator = -1;
     Kind kind = Kind::Born;
+    bool operator==(const EnemyGeneratorEvent&) const = default;
 };
 
 /** What a player's hit carries besides damage: the original's damage-type bits that matter. */
@@ -157,6 +164,7 @@ struct EnemyDeathShot {
     s32 kind = kGarmBroodKind;
     Vec3 position{0.0f, 0.0f, 0.0f};  ///< where the body lay
     Vec3 direction{0.0f, 0.0f, 1.0f}; ///< toward the player, unit length
+    bool operator==(const EnemyDeathShot&) const = default;
 };
 
 /** A blast one of the swarm goes up in. */
@@ -166,6 +174,7 @@ struct EnemyBurst {
     s32 enemy = -1;
     s32 kind = -1;             ///< whose fragments scatter when it explodes
     bool silencesYell = false; ///< set off by a hit rather than its own fuse
+    bool operator==(const EnemyBurst&) const = default;
 };
 
 /** A sound one of the swarm makes other than on being hit: a throw going off (the arrow's
@@ -175,6 +184,7 @@ struct EnemyCue {
     Kind kind = Kind::Arrow;
     s32 enemyKind = 0;
     Vec3 position{0.0f, 0.0f, 0.0f};
+    bool operator==(const EnemyCue&) const = default;
 };
 
 /** The strengths a placement gives past the tiers: the variants. */
@@ -287,6 +297,9 @@ public:
     f32 hurt(s32 id, const EnemyHit& hit);
     /** The enemies a missile can strike. */
     std::vector<MissileTarget> targets() const;
+    /** Native acquisition order, lifetime identity and dynamic-grid contact tie
+     * keys. IDs remain pool-local until a scene composes its target roster. */
+    std::vector<MeleeGeometry::Target> meleeGeometry() const;
     /** PlayerCollideItems' swarm contact, separate from missile/physical movement reach.
      * Positions are collision centres; width is the player's full native col_radius.
      * Returns the contact nearest the step endpoint, not the nearest enemy centre.
@@ -328,6 +341,10 @@ public:
         f32 fullHealth = 0;
         bool asleep = false;
         bool hitFlash = false;
+        f32 alpha = 1;
+        f32 scale = 1;
+        u32 deathSkin = 0;
+        u32 deathFrame = 0;
     };
     std::optional<Observation> observe(s32 id) const;
     /** Resource selection, independent of a live enemy slot. */
@@ -338,13 +355,16 @@ public:
         bool asleep = false;
     };
     const TreeInfo* appearanceTree(const Appearance& appearance);
+    static constexpr std::array<std::string_view, 6> kDeathSkins{
+        "DEATHBLOOD", "DEATHFIRE", "DEATHELEC", "DEATHLIGHT", "DEATHACID", "DEATHALT"};
     /** Draw only an externally posed body using already-loaded resources. Does
      * not create a collision body, run AI, emit rewards or advance animation.
-     * Death skins, shadows and one-shot effects are not part of this base pass. */
+     * Shadows and one-shot effects are separate from this base pass. */
     void drawPose(RenderDevice& device, const Mat4& clip, const Mat4& placement,
                   const WorldLighting& lighting, const Appearance& appearance, const TreePose& pose,
                   u32 sequence, f32 frame, f32 textureFrame, const Texture* hitFlash,
-                  const CameraFrame* camera, TreeModel::Pass pass = TreeModel::Pass::All);
+                  const CameraFrame* camera, TreeModel::Pass pass = TreeModel::Pass::All,
+                  f32 alpha = 1, const Texture* deathSkin = nullptr, bool dying = false);
     usize count() const; ///< live, dying included
     s32 kindOf(s32 id) const;
     s32 tierOf(s32 id) const;
@@ -353,6 +373,8 @@ public:
     bool bred(s32 id) const;
     f32 healthOf(s32 id) const;
     const Vec3& positionOf(s32 id) const;
+    /** Actual retained support, including dying bodies; -1 for absent/unattached slots. */
+    s32 floorOf(s32 id) const;
     f32 yawOf(s32 id) const;
     f32 radiusOf(s32 id) const;
     f32 heightOf(s32 id) const;
@@ -376,28 +398,12 @@ public:
     /** How far one of `kind` goes in a tick. */
     f32 paceOf(s32 kind) const;
 
-private:
     enum class State : u8 { Inactive, Active, Asleep, Dying };
     enum class Birth : u8 { Brood, Placement, Patrol };
 
-    struct Stock {
-        s32 kind = -1;
-        ItemArchive archive;
-        TextureAnimator textures;
-        std::array<const TreeInfo*, 3> trees{};
-        std::array<TreeModel, 3> bodies;               ///< set to the frame before each is drawn
-        std::array<const TreeInfo*, 3> variantTrees{}; ///< the archer's, bomber's, suicide's
-        std::array<TreeModel, 3> variantBodies;
-        TreeModel arrow;
-        TreeModel bomb;
-        TreeModel fireball; ///< the third slot's shot
-        std::array<TreeModel, 2> deathStatues;
-        std::array<const TreeInfo*, 2> deathStatueTrees{};
-        std::array<BlobShadow, 3> shadows; ///< SHADOW1L1..3L1, by tier
-        TreeInfo unseen; ///< the stance alone, for a kind with no body on the disc (IT)
-    };
-
-    struct Enemy {
+    /** Pointer-free native slot state shared with checkpoints, so a new AI,
+     * contact or lifecycle field cannot silently disappear from capture. */
+    struct BodyState {
         u64 instance = 0;
         State state = State::Inactive;
         s32 kind = 0;
@@ -421,6 +427,7 @@ private:
         struct Floor {
             s32 object = -1;
             Vec3 local{0};
+            bool operator==(const Floor&) const = default;
         };
         std::optional<Floor> floor;
         f32 yaw = 0.0f; ///< the way the body faces
@@ -458,7 +465,79 @@ private:
         f32 burnGap = 0;
         f32 deathSeconds = 0;
         s32 deathSkinFrames = 0;
-        std::string_view deathSkin;
+        std::string deathSkin;
+        bool valid() const;
+        bool operator==(const BodyState&) const = default;
+    };
+
+    struct Checkpoint {
+        static constexpr usize kMaxEvents = 65536;
+        static constexpr usize kMaxCombatants = 4096;
+        struct Body : BodyState {
+            std::optional<EnemyAnimator::Checkpoint> animator;
+            bool operator==(const Body&) const = default;
+        };
+        struct Stock {
+            s32 kind = -1;
+            TextureAnimator::Checkpoint textures;
+            bool operator==(const Stock&) const = default;
+        };
+        std::array<Body, kMost> enemies;
+        std::vector<Stock> stocks;
+        u64 nextInstance = 1;
+        std::mt19937 random;
+        s32 most = kMost;
+        EnemyScales scales;
+        LookoutRoute lookouts;
+        std::vector<EnemyBlow> blows;
+        std::vector<EnemyLoss> losses;
+        std::vector<EnemyBurst> bursts;
+        std::vector<EnemyCue> cues;
+        std::vector<EnemyFeedback> feedback;
+        std::vector<DeathEvent> deathEvents;
+        std::vector<EnemyDeathShot> deathShots;
+        std::vector<s32> tagged;
+        std::vector<EnemyGeneratorEvent> generatorEvents;
+        std::vector<EnemyBody> combatants;
+        Vec2 contactGridOrigin{0};
+        f32 contactGridInverseWidth = 0;
+        s32 bomber = -1;
+        std::optional<ViewVolume> view;
+        s32 inView = 0;
+        u32 frame = 0;
+        s32 pendingTicks = 0;
+        f32 pendingSeconds = 0;
+        f32 shrink = 1;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    /** Exact, atomic restore against the same opened world's loaded stock roster.
+     * Never loads assets, spawns actors or dispatches queued world events. Rewinds
+     * birth counters too: callers must quarantine replay and reconcile published
+     * lifetimes/events before using a restored pool as live authority. External
+     * collision, hazards, generators and missiles require their own matching state. */
+    bool restore(const Checkpoint& state);
+
+private:
+    struct Stock {
+        s32 kind = -1;
+        ItemArchive archive;
+        TextureAnimator textures;
+        std::array<const TreeInfo*, 3> trees{};
+        std::array<TreeModel, 3> bodies;               ///< set to the frame before each is drawn
+        std::array<const TreeInfo*, 3> variantTrees{}; ///< the archer's, bomber's, suicide's
+        std::array<TreeModel, 3> variantBodies;
+        TreeModel arrow;
+        TreeModel bomb;
+        TreeModel fireball; ///< the third slot's shot
+        std::array<TreeModel, 2> deathStatues;
+        std::array<const TreeInfo*, 2> deathStatueTrees{};
+        std::array<BlobShadow, 3> shadows; ///< SHADOW1L1..3L1, by tier
+        TreeInfo unseen; ///< the stance alone, for a kind with no body on the disc (IT)
+    };
+
+    struct Enemy : BodyState {
         EnemyAnimator animator;
     };
 
@@ -517,6 +596,7 @@ private:
     static f32 playerDistance(const Enemy& enemy, const EnemyView& player);
     static f32 wrap(f32 angle);
     static Vec3 bodyCentre(const Enemy& enemy);
+    MeleeGeometry::Target meleeBody(s32 id) const;
 
     RenderDevice* m_device = nullptr;
     std::filesystem::path m_root;

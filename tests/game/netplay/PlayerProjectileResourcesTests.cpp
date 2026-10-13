@@ -1,3 +1,6 @@
+#include <algorithm>
+
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "FakeRenderDevice.h"
@@ -9,6 +12,7 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+using Catch::Approx;
 
 TEST_CASE("player projectile preloading is atomic and supports four independently owned seats",
           "[netplay][player-projectile-resources][assets]") {
@@ -118,6 +122,55 @@ TEST_CASE("native player projectile catalogs cover every costume class and futur
             actor.save().progress().inventory.addPowerup(powerup::kWeapon, element, 0, 60);
             arsenal.launchWeapon(actor, figure.get(), actor.facing(), 1, false);
             REQUIRE(arsenal.missiles().count() == 1);
+            const auto rider = arsenal.weaponRider(actor, *figure);
+            REQUIRE(rider);
+            REQUIRE(rider->textureFrame);
+            const auto tree = figure->missileArchive()->trees.find(figure->missileTree());
+            REQUIRE(tree);
+            PlayerWeaponState prepared;
+            prepared.character = static_cast<u32>(character);
+            prepared.resource =
+                host.treeId(figure->missileArchive(), &figure->missileArchive()->trees.tree(*tree),
+                            rider->lenders);
+            prepared.rider = host.treeId(rider->archive, rider->tree, rider->lenders);
+            prepared.riderTextureFrame = rider->textureFrame;
+            REQUIRE(prepared.resource != 0);
+            REQUIRE(prepared.rider != 0);
+            REQUIRE(prepared.resource != prepared.rider);
+            CHECK(host.acceptsWeapon(prepared));
+            CHECK(client.acceptsWeapon(prepared));
+            arsenal.missiles().update(0.1f, nullptr);
+            CombatSnapshot sample;
+            sample.motion.epoch = 1;
+            sample.motion.cameraContinuity = 1;
+            REQUIRE(ProjectileCapture::append(sample, host, arsenal.missiles(), enemies));
+            const auto& missile = arsenal.missiles().missile(0);
+            const EffectTrees::Effect* nativeRider = nullptr;
+            for (usize index = 0; index < arsenal.missiles().visuals().count(); ++index) {
+                const auto& effect = arsenal.missiles().visuals().effect(index);
+                if (effect.id == missile.rider) {
+                    nativeRider = &effect;
+                }
+            }
+            REQUIRE(nativeRider);
+            for (const auto& component : sample.projectiles) {
+                if (component.source != ProjectileSource::PlayerRider) {
+                    continue;
+                }
+                CHECK(component.resource == prepared.rider);
+                auto sampled = component;
+                REQUIRE(client.sampleWeapon(sampled, missile.age, component.textureFrame));
+                CHECK(sampled.animation.action == component.animation.action);
+                CHECK(sampled.animation.sequence == component.animation.sequence);
+                CHECK(sampled.animation.generation == component.animation.generation);
+                CHECK(sampled.animation.frame == Approx(nativeRider->player.presentationFrame()));
+                CHECK(sampled.animation.transition == component.animation.transition);
+                CHECK(sampled.placement == component.placement);
+                CHECK(sampled.flags == component.flags);
+            }
+            CHECK(std::ranges::count_if(sample.projectiles, [](const auto& component) {
+                      return component.source == ProjectileSource::PlayerRider;
+                  }) == 1);
             inspect();
         }
         actor.save().progress().inventory = {};

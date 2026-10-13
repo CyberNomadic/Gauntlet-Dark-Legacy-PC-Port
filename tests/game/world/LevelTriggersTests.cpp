@@ -1018,6 +1018,54 @@ TEST_CASE("unkeyed trigger targets translate their geometry to signed height end
     CHECK(triggers.takeSettled().empty());
 }
 
+TEST_CASE("switch art missing from the level's own item archive comes from the realm's",
+          "[triggers][trigger-visibility][trigger-archives]") {
+    SwitchFixture f(
+        R"({"info":0,"flags":0,"position":[0,0,0],"params":[0,0,0,0,4,255,7,0,0,0,100,0]})");
+    const auto own = test::sampleLevel("trigger-own-archive");
+    writeTextFile(own / "animations.json", R"({"trees":[{"name":"TENTACLE",
+      "nodes":[{"name":"WALL","object":"WALL","parent":-1,"position":[0,0,0]}],
+      "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
+    const auto realm = test::sampleLevel("trigger-realm-archive");
+    writeTextFile(realm / "animations.json", R"({"trees":[{"name":"BRIDGEPAD",
+      "nodes":[{"name":"WALL","object":"WALL","parent":-1,"position":[0,0,0]}],
+      "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
+    ItemArchive ownItems;
+    ItemArchive realmItems;
+    REQUIRE(ownItems.load(own));
+    REQUIRE(realmItems.load(realm));
+    f.triggers.bindFigures(f.device, f.layout, ownItems);
+    CHECK(f.triggers.figure(0) == nullptr);
+    f.triggers.bindFigures(f.device, f.layout, ownItems, &realmItems);
+    REQUIRE(f.triggers.figure(0) != nullptr);
+    f.triggers.draw(f.device, Mat4{1}, {});
+    CHECK(f.device.draws.size() == 1);
+}
+
+TEST_CASE("Castle Courtyard switches are visible despite the level's own item archive",
+          "[triggers][trigger-visibility][assets]") {
+    const auto root = test::assetOrSkip("WDATA/CASTLE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("A1")));
+    REQUIRE(world.items().trees.find("TENTACLE").has_value());
+    REQUIRE_FALSE(world.items().trees.find("TRIGGER2").has_value());
+    const auto& triggers = world.triggers();
+    REQUIRE(triggers.size() == 8);
+    usize shown = 0;
+    for (usize i = 0; i < triggers.size(); ++i) {
+        const auto& instance = world.layout().itemInstances()[static_cast<usize>(
+            triggers.trigger(i).instance)];
+        const bool markerOnly = (instance.flags & 2U) != 0;
+        INFO("trigger " << i);
+        CHECK((triggers.figure(i) != nullptr) == !markerOnly);
+        shown += triggers.figure(i) != nullptr ? 1 : 0;
+    }
+    CHECK(shown == 6);
+}
+
 TEST_CASE("marker-only switches stay invisible without losing trigger behavior",
           "[triggers][trigger-visibility]") {
     SwitchFixture f(

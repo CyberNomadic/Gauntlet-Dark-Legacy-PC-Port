@@ -35,6 +35,17 @@ constexpr std::string_view kSoundDirectory = "audio";
 constexpr s32 kOgre = 12;
 constexpr f32 kOgreScale = 1.6f;
 constexpr f32 kMasterScale = 1.2f;
+constexpr std::array kArmEquipment{powerup::kLeftGauntlet, powerup::kReflectShield,
+                                   powerup::kFireShield, powerup::kLightningShield};
+constexpr std::array<std::string_view, 4> kArmModels{"BOSSGAUNTL", "RF_SHLD", "FW_SHLD", "L_SHLD"};
+std::optional<usize> armOf(u32 equipment) {
+    for (usize i = 0; i < kArmEquipment.size(); ++i) {
+        if ((equipment & kArmEquipment[i]) != 0) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
 } // namespace
 
 f32 PlayerFigure::bodyScale(const CharacterSave& save, const PowerupEffects& effects) {
@@ -369,13 +380,9 @@ void PlayerFigure::animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDee
                        m_animator.strongReleased() || m_animator.superReleased();
     m_companion.update(seconds, m_animator.action(), swung, phoenix && m_familiarPending);
     m_familiar.update(seconds, m_familiarPending);
-    const std::span<const Mat4> matrices = m_animator.pose().matrices();
     m_transforms.resize(m_costume->nodes.size());
     for (usize n = 0; n < m_transforms.size(); ++n) {
-        const s32 source = m_classNodeOfNode[n];
-        m_transforms[n] = source >= 0 && static_cast<usize>(source) < matrices.size()
-                              ? matrices[static_cast<usize>(source)]
-                              : glm::translate(Mat4{1.0f}, m_costume->worldPosition(n));
+        m_transforms[n] = poseTransform(n, m_animator.pose());
     }
 }
 
@@ -437,12 +444,39 @@ Mat4 PlayerFigure::rootAttachment(const Mat4& body) const {
                                         : m_transforms.front());
 }
 
+Mat4 PlayerFigure::poseTransform(usize node, const TreePose& pose) const {
+    if (m_costume == nullptr || node >= m_costume->nodes.size()) {
+        return Mat4{1};
+    }
+    const auto matrices = pose.matrices();
+    const s32 source = node < m_classNodeOfNode.size() ? m_classNodeOfNode[node] : -1;
+    return source >= 0 && static_cast<usize>(source) < matrices.size()
+               ? matrices[static_cast<usize>(source)]
+               : glm::translate(Mat4{1}, m_costume->worldPosition(node));
+}
+
+Mat4 PlayerFigure::rootAttachment(const Mat4& body, const TreePose& pose) const {
+    return body * poseTransform(0, pose);
+}
+
 std::optional<Mat4> PlayerFigure::attachment(const Mat4& body,
                                              std::string_view objectSuffix) const {
     if (m_costume != nullptr) {
         for (usize n = 0; n < m_costume->nodes.size() && n < m_transforms.size(); ++n) {
             if (m_costume->nodes[n].object.ends_with(objectSuffix)) {
                 return body * m_transforms[n];
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<Mat4> PlayerFigure::attachment(const Mat4& body, std::string_view objectSuffix,
+                                             const TreePose& pose) const {
+    if (m_costume != nullptr) {
+        for (usize node = 0; node < m_costume->nodes.size(); ++node) {
+            if (m_costume->nodes[node].object.ends_with(objectSuffix)) {
+                return body * poseTransform(node, pose);
             }
         }
     }
@@ -565,7 +599,7 @@ void PlayerFigure::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& 
                             const WorldLighting& lighting, const TreePose& pose,
                             PlayerAnimator::Action action, f32 textureFrame,
                             const Texture* hitFlash, const CameraFrame* camera,
-                            TreeModel::Pass pass) const {
+                            TreeModel::Pass pass, bool hideWeapon, u32 armEquipment) const {
     if (m_costume == nullptr || !pose.posed()) {
         return;
     }
@@ -584,16 +618,66 @@ void PlayerFigure::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& 
     m_costumeTextures.apply(m_weapon, offset);
     m_model.setMaskedTexture(hitFlash);
     m_model.setAppearance(hitFlash != nullptr);
+    const auto arm = armEquipmentReady(armEquipment) ? armOf(armEquipment) : std::nullopt;
+    const bool armHeld = arm && m_armNode >= 0 && static_cast<usize>(m_armNode) < transforms.size();
+    if (m_armHidden >= 0) {
+        m_model.setMeshAlpha(static_cast<usize>(m_armHidden), armHeld ? 0.0f : 1.0f);
+    }
     m_model.draw(device, clip, body, lighting, transforms, camera, 1, pass);
+    if (armHeld) {
+        m_replicaArms[*arm].model.draw(device, clip,
+                                       body * transforms[static_cast<usize>(m_armNode)], lighting,
+                                       {}, nullptr, 1, pass);
+    }
     const bool thrown = action == PlayerAnimator::Action::ThrowRecover ||
                         action == PlayerAnimator::Action::ThrowMovingRecover ||
                         action == PlayerAnimator::Action::StrongThrowRecover;
-    if (heldWeaponBound() && (!thrown || m_staysInHand)) {
+    if (heldWeaponBound() && !hideWeapon && (!thrown || m_staysInHand)) {
         m_weapon.draw(device, clip, body * transforms[static_cast<usize>(m_handNode)], lighting, {},
                       camera, 1, pass);
     }
     m_model.setMaskedTexture(nullptr);
     m_model.setAppearance(false);
+    if (m_armHidden >= 0) {
+        m_model.setMeshAlpha(static_cast<usize>(m_armHidden), m_armHeld ? 0.0f : 1.0f);
+    }
+}
+
+bool PlayerFigure::bindArmEquipment(RenderDevice& device, ItemArchive& powerups,
+                                    ItemArchive& weapons) {
+    for (usize i = 0; i < m_replicaArms.size(); ++i) {
+        auto& archive = i == 0 ? powerups : weapons;
+        if (!archive.loaded() || !archive.models.find(kArmModels[i])) {
+            return false;
+        }
+    }
+    // Unlike the native held-item cache, this catalog can be rebound to another
+    // trusted archive before receiving packets. Equal model names are not equal owners.
+    for (auto& arm : m_replicaArms) {
+        arm.model.clear();
+        arm.tree = {};
+    }
+    for (usize i = 0; i < m_replicaArms.size(); ++i) {
+        auto& archive = i == 0 ? powerups : weapons;
+        auto& arm = m_replicaArms[i];
+        bindObject(device, archive, kArmModels[i], arm.tree, arm.model);
+        if (!arm.model.bound()) {
+            for (auto& bound : m_replicaArms) {
+                bound.model.clear();
+                bound.tree = {};
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PlayerFigure::armEquipmentReady(u32 equipment) const {
+    if ((equipment & ~(powerup::kLeftGauntlet | powerup::kShields)) != 0) {
+        return false;
+    }
+    const auto arm = armOf(equipment);
+    return !arm || m_replicaArms[*arm].model.bound();
 }
 
 std::array<std::optional<CompanionVisual>, 2> PlayerFigure::companionVisuals(const Mat4& body,

@@ -226,6 +226,49 @@ TEST_CASE("room admission configures identity once without reconfiguring its pro
     CHECK(host.wire.configureCount == 1);
 }
 
+TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
+          "[netplay][online-session][latency]") {
+    Client host;
+    host.publish(room());
+    host.connect();
+    auto started = room();
+    started.started = true;
+    for (auto& member : started.members) {
+        member.ready = true;
+    }
+    host.publish(started);
+    REQUIRE(host.session.phase() == Phase::Active);
+    host.wire.sent.clear();
+    REQUIRE(host.session.match().prepare(7));
+    host.service.next.error = "must not poll during flush";
+    const auto tick = host.session.match().tick();
+    const auto epoch = host.session.match().context().epoch;
+
+    SECTION("congested output survives until the next flush") {
+        host.wire.result = PacketTransport::SendResult::Congested;
+        REQUIRE(host.session.flush());
+        CHECK(host.wire.sent.empty());
+        CHECK(host.session.match().queuedControls() == 1);
+        host.wire.result = PacketTransport::SendResult::Sent;
+        REQUIRE(host.session.flush());
+        CHECK(host.wire.sent.size() == 1);
+        CHECK(host.session.match().queuedControls() == 0);
+        REQUIRE(host.session.flush());
+        CHECK(host.wire.sent.size() == 1);
+        CHECK(host.session.phase() == Phase::Active);
+        CHECK(host.session.match().tick() == tick);
+        CHECK(host.session.match().context().epoch == epoch);
+        CHECK(host.service.next.error == "must not poll during flush");
+    }
+    SECTION("send failure is surfaced in the same update") {
+        host.wire.result = PacketTransport::SendResult::Disconnected;
+        CHECK_FALSE(host.session.flush());
+        CHECK(host.session.phase() == Phase::Failed);
+        CHECK(host.session.failure() == Failure::Match);
+        CHECK_FALSE(host.session.flush());
+    }
+}
+
 TEST_CASE("online sessions handle split local seats, sparse rosters and unordered replies",
           "[netplay][online-session]") {
     Client host(true, 2);

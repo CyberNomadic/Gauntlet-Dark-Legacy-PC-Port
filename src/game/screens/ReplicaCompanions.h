@@ -11,6 +11,8 @@ public:
     void bindEarned(const PlayerFigure& figure);
     bool bindPowerups(RenderDevice& device, ItemArchive& powerups, ItemArchive* weapons);
     bool accepts(usize slot, const CompanionState& state) const;
+    /** Borrowed authored loop for local shield locomotion replay, loaded before packets. */
+    const TreeInfo* fireShieldTree() const;
     void draw(RenderDevice& device, usize slot, const CompanionState& state, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera, TreeModel::Pass pass) const;
 

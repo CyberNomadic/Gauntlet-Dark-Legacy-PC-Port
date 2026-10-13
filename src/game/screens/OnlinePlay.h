@@ -2,10 +2,15 @@
 
 #include "game/netplay/ClientClock.h"
 #include "game/screens/AfterLevelScene.h"
+#include "game/screens/LocalMovementPrediction.h"
+#include "game/screens/LocalPotionPrediction.h"
+#include "game/screens/LocalProjectilePrediction.h"
+#include "game/screens/LocalTurboEffectPrediction.h"
 #include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
 #include "game/screens/OnlineParty.h"
 #include "game/screens/PlayReplication.h"
+#include "game/screens/ReplicaAudio.h"
 #include "game/screens/ReplicaStage.h"
 
 namespace gdl::game {
@@ -58,6 +63,12 @@ public:
     const PlayScene* hostScene() const;
     const ReplicaView* replica() const { return m_replica.view(); }
     const CombatSnapshot* shown() const;
+    const LocalMovementPrediction::Metrics& predictionMetrics() const {
+        return m_prediction.metrics();
+    }
+    /** Diagnostic A/B control for local movement, action and projectile replay;
+     * never changes host authority or input scheduling. */
+    void setMovementPrediction(bool enabled) { m_predictMovement = enabled; }
     OnlineLevelEntry::Phase entryPhase() const { return m_entry.phase(); }
     bool entryVisible() const { return m_entry.visible() || m_completion.visible(); }
     const OnlineCompletion& completion() const { return m_completion; }
@@ -73,6 +84,7 @@ private:
     bool load(const SessionInputs::Frame& devices);
     bool travel();
     bool loadShop();
+    Phase updateFrame(const SessionInputs::Frame& devices);
     Phase updateShop(const SessionInputs::Frame& devices);
     Phase fail(Failure reason);
     void quiet();
@@ -90,7 +102,15 @@ private:
     std::optional<LevelRef> m_level;
     std::optional<LevelRef> m_secretParent;
     ReplicaStage m_replica;
+    ReplicaAudio m_audio;
     ClientClock m_clock;
+    LocalMovementPrediction m_prediction;
+    LocalProjectilePrediction m_projectilePrediction;
+    LocalPotionPrediction m_potionPrediction;
+    LocalTurboEffectPrediction m_effectPrediction;
+    bool m_presentEffects = false;
+    LatencyTelemetry::Time m_latencyReportAt;
+    bool m_predictMovement = true;
     OnlineLevelEntry m_entry;
     OnlineCompletion m_completion;
     AfterLevelScene m_shop;

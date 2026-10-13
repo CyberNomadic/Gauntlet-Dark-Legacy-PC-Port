@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "engine/core/Types.h"
 
@@ -12,6 +13,17 @@ bool SoundSequence::loops() const {
 }
 
 SoundPlayer::SoundPlayer(AudioMixer& mixer) : m_mixer(mixer) {}
+
+SoundPlayer::Capture::Capture(SoundPlayer* player, Observer observer) : m_player(player) {
+    if (m_player != nullptr) {
+        m_previous = std::exchange(m_player->m_observer, std::move(observer));
+    }
+}
+SoundPlayer::Capture::~Capture() {
+    if (m_player != nullptr) {
+        m_player->m_observer = std::move(m_previous);
+    }
+}
 
 namespace {
 
@@ -56,7 +68,12 @@ SoundHandle SoundPlayer::play(const SoundSequence& sequence, f32 volume, SoundCa
     if (!playable(sequence)) {
         return kNoSound;
     }
-    return start(sequence, volume, category, m_nextHandle++);
+    const auto handle = start(sequence, volume, category, m_nextHandle++);
+    if (m_observer && !sequence.bank.empty()) {
+        m_observer({Event::Kind::Play, handle, kNoSound, sequence.bank, sequence.call,
+                    std::clamp(volume, 0.0f, 1.0f), category});
+    }
+    return handle;
 }
 
 SoundHandle SoundPlayer::playAfter(SoundHandle previous, const SoundSequence& sequence, f32 volume,
@@ -68,6 +85,10 @@ SoundHandle SoundPlayer::playAfter(SoundHandle previous, const SoundSequence& se
         return kNoSound;
     }
     m_pending.push_back(Pending{m_nextHandle, previous, sequence, volume, category});
+    if (m_observer && !sequence.bank.empty()) {
+        m_observer({Event::Kind::Play, m_nextHandle, previous, sequence.bank, sequence.call,
+                    std::clamp(volume, 0.0f, 1.0f), category});
+    }
     return m_nextHandle++;
 }
 
@@ -147,28 +168,42 @@ void SoundPlayer::applyVolume(Voice& voice) const {
 }
 
 void SoundPlayer::setVolume(SoundHandle handle, f32 volume) {
+    bool changed = false;
     for (Voice& voice : m_voices) {
         if (voice.handle == handle) {
+            changed = voice.volume != std::clamp(volume, 0.0f, 1.0f);
             voice.volume = std::clamp(volume, 0.0f, 1.0f);
             applyVolume(voice);
         }
     }
     for (Pending& pending : m_pending) {
         if (pending.handle == handle) {
+            changed = pending.volume != std::clamp(volume, 0.0f, 1.0f);
             pending.volume = std::clamp(volume, 0.0f, 1.0f);
         }
+    }
+    if (changed && m_observer) {
+        m_observer({Event::Kind::Volume, handle, kNoSound, {}, 0, std::clamp(volume, 0.0f, 1.0f)});
     }
 }
 
 void SoundPlayer::setPan(SoundHandle handle, f32 pan) {
-    for (const Voice& voice : m_voices) {
+    for (Voice& voice : m_voices) {
         if (voice.handle == handle) {
+            const f32 next = std::clamp(pan, -1.0f, 1.0f);
+            if (voice.pan != next && m_observer) {
+                m_observer({Event::Kind::Pan, handle, kNoSound, {}, 0, next});
+            }
+            voice.pan = next;
             voice.stream->setPan(pan);
         }
     }
 }
 
 void SoundPlayer::stop(SoundHandle handle) {
+    if (handle != kNoSound && m_observer) {
+        m_observer({Event::Kind::Stop, handle, kNoSound, {}});
+    }
     for (Voice& voice : m_voices) {
         if (voice.handle == handle) {
             voice.stream->stop();
@@ -180,6 +215,14 @@ void SoundPlayer::stop(SoundHandle handle) {
 }
 
 void SoundPlayer::stopAll() {
+    if (m_observer) {
+        for (const auto& voice : m_voices) {
+            m_observer({Event::Kind::Stop, voice.handle, kNoSound, {}});
+        }
+        for (const auto& pending : m_pending) {
+            m_observer({Event::Kind::Stop, pending.handle, kNoSound, {}});
+        }
+    }
     for (Voice& voice : m_voices) {
         voice.stream->stop();
         voice.finished = true;

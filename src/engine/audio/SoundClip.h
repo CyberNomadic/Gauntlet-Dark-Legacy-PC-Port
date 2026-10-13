@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "engine/core/Types.h"
@@ -31,6 +32,10 @@ struct SoundSequence {
     std::vector<SoundSequenceStep> steps;
     f32 volume = 1.0f;
     SoundGainCurve gainCurve = SoundGainCurve::Linear;
+    // Native call identity, independent of decoded sample addresses. Synthetic
+    // sequences leave this empty and are never sent to a remote presentation.
+    std::string bank;
+    u32 call = 0;
 
     bool loops() const;
 };

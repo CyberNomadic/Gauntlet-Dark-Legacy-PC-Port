@@ -6,9 +6,12 @@
 #include "engine/core/Types.h"
 #include "engine/world/AmbientDimmer.h"
 
+#include "game/combat/MeleeGeometry.h"
 #include "game/players/ItemAttack.h"
+#include "game/players/MeleeSelection.h"
 #include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelOpponents.h"
+#include "game/screens/TurboEmission.h"
 #include "game/world/CameraShake.h"
 #include "game/world/MoveStrikes.h"
 #include "game/world/PlayerArsenal.h"
@@ -20,6 +23,7 @@ namespace gdl::game {
  * Clear before releasing its borrowed effect store, arsenal, figures or archives. */
 class PlayerAttacks {
 public:
+    static constexpr f32 kRamReach = 0.3f; ///< native charge contact margin beyond body radius
     struct Resources {
         RenderDevice& device;
         const ClassDataSet& classes;
@@ -108,6 +112,10 @@ public:
      * a chain of close attacks it is. */
     PlayerDeed attackDeed(const PlayerActor& actor, bool strong, const Targets& targets,
                           bool moved = false, s32 chain = 0, std::optional<Vec3> facing = {}) const;
+    /** Conservative ordinary-throw eligibility at every facing. Nearby melee or
+     * item substitutions require authoritative resolution, even when automatic
+     * melee is disabled or a contact shield suppresses its unpressed attacks. */
+    bool rangedOnly(const PlayerActor& actor, const Targets& targets) const;
     /** The selected close target may start a walking body's unpressed quick strike.
      * Movement, input and animation eligibility belong to the caller. */
     PlayerDeed automaticMeleeDeed(const PlayerActor& actor, const Targets& targets,
@@ -116,14 +124,28 @@ public:
      * button reaches a unit further. */
     MeleeSense meleeSense(const PlayerActor& actor, bool held, const Targets& targets,
                           std::optional<Vec3> facing = {}) const;
-    static constexpr f32 kSwingReach = 1.0f; ///< past the body's radius, within a swing
-    static constexpr f32 kStepReach = 2.0f;  ///< within a step
-    static constexpr f32 kHeldReach = 1.0f;  ///< added while an attack button is held
-    static constexpr f32 kLowEnemy = 4.0f;   ///< the height under which an enemy is short
-    static constexpr f32 kLowThing = 3.5f;   ///< and anything else
+    /** Pointer-free all-bearing selection at fixed feet. It deliberately recomputes
+     * a stationary contact instead of retaining the last moving attackStep. Hurt
+     * multiplayer remains native-only because its party fallback is not captured. */
+    std::optional<MeleeSelection::Snapshot> meleeAcquisition(const PlayerActor& actor,
+                                                             const Targets& targets) const;
+    /** Complete nearby cylinder context for bounded moving acquisition. Refuses
+     * unsupported geometry instead of silently omitting a possible target. */
+    std::optional<std::vector<MeleeGeometry::Target>> meleeGeometry(const PlayerActor& actor,
+                                                                    const Targets& targets,
+                                                                    f32 movementRadius,
+                                                                    bool requireClose = true) const;
+    static constexpr f32 kSwingReach = MeleeSelection::kSwingReach;
+    static constexpr f32 kStepReach = MeleeSelection::kStepReach;
+    static constexpr f32 kHeldReach = MeleeSelection::kHeldReach;
+    static constexpr f32 kLowEnemy = 4.0f; ///< the height under which an enemy is short
+    static constexpr f32 kLowThing = 3.5f; ///< and anything else
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     const MoveStrikes& strikes() const { return m_strikes; }
     usize shieldCount() const { return m_shields.size(); }
+
+    /** Native base damage used to prepare the same visual strike descriptors. */
+    f32 meleeDamageOf(usize index, std::span<const PlayerRuntime> players) const;
 
 private:
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,
@@ -173,6 +195,18 @@ private:
     /** A same-step swarm contact precedes a fresh weighted acquisition query. */
     static std::optional<MissileTarget>
     contactEnemy(const PlayerActor& actor, const Targets& targets, const Vec3& facing, f32 range);
+    static std::optional<MissileTarget> contactSeed(const PlayerActor& actor,
+                                                    const Targets& targets, bool stationary);
+    static MeleeSelection::Target meleeCandidate(const PlayerActor& actor,
+                                                 const MissileTarget& body);
+    static MeleeSelection::Contact meleeContact(const PlayerActor& actor, const MissileTarget& body,
+                                                const Targets& targets);
+    struct MeleeQuery {
+        MeleeSelection::Snapshot selection;
+        std::vector<MissileTarget> bodies;
+    };
+    MeleeQuery meleeQuery(const PlayerActor& actor, const Targets& targets,
+                          std::optional<Vec3> facing) const;
     struct MeleeTarget {
         MissileTarget body;
         f32 distance = 0;
@@ -193,12 +227,12 @@ private:
     static ItemArchive* moveEffectsOf(usize index, std::span<PlayerRuntime> players);
     ItemArchive* moveEffectArchive(usize index, std::span<PlayerRuntime> players,
                                    std::string_view tree);
-    f32 meleeDamageOf(usize index, std::span<PlayerRuntime> players) const;
     /** One strike of `index`'s class, set going where the character stands, or at `at`. */
     void fireStrike(usize index, s32 strikeIndex, std::span<PlayerRuntime> players,
-                    std::optional<Vec3> at = std::nullopt);
-    void startParticles(usize index, const MoveEffect& effect, u32 parent,
-                        std::span<PlayerRuntime> players);
+                    std::optional<Vec3> at = std::nullopt,
+                    std::optional<usize> occurrence = std::nullopt);
+    u32 startParticles(usize index, const TurboEmission::Particle& emission, u32 parent,
+                       std::span<PlayerRuntime> players);
     void updateParticles(std::span<PlayerRuntime> players);
     void updateMoveAttachments(std::span<PlayerRuntime> players);
     /** Stationary effects parented to the caster by DoPlyrSfx, with their area carrier. */

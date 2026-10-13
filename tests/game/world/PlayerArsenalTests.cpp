@@ -2,6 +2,8 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -40,6 +42,598 @@ struct Fixture {
         arsenal.bind({device, classes, weapons, collision, effects, audio, nullptr, {}});
     }
 };
+
+TEST_CASE("weapon preparation samples live inventory without launches or resource effects",
+          "[game][world][player-arsenal][weapon-replay]") {
+    Fixture f;
+    const auto plain = f.arsenal.weaponThrow(f.actor, 0.34f);
+    REQUIRE(plain);
+    CHECK(plain->owner == f.actor.player());
+    CHECK(plain->character == f.actor.save().character);
+    CHECK(plain->position == f.actor.position());
+    CHECK(plain->center == f.actor.followPoint());
+    CHECK(plain->direction == f.actor.facing());
+    CHECK(plain->hand == Vec3{0});
+    CHECK(plain->speed == PlayerMissiles::kSlowest);
+    CHECK(plain->damage == PlayerMissiles::kLeastDamage);
+    CHECK(plain->attackSeconds == 0.34f);
+    CHECK(plain->shots == 1);
+    CHECK(plain->flags == 0);
+    auto& inventory = f.actor.save().progress().inventory;
+    inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 12, 30, true);
+    inventory.addPowerup(powerup::kWeapon, powerup::kFiveWayShot | 4U, 7, 30, true);
+    const auto before = inventory.powerups;
+    const auto enchanted = f.arsenal.weaponThrow(f.actor, 0.5f);
+    REQUIRE(enchanted);
+    CHECK(enchanted->hand == Vec3{0, -0.5f, -1.25f});
+    CHECK(enchanted->shots == 5);
+    CHECK(enchanted->flags == (powerup::kFiveWayShot | 4U));
+    CHECK(enchanted->attackSeconds == 0.5f);
+    CHECK(f.arsenal.missiles().count() == 0);
+    CHECK(f.arsenal.missiles().visuals().count() == 0);
+    CHECK(f.effects.count() == 0);
+    CHECK(inventory.powerups == before);
+    f.arsenal.clear();
+    CHECK_FALSE(f.arsenal.weaponThrow(f.actor, 0));
+}
+
+TEST_CASE("complete weapon preparation is resource-free and keeps single-volley sound flags",
+          "[game][world][player-arsenal][weapon-prepare]") {
+    Fixture fixture;
+    PlayerFigure figure;
+    const u32 flags = GENERATE(0U, powerup::kRapidFire | powerup::kFiveWayShot | 4U,
+                               powerup::kThreeWayShot | powerup::kSuperShot);
+    const bool spreads = GENERATE(false, true);
+    const bool aimed = GENERATE(false, true);
+    auto& inventory = fixture.actor.save().progress().inventory;
+    if (flags != 0) {
+        inventory.addPowerup(powerup::kWeapon, flags, 0, 30, true);
+    }
+    const auto inventoryBefore = inventory.powerups;
+    const auto animatorBefore = figure.animator().checkpoint();
+    const u32 texturesBefore = fixture.device.texturesCreated;
+    const Vec3 direction{0.6f, 0, 0.8f};
+    const auto target = aimed ? std::optional<Vec3>{{20, 8, 30}} : std::nullopt;
+    const auto prepared =
+        fixture.arsenal.prepareWeapon(fixture.actor, figure, direction, 2, spreads, target);
+    REQUIRE(prepared);
+    CHECK(prepared->soundFlags == flags);
+    CHECK_FALSE(prepared->pojo);
+    CHECK(prepared->weapon.flags == (flags & ~powerup::kSuperShot));
+    CHECK(prepared->weapon.direction == direction);
+    CHECK(prepared->weapon.scale == 2);
+    CHECK(prepared->weapon.target == target);
+    const s32 count = spreads ? PowerupEffects::of(inventory).shots() : 1;
+    CHECK(prepared->weapon.shots == count);
+    REQUIRE(prepared->missiles.size() == static_cast<usize>(count));
+    for (const auto& missile : prepared->missiles) {
+        CHECK(missile.spec == &MissileSpec::of(fixture.actor.save().character));
+        CHECK(missile.scale == 2);
+        CHECK(missile.damage == 2 * prepared->weapon.damage);
+        CHECK(missile.flags == prepared->weapon.flags);
+        CHECK(missile.owner == fixture.actor.player());
+        CHECK(missile.velocity.has_value() == aimed);
+        CHECK(missile.model == nullptr);
+        CHECK(missile.archive == nullptr);
+        CHECK(missile.textureLender == nullptr);
+        CHECK(missile.riderArchive == nullptr);
+        CHECK(missile.streak.texture == nullptr);
+        CHECK(missile.tree.empty());
+        CHECK(missile.riderTree.empty());
+        CHECK_FALSE(missile.release);
+    }
+    CHECK(inventory.powerups == inventoryBefore);
+    CHECK(figure.animator().checkpoint() == animatorBefore);
+    CHECK(fixture.device.texturesCreated == texturesBefore);
+    CHECK(fixture.arsenal.missiles().count() == 0);
+    CHECK(fixture.arsenal.missiles().visuals().count() == 0);
+    CHECK(fixture.effects.count() == 0);
+    fixture.arsenal.clear();
+    CHECK_FALSE(
+        fixture.arsenal.prepareWeapon(fixture.actor, figure, direction, 2, spreads, target));
+}
+
+TEST_CASE("explicit prepared provenance is canonical and never inferred from a turbo animation",
+          "[game][world][player-arsenal][weapon-prepare][assets]") {
+    Fixture fixture;
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    REQUIRE(fixture.weapons.load(root / "WEAPONS"));
+    fixture.actor.save().character = 1;
+    auto figure = PlayerFigure::load(fixture.device, root, fixture.actor.save(), false);
+    REQUIRE(figure);
+    figure->animate(0, 1, 1.0f / 60, PlayerDeed::TurboStrong);
+    REQUIRE(figure->animator().action() == PlayerAnimator::Action::TurboStrong);
+    REQUIRE_FALSE(figure->animator().released());
+    REQUIRE_FALSE(figure->animator().strongReleased());
+    auto& inventory = fixture.actor.save().progress().inventory;
+    inventory.addPowerup(powerup::kWeapon, powerup::kRapidFire | powerup::kFiveWayShot, 0, 30);
+    const MissileRelease identity{1, figure->animator().player().generation(), false, 0, 0x10000};
+    REQUIRE(identity.generation != 0);
+    auto requested = identity;
+    bool eligible = true;
+    bool spreads = false;
+    f32 scale = 1;
+    std::optional<Vec3> target;
+    SECTION("canonical turbo event is single even with five-way equipped") {}
+    SECTION("another character cannot be attributed") {
+        requested.character = 0;
+        eligible = false;
+    }
+    SECTION("another animation generation cannot be attributed") {
+        ++requested.generation;
+        eligible = false;
+    }
+    SECTION("a noncanonical fan member is not a release identity") {
+        requested.ordinal = 1;
+        eligible = false;
+    }
+    SECTION("ordinary metadata cannot replace a turbo event identity") {
+        requested.emission = 0;
+        eligible = false;
+    }
+    SECTION("a zero encoded row slot is invalid") {
+        requested.emission = 0xFFFF;
+        eligible = false;
+    }
+    SECTION("an overflowing encoded row slot is invalid") {
+        requested.emission = 0x810000;
+        eligible = false;
+    }
+    SECTION("turbo cannot claim a doubled strong throw") {
+        requested.strong = true;
+        eligible = false;
+    }
+    SECTION("a spread physical request is not a native turbo volley") {
+        spreads = true;
+        eligible = false;
+    }
+    SECTION("a doubled physical request is not a native turbo volley") {
+        scale = 2;
+        eligible = false;
+    }
+    SECTION("an auto-aimed physical request is not a native turbo volley") {
+        target = Vec3{20, 8, 30};
+        eligible = false;
+    }
+    SECTION("a reaction does not admit a turbo event identity") {
+        figure->animate(0, 1, 1.0f / 60, PlayerDeed::Flinch);
+        requested.generation = figure->animator().player().generation();
+        eligible = false;
+    }
+    SECTION("unsupported inventory preserves flight but not replay provenance") {
+        inventory.addPowerup(powerup::kWeapon, powerup::kReflect, 0, 30);
+        eligible = false;
+    }
+    SECTION("Pojo substitution preserves flight but not replay provenance") {
+        inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 30);
+        eligible = false;
+    }
+    const auto position = fixture.actor.position();
+    const auto inventoryBefore = inventory.powerups;
+    const u32 texturesBefore = fixture.device.texturesCreated;
+    const auto prepared = fixture.arsenal.prepareWeapon(
+        fixture.actor, *figure, fixture.actor.facing(), scale, spreads, target, requested);
+    REQUIRE(prepared);
+    REQUIRE(prepared->missiles.size() == (spreads ? 5 : 1));
+    for (usize ordinal = 0; ordinal < prepared->missiles.size(); ++ordinal) {
+        const auto& launch = prepared->missiles[ordinal];
+        CHECK(launch.release.has_value() == eligible);
+        if (eligible) {
+            auto expected = identity;
+            expected.ordinal = static_cast<u8>(ordinal);
+            CHECK(launch.release == expected);
+        }
+    }
+    CHECK(fixture.actor.position() == position);
+    CHECK(inventory.powerups == inventoryBefore);
+    CHECK(fixture.device.texturesCreated == texturesBefore);
+    CHECK(fixture.arsenal.missiles().count() == 0);
+    const auto untagged =
+        fixture.arsenal.prepareWeapon(fixture.actor, *figure, fixture.actor.facing(), 1, false);
+    REQUIRE(untagged);
+    REQUIRE(untagged->missiles.size() == 1);
+    CHECK_FALSE(untagged->missiles.front().release);
+    fixture.arsenal.launchWeapon(fixture.actor, figure.get(), fixture.actor.facing(), scale,
+                                 spreads, target, requested);
+    REQUIRE(fixture.arsenal.missiles().count() == prepared->missiles.size());
+    for (usize index = 0; index < prepared->missiles.size(); ++index) {
+        CHECK(fixture.arsenal.missiles().missile(index).release ==
+              prepared->missiles[index].release);
+    }
+    fixture.arsenal.clear();
+}
+
+TEST_CASE("prepared ordinary and single-volley releases match live native missile physics",
+          "[game][world][player-arsenal][weapon-prepare][assets]") {
+    Fixture fixture;
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    REQUIRE(fixture.classes.load(root / "PDATA"));
+    REQUIRE(fixture.weapons.load(root / "WEAPONS"));
+    const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+    CharacterSave save;
+    save.character = character;
+    save.progress().experience = levelExperience(35);
+    fixture.actor.spawn(2, save, fixture.classes.stats(character), {10, 3, 20}, 0.4f);
+    auto figure = PlayerFigure::load(fixture.device, root, save, false);
+    REQUIRE(figure);
+    for (const u32 flags : {0U, powerup::kFiveWayShot | powerup::kRapidFire}) {
+        if (flags != 0) {
+            fixture.actor.save().progress().inventory.addPowerup(powerup::kWeapon, flags, 0, 30);
+        }
+        for (const bool spreads : {false, true}) {
+            for (const f32 scale : {1.0f, 2.0f}) {
+                for (const bool aimed : {false, true}) {
+                    CAPTURE(character, flags, spreads, scale, aimed);
+                    const auto target = aimed ? std::optional<Vec3>{{21, 9, 30}} : std::nullopt;
+                    const Vec3 direction{0.6f, 0, 0.8f};
+                    const auto prepared = fixture.arsenal.prepareWeapon(
+                        fixture.actor, *figure, direction, scale, spreads, target);
+                    REQUIRE(prepared);
+                    fixture.arsenal.missiles().clear();
+                    fixture.arsenal.launchWeapon(fixture.actor, figure.get(), direction, scale,
+                                                 spreads, target);
+                    REQUIRE(fixture.arsenal.missiles().count() == prepared->missiles.size());
+                    for (usize index = 0; index < prepared->missiles.size(); ++index) {
+                        const auto& expected = prepared->missiles[index];
+                        const auto& actual = fixture.arsenal.missiles().missile(index);
+                        CHECK(actual.position == expected.position);
+                        CHECK(actual.velocity ==
+                              expected.velocity.value_or(PlayerMissiles::launchVelocity(
+                                  expected.direction, expected.speed, expected.reach,
+                                  expected.spec->weight)));
+                        CHECK(actual.spec == expected.spec);
+                        CHECK(actual.damage == expected.damage);
+                        CHECK(actual.scale == expected.scale);
+                        CHECK(actual.flags == expected.flags);
+                        CHECK(actual.wallSound == expected.wallSound);
+                        CHECK(actual.release == expected.release);
+                    }
+                }
+            }
+        }
+    }
+    fixture.arsenal.clear();
+}
+
+TEST_CASE("plain replay preparation matches the live arsenal for every class and strength",
+          "[game][world][player-arsenal][weapon-replay][assets]") {
+    Fixture f;
+    const auto directory = test::assetOrSkip("PDATA");
+    REQUIRE(f.classes.load(directory));
+    PlayerFigure figure;
+    for (s32 character = 0; character <= kSumnerClass; ++character) {
+        for (const s32 level : {1, 50, 99}) {
+            for (const f32 scale : {1.0f, 2.0f}) {
+                CAPTURE(character, level, scale);
+                CharacterSave save;
+                save.character = character;
+                save.progress().experience = levelExperience(level);
+                const auto* stats = f.classes.stats(character);
+                f.actor.spawn(2, save, stats, {10, 3, 20}, 0.4f);
+                auto prepared = f.arsenal.weaponThrow(f.actor, 0);
+                REQUIRE(prepared);
+                s32 stat = 0;
+                Vec3 hand{0};
+                if (stats != nullptr) {
+                    const auto block = displayStats(*stats, level, save.progress());
+                    stat = MissileSpec::byMagic(character) ? block.magic() : block.strength();
+                    hand = stats->weaponOffset;
+                }
+                CHECK(prepared->speed == PlayerMissiles::speedFor(stat));
+                CHECK(prepared->damage == PlayerMissiles::damageFor(stat));
+                CHECK(prepared->hand == hand);
+                prepared->scale = scale;
+                prepared->target = Vec3{15, 7, 40};
+                PlayerMissiles replay;
+                REQUIRE(replay.launch(PlayerMissiles::weaponLaunches(*prepared).front()));
+                f.arsenal.launchWeapon(f.actor, &figure, f.actor.facing(), scale, false,
+                                       prepared->target);
+                REQUIRE(f.arsenal.missiles().count() == 1);
+                const auto& live = f.arsenal.missiles().missile(0);
+                CHECK(PlayerMissiles::flightCheckpoint(live) ==
+                      PlayerMissiles::flightCheckpoint(replay.missile(0)));
+                CHECK(live.damage == replay.missile(0).damage);
+                CHECK(live.spec == replay.missile(0).spec);
+                for (s32 tick = 0; tick < 15; ++tick) {
+                    replay.update(1.0f / 60, nullptr);
+                    f.arsenal.missiles().update(1.0f / 60, nullptr);
+                    CHECK(PlayerMissiles::flightCheckpoint(f.arsenal.missiles().missile(0)) ==
+                          PlayerMissiles::flightCheckpoint(replay.missile(0)));
+                }
+                f.arsenal.missiles().clear();
+            }
+        }
+    }
+}
+
+TEST_CASE("plain weapon clock queries use the native visual bank without starting it",
+          "[game][world][player-arsenal][weapon-replay][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const auto character = GENERATE(1, 2, 6);
+    Fixture f;
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    f.actor.save().character = character;
+    auto figure = PlayerFigure::load(f.device, root, f.actor.save(), false);
+    REQUIRE(figure);
+    CHECK_FALSE(f.arsenal.weaponTextureFrame(*figure));
+    f.arsenal.missiles().update(0.75f, nullptr);
+    CHECK_FALSE(f.arsenal.weaponTextureFrame(*figure));
+    CHECK(f.arsenal.missiles().visuals().count() == 0);
+    f.arsenal.launchWeapon(f.actor, figure.get(), f.actor.facing(), 1, false);
+    REQUIRE(f.arsenal.missiles().visuals().count() == 1);
+    REQUIRE(f.arsenal.weaponTextureFrame(*figure));
+    CHECK(*f.arsenal.weaponTextureFrame(*figure) == 0);
+    f.arsenal.missiles().update(0.125f, nullptr);
+    CHECK(*f.arsenal.weaponTextureFrame(*figure) == Approx(3.75f));
+    const auto& effects = f.arsenal.missiles().visuals();
+    CHECK(*f.arsenal.weaponTextureFrame(*figure) == effects.textureFrame(effects.effect(0)));
+    f.arsenal.clear(); // The projectile pool borrows the figure's archive.
+    CHECK_FALSE(f.arsenal.weaponTextureFrame(*figure));
+}
+
+TEST_CASE("plain weapon birth retains release provenance after the player is interrupted",
+          "[game][world][player-arsenal][weapon-replay][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const bool strong = GENERATE(false, true);
+    Fixture f;
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    f.actor.save().character = 1;
+    auto figure = PlayerFigure::load(f.device, root, f.actor.save(), false);
+    REQUIRE(figure);
+    // An idle/scripted launch has no action release to acknowledge.
+    f.arsenal.launchWeapon(f.actor, figure.get(), f.actor.facing(), 1, false);
+    REQUIRE(f.arsenal.missiles().count() == 1);
+    CHECK_FALSE(f.arsenal.missiles().missile(0).release);
+    for (s32 tick = 0;
+         tick < 180 && !figure->animator().released() && !figure->animator().strongReleased();
+         ++tick) {
+        figure->animate(0, 1, 1.0f / 60, strong ? PlayerDeed::StrongAttack : PlayerDeed::Attack);
+    }
+    REQUIRE((figure->animator().released() || figure->animator().strongReleased()));
+    const MissileRelease expected{1, figure->animator().player().generation(), strong};
+    bool eligible = true;
+    auto multiplayer = MultiplayerMode::Normal;
+    auto& inventory = f.actor.save().progress().inventory;
+    SECTION("ordinary or strong native throw") {}
+    SECTION("amulet throws retain native release provenance") {
+        inventory.addPowerup(powerup::kWeapon, 1, 0, 30);
+    }
+    SECTION("rapid and spread throws keep native fan provenance") {
+        const u32 flags =
+            GENERATE(powerup::kRapidFire, powerup::kThreeWayShot, powerup::kFiveWayShot,
+                     powerup::kRapidFire | powerup::kThreeWayShot, PlayerMissiles::kPlainModifiers);
+        inventory.addPowerup(powerup::kWeapon, flags, 0, 30);
+    }
+    SECTION("spread plus an unsupported weapon remains authoritative") {
+        inventory.addPowerup(powerup::kWeapon, powerup::kFiveWayShot | powerup::kReflect, 0, 30);
+        eligible = false;
+    }
+    SECTION("Pojo substitutions remain authoritative") {
+        inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 30);
+        eligible = false;
+    }
+    SECTION("competitive throws remain authoritative") {
+        multiplayer = MultiplayerMode::Stun;
+        eligible = false;
+    }
+    f.arsenal.bind({f.device,
+                    f.classes,
+                    f.weapons,
+                    f.collision,
+                    f.effects,
+                    f.audio,
+                    nullptr,
+                    {},
+                    false,
+                    false,
+                    nullptr,
+                    &multiplayer});
+    f.arsenal.launchWeapon(f.actor, figure.get(), f.actor.facing(), strong ? 2.0f : 1.0f, true);
+    REQUIRE(f.arsenal.missiles().count() > 0);
+    const auto before = f.arsenal.missiles().missile(0).release;
+    CHECK(before.has_value() == eligible);
+    if (eligible) {
+        CHECK(*before == expected);
+    }
+    const auto prepared = f.arsenal.weaponThrow(f.actor, figure->animator().attackSeconds());
+    REQUIRE(prepared);
+    CHECK(f.arsenal.missiles().count() == static_cast<usize>(prepared->shots));
+    const auto launches = PlayerMissiles::weaponLaunches(*prepared);
+    for (usize ordinal = 0; ordinal < f.arsenal.missiles().count(); ++ordinal) {
+        const auto& shot = f.arsenal.missiles().missile(ordinal);
+        CHECK(shot.flags == prepared->flags);
+        CHECK(shot.wallSound == launches[ordinal].wallSound);
+        CHECK(shot.release.has_value() == eligible);
+        if (eligible) {
+            auto identity = expected;
+            identity.ordinal = static_cast<u8>(ordinal);
+            CHECK(*shot.release == identity);
+        }
+    }
+    figure->animate(0, 1, 1.0f / 60, PlayerDeed::Flinch);
+    figure->animate(0, 1, 1.0f / 60, PlayerDeed::None);
+    CHECK_FALSE(figure->animator().released());
+    CHECK_FALSE(figure->animator().strongReleased());
+    CHECK(f.arsenal.missiles().missile(0).release == before);
+    f.arsenal.missiles().update(1.0f / 60, nullptr);
+    CHECK(f.arsenal.missiles().missile(0).release == before);
+    f.arsenal.clear();
+}
+
+TEST_CASE("native weapon sound capture reports the played cue once per released fan",
+          "[game][world][player-arsenal][weapon-sound][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const auto flags = GENERATE(0U, 1U, 2U, 3U, 4U, powerup::kRapidFire, powerup::kThreeWayShot,
+                                powerup::kRapidFire | powerup::kFiveWayShot | 4U);
+    const bool strong = GENERATE(false, true);
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    Fixture f;
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    f.audio.open(root, &sounds, nullptr);
+    f.arsenal.bind({f.device, f.classes, f.weapons, f.collision, f.effects, f.audio, &sounds, {}});
+    f.actor.save().character = 1;
+    auto figure = PlayerFigure::load(f.device, root, f.actor.save(), false);
+    REQUIRE(figure);
+    if (flags != 0) {
+        f.actor.save().progress().inventory.addPowerup(powerup::kWeapon, flags, 0, 30);
+    }
+    for (s32 tick = 0;
+         tick < 180 && !figure->animator().released() && !figure->animator().strongReleased();
+         ++tick) {
+        figure->animate(0, 1, 1.0f / 60, strong ? PlayerDeed::StrongAttack : PlayerDeed::Attack);
+    }
+    REQUIRE((figure->animator().released() || figure->animator().strongReleased()));
+    const MissileRelease release{1, figure->animator().player().generation(), strong, 0};
+    SoundSet common;
+    REQUIRE(common.load(root / "AUDIO/COMMON"));
+    constexpr std::array<std::string_view, 5> kThrowCues{"", "S_AMULETFIRE", "S_AMULETLIGHTNI",
+                                                         "S_AMULETLIGHT", "S_AMULETACID"};
+    const bool fan = (flags & (powerup::kThreeWayShot | powerup::kFiveWayShot)) != 0;
+    SoundSet& expectedBank = fan || (flags & 0xFU) != 0 ? common : figure->voice();
+    const auto name = fan                   ? std::string{"S_SUPERSHOT"}
+                      : (flags & 0xFU) != 0 ? std::string{kThrowCues[flags & 0xFU]}
+                                            : std::format("S_{}THROW", classCode(1));
+    const auto expectedCall = expectedBank.find(name);
+    REQUIRE(expectedCall);
+    const auto expectedSequence = expectedBank.sequence(*expectedCall);
+    std::vector<PlayerArsenal::WeaponSound> outer;
+    std::vector<PlayerArsenal::WeaponSound> inner;
+    std::vector<SoundPlayer::Event> played;
+    const SoundPlayer::Capture audioCapture(&sounds, [&](const auto& event) {
+        if (event.kind == SoundPlayer::Event::Kind::Play) {
+            played.push_back(event);
+        }
+    });
+    const auto launch = [&] {
+        f.arsenal.missiles().clear();
+        f.arsenal.launchWeapon(f.actor, figure.get(), f.actor.facing(), strong ? 2.0f : 1.0f, true);
+        const auto worn = PowerupEffects::of(f.actor.save().progress().inventory);
+        CHECK(f.arsenal.missiles().count() == static_cast<usize>(worn.shots()));
+    };
+    const auto check = [&](const PlayerArsenal::WeaponSound& observed) {
+        REQUIRE_FALSE(played.empty());
+        CHECK(observed.owner == f.actor.player());
+        CHECK(observed.release == release);
+        CHECK(observed.handle != kNoSound);
+        CHECK(observed.handle == played.back().handle);
+        CHECK(played.back().bank == expectedSequence.bank);
+        CHECK(played.back().call == *expectedCall);
+        CHECK(sounds.isPlaying(observed.handle));
+    };
+    {
+        const PlayerArsenal::SoundCapture capture(
+            &f.arsenal, [&](const auto& event) { outer.push_back(event); });
+        launch();
+        REQUIRE(outer.size() == 1);
+        REQUIRE(played.size() == 1);
+        check(outer.back());
+        {
+            const PlayerArsenal::SoundCapture nested(
+                &f.arsenal, [&](const auto& event) { inner.push_back(event); });
+            launch();
+            REQUIRE(inner.size() == 1);
+            CHECK(outer.size() == 1);
+            REQUIRE(played.size() == 2);
+            check(inner.back());
+        }
+        launch();
+        REQUIRE(outer.size() == 2);
+        REQUIRE(played.size() == 3);
+        check(outer.back());
+    }
+    launch(); // Leaving the capture scope changes no offline sound dispatch.
+    CHECK(outer.size() == 2);
+    CHECK(inner.size() == 1);
+    CHECK(played.size() == 4);
+    {
+        const PlayerArsenal::SoundCapture absent(
+            nullptr, [&](const auto& event) { outer.push_back(event); });
+        launch();
+    }
+    CHECK(outer.size() == 2);
+    CHECK(played.size() == 5);
+    f.arsenal.clear();
+    f.audio.close();
+    sounds.stopAll();
+}
+
+TEST_CASE("native weapon sound capture excludes scripted unsupported and blocked releases",
+          "[game][world][player-arsenal][weapon-sound][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    Fixture f;
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    f.actor.save().character = 1;
+    auto figure = PlayerFigure::load(f.device, root, f.actor.save(), false);
+    REQUIRE(figure);
+    bool scripted = false;
+    bool output = true;
+    bool blocked = false;
+    auto multiplayer = MultiplayerMode::Normal;
+    auto& inventory = f.actor.save().progress().inventory;
+    SECTION("scripted launch without a native release latch") {
+        scripted = true;
+    }
+    SECTION("reflective rider remains authoritative") {
+        inventory.addPowerup(powerup::kWeapon, powerup::kReflect, 0, 30);
+    }
+    SECTION("Pojo substitution remains authoritative") {
+        inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 30);
+    }
+    SECTION("competitive projectile remains authoritative") {
+        multiplayer = MultiplayerMode::Stun;
+    }
+    SECTION("a silent native launch has no handle to observe") {
+        output = false;
+    }
+    SECTION("an obstructed muzzle only dispatches its impact") {
+        blocked = true;
+    }
+    if (!scripted) {
+        for (s32 tick = 0; tick < 180 && !figure->animator().released(); ++tick) {
+            figure->animate(0, 1, 1.0f / 60, PlayerDeed::Attack);
+        }
+        REQUIRE(figure->animator().released());
+    }
+    f.audio.open(root, output ? &sounds : nullptr, nullptr);
+    f.arsenal.bind({f.device,
+                    f.classes,
+                    f.weapons,
+                    f.collision,
+                    f.effects,
+                    f.audio,
+                    output ? &sounds : nullptr,
+                    {},
+                    false,
+                    false,
+                    nullptr,
+                    &multiplayer});
+    if (blocked) {
+        const auto throwing = f.arsenal.weaponThrow(f.actor, figure->animator().attackSeconds());
+        REQUIRE(throwing);
+        const auto muzzle = PlayerMissiles::weaponLaunches(*throwing).front().position;
+        const f32 z = muzzle.z + 0.1f;
+        const std::vector walls{
+            CollisionTriangle{
+                {0, 0, -1}, {Vec3{-100, -100, z}, Vec3{100, 100, z}, Vec3{100, -100, z}}, 0},
+            CollisionTriangle{
+                {0, 0, -1}, {Vec3{-100, -100, z}, Vec3{-100, 100, z}, Vec3{100, 100, z}}, 0}};
+        f.collision.build(walls);
+    }
+    std::vector<PlayerArsenal::WeaponSound> observed;
+    {
+        const PlayerArsenal::SoundCapture capture(
+            &f.arsenal, [&](const auto& event) { observed.push_back(event); });
+        f.arsenal.launchWeapon(f.actor, figure.get(), f.actor.facing(), 1, true);
+    }
+    CHECK(observed.empty());
+    CHECK(f.arsenal.missiles().count() == (blocked ? 0 : 1));
+    f.arsenal.clear();
+    f.audio.close();
+    sounds.stopAll();
+}
 
 usize visibleFlameTriangles(const test::FakeRenderDevice& device, const Texture* texture) {
     REQUIRE(texture != nullptr);
@@ -237,6 +831,15 @@ TEST_CASE("amulet throws retain their player streak alongside all four authored 
             CAPTURE(element);
             inventory.powerups = {};
             inventory.addPowerup(powerup::kWeapon, element, 0, 60);
+            const auto count = f.arsenal.missiles().visuals().count();
+            const auto preparedRider = f.arsenal.weaponRider(f.actor, *figure);
+            REQUIRE(preparedRider);
+            REQUIRE(preparedRider->archive == figure->effects());
+            REQUIRE(preparedRider->tree != nullptr);
+            CHECK(preparedRider->tree->name == WeaponGlow::throwTree(element));
+            REQUIRE(preparedRider->lenders.size() == 1);
+            CHECK(preparedRider->lenders.front() == &f.weapons.textures);
+            CHECK(f.arsenal.missiles().visuals().count() == count);
             f.arsenal.launchWeapon(f.actor, figure.get(), {0, 0, 1}, 1, true);
             REQUIRE(f.arsenal.missiles().count() == 1);
             const auto& shot = f.arsenal.missiles().missile(0);
@@ -254,15 +857,18 @@ TEST_CASE("amulet throws retain their player streak alongside all four authored 
                 const auto& effect = visuals.effect(i);
                 if (effect.id == shot.rider) {
                     riderFound = true;
+                    const auto currentRider = f.arsenal.weaponRider(f.actor, *figure);
+                    REQUIRE(currentRider);
+                    REQUIRE(currentRider->textureFrame);
+                    CHECK(*currentRider->textureFrame == visuals.textureFrame(effect));
+                    CHECK(effect.lenders == currentRider->lenders);
                     CHECK(effect.name == WeaponGlow::throwTree(element));
                     CHECK(effect.position == shot.position);
-                    if (effect.particles.field().size() > 0) {
-                        CHECK(effect.particles.field().particleCount() > 0);
-                        for (usize emitter = 0; emitter < effect.particles.field().size();
-                             ++emitter) {
-                            CHECK(effect.particles.field().textureOf(emitter) !=
-                                  &f.device.whiteTexture());
-                        }
+                    REQUIRE(effect.particles.field().size() > 0);
+                    CHECK(effect.particles.field().particleCount() > 0);
+                    for (usize emitter = 0; emitter < effect.particles.field().size(); ++emitter) {
+                        CHECK(effect.particles.field().textureOf(emitter) !=
+                              &f.device.whiteTexture());
                     }
                 }
             }

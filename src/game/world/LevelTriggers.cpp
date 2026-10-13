@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <unordered_set>
 #include <utility>
 
 #include "engine/core/Types.h"
@@ -296,7 +297,7 @@ void LevelTriggers::refreshEligibility(s32 players) {
 }
 
 void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
-                                ItemArchive& items) {
+                                ItemArchive& items, ItemArchive* realmItems) {
     m_figures.clear();
     for (const auto& trigger : m_triggers) {
         const auto& instance = layout.itemInstances()[static_cast<usize>(trigger.instance)];
@@ -309,7 +310,8 @@ void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
         auto figure = std::make_unique<ItemFigure>();
         // Marker-only triggers have no tree. Preserve authored height: these pads
         // may sit on a moving bridge rather than on the static collision floor.
-        if (!figure->place(device, items, info.name, instance, nullptr)) {
+        ItemArchive& art = itemArchiveForTree(items, info.name, realmItems);
+        if (!figure->place(device, art, info.name, instance, nullptr)) {
             figure.reset();
         } else {
             figure->placeAt(trigger.placement);
@@ -753,6 +755,24 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
             m_openings.push_back(openingOf(target, false));
         }
     }
+    stepMotion(seconds, scene, collision, true);
+    for (usize i = 0; i < m_figures.size(); ++i) {
+        if (m_figures[i] == nullptr || !m_triggers[i].enabled) {
+            continue;
+        }
+        auto& figure = *m_figures[i];
+        figure.update(seconds);
+        if (m_triggers[i].fired && figure.sequence() == 1 && figure.finished()) {
+            figure.play(2, true);
+        } else if (!m_triggers[i].fired && figure.sequence() == 3 && figure.finished()) {
+            figure.play(0, true);
+        }
+    }
+    finishMotion(animator, collision, true);
+}
+
+void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* collision,
+                               bool report) {
     // Fields thin out a step a game frame.
     m_frameRemainder += seconds * kFrameRate;
     const f32 frames = std::floor(m_frameRemainder);
@@ -769,7 +789,7 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
                 if (std::abs(goal - target.height) <= kHeightTolerance) {
                     target.height = goal;
                     target.settled = true;
-                    if (std::abs(distance) > kHeightTolerance) {
+                    if (report && std::abs(distance) > kHeightTolerance) {
                         m_settled.push_back(openingOf(target, false));
                     }
                     if (!target.forced && target.open &&
@@ -798,21 +818,15 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
         applyAlpha(target, scene, collision);
         if (!target.settled && target.alpha == goal) {
             target.settled = true;
-            m_settled.push_back(openingOf(target, false));
+            if (report) {
+                m_settled.push_back(openingOf(target, false));
+            }
         }
     }
-    for (usize i = 0; i < m_figures.size(); ++i) {
-        if (m_figures[i] == nullptr || !m_triggers[i].enabled) {
-            continue;
-        }
-        auto& figure = *m_figures[i];
-        figure.update(seconds);
-        if (m_triggers[i].fired && figure.sequence() == 1 && figure.finished()) {
-            figure.play(2, true);
-        } else if (!m_triggers[i].fired && figure.sequence() == 3 && figure.finished()) {
-            figure.play(0, true);
-        }
-    }
+}
+
+void LevelTriggers::finishMotion(const WorldAnimator& animator, WorldCollision* collision,
+                                 bool report) {
     // An animated target is done once its animation has run to the end.
     for (Target& target : m_targets) {
         if (target.settled || !target.animated) {
@@ -821,7 +835,9 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
         if (const auto track = animator.trackOf(target.object);
             track.has_value() && animator.finished(*track)) {
             target.settled = true;
-            m_settled.push_back(openingOf(target, false));
+            if (report) {
+                m_settled.push_back(openingOf(target, false));
+            }
         }
         if (collision != nullptr && (target.kind & LevelTrigger::kStaysSolid) == 0) {
             collision->setSolid(target.object, target.settled);
@@ -836,6 +852,84 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
                 target.object, !target.settled && (heightTarget || target.wholePartyReady));
         }
     }
+}
+
+bool LevelTriggers::Motion::Target::valid() const {
+    return object >= 0 && object < 65535 && std::isfinite(alpha) && alpha >= 0 && alpha <= 1 &&
+           std::isfinite(height) && std::abs(height) <= 1'000'000;
+}
+
+bool LevelTriggers::Motion::valid() const {
+    if (!std::isfinite(frameRemainder) || frameRemainder < 0 || frameRemainder >= 1 ||
+        targets.size() > kMaxTargets) {
+        return false;
+    }
+    std::unordered_set<s32> objects;
+    for (const auto& target : targets) {
+        if (!target.valid() || !objects.insert(target.object).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+LevelTriggers::Motion LevelTriggers::motion() const {
+    Motion result;
+    result.frameRemainder = m_frameRemainder;
+    result.targets.reserve(m_targets.size());
+    for (const auto& target : m_targets) {
+        result.targets.push_back({target.object, target.open, target.settled, target.pressed,
+                                  target.wholePartyReady, target.returning, target.forced,
+                                  target.alpha, target.height});
+    }
+    return result;
+}
+
+bool LevelTriggers::acceptsMotion(const Motion& state) const {
+    if (!state.valid() || state.targets.size() != m_targets.size()) {
+        return false;
+    }
+    for (usize index = 0; index < m_targets.size(); ++index) {
+        const auto& target = m_targets[index];
+        const auto& cursor = state.targets[index];
+        if (cursor.object != target.object || !std::isfinite(target.closedHeight) ||
+            !std::isfinite(target.openHeight) ||
+            cursor.height < std::min(target.closedHeight, target.openHeight) - kHeightTolerance ||
+            cursor.height > std::max(target.closedHeight, target.openHeight) + kHeightTolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool LevelTriggers::restoreMotion(const Motion& state) {
+    if (!acceptsMotion(state)) {
+        return false;
+    }
+    for (usize index = 0; index < m_targets.size(); ++index) {
+        auto& target = m_targets[index];
+        const auto& cursor = state.targets[index];
+        target.open = cursor.open;
+        target.settled = cursor.settled;
+        target.pressed = cursor.pressed;
+        target.wholePartyReady = cursor.wholePartyReady;
+        target.returning = cursor.returning;
+        target.forced = cursor.forced;
+        target.alpha = cursor.alpha;
+        target.height = cursor.height;
+    }
+    m_frameRemainder = state.frameRemainder;
+    return true;
+}
+
+bool LevelTriggers::advanceMotion(f32 seconds, const WorldAnimator& animator, WorldScene& scene,
+                                  WorldCollision* collision) {
+    if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) {
+        return false;
+    }
+    stepMotion(seconds, scene, collision, false);
+    finishMotion(animator, collision, false);
+    return true;
 }
 
 } // namespace gdl::game

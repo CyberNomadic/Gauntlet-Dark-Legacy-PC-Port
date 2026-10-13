@@ -1,5 +1,7 @@
 #include "game/netplay/ReplicaPose.h"
 
+#include <utility>
+
 namespace gdl::game {
 bool ReplicaPose::accepts(const TreeInfo* tree, const CombatAnimation& animation) {
     if (tree == nullptr || !animation.valid() || animation.generation == 0 ||
@@ -43,6 +45,28 @@ bool ReplicaPose::show(const CombatAnimation& animation) {
     if (animation.transition < 1 && m_from.posed()) {
         m_pose.blend(m_from, animation.transition);
     }
+    return true;
+}
+bool ReplicaPose::show(const CombatAnimation& animation,
+                       const PlayerAnimator::TransitionPose& transition) {
+    if (!accepts(m_tree, animation) || animation.transition >= 1 || !transition.valid()) {
+        return false;
+    }
+    TreePose current;
+    TreePose previous;
+    if (!current.restore(*m_tree, transition.current) ||
+        !previous.restore(*m_tree, transition.previous)) {
+        return false;
+    }
+    // The checkpoint carries the exact interrupted stance, but the displayed
+    // cursor can lie between host ticks. Re-sample its authored destination and
+    // blend from that stance, not from the last pose this renderer happened to
+    // draw. Copying checkpoint.current here would freeze every fractional render.
+    current.evaluate(*m_tree, animation.sequence, animation.frame, false, true);
+    current.blend(previous, animation.transition);
+    m_pose = std::move(current);
+    m_from = std::move(previous);
+    m_generation = animation.generation;
     return true;
 }
 } // namespace gdl::game

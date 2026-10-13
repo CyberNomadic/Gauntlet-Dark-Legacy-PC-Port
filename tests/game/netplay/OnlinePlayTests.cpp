@@ -26,19 +26,24 @@ struct RuntimePair {
     OnlinePlay host;
     OnlinePlay guest;
 
-    explicit RuntimePair(s32 classOffset = 0) {
+    explicit RuntimePair(s32 classOffset = 0, bool pendingPromotion = false,
+                         bool pendingRelic = false) {
         REQUIRE(catalog.load(root));
         context.config = &config;
         REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
         context.strings = &strings;
         context.levels = &catalog;
         context.unpackedRoot = root;
-        const auto choice = [](s32 device, s32 character, s32 color) {
+        const auto choice = [pendingPromotion, pendingRelic](s32 device, s32 character, s32 color) {
             CharacterSave save;
             save.name = "ONLINE";
             save.character = character;
             save.color = color;
             save.progress().experience = levelExperience(60);
+            save.progress().promotedLevel = pendingPromotion ? 20 : -1;
+            if (pendingRelic) {
+                save.progress().relics.runes = save.progress().relics.pendingRunes = 1;
+            }
             save.progress().health = 9000;
             save.classUnlock = 0xFFFF;
             save.moviesSeen = {"PRIVATE"};
@@ -86,6 +91,356 @@ struct RuntimePair {
         REQUIRE(guest.phase() != OnlinePlay::Phase::Failed);
     }
 };
+
+TEST_CASE("native online updates submit new input and snapshots before returning",
+          "[netplay][online-play][assets][latency]") {
+    RuntimePair pair;
+    pair.open();
+    for (s32 tick = 0; tick < 150; ++tick) {
+        pair.step();
+    }
+    const auto sentBefore = pair.wire.guest.latency().sendQueue().summary().count;
+    const auto hostPolls = pair.wire.hostWire.polls;
+    const auto guestPolls = pair.wire.guestWire.polls;
+    REQUIRE(pair.guest.update({}) != OnlinePlay::Phase::Failed);
+    const auto sampled = pair.wire.guest.sampledInputs();
+    REQUIRE(sampled.size() == 2);
+    const u64 inputTick = sampled.front().tick;
+    CHECK(pair.wire.guest.latency().sendQueue().summary().count == sentBefore + 2);
+    CHECK(pair.wire.guestWire.polls == guestPolls + 1);
+    CHECK(pair.wire.hostWire.polls == hostPolls);
+    // Receiving only, with no second guest update, must admit that exact sample.
+    pair.wire.hostSession.update(0);
+    CHECK(pair.wire.host.inputDiagnostics(2).received == inputTick);
+
+    while (pair.wire.host.tick() % PlayReplication::kSnapshotStride != 0) {
+        pair.step();
+    }
+    const auto capturedTick = pair.wire.host.tick();
+    REQUIRE(pair.host.update({}) != OnlinePlay::Phase::Failed);
+    pair.wire.guestSession.update(0);
+    REQUIRE(pair.wire.guest.playback().latest());
+    CHECK(pair.wire.guest.playback().latest()->motion.tick == capturedTick);
+}
+
+TEST_CASE("native guest movement starts locally before the host consumes its input",
+          "[netplay][online-play][assets][prediction]") {
+    const u64 latency = GENERATE(0, 3, 6, 9);
+    RuntimePair pair;
+    pair.open();
+    for (s32 tick = 0; tick < 150; ++tick) {
+        pair.step();
+    }
+    pair.draw();
+    REQUIRE(pair.guest.shown());
+    const auto* confirmed = pair.wire.guest.playback().latest();
+    REQUIRE(confirmed);
+    REQUIRE(confirmed->players[2]->movement.enabled);
+    pair.wire.hostWire.latency = latency;
+    pair.wire.guestWire.latency = latency;
+    const auto before = confirmed->motion.players[2]->position;
+    const auto hostBefore = pair.host.hostScene()->actor(2)->position();
+    SessionInputs::Frame input;
+    input[0].move = {{1, 0}, 1};
+    pair.step({}, input);
+    pair.draw();
+    CHECK(pair.guest.shown()->motion.players[2]->position != before);
+    CHECK(pair.host.hostScene()->actor(2)->position() == hostBefore);
+    CHECK(pair.guest.predictionMetrics().samples > 0);
+    CHECK_FALSE(pair.guest.hostScene());
+    s32 hostConfirmedAt = -1;
+    for (s32 tick = 1; tick <= 60; ++tick) {
+        pair.step({}, input);
+        pair.draw();
+        const auto* latest = pair.wire.guest.playback().latest();
+        if (hostConfirmedAt < 0 && latest->motion.players[2]->position != before) {
+            hostConfirmedAt = tick;
+        }
+    }
+    CAPTURE(latency, hostConfirmedAt, pair.guest.predictionMetrics().largestCorrection);
+    CHECK(hostConfirmedAt >= static_cast<s32>(latency));
+    CHECK(hostConfirmedAt < 60);
+    CHECK(pair.guest.predictionMetrics().resolvedDeadlineMs > 0);
+}
+
+TEST_CASE("guest tower audio and promotion figures follow the host without a gameplay scene",
+          "[netplay][online-play][assets][guest-presentation]") {
+    AudioMixer hostMixer(48000);
+    AudioMixer guestMixer(48000);
+    SoundPlayer hostSounds(hostMixer);
+    SoundPlayer guestSounds(guestMixer);
+    guestSounds.setCategoryVolume(SoundCategory::Music, 0);
+    RuntimePair pair(0, true);
+    const AssetLocator assets(pair.root);
+    auto hostContext = pair.context;
+    auto guestContext = pair.context;
+    hostContext.sounds = &hostSounds;
+    guestContext.sounds = &guestSounds;
+    hostContext.assets = guestContext.assets = &assets;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{0};
+    REQUIRE(
+        pair.guest.open(pair.guestDevice, guestContext, pair.wire.guestSession, pair.guestParty));
+    REQUIRE(pair.host.open(pair.hostDevice, hostContext, pair.wire.hostSession, pair.hostParty,
+                           LevelRef::tower(), options));
+    bool audible = false;
+    bool sumner = false;
+    bool promotion = false;
+    bool caption = false;
+    std::vector<f32> pcm(usize{800} * 2);
+    for (usize tick = 0; tick < 240; ++tick) {
+        pair.step();
+        pair.draw();
+        hostMixer.mix(pcm);
+        guestMixer.mix(pcm);
+        audible = audible || std::ranges::any_of(pcm, [](f32 value) { return value != 0; });
+        hostSounds.update();
+        guestSounds.update();
+        const auto* shown = pair.guest.shown();
+        if (shown == nullptr) {
+            continue;
+        }
+        for (const auto& figure : shown->projectiles) {
+            if (figure.source == ProjectileSource::Sumner) {
+                sumner = true;
+                CHECK(Vec3{figure.placement[3]} == pair.host.hostScene()->sumner().position());
+            }
+            if (figure.source == ProjectileSource::Promotion) {
+                promotion = true;
+                CHECK(figure.placement == pair.host.hostScene()->promotion().wizardTransform());
+                CHECK(figure.flags == (ProjectileState::kUnlit | ProjectileState::kAdditive));
+            }
+        }
+        CHECK(shown->musicArea == pair.host.shown()->musicArea);
+        caption = caption || (shown->hud &&
+                              shown->hud->ceremony.kind == HudSnapshot::Ceremony::Kind::Promotion);
+    }
+    CHECK(audible);
+    CHECK(sumner);
+    CHECK(promotion);
+    CHECK(caption);
+    CHECK_FALSE(pair.guest.hostScene());
+    // Music and effects are independent local mixer categories. Prove that
+    // the audible result above was not just the soundtrack masking absent cues.
+    guestSounds.setCategoryVolume(SoundCategory::Effects, 0);
+    guestSounds.setCategoryVolume(SoundCategory::Music, 1);
+    bool music = false;
+    for (usize tick = 0; tick < 30; ++tick) {
+        pair.step();
+        pair.draw();
+        hostMixer.mix(pcm);
+        guestMixer.mix(pcm);
+        music = music || std::ranges::any_of(pcm, [](f32 value) { return value != 0; });
+        hostSounds.update();
+        guestSounds.update();
+    }
+    CHECK(music);
+    pair.guest.close();
+    pair.host.close();
+}
+
+TEST_CASE("guest native throw audio precedes reliable confirmation without playing twice",
+          "[netplay][online-play][assets][guest-audio][predicted-audio]") {
+    const bool spread = GENERATE(false, true);
+    const bool predict = GENERATE(false, true);
+    const s32 holdTicks = GENERATE(60, 180);
+    CAPTURE(spread, predict, holdTicks);
+    AudioMixer hostMixer(48000);
+    AudioMixer guestMixer(48000);
+    SoundPlayer hostSounds(hostMixer);
+    SoundPlayer guestSounds(guestMixer);
+    RuntimePair pair;
+    const AssetLocator assets(pair.root);
+    auto hostContext = pair.context;
+    auto guestContext = pair.context;
+    hostContext.sounds = &hostSounds;
+    guestContext.sounds = &guestSounds;
+    hostContext.assets = guestContext.assets = &assets;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{0};
+    REQUIRE(
+        pair.guest.open(pair.guestDevice, guestContext, pair.wire.guestSession, pair.guestParty));
+    REQUIRE(pair.host.open(pair.hostDevice, hostContext, pair.wire.hostSession, pair.hostParty,
+                           LevelRef::tower(), options));
+    pair.guest.setMovementPrediction(predict);
+    std::vector<f32> pcm(usize{800} * 2);
+    const auto mix = [&] {
+        hostMixer.mix(pcm);
+        guestMixer.mix(pcm);
+        hostSounds.update();
+        guestSounds.update();
+    };
+    for (s32 tick = 0; tick < 180; ++tick) {
+        pair.step();
+        pair.draw();
+        mix();
+    }
+    REQUIRE(pair.host.phase() == OnlinePlay::Phase::Playing);
+    REQUIRE(pair.guest.phase() == OnlinePlay::Phase::Playing);
+    REQUIRE(pair.host.hostScene());
+    // This fixture's guest device zero owns global seat two.
+    constexpr u8 kSeat = 2;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& shooter = const_cast<PlayerRuntime&>(pair.host.hostScene()->participants()[kSeat]);
+    REQUIRE(shooter.actor.player() == kSeat);
+    if (spread) {
+        shooter.actor.save().progress().inventory.addPowerup(powerup::kWeapon,
+                                                             powerup::kFiveWayShot, 0, -1);
+    }
+    for (s32 tick = 0; tick < 30; ++tick) {
+        pair.step();
+        pair.draw();
+        mix();
+    }
+    const auto* authority = pair.wire.guest.playback().latest();
+    REQUIRE(authority);
+    REQUIRE(authority->players[kSeat]);
+    REQUIRE(authority->players[kSeat]->movement.ranged);
+    REQUIRE(authority->players[kSeat]->weapon);
+    REQUIRE(authority->players[kSeat]->weapon->shots == (spread ? 5 : 1));
+    std::string expectedBank;
+    u32 expectedCall = 0;
+    if (spread) {
+        SoundSet common;
+        REQUIRE(common.load(pair.root / "AUDIO/COMMON"));
+        const auto call = common.find("S_SUPERSHOT");
+        REQUIRE(call);
+        const auto sequence = common.sequence(*call);
+        expectedBank = sequence.bank;
+        expectedCall = sequence.call;
+    } else {
+        REQUIRE(shooter.figure);
+        const auto call = shooter.figure->throwSound();
+        REQUIRE(call);
+        const auto sequence = shooter.figure->voice().sequence(*call);
+        expectedBank = sequence.bank;
+        expectedCall = sequence.call;
+    }
+    REQUIRE_FALSE(expectedBank.empty());
+    std::vector<SoundPlayer::Event> heard;
+    std::vector<PacketTransport::Event> heldAudio;
+    const auto holdAudio = [&] {
+        auto& incoming = pair.wire.guestWire.events;
+        for (auto event = incoming.begin(); event != incoming.end();) {
+            if (event->type == PacketTransport::EventType::Message &&
+                AudioSync::recognizes(event->bytes)) {
+                heldAudio.push_back(*event);
+                event = incoming.erase(event);
+            } else {
+                ++event;
+            }
+        }
+    };
+    std::set<ShotIdentity> nativeReleases;
+    {
+        const SoundPlayer::Capture observe(&guestSounds, [&](const auto& event) {
+            if (event.kind == SoundPlayer::Event::Kind::Play && event.bank == expectedBank &&
+                event.call == expectedCall) {
+                heard.push_back(event);
+            }
+        });
+        // Hold only reliable sound commands. Native simulation, guest input and
+        // authoritative visual checkpoints continue normally. This isolates a
+        // predicted mixer start from accidentally hearing the confirmed event.
+        // The long hold outlives the rollback window: never-predicted authority
+        // must still play, while an already-heard predicted cue must stay silent.
+        for (s32 tick = 0; tick < holdTicks; ++tick) {
+            REQUIRE(pair.host.update({}) != OnlinePlay::Phase::Failed);
+            holdAudio();
+            SessionInputs::Frame input;
+            if (tick == 0) {
+                input[0].attack = true;
+                input[0].attackPressed = true;
+            }
+            REQUIRE(pair.guest.update(input) != OnlinePlay::Phase::Failed);
+            pair.draw();
+            mix();
+            if (const auto* state = pair.host.shown()) {
+                for (const auto& projectile : state->projectiles) {
+                    if (projectile.rollback && projectile.rollback->origin.seat == kSeat &&
+                        projectile.rollback->origin.ordinal == 0) {
+                        nativeReleases.insert(projectile.rollback->origin);
+                    }
+                }
+            }
+        }
+        REQUIRE(nativeReleases.size() == 1);
+        REQUIRE(heard.size() == (predict ? 1 : 0));
+        const auto attributed = std::ranges::count_if(heldAudio, [&](const auto& event) {
+            REQUIRE(event.bytes.size() == AudioSync::kPacketBytes);
+            if (event.bytes[27] == 0) {
+                return false;
+            }
+            CHECK(event.bytes[104] == kSeat);
+            CHECK(event.bytes[106] == 0); // One launch sound, not one per fan member.
+            return true;
+        });
+        REQUIRE(attributed == 1);
+        // Preserve every reliable cue and its original sequence order.
+        auto& incoming = pair.wire.guestWire.events;
+        incoming.insert(incoming.begin(), heldAudio.begin(), heldAudio.end());
+        for (s32 tick = 0; tick < 30; ++tick) {
+            pair.step();
+            pair.draw();
+            mix();
+        }
+        REQUIRE(heard.size() == 1);
+        CHECK(heard.front().value == LevelSoundscape::kStepVolume);
+        CHECK(heard.front().category == SoundCategory::Effects);
+        CHECK(heard.front().after == kNoSound);
+    }
+    CHECK_FALSE(pair.guest.hostScene());
+    pair.guest.close();
+    pair.host.close();
+}
+
+TEST_CASE("guest rune ceremony shows the wizard and caption then returns to gameplay",
+          "[netplay][online-play][assets][guest-presentation]") {
+    RuntimePair pair(0, false, true);
+    pair.open();
+    bool wizard = false;
+    bool caption = false;
+    bool placement = false;
+    for (usize tick = 0; tick < 2400; ++tick) {
+        CAPTURE(tick);
+        pair.step();
+        pair.draw();
+        const auto* shown = pair.guest.shown();
+        if (shown == nullptr) {
+            continue;
+        }
+        REQUIRE(shown->hud);
+        if (shown->hud->ceremony.kind == HudSnapshot::Ceremony::Kind::Rune) {
+            caption = caption || shown->hud->ceremony.letters > 0;
+            const auto found = std::ranges::find(shown->projectiles, ProjectileSource::TowerWizard,
+                                                 &ProjectileState::source);
+            REQUIRE(found != shown->projectiles.end());
+            wizard = true;
+            CHECK((found->flags & ProjectileState::kAdditive) != 0);
+            const auto* host = pair.host.shown();
+            if (host->motion.cameraContinuity == shown->motion.cameraContinuity) {
+                CHECK(shown->motion.camera.position == host->motion.camera.position);
+                CHECK(shown->motion.camera.pitch == host->motion.camera.pitch);
+                CHECK(shown->motion.camera.yaw == host->motion.camera.yaw);
+            }
+        }
+        placement = placement || std::ranges::any_of(shown->projectiles, [](const auto& effect) {
+                        return effect.source == ProjectileSource::TowerRelic;
+                    });
+        if (wizard && caption && placement && !pair.host.hostScene()->towerRelics().active() &&
+            shown->hud->ceremony.kind == HudSnapshot::Ceremony::Kind::None) {
+            break;
+        }
+    }
+    CHECK(wizard);
+    CHECK(caption);
+    CHECK(placement);
+    CHECK_FALSE(pair.host.hostScene()->towerRelics().active());
+    REQUIRE(pair.guest.shown());
+    CHECK(pair.guest.shown()->hud->ceremony.kind == HudSnapshot::Ceremony::Kind::None);
+}
 
 TEST_CASE("online secret visits preserve the parent scene results and local-only earned unlocks",
           "[netplay][online-secret][online-play][assets]") {

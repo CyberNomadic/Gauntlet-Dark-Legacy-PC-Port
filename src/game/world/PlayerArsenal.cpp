@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <utility>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
@@ -10,37 +11,26 @@
 #include "game/combat/DamageTypes.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
+#include "game/players/TurboMove.h"
 #include "game/world/DynamicLights.h"
-#include "game/world/TargetAssist.h"
 #include "game/world/WeaponGlow.h"
 namespace gdl::game {
 namespace {
-struct PotionLook {
-    std::string_view bottle;
-    std::string_view burst;
-    std::string_view sound;
-};
-constexpr std::array<PotionLook, 5> kPotions{{{"POT_RED_TW", "MP_FIRE", "S_POTION2"},
-                                              {"POT_RED_TW", "MP_FIRE", "S_POTION2"},
-                                              {"POT_BLU_TW", "MP_ELEC", "S_POTION1"},
-                                              {"POT_YEL_TW", "MP_LIGHT", "S_POTION3"},
-                                              {"POT_GRE_TW", "MP_ACID", "S_POTION4"}}};
-constexpr f32 kPotionToss = 5.0f;       ///< how hard a potion is thrown
-constexpr f32 kPotionCharge = 1.5f;     ///< extra launch speed per held game tick
-constexpr f32 kThrownShare = 0.75f;     ///< of that power a thrown potion keeps
-constexpr f32 kPotionLoft = 0.707f;     ///< as much up as forwards
-constexpr f32 kPotionHandHeight = 4.0f; ///< over the feet, where it leaves
-constexpr f32 kPotionHandReach = 2.0f;  ///< and ahead of them
 constexpr f32 kPhoenixDamage = 10.0f;
 constexpr u32 kPhoenixDamageFlags = 0x11; ///< fire plus knockback
 
-const PotionLook& potionLook(s32 kind) {
-    return kPotions[kind >= 0 && static_cast<usize>(kind) < kPotions.size()
-                        ? static_cast<usize>(kind)
-                        : 0];
-}
-
 } // namespace
+PlayerArsenal::SoundCapture::SoundCapture(PlayerArsenal* arsenal, SoundObserver observer)
+    : m_arsenal(arsenal) {
+    if (m_arsenal != nullptr) {
+        m_previous = std::exchange(m_arsenal->m_soundObserver, std::move(observer));
+    }
+}
+PlayerArsenal::SoundCapture::~SoundCapture() {
+    if (m_arsenal != nullptr) {
+        m_arsenal->m_soundObserver = std::move(m_previous);
+    }
+}
 void PlayerArsenal::bind(const Resources& resources, std::span<TextureSet* const> textureLenders) {
     clear();
     m_resources.emplace(resources);
@@ -109,20 +99,10 @@ MissileStreak PlayerArsenal::weaponStreak(const PlayerActor& actor, bool superSh
     }
     return streak;
 }
-void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
-                                 const Vec3& direction, f32 scale, bool spreads,
-                                 std::optional<Vec3> target) {
-    if (!m_resources.has_value() || body == nullptr) {
-        return;
-    }
-    PlayerFigure& figure = *body;
-    Vec3 facing = direction;
-    if (target.has_value()) {
-        const Vec3 offset = *target - actor.position();
-        const f32 distance = std::hypot(offset.x, offset.z);
-        if (distance > 1e-5f) {
-            facing = Vec3{offset.x / distance, 0, offset.z / distance};
-        }
+std::optional<PlayerMissiles::WeaponThrow> PlayerArsenal::weaponThrow(const PlayerActor& actor,
+                                                                      f32 attackSeconds) const {
+    if (!m_resources) {
+        return std::nullopt;
     }
     const CharacterSave& save = actor.save();
     const auto worn = PowerupEffects::of(save.progress().inventory);
@@ -141,20 +121,124 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     if (pojo) {
         hand = Vec3{0, -0.5f, -1.25f};
     }
-    const Vec3 side{facing.z, 0.0f, -facing.x};
-    MissileLaunch launch;
-    launch.multiplayer =
+    PlayerMissiles::WeaponThrow weapon;
+    weapon.multiplayer =
         m_resources->multiplayer != nullptr ? *m_resources->multiplayer : MultiplayerMode::Normal;
-    launch.owner = actor.player();
-    launch.scale = scale;
-    launch.direction = facing;
-    launch.position = actor.followPoint() + side * hand.x + Vec3{0.0f, hand.y, 0.0f} +
-                      facing * (hand.z + PlayerMissiles::kMuzzle);
-    launch.speed = PlayerMissiles::speedFor(stat);
-    launch.damage = PlayerMissiles::damageFor(stat) * scale;
-    launch.flags = worn.weapon & ~powerup::kSuperShot;
-    launch.reach = PlayerMissiles::reachFor(figure.animator().attackSeconds());
-    launch.spec = &MissileSpec::of(save.character);
+    weapon.owner = actor.player();
+    weapon.character = save.character;
+    weapon.position = actor.position();
+    weapon.center = actor.followPoint();
+    weapon.hand = hand;
+    weapon.direction = actor.facing();
+    weapon.speed = PlayerMissiles::speedFor(stat);
+    weapon.damage = PlayerMissiles::damageFor(stat);
+    weapon.flags = worn.weapon & ~powerup::kSuperShot;
+    weapon.attackSeconds = attackSeconds;
+    weapon.shots = worn.shots();
+    return weapon;
+}
+
+std::optional<PlayerArsenal::PreparedWeapon> PlayerArsenal::prepareWeapon(
+    const PlayerActor& actor, const PlayerFigure& figure, const Vec3& direction, f32 scale,
+    bool spreads, std::optional<Vec3> target, std::optional<MissileRelease> explicitRelease) const {
+    const auto& animator = figure.animator();
+    const auto weapon = weaponThrow(actor, animator.attackSeconds());
+    if (!weapon) {
+        return std::nullopt;
+    }
+    PreparedWeapon prepared;
+    prepared.weapon = *weapon;
+    prepared.weapon.direction = direction;
+    prepared.weapon.scale = scale;
+    prepared.weapon.shots = spreads ? prepared.weapon.shots : 1;
+    prepared.weapon.target = target;
+    const auto worn = PowerupEffects::of(actor.save().progress().inventory);
+    prepared.soundFlags = worn.weapon;
+    prepared.pojo = (worn.special & powerup::kPojo) != 0;
+    prepared.missiles = PlayerMissiles::weaponLaunches(prepared.weapon);
+    const auto& save = actor.save();
+    if (!explicitRelease && (animator.released() || animator.strongReleased())) {
+        explicitRelease = MissileRelease{save.character, animator.player().generation(),
+                                         animator.strongReleased()};
+    }
+    bool nativeRelease = false;
+    if (explicitRelease) {
+        if (explicitRelease->emission == 0) {
+            nativeRelease = (animator.released() || animator.strongReleased()) &&
+                            explicitRelease->strong == animator.strongReleased();
+        } else {
+            const u32 slot = explicitRelease->emission >> 16;
+            nativeRelease = PlayerAnimator::rollbackTurboAction(animator.action()) && slot > 0 &&
+                            slot <= TurboMove::kMaxCheckpointRows && !explicitRelease->strong &&
+                            prepared.weapon.shots == 1 && prepared.weapon.scale == 1 &&
+                            !prepared.weapon.target;
+        }
+    }
+    if (PlayerMissiles::replayModifiers(worn.weapon) && !prepared.pojo &&
+        prepared.weapon.multiplayer == MultiplayerMode::Normal && nativeRelease &&
+        explicitRelease && explicitRelease->character == save.character &&
+        explicitRelease->generation != 0 &&
+        explicitRelease->generation == animator.player().generation() &&
+        explicitRelease->ordinal == 0) {
+        for (usize ordinal = 0; ordinal < prepared.missiles.size(); ++ordinal) {
+            auto release = *explicitRelease;
+            release.ordinal = static_cast<u8>(ordinal);
+            prepared.missiles[ordinal].release = release;
+        }
+    }
+    return prepared;
+}
+
+std::optional<f32> PlayerArsenal::weaponTextureFrame(const PlayerFigure& figure) const {
+    const auto* archive = figure.missileArchive();
+    if (!m_resources || archive == nullptr) {
+        return std::nullopt;
+    }
+    const std::array<TextureSet*, 1> lenders{&m_resources->weapons.textures};
+    return m_missiles.visuals().textureFrame(*archive, lenders);
+}
+
+std::optional<PlayerArsenal::WeaponRider> PlayerArsenal::weaponRider(const PlayerActor& actor,
+                                                                     PlayerFigure& figure) const {
+    if (!m_resources) {
+        return std::nullopt;
+    }
+    const auto worn = PowerupEffects::of(actor.save().progress().inventory);
+    const auto name = WeaponGlow::throwTree(WeaponGlow::elementOf(worn));
+    auto* archive = name.empty() ? nullptr : figure.effects();
+    const auto tree = archive != nullptr ? archive->trees.find(name) : std::nullopt;
+    if (!tree) {
+        return std::nullopt;
+    }
+    WeaponRider rider;
+    rider.archive = archive;
+    rider.tree = &archive->trees.tree(*tree);
+    rider.lenders.push_back(&m_resources->weapons.textures);
+    rider.textureFrame = m_missiles.visuals().textureFrame(*archive, rider.lenders);
+    const auto fallbacks = m_missiles.visuals().textureLenders();
+    rider.lenders.insert(rider.lenders.end(), fallbacks.begin(), fallbacks.end());
+    return rider;
+}
+
+void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
+                                 const Vec3& direction, f32 scale, bool spreads,
+                                 std::optional<Vec3> target,
+                                 std::optional<MissileRelease> explicitRelease) {
+    if (!m_resources || body == nullptr) {
+        return;
+    }
+    PlayerFigure& figure = *body;
+    const auto prepared =
+        prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease);
+    if (!prepared || prepared->missiles.empty()) {
+        return;
+    }
+    const auto& launches = prepared->missiles;
+    const auto& save = actor.save();
+    const bool pojo = prepared->pojo;
+    // The volley shares its muzzle and visual resources. Native launch math is
+    // also used by physics-only replay, which never borrows these assets.
+    MissileLaunch launch = launches.front();
     launch.playerHitGap = PlayerMissiles::hitGap(&m_resources->weapons, launch.spec->impactTree);
     // FamiliarSpit[4] is WEAPONS/PHOENIX_FBALL, not the earned familiar's shot.
     launch.model = pojo ? &m_phoenixShot : &figure.missile();
@@ -186,27 +270,19 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
         presentImpact({.position = clear, .owner = launch.owner});
         return;
     }
-    // A three or five way shot worn spreads the throw, fifteen degrees apart.
-    const s32 shots = spreads ? PowerupEffects::of(save.progress().inventory).shots() : 1;
-    if (shots == 5) {
-        launch.wallSound = MissileWallSound::FiveWay;
-    } else if (shots == 3) {
-        launch.wallSound = MissileWallSound::ThreeWay;
-    }
-    for (const Vec3& way : PlayerMissiles::spread(facing, shots)) {
-        launch.direction = way;
-        if (target.has_value()) {
-            const Vec3 aim =
-                TargetAssist::velocity(launch.position, *target, launch.speed, launch.spec->weight);
-            // Preserve spread instead of converging every shot on one point.
-            const f32 turn = std::atan2(way.x, way.z) - std::atan2(facing.x, facing.z);
-            launch.velocity = Vec3{aim.x * std::cos(turn) + aim.z * std::sin(turn), aim.y,
-                                   aim.z * std::cos(turn) - aim.x * std::sin(turn)};
+    const auto release = launch.release;
+    bool launched = false;
+    for (usize ordinal = 0; ordinal < launches.size(); ++ordinal) {
+        const auto& member = launches[ordinal];
+        launch.direction = member.direction;
+        launch.velocity = member.velocity;
+        launch.wallSound = member.wallSound;
+        launch.release = member.release;
+        if (m_missiles.launch(launch)) {
+            launched = true;
         }
-        m_missiles.launch(launch);
-        launch.wallSound = MissileWallSound::Silent;
     }
-    const u32 weapon = PowerupEffects::of(save.progress().inventory).weapon;
+    const u32 weapon = prepared->soundFlags;
     // GUNE5D PlayerMotion -> AudioPlayerEatSFX (8009F638) also follows this
     // weapon/class dispatch for Pojo. S_POJOTURBO belongs to breath, not shots.
     constexpr std::array<std::string_view, 5> kElementThrows{"", "S_AMULETFIRE", "S_AMULETLIGHTNI",
@@ -214,18 +290,24 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     constexpr u32 kSpecialThrows =
         powerup::kThreeWayShot | powerup::kFiveWayShot | powerup::kSuperShot;
     const auto element = static_cast<usize>(weapon & 0xFU);
+    SoundHandle handle = kNoSound;
     if ((weapon & kSpecialThrows) != 0) {
-        m_resources->audio.playNamed("S_SUPERSHOT", LevelSoundscape::kStepVolume);
+        handle = m_resources->audio.playNamed("S_SUPERSHOT", LevelSoundscape::kStepVolume);
     } else if (element > 0 && element < kElementThrows.size()) {
-        m_resources->audio.playNamed(kElementThrows[element], LevelSoundscape::kStepVolume);
+        handle =
+            m_resources->audio.playNamed(kElementThrows[element], LevelSoundscape::kStepVolume);
     } else if (const auto sound = figure.throwSound();
                m_resources->sounds != nullptr && sound.has_value()) {
         try {
-            m_resources->sounds->play(figure.voice().sequence(*sound), LevelSoundscape::kStepVolume,
-                                      SoundCategory::Effects);
+            handle =
+                m_resources->sounds->play(figure.voice().sequence(*sound),
+                                          LevelSoundscape::kStepVolume, SoundCategory::Effects);
         } catch (const std::exception& e) {
             log::warn("Tower: throw sound: {}", e.what());
         }
+    }
+    if (launched && release && handle != kNoSound && m_soundObserver) {
+        m_soundObserver({handle, actor.player(), *release});
     }
 }
 
@@ -383,7 +465,8 @@ void PlayerArsenal::loadPotionModels() {
         return;
     }
     for (usize kind = 0; kind < m_potionModels.size(); ++kind) {
-        if (const auto tree = m_resources->weapons.trees.find(kPotions[kind].bottle);
+        if (const auto tree = m_resources->weapons.trees.find(
+                PotionEmission::look(static_cast<s32>(kind)).bottle);
             tree.has_value()) {
             m_potionModels[kind].bind(m_resources->weapons.trees.tree(*tree),
                                       m_resources->weapons.models, m_resources->weapons.textures,
@@ -393,20 +476,23 @@ void PlayerArsenal::loadPotionModels() {
 }
 
 void PlayerArsenal::burstPotion(s32 kind, const Vec3& position, f32 power, bool castSound) {
+    PotionEmission::Context context;
+    context.resolvedKind = kind;
+    context.position = position;
+    context.power = power;
+    presentPotion(PotionEmission::burst(context), castSound);
+}
+
+void PlayerArsenal::presentPotion(const PotionEmission::Burst& burst, bool castSound) {
     if (!m_resources.has_value()) {
         return;
     }
-    const PotionLook& look = potionLook(kind);
     if (m_resources->weapons.loaded()) {
-        EffectTrees::Setting setting;
-        setting.scale = std::min(kBurstPerPower * power, 1.0f);
-        setting.light = EffectTrees::Light{DynamicLights::ofPotion(kind),
-                                           DynamicLights::kMagicRadiusPerPower * power};
-        m_resources->effects.startSet(m_resources->device, m_resources->weapons, look.burst,
-                                      position, setting);
+        m_resources->effects.startSet(m_resources->device, m_resources->weapons, burst.tree,
+                                      burst.impact.position, burst.setting);
     }
     if (castSound) {
-        m_resources->audio.playNamed(look.sound);
+        m_resources->audio.playNamed(burst.sound);
     }
 }
 
@@ -474,16 +560,12 @@ std::optional<MissileImpact> PlayerArsenal::usePotion(PlayerActor& actor) {
     const f32 bonus = damage::colourBonus(actor.save().color, static_cast<u32>(stored));
     const f32 power = potionPowerOf(actor, stored);
     const s32 kind = resolvePotionKind(stored);
-    burstPotion(kind, actor.position(), power);
-    MissileImpact burst;
-    burst.position = actor.position();
-    burst.owner = actor.player();
-    burst.potion = kind;
-    burst.potency = power;
-    burst.damage = kPotionDamage * bonus; // start_magic: the magic stat sets the radius.
-    burst.flags = damage::magicHeal(experienceLevel(actor.save().experience()));
-    healingCast(actor, burst.potency);
-    return burst;
+    const auto burst =
+        PotionEmission::burst({actor.player(), actor.position(), actor.facing(), kind, power, bonus,
+                               damage::magicHeal(experienceLevel(actor.save().experience()))});
+    presentPotion(burst, true);
+    healingCast(actor, burst.impact.potency);
+    return burst.impact;
 }
 
 s32 PlayerArsenal::resolvePotionKind(s32 kind) {
@@ -495,7 +577,7 @@ s32 PlayerArsenal::resolvePotionKind(s32 kind) {
     return resolved;
 }
 
-void PlayerArsenal::throwPotion(PlayerActor& actor, s32 heldTicks) {
+void PlayerArsenal::throwPotion(PlayerActor& actor, s32 heldTicks, u64 generation) {
     auto& inventory = actor.save().progress().inventory;
     if (!m_resources.has_value() || inventory.potions.empty()) {
         return;
@@ -503,24 +585,17 @@ void PlayerArsenal::throwPotion(PlayerActor& actor, s32 heldTicks) {
     const s32 stored = inventory.takePotion();
     const s32 kind = resolvePotionKind(stored);
     const f32 power = potionPowerOf(actor, stored);
-    const Vec3 facing = actor.facing();
-    MissileLaunch launch;
-    launch.owner = actor.player();
-    launch.direction = facing;
-    launch.position =
-        actor.position() + facing * kPotionHandReach + Vec3{0.0f, kPotionHandHeight, 0.0f};
-    launch.velocity = Vec3{facing.x * kPotionLoft, kPotionLoft, facing.z * kPotionLoft} *
-                      (kPotionToss + kPotionCharge * static_cast<f32>(std::max(0, heldTicks)));
-    launch.potion = kind;
-    launch.potency = kThrownShare * power;
-    launch.damage =
-        kPotionDamage * damage::colourBonus(actor.save().color, static_cast<u32>(stored));
-    launch.flags = damage::magicHeal(experienceLevel(actor.save().experience()));
-    launch.spec = &MissileSpec::potion();
+    auto launch = PotionEmission::throwPotion(
+        {actor.player(), actor.position(), actor.facing(), kind, power,
+         damage::colourBonus(actor.save().color, static_cast<u32>(stored)),
+         damage::magicHeal(experienceLevel(actor.save().experience()))},
+        heldTicks);
     launch.model = &m_potionModels[static_cast<usize>(
         std::clamp(kind, 0, static_cast<s32>(m_potionModels.size()) - 1))];
     launch.archive = &m_resources->weapons;
-    launch.tree = potionLook(kind).bottle;
+    if (generation != 0) {
+        launch.potionRelease = MissilePotionRelease{generation};
+    }
     m_missiles.launch(launch);
     healingCast(actor, power);
 }

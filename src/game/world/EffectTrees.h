@@ -37,6 +37,7 @@ public:
         /** Whether the radius rises and falls again over the effect's life, as a damage
          * row's does over its window (ProcessEffects' light scale); else it holds. */
         bool swells = false;
+        bool operator==(const Light&) const = default;
     };
 
     /** How an effect is set going, beyond where. */
@@ -67,6 +68,56 @@ public:
         f32 alpha = 1.0f;        ///< constant opacity, multiplied by any end-of-life fade
         f32 playbackRate = 1.0f; ///< animation speed, independent of motion and particle clocks
         std::optional<Light> light;
+        bool operator==(const Setting&) const = default;
+    };
+
+    /** Resumable visual state without render resources or actor pointers. Setting::seconds
+     * is the remaining lifetime and Setting::loop is the current repeat policy. Stable
+     * gameplay emission/caster identities are owned by the caller, not this local pool. */
+    struct Checkpoint {
+        std::string name;
+        bool tree = false;
+        u32 continuity = 1;
+        Setting setting;
+        Vec3 position{0};
+        bool timed = false;
+        bool retiring = false;
+        f32 lived = 0;
+        AnimationPlayer::Checkpoint animation;
+        ParticleField::Checkpoint trails;
+        TreeParticles::Checkpoint particles;
+        std::optional<Mat4> attachment;
+        std::optional<Vec3> flightDirection;
+        std::optional<u32> particleTextureSlot;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+
+    /** Optional caller-owned native emission identity. The pool never invents
+     * caster/action coordinates or replaces them while restoring visual state. */
+    struct Provenance {
+        s32 player = -1;
+        u64 generation = 0;
+        u16 occurrence = 0;
+        u16 effectOrdinal = 0;
+        bool operator==(const Provenance&) const = default;
+    };
+
+    /** Trusted load-time bindings for callback-free replay. Models, textures and
+     * archives remain borrowed; starting a copy never binds or uploads artwork.
+     * A tree uses model/particles, a standalone emitter uses descriptor/texture.
+     * The texture animator is the freshly bound bank prototype, shared by every
+     * copied effect with the same archive and ordered lenders. */
+    struct Prepared {
+        ItemArchive* archive = nullptr;
+        const TreeInfo* tree = nullptr;
+        const TreeModel* model = nullptr;
+        const TreeParticles* particles = nullptr;
+        const TextureAnimator* textures = nullptr;
+        std::span<TextureSet* const> lenders;
+        const ParticleDescriptor* descriptor = nullptr;
+        const Texture* texture = nullptr;
+        std::optional<u32> textureSlot;
     };
 
     /** One effect playing. */
@@ -119,6 +170,7 @@ public:
         f32 previousFrame = 0;
         bool presentationCaptured = false;
         mutable TreePose presentationPose; ///< visual-only sample, never emitter or contact input
+        std::optional<Provenance> provenance;
         Mat4 transform() const;
         f32 opacity() const;
     };
@@ -131,10 +183,21 @@ public:
     u32 startSet(RenderDevice& device, ItemArchive& archive, std::string_view tree,
                  const Vec3& position, const Setting& setting,
                  std::span<TextureSet* const> textureLenders = {});
+    /** Same native initialization using already-bound resources. Morph topology
+     * is unsupported. Standalone emitters require their actual native birth seed;
+     * no local handle or guessed network identity substitutes for that seed. */
+    u32 startPrepared(const Prepared& prepared, const Vec3& position, const Setting& setting,
+                      const Mat4& particleAttachment = Mat4{1},
+                      std::optional<u32> particleSeed = std::nullopt);
+    /** Retains a shared prebound clock even when no effect currently uses it. */
+    bool prepareBank(const Prepared& prepared);
     /** Ends effect number `id` now. */
     void stop(u32 id);
     /** Removes the mesh and ends births, retaining particle tails until they expire. */
     void finish(u32 id);
+    /** Bind once; the same value is idempotent. Missing effects or conflicting
+     * tags are rejected without changing the visual or its original ownership. */
+    bool tag(u32 id, const Provenance& provenance);
     /** Ordered fallback texture sets. Set before starting effects; owners must outlive clear(). */
     void setTextureLenders(std::span<TextureSet* const> lenders);
     std::span<TextureSet* const> textureLenders() const { return m_lenders; }
@@ -171,9 +234,29 @@ public:
 
     usize count() const { return m_effects.size(); }
     const Effect& effect(usize index) const { return *m_effects[index]; }
+    std::optional<Checkpoint> checkpoint(u32 id) const;
+    /** Restores an existing effect against its trusted bound tree/emitters. Does not
+     * create resources, replace its local identity, or accept morph/topology changes.
+     * Rebuilds the pose and cuts render interpolation. Invalid state changes nothing. */
+    bool restore(u32 id, const Checkpoint& state);
+    /** Bank clocks are shared, never restored as a side effect of one effect. The archive
+     * and complete ordered lender span identify an already-bound bank, without loading. */
+    std::optional<TextureAnimator::Checkpoint>
+    textureCheckpoint(const ItemArchive& archive, std::span<TextureSet* const> lenders) const;
+    bool restoreTextureClock(const ItemArchive& archive, std::span<TextureSet* const> lenders,
+                             const TextureAnimator::Checkpoint& state);
     f32 textureFrame(const Effect& effect) const;
+    /** Fractional clock used by a future startSet with these explicit lenders, followed by
+     * this pool's fallback lenders. Empty means that bank has never started;
+     * querying does not bind artwork or create/advance a clock. */
+    std::optional<f32> textureFrame(const ItemArchive& archive,
+                                    std::span<TextureSet* const> textureLenders = {}) const;
 
 private:
+    static void initializeTree(Effect& effect, const Setting& setting);
+    static void initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
+                                    const Texture& texture, u32 textureSlot, const Mat4& attachment,
+                                    u32 seed);
     static bool bindVisuals(Effect& effect);
     static f32 secondsLeftOf(const Effect& effect);
     /** An archive's texture animations, shared by its effects. */

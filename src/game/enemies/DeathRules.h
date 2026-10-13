@@ -30,5 +30,6 @@ struct DeathEvent {
     DeathForm form = DeathForm::Red;
     f32 amount = 0;
     Vec3 position{0};
+    bool operator==(const DeathEvent&) const = default;
 };
 } // namespace gdl::game

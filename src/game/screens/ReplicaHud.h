@@ -46,6 +46,7 @@ public:
     static std::string_view countTexture(HudCountKind kind);
 
 private:
+    std::string ceremonyText(const HudSnapshot& snapshot) const;
     StatusBoxPainter m_boxes;
     BossMeters m_bosses;
     ChallengeHud m_hourglass;

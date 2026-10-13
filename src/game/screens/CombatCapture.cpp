@@ -59,8 +59,18 @@ std::optional<CombatSnapshot> CombatCapture::capture(const MotionSnapshot& motio
                                                 runtime.healthFraction)
                            : 0;
         state.hitFlash = runtime.hitFlashTicks > 0;
+        state.weaponHidden = runtime.move.weaponHidden();
         state.damageable = PlayerHealth::canBeDamaged(runtime);
+        const auto equipment = PowerupEffects::of(runtime.actor.save().progress().inventory);
+        state.armEquipment =
+            (equipment.armor & powerup::kShields) | (equipment.special & powerup::kLeftGauntlet);
+        state.movement.speed = runtime.actor.speed();
+        state.movement.radius = runtime.actor.radius();
+        state.movement.height = runtime.actor.height();
+        state.movement.followHeight = runtime.actor.followPoint().y - runtime.actor.position().y;
         if (world != nullptr) {
+            state.floor = PlayerFloorState{runtime.floor.object, runtime.floor.flags,
+                                           runtime.floor.placement};
             const PortalDeparture stationary;
             if (const auto shadow =
                     PartyFigures::shadowOf(runtime, *world, departure ? *departure : stationary)) {
@@ -74,6 +84,21 @@ std::optional<CombatSnapshot> CombatCapture::capture(const MotionSnapshot& motio
         if (runtime.figure) {
             const auto& animator = runtime.figure->animator();
             state.animation = animation(animator.player(), static_cast<u32>(animator.action()));
+            if (animator.bound()) {
+                state.rollback = animator.checkpoint();
+                state.transitionPose = animator.transitionPose();
+                state.knockback = runtime.knockback.checkpoint();
+                state.reaction = runtime.reaction;
+            }
+            state.movement.current = runtime.life == PlayerLife::Standing && !state.portalPhase &&
+                                     !runtime.capture.active() && !runtime.transport.active() &&
+                                     runtime.combo.partner < 0 && runtime.deathHeld < 0 &&
+                                     runtime.reaction == PlayerDeed::None &&
+                                     !runtime.knockback.pending() && !runtime.knockback.sliding() &&
+                                     !runtime.knockback.pushed() && !animator.entering() &&
+                                     runtime.gesture == PlayerDeed::None && runtime.gagSeconds <= 0;
+            state.movement.enabled =
+                state.movement.current && PlayerAnimator::rollbackAction(animator.action());
             if (runtime.life != PlayerLife::InTower &&
                 (runtime.life != PlayerLife::Standing || departure == nullptr ||
                  !departure->finished())) {
@@ -93,6 +118,11 @@ std::optional<CombatSnapshot> CombatCapture::capture(const MotionSnapshot& motio
                             {0, visual->sequence, visual->generation, visual->frame, 1},
                             visual->textureClock,
                             visual->alpha};
+                        if (slot == 1 &&
+                            visual->form == static_cast<u32>(PowerupCompanion::Kind::FireShield)) {
+                            state.companions[slot]->rollback =
+                                runtime.figure->companion().animationCheckpoint();
+                        }
                     }
                 }
             }
@@ -116,6 +146,10 @@ std::optional<CombatSnapshot> CombatCapture::capture(const MotionSnapshot& motio
         state.health = std::max(0.0f, observed->health);
         state.fullHealth = observed->fullHealth;
         state.hitFlash = observed->hitFlash;
+        state.alpha = observed->alpha;
+        state.scale = observed->scale;
+        state.deathSkin = observed->deathSkin;
+        state.deathFrame = observed->deathFrame;
         state.position = enemies.positionOf(slot);
         state.yaw = std::remainder(enemies.yawOf(slot), kTwoPi);
         if (const auto* animator = enemies.animatorOf(slot)) {

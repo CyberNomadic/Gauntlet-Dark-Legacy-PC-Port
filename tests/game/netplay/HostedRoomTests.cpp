@@ -66,21 +66,24 @@ struct Pair {
     }
 };
 } // namespace
-TEST_CASE("old point-aim peers cannot join a directional-input room", "[netplay][hosted-room]") {
-    Pair pair;
-    pair.guest.update(0);
-    bool rewrote = false;
-    for (auto& event : pair.a.incoming) {
-        if (event.type == PacketTransport::EventType::Message && event.bytes.size() >= 2) {
-            event.bytes[1] = 1;
-            rewrote = true;
+TEST_CASE("peers missing replay capabilities cannot join even with the same build name",
+          "[netplay][hosted-room]") {
+    for (const u8 oldProtocol : {u8{1}, u8{13}, u8{14}, u8{15}, u8{16}, u8{17}}) {
+        Pair pair;
+        pair.guest.update(0);
+        bool rewrote = false;
+        for (auto& event : pair.a.incoming) {
+            if (event.type == PacketTransport::EventType::Message && event.bytes.size() >= 2) {
+                event.bytes[1] = oldProtocol;
+                rewrote = true;
+            }
         }
+        REQUIRE(rewrote);
+        pair.pump();
+        CHECK_FALSE(pair.guest.connected());
+        REQUIRE(pair.host.room());
+        CHECK(pair.host.room()->members.size() == 1);
     }
-    REQUIRE(rewrote);
-    pair.pump();
-    CHECK_FALSE(pair.guest.connected());
-    REQUIRE(pair.host.room());
-    CHECK(pair.host.room()->members.size() == 1);
 }
 
 TEST_CASE("self hosted admission starts existing online gameplay without a room server",
@@ -121,17 +124,20 @@ TEST_CASE("hosted room admission rejects mismatched builds assets and full parti
         Pair pair(1, 1, "different");
         pair.pump();
         CHECK(pair.guestRoom.failure() == HostedRoom::Failure::Version);
+        CHECK(pair.guest.failureDetail() == "Game versions do not match");
         CHECK(pair.host.phase() == OnlineSession::Phase::Lobby);
     }
     SECTION("assets") {
         Pair pair(1, 1, "test", std::string(64, 'b'));
         pair.pump();
         CHECK(pair.guestRoom.failure() == HostedRoom::Failure::Assets);
+        CHECK(pair.guest.failureDetail() == "Game assets do not match");
     }
     SECTION("full") {
         Pair pair(3, 2);
         pair.pump();
         CHECK(pair.guestRoom.failure() == HostedRoom::Failure::Full);
+        CHECK(pair.guest.failureDetail() == "Room has no free player slots");
     }
 }
 TEST_CASE("a hosted lobby survives guest departure and resets readiness",

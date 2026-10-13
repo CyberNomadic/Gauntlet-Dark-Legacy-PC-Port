@@ -44,6 +44,13 @@ struct OnlinePair {
         std::string identity;
         std::string remoteIdentity;
         std::vector<Event> events;
+        struct Delayed {
+            u64 due;
+            Event event;
+        };
+        std::vector<Delayed> delayed;
+        u64 polls = 0;
+        u64 latency = 0; ///< receiver polls; zero preserves the immediate harness
         bool configurePeer(std::string peer, bool isHost) override {
             identity = std::move(peer);
             host = isHost;
@@ -67,11 +74,24 @@ struct OnlinePair {
         SendResult send(Connection connection, std::span<const u8> bytes,
                         Delivery /*delivery*/) override {
             REQUIRE(connection == (host ? 1U : 99U));
-            remote->events.push_back(
-                {EventType::Message, host ? 99U : 1U, {bytes.begin(), bytes.end()}, {}});
+            Event event{EventType::Message, host ? 99U : 1U, {bytes.begin(), bytes.end()}, {}};
+            if (latency == 0) {
+                remote->events.push_back(std::move(event));
+            } else {
+                remote->delayed.push_back({remote->polls + latency, std::move(event)});
+            }
             return SendResult::Sent;
         }
-        std::vector<Event> poll() override { return std::exchange(events, {}); }
+        std::vector<Event> poll() override {
+            ++polls;
+            for (auto& delivery : delayed) {
+                if (delivery.due <= polls) {
+                    events.push_back(std::move(delivery.event));
+                }
+            }
+            std::erase_if(delayed, [this](const auto& delivery) { return delivery.due <= polls; });
+            return std::exchange(events, {});
+        }
         std::optional<Statistics> statistics(Connection /*connection*/) const override {
             return {};
         }

@@ -9,8 +9,9 @@ namespace gdl::game {
  * Never extrapolates actors, changes authoritative input ticks or runs gameplay. */
 class ClientClock {
 public:
-    static constexpr u64 kDelay = 6; // two 20 Hz checkpoints at the native 60 Hz tick rate
-    static constexpr u64 kCatchup = 12;
+    static constexpr u64 kDelay = 3; // one 20 Hz checkpoint: 50 ms, not an extra 100 ms
+    static constexpr u64 kCatchup =
+        6; // rejoin after a gap, rather than keeping stale input visible
     bool begin(const MatchSession& match);
     void clear();
     std::optional<CombatSnapshot> sample(const MatchSession& match, f64 seconds,

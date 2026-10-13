@@ -15,6 +15,61 @@
 
 namespace gdl {
 
+bool ParticleField::Checkpoint::valid() const {
+    return entries.size() <= 256 && std::isfinite(frameRemainder) && frameRemainder >= 0 &&
+           frameRemainder < 1 && std::isfinite(lastAdvance) && lastAdvance >= 0 &&
+           lastAdvance <= 450 && std::isfinite(heatFrames) && heatFrames >= 0 &&
+           heatFrames <= 30.0 * 24 * 60 * 60 * 30 &&
+           std::ranges::all_of(entries, [](const Entry& entry) {
+               return entry.worldObject >= -1 && entry.worldObject <= 1'000'000 &&
+                      entry.emitter.valid();
+           });
+}
+
+ParticleField::Checkpoint ParticleField::checkpoint() const {
+    Checkpoint state;
+    state.frameRemainder = m_frameRemainder;
+    state.lastAdvance = m_lastAdvance;
+    state.heatFrames = m_heatFrames;
+    state.entries.reserve(m_entries.size());
+    for (const auto& entry : m_entries) {
+        state.entries.push_back({entry.emitter.checkpoint(), entry.worldObject});
+    }
+    return state;
+}
+
+bool ParticleField::canRestore(const Checkpoint& state) const {
+    if (!state.valid() || state.entries.size() != m_entries.size()) {
+        return false;
+    }
+    for (usize i = 0; i < m_entries.size(); ++i) {
+        if (state.entries[i].worldObject != m_entries[i].worldObject ||
+            !m_entries[i].emitter.canRestore(state.entries[i].emitter)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ParticleField::restore(const Checkpoint& state) {
+    if (!canRestore(state)) {
+        return false;
+    }
+    auto entries = m_entries;
+    for (usize i = 0; i < entries.size(); ++i) {
+        if (!entries[i].emitter.restore(state.entries[i].emitter)) {
+            return false;
+        }
+    }
+    m_entries = std::move(entries);
+    m_frameRemainder = state.frameRemainder;
+    m_lastAdvance = state.lastAdvance;
+    m_heatFrames = state.heatFrames;
+    clearTextureBlends();
+    m_batch.clear();
+    return true;
+}
+
 namespace {
 
 void submitHeat(RenderDevice& device, const ParticleEmitter& emitter, const Mat4& clip,

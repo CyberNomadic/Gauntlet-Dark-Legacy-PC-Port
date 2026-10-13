@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "game/players/PlayerActor.h"
+
 namespace gdl::game {
 Vec3 BodyCollision::resolveItems(const Vec3& from, const Vec3& to, f32 radius, f32 height,
                                  std::span<const Obstacle> items) {
@@ -85,5 +87,31 @@ Vec3 BodyCollision::resolve(const Vec3& from, const Vec3& to, f32 radius, f32 he
         remaining -= normal * std::min(glm::dot(remaining, normal), 0.0f);
     }
     return {position.x, to.y, position.y};
+}
+
+Vec3 BodyCollision::resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to,
+                                    std::span<const MissileTarget> bodies,
+                                    std::span<const Obstacle> generators,
+                                    const WorldCollision* collision) {
+    Vec3 resolved = resolve(from, to, player.radius(), player.height(), bodies);
+    resolved = resolveItems(from, resolved, player.radius(), player.height(), generators);
+    if (collision != nullptr) {
+        // Match walking's vertical span and low-face filter. Animated contacts
+        // have already been swept; this overlap recheck is static world only.
+        resolved = collision->resolveWalls(
+            resolved, player.radius(), resolved.y + PlayerActor::kFootClearance,
+            resolved.y + player.height() - PlayerActor::kFootClearance, nullptr,
+            player.minimumWallY(resolved.y), WorldCollision::WallPush::StaticOnly);
+        const Vec3 checked = resolve(from, resolved, player.radius(), player.height(), bodies);
+        if (glm::distance(checked, resolved) > 1e-4f) {
+            return {from.x, to.y, from.z};
+        }
+        const Vec3 itemChecked =
+            resolveItems(resolved, resolved, player.radius(), player.height(), generators);
+        if (glm::distance(itemChecked, resolved) > 1e-4f) {
+            return {from.x, to.y, from.z};
+        }
+    }
+    return resolved;
 }
 } // namespace gdl::game

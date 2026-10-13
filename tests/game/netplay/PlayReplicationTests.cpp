@@ -1,13 +1,27 @@
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <set>
+
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/netplay/ClientClock.h"
+#include "game/netplay/CombatReplica.h"
 #include "game/netplay/OnlinePair.h"
+#include "game/players/ItemPickup.h"
+#include "game/screens/FloorRiding.h"
 #include "game/screens/MatchInputs.h"
 #include "game/screens/PlayReplication.h"
 #include "game/screens/ReplicaView.h"
 #include "game/world/LevelCatalog.h"
+#include "game/world/PotionEmission.h"
+#include "game/world/WeaponGlow.h"
 
 namespace {
 using namespace gdl;
@@ -142,7 +156,8 @@ TEST_CASE("remote scroll dismissal advances the host once and respects the nativ
     const Vec3 start = scene.play.actor(1)->position();
     Pair pair;
     PlayReplication driver;
-    const ProjectileResources resources;
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
     pair.prepare();
     REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
     pair.ready();
@@ -234,7 +249,7 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
     scene.settle();
     PlayReplication driver;
     ProjectileResources resources;
-    REQUIRE(scene.play.bindPlayerProjectiles(resources));
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
     pair.prepare();
     REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
     CHECK_FALSE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
@@ -287,6 +302,9 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
         &clientWorld.realmItems().textures, &clientWorld.powerups().textures, &clientStatic};
     REQUIRE(
         clientProjectiles.addPlayers(scene.device, companionWeapons, clientFigures, clientLenders));
+    REQUIRE(clientProjectiles.addStage(
+        scene.device, {&clientWorld.items(), &clientWorld.realmItems(), &clientWorld.powerups()},
+        {}, clientLenders));
     REQUIRE(client.bindCompanions(scene.device, clientWorld.powerups(), &companionWeapons));
     HudResources hudResources;
     hudResources.powerups = &clientWorld.powerups();
@@ -436,7 +454,7 @@ TEST_CASE("scene capture preserves timer priority pause and runestone visibility
         CAPTURE(level);
         Scene scene(level, false, true);
         ProjectileResources resources;
-        REQUIRE(scene.play.bindPlayerProjectiles(resources));
+        REQUIRE(scene.play.bindSceneProjectiles(resources));
         Pair pair;
         PlayReplication driver;
         pair.prepare();
@@ -530,6 +548,13 @@ TEST_CASE("an unregistered real weapon fails capture instead of disappearing rem
           "[netplay][play-replication][assets]") {
     Scene scene;
     scene.settle();
+    ProjectileResources resources;
+    // Sumner is visible immediately. Register the stage so the intentional
+    // missing-player-resource failure occurs only when a real weapon is born.
+    REQUIRE(resources.addStage(
+        scene.device, {&scene.world.items(), &scene.world.realmItems(), &scene.world.powerups()},
+        {}, scene.play.effects().textureLenders()));
+    REQUIRE(resources.treeId(&scene.world.items(), scene.play.sumner().tree()) != 0);
     Pair pair;
     PlayReplication driver;
     pair.prepare();
@@ -540,13 +565,13 @@ TEST_CASE("an unregistered real weapon fails capture instead of disappearing rem
     input[0].attackPressed = true;
     Result result = Result::Advanced;
     for (s32 i = 0; i < 180 && result == Result::Advanced; ++i) {
-        result = driver.advance(pair.host, input, {});
+        result = driver.advance(pair.host, input, resources);
         input[0].attackPressed = false;
     }
     REQUIRE(scene.play.missiles().count() > 0);
     REQUIRE(result == Result::Failed);
     const auto tick = pair.host.tick();
-    CHECK(driver.advance(pair.host, input, {}) == Result::Failed);
+    CHECK(driver.advance(pair.host, input, resources) == Result::Failed);
     CHECK(pair.host.tick() == tick);
 }
 
@@ -568,7 +593,7 @@ TEST_CASE("entrance camera cuts remain marked when snapshots are sent less often
           "[netplay][play-replication][assets]") {
     Scene scene;
     ProjectileResources resources;
-    REQUIRE(scene.play.bindPlayerProjectiles(resources));
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
     Pair pair;
     PlayReplication driver;
     pair.prepare();
@@ -606,7 +631,7 @@ TEST_CASE("a loaded cemetery scene publishes its dormant statues through the rea
           "[netplay][play-replication][replica-statues][assets]") {
     Scene scene("G4");
     ProjectileResources resources;
-    REQUIRE(scene.play.bindPlayerProjectiles(resources));
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
     REQUIRE(scene.play.statues().count() > 0);
     Pair pair;
     PlayReplication driver;
@@ -627,5 +652,1609 @@ TEST_CASE("a loaded cemetery scene publishes its dormant statues through the rea
                   CombatPacket::encode(state));
         }
     }
+}
+
+TEST_CASE(
+    "native G1 capture grants stationary melee context only outside world and equipment locks",
+    "[netplay][play-replication][melee-prediction][assets]") {
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    // The fixture's timers option selects the authored start. Explicit profiles
+    // retain ordinary equipment instead of its optional Stop Time inventory.
+    Scene scene("G1", false, true, false, party);
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    const auto step = [&] {
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+        pair.pump();
+    };
+    step();
+    REQUIRE(scene.play.spawning());
+    REQUIRE(driver.latest()->players[1]);
+    CHECK_FALSE(driver.latest()->players[1]->movement.current);
+    CHECK_FALSE(driver.latest()->players[1]->melee);
+
+    for (s32 tick = 0; tick < 1200 && !driver.latest()->players[1]->melee; ++tick) {
+        step();
+    }
+    REQUIRE(driver.latest()->players[1]->melee);
+    const auto& player = *driver.latest()->players[1];
+    REQUIRE(player.rollback);
+    CHECK(player.movement.current);
+    CHECK(player.movement.enabled);
+    CHECK(player.melee->selection.feet == scene.play.actor(1)->position());
+    CHECK(player.melee->selection.reach == scene.play.actor(1)->reach());
+    const auto bytes = CombatPacket::encode(*driver.latest());
+    REQUIRE(bytes);
+    const auto decoded = CombatPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->players[1]->melee);
+    CHECK(PlayerMeleeCheckpoint::encode(*decoded->players[1]->melee) ==
+          PlayerMeleeCheckpoint::encode(*player.melee));
+
+    scene.config.combat.autoMelee = true;
+    step();
+    CHECK_FALSE(driver.latest()->players[1]->melee);
+    scene.config.combat.autoMelee = false;
+    step();
+    REQUIRE(driver.latest()->players[1]->melee);
+    // An item can replace both attack choice and animation speed. The local
+    // player must wait for its authoritative action rather than reuse old melee.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+    auto* actor = const_cast<PlayerActor*>(scene.play.actor(1));
+    actor->save().progress().inventory.addPowerup(powerup::kWeapon, powerup::kSuperShot, 0, 60);
+    step();
+    CHECK_FALSE(driver.latest()->players[1]->melee);
+}
+TEST_CASE(
+    "native host certifies reaction slides without advancing gameplay or admitting unsafe bodies",
+    "[netplay][play-replication][knockback-prediction][assets]") {
+    const bool speed = GENERATE(false, true);
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene("G1", false, true, false, party);
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& other = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    other.life = PlayerLife::InTower;
+    if (speed) {
+        runtime.actor.save().progress().inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    }
+    runtime.reaction = PlayerDeed::Flinch;
+    runtime.knockback.queue({0.25f, 0, 0}, Knockback::kKnockBack, 10);
+    const auto impulse = runtime.knockback.checkpoint();
+    const auto action = runtime.figure->animator().checkpoint();
+    const Vec3 position = runtime.actor.position();
+    const auto inventory = runtime.actor.save().progress().inventory;
+    const auto health = runtime.actor.save().health();
+    const usize missiles = scene.play.missiles().count();
+    const usize effects = scene.play.effects().count();
+    const u32 prefix = scene.play.knockbackPreview(1);
+    REQUIRE(prefix > 0);
+    CHECK(prefix <= PlayerCombatState::kKnockbackTicks);
+    for (s32 repeat = 0; repeat < 4; ++repeat) {
+        CHECK(scene.play.knockbackPreview(1) == prefix);
+    }
+    CHECK(runtime.knockback.checkpoint() == impulse);
+    CHECK(runtime.reaction == PlayerDeed::Flinch);
+    CHECK(runtime.figure->animator().checkpoint() == action);
+    CHECK(runtime.actor.position() == position);
+    CHECK(runtime.actor.save().health() == health);
+    CHECK(runtime.actor.save().progress().inventory == inventory);
+    CHECK(scene.play.missiles().count() == missiles);
+    CHECK(scene.play.effects().count() == effects);
+
+    scene.config.combat.autoMelee = true;
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    scene.config.combat.autoMelee = false;
+    runtime.actor.save().progress().inventory.addPowerup(powerup::kArmor, powerup::kReflectShield,
+                                                         0, 60);
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    runtime.actor.save().progress().inventory = inventory;
+    runtime.gesture = PlayerDeed::Pick;
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    runtime.gesture = PlayerDeed::None;
+    runtime.reaction = PlayerDeed::FallBack;
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    runtime.reaction = PlayerDeed::Flinch;
+    runtime.knockback.queue({0, 0, 1}, Knockback::kKnockDown, 10);
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    REQUIRE(runtime.knockback.restore(impulse));
+    // A fixture can push the feet onto static ground before FloorRiding has
+    // released the preceding moving support. Either retained marker is unsafe.
+    const auto floor = runtime.floor;
+    runtime.floor.placement = Mat4{1};
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    runtime.floor = floor;
+    REQUIRE(scene.play.knockbackPreview(1) == prefix);
+    runtime.floor.flags |= FloorRiding::kMoving;
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    runtime.floor = floor;
+    REQUIRE(scene.play.knockbackPreview(1) == prefix);
+    const Vec3 otherPosition = other.actor.position();
+    other.life = PlayerLife::Standing;
+    other.actor.place(runtime.actor.position());
+    CHECK(scene.play.knockbackPreview(1) == 0);
+    other.actor.place(otherPosition);
+    other.life = PlayerLife::InTower;
+    REQUIRE(scene.play.knockbackPreview(1) == prefix);
+
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto& player = *driver.latest()->players[1];
+    REQUIRE(player.knockback);
+    CHECK(*player.knockback == runtime.knockback.checkpoint());
+    CHECK(player.reaction == runtime.reaction);
+    CHECK(player.knockbackTicks > 0);
+    CHECK(player.movement.enabled);
+    CHECK(player.movement.current);
+    CHECK(player.modifiers.has_value() == speed);
+    if (player.modifiers) {
+        CHECK(player.modifiers->speed);
+    }
+    CHECK_FALSE(player.movement.ranged);
+    CHECK_FALSE(player.melee);
+    pair.pump();
+    REQUIRE(pair.guest.playback().latest());
+    const auto& received = *pair.guest.playback().latest()->players[1];
+    CHECK(received.knockback == player.knockback);
+    CHECK(received.reaction == player.reaction);
+    CHECK(received.knockbackTicks == player.knockbackTicks);
+}
+TEST_CASE("native G1 captures moving melee geometry without replaying combat side effects",
+          "[netplay][play-replication][moving-melee][assets]") {
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene("G1", false, true, false, party);
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& other = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    other.life = PlayerLife::InTower;
+    auto& enemies = scene.play.enemies();
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const Vec3 position = runtime.actor.position();
+    const auto enemy = enemies.spawn(
+        {.kind = kGruntKind,
+         .position = position + runtime.actor.facing() *
+                                    (runtime.actor.reach() + 2.5f + enemyKind(kGruntKind).radius),
+         .placed = true},
+        {});
+    REQUIRE(enemy);
+    // Authored barrel 19 is inside the starting area's all-bearing acquisition
+    // range. Mixed item/creature contact is deliberately outside this lane.
+    const auto mixed = scene.play.meleePreview(1);
+    REQUIRE(mixed);
+    CHECK_FALSE(mixed->moving);
+    // Keep real G1 geometry, native enemies and the host bridge, while isolating
+    // the admitted ordinary-cylinder encounter from unrelated barrel targeting.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& barrels = const_cast<Breakables&>(scene.play.barrels());
+    REQUIRE(barrels.size() > 0);
+    barrels.clear();
+    const auto preview = scene.play.meleePreview(1);
+    REQUIRE(preview);
+    REQUIRE(preview->moving);
+    CHECK(preview->moving->origin == position);
+    CHECK(preview->moving->ticks == PlayerMeleeState::kMaxTicks);
+    REQUIRE_FALSE(preview->moving->targets.empty());
+    const auto checkpoint = runtime.figure->animator().checkpoint();
+    const auto impulse = runtime.knockback.checkpoint();
+    const auto enemyHealth = enemies.healthOf(*enemy);
+    const auto inventory = runtime.actor.save().progress().inventory;
+    const usize missiles = scene.play.missiles().count();
+    const usize effects = scene.play.effects().count();
+    for (s32 repeat = 0; repeat < 4; ++repeat) {
+        const auto again = scene.play.meleePreview(1);
+        REQUIRE(again);
+        REQUIRE(again->moving);
+        CHECK(PlayerMeleeCheckpoint::encode(*again) == PlayerMeleeCheckpoint::encode(*preview));
+    }
+    CHECK(runtime.actor.position() == position);
+    CHECK(runtime.figure->animator().checkpoint() == checkpoint);
+    CHECK(runtime.knockback.checkpoint() == impulse);
+    CHECK(enemies.healthOf(*enemy) == enemyHealth);
+    CHECK(runtime.actor.save().progress().inventory == inventory);
+    CHECK(scene.play.missiles().count() == missiles);
+    CHECK(scene.play.effects().count() == effects);
+
+    const auto movingDenied = [&] {
+        const auto denied = scene.play.meleePreview(1);
+        CHECK((!denied || !denied->moving));
+    };
+    other.life = PlayerLife::Standing;
+    other.actor.place(position);
+    movingDenied();
+    other.life = PlayerLife::InTower;
+    const auto floor = runtime.floor;
+    runtime.floor.placement = Mat4{1};
+    movingDenied();
+    runtime.floor = floor;
+    runtime.floor.flags |= FloorRiding::kMoving;
+    movingDenied();
+    runtime.floor = floor;
+    runtime.gesture = PlayerDeed::Pick;
+    movingDenied();
+    runtime.gesture = PlayerDeed::None;
+    runtime.reaction = PlayerDeed::Flinch;
+    movingDenied();
+    runtime.reaction = PlayerDeed::None;
+    scene.config.combat.autoMelee = true;
+    movingDenied();
+    scene.config.combat.autoMelee = false;
+    runtime.actor.save().progress().inventory.addPowerup(powerup::kArmor, powerup::kReflectShield,
+                                                         0, 60);
+    movingDenied();
+    runtime.actor.save().progress().inventory = inventory;
+    const auto restored = scene.play.meleePreview(1);
+    REQUIRE(restored);
+    REQUIRE(restored->moving);
+
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    SessionInputs::Frame input;
+    input[0].move = {{0, 1}, 1};
+    input[0].aimDirection = runtime.actor.facing();
+    input[0].attack = true;
+    input[0].attackPressed = true;
+    REQUIRE(MatchInputs::sample(pair.guest, input));
+    REQUIRE(pair.guest.sampledInputs().size() == 1);
+    const auto sampled = pair.guest.sampledInputs().front();
+    REQUIRE(sampled.seat == 1);
+    pair.send(pair.guest, pair.host, 1);
+    // Guest input is scheduled ahead. Reach its actual resolution deadline;
+    // receipt of a future command is not evidence that gameplay consumed it.
+    do {
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+    } while (driver.latest()->motion.tick < sampled.tick);
+    REQUIRE(driver.latest());
+    REQUIRE(driver.latest()->players[1]);
+    CHECK(runtime.actor.moving());
+    CHECK(runtime.figure->animator().lunging());
+    const auto& received = *driver.latest()->players[1];
+    REQUIRE(received.rollbackInput);
+    CHECK(received.rollbackInput->tick == sampled.tick);
+    CHECK(received.rollbackInput->grant == sampled.grant);
+    CHECK(received.rollbackInput->heldButtons == sampled.heldButtons);
+    CHECK(received.rollbackInput->aimDirection == sampled.aimDirection);
+    REQUIRE(received.melee);
+    REQUIRE(received.melee->moving);
+    CHECK(received.movement.current);
+    CHECK(received.movement.enabled);
+    CHECK_FALSE(received.movement.ranged);
+    // A certified turbo context may carry its single-volley weapon descriptor
+    // even while ordinary ranged input is not authorized near a melee target.
+    CHECK(received.weapon.has_value() == received.turbo.has_value());
+    CHECK(received.melee->moving->origin == runtime.actor.position());
+    const auto bytes = CombatPacket::encode(*driver.latest());
+    REQUIRE(bytes);
+    const auto decoded = CombatPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->players[1]->melee);
+    CHECK(PlayerMeleeCheckpoint::encode(*decoded->players[1]->melee) ==
+          PlayerMeleeCheckpoint::encode(*received.melee));
+}
+TEST_CASE(
+    "native host grants supported turbo and shove context without spending or emitting attacks",
+    "[netplay][play-replication][turbo-prediction][shove-prediction][assets]") {
+    const bool charge = GENERATE(false, true);
+    const f32 speedBonus = GENERATE(0.0f, 2.0f, 20.0f);
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene("G1", false, true, false, party);
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& other = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    other.life = PlayerLife::InTower;
+    // G1's nearby barrel is a mixed target; prediction must not certify it
+    // before the fixture isolates the supported native target families.
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& barrels = const_cast<Breakables&>(scene.play.barrels());
+    REQUIRE(barrels.size() > 0);
+    barrels.clear();
+    const f32 cachedSpeed = runtime.actor.speed();
+    if (speedBonus != 0) {
+        runtime.actor.save().progress().inventory.addPowerup(powerup::kSpeed, 0, speedBonus, -1);
+    }
+    runtime.turbo.reset();
+    const f32 initialMeter = charge ? TurboMeter::kShoveFrom : TurboMeter::kStrongCost;
+    runtime.turbo.add(initialMeter);
+    const auto geometry = scene.play.turboGeometry(1);
+    REQUIRE(geometry);
+    REQUIRE(geometry->moving);
+    const f32 expectedSpeed =
+        std::clamp(cachedSpeed + speedBonus, PlayerActor::kMinSpeed, PlayerActor::kMaxSpeed);
+    CHECK(geometry->moving->radius ==
+          std::min(PlayerMeleeState::kMaxRadius,
+                   1.5f * expectedSpeed * static_cast<f32>(geometry->moving->ticks) / 60 + 0.01f));
+    CHECK(runtime.actor.speed() == cachedSpeed);
+    REQUIRE(scene.play.shovePredictable(1, *geometry));
+    // The combined native acquisition query reserves [1000, 2000) for
+    // enemies and [2000, 3000) for generators; fixture/critter IDs are excluded.
+    constexpr s32 kFirstSupportedTarget = 1000;
+    constexpr s32 kEndSupportedTargets = 3000;
+    for (const auto& target : geometry->moving->targets) {
+        CHECK(target.id >= kFirstSupportedTarget);
+        CHECK(target.id < kEndSupportedTargets);
+    }
+    const auto checkpoint = runtime.figure->animator().checkpoint();
+    const auto inventory = runtime.actor.save().progress().inventory;
+    const auto health = runtime.actor.save().progress().health;
+    const auto state = PlayerTurboState{runtime.turbo.checkpoint(), runtime.move.checkpoint()};
+    const auto missiles = scene.play.missiles().count();
+    const auto effects = scene.play.effects().count();
+    for (s32 repeat = 0; repeat < 5; ++repeat) {
+        const auto again = scene.play.turboGeometry(1);
+        REQUIRE(again);
+        CHECK(PlayerMeleeCheckpoint::encode(*again) == PlayerMeleeCheckpoint::encode(*geometry));
+        REQUIRE(scene.play.turboPreview(1));
+        CHECK(*scene.play.turboPreview(1) == state);
+        CHECK(scene.play.shovePredictable(1, *again));
+    }
+    CHECK(runtime.figure->animator().checkpoint() == checkpoint);
+    CHECK(runtime.actor.save().progress().inventory == inventory);
+    CHECK(runtime.actor.save().progress().health == health);
+    CHECK(runtime.turbo.checkpoint() == state.meter);
+    CHECK(runtime.move.checkpoint() == state.move);
+    CHECK(scene.play.missiles().count() == missiles);
+    CHECK(scene.play.effects().count() == effects);
+
+    // Native charge hits raw standing fixtures even if they are nonsolid or
+    // absent from ordinary acquisition (SafeRocks). Do not infer ram safety
+    // from the already accepted movement boxes alone.
+    const auto ramDirectory = test::scratchDirectory("shove-capture-fixtures");
+    writeTextFile(ramDirectory / "world.json", R"({
+      "objects": [{"name":"GROUND","position":[0,0,0],"next":-1,"child":-1}],
+      "itemInfos": [
+        {"type":10,"subtype":43,"name":"BARREL","radius":1,"height":3,
+         "collisionType":1,"hitPoints":10},
+        {"type":10,"subtype":41,"name":"ROCK","radius":1,"height":3,
+         "collisionType":1,"hitPoints":10}],
+      "itemInstances": [
+        {"info":0,"minPlayers":1,"position":[0,0,0],"rotation":[0,0,0],
+         "params":[0,0,3,0,0,0,0,0,0,0,0,0]},
+        {"info":1,"minPlayers":1,"position":[0,0,0],"rotation":[0,0,0],
+         "params":[41,0,3,0,0,0,0,0,0,0,0,0]}]
+    })");
+    WorldLayout ramLayout;
+    REQUIRE(ramLayout.load(ramDirectory));
+    ItemArchive missing;
+    REQUIRE(barrels.bind(scene.device, ramLayout, missing, nullptr));
+    REQUIRE(barrels.standing(0));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned test fixture
+    auto& ramBarrel = const_cast<Breakables::Barrel&>(barrels.barrel(0));
+    ramBarrel.box.centre = runtime.actor.position();
+    ramBarrel.box.solid = false;
+    CHECK_FALSE(scene.play.shovePredictable(1, *geometry));
+    const f32 outside =
+        geometry->moving->radius + runtime.actor.radius() + PlayerAttacks::kRamReach + 20;
+    ramBarrel.box.centre += Vec3{outside, 0, 0};
+    CHECK(scene.play.shovePredictable(1, *geometry));
+    barrels.clear();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned test fixture
+    auto& rocks = const_cast<SafeRocks&>(scene.play.safeRocks());
+    REQUIRE(rocks.bind(scene.device, ramLayout, missing));
+    REQUIRE(rocks.standing(0));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned test fixture
+    auto& ramRock = const_cast<SafeRocks::Rock&>(rocks.rock(0));
+    ramRock.obstacle.centre = runtime.actor.position() + Vec3{0, 100, 0};
+    ramRock.obstacle.solid = false;
+    CHECK_FALSE(scene.play.shovePredictable(1, *geometry));
+    ramRock.obstacle.centre += Vec3{outside, 0, 0};
+    CHECK(scene.play.shovePredictable(1, *geometry));
+    rocks.clear();
+    CHECK_FALSE(scene.play.shovePredictable(-1, *geometry));
+    auto invalidRegion = *geometry;
+    invalidRegion.moving.reset();
+    CHECK_FALSE(scene.play.shovePredictable(1, invalidRegion));
+    invalidRegion = *geometry;
+    invalidRegion.selection.feet += Vec3{1, 0, 0};
+    invalidRegion.moving->origin = invalidRegion.selection.feet;
+    CHECK_FALSE(scene.play.shovePredictable(1, invalidRegion));
+
+    runtime.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 60);
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    runtime.actor.save().progress().inventory = inventory;
+    scene.config.combat.autoMelee = true;
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    scene.config.combat.autoMelee = false;
+    const auto floor = runtime.floor;
+    runtime.floor.placement = Mat4{1};
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    runtime.floor = floor;
+    runtime.gesture = PlayerDeed::Pick;
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    runtime.gesture = PlayerDeed::None;
+    REQUIRE(scene.play.turboGeometry(1));
+
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    SessionInputs::Frame input;
+    input[0].turboAttackPressed = !charge;
+    input[0].chargePressed = charge;
+    REQUIRE(MatchInputs::sample(pair.guest, input));
+    REQUIRE(pair.guest.sampledInputs().size() == 1);
+    const auto sampled = pair.guest.sampledInputs().front();
+    pair.send(pair.guest, pair.host, 1);
+    f32 beforeStepMeter = runtime.turbo.held();
+    do {
+        beforeStepMeter = runtime.turbo.held();
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+    } while (driver.latest()->motion.tick < sampled.tick);
+    REQUIRE(runtime.figure->animator().action() ==
+            (charge ? PlayerAnimator::Action::Shove : PlayerAnimator::Action::TurboStrong));
+    const auto& captured = *driver.latest()->players[1];
+    REQUIRE(captured.turbo);
+    REQUIRE(captured.turboGeometry);
+    REQUIRE(captured.turboGeometry->moving);
+    CHECK(captured.turbo->meter == runtime.turbo.checkpoint());
+    CHECK(captured.turbo->move == runtime.move.checkpoint());
+    // Warrior B's first damaging native row starts at frame zero, so the
+    // first post-step checkpoint already records its payment.
+    CHECK(captured.turbo->move.owed == 0);
+    CHECK(captured.turbo->meter.held < beforeStepMeter);
+    CHECK(captured.shove);
+    if (charge) {
+        CHECK(captured.turbo->move == TurboMove::Checkpoint{});
+        CHECK(runtime.rammed.empty());
+    }
+    CHECK(captured.movement.enabled);
+    CHECK(captured.movement.current);
+    CHECK_FALSE(captured.movement.ranged);
+    REQUIRE(captured.weapon);
+    CHECK(resources.acceptsWeapon(*captured.weapon));
+    const auto bytes = CombatPacket::encode(*driver.latest());
+    REQUIRE(bytes);
+    const auto decoded = CombatPacket::decode(*bytes);
+    REQUIRE(decoded);
+    CHECK(decoded->players[1]->turbo == captured.turbo);
+    CHECK(decoded->players[1]->shove == captured.shove);
+    REQUIRE(decoded->players[1]->turboGeometry);
+    CHECK(PlayerMeleeCheckpoint::encode(*decoded->players[1]->turboGeometry) ==
+          PlayerMeleeCheckpoint::encode(*captured.turboGeometry));
+}
+TEST_CASE("weapon modifier certification stops before effective inventory changes without mutation",
+          "[netplay][play-replication][weapon-modifiers][assets]") {
+    const auto level = GENERATE(std::string_view{}, std::string_view{"G1"}, std::string_view{"G5"});
+    Scene scene(level);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    CHECK_FALSE(scene.play.weaponModifiers(1));
+    CHECK_FALSE(scene.play.weaponModifiers(-1));
+    for (const u32 flags :
+         {powerup::kRapidFire, powerup::kThreeWayShot, powerup::kFiveWayShot,
+          PlayerMissiles::kPlainModifiers, 1U, 2U, 3U, 4U, PlayerMissiles::kPlainModifiers | 4U}) {
+        for (const f32 duration : {0.001f, 0.04f, 0.2f, -1.0f}) {
+            CAPTURE(level, flags, duration);
+            inventory.powerups[0] = {duration, powerup::kWeapon, 0, flags, true};
+            const auto before = inventory;
+            const auto modifiers = scene.play.weaponModifiers(1);
+            REQUIRE(modifiers);
+            CHECK(modifiers->flags == flags);
+            auto oracle = before;
+            f32 rate = 1;
+            if (level.empty()) {
+                rate = 0;
+            } else if (level == "G5") {
+                rate = 3;
+            }
+            u32 ticks = 0;
+            for (; ticks < PlayerWeaponModifiers::kMaxTicks; ++ticks) {
+                oracle.advance((1.0f / 60) * rate);
+                if (PowerupEffects::of(oracle).weapon != flags) {
+                    break;
+                }
+            }
+            CHECK(modifiers->ticks == ticks);
+            CHECK(inventory == before);
+            const auto preview = scene.play.weaponPreview(1);
+            REQUIRE(preview);
+            CHECK(preview->shots == PowerupEffects::of(inventory).shots());
+        }
+    }
+    inventory = {};
+    inventory.powerups[0] = {0.001f, powerup::kWeapon, 0, powerup::kRapidFire, true};
+    inventory.powerups[1] = {-1, powerup::kWeapon, 0, powerup::kRapidFire, true};
+    inventory.powerups[2] = {30, powerup::kWeapon, 0, powerup::kSuperShot, false};
+    const auto retained = scene.play.weaponModifiers(1);
+    REQUIRE(retained);
+    CHECK(retained->ticks == PlayerWeaponModifiers::kMaxTicks);
+    REQUIRE(scene.play.weaponPreview(1));
+    inventory.powerups[2].on = true;
+    CHECK_FALSE(scene.play.weaponModifiers(1));
+    CHECK_FALSE(scene.play.weaponPreview(1));
+    CHECK_FALSE(scene.play.rangedPredictable(1));
+    CHECK_FALSE(scene.play.meleePreview(1));
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    inventory.powerups[2].on = false;
+    inventory.powerups[0].on = false;
+    inventory.powerups[1].on = false;
+    CHECK_FALSE(scene.play.weaponModifiers(1));
+    REQUIRE(scene.play.weaponPreview(1));
+    CHECK(scene.play.weaponPreview(1)->shots == 1);
+}
+
+TEST_CASE("host captures rapid spread weapons with stable native fan identities",
+          "[netplay][play-replication][weapon-modifiers][assets]") {
+    const u32 flags = GENERATE(powerup::kRapidFire, powerup::kThreeWayShot, powerup::kFiveWayShot,
+                               PlayerMissiles::kPlainModifiers);
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    inventory.addPowerup(powerup::kWeapon, flags, 0, 30);
+    const auto before = inventory;
+    const auto expectedShots = static_cast<usize>(PowerupEffects::of(inventory).shots());
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    SessionInputs::Frame input;
+    input[0].attack = true;
+    input[0].attackPressed = true;
+    for (s32 tick = 0; tick < 180 && scene.play.missiles().count() == 0; ++tick) {
+        REQUIRE(MatchInputs::sample(pair.guest, input));
+        pair.pump();
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        pair.pump();
+        input[0].attackPressed = false;
+    }
+    REQUIRE(scene.play.missiles().count() == expectedShots);
+    REQUIRE(driver.latest());
+    const auto& captured = *driver.latest();
+    REQUIRE(captured.players[1]);
+    const auto& player = *captured.players[1];
+    REQUIRE(player.modifiers);
+    CHECK(player.modifiers->flags == flags);
+    CHECK(player.modifiers->ticks == PlayerWeaponModifiers::kMaxTicks);
+    REQUIRE(player.weapon);
+    CHECK(player.weapon->shots == expectedShots);
+    REQUIRE(player.rollback);
+    CHECK(player.rollback->rapid == ((flags & powerup::kRapidFire) != 0));
+    CHECK(inventory == before);
+    std::array<bool, 5> ordinals{};
+    for (const auto& shot : captured.projectiles) {
+        if (!shot.rollback) {
+            continue;
+        }
+        const auto& origin = shot.rollback->origin;
+        CHECK(origin.seat == 1);
+        CHECK(origin.tick == captured.motion.tick);
+        CHECK(origin.generation == player.rollback->animation.generation);
+        REQUIRE(origin.ordinal < expectedShots);
+        ordinals[origin.ordinal] = true;
+    }
+    CHECK(static_cast<usize>(std::ranges::count(ordinals, true)) == expectedShots);
+    const auto bytes = CombatPacket::encode(captured);
+    REQUIRE(bytes);
+    const auto decoded = CombatPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->players[1]->modifiers);
+    CHECK(decoded->players[1]->modifiers->flags == flags);
+    CHECK(decoded->players[1]->weapon->shots == expectedShots);
+}
+
+TEST_CASE("Speed certification tracks native pace sums and animation-only cheat timing",
+          "[netplay][play-replication][weapon-modifiers][speed-prediction][assets]") {
+    const auto level = GENERATE(std::string_view{}, std::string_view{"G1"}, std::string_view{"G5"});
+    Scene scene(level);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    runtime.actor.setPaceBonus(0);
+    const f32 unboosted = runtime.actor.speed();
+    f32 rate = 1;
+    if (level.empty()) {
+        rate = 0;
+    } else if (level == "G5") {
+        rate = 3;
+    }
+    const auto verify = [&] {
+        const auto before = inventory;
+        const auto worn = PowerupEffects::of(before);
+        const bool speed = (worn.special & powerup::kSpeedBoost) != 0;
+        const auto modifiers = scene.play.weaponModifiers(1);
+        REQUIRE(modifiers);
+        CHECK(modifiers->flags == worn.weapon);
+        CHECK(modifiers->speed == speed);
+        auto oracle = before;
+        u32 ticks = 0;
+        for (; ticks < PlayerWeaponModifiers::kMaxTicks; ++ticks) {
+            oracle.advance((1.0f / 60) * rate);
+            const auto next = PowerupEffects::of(oracle);
+            if (next.weapon != worn.weapon || next.paceAdd != worn.paceAdd ||
+                ((next.special & powerup::kSpeedBoost) != 0) != speed) {
+                break;
+            }
+        }
+        CHECK(modifiers->ticks == ticks);
+        CHECK(scene.play.itemsPredictable(1));
+        CHECK(scene.play.predictionSpeed(1) ==
+              std::clamp(unboosted + worn.paceAdd, PlayerActor::kMinSpeed, PlayerActor::kMaxSpeed));
+        CHECK(runtime.actor.speed() == unboosted);
+        CHECK(inventory == before);
+        return modifiers->ticks;
+    };
+    for (const f32 duration : {0.001f, 0.04f, 0.2f, -1.0f}) {
+        for (const f32 charge : {0.0f, 2.0f, 20.0f}) {
+            CAPTURE(level, duration, charge);
+            inventory = {};
+            inventory.powerups[0] = {duration, powerup::kSpeed, charge, 0, true};
+            verify();
+            inventory.powerups[1] = {-1, powerup::kWeapon, 0, PlayerMissiles::kPlainModifiers,
+                                     true};
+            verify();
+        }
+    }
+    // Losing one duplicate can leave Speed active while changing movement pace.
+    inventory = {};
+    inventory.powerups[0] = {0.04f, powerup::kSpeed, 2, 0, true};
+    inventory.powerups[1] = {-1, powerup::kSpeed, 1, 0, true};
+    const auto shortened = verify();
+    if (!level.empty()) {
+        CHECK(shortened < PlayerWeaponModifiers::kMaxTicks);
+    }
+    // A zero-bonus duplicate may expire without changing either effective input.
+    inventory.powerups[0].charge = 0;
+    CHECK(verify() == PlayerWeaponModifiers::kMaxTicks);
+    inventory = {};
+    // XSPEED's special-kind charge does not enter SetPlayerVars' pace sum.
+    inventory.powerups[0] = {0.04f, powerup::kSpecial, 4, powerup::kSpeedBoost, true};
+    verify();
+    CHECK(scene.play.predictionSpeed(1) == unboosted);
+    inventory.powerups[0].on = false;
+    CHECK_FALSE(scene.play.weaponModifiers(1));
+    CHECK(scene.play.itemsPredictable(1));
+    CHECK_FALSE(scene.play.predictionSpeed(-1));
+    for (const f32 invalid :
+         {std::numeric_limits<f32>::quiet_NaN(), std::numeric_limits<f32>::infinity()}) {
+        inventory = {};
+        inventory.powerups[0] = {invalid, powerup::kSpeed, 2, 0, true};
+        CHECK_FALSE(scene.play.weaponModifiers(1));
+        CHECK_FALSE(scene.play.itemsPredictable(1));
+        CHECK_FALSE(scene.play.predictionSpeed(1));
+        inventory.powerups[0] = {-1, powerup::kSpeed, invalid, 0, true};
+        CHECK_FALSE(scene.play.weaponModifiers(1));
+        CHECK_FALSE(scene.play.itemsPredictable(1));
+        CHECK_FALSE(scene.play.predictionSpeed(1));
+        inventory.powerups[0] = {invalid, powerup::kSpecial, 4, powerup::kSpeedBoost, true};
+        CHECK_FALSE(scene.play.weaponModifiers(1));
+        CHECK_FALSE(scene.play.predictionSpeed(1));
+    }
+}
+
+TEST_CASE("Speed pickup capture uses next-step pace without changing the native actor",
+          "[netplay][play-replication][weapon-modifiers][speed-prediction][assets]") {
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    // G1's authored BOOSTICON is subtype 7, value 4, activeOn 40. The
+    // Tower does not contain a Speed record in its native item table.
+    Scene scene("G1", false, true, false, party);
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    runtime.actor.save().progress().inventory = {};
+    runtime.actor.setPaceBonus(0);
+    const f32 before = runtime.actor.speed();
+    const auto& infos = scene.world.layout().itemInfos();
+    const auto item = std::ranges::find_if(infos, [](const auto& info) {
+        return info.type == ItemInfo::kPowerup &&
+               info.subtype == static_cast<s32>(ItemKind::SpeedPowerup) && info.value > 0;
+    });
+    REQUIRE(item != infos.end());
+    REQUIRE(scene.world.placeItem(scene.device, item->name, runtime.actor.position()));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto worn = PowerupEffects::of(runtime.actor.save().progress().inventory);
+    REQUIRE(worn.paceAdd > 0);
+    const auto& captured = *driver.latest()->players[0];
+    REQUIRE(captured.modifiers);
+    CHECK(captured.modifiers->speed);
+    CHECK(captured.modifiers->flags == 0);
+    REQUIRE(captured.rollback);
+    CHECK_FALSE(captured.rollback->speed);
+    CHECK(runtime.actor.speed() == before);
+    const f32 expected =
+        std::clamp(before + worn.paceAdd, PlayerActor::kMinSpeed, PlayerActor::kMaxSpeed);
+    CHECK(captured.movement.speed == expected);
+    // Outside the Tower, the post-motion pickup also schedules P_PICKUP.
+    // This unresolved gesture must withhold replay, not discard the fresh pace.
+    CHECK(runtime.gesture == PlayerDeed::Pick);
+    CHECK_FALSE(captured.movement.current);
+    CHECK_FALSE(captured.movement.enabled);
+    REQUIRE(CombatPacket::encode(*driver.latest()));
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    CHECK(runtime.actor.speed() == expected);
+    CHECK(driver.latest()->players[0]->rollback->speed);
+    REQUIRE(driver.latest()->players[0]->rollback->action == PlayerAnimator::Action::Pick);
+    CHECK_FALSE(driver.latest()->players[0]->movement.enabled);
+    for (s32 tick = 0;
+         tick < 120 && runtime.figure->animator().action() == PlayerAnimator::Action::Pick;
+         ++tick) {
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    }
+    REQUIRE(runtime.figure->animator().action() != PlayerAnimator::Action::Pick);
+    CHECK(driver.latest()->players[0]->movement.enabled);
+    CHECK(driver.latest()->players[0]->movement.speed == expected);
+    REQUIRE(driver.latest()->players[0]->modifiers);
+    CHECK(driver.latest()->players[0]->modifiers->speed);
+}
+
+TEST_CASE("passive invulnerability retains plain local attacks with Speed and spread",
+          "[netplay][play-replication][weapon-modifiers][speed-prediction][assets]") {
+    const u32 armor = GENERATE(powerup::kInvulnerable, powerup::kGoldInvulnerable,
+                               powerup::kInvulnerable | powerup::kGoldInvulnerable);
+    const bool defend = GENERATE(false, true);
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    inventory.addPowerup(powerup::kArmor, armor, 0, -1);
+    inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    inventory.addPowerup(powerup::kWeapon, PlayerMissiles::kPlainModifiers, 0, -1);
+    const auto before = inventory;
+    CHECK(scene.play.itemsPredictable(0));
+    REQUIRE(scene.play.weaponPreview(0));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    SessionInputs::Frame input;
+    input[0].strongAttack = !defend;
+    input[0].defendPressed = defend;
+    REQUIRE(driver.advance(pair.host, input, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto& captured = *driver.latest()->players[0];
+    CHECK(captured.movement.enabled);
+    CHECK(captured.movement.ranged);
+    REQUIRE(captured.modifiers);
+    CHECK(captured.modifiers->speed);
+    CHECK(captured.modifiers->flags == PlayerMissiles::kPlainModifiers);
+    REQUIRE(captured.rollback);
+    CHECK(captured.rollback->speed);
+    CHECK_FALSE(captured.rollback->shielded);
+    CHECK_FALSE(PlayerAnimator::locomotion(captured.rollback->action));
+    REQUIRE(captured.weapon);
+    CHECK(captured.weapon->shots == 5);
+    CHECK(inventory == before);
+    CHECK(CombatPacket::encode(*driver.latest()));
+}
+
+TEST_CASE("Speed with an unsupported weapon retains authority but cannot replay movement",
+          "[netplay][play-replication][weapon-modifiers][speed-prediction][assets]") {
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    inventory.addPowerup(powerup::kWeapon, powerup::kThunderHammer, -1, -1);
+    CHECK_FALSE(scene.play.weaponModifiers(0));
+    CHECK_FALSE(scene.play.predictionSpeed(0));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto& captured = *driver.latest()->players[0];
+    REQUIRE(captured.rollback);
+    CHECK(captured.rollback->speed);
+    CHECK(captured.movement.current);
+    CHECK_FALSE(captured.movement.enabled);
+    CHECK_FALSE(captured.movement.ranged);
+    CHECK_FALSE(captured.modifiers);
+    CHECK_FALSE(captured.weapon);
+    CHECK_FALSE(captured.melee);
+    CHECK_FALSE(captured.turbo);
+    CHECK_FALSE(captured.turboGeometry);
+    CHECK_FALSE(captured.shove);
+    CHECK(captured.knockbackTicks == 0);
+    CHECK(CombatPacket::encode(*driver.latest()));
+}
+
+TEST_CASE("unsupported equipment preserves walking but revokes active ordinary action replay",
+          "[netplay][play-replication][weapon-modifiers][assets]") {
+    const u32 armor = GENERATE(0U, 0x80000U, 0x80000000U);
+    const bool defend = GENERATE(false, true);
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    inventory.addPowerup(powerup::kWeapon, powerup::kRapidFire, 0, 30);
+    inventory.addPowerup(armor != 0 ? powerup::kArmor : powerup::kWeapon, armor != 0 ? armor : 5U,
+                         0, 30);
+    CHECK_FALSE(scene.play.itemsPredictable(0));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto walking = *driver.latest()->players[0];
+    CHECK(walking.movement.enabled);
+    CHECK(walking.movement.current);
+    CHECK_FALSE(walking.movement.ranged);
+    CHECK_FALSE(walking.melee);
+    CHECK_FALSE(walking.turbo);
+    CHECK_FALSE(walking.weapon);
+    SessionInputs::Frame input;
+    input[0].defendPressed = defend;
+    input[0].strongAttack = !defend;
+    REQUIRE(driver.advance(pair.host, input, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    const auto& active = *driver.latest()->players[0];
+    REQUIRE(active.rollback);
+    CHECK_FALSE(PlayerAnimator::locomotion(active.rollback->action));
+    CHECK_FALSE(active.movement.enabled);
+    CHECK(active.movement.current);
+    CHECK_FALSE(active.movement.ranged);
+    CHECK_FALSE(active.melee);
+    CHECK_FALSE(active.turbo);
+    CHECK_FALSE(active.weapon);
+    CHECK(CombatPacket::encode(*driver.latest()));
+}
+
+TEST_CASE(
+    "shield locomotion admits native gait but withholds attack and reaction replay",
+    "[netplay][play-replication][weapon-modifiers][speed-prediction][shield-prediction][assets]") {
+    const u32 armor =
+        GENERATE(powerup::kReflectShield, powerup::kFireShield, powerup::kLightningShield);
+    const bool speed = GENERATE(false, true);
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    auto& inventory = runtime.actor.save().progress().inventory;
+    inventory = {};
+    inventory.addPowerup(powerup::kArmor, armor, 0, -1);
+    if (speed) {
+        inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    }
+    CHECK(scene.play.predictionSpeed(0));
+    CHECK_FALSE(scene.play.itemsPredictable(0));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    for (const bool moving : {false, true}) {
+        SessionInputs::Frame input;
+        if (moving) {
+            input[0].move = {{0, 1}, 1};
+        }
+        for (s32 tick = 0; tick < 4; ++tick) {
+            REQUIRE(driver.advance(pair.host, input, resources) == Result::Advanced);
+        }
+        REQUIRE(driver.latest());
+        const auto& captured = *driver.latest()->players[0];
+        REQUIRE(captured.rollback);
+        CHECK(captured.rollback->shielded);
+        CHECK(captured.rollback->speed == speed);
+        CHECK(PlayerAnimator::locomotion(captured.rollback->action));
+        CHECK(captured.movement.current);
+        CHECK(captured.movement.enabled);
+        REQUIRE(captured.modifiers);
+        CHECK(captured.modifiers->shields == armor);
+        CHECK(captured.modifiers->speed == speed);
+        CHECK(captured.modifiers->ticks == PlayerWeaponModifiers::kMaxTicks);
+        CHECK(captured.armEquipment == armor);
+        CHECK_FALSE(captured.movement.ranged);
+        CHECK_FALSE(captured.weapon);
+        CHECK_FALSE(captured.melee);
+        CHECK_FALSE(captured.turbo);
+        CHECK_FALSE(captured.turboGeometry);
+        CHECK_FALSE(captured.shove);
+        CHECK(captured.knockbackTicks == 0);
+        CHECK(CombatPacket::encode(*driver.latest()));
+    }
+    inventory.powerups[0].on = false;
+    CHECK(scene.play.predictionSpeed(0));
+    CHECK(scene.play.itemsPredictable(0));
+}
+
+TEST_CASE("four native rapid five-way players keep projectile capture running",
+          "[netplay][play-replication][weapon-modifiers][projectile-capacity][assets]") {
+    const bool speed = GENERATE(false, true);
+    const bool strafe = GENERATE(false, true);
+    const u32 element = GENERATE(0U, 1U, 2U, 3U, 4U);
+    CharacterSave save;
+    save.character = 7; // The native Jester has the shortest ordinary throw cycle.
+    save.progress().health = 1000;
+    save.progress().inventory.addPowerup(
+        powerup::kWeapon, powerup::kRapidFire | powerup::kFiveWayShot | element, 0, -1);
+    if (speed) {
+        save.progress().inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    }
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}, PartyMember{2, save},
+                           PartyMember{3, save}};
+    Scene scene({}, false, false, false, party);
+    scene.settle();
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    // Local seat ownership changes input routing, not native simulation or the
+    // production snapshot/component limit used by a four-peer online room.
+    MatchSession host;
+    REQUIRE(host.open(1, {1, 1, 1, 1}, {}));
+    REQUIRE(host.prepare(1));
+    PlayReplication driver;
+    REQUIRE(driver.bind(scene.play, host, scene.pickups, scene.fixtures));
+    REQUIRE(host.loaded());
+    REQUIRE(host.phase() == MatchSession::Phase::Running);
+    SessionInputs::Frame input;
+    for (auto& player : input) {
+        player.attack = true;
+        player.aimDirection = Vec3{0, 0, 1};
+        player.strafe = strafe;
+    }
+    usize maxPhysical = 0;
+    usize maxComponents = 0;
+    usize maxParticleComponents = 0;
+    usize maxRetiringComponents = 0;
+    usize maxRawBytes = 0;
+    usize maxCompressedBytes = 0;
+    usize maxBurstBytes = 0;
+    usize maxPackets = 0;
+    usize reconstructed = 0;
+    usize firstFailurePhysical = 0;
+    usize firstFailureComponents = 0;
+    s32 firstFailureTick = -1;
+    std::array<s32, 4> lastRelease{-1, -1, -1, -1};
+    std::array<s32, 4> minimumPeriod{600, 600, 600, 600};
+    std::array<s32, 4> releases{};
+    std::array<s32, 4> strafeTicks{};
+    std::array<s32, 4> strafeReleases{};
+    std::array<f32, 4> distance{};
+    std::array<Vec3, 4> previous{};
+    for (usize seat = 0; seat < previous.size(); ++seat) {
+        REQUIRE(scene.play.actor(static_cast<s32>(seat)));
+        previous[seat] = scene.play.actor(static_cast<s32>(seat))->position();
+    }
+    for (s32 tick = 0; tick < 600; ++tick) {
+        if (strafe) {
+            // Stay near the native spawn with short alternating sidesteps. Keep
+            // actual input, movement, facing, collisions and animations in play.
+            const f32 direction = (tick / 24) % 2 == 0 ? 1.0f : -1.0f;
+            for (auto& player : input) {
+                player.move = {{direction, 0}, 1};
+            }
+        }
+        bool failedNow = false;
+        if (firstFailureTick < 0) {
+            const auto result = driver.advance(host, input, resources);
+            if (result != Result::Advanced) {
+                firstFailureTick = tick;
+                failedNow = true;
+            }
+        } else {
+            // Continue the unchanged native scene solely to measure its peak
+            // after the replication owner fails; do not suppress real impacts.
+            REQUIRE(scene.play.update(1.0 / 60, input) == PlayOutcome::Running);
+        }
+        for (usize seat = 0; seat < releases.size(); ++seat) {
+            const auto* animator = scene.play.animator(static_cast<s32>(seat));
+            REQUIRE(animator);
+            CHECK(animator->checkpoint().speed == speed);
+            CHECK(animator->checkpoint().rapid);
+            const bool shootingStrafe =
+                animator->action() >= PlayerAnimator::Action::StrafeShootForward1 &&
+                animator->action() <= PlayerAnimator::Action::StrafeShootRight2;
+            strafeTicks[seat] += shootingStrafe ? 1 : 0;
+            const auto position = scene.play.actor(static_cast<s32>(seat))->position();
+            distance[seat] += glm::distance(position, previous[seat]);
+            previous[seat] = position;
+            if (animator->released()) {
+                strafeReleases[seat] += shootingStrafe ? 1 : 0;
+                if (lastRelease[seat] >= 0) {
+                    minimumPeriod[seat] = std::min(minimumPeriod[seat], tick - lastRelease[seat]);
+                }
+                lastRelease[seat] = tick;
+                ++releases[seat];
+            }
+        }
+        const auto& missiles = scene.play.missiles();
+        usize components = 0;
+        for (usize index = 0; index < missiles.count(); ++index) {
+            const auto& missile = missiles.missile(index);
+            if (missile.effect == 0 && missile.model != nullptr && missile.model->bound()) {
+                ++components;
+            }
+            if (missile.streak.texture != nullptr) {
+                ++components;
+            }
+        }
+        for (usize index = 0; index < missiles.visuals().count(); ++index) {
+            const auto& effect = missiles.visuals().effect(index);
+            const auto* history = missiles.visualHistory(effect.id);
+            if (effect.tree != nullptr && (!effect.retiring || history != nullptr) &&
+                (effect.model.bound() || history != nullptr)) {
+                ++components;
+            }
+        }
+        if (firstFailureTick < 0) {
+            REQUIRE(driver.latest());
+            const auto& captured = driver.latest()->projectiles;
+            // Use the actual replicated roster, including particle-only riders,
+            // retained tails and any other scene effects. The native count above
+            // remains a conservative witness if capture fails before publishing.
+            components = captured.size();
+            usize particleComponents = 0;
+            usize retiringComponents = 0;
+            for (const auto& shot : captured) {
+                if (shot.particles && resources.hasParticles(shot.resource)) {
+                    ++particleComponents;
+                }
+                if (shot.particles && shot.particles->flight.retiring) {
+                    ++retiringComponents;
+                }
+            }
+            maxParticleComponents = std::max(maxParticleComponents, particleComponents);
+            maxRetiringComponents = std::max(maxRetiringComponents, retiringComponents);
+        }
+        const bool newPeak = components > maxComponents;
+        maxPhysical = std::max(maxPhysical, missiles.count());
+        maxComponents = std::max(maxComponents, components);
+        if (failedNow) {
+            firstFailurePhysical = missiles.count();
+            firstFailureComponents = components;
+        }
+        if (firstFailureTick < 0 && (newPeak || tick % 120 == 0 || tick == 599)) {
+            REQUIRE(driver.latest());
+            const auto& snapshot = *driver.latest();
+            const auto raw = CombatPacket::encode(snapshot);
+            REQUIRE(raw);
+            const auto compressed = SnapshotBlock::encode(*raw);
+            REQUIRE(compressed);
+            const auto packets =
+                CombatReplica::packets(snapshot, SnapshotBlock::Compression::Automatic,
+                                       CombatReplica::Recovery::SingleLoss);
+            REQUIRE(packets);
+            usize burstBytes = 0;
+            CombatReplica replica;
+            REQUIRE(replica.begin(1, snapshot.motion.epoch));
+            for (const auto& packet : *packets) {
+                burstBytes += packet.size();
+                CHECK(packet.size() <= PacketTransport::kMaxPacketBytes);
+                const auto admitted = replica.receive(1, packet);
+                // Repair packets following the final data chunk are already stale.
+                CHECK((admitted == CombatReplica::Admission::Pending ||
+                       admitted == CombatReplica::Admission::Committed ||
+                       admitted == CombatReplica::Admission::Stale));
+            }
+            REQUIRE(replica.latest());
+            CHECK(CombatPacket::encode(*replica.latest()) == raw);
+            CHECK(replica.latest()->projectiles.size() == snapshot.projectiles.size());
+            maxRawBytes = std::max(maxRawBytes, raw->size());
+            maxCompressedBytes = std::max(maxCompressedBytes, compressed->size());
+            maxBurstBytes = std::max(maxBurstBytes, burstBytes);
+            maxPackets = std::max(maxPackets, packets->size());
+            ++reconstructed;
+        }
+    }
+    CAPTURE(speed, strafe, element, strafeTicks, strafeReleases, distance, maxPhysical,
+            maxComponents, maxParticleComponents, maxRetiringComponents, firstFailureTick,
+            firstFailurePhysical, firstFailureComponents, minimumPeriod, releases, maxRawBytes,
+            maxCompressedBytes, maxBurstBytes, maxPackets, reconstructed);
+    CHECK(std::ranges::all_of(releases, [](s32 count) { return count > 10; }));
+    if (strafe) {
+        CHECK(std::ranges::all_of(strafeTicks, [](s32 count) { return count > 300; }));
+        CHECK(std::ranges::all_of(strafeReleases, [](s32 count) { return count > 10; }));
+        CHECK(std::ranges::all_of(distance, [](f32 travelled) { return travelled > 1; }));
+    } else {
+        CHECK(std::ranges::all_of(strafeTicks, [](s32 count) { return count == 0; }));
+    }
+    CHECK(firstFailureTick == -1);
+    CHECK(reconstructed > 5);
+    CHECK(maxBurstBytes <= static_cast<usize>(PacketTransport::kSendBufferBytes));
+}
+
+TEST_CASE("host certifies elemental throws with distinct native body rider and streak identities",
+          "[netplay][play-replication][elemental-replay][assets]") {
+    const u32 element = GENERATE(1U, 2U, 3U, 4U);
+    const s32 character = GENERATE(0, 2, 6);
+    const bool strong = GENERATE(false, true);
+    CAPTURE(element, character, strong);
+    CharacterSave save;
+    save.character = character;
+    save.progress().health = 1000;
+    const u32 flags = element | powerup::kRapidFire | powerup::kFiveWayShot;
+    save.progress().inventory.addPowerup(powerup::kWeapon, flags, 0, -1);
+    save.progress().inventory.addPowerup(powerup::kSpeed, 0, 2, -1);
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene({}, false, false, false, party);
+    scene.settle();
+    const auto before = scene.play.actor(1)->save().progress().inventory;
+    CHECK_FALSE(scene.play.itemsPredictable(1));
+    CHECK(scene.play.rangedItemsPredictable(1));
+    CHECK(scene.play.predictionSpeed(1));
+    CHECK_FALSE(scene.play.meleePreview(1));
+    CHECK_FALSE(scene.play.turboGeometry(1));
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+    REQUIRE(driver.latest());
+    REQUIRE(driver.latest()->players[1]->weapon);
+    const auto descriptor = *driver.latest()->players[1]->weapon;
+    REQUIRE(descriptor.rider != 0);
+    REQUIRE(resources.acceptsWeapon(descriptor));
+    const auto& runtime = scene.play.participants()[1];
+    const auto rider = scene.play.weaponRider(runtime.actor, *runtime.figure);
+    REQUIRE(rider);
+    CHECK(descriptor.rider == resources.treeId(rider->archive, rider->tree, rider->lenders));
+    // No projectile has used either bank yet: zero is not an invented running clock.
+    CHECK_FALSE(descriptor.textureFrame);
+    CHECK_FALSE(descriptor.riderTextureFrame);
+    SessionInputs::Frame inputs;
+    inputs[0].attack = !strong;
+    inputs[0].attackPressed = !strong;
+    inputs[0].strongAttack = strong;
+    inputs[0].aimDirection = Vec3{0, 0, 1};
+    for (s32 tick = 0; tick < 180 && scene.play.missiles().count() == 0; ++tick) {
+        REQUIRE(MatchInputs::sample(pair.guest, inputs));
+        pair.pump();
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        pair.pump();
+        inputs[0].attackPressed = false;
+    }
+    if (character == 6 && strong) {
+        // Native Sorceress heavy actions do not release the ordinary weapon.
+        // The checkpoint may carry its future quick-throw descriptor, but neither
+        // native play nor replay may manufacture a missile from this animation.
+        CHECK(scene.play.missiles().count() == 0);
+        REQUIRE(driver.latest());
+        CHECK(std::ranges::none_of(driver.latest()->projectiles,
+                                   [](const auto& shot) { return shot.rollback.has_value(); }));
+        REQUIRE(CombatPacket::encode(*driver.latest()));
+        return;
+    }
+    REQUIRE(scene.play.missiles().count() == 5);
+    REQUIRE(driver.latest());
+    const auto& captured = *driver.latest();
+    const auto& player = *captured.players[1];
+    REQUIRE(player.modifiers);
+    CHECK(player.modifiers->flags == flags);
+    CHECK(player.modifiers->speed);
+    REQUIRE(player.weapon);
+    CHECK(player.movement.enabled);
+    CHECK(player.movement.ranged);
+    CHECK_FALSE(player.melee);
+    CHECK_FALSE(player.turboGeometry);
+    CHECK(player.weapon->rider == descriptor.rider);
+    REQUIRE(player.weapon->riderTextureFrame);
+    std::array<u32, 5> bodies{}, riders{}, streaks{};
+    for (const auto& shot : captured.projectiles) {
+        if (!shot.rollback) {
+            continue;
+        }
+        const auto& origin = shot.rollback->origin;
+        CHECK(origin.seat == 1);
+        CHECK(origin.tick == captured.motion.tick);
+        CHECK(origin.strong == strong);
+        CHECK(origin.generation == player.rollback->animation.generation);
+        REQUIRE(origin.ordinal < 5);
+        REQUIRE(resources.accepts(shot));
+        switch (shot.source) {
+        case ProjectileSource::PlayerEffect:
+        case ProjectileSource::Player: ++bodies[origin.ordinal]; break;
+        case ProjectileSource::PlayerRider:
+            ++riders[origin.ordinal];
+            CHECK(shot.resource == descriptor.rider);
+            break;
+        case ProjectileSource::Streak: ++streaks[origin.ordinal]; break;
+        default: FAIL("unrelated effect received an ordinary throw identity");
+        }
+    }
+    for (usize ordinal = 0; ordinal < 5; ++ordinal) {
+        CHECK(bodies[ordinal] == (WeaponGlow::throwsEffectAlone(character) ? 0U : 1U));
+        CHECK(riders[ordinal] == 1);
+        CHECK(streaks[ordinal] == (descriptor.streak == 0 ? 0U : 1U));
+    }
+    CHECK(scene.play.actor(1)->save().progress().inventory == before);
+    const auto bytes = CombatPacket::encode(captured);
+    REQUIRE(bytes);
+    const auto decoded = CombatPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->players[1]->weapon);
+    CHECK(decoded->players[1]->weapon->rider == descriptor.rider);
+    CHECK(CombatPacket::encode(*decoded) == bytes);
+}
+TEST_CASE("native turbo volleys carry distinct persistent identities through host capture",
+          "[netplay][play-replication][turbo-volley-identity][assets]") {
+    const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+    const bool full = GENERATE(false, true);
+    CAPTURE(character, full);
+    CharacterSave save;
+    save.character = character;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene({}, false, false, false, party);
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& other = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+    other.life = PlayerLife::InTower;
+    runtime.turbo.reset();
+    runtime.turbo.add(full ? TurboMeter::kFullCost : TurboMeter::kStrongCost);
+    ClassDataSet classes;
+    REQUIRE(classes.load(scene.root / "PDATA"));
+    const auto* stats = classes.stats(character);
+    REQUIRE(stats);
+    auto rows = stats->strikesOf(full ? stats->moves.turboC1 : stats->moves.turboB);
+    if (full) {
+        const auto second = stats->strikesOf(stats->moves.turboC2);
+        rows.insert(rows.end(), second.begin(), second.end());
+    }
+    const bool hasVolley = std::ranges::any_of(rows, [&](s32 row) {
+        return stats->moveStrikes[static_cast<usize>(row)].type == MoveStrike::kVolley;
+    });
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    SessionInputs::Frame input;
+    input[0].turboAttackPressed = true;
+    input[0].aimDirection = Vec3{0, 0, 1};
+    const auto inventory = runtime.actor.save().progress().inventory;
+    std::map<u64, ShotIdentity> physical;
+    std::map<ShotIdentity, u64> identities;
+    std::set<ShotIdentity> captured;
+    std::map<u64, EffectIdentity> nativeEffects;
+    std::set<EffectIdentity> capturedEffects;
+    usize nativeEmissions = 0;
+    usize tails = 0;
+    bool active = false;
+    for (s32 tick = 0; tick < 240; ++tick) {
+        REQUIRE(MatchInputs::sample(pair.guest, input));
+        pair.pump();
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+        input[0].turboAttackPressed = false;
+        const auto& snapshot = *driver.latest();
+        const auto action = runtime.figure->animator().action();
+        active = active || action == (full ? PlayerAnimator::Action::TurboFull
+                                           : PlayerAnimator::Action::TurboStrong);
+        const auto inspectNative = [&](u64 instance, s32 owner,
+                                       const std::optional<MissileRelease>& release) {
+            if (owner != 1 || !release || release->emission == 0) {
+                return;
+            }
+            CHECK(release->character == character);
+            CHECK_FALSE(release->strong);
+            CHECK(release->ordinal == 0);
+            const auto slot = (release->emission >> 16U) - 1U;
+            REQUIRE(slot < rows.size());
+            CHECK(stats->moveStrikes[static_cast<usize>(rows[slot])].type == MoveStrike::kVolley);
+            auto known = physical.find(instance);
+            if (known == physical.end()) {
+                ShotIdentity origin{snapshot.motion.epoch,
+                                    snapshot.motion.tick,
+                                    release->generation,
+                                    pair.host.context().grants[1],
+                                    1,
+                                    false,
+                                    0,
+                                    release->emission};
+                REQUIRE(origin.valid());
+                CHECK_FALSE(identities.contains(origin));
+                identities.emplace(origin, instance);
+                known = physical.emplace(instance, origin).first;
+                ++nativeEmissions;
+            }
+            CHECK(known->second.emission == release->emission);
+            CHECK(known->second.generation == release->generation);
+        };
+        const auto& missiles = scene.play.missiles();
+        for (usize index = 0; index < missiles.count(); ++index) {
+            const auto& missile = missiles.missile(index);
+            inspectNative(missile.instance, missile.owner, missile.release);
+        }
+        for (const auto& history : missiles.visualHistory()) {
+            inspectNative(history.instance, history.owner, history.release);
+        }
+        const auto& effects = scene.play.effects();
+        for (usize index = 0; index < effects.count(); ++index) {
+            const auto& effect = effects.effect(index);
+            if (!effect.provenance) {
+                continue;
+            }
+            const auto& tag = *effect.provenance;
+            REQUIRE(tag.player == 1);
+            REQUIRE(tag.occurrence < rows.size());
+            s32 row = stats->moveStrikes[static_cast<usize>(rows[tag.occurrence])].effect;
+            for (usize ordinal = 0; ordinal < tag.effectOrdinal && row >= 0; ++ordinal) {
+                REQUIRE(static_cast<usize>(row) < stats->moveEffects.size());
+                row = stats->moveEffects[static_cast<usize>(row)].next;
+            }
+            REQUIRE(row >= 0);
+            REQUIRE(static_cast<usize>(row) < stats->moveEffects.size());
+            if (!nativeEffects.contains(effect.instance)) {
+                CHECK(effect.name == stats->moveEffects[static_cast<usize>(row)].tree);
+            }
+            const EffectIdentity origin{snapshot.motion.epoch,
+                                        snapshot.motion.tick,
+                                        tag.generation,
+                                        pair.host.context().grants[1],
+                                        1,
+                                        tag.occurrence,
+                                        tag.effectOrdinal};
+            REQUIRE(origin.valid());
+            nativeEffects.try_emplace(effect.instance, origin);
+        }
+        bool hasAttributed = false;
+        std::set<std::pair<ProjectileSource, ShotIdentity>> components;
+        for (const auto& shot : snapshot.projectiles) {
+            if (shot.effectOrigin) {
+                CHECK(shot.source == ProjectileSource::WorldEffect);
+                REQUIRE(nativeEffects.contains(shot.instance));
+                CHECK(shot.effectOrigin == nativeEffects.at(shot.instance));
+                CHECK_FALSE(shot.releaseOrigin());
+                capturedEffects.insert(*shot.effectOrigin);
+                hasAttributed = true;
+            }
+            const auto* origin = shot.releaseOrigin();
+            if (origin == nullptr || origin->emission == 0) {
+                continue;
+            }
+            hasAttributed = true;
+            CHECK(origin->seat == 1);
+            REQUIRE(identities.contains(*origin));
+            CHECK(components.emplace(shot.source, *origin).second);
+            CHECK(resources.accepts(shot));
+            captured.insert(*origin);
+            if (shot.particles && shot.particles->flight.retiring) {
+                CHECK_FALSE(shot.rollback);
+                CHECK(shot.particles->origin == *origin);
+                ++tails;
+            }
+        }
+        if (hasAttributed) {
+            const auto bytes = CombatPacket::encode(snapshot);
+            REQUIRE(bytes);
+            const auto decoded = CombatPacket::decode(*bytes);
+            REQUIRE(decoded);
+            CHECK(CombatPacket::encode(*decoded) == bytes);
+        }
+        pair.pump();
+    }
+    CAPTURE(nativeEmissions, tails, captured.size(), rows.size(), capturedEffects.size());
+    CHECK(active);
+    CHECK((nativeEmissions > 0) == hasVolley);
+    CHECK((!captured.empty()) == hasVolley);
+    if (character == 6 && !full) {
+        CHECK_FALSE(capturedEffects.empty()); // Sorceress B has rendered cloud/rain trees.
+    }
+    CHECK(runtime.actor.save().progress().inventory == inventory);
+}
+
+TEST_CASE("host effect provenance fences tagged visuals that predate the match epoch",
+          "[netplay][play-replication][effect-identity][assets]") {
+    CharacterSave save;
+    save.character = 6;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}, PartyMember{1, save}};
+    Scene scene({}, false, false, false, party);
+    scene.settle();
+    const auto& runtime = scene.play.participants()[1];
+    REQUIRE(runtime.figure);
+    auto* archive = runtime.figure->effects();
+    REQUIRE(archive);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native scene fixture
+    auto& effects = const_cast<EffectTrees&>(scene.play.effects());
+    EffectTrees::Setting setting;
+    setting.seconds = 10;
+    const u32 id =
+        effects.startSet(scene.device, *archive, "SOR_PWRB2", runtime.actor.position(), setting);
+    REQUIRE(id != 0);
+    REQUIRE(effects.tag(id, {1, runtime.figure->animator().player().generation(), 0, 0}));
+    u64 instance = 0;
+    for (usize index = 0; index < effects.count(); ++index) {
+        if (effects.effect(index).id == id) {
+            instance = effects.effect(index).instance;
+        }
+    }
+    REQUIRE(instance != 0);
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    for (s32 tick = 0; tick < 5; ++tick) {
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+        const auto& captured = driver.latest()->projectiles;
+        const auto found = std::ranges::find_if(captured, [&](const auto& shot) {
+            return shot.source == ProjectileSource::WorldEffect && shot.instance == instance;
+        });
+        REQUIRE(found != captured.end());
+        CHECK_FALSE(found->effectOrigin);
+        CHECK(CombatPacket::encode(*driver.latest()));
+        pair.pump();
+    }
+}
+TEST_CASE("native thrown potion capture retains its release identity and exact bottle resource",
+          "[netplay][play-replication][potion-checkpoint][assets]") {
+    const s32 kind = GENERATE(1, 2, 3, 4);
+    CAPTURE(kind);
+    Scene scene;
+    scene.settle();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned native fixture
+    auto& runtime = const_cast<PlayerRuntime&>(scene.play.participants()[1]);
+    runtime.actor.save().progress().inventory = {};
+    runtime.actor.save().progress().inventory.potions = {kind};
+    Pair pair;
+    PlayReplication driver;
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    std::optional<PotionIdentity> identity;
+    usize observed = 0;
+    usize tails = 0;
+    bool removed = false;
+    for (u32 tick = 0; tick < 240; ++tick) {
+        SessionInputs::Frame inputs;
+        inputs[0].throwPotion = tick < 10;
+        inputs[0].aimDirection = Vec3{-1, 0, 0};
+        REQUIRE(MatchInputs::sample(pair.guest, inputs));
+        pair.send(pair.guest, pair.host, 1);
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+        const auto& snapshot = *driver.latest();
+        bool live = false;
+        for (usize index = 0; index < scene.play.missiles().count(); ++index) {
+            const auto& missile = scene.play.missiles().missile(index);
+            if (missile.owner != 1 || missile.potion != kind) {
+                continue;
+            }
+            live = true;
+            REQUIRE(missile.potionRelease);
+            const auto& visuals = scene.play.missiles().visuals();
+            const EffectTrees::Effect* bottle = nullptr;
+            for (usize effect = 0; effect < visuals.count(); ++effect) {
+                if (visuals.effect(effect).id == missile.effect) {
+                    bottle = &visuals.effect(effect);
+                    break;
+                }
+            }
+            REQUIRE(bottle);
+            CHECK(bottle->name == PotionEmission::look(kind).bottle);
+            const auto found = std::ranges::find_if(snapshot.projectiles, [&](const auto& shot) {
+                return shot.source == ProjectileSource::PlayerEffect &&
+                       shot.instance == bottle->instance;
+            });
+            REQUIRE(found != snapshot.projectiles.end());
+            REQUIRE(found->potion);
+            CHECK(found->resource == resources.effectId(*bottle));
+            CHECK(resources.hasParticles(found->resource));
+            REQUIRE(found->particles);
+            CHECK(found->particles->potion == kind);
+            CHECK(found->particles->character == 0);
+            CHECK_FALSE(found->particles->origin);
+            CHECK(found->particles->potionOrigin == found->potion->origin);
+            CHECK_FALSE(found->particles->flight.retiring);
+            CHECK(found->potion->kind == kind);
+            CHECK(found->potion->flight == PlayerMissiles::flightCheckpoint(missile));
+            CHECK(found->potion->origin.epoch == snapshot.motion.epoch);
+            CHECK(found->potion->origin.seat == 1);
+            CHECK(found->potion->origin.grant == snapshot.motion.players[1]->grant);
+            CHECK(found->potion->origin.generation == missile.potionRelease->generation);
+            CHECK(found->potion->origin.kind == PotionIdentity::Kind::Throw);
+            if (!identity) {
+                identity = found->potion->origin;
+                CHECK(identity->tick == snapshot.motion.tick);
+                CHECK(runtime.figure->animator().potionThrown());
+            } else {
+                CHECK(found->potion->origin == *identity);
+            }
+            ++observed;
+        }
+        if (identity && !live) {
+            removed = true;
+            CHECK(std::ranges::none_of(snapshot.projectiles,
+                                       [](const auto& shot) { return shot.potion.has_value(); }));
+            for (const auto& shot : snapshot.projectiles) {
+                if (shot.potionReleaseOrigin() == nullptr ||
+                    *shot.potionReleaseOrigin() != *identity) {
+                    continue;
+                }
+                REQUIRE(shot.particles);
+                CHECK(shot.particles->potion == kind);
+                CHECK(shot.particles->potionOrigin == identity);
+                CHECK(shot.particles->flight.retiring);
+                CHECK(shot.particles->flight.totalSteps > shot.particles->flight.activeSteps);
+                ++tails;
+            }
+        }
+        REQUIRE(CombatPacket::encode(snapshot));
+        pair.pump();
+    }
+    CHECK(identity.has_value());
+    CHECK(observed > 1);
+    CHECK(tails > 0);
+    CHECK(removed);
+    REQUIRE(driver.latest());
+    CHECK(std::ranges::none_of(driver.latest()->projectiles, [](const auto& shot) {
+        return shot.potionReleaseOrigin() != nullptr;
+    }));
+    CHECK(runtime.actor.save().progress().inventory.potions.empty());
 }
 } // namespace

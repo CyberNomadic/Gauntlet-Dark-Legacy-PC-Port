@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <string>
@@ -58,9 +59,11 @@ public:
     u16 displayedRunes() const { return m_runes; }
     u16 displayedShards() const { return m_shards; }
     const EffectTrees& figures() const { return m_figures; }
+    const EffectTrees& wizard() const { return m_wizard; }
     u16 pendingCeremonies() const { return m_pendingCeremonies; }
     f32 revealAlpha(TowerCompletion::Kind kind) const;
     usize captionPage() const { return m_page; }
+    usize captionLetters() const { return static_cast<usize>(std::max(m_ticks, 0) / 2); }
     std::string_view caption() const;
     static void acknowledge(Relics& relics, const Entry& entry);
 

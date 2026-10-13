@@ -2,6 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/io/File.h"
 
@@ -405,6 +406,60 @@ TEST_CASE("replica presentation hides unavailable assets and clears on epoch cha
     CHECK(actors.playerFigure(4) == nullptr);
 }
 
+TEST_CASE("guest enemy death skins match native host draws without advancing AI",
+          "[netplay][replica-actors][assets][guest-death]") {
+    const auto root = test::assetOrSkip("WEAPONS/OBJECTS.NGC").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    Enemies host;
+    Enemies guest;
+    host.open(device, root, nullptr, 4, {}, 1);
+    guest.open(device, root, nullptr, 4, {}, 1);
+    REQUIRE(host.loadKind(kGruntKind));
+    REQUIRE(guest.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.placed = true;
+    const auto id = host.spawn(spawn, {});
+    REQUIRE(id);
+    host.setShrink(0.5f);
+    host.hurt(*id, {.damage = 100000, .player = 0, .where = std::nullopt});
+    REQUIRE(host.dying(*id));
+    ReplicaActors actors;
+    REQUIRE(actors.begin(1));
+    actors.loadDeathSkins(device, guest, weapons);
+    const auto camera = CameraFrame::at({0, 20, 30});
+    for (u64 tick = 0; tick < 24; tick += 4) {
+        CAPTURE(tick);
+        const auto snapshot = capture(motion(tick), {}, host);
+        REQUIRE(snapshot.enemies.size() == 1);
+        CHECK(snapshot.enemies[0].deathSkin != 0);
+        // Match the host's actual texture, including floating-point clock rounding.
+        CHECK(snapshot.enemies[0].deathFrame <= tick / 4);
+        if (tick > 4) {
+            CHECK(snapshot.enemies[0].deathFrame >= tick / 4 - 1);
+        }
+        CHECK(snapshot.enemies[0].scale == 0.5f);
+        REQUIRE(actors.show(snapshot, guest));
+        device.draws.clear();
+        host.draw(device, Mat4{1}, {}, nullptr, &weapons, &camera);
+        const auto expected = device.draws;
+        device.draws.clear();
+        const auto loaded = device.texturesCreated;
+        actors.draw(device, guest, Mat4{1}, {}, camera, static_cast<f32>(tick) / 2, nullptr);
+        sameGeometry(device.draws, expected);
+        REQUIRE_FALSE(device.draws.empty());
+        for (usize i = 0; i < device.draws.size(); ++i) {
+            CHECK(device.draws[i].state.maskedTexture == expected[i].state.maskedTexture);
+            CHECK(device.draws[i].vertices[0].color == expected[i].vertices[0].color);
+        }
+        CHECK(device.texturesCreated == loaded);
+        host.update(4, 4.0f / 60, {});
+    }
+    CHECK(guest.count() == 0);
+    CHECK(guest.takeFeedback().empty());
+}
+
 TEST_CASE("received knight poses match authored bodies without advancing a local animator",
           "[netplay][replica-actors][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/objects.ngc").parent_path().parent_path();
@@ -494,6 +549,8 @@ TEST_CASE("received knight poses match authored bodies without advancing a local
     changedSeat.motion.tick += 1;
     changedSeat.motion.players[0]->grant = 7;
     changedSeat.players[0]->life = ReplicaPlayerLife::InTower;
+    changedSeat.players[0]->movement.enabled = false;
+    changedSeat.players[0]->movement.current = false;
     REQUIRE(actors.show(changedSeat, resources));
     CHECK(actors.visiblePlayers() == 0);
     REQUIRE(actors.begin(2));
@@ -550,6 +607,64 @@ TEST_CASE("displaying a remote throw hides its held weapon but cannot release a 
     }
     CHECK(sawRelease);
     CHECK(sawRecover);
+}
+
+TEST_CASE("remote weapon visibility follows the host even without turbo prediction context",
+          "[netplay][replica-actors][turbo-checkpoint][assets]") {
+    const s32 character = GENERATE(0, 1);
+    const auto root = test::assetOrSkip("WEAPONS/objects.ngc").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    Enemies resources;
+    std::array<PlayerRuntime, 1> players;
+    auto& player = players[0];
+    CharacterSave save;
+    save.character = character;
+    player.actor.spawn(0, save, nullptr, {}, 0);
+    player.figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(player.figure);
+    for (s32 frame = 0; frame < 20; ++frame) {
+        player.figure->animate(0, 2, 1.0f / 30);
+    }
+    ReplicaActors actors;
+    CombatPlayback playback;
+    REQUIRE(actors.begin(1));
+    REQUIRE(playback.begin(1, 1));
+    REQUIRE(actors.setPlayer(0, 1, PlayerFigure::load(device, root, save, false)));
+    const auto* shown = actors.playerFigure(0);
+    REQUIRE(shown);
+    const auto before = shown->animator().checkpoint();
+    const auto camera = CameraFrame::at({0, 20, 30});
+    usize visibleDraws = 0;
+    u64 tick = 20;
+    for (const bool hidden : {false, true, false}) {
+        auto where = motion(tick++);
+        where.players[0] = SeatMotion{1, 1, {}, 0};
+        auto snapshot = capture(where, players, resources);
+        snapshot.players[0]->weaponHidden = hidden;
+        snapshot.players[0]->turbo.reset();
+        snapshot.players[0]->turboGeometry.reset();
+        REQUIRE(actors.show(deliver(playback, snapshot), resources));
+        device.draws.clear();
+        actors.draw(device, resources, Mat4{1}, {}, camera, 20, nullptr);
+        const auto actual = device.draws;
+        if (hidden) {
+            CHECK(actual.size() < visibleDraws);
+        } else {
+            if (visibleDraws != 0) {
+                CHECK(actual.size() == visibleDraws);
+            }
+            visibleDraws = actual.size();
+        }
+        device.draws.clear();
+        player.figure->draw(device, Mat4{1}, Mat4{1}, {}, 1, hidden, &camera);
+        sameGeometry(actual, device.draws);
+        CHECK(shown->animator().checkpoint() == before);
+        CHECK_FALSE(shown->animator().released());
+        CHECK_FALSE(shown->animator().strongReleased());
+        CHECK_FALSE(shown->animator().meleeStruck());
+        CHECK_FALSE(shown->familiarReleased());
+        CHECK(resources.count() == 0);
+    }
 }
 
 TEST_CASE("remote Pojo replaces the character rather than overlapping its body and weapon",

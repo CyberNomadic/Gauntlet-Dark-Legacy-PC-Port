@@ -82,6 +82,7 @@ public:
     std::optional<CompanionVisual> visual(const Mat4& at, f32 alpha) const;
     std::optional<Mat4> attachment(const Mat4& at, std::string_view object) const;
     s32 sequence() const { return m_tree != nullptr ? static_cast<s32>(m_player.sequence()) : -1; }
+    AnimationPlayer::Checkpoint animationCheckpoint() const { return m_player.checkpoint(); }
 
 private:
     void play(s32 sequence);

@@ -16,6 +16,7 @@ bool SoundSet::load(const std::filesystem::path& directory, Restoration restorat
     m_entries.clear();
     m_byName.clear();
     m_samples.clear();
+    m_bank.clear();
     m_restoration = restoration;
     return loadNative(directory);
 }
@@ -68,6 +69,8 @@ SoundSequence SoundSet::sequence(u32 index) {
     SoundSequence out;
     out.volume = sound.volume;
     out.gainCurve = SoundGainCurve::Dcs;
+    out.bank = m_bank;
+    out.call = index;
     for (const SoundSetStep& step : sound.sequence) {
         if (step.sample >= m_samples.size()) {
             continue;

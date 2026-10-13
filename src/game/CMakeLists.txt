@@ -13,9 +13,35 @@ add_library(game STATIC
     netplay/SnapshotBlock.cpp
     netplay/InputCommand.cpp
     netplay/InputTimeline.cpp
+    netplay/RollbackInputHistory.cpp
+    netplay/ShotIdentity.cpp
+    netplay/EffectIdentity.cpp
+    netplay/PotionIdentity.cpp
+    netplay/PlayerLocomotionCheckpoint.cpp
+    netplay/PlayerPoseCheckpoint.cpp
+    netplay/PlayerPotionCheckpoint.cpp
+    netplay/TurboEffectCheckpoint.cpp
+    netplay/PredictedShotLedger.cpp
+    netplay/PlayerActionCheckpoint.cpp
+    netplay/AnimationCheckpoint.cpp
+    netplay/PlatformCheckpoint.cpp
+    world/WorldMotion.cpp
+    screens/TurboEmission.cpp
+    screens/TurboEffectResources.cpp
+    screens/TurboEffectSimulation.cpp
+    screens/PotionSimulation.cpp
+    screens/LocalTurboEffectPrediction.cpp
+    screens/FireShieldPresentation.cpp
+    netplay/PlayerMeleeCheckpoint.cpp
+    netplay/PlayerTurboCheckpoint.cpp
+    combat/MeleeGeometry.cpp
+    netplay/PlayerKnockbackCheckpoint.cpp
     netplay/MatchSession.cpp
+    netplay/LatencyTelemetry.cpp
     netplay/ShopSync.cpp
     netplay/FeedbackSync.cpp
+    netplay/AudioSync.cpp
+    screens/ReplicaAudio.cpp
     netplay/ClientClock.cpp
     netplay/OnlineSession.cpp
     netplay/CharacterProfile.cpp
@@ -44,11 +70,15 @@ add_library(game STATIC
     screens/ReplicaActors.cpp
     screens/ReplicaCompanions.cpp
     screens/ReplicaProjectiles.cpp
+    screens/ReplicaProjectileParticles.cpp
     screens/PlayerProjectileResources.cpp
     screens/PlaySceneReplication.cpp
     screens/ReplicaPickups.cpp
     screens/ReplicaFixtures.cpp
     screens/CombatCapture.cpp
+    screens/LocalMovementPrediction.cpp
+    screens/LocalProjectilePrediction.cpp
+    screens/LocalPotionPrediction.cpp
     screens/PlayInput.h
     screens/SessionInputs.cpp
     world/StaticScenery.cpp
@@ -159,6 +189,7 @@ add_library(game STATIC
     players/PlayerTransport.cpp
     players/PlayerAnimator.h
     players/PlayerAnimator.cpp
+    players/MeleeSelection.cpp
     players/Knockback.h
     players/Knockback.cpp
     players/PlayerImpact.h
@@ -266,6 +297,7 @@ add_library(game STATIC
     screens/PlaySceneRelics.cpp
     screens/PlayScenePromotion.cpp
     world/PlayerArsenal.cpp
+    world/PotionEmission.cpp
     world/LevelSoundscape.cpp
     world/VoiceQueue.cpp
     world/EffectTrees.h

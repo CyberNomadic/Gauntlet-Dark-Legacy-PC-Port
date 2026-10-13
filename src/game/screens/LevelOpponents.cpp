@@ -407,35 +407,11 @@ Vec3 LevelOpponents::resolveMovement(const PlayerActor& player, const Vec3& from
     const auto bosses = m_bosses.targets();
     bodies.insert(bodies.end(), critters.begin(), critters.end());
     bodies.insert(bodies.end(), bosses.begin(), bosses.end());
-    Vec3 resolved = BodyCollision::resolve(from, to, player.radius(), player.height(), bodies);
     const auto generators = m_generators.obstacles();
-    resolved =
-        BodyCollision::resolveItems(from, resolved, player.radius(), player.height(), generators);
     // A slide along a creature must still respect the level walls. If wall resolution
     // would move back inside a creature, retain the already-safe pre-step position.
-    if (m_resources.has_value()) {
-        // Retain the walking query's vertical span AND native low-face filter.
-        // A taller correction volume would undo a valid step onto lowered scenery.
-        // PlayerMotion's animated-wall branch (80088714) projects displacement;
-        // it does not expel a stationary body from a cart that moved into it.
-        // Walking and body corrections already sweep against animated walls.
-        // Keep the static-wall overlap correction without repeating a moving-wall push.
-        resolved = m_resources->world.collision().resolveWalls(
-            resolved, player.radius(), resolved.y + PlayerActor::kFootClearance,
-            resolved.y + player.height() - PlayerActor::kFootClearance, nullptr,
-            player.minimumWallY(resolved.y), WorldCollision::WallPush::StaticOnly);
-        const Vec3 checked =
-            BodyCollision::resolve(from, resolved, player.radius(), player.height(), bodies);
-        if (glm::distance(checked, resolved) > 1e-4f) {
-            return {from.x, to.y, from.z};
-        }
-        const Vec3 itemChecked = BodyCollision::resolveItems(resolved, resolved, player.radius(),
-                                                             player.height(), generators);
-        if (glm::distance(itemChecked, resolved) > 1e-4f) {
-            return {from.x, to.y, from.z};
-        }
-    }
-    return resolved;
+    return BodyCollision::resolveMovement(player, from, to, bodies, generators,
+                                          m_resources ? &m_resources->world.collision() : nullptr);
 }
 
 void LevelOpponents::close() {

@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -211,5 +212,92 @@ TEST_CASE("world track loops retain time at their final-key endpoint across cade
         animator.step(8.0f / 30.0f, scene);
         REQUIRE(animator.frame(0) == Approx(2.0f).margin(0.0001f));
     }
+}
+
+TEST_CASE("world animation checkpoints replay exact poses and cycle boundaries",
+          "[world][animation][world-rollback]") {
+    for (const s32 mode : {0, 1, 2, 3, 4}) {
+        for (const s32 rate : {30, 60, 120}) {
+            CAPTURE(mode, rate);
+            Fixture host("world-checkpoint-host");
+            Fixture replay("world-checkpoint-replay");
+            host.animator.bind(host.layout);
+            replay.animator.bind(replay.layout);
+            if (mode == 1) {
+                host.animator.fire(8, true);
+            } else if (mode == 2) {
+                host.animator.fire(8, true, true);
+                host.animator.fire(8, false);
+            } else if (mode == 3) {
+                host.animator.hold(8);
+            } else if (mode == 4) {
+                host.animator.fire(8, true, true);
+            }
+            const f32 seconds = 1.0f / static_cast<f32>(rate);
+            host.animator.step(seconds, host.scene);
+            const auto saved = host.animator.checkpoint();
+            REQUIRE(saved.size() == 1);
+            REQUIRE(saved.front().valid());
+            REQUIRE(replay.animator.restore(saved));
+            CHECK(replay.animator.cycleEvents().empty());
+            for (s32 tick = 0; tick < 30; ++tick) {
+                const bool paused = tick >= 4 && tick < 8;
+                host.scene.capturePresentation();
+                replay.scene.capturePresentation();
+                host.animator.step(seconds, host.scene, paused);
+                replay.animator.step(seconds, replay.scene, paused);
+                CHECK(replay.animator.checkpoint() == host.animator.checkpoint());
+                CHECK(replay.bladeAt() == host.bladeAt());
+                const auto expected = host.animator.cycleEvents();
+                const auto actual = replay.animator.cycleEvents();
+                REQUIRE(actual.size() == expected.size());
+                for (usize event = 0; event < expected.size(); ++event) {
+                    CHECK(actual[event].object == expected[event].object);
+                    CHECK(actual[event].wrapped == expected[event].wrapped);
+                }
+            }
+            REQUIRE(replay.animator.restore(saved));
+            CHECK(replay.animator.checkpoint() == saved);
+            CHECK(replay.animator.cycleEvents().empty());
+        }
+    }
+}
+
+TEST_CASE("world animation cursor restoration validates the whole bound roster before mutation",
+          "[world][animation][world-rollback]") {
+    Fixture fixture("world-checkpoint-reject");
+    fixture.animator.bind(fixture.layout);
+    fixture.animator.step(kStep, fixture.scene);
+    const auto saved = fixture.animator.checkpoint();
+    const auto eventCount = fixture.animator.cycleEvents().size();
+    const auto reject = [&](const auto& changed) {
+        CHECK_FALSE(fixture.animator.restore(changed));
+        CHECK(fixture.animator.checkpoint() == saved);
+        CHECK(fixture.animator.cycleEvents().size() == eventCount);
+    };
+    reject(std::vector<WorldAnimator::Cursor>{});
+    auto changed = saved;
+    changed.push_back(changed.front());
+    reject(changed);
+    for (const f32 invalid : {-1.0f, 4.0f, std::numeric_limits<f32>::infinity(),
+                              std::numeric_limits<f32>::quiet_NaN()}) {
+        changed = saved;
+        changed.front().frame = invalid;
+        reject(changed);
+    }
+    changed = saved;
+    ++changed.front().object;
+    reject(changed);
+    changed = saved;
+    ++changed.front().frames;
+    reject(changed);
+    changed = saved;
+    changed.front().finished = true;
+    reject(changed);
+    changed = saved;
+    changed.front().held = true;
+    reject(changed);
+    REQUIRE(fixture.animator.restore(saved));
+    CHECK(fixture.animator.cycleEvents().empty());
 }
 } // namespace

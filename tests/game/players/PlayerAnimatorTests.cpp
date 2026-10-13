@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_approx.hpp>
@@ -73,6 +75,177 @@ TreeInfo classTree() {
 
 f32 playingIndex(const PlayerAnimator& animator) {
     return animator.pose().matrices()[0][3].x;
+}
+
+TEST_CASE("player rollback reproduces ranged releases and guard boundaries from every tick",
+          "[player-animation][rollback]") {
+    auto tree = classTree();
+    for (const std::string_view name :
+         {"ATTPWRATHROW", "ATTPWRATHROWR", "DEFEND1", "DEFEND2", "DEFENDR"}) {
+        TreeSequenceInfo sequence;
+        sequence.name = name;
+        sequence.frames = 9;
+        sequence.frameRate = 24;
+        tree.sequences.push_back(sequence);
+    }
+    for (const PlayerDeed attack :
+         {PlayerDeed::Attack, PlayerDeed::StrongAttack, PlayerDeed::Defend}) {
+        for (const f32 rate : {30.0f, 60.0f}) {
+            CAPTURE(attack, rate);
+            const auto ticks = static_cast<s32>(60.0f / rate);
+            const f32 seconds = 1 / rate;
+            PlayerAnimator original;
+            REQUIRE(original.bind(tree, false));
+            original.setCharacter(0);
+            original.setGuardArmor(2.5f);
+            original.setAttackSpeed(true, false);
+            s32 releases = 0;
+            s32 defenses = 0;
+            const auto input = [attack](s32 tick) {
+                // Include fresh presses, held input and short releases, rather than
+                // restoring only the beginning of a canned attack animation.
+                return tick % 80 < 65 ? attack : PlayerDeed::None;
+            };
+            for (s32 tick = 0; tick < 200; ++tick) {
+                CAPTURE(tick);
+                const auto saved = original.checkpoint();
+                REQUIRE(saved.valid());
+                PlayerAnimator replayed;
+                REQUIRE(replayed.bind(tree, false));
+                REQUIRE(replayed.restore(saved));
+                REQUIRE(replayed.checkpoint() == saved);
+                auto expected = original;
+                for (s32 future = 0; future < 32; ++future) {
+                    expected.update(PlayerMotion::Stand, ticks, seconds, input(tick + future));
+                    replayed.update(PlayerMotion::Stand, ticks, seconds, input(tick + future));
+                    REQUIRE(replayed.checkpoint() == expected.checkpoint());
+                    CHECK(replayed.released() == expected.released());
+                    CHECK(replayed.strongReleased() == expected.strongReleased());
+                    CHECK(replayed.defending() == expected.defending());
+                    CHECK(replayed.moveScale() == expected.moveScale());
+                }
+                original.update(PlayerMotion::Stand, ticks, seconds, input(tick));
+                releases += original.released() || original.strongReleased() ? 1 : 0;
+                defenses += original.defending() ? 1 : 0;
+            }
+            CHECK((attack == PlayerDeed::Defend ? defenses : releases) > 0);
+        }
+    }
+}
+
+TEST_CASE("grounded reaction rollback excludes flight captures and special actions",
+          "[player-animation][rollback][reaction]") {
+    for (usize index = 0; index < PlayerAnimator::kActionCount; ++index) {
+        const auto action = static_cast<Action>(index);
+        CAPTURE(action);
+        const bool allowed =
+            action == Action::HitReact || action == Action::Stun || action == Action::SpikeHit;
+        CHECK(PlayerAnimator::rollbackReactionAction(action) == allowed);
+        if (allowed) {
+            CHECK_FALSE(PlayerAnimator::rollbackAction(action));
+            CHECK_FALSE(PlayerAnimator::rollbackMeleeAction(action));
+        }
+    }
+    for (usize index = 0; index <= static_cast<usize>(PlayerDeed::ComboThrown); ++index) {
+        const auto deed = static_cast<PlayerDeed>(index);
+        CAPTURE(deed);
+        const bool allowed = deed == PlayerDeed::None || deed == PlayerDeed::Flinch ||
+                             deed == PlayerDeed::Reel || deed == PlayerDeed::Spike;
+        CHECK(PlayerAnimator::rollbackReactionDeed(deed) == allowed);
+    }
+}
+
+TEST_CASE("player rollback retains potion latches, melee chains, reactions and death",
+          "[player-animation][rollback]") {
+    auto tree = classTree();
+    for (const auto name : PlayerAnimator::kSequenceNames) {
+        if (!tree.findSequence(name)) {
+            TreeSequenceInfo sequence;
+            sequence.name = name;
+            sequence.frames = 6;
+            sequence.frameRate = 30;
+            tree.sequences.push_back(sequence);
+        }
+    }
+    constexpr std::array kDeeds{
+        PlayerDeed::Melee,       PlayerDeed::None,        PlayerDeed::MeleeSlow,
+        PlayerDeed::UsePotion,   PlayerDeed::ThrowPotion, PlayerDeed::ShieldPotion,
+        PlayerDeed::SuperShot,   PlayerDeed::Hammer,      PlayerDeed::Breathe,
+        PlayerDeed::Flinch,      PlayerDeed::FallBack,    PlayerDeed::Webbed,
+        PlayerDeed::TurboStrong, PlayerDeed::TurboFull,   PlayerDeed::Shove,
+        PlayerDeed::DeathGrab,   PlayerDeed::None,        PlayerDeed::Die};
+    for (const auto deed : kDeeds) {
+        CAPTURE(deed);
+        PlayerAnimator original;
+        REQUIRE(original.bind(tree, false));
+        original.setCharacter(2);
+        original.setMelee({MeleeRange::Swing, false, 1.5f});
+        for (s32 tick = 0; tick < 90; ++tick) {
+            CAPTURE(tick);
+            const auto saved = original.checkpoint();
+            REQUIRE(saved.valid());
+            PlayerAnimator replayed;
+            REQUIRE(replayed.bind(tree, false));
+            REQUIRE(replayed.restore(saved));
+            REQUIRE(replayed.checkpoint() == saved);
+            auto expected = original;
+            for (s32 future = 0; future < 16; ++future) {
+                const auto asked = (tick + future) % 20 < 12 ? deed : PlayerDeed::None;
+                expected.update(PlayerMotion::Walk, 1, 1.0f / 60.0f, asked);
+                replayed.update(PlayerMotion::Walk, 1, 1.0f / 60.0f, asked);
+                REQUIRE(replayed.checkpoint() == expected.checkpoint());
+            }
+            original.update(PlayerMotion::Walk, 1, 1.0f / 60.0f,
+                            tick % 20 < 12 ? deed : PlayerDeed::None);
+        }
+    }
+}
+
+TEST_CASE("player checkpoint validation is atomic and requires a trusted bound sequence",
+          "[player-animation][rollback]") {
+    const auto tree = classTree();
+    PlayerAnimator original;
+    REQUIRE(original.bind(tree, false));
+    original.update(PlayerMotion::Run, 1, 1.0f / 60.0f, PlayerDeed::Attack);
+    const auto saved = original.checkpoint();
+    PlayerAnimator unbound;
+    CHECK_FALSE(unbound.restore(saved));
+    auto bad = saved;
+    bad.animation.sequence = static_cast<u32>(tree.sequences.size());
+    CHECK_FALSE(original.restore(bad));
+    bad = saved;
+    bad.action = Action::Start;
+    CHECK_FALSE(original.restore(bad));
+    bad = saved;
+    bad.phaseSeconds = std::numeric_limits<f64>::infinity();
+    CHECK_FALSE(original.restore(bad));
+    bad = saved;
+    bad.chain = -1;
+    CHECK_FALSE(original.restore(bad));
+    bad = saved;
+    bad.melee.range = static_cast<MeleeRange>(255);
+    CHECK_FALSE(original.restore(bad));
+    CHECK(original.checkpoint() == saved);
+}
+
+TEST_CASE("player rollback admits only autonomous movement, ranged attacks and guarding",
+          "[player-animation][rollback]") {
+    for (usize value = 0; value < PlayerAnimator::kActionCount; ++value) {
+        const auto action = static_cast<Action>(value);
+        CAPTURE(action);
+        const bool ranged =
+            action == Action::Throw || action == Action::ThrowMoving ||
+            action == Action::ThrowRelease || action == Action::ThrowMovingRelease ||
+            action == Action::ThrowRecover || action == Action::ThrowMovingRecover ||
+            action == Action::StrongThrow || action == Action::StrongThrowRecover;
+        const bool strafe =
+            action >= Action::StrafeShootForward1 && action <= Action::StrafeShootRight2;
+        const bool guard = action == Action::DefendRaise || action == Action::Defend ||
+                           action == Action::DefendLower;
+        CHECK(PlayerAnimator::rollbackAction(action) ==
+              (PlayerAnimator::locomotion(action) || ranged || strafe || guard));
+    }
+    CHECK_FALSE(PlayerAnimator::rollbackAction(static_cast<Action>(255)));
 }
 
 TEST_CASE("player visual poses interpolate subframes without moving gameplay joints",

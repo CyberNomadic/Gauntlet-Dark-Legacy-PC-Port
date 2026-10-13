@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <span>
 
 #include "engine/core/Types.h"
@@ -26,6 +27,10 @@ public:
 
     /** Moves the member by how its moving floor moved since the floor was noted. */
     static void carry(PlayerRuntime& runtime, const WorldCollision& collision);
+    /** Native support query including footprint ownership at a ledge. Read-only;
+     * does not claim a floor or apply the moving-floor admission rules. */
+    static std::optional<FloorHit> support(const PlayerActor& actor,
+                                           const WorldCollision& collision);
     /** After `index` stepped from `from`: refuses the step when another rides a floor kept
      * apart, then notes the floor it stands on. */
     static void land(std::span<PlayerRuntime> players, usize index, const Vec3& from,

@@ -114,7 +114,9 @@ bool HudHelp::valid() const {
                         bounded(anchor->z, -1'000'000, 1'000'000)));
 }
 bool HudSnapshot::valid() const {
-    return screen.valid() && !(visible && (screen.cinematicBars || screen.gameOver)) &&
+    return screen.valid() && ceremony.valid() &&
+           (ceremony.kind != Ceremony::Kind::Promotion || players[ceremony.index].has_value()) &&
+           !(visible && (screen.cinematicBars || screen.gameOver)) &&
            (!hourglass || hourglass->valid()) && (!runeFill || bounded(*runeFill, 0, 1)) &&
            (!scroll || scroll->valid()) && (!help || help->valid()) && cards.size() <= kMaxCards &&
            bossBars.size() <= kMaxBossBars &&
@@ -124,6 +126,19 @@ bool HudSnapshot::valid() const {
            std::ranges::all_of(counts,
                                [](const auto& count) { return !count || count->valid(); }) &&
            std::ranges::all_of(bossBars, &HudBossBar::valid);
+}
+bool HudSnapshot::Ceremony::valid() const {
+    if (letters > 4096 || page > 32) {
+        return false;
+    }
+    switch (kind) {
+    case Kind::None: return index == 0 && page == 0 && letters == 0;
+    case Kind::Promotion: return index < 4 && page == 0;
+    case Kind::Rune: return index < 13 && page == 0;
+    case Kind::Shard: return index >= 1 && index <= 8 && page == 0;
+    case Kind::Followup: return index < 5;
+    }
+    return false;
 }
 std::optional<std::vector<u8>> HudPacket::encode(const HudSnapshot& snapshot) {
     if (!snapshot.valid()) {
@@ -178,6 +193,10 @@ std::optional<std::vector<u8>> HudPacket::encode(const HudSnapshot& snapshot) {
     } else {
         bytes.insert(bytes.end(), 32, 0);
     }
+    word(bytes, static_cast<u32>(snapshot.ceremony.kind));
+    word(bytes, snapshot.ceremony.index);
+    word(bytes, snapshot.ceremony.page);
+    word(bytes, snapshot.ceremony.letters);
     for (const auto& player : snapshot.players) {
         if (!player) {
             continue;
@@ -306,6 +325,14 @@ std::optional<HudSnapshot> HudPacket::decode(std::span<const u8> bytes) {
     } else if (!std::ranges::all_of(reader.readBytes(32), [](u8 byte) { return byte == 0; })) {
         return std::nullopt;
     }
+    const auto ceremonyKind = reader.readU32();
+    if (ceremonyKind > static_cast<u32>(HudSnapshot::Ceremony::Kind::Followup)) {
+        return std::nullopt;
+    }
+    result.ceremony.kind = static_cast<HudSnapshot::Ceremony::Kind>(ceremonyKind);
+    result.ceremony.index = reader.readU32();
+    result.ceremony.page = reader.readU32();
+    result.ceremony.letters = reader.readU32();
     for (usize seat = 0; seat < result.players.size(); ++seat) {
         if ((flags & (2U << seat)) == 0) {
             continue;

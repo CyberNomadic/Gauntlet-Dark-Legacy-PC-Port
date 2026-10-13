@@ -15,6 +15,7 @@ public:
     bool load(const std::filesystem::path& root, const LevelRef& level);
     void clear();
     ItemArchive& primary() { return m_primary; }
+    const ItemArchive& primary() const { return m_primary; }
     ItemArchive& realm() { return m_realm; }
     bool loaded() const { return m_primary.loaded(); }
     /** Borrowed for the lifetime of these archives; never a corpus-wide lookup. */

@@ -645,4 +645,71 @@ TEST_CASE("zero-duration authored releases present frame zero without advancing 
     CHECK_FALSE(shown.show({11, 0, 1, 0.01f, 1}));
     CHECK_FALSE(ReplicaPose::accepts(nullptr, {11, 0, 1, 0, 1}));
 }
+TEST_CASE("player transition presentation restores the exact blend after missing its start",
+          "[netplay][replica-pose][player-pose-checkpoint]") {
+    const auto source = tree();
+    TreePose previous;
+    previous.evaluate(source, 0, 2);
+    TreePose current;
+    current.evaluate(source, 0, 8);
+    current.blend(previous, 0.5f);
+    REQUIRE(previous.checkpoint());
+    REQUIRE(current.checkpoint());
+    const PlayerAnimator::TransitionPose pose{*current.checkpoint(), *previous.checkpoint()};
+    const auto wire = PlayerPoseCheckpoint::encode(pose);
+    REQUIRE(wire);
+    const auto decoded = PlayerPoseCheckpoint::decode(*wire);
+    REQUIRE(decoded);
+    ReplicaPose shown;
+    shown.bind(&source);
+    // A later correction must not blend from whichever unrelated frame this
+    // renderer happened to draw before the authoritative stance arrived.
+    REQUIRE(shown.show({0, 0, 1, 10, 1}));
+    for (usize render = 0; render < 8; ++render) {
+        REQUIRE(shown.show({0, 0, 2, 8, 0.5f}, *decoded));
+        CHECK(shown.pose().checkpoint() == current.checkpoint());
+    }
+    auto wrong = *decoded;
+    wrong.current.nodes[0].rest.x += 1;
+    wrong.previous.nodes = wrong.current.nodes;
+    CHECK_FALSE(shown.show({0, 0, 2, 8, 0.5f}, wrong));
+    CHECK(shown.pose().checkpoint() == current.checkpoint());
+    // The same authoritative interrupted pose also seeds fractional renders;
+    // it must not freeze at the lower checkpoint's already-blended current pose.
+    REQUIRE(shown.show({0, 0, 2, 9, 0.75f}, *decoded));
+    CHECK(shown.pose().matrices()[0][3].x == Approx(7.25f));
+    REQUIRE(shown.show({0, 0, 2, 8, 0.5f}, *decoded));
+    CHECK(shown.pose().checkpoint() == current.checkpoint());
+}
+TEST_CASE("interpolated player feet cannot retain an unrelated contact replay certificate",
+          "[netplay][combat-playback][locomotion-checkpoint]") {
+    auto source = tree();
+    source.sequences[0].name = "READY";
+    PlayerAnimator animator;
+    REQUIRE(animator.bind(source, false));
+    auto first = state(10);
+    auto& player = *first.players[0];
+    player.rollback = animator.checkpoint();
+    player.movement.enabled = player.movement.current = true;
+    player.locomotion = PlayerLocomotionState{};
+    player.locomotion->radius = 2;
+    player.locomotion->ticks = 12;
+    auto last = first;
+    last.motion.tick = 12;
+    last.motion.players[0]->position.z = 1;
+    last.players[0]->locomotion->origin.z = 1;
+    CombatPlayback playback;
+    REQUIRE(playback.begin(1, 1));
+    receive(playback, first);
+    receive(playback, last);
+    const auto shown = playback.sample(11);
+    REQUIRE(shown);
+    CHECK(shown->valid());
+    CHECK(shown->motion.players[0]->position.z == Approx(0.5f));
+    CHECK_FALSE(shown->players[0]->locomotion);
+    REQUIRE(playback.latest());
+    REQUIRE(playback.latest()->players[0]->locomotion);
+    CHECK(playback.latest()->players[0]->locomotion->origin.z == 1);
+    CHECK(CombatPacket::encode(*playback.sample(10)) == CombatPacket::encode(first));
+}
 } // namespace

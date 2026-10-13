@@ -1,12 +1,16 @@
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/core/Types.h"
 
+#include "TestSupport.h"
 #include "game/players/ComboMove.h"
 #include "game/players/TurboMove.h"
 namespace {
@@ -156,6 +160,189 @@ TEST_CASE("turbo volleys catch up skipped frames without repeating shots",
     REQUIRE(f.meter.held() == 100);
 }
 
+TEST_CASE(
+    "identified turbo strikes retain chain occurrences through partial consumption and restore",
+    "[game][players][turbo-move][turbo-strike-identity]") {
+    Fixture f;
+    // Row 1 occurs twice in C, but fires before the earlier row 0. Removing
+    // those pending entries must not renumber the remaining occurrence.
+    f.stats.moveStrikes[0].startFrame = 5;
+    f.stats.moveStrikes[1].startFrame = 2;
+    f.stats.moves.turboC1 = 0;
+    f.stats.moves.turboC2 = 1;
+    std::vector<TurboMove::Strike> observed;
+    f.events.identifiedStrike = [&](const auto& strike) {
+        if (f.stats.moveStrikes[static_cast<usize>(strike.row)].amount != 0) {
+            CHECK(f.move.owed() == 0);
+            CHECK(f.meter.held() == 0);
+        }
+        observed.push_back(strike);
+    };
+    f.move.begin(Action::TurboFull, &f.stats, f.meter);
+    f.advance(2, Action::TurboFull);
+    CHECK(observed == std::vector<TurboMove::Strike>{{1, 1}, {1, 2}});
+    CHECK(
+        std::ranges::none_of(f.calls, [](const auto& call) { return call.starts_with("strike"); }));
+    const auto saved = f.move.checkpoint();
+    CHECK(saved.pending == std::vector<s32>{0});
+    Fixture replay;
+    replay.stats = f.stats;
+    REQUIRE(replay.move.restore(saved, &replay.stats, Action::TurboFull));
+    REQUIRE(replay.meter.restore(f.meter.checkpoint()));
+    std::vector<TurboMove::Strike> repeated;
+    replay.events.identifiedStrike = [&](const auto& strike) { repeated.push_back(strike); };
+    observed.clear();
+    for (const f32 frame : {2.0f, 4.0f, 5.0f, 7.0f}) {
+        f.advance(frame, Action::TurboFull);
+        replay.advance(frame, Action::TurboFull);
+        CHECK(repeated == observed);
+        CHECK(replay.move.checkpoint() == f.move.checkpoint());
+        CHECK(replay.meter.checkpoint() == f.meter.checkpoint());
+    }
+    CHECK(observed == std::vector<TurboMove::Strike>{{0, 0}});
+}
+
+TEST_CASE(
+    "identified strike and volley observers preserve native dispatch order without duplication",
+    "[game][players][turbo-move][turbo-strike-identity]") {
+    Fixture f;
+    f.stats.moveStrikes[0].type = MoveStrike::kVolley;
+    f.stats.moveStrikes[0].flags = 0;
+    f.stats.moveStrikes[0].help = -1;
+    f.stats.moveStrikes[0].delay = 1;
+    std::vector<std::string> calls;
+    f.events.identifiedVolley = [&](const auto& shot) {
+        calls.push_back("volley" + std::to_string(shot.index));
+    };
+    f.events.identifiedStrike = [&](const auto& strike) {
+        calls.push_back("strike" + std::to_string(strike.slot));
+    };
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    f.advance(2);
+    CHECK(calls == std::vector<std::string>{"volley0", "volley1", "volley2", "strike0", "strike1"});
+    CHECK(f.calls.empty());
+    CHECK(f.shots.empty());
+    CHECK(f.meter.held() == 60);
+    f.advance(2);
+    CHECK(calls.size() == 5);
+    f.advance(3, Action::Ready);
+    f.advance(4);
+    CHECK(calls.size() == 5);
+}
+
+TEST_CASE("identified turbo volleys preserve native slot order and skipped-frame counters",
+          "[game][players][turbo-move][turbo-volley-identity]") {
+    Fixture f;
+    MoveStrike volley;
+    volley.type = MoveStrike::kVolley;
+    volley.startFrame = 0;
+    volley.endFrame = 12;
+    volley.delay = 2;
+    volley.angle = 1;
+    volley.flags = MoveStrike::kSweepsIn;
+    f.stats.moveStrikes = {volley};
+    // The same authored row occurs once in each full-turbo chain. Its two
+    // independent counters must not collapse to one identity or interleave.
+    f.stats.moves.turboC1 = f.stats.moves.turboC2 = 0;
+    std::vector<TurboMove::Volley> observed;
+    f.events.identifiedVolley = [&](const TurboMove::Volley& shot) {
+        const auto before = f.move.checkpoint();
+        REQUIRE(shot.slot < before.volleysShot.size());
+        CHECK(shot.index == before.volleysShot[shot.slot]);
+        observed.push_back(shot);
+    };
+    f.move.begin(Action::TurboFull, &f.stats, f.meter);
+    f.advance(4, Action::TurboFull);
+    REQUIRE(observed.size() == 6);
+    CHECK(f.shots.empty()); // identified callback replaces the legacy callback
+    for (usize slot = 0; slot < 2; ++slot) {
+        for (s32 index = 0; index < 3; ++index) {
+            const auto& shot = observed[slot * 3 + static_cast<usize>(index)];
+            CHECK(shot.slot == slot);
+            CHECK(shot.index == index);
+            CHECK(shot.emissionIdentity() == ((slot + 1) << 16U) + index);
+            const f32 angle = 1 - static_cast<f32>(index) / 6;
+            CHECK(shot.direction.x == Approx(std::sin(angle)));
+            CHECK(shot.direction.z == Approx(std::cos(angle)));
+        }
+    }
+    CHECK(f.move.checkpoint().volleysShot == std::vector<s32>{3, 3});
+    CHECK(f.meter.held() == 100); // identity observation does not cause payment
+    f.advance(4, Action::TurboFull);
+    CHECK(observed.size() == 6);
+    const auto saved = f.move.checkpoint();
+    Fixture replayed;
+    replayed.stats = f.stats;
+    std::vector<TurboMove::Volley> repeated;
+    replayed.events.identifiedVolley = [&](const TurboMove::Volley& shot) {
+        repeated.push_back(shot);
+    };
+    REQUIRE(replayed.move.restore(saved, &replayed.stats, Action::TurboFull));
+    REQUIRE(replayed.meter.restore(f.meter.checkpoint()));
+    CHECK(repeated.empty());
+    observed.clear();
+    for (const f32 frame : {4.0f, 5.0f, 10.0f, 10.0f, 12.0f}) {
+        f.advance(frame, Action::TurboFull);
+        replayed.advance(frame, Action::TurboFull);
+        CHECK(repeated == observed);
+        CHECK(replayed.move.checkpoint() == f.move.checkpoint());
+        CHECK(replayed.meter.checkpoint() == f.meter.checkpoint());
+    }
+    REQUIRE(observed.size() == 6);
+    CHECK(observed.front().slot == 0);
+    CHECK(observed.front().index == 3);
+    CHECK(observed.back().slot == 1);
+    CHECK(observed.back().index == 5);
+    CHECK(replayed.shots.empty());
+}
+
+TEST_CASE("turbo emission identities reject unrepresentable coordinates without aliasing",
+          "[game][players][turbo-move][turbo-volley-identity]") {
+    CHECK(TurboMove::Volley{{}, 0, 0}.emissionIdentity() == 0x00010000U);
+    CHECK(TurboMove::Volley{{}, 127, 65535}.emissionIdentity() == 0x0080FFFFU);
+    CHECK(TurboMove::Volley{{}, 128, 0}.emissionIdentity() == 0);
+    CHECK(TurboMove::Volley{{}, std::numeric_limits<usize>::max(), 0}.emissionIdentity() == 0);
+    CHECK(TurboMove::Volley{{}, 0, -1}.emissionIdentity() == 0);
+    CHECK(TurboMove::Volley{{}, 0, 65536}.emissionIdentity() == 0);
+    CHECK(TurboMove::Volley{{}, 0, std::numeric_limits<s32>::max()}.emissionIdentity() == 0);
+
+    Fixture f;
+    MoveStrike volley;
+    volley.type = MoveStrike::kVolley;
+    volley.endFrame = 65537;
+    volley.delay = 1;
+    f.stats.moveStrikes = {volley};
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    auto saved = f.move.checkpoint();
+    saved.volleysShot[0] = 65535;
+    REQUIRE(f.move.restore(saved, &f.stats, Action::TurboStrong));
+    std::vector<u32> identities;
+    f.events.identifiedVolley = [&](const TurboMove::Volley& shot) {
+        identities.push_back(shot.emissionIdentity());
+    };
+    f.advance(65535);
+    CHECK(identities == std::vector<u32>{0x0001FFFFU});
+    CHECK(TurboMove::valid(f.move.checkpoint()));
+    f.advance(65536);
+    CHECK(identities == std::vector<u32>{0x0001FFFFU, 0});
+    CHECK_FALSE(TurboMove::valid(f.move.checkpoint()));
+}
+
+TEST_CASE("non-volley turbo rows never dispatch emission identities",
+          "[game][players][turbo-move][turbo-volley-identity]") {
+    Fixture f;
+    usize emissions = 0;
+    f.events.identifiedVolley = [&](const TurboMove::Volley&) { ++emissions; };
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    for (const f32 frame : {0.0f, 1.0f, 2.0f, 3.0f, 10.0f}) {
+        f.advance(frame);
+    }
+    CHECK(emissions == 0);
+    CHECK(f.shots.empty());
+    CHECK(f.meter.held() == 60);
+    CHECK(f.calls == std::vector<std::string>{"dim", "strike0", "help77", "dim", "dim", "strike1"});
+}
+
 TEST_CASE("the combo pays half the meter as it begins and runs its class's combo rows through "
           "the first act",
           "[game][players][turbo-move][combo]") {
@@ -178,4 +365,232 @@ TEST_CASE("the combo pays half the meter as it begins and runs its class's combo
     f.advance(2, Action::ComboAct1);
     REQUIRE(f.calls.size() == 2);
 }
+TEST_CASE("turbo checkpoints resume delayed payment without reissuing consumed strikes",
+          "[game][players][turbo-move][rollback][turbo-checkpoint]") {
+    Fixture f;
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    f.advance(1);
+    const auto before = f.move.checkpoint();
+    REQUIRE(before.pending == std::vector<s32>{1});
+    REQUIRE(before.all == std::vector<s32>{0, 1});
+    REQUIRE(before.named);
+    REQUIRE(before.weaponHidden);
+    REQUIRE(before.owed == 40);
+    Fixture replayed;
+    REQUIRE(replayed.meter.restore(f.meter.checkpoint()));
+    REQUIRE(replayed.move.restore(before, &replayed.stats, Action::TurboStrong));
+    CHECK(replayed.calls.empty());
+    CHECK(replayed.shots.empty());
+    CHECK(replayed.meter.held() == 100);
+    f.calls.clear();
+    for (const f32 frame : {1.0f, 1.5f, 2.0f, 3.0f, 8.0f}) {
+        f.advance(frame);
+        replayed.advance(frame);
+        CHECK(replayed.move.checkpoint() == f.move.checkpoint());
+        CHECK(replayed.meter.checkpoint() == f.meter.checkpoint());
+        CHECK(replayed.calls == f.calls);
+    }
+    CHECK(replayed.meter.held() == 60);
+    CHECK(replayed.calls == std::vector<std::string>{"dim", "dim", "dim", "strike1"});
+}
+
+TEST_CASE("turbo checkpoints retain duplicate full chains and canceled timeline residue",
+          "[game][players][turbo-move][rollback][turbo-checkpoint]") {
+    Fixture f;
+    f.stats.moves.turboC1 = 0;
+    f.stats.moves.turboC2 = 1;
+    f.move.begin(Action::TurboFull, &f.stats, f.meter);
+    f.advance(1, Action::TurboFull);
+    const auto full = f.move.checkpoint();
+    REQUIRE(full.all == std::vector<s32>{0, 1, 1});
+    REQUIRE(full.pending == std::vector<s32>{1, 1});
+    TurboMove restored;
+    REQUIRE(restored.restore(full, &f.stats, Action::TurboFull));
+    CHECK(restored.checkpoint() == full);
+    CHECK_FALSE(restored.restore(full, &f.stats, Action::TurboStrong));
+    CHECK(restored.checkpoint() == full);
+    auto partialDuplicate = full;
+    partialDuplicate.pending.pop_back();
+    CHECK_FALSE(restored.restore(partialDuplicate, &f.stats));
+    CHECK(restored.checkpoint() == full);
+    f.advance(1, Action::Ready);
+    const auto canceled = f.move.checkpoint();
+    REQUIRE(canceled.pending.empty());
+    REQUIRE(canceled.all.empty());
+    REQUIRE(canceled.named);
+    REQUIRE(canceled.volleysShot.size() == 3);
+    REQUIRE(restored.restore(canceled, &f.stats, Action::Ready));
+    CHECK(restored.checkpoint() == canceled);
+    CHECK(f.meter.held() == 100);
+    CHECK_FALSE(restored.restore(canceled, &f.stats, Action::TurboFull));
+    CHECK(restored.checkpoint() == canceled);
+}
+
+TEST_CASE("turbo checkpointed volleys resume the next shot and preserve unpaid harmless rows",
+          "[game][players][turbo-move][rollback][turbo-checkpoint]") {
+    Fixture f;
+    MoveStrike volley;
+    volley.type = MoveStrike::kVolley;
+    volley.startFrame = 0;
+    volley.endFrame = 12;
+    volley.delay = 2;
+    volley.angle = 1;
+    volley.flags = MoveStrike::kSweepsIn;
+    f.stats.moveStrikes = {volley};
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    f.advance(4);
+    REQUIRE(f.move.checkpoint().pending.empty());
+    REQUIRE(f.move.checkpoint().volleysShot == std::vector<s32>{3});
+    REQUIRE(f.move.owed() == 40);
+    Fixture replayed;
+    replayed.stats = f.stats;
+    REQUIRE(replayed.move.restore(f.move.checkpoint(), &replayed.stats, Action::TurboStrong));
+    REQUIRE(replayed.meter.restore(f.meter.checkpoint()));
+    CHECK(replayed.shots.empty());
+    f.calls.clear();
+    f.shots.clear();
+    for (const f32 frame : {4.0f, 5.0f, 6.0f, 10.0f, 12.0f}) {
+        f.advance(frame);
+        replayed.advance(frame);
+        CHECK(replayed.shots == f.shots);
+        CHECK(replayed.calls == f.calls);
+        CHECK(replayed.move.checkpoint() == f.move.checkpoint());
+        CHECK(replayed.meter.checkpoint() == f.meter.checkpoint());
+    }
+    CHECK(replayed.shots.size() == 3);
+    CHECK(replayed.meter.held() == 100);
+}
+
+TEST_CASE("shove checkpoints replace prior turbo rows without spending or replaying effects",
+          "[game][players][turbo-move][rollback][shove-prediction]") {
+    Fixture f;
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    f.advance(1);
+    const auto active = f.move.checkpoint();
+    REQUIRE(active.owed == TurboMeter::kStrongCost);
+    REQUIRE(active.weaponHidden);
+    REQUIRE(active.named);
+    f.calls.clear();
+    REQUIRE(f.move.begin(Action::Shove, &f.stats, f.meter).empty());
+    const auto charge = f.move.checkpoint();
+    CHECK(charge == TurboMove::Checkpoint{});
+    CHECK(f.meter.held() == 100);
+    CHECK(f.calls.empty());
+    CHECK(f.shots.empty());
+
+    Fixture replayed;
+    REQUIRE(replayed.move.restore(charge, &replayed.stats, Action::Shove));
+    CHECK_FALSE(replayed.move.restore(active, &replayed.stats, Action::Shove));
+    CHECK(replayed.move.checkpoint() == charge);
+    auto invalid = charge;
+    invalid.named = true;
+    CHECK_FALSE(replayed.move.restore(invalid, &replayed.stats, Action::Shove));
+    invalid = charge;
+    invalid.volleysShot = {0};
+    CHECK_FALSE(replayed.move.restore(invalid, &replayed.stats, Action::Shove));
+    CHECK(replayed.move.checkpoint() == charge);
+    for (const f32 frame : {0.0f, 1.0f, 6.0f, 20.0f}) {
+        f.advance(frame, Action::Shove);
+        replayed.advance(frame, Action::Shove);
+        CHECK(f.move.checkpoint() == charge);
+        CHECK(replayed.move.checkpoint() == charge);
+    }
+    // PlayerAttacks owns the time-based drain. Restoring or stepping the rowless
+    // move must not charge a lump cost, emit strikes, or restore old effects.
+    CHECK(f.meter.held() == 100);
+    CHECK(replayed.meter.held() == 100);
+    CHECK(f.calls.empty());
+    CHECK(replayed.calls.empty());
+    CHECK(replayed.shots.empty());
+    replayed.advance(0, Action::DefendRaise);
+    CHECK(replayed.move.checkpoint() == charge);
+    CHECK(PlayerAnimator::rollbackShoveAction(Action::Shove));
+    CHECK_FALSE(PlayerAnimator::rollbackTurboAction(Action::Shove));
+    CHECK_FALSE(PlayerAnimator::rollbackShoveAction(Action::TurboStrong));
+    CHECK_FALSE(PlayerAnimator::rollbackShoveAction(Action::TurboFull));
+}
+
+TEST_CASE("turbo restoration validates trusted class rows and rejects malformed state atomically",
+          "[game][players][turbo-move][rollback][turbo-checkpoint]") {
+    Fixture f;
+    f.move.begin(Action::TurboStrong, &f.stats, f.meter);
+    f.advance(1);
+    const auto original = f.move.checkpoint();
+    std::vector<TurboMove::Checkpoint> invalid;
+    auto changed = original;
+    changed.pending = {1, 0};
+    invalid.push_back(changed);
+    changed = original;
+    changed.all = {-1, 1};
+    invalid.push_back(changed);
+    changed = original;
+    changed.pending = {2};
+    invalid.push_back(changed);
+    changed = original;
+    changed.all = {0, 1, 2};
+    changed.volleysShot.push_back(0);
+    invalid.push_back(changed);
+    changed = original;
+    changed.volleysShot = {0};
+    invalid.push_back(changed);
+    for (const s32 count : {-1, 1, TurboMove::kMaxCheckpointVolleys + 1}) {
+        changed = original;
+        changed.volleysShot[0] = count;
+        invalid.push_back(changed);
+    }
+    for (const f32 owed : {-1.0f, 1.0f, 100.01f, std::numeric_limits<f32>::quiet_NaN(),
+                           std::numeric_limits<f32>::infinity()}) {
+        changed = original;
+        changed.owed = owed;
+        invalid.push_back(changed);
+    }
+    changed = original;
+    changed.all.assign(TurboMove::kMaxCheckpointRows + 1, 0);
+    changed.volleysShot.assign(changed.all.size(), 0);
+    invalid.push_back(changed);
+    for (const auto& bad : invalid) {
+        CHECK_FALSE(f.move.restore(bad, &f.stats));
+        CHECK(f.move.checkpoint() == original);
+    }
+    const ClassStats other;
+    CHECK_FALSE(f.move.restore(original, &other));
+    CHECK_FALSE(f.move.restore(original, nullptr));
+    CHECK(f.move.checkpoint() == original);
+    CHECK(f.meter.held() == 100);
+}
+
+TEST_CASE("native B and C turbo rows resume all checkpoint boundaries with identical events",
+          "[game][players][turbo-move][rollback][turbo-checkpoint][assets]") {
+    const s32 character = GENERATE(0, 1, 3, 6);
+    const Action action = GENERATE(Action::TurboStrong, Action::TurboFull);
+    ClassDataSet classes;
+    REQUIRE(classes.load(test::assetOrSkip("PDATA/WAR.WAD").parent_path()));
+    const ClassStats* stats = classes.stats(character);
+    REQUIRE(stats);
+    Fixture original;
+    original.stats = *stats;
+    original.move.begin(action, stats, original.meter);
+    REQUIRE_FALSE(original.move.checkpoint().all.empty());
+    for (s32 halfFrame = 0; halfFrame < 240; ++halfFrame) {
+        CAPTURE(character, action, halfFrame);
+        Fixture replayed;
+        replayed.stats = *stats;
+        const auto checkpoint = original.move.checkpoint();
+        REQUIRE(TurboMove::valid(checkpoint));
+        REQUIRE(replayed.move.restore(checkpoint, stats, action));
+        REQUIRE(replayed.meter.restore(original.meter.checkpoint()));
+        CHECK(replayed.calls.empty());
+        CHECK(replayed.shots.empty());
+        original.calls.clear();
+        original.shots.clear();
+        const f32 frame = static_cast<f32>(halfFrame) / 2;
+        original.advance(frame, action);
+        replayed.advance(frame, action);
+        CHECK(replayed.calls == original.calls);
+        CHECK(replayed.shots == original.shots);
+        CHECK(replayed.move.checkpoint() == original.move.checkpoint());
+        CHECK(replayed.meter.checkpoint() == original.meter.checkpoint());
+    }
+}
+
 } // namespace

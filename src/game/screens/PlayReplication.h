@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 #include "game/netplay/MatchSession.h"
 #include "game/screens/PlayScene.h"
 #include "game/screens/ReplicaFighters.h"
@@ -32,6 +34,9 @@ private:
     bool rosterMatches(const MatchContext& context) const;
     void filterArrivalSkip(SessionInputs::Frame& inputs);
     std::optional<CombatSnapshot> capture(u64 tick, const ProjectileResources& resources);
+    void captureWeapons(CombatSnapshot& state, const ProjectileResources& resources);
+    void captureShotOrigins(CombatSnapshot& state, const ProjectileResources& resources);
+    void captureEffectOrigins(CombatSnapshot& state);
     PlayScene* m_scene = nullptr;
     const PickupResources* m_pickups = nullptr;
     const FixtureResources* m_fixtures = nullptr;
@@ -42,6 +47,15 @@ private:
     std::array<bool, InputCommand::kSeats> m_arrivalSkipVotes{};
     u32 m_cameraContinuity = 1;
     u64 m_nextTick = 0;
+    u64 m_lastMissile = 0;
+    struct ShotOrigin {
+        ShotIdentity identity;
+        u32 character = 0;
+    };
+    std::map<u64, ShotOrigin> m_shotOrigins;
+    std::map<u64, PotionIdentity> m_potionOrigins;
+    u64 m_lastEffect = 0;
+    std::map<u64, EffectIdentity> m_effectOrigins;
     bool m_finished = false;
     bool m_failed = false;
     bool m_quiet = false;

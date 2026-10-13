@@ -247,10 +247,19 @@ void ParticleEmitter::start(const ParticleDescriptor& descriptor, const Mat4& no
     m_emitting = true;
     m_spriteScale = 1.0f;
     m_random.seed(seed);
+    m_randomState = seed % static_cast<u32>(std::minstd_rand::modulus);
+    if (m_randomState == 0) {
+        m_randomState = 1;
+    }
+}
+
+u32 ParticleEmitter::randomInteger() {
+    m_randomState = static_cast<u32>(m_random());
+    return m_randomState;
 }
 
 f32 ParticleEmitter::random01() {
-    return static_cast<f32>(m_random() - std::minstd_rand::min()) /
+    return static_cast<f32>(randomInteger() - std::minstd_rand::min()) /
            static_cast<f32>(std::minstd_rand::max() - std::minstd_rand::min());
 }
 
@@ -389,8 +398,87 @@ Vec3 ParticleEmitter::newVelocity() {
     orthogonalPair(glm::normalize(forward), a, b);
     const f32 tilt = d.angle * random01();
     const f32 turn = kPi * random01();
-    const f32 side = (m_random() & 4U) != 0 ? -std::cos(turn) : std::cos(turn);
+    const f32 side = (randomInteger() & 4U) != 0 ? -std::cos(turn) : std::cos(turn);
     return forward * std::cos(tilt) + (a * std::sin(turn) + b * side) * (std::sin(tilt) * d.speed);
+}
+
+bool ParticleEmitter::Checkpoint::valid() const {
+    constexpr u32 kMaxFrames = 30U * 24U * 60U * 60U * 30U;
+    constexpr u32 kMaxParticles = 4096;
+    const auto finite = [](f32 value) { return std::isfinite(value) && std::abs(value) <= 1e6f; };
+    const auto vector = [&](const Vec3& value) {
+        return finite(value.x) && finite(value.y) && finite(value.z);
+    };
+    const auto envelope = [&](const ParticleEnvelope& value) {
+        return finite(value.lifeStart) && finite(value.lifeEnd) && finite(value.fadeStart) &&
+               finite(value.fadeEnd);
+    };
+    const auto& d = descriptor;
+    if (phase > Phase::Done || age > kMaxFrames || !std::isfinite(saved) || saved > 0 ||
+        saved < -1 || !finite(spriteScale) || random < std::minstd_rand::min() ||
+        random > std::minstd_rand::max() || d.delay > kMaxFrames || d.emitFrames > kMaxFrames ||
+        d.fadeFrames > kMaxFrames || d.particleLife == 0 || d.particleLife > kMaxFrames ||
+        d.particleFade > kMaxFrames || d.maxParticles > kMaxParticles ||
+        d.maxDirections > kMaxParticles || d.maxPositions > kMaxParticles ||
+        d.texture.size() > 256 || d.texture.find('\0') != std::string::npos || !finite(d.angle) ||
+        !vector(d.direction) || !vector(d.volume) || !finite(d.rateRandom) || d.rateRandom < 0 ||
+        d.rateRandom > 1 || !finite(d.gravity) || !finite(d.drag) || !finite(d.speed) ||
+        !envelope(d.red) || !envelope(d.green) || !envelope(d.blue) || !envelope(d.alpha) ||
+        !envelope(d.width)) {
+        return false;
+    }
+    for (const f32 rate : d.rate) {
+        if (!std::isfinite(rate) || rate < 0 || rate > static_cast<f32>(kMaxParticles)) {
+            return false;
+        }
+    }
+    // capacity() converts the computed rate/lifetime product to u32. Bound it before
+    // invoking the native calculation, even though restore also checks trusted equality.
+    const f64 span = static_cast<f64>(d.particleLife) + d.particleFade;
+    if (*std::max_element(d.rate.begin(), d.rate.end()) * span > 1e9 ||
+        d.capacity() > kMaxParticles || particles.size() > d.capacity()) {
+        return false;
+    }
+    for (s32 column = 0; column < 4; ++column) {
+        for (s32 row = 0; row < 4; ++row) {
+            if (!finite(node[column][row])) {
+                return false;
+            }
+        }
+    }
+    if (node[0][3] != 0 || node[1][3] != 0 || node[2][3] != 0 || node[3][3] != 1) {
+        return false;
+    }
+    return std::ranges::all_of(particles, [&](const Particle& particle) {
+        return vector(particle.origin) && vector(particle.velocity) &&
+               std::isfinite(particle.age) && particle.age >= 0 && particle.age < span;
+    });
+}
+
+ParticleEmitter::Checkpoint ParticleEmitter::checkpoint() const {
+    return {m_descriptor, m_node,     m_particles,   m_phase,      m_age,
+            m_saved,      m_emitting, m_spriteScale, m_randomState};
+}
+
+bool ParticleEmitter::canRestore(const Checkpoint& state) const {
+    return state.valid() && state.descriptor == m_descriptor;
+}
+
+bool ParticleEmitter::restore(const Checkpoint& state) {
+    if (!canRestore(state)) {
+        return false;
+    }
+    auto particles = state.particles;
+    m_particles = std::move(particles);
+    m_node = state.node;
+    m_phase = state.phase;
+    m_age = state.age;
+    m_saved = state.saved;
+    m_emitting = state.emitting;
+    m_spriteScale = state.spriteScale;
+    m_randomState = state.random;
+    m_random.seed(state.random);
+    return true;
 }
 
 Vec3 ParticleEmitter::positionOf(const Particle& particle) const {

@@ -54,6 +54,9 @@ public:
     f32 yaw() const { return m_yaw; }
     /** The sequence playing, and the index the cycle asks for next. */
     u32 sequence() const { return m_player.sequence(); }
+    const TreeInfo* tree() const { return m_tree; }
+    const AnimationPlayer& animation() const { return m_player; }
+    const Mat4& placement() const { return m_transform; }
     s32 index() const { return m_index; }
     bool gesturing() const { return playing(kGestureIndex); }
     /** Whether the sequence of that index is the one playing. */

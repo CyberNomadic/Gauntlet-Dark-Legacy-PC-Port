@@ -166,6 +166,10 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
                                        static_cast<f64>(upper.motion.tick - lower.motion.tick));
         auto shown = lower;
         shown.motion = *motion;
+        if (upper.worldTextureFrame >= lower.worldTextureFrame) {
+            shown.worldTextureFrame =
+                std::lerp(lower.worldTextureFrame, upper.worldTextureFrame, t);
+        }
         if (presentation != nullptr) {
             presentation->blend = t;
             presentation->fromGeometry = lower.geometry;
@@ -223,6 +227,14 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
                 }
                 shown.players[seat] = player;
             }
+            if (shown.players[seat] && shown.players[seat]->locomotion &&
+                shown.motion.players[seat] &&
+                shown.players[seat]->locomotion->origin != shown.motion.players[seat]->position) {
+                // Contact observations belong to exact completed host feet, not
+                // to a fractional drawing pose. Never renew the replay region
+                // by moving its origin along with interpolation.
+                shown.players[seat]->locomotion.reset();
+            }
         }
         // Discrete state and absent actors belong to the lower tick. Never show
         // a birth early, blend a recycled slot, or interpolate health through death.
@@ -242,6 +254,8 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
             enemy.yaw = std::remainder(
                 enemy.yaw + std::remainder(found->yaw - enemy.yaw, kTwoPi) * t, kTwoPi);
             enemy.animation = between(enemy.animation, found->animation, t);
+            enemy.alpha = std::lerp(enemy.alpha, found->alpha, t);
+            enemy.scale = std::lerp(enemy.scale, found->scale, t);
         }
         for (auto& shot : shown.projectiles) {
             const auto found =

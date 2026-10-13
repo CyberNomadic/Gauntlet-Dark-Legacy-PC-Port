@@ -74,6 +74,46 @@ std::filesystem::path presentationFixture() {
     return root;
 }
 
+TEST_CASE("effect provenance is caller-owned and survives visual restore morph and retirement",
+          "[effects][effect-identity]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 2;
+    setting.then = "MOVING";
+    setting.morphIn = 0.1f;
+    const auto id = effects.startSet(device, archive, "MOVING", {}, setting);
+    REQUIRE(id != 0);
+    const auto before = effects.checkpoint(id);
+    REQUIRE(before);
+    const EffectTrees::Provenance origin{2, 7, 3, 5};
+    CHECK(effects.tag(id, origin));
+    CHECK(effects.tag(id, origin));
+    CHECK(effects.effect(0).provenance == origin);
+    CHECK(effects.checkpoint(id) == before); // visual state excludes ownership
+    CHECK_FALSE(effects.tag(id, {2, 8, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {-1, 7, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {4, 7, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {2, 0, 3, 5}));
+    CHECK_FALSE(effects.tag(id + 1, origin));
+    effects.update(1.0f / 60);
+    REQUIRE(effects.restore(id, *before));
+    CHECK(effects.effect(0).provenance == origin);
+    const auto instance = effects.effect(0).instance;
+    effects.update(0.2f);
+    REQUIRE(effects.count() == 1);
+    CHECK(effects.effect(0).continuity > before->continuity);
+    CHECK(effects.effect(0).instance == instance);
+    CHECK(effects.effect(0).provenance == origin);
+    effects.finish(id);
+    CHECK(effects.effect(0).retiring);
+    CHECK(effects.effect(0).provenance == origin);
+    effects.stop(id);
+    CHECK_FALSE(effects.tag(id, origin));
+}
+
 TEST_CASE("effect opacity combines an explicit alpha with the timed fade",
           "[effects][effect-opacity]") {
     ItemArchive archive;
@@ -96,6 +136,55 @@ TEST_CASE("effect opacity combines an explicit alpha with the timed fade",
         REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
         CHECK(effects.effect(0).opacity() == std::clamp(alpha, 0.0f, 1.0f));
     }
+}
+
+TEST_CASE("future effect texture clocks preserve first use and exact lender ordering",
+          "[effects][weapon-replay]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    ItemArchive other;
+    REQUIRE(other.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    TextureSet fallback;
+    TextureSet explicitBank;
+    const std::array<TextureSet*, 1> fallbackLenders{&fallback};
+    const std::array<TextureSet*, 1> explicitLenders{&explicitBank};
+    EffectTrees effects;
+    effects.setTextureLenders(fallbackLenders);
+    for (s32 repeat = 0; repeat < 3; ++repeat) {
+        CHECK_FALSE(effects.textureFrame(archive));
+        CHECK_FALSE(effects.textureFrame(archive, explicitLenders));
+        effects.update(0.25f);
+        CHECK(effects.count() == 0);
+    }
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    const u32 id = effects.startSet(device, archive, "MOVING", {}, setting, explicitLenders);
+    REQUIRE(id != 0);
+    REQUIRE(effects.textureFrame(archive, explicitLenders));
+    CHECK(*effects.textureFrame(archive, explicitLenders) == 0);
+    CHECK_FALSE(effects.textureFrame(archive));
+    CHECK_FALSE(effects.textureFrame(other, explicitLenders));
+    effects.update(0.25f);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(7.5f));
+    CHECK(*effects.textureFrame(archive, explicitLenders) ==
+          effects.textureFrame(effects.effect(0)));
+    effects.stop(id);
+    CHECK(effects.count() == 0);
+    effects.update(0.25f);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    effects.setTextureLenders(explicitLenders);
+    CHECK_FALSE(effects.textureFrame(archive, fallbackLenders));
+    effects.setTextureLenders(fallbackLenders);
+    REQUIRE(effects.textureFrame(archive, explicitLenders));
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+    REQUIRE(effects.textureFrame(archive));
+    CHECK(*effects.textureFrame(archive) == 0);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    effects.clear();
+    CHECK_FALSE(effects.textureFrame(archive));
+    CHECK_FALSE(effects.textureFrame(archive, explicitLenders));
 }
 
 TEST_CASE("explicit effect morph clocks hold only the birth and preserve the flight time",

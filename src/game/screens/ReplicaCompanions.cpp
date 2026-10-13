@@ -52,6 +52,10 @@ bool CompanionResources::accepts(usize slot, const CompanionState& state) const 
                static_cast<f32>(
                    std::max(0, resource->tree->sequences[state.animation.sequence].frames - 1));
 }
+const TreeInfo* CompanionResources::fireShieldTree() const {
+    const auto* resource = entry(1, static_cast<u32>(PowerupCompanion::Kind::FireShield));
+    return resource != nullptr && resource->model.bound() ? resource->tree : nullptr;
+}
 void CompanionResources::draw(RenderDevice& device, usize slot, const CompanionState& state,
                               const Mat4& clip, const WorldLighting& lighting,
                               const CameraFrame& camera, TreeModel::Pass pass) const {

@@ -1,4 +1,6 @@
 
+#include <limits>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -19,6 +21,64 @@ TreeSequenceInfo sequence(s32 frames, s32 rate) {
     info.frames = frames;
     info.frameRate = rate;
     return info;
+}
+
+TEST_CASE("animation checkpoints resume fractional clocks, transitions, loops and held endings",
+          "[world][animation][rollback]") {
+    const auto source = sequence(7, 24);
+    for (const bool repeat : {false, true}) {
+        for (const bool smooth : {false, true}) {
+            AnimationPlayer original;
+            original.setSmooth(smooth);
+            original.setSpeed(4.0f / 3.0f);
+            original.start(source, 5, 0.1f, 1.25f, 0.025f);
+            for (s32 tick = 0; tick < 120; ++tick) {
+                CAPTURE(repeat, smooth, tick);
+                const auto saved = original.checkpoint();
+                REQUIRE(saved.valid());
+                AnimationPlayer replayed;
+                REQUIRE(replayed.restore(saved, &source));
+                REQUIRE(replayed.checkpoint() == saved);
+                auto expected = original;
+                for (s32 future = 0; future < 40; ++future) {
+                    const f32 seconds = future % 2 == 0 ? 1.0f / 60.0f : 1.0f / 120.0f;
+                    CHECK(replayed.advance(seconds, repeat) == expected.advance(seconds, repeat));
+                    CHECK(replayed.checkpoint() == expected.checkpoint());
+                    CHECK(replayed.presentationFrame() == expected.presentationFrame());
+                }
+                original.advance(1.0f / 60.0f, repeat);
+            }
+            original.stop();
+            AnimationPlayer stopped;
+            REQUIRE(stopped.restore(original.checkpoint(), nullptr));
+            CHECK(stopped.checkpoint() == original.checkpoint());
+        }
+    }
+}
+
+TEST_CASE("invalid animation checkpoints leave the old clock intact", "[animation][rollback]") {
+    const auto source = sequence(7, 24);
+    AnimationPlayer original;
+    original.start(source, 2);
+    original.advance(0.05f, true);
+    const auto saved = original.checkpoint();
+    auto bad = saved;
+    bad.time = std::numeric_limits<f64>::quiet_NaN();
+    CHECK_FALSE(original.restore(bad, &source));
+    bad = saved;
+    bad.secondsPerFrame = 0;
+    CHECK_FALSE(original.restore(bad, &source));
+    bad = saved;
+    bad.frame = 8;
+    CHECK_FALSE(original.restore(bad, &source));
+    bad = saved;
+    bad.transitionTime = 1;
+    CHECK_FALSE(original.restore(bad, &source));
+    bad = saved;
+    bad.held = true;
+    CHECK_FALSE(original.restore(bad, &source));
+    CHECK_FALSE(original.restore(saved, nullptr));
+    CHECK(original.checkpoint() == saved);
 }
 
 TEST_CASE("a sequence steps a frame per tick, wraps when it repeats and holds when it does not",

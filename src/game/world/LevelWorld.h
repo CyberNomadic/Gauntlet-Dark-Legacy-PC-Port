@@ -36,6 +36,7 @@
 #include "game/world/TowerAccess.h"
 #include "game/world/TowerCamera.h"
 #include "game/world/WorldDestruction.h"
+#include "game/world/WorldMotion.h"
 
 namespace gdl::game {
 
@@ -98,6 +99,7 @@ public:
     const WorldLayout& layout() const { return m_layout; }
     const WorldScene& scene() const { return m_scene; }
     const WorldAnimator& worldAnimator() const { return m_worldAnimator; }
+    WorldMotion::State motion(bool pauseLoops = false) const;
     const TextureAnimator& textureAnimator() const { return m_textureAnimator; }
     const ParticleField& particles() const { return m_particles; }
     /** The pickups the level places: the crystals Sumner keeps for a new party. */
@@ -190,6 +192,7 @@ public:
     /** The level's item archive, lending the torch flames and Sumner; empty when it is not
      * unpacked. */
     ItemArchive& items() { return m_itemArchives.primary(); }
+    const ItemArchive& items() const { return m_itemArchives.primary(); }
     /** Stage textures borrowed by native item/enemy animation slots such as LAVA. */
     TextureSet& textures() { return m_textures; }
     /** Common realm figures still available when a boss supplies its own item archive. */

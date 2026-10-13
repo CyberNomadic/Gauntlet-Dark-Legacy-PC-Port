@@ -4,6 +4,8 @@
 #include <cmath>
 #include <set>
 
+#include "engine/core/Log.h"
+
 namespace gdl::game {
 namespace {
 bool identity(const std::string& peer) {
@@ -339,6 +341,8 @@ void OnlineSession::update(f64 seconds) {
         return;
     }
     if (update.closed || !update.error.empty()) {
+        m_failureDetail = update.error.empty() ? "Room closed" : update.error;
+        log::warn("Online room failed: {}", m_failureDetail);
         fail(Failure::Service);
         return;
     }
@@ -360,9 +364,7 @@ void OnlineSession::update(f64 seconds) {
         return;
     }
     m_match.update(seconds);
-    m_match.flush(m_transport);
-    if (m_match.phase() == MatchSession::Phase::Stopped) {
-        fail(Failure::Match);
+    if (!flush()) {
         return;
     }
     if (m_phase == Phase::Lobby && connected()) {
@@ -373,6 +375,20 @@ void OnlineSession::update(f64 seconds) {
         (m_phase == Phase::Starting && m_wait >= kStartTimeout)) {
         fail(Failure::Timeout);
     }
+}
+
+bool OnlineSession::flush() {
+    if (m_phase == Phase::Failed || m_phase == Phase::Closed) {
+        return false;
+    }
+    if (m_phase == Phase::Active) {
+        m_match.flush(m_transport);
+        if (m_match.phase() == MatchSession::Phase::Stopped) {
+            fail(Failure::Match);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool OnlineSession::select(std::span<const CharacterProfile> selections) {

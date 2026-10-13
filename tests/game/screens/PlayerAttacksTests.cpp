@@ -115,6 +115,183 @@ std::filesystem::path turboAssets() {
     return root;
 }
 
+TEST_CASE("native turbo volleys retain distinct duplicate-row and catch-up release identities",
+          "[game][player-attacks][turbo-volley-identity][assets]") {
+    const auto nativeRoot = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const auto root = turboAssets();
+    writeTextFile(root / "pdata/WAR.json", R"({"height":6,"width":2,
+      "fight":[200,600],"speed":[200,600],"armor":[200,600],"magic":[200,600],
+      "moves":{"turboB":0,"turboC1":0,"turboC2":0},"moveStrikes":[
+      {"type":10,"startFrame":0,"endFrame":40,"delay":1,"angle":0.45,"flags":256}]})");
+    const u32 flags = GENERATE(0U, 4U, powerup::kRapidFire | powerup::kFiveWayShot | 4U);
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    Fixture fixture;
+    REQUIRE(fixture.classes.load(root / "pdata"));
+    REQUIRE(fixture.weapons.load(nativeRoot / "WEAPONS"));
+    fixture.audio.open(nativeRoot, &sounds, nullptr);
+    fixture.arsenal.bind({fixture.device,
+                          fixture.classes,
+                          fixture.weapons,
+                          fixture.world.collision(),
+                          fixture.effects,
+                          fixture.audio,
+                          &sounds,
+                          {}});
+    fixture.attacks.bind({fixture.device, fixture.classes, fixture.world, fixture.weapons,
+                          fixture.effects, fixture.audio, &sounds, fixture.arsenal,
+                          fixture.dimmer});
+    auto& player = fixture.players[0];
+    const auto* stats = fixture.classes.stats(0);
+    REQUIRE(stats);
+    player.actor.spawn(0, {}, stats, {10, 2, 20}, 0.7f);
+    player.figure = PlayerFigure::load(fixture.device, nativeRoot, player.actor.save(), false);
+    REQUIRE(player.figure);
+    if (flags != 0) {
+        player.actor.save().progress().inventory.addPowerup(powerup::kWeapon, flags, 0, 30);
+    }
+    // A prior throw clock survives entry into turbo and still controls weapon reach.
+    for (s32 tick = 0; tick < 120; ++tick) {
+        player.figure->animate(0, 1, 1.0f / 60, tick == 0 ? PlayerDeed::Attack : PlayerDeed::None);
+    }
+    REQUIRE(player.figure->animator().action() == PlayerAnimator::Action::Ready);
+    const f32 priorAttackSeconds = player.figure->animator().attackSeconds();
+    REQUIRE(priorAttackSeconds > 0);
+    player.turbo.add(100);
+    player.figure->animate(0, 1, 1.0f / 60, PlayerDeed::TurboFull);
+    REQUIRE(player.figure->animator().action() == PlayerAnimator::Action::TurboFull);
+    const u64 generation = player.figure->animator().player().generation();
+    CHECK(player.figure->animator().attackSeconds() == priorAttackSeconds);
+    SoundSet common;
+    REQUIRE(common.load(nativeRoot / "AUDIO/COMMON"));
+    const bool fan = (flags & powerup::kFiveWayShot) != 0;
+    auto& bank = flags == 0 ? player.figure->voice() : common;
+    const auto call = bank.find(fan ? "S_SUPERSHOT" : flags != 0 ? "S_AMULETACID" : "S_WARTHROW");
+    REQUIRE(call);
+    const auto cue = bank.sequence(*call);
+    std::vector<SoundPlayer::Event> played;
+    std::vector<PlayerArsenal::WeaponSound> observed;
+    const SoundPlayer::Capture audioCapture(&sounds, [&](const auto& event) {
+        if (event.kind == SoundPlayer::Event::Kind::Play) {
+            played.push_back(event);
+        }
+    });
+    const PlayerArsenal::SoundCapture releaseCapture(
+        &fixture.arsenal, [&](const auto& event) { observed.push_back(event); });
+    std::vector<MissileRelease> allReleases;
+    for (s32 batch = 0; batch < 3; ++batch) {
+        if (batch != 0) {
+            for (s32 tick = 0; tick < 8; ++tick) {
+                player.figure->animate(0, 1, 1.0f / 60, PlayerDeed::None);
+            }
+        }
+        const f32 frame = player.figure->animator().player().frame();
+        const s32 due = static_cast<s32>(std::floor(frame)) + 1;
+        CAPTURE(flags, batch, frame, due);
+        REQUIRE(player.figure->animator().action() == PlayerAnimator::Action::TurboFull);
+        REQUIRE(player.figure->animator().player().generation() == generation);
+        const usize before = fixture.arsenal.missiles().count();
+        const usize soundBefore = observed.size();
+        fixture.attacks.updateTurbo(0, 1, 1.0f / 60, fixture.players, [](s32, usize) {});
+        const usize after = fixture.arsenal.missiles().count();
+        REQUIRE(after == static_cast<usize>(due) * 2);
+        CHECK(observed.size() - soundBefore == after - before);
+        REQUIRE(played.size() == observed.size());
+        if (batch != 0) {
+            CHECK(after - before > 2); // Several shots per row caught up in this one update.
+        }
+        for (usize index = before; index < after; ++index) {
+            const auto& missile = fixture.arsenal.missiles().missile(index);
+            REQUIRE(missile.release);
+            const auto& release = *missile.release;
+            CHECK(release.character == 0);
+            CHECK(release.generation == generation);
+            CHECK_FALSE(release.strong);
+            CHECK(release.ordinal == 0);
+            CHECK((release.emission >> 16) >= 1);
+            CHECK((release.emission >> 16) <= 2);
+            CHECK(std::ranges::find(allReleases, release) == allReleases.end());
+            allReleases.push_back(release);
+            const auto volleyIndex = release.emission & 0xFFFFU;
+            CHECK(volleyIndex < static_cast<u32>(due));
+            const f32 heading = player.actor.yaw() + 0.45f * static_cast<f32>(volleyIndex) / 40;
+            const Vec3 direction{std::sin(heading), 0, std::cos(heading)};
+            auto weapon = fixture.arsenal.weaponThrow(player.actor, priorAttackSeconds);
+            REQUIRE(weapon);
+            weapon->direction = direction;
+            weapon->shots = 1;
+            weapon->target.reset();
+            const auto native = PlayerMissiles::weaponLaunches(*weapon);
+            REQUIRE(native.size() == 1);
+            CHECK(glm::distance(missile.position, native[0].position) < 0.0001f);
+            CHECK(glm::distance(missile.velocity, PlayerMissiles::launchVelocity(
+                                                      direction, native[0].speed, native[0].reach,
+                                                      native[0].spec->weight)) < 0.0001f);
+            CHECK(missile.scale == 1);
+            CHECK(missile.flags == flags);
+            CHECK(observed[index].release == release);
+            CHECK(observed[index].handle == played[index].handle);
+            CHECK(played[index].bank == cue.bank);
+            CHECK(played[index].call == *call);
+        }
+        if (batch != 0) {
+            // After the one-tick begin latch, a repeated timeline sample has no new volley.
+            fixture.attacks.updateTurbo(0, 1, 1.0f / 60, fixture.players, [](s32, usize) {});
+            CHECK(fixture.arsenal.missiles().count() == after);
+            CHECK(observed.size() == after);
+        }
+    }
+    const auto first = fixture.arsenal.missiles().missile(0).release;
+    player.figure->animate(0, 1, 1.0f / 60, PlayerDeed::Flinch);
+    fixture.attacks.updateTurbo(0, 1, 1.0f / 60, fixture.players, [](s32, usize) {});
+    CHECK(fixture.arsenal.missiles().missile(0).release == first);
+    fixture.attacks.clear();
+    fixture.arsenal.clear();
+    fixture.audio.close();
+    sounds.stopAll();
+}
+
+TEST_CASE("native full-turbo effect tags distinguish duplicate rows and missing chain artwork",
+          "[game][player-attacks][effect-identity]") {
+    const auto root = turboAssets();
+    writeTextFile(root / "pdata/WAR.json", R"({"height":6,"width":2,
+      "fight":[200,600],"speed":[200,600],"armor":[200,600],"magic":[200,600],
+      "moves":{"turboC1":0,"turboC2":0},"moveEffects":[
+        {"tree":"NULLFX","next":1},{"tree":"BURST","next":2},{"tree":"BURST"}],
+      "moveStrikes":[{"type":4,"startFrame":0,"radius":12,"arc":-1,"amount":5,"effect":0}]})");
+    Fixture fixture;
+    REQUIRE(fixture.classes.load(root / "pdata"));
+    auto& player = fixture.players[0];
+    player.figure = PlayerFigure::load(fixture.device, root, player.actor.save(), false);
+    REQUIRE(player.figure);
+    const auto inventory = player.actor.save().progress().inventory;
+    const auto health = player.actor.save().health();
+    player.turbo.add(100);
+    player.figure->animate(0, 1, 1.0f / 60, PlayerDeed::TurboFull);
+    REQUIRE(player.figure->animator().action() == PlayerAnimator::Action::TurboFull);
+    const auto generation = player.figure->animator().player().generation();
+    fixture.attacks.updateTurbo(0, 1, 1.0f / 60, fixture.players, [](s32, usize) {});
+    REQUIRE(fixture.effects.count() == 4);
+    CHECK(player.turbo.held() == 0);
+    for (usize index = 0; index < fixture.effects.count(); ++index) {
+        const auto& effect = fixture.effects.effect(index);
+        CHECK(effect.name == "BURST");
+        REQUIRE(effect.provenance);
+        CHECK(effect.provenance == EffectTrees::Provenance{3, generation,
+                                                           static_cast<u16>(index / 2),
+                                                           static_cast<u16>(index % 2 + 1)});
+    }
+    // Native PartyMotion advances the action before the next attack update;
+    // sampling the unchanged begin latch twice is not a second simulation tick.
+    player.figure->animate(0, 1, 1.0f / 60, PlayerDeed::None);
+    fixture.attacks.updateTurbo(0, 1, 1.0f / 60, fixture.players, [](s32, usize) {});
+    CHECK(fixture.effects.count() == 4);
+    CHECK(player.actor.save().progress().inventory == inventory);
+    CHECK(player.actor.save().health() == health);
+    fixture.attacks.clear();
+    fixture.effects.clear();
+}
+
 TEST_CASE("touching a swarm enemy takes priority over a fresh barrel aim search",
           "[game][player-attacks][alpha-contact-target]") {
     Fixture f;
@@ -260,6 +437,378 @@ TEST_CASE("contact melee retains the three-dimensional distance on different ste
     CHECK(f.attacks.meleeSense(actor, false, f.targets).range == MeleeRange::Step);
     CHECK(f.attacks.automaticMeleeDeed(actor, f.targets, actor.facing()) == PlayerDeed::None);
     CHECK(f.attacks.meleeSense(actor, true, f.targets).range == MeleeRange::Swing);
+}
+
+TEST_CASE("stationary melee snapshots preserve native fresh target selection at every bearing",
+          "[game][player-attacks][melee-selection]") {
+    Fixture f;
+    const auto root = turboAssets();
+    const auto directory = root / "PLAYERS/WAR/YEL";
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"BODY","position":[-100,0,0]}],"itemInfos":[
+      {"type":10,"subtype":43,"name":"BARREL","radius":0.5,"height":3,
+       "collisionOffset":[0,1.5,0],"armor":0},
+      {"type":10,"subtype":43,"name":"BARREL","radius":0.5,"height":3,
+       "collisionOffset":[0,1.5,0],"armor":-1}],
+      "itemInstances":[{"info":0,"position":[0,0,3]},
+        {"info":0,"position":[3,0,0]},{"info":0,"position":[0,0,-3]},
+        {"info":0,"position":[-3,0,0]},{"info":0,"position":[0,20,1]},
+        {"info":1,"position":[1,0,1]}]})");
+    LevelRef level;
+    level.directory = "PLAYERS/WAR/YEL";
+    REQUIRE(f.world.load(f.device, root, level));
+    f.fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio});
+    auto& actor = f.players[0].actor;
+    const auto snapshot = f.attacks.meleeAcquisition(actor, f.targets);
+    REQUIRE(snapshot);
+    CHECK_FALSE(snapshot->contact);
+    REQUIRE(snapshot->targets.size() == 4); // elevated and acquisition-disabled bodies excluded
+    std::vector<MissileTarget> bodies;
+    for (usize index = 0; index < f.fixtures.barrels().size(); ++index) {
+        bodies.push_back(f.fixtures.barrels().target(index, static_cast<s32>(index)));
+    }
+    for (s32 bearing = 0; bearing < 16; ++bearing) {
+        const f32 angle = static_cast<f32>(bearing) * std::numbers::pi_v<f32> / 8;
+        const Vec3 facing{std::sin(angle), 0, std::cos(angle)};
+        actor.turnTo(angle + 0.2f); // post-assist body heading differs from attackFacing
+        for (const bool held : {false, true}) {
+            CAPTURE(bearing, held);
+            const f32 bias = held ? PlayerAttacks::kHeldReach : 0;
+            const auto selected = TargetAssist::ahead(
+                actor.position(), actor.height(), facing, bodies,
+                actor.reach() + PlayerAttacks::kStepReach + bias, TargetAssist::kRange,
+                &f.world.collision(), TargetAssist::kFacingDot);
+            MeleeSense expected{MeleeRange::Beyond, false, 0};
+            if (selected) {
+                const f32 distance =
+                    TargetAssist::distanceTo(actor.position(), actor.height(), *selected);
+                expected.range = distance < actor.reach() + PlayerAttacks::kSwingReach + bias
+                                     ? MeleeRange::Swing
+                                     : MeleeRange::Step;
+                expected.low = distance < actor.reach() + PlayerAttacks::kStepReach &&
+                               selected->height <= PlayerAttacks::kLowThing;
+                const Vec3 offset = selected->base - actor.position();
+                expected.yaw = std::remainder(std::atan2(offset.x, offset.z) - actor.yaw(),
+                                              2 * std::numbers::pi_v<f32>);
+            }
+            const auto replay = MeleeSelection::sense(*snapshot, held, facing, actor.yaw());
+            CHECK(replay == expected);
+            CHECK(f.attacks.meleeSense(actor, held, f.targets, facing) == expected);
+        }
+    }
+}
+
+TEST_CASE("stationary melee capture recomputes contact instead of serializing the previous sweep",
+          "[game][player-attacks][melee-selection]") {
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {2, 0, 1.5f}, .placed = true}, {}));
+    auto& player = f.players[0];
+    f.targets.players = f.players;
+    player.attackStep = PlayerRuntime::AttackStep{{1.5f, 2.5f, 1}, player.actor.followPoint()};
+    const auto snapshot = f.attacks.meleeAcquisition(player.actor, f.targets);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->contact);
+    CHECK_FALSE(snapshot->contact->requireFacing);
+    // On the next stationary native step, the old retreat sweep is overwritten.
+    player.attackStep =
+        PlayerRuntime::AttackStep{player.actor.followPoint(), player.actor.followPoint()};
+    for (const Vec3 facing : {Vec3{0, 0, 1}, Vec3{1, 0, 0}, Vec3{0, 0, -1}}) {
+        for (const bool held : {false, true}) {
+            CHECK(MeleeSelection::sense(*snapshot, held, facing, player.actor.yaw()) ==
+                  f.attacks.meleeSense(player.actor, held, f.targets, facing));
+        }
+    }
+    f.targets.multiplayer = MultiplayerMode::Hurt;
+    CHECK_FALSE(f.attacks.meleeAcquisition(player.actor, f.targets));
+    const PlayerAttacks unbound;
+    CHECK_FALSE(unbound.meleeAcquisition(player.actor, f.targets));
+}
+
+TEST_CASE("stationary Death acquisition retains the special overlapping facing requirement",
+          "[game][player-attacks][melee-selection]") {
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, test::deathArchive(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kDeathKind));
+    REQUIRE(enemies.spawn({.kind = kDeathKind, .position = {0, 0, 10}, .placed = true}, {}));
+    auto& actor = f.players[0].actor;
+    actor.place({0, 0.5f, 10.5f});
+    const auto snapshot = f.attacks.meleeAcquisition(actor, f.targets);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->contact);
+    CHECK(snapshot->contact->requireFacing);
+    CHECK(MeleeSelection::sense(*snapshot, true, {0, 0, 1}, actor.yaw()).range ==
+          MeleeRange::Beyond);
+    CHECK(MeleeSelection::sense(*snapshot, true, {0, 0, -1}, actor.yaw()).range ==
+          MeleeRange::Swing);
+}
+
+TEST_CASE("moving melee capture leaves empty and ranged-only arenas on the throw path",
+          "[game][player-attacks][moving-melee-capture]") {
+    Fixture f;
+    auto& actor = f.players[0].actor;
+    CHECK_FALSE(f.attacks.meleeGeometry(actor, f.targets, 2));
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {0, 0, 20}, .placed = true}, {}));
+    REQUIRE(f.attacks.aim(actor, actor.facing(), f.targets));
+    CHECK_FALSE(f.attacks.meleeGeometry(actor, f.targets, 2));
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    actor.place({0, 0, 17});
+    const auto close = f.attacks.meleeGeometry(actor, f.targets, 2);
+    REQUIRE(close);
+    CHECK(close->size() == 1);
+    CHECK_FALSE(f.attacks.rangedOnly(actor, f.targets));
+}
+
+TEST_CASE("moving melee capture retains ordered enemy identities behind walls and headings",
+          "[game][player-attacks][moving-melee-capture]") {
+    Fixture f;
+    const auto root = turboAssets();
+    const auto directory = root / "PLAYERS/WAR/YEL";
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"BODY","position":[0,0,0],"flags":6}]})");
+    writeTextFile(directory / "collision.json", R"({"objects":[
+      {"object":0,"normals":[0,0,-1],
+       "vertices":[-20,0,2,20,0,2,0,20,2]}]})");
+    LevelRef level;
+    level.directory = "PLAYERS/WAR/YEL";
+    REQUIRE(f.world.load(f.device, root, level));
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    constexpr std::array<Vec3, 4> kPositions{Vec3{0, 0, 4}, Vec3{0, 0, -3}, Vec3{0, 0, 20},
+                                             Vec3{0, 0, 100}};
+    for (const Vec3& position : kPositions) {
+        REQUIRE(enemies.spawn({.kind = kGruntKind, .position = position, .placed = true}, {}));
+    }
+    const auto native = enemies.meleeGeometry();
+    REQUIRE(native.size() == kPositions.size());
+    auto& player = f.players[0];
+    f.targets.players = f.players;
+    player.attackStep = PlayerRuntime::AttackStep{{1, 2.5f, 0}, player.actor.followPoint()};
+    REQUIRE(f.world.collision().wallBetween(player.actor.followPoint(),
+                                            native.front().acquisition.point));
+    const auto health = enemies.healthOf(native.front().id);
+    constexpr s32 kEnemyBase = 1000;
+    for (const f32 yaw : {0.0f, std::numbers::pi_v<f32>, std::numbers::pi_v<f32> * 0.5f}) {
+        player.actor.turnTo(yaw);
+        const auto captured = f.attacks.meleeGeometry(player.actor, f.targets, 2);
+        REQUIRE(captured);
+        REQUIRE(captured->size() == 3); // the distant, unacquirable enemy is excluded
+        for (usize index = 0; index < captured->size(); ++index) {
+            const auto& actual = (*captured)[index];
+            const auto& expected = native[index];
+            CHECK(actual.id == expected.id + kEnemyBase);
+            CHECK(actual.instance == expected.instance);
+            CHECK(actual.base == expected.base);
+            CHECK(actual.radius == expected.radius);
+            CHECK(actual.height == expected.height);
+            CHECK(actual.acquisition.point == expected.acquisition.point);
+            CHECK(actual.acquisition.radius == expected.acquisition.radius);
+            CHECK(actual.acquisition.distanceScale == expected.acquisition.distanceScale);
+            CHECK(actual.acquisition.maxHeight == expected.acquisition.maxHeight);
+            CHECK(actual.acquisition.enabled == expected.acquisition.enabled);
+            CHECK(actual.contactCell == expected.contactCell);
+            CHECK(actual.contact == expected.contact);
+            CHECK(actual.requireFacing == expected.requireFacing);
+            CHECK(actual.low == expected.low);
+            CHECK(actual.blocksMovement == expected.blocksMovement);
+        }
+        CHECK(player.actor.yaw() == yaw);
+        CHECK(player.actor.position() == Vec3{0});
+        REQUIRE(player.attackStep);
+        CHECK(player.attackStep->from == Vec3{1, 2.5f, 0});
+        CHECK(player.attackStep->to == player.actor.followPoint());
+    }
+    CHECK(enemies.healthOf(native.front().id) == health);
+    CHECK(enemies.count() == kPositions.size());
+    CHECK(enemies.positionOf(native.front().id) == kPositions.front());
+    CHECK(f.meleeHits.empty());
+    CHECK(f.effects.count() == 0);
+    CHECK(f.arsenal.missiles().count() == 0);
+}
+
+TEST_CASE("moving melee capture includes physical generators with disabled acquisition",
+          "[game][player-attacks][moving-melee-capture]") {
+    const bool invulnerable = GENERATE(false, true);
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    auto& generators = f.opponents.generators();
+    ItemInfo info;
+    info.type = ItemInfo::kGenerator;
+    info.name = "BOSSGEN";
+    info.hitPoints = 500;
+    info.height = 6;
+    info.xSize = 2;
+    info.zSize = 2;
+    info.armor = invulnerable ? -1 : 0;
+    REQUIRE(generators.placeBoss(f.device, info, f.weapons, enemies, kGruntKind, Mat4{1}, nullptr));
+    auto& actor = f.players[0].actor;
+    const auto& box = generators.boxOf(0);
+    actor.place(generators.positionOf(0) - Vec3{0, 0, std::max(box.halfAcross, box.halfAlong) + 1});
+    constexpr s32 kGeneratorBase = 2000;
+    const auto native = generators.target(0, kGeneratorBase);
+    REQUIRE(native.acquisition);
+    const auto captured = f.attacks.meleeGeometry(actor, f.targets, 2);
+    REQUIRE(captured);
+    REQUIRE(captured->size() == 1);
+    const auto& target = captured->front();
+    CHECK(target.id == native.id);
+    CHECK(target.base == native.base);
+    CHECK(target.radius == native.radius);
+    CHECK(target.height == native.height);
+    CHECK(target.acquisition.point == native.acquisition->point);
+    CHECK(target.acquisition.radius == native.acquisition->radius);
+    CHECK(target.acquisition.distanceScale == native.acquisition->distanceScale);
+    CHECK(target.acquisition.maxHeight == native.acquisition->maxHeight);
+    CHECK(target.acquisition.enabled == !invulnerable);
+    CHECK_FALSE(target.contact);
+    CHECK_FALSE(target.blocksMovement); // movement checks use the generator obstacle box
+    CHECK(generators.standing(0));
+    CHECK(generators.healthOf(0) == 500);
+    CHECK(enemies.count() == 0);
+    CHECK(f.meleeHits.empty());
+    generators.clear();
+    enemies.close();
+}
+
+TEST_CASE("moving melee capture declines unsupported barrels and mesh items",
+          "[game][player-attacks][moving-melee-capture]") {
+    const bool mesh = GENERATE(false, true);
+    Fixture f;
+    const auto root = turboAssets();
+    const auto directory = root / "PLAYERS/WAR/YEL";
+    if (mesh) {
+        writeTextFile(directory / "world.json", R"({"objects":[
+          {"name":"BODY","position":[-100,0,0]}],"itemInfos":[
+          {"type":10,"subtype":42,"hitPoints":25,"armor":1}],
+          "itemInstances":[{"info":0,"name":"BODY","position":[0,0,3],
+            "collision":[{"normal":[0,0,-1],
+              "vertices":[[-5,0,0],[5,0,0],[0,10,0]]}]}]})");
+    } else {
+        writeTextFile(directory / "world.json", R"({"objects":[
+          {"name":"BODY","position":[-100,0,0]}],"itemInfos":[
+          {"type":10,"subtype":43,"name":"BARREL","radius":0.5,"height":3,
+           "collisionOffset":[0,1.5,0],"armor":0}],
+          "itemInstances":[{"info":0,"position":[0,0,3]}]})");
+    }
+    LevelRef level;
+    level.directory = "PLAYERS/WAR/YEL";
+    REQUIRE(f.world.load(f.device, root, level));
+    f.fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio});
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {0, 0, -3}, .placed = true}, {}));
+    REQUIRE(enemies.meleeGeometry().size() == 1);
+    if (mesh) {
+        REQUIRE(f.world.walls().size() == 1);
+        REQUIRE(f.world.walls().standing(0));
+        REQUIRE_FALSE(f.world.walls().target(0, 0).surface.empty());
+    } else {
+        REQUIRE(f.fixtures.barrels().size() == 1);
+        REQUIRE(f.fixtures.barrels().standing(0));
+    }
+    CHECK_FALSE(f.attacks.meleeGeometry(f.players[0].actor, f.targets, 2));
+    CHECK(enemies.count() == 1);
+    CHECK(f.meleeHits.empty());
+    CHECK(f.effects.count() == 0);
+}
+
+TEST_CASE("moving melee capture declines mixed critter contacts without dropping them",
+          "[game][player-attacks][moving-melee-capture][assets]") {
+    const f32 generalZ = GENERATE(-0.5f, 20.0f);
+    const auto nativeRoot = test::assetOrSkip("CRITTER/GENERAL.WAD").parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/GENERAL/LEVELG/ANIM.PS2");
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {0, 0, 3}, .placed = true}, {}));
+    REQUIRE(f.attacks.meleeGeometry(f.players[0].actor, f.targets, 2));
+    auto& critters = f.opponents.critters();
+    critters.open(f.device, nativeRoot, nullptr, {}, 'G');
+    REQUIRE(critters.spawnGeneral({0, 0, generalZ}, 0));
+    const auto bodies = critters.targets();
+    REQUIRE_FALSE(bodies.empty());
+    CHECK_FALSE(f.attacks.meleeGeometry(f.players[0].actor, f.targets, 2));
+    CHECK(enemies.count() == 1);
+    const auto after = critters.targets();
+    REQUIRE(after.size() == bodies.size());
+    for (usize index = 0; index < after.size(); ++index) {
+        CHECK(after[index].id == bodies[index].id);
+        CHECK(after[index].node == bodies[index].node);
+        CHECK(after[index].base == bodies[index].base);
+        CHECK(after[index].radius == bodies[index].radius);
+        CHECK(after[index].height == bodies[index].height);
+    }
+    CHECK(f.meleeHits.empty());
+}
+
+TEST_CASE("moving melee capture respects dying critters' remaining solid bodies",
+          "[game][player-attacks][moving-melee-capture][assets]") {
+    const f32 generalZ = GENERATE(-0.5f, 20.0f);
+    const auto nativeRoot = test::assetOrSkip("CRITTER/GENERAL.WAD").parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/GENERAL/LEVELG/ANIM.PS2");
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {0, 0, 3}, .placed = true}, {}));
+    const auto& actor = f.players[0].actor;
+    REQUIRE(f.attacks.meleeGeometry(actor, f.targets, 2));
+    auto& critters = f.opponents.critters();
+    critters.open(f.device, nativeRoot, nullptr, {}, 'G');
+    const auto general = critters.spawnGeneral({0, 0, generalZ}, 0);
+    REQUIRE(general);
+    EnemyHit slay;
+    slay.damage = 10000;
+    slay.player = 0;
+    critters.hurt(*general, slay);
+    REQUIRE(critters.dying(*general));
+    REQUIRE_FALSE(critters.alive(*general));
+    REQUIRE(critters.targets().empty());
+    const auto bodies = critters.targets(true);
+    REQUIRE_FALSE(bodies.empty());
+    const auto captured = f.attacks.meleeGeometry(actor, f.targets, 2);
+    CHECK(captured.has_value() == (generalZ == 20.0f));
+    const auto after = critters.targets(true);
+    REQUIRE(after.size() == bodies.size());
+    for (usize index = 0; index < after.size(); ++index) {
+        CHECK(after[index].id == bodies[index].id);
+        CHECK(after[index].node == bodies[index].node);
+        CHECK(after[index].base == bodies[index].base);
+        CHECK(after[index].radius == bodies[index].radius);
+        CHECK(after[index].height == bodies[index].height);
+    }
+    CHECK(critters.dying(*general));
+    CHECK(enemies.count() == 1);
+    CHECK(f.meleeHits.empty());
+}
+
+TEST_CASE("moving melee capture refuses multiplayer damage and an unbound selector",
+          "[game][player-attacks][moving-melee-capture]") {
+    Fixture f;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .position = {0, 0, 3}, .placed = true}, {}));
+    const auto& actor = f.players[0].actor;
+    REQUIRE(f.attacks.meleeGeometry(actor, f.targets, 2));
+    f.targets.multiplayer = MultiplayerMode::Hurt;
+    CHECK_FALSE(f.attacks.meleeGeometry(actor, f.targets, 2));
+    f.targets.multiplayer = MultiplayerMode::Normal;
+    CHECK_FALSE(f.attacks.meleeGeometry(actor, f.targets, 0));
+    CHECK_FALSE(f.attacks.meleeGeometry(actor, f.targets, -1));
+    const PlayerAttacks unbound;
+    CHECK_FALSE(unbound.meleeGeometry(actor, f.targets, 2));
 }
 
 TEST_CASE("weapon modes route player hits through health with shared contact immunity",
@@ -3391,6 +3940,119 @@ TEST_CASE("automatic melee requires a forward creature inside the unheld swing b
     CHECK(inventory == before);
     CHECK(f.arsenal.missiles().count() == 0);
     enemies.close();
+}
+
+TEST_CASE("ordinary ranged prediction excludes diagonal melee between cardinal aim probes",
+          "[game][player-attacks][rollback][ranged-eligibility]") {
+    Fixture f;
+    auto& actor = f.players[0].actor;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 7);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .tier = 3, .placed = true}, {}));
+    const auto bodies = enemies.targets();
+    REQUIRE(bodies.size() == 1);
+    const auto& target = bodies.front();
+    const f32 gap = actor.reach() + PlayerAttacks::kSwingReach + PlayerAttacks::kHeldReach + 0.25f;
+    constexpr std::array kCardinals{Vec3{1, 0, 0}, Vec3{-1, 0, 0}, Vec3{0, 0, 1}, Vec3{0, 0, -1}};
+    for (const f32 x : {-1.0f, 1.0f}) {
+        for (const f32 z : {-1.0f, 1.0f}) {
+            const Vec3 diagonal = glm::normalize(Vec3{x, 0, z});
+            actor.place(target.base - diagonal * (target.radius + gap));
+            // Every former cardinal probe approves ranged attacks, but an actual
+            // mouse-facing diagonal selects the native stepping melee instead.
+            for (const auto& heading : kCardinals) {
+                CHECK(f.attacks.attackDeed(actor, false, f.targets, true, 0, heading) ==
+                      PlayerDeed::Attack);
+                CHECK(f.attacks.attackDeed(actor, true, f.targets, true, 0, heading) ==
+                      PlayerDeed::StrongAttack);
+            }
+            REQUIRE(f.attacks.attackDeed(actor, false, f.targets, true, 0, diagonal) ==
+                    PlayerDeed::Melee);
+            REQUIRE(f.attacks.attackDeed(actor, true, f.targets, true, 0, diagonal) ==
+                    PlayerDeed::MeleeSlow);
+            CHECK_FALSE(f.attacks.rangedOnly(actor, f.targets));
+        }
+    }
+    const f32 reach = actor.reach() + PlayerAttacks::kStepReach + PlayerAttacks::kHeldReach;
+    for (const f32 offset : {-0.125f, 0.125f}) {
+        actor.place(target.base - Vec3{0, 0, target.radius + reach + offset});
+        CHECK(f.attacks.rangedOnly(actor, f.targets) == (offset > 0));
+    }
+    actor.place(target.base + Vec3{0, 100, 0});
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+}
+
+TEST_CASE("ranged prediction respects all native item attack substitutions without spending items",
+          "[game][player-attacks][rollback][ranged-eligibility]") {
+    Fixture f;
+    auto& actor = f.players[0].actor;
+    auto& inventory = actor.save().progress().inventory;
+    const u32 mask =
+        GENERATE(powerup::kSuperShot, powerup::kThunderHammer, powerup::kFireBreath,
+                 powerup::kAcidBreath, powerup::kLightningBreath, powerup::kSkorneHorns,
+                 powerup::kSkorneMask, powerup::kLeftGauntlet, powerup::kRightGauntlet);
+    const auto kind = mask == powerup::kSuperShot || mask == powerup::kThunderHammer
+                          ? powerup::kWeapon
+                          : powerup::kSpecial;
+    inventory.addPowerup(kind, mask, 3, 60);
+    REQUIRE(inventory.powerup(kind, mask));
+    REQUIRE(ItemAttack::select(PowerupEffects::of(inventory)));
+    const auto before = inventory;
+    CHECK_FALSE(f.attacks.rangedOnly(actor, f.targets));
+    CHECK(inventory == before);
+    inventory.powerups[0].on = false;
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+}
+
+TEST_CASE("automatic melee options and contact shields never authorize nearby predicted throws",
+          "[game][player-attacks][rollback][ranged-eligibility][auto-melee]") {
+    Fixture f;
+    auto& actor = f.players[0].actor;
+    const bool autoAttack = GENERATE(false, true);
+    actor.save().autoAttack = autoAttack;
+    const u32 shield = GENERATE(0U, powerup::kFireShield, powerup::kLightningShield);
+    if (shield != 0) {
+        actor.save().progress().inventory.addPowerup(powerup::kArmor, shield, 0, 60);
+    }
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, turboAssets(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(
+        enemies.spawn({.kind = kGruntKind, .tier = 3, .position = {0, 0, 2}, .placed = true}, {}));
+    // The Game Options gate suppresses only unpressed attacks, as does either
+    // shield. A held attack still chooses melee and needs host resolution.
+    const bool autoMelee = GENERATE(false, true);
+    const auto unpressed = autoMelee && autoAttack
+                               ? f.attacks.automaticMeleeDeed(actor, f.targets, actor.facing())
+                               : PlayerDeed::None;
+    CHECK(unpressed ==
+          (autoMelee && autoAttack && shield == 0 ? PlayerDeed::AutoMelee : PlayerDeed::None));
+    CHECK(f.attacks.attackDeed(actor, false, f.targets) == PlayerDeed::Melee);
+    CHECK(f.attacks.attackDeed(actor, true, f.targets) == PlayerDeed::MeleeSlow);
+    CHECK_FALSE(f.attacks.rangedOnly(actor, f.targets));
+}
+
+TEST_CASE("ranged prediction includes only live Hurt-mode party melee fallback",
+          "[game][player-attacks][rollback][ranged-eligibility]") {
+    Fixture f;
+    std::array<PlayerRuntime, 1> others;
+    others[0].actor.spawn(0, {}, nullptr, Vec3{2, 0, 2}, 0);
+    f.targets.players = others;
+    const auto& actor = f.players[0].actor;
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    f.targets.multiplayer = MultiplayerMode::Hurt;
+    CHECK_FALSE(f.attacks.rangedOnly(actor, f.targets));
+    others[0].departed = true;
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    others[0].departed = false;
+    others[0].life = PlayerLife::Dying;
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
+    others[0].life = PlayerLife::Standing;
+    others[0].actor.place({2, 100, 2});
+    CHECK(f.attacks.rangedOnly(actor, f.targets));
 }
 
 TEST_CASE("automatic melee leaves both forms of Death alone without removing manual targeting",

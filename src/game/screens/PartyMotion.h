@@ -78,8 +78,20 @@ public:
                                            f32 cameraYaw, s32 ticks, f32 seconds,
                                            const WorldCollision& collision, const Events& events);
     static StrafeWay strafeWayOf(f32 heading, f32 facing);
+    /** Native action pacing before the current tick changes its animation. */
+    static f32 actionPace(const PlayerAnimator* animator, PlayerDeed deed, bool webbed = false);
+    /** Native partial turning and stick-released lunge intent. Pure planning:
+     * callers still resolve the resulting step against their own world state. */
+    static MoveInput attackMove(const PlayerActor& actor, const PlayerAnimator* animator,
+                                const MoveInput& move, PlayerDeed deed, f32 cameraYaw, f32 seconds,
+                                bool mayLunge, bool steeringTurbo = false);
     static MoveInput chargeInput(const PlayerActor& actor, const MoveInput& stick, f32 cameraYaw);
     static PlayerDeed turboDeed(const PlayerRuntime& runtime, const PlayInput& input);
+    /** Native meter/button priority without inventory or scene access. */
+    static PlayerDeed turboDeed(const PlayerAnimator& animator, f32 meter, const PlayInput& input,
+                                bool pojo = false);
+    /** Turbo turning uses an angular-speed limit, including cursor aiming. */
+    static f32 turboHeading(f32 current, f32 wanted, f32 seconds, f32 turnScale);
     /** Passes IT at the step's resolved player contacts after a second of possession;
      * the fallen are it no more. Contacts are indexed by party member, not input lane. */
     static void passIt(std::span<PlayerRuntime> players, s32 ticks, const Events& events,

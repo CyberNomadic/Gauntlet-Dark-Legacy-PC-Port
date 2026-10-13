@@ -2,12 +2,61 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "engine/core/Types.h"
 
 namespace gdl {
 namespace {
 constexpr f32 kTimeSlack = 0.000001f;
+}
+
+bool AnimationPlayer::Checkpoint::valid() const {
+    return std::isfinite(secondsPerFrame) && secondsPerFrame >= kCheckpointMinPeriod &&
+           secondsPerFrame <= kCheckpointMaxPeriod && std::isfinite(time) && time >= 0 &&
+           time <= kCheckpointSeconds && std::isfinite(frame) && frame >= 0 &&
+           frame <= kCheckpointFrames && std::isfinite(speed) && speed >= kCheckpointMinPeriod &&
+           speed <= kCheckpointMaxSpeed && std::isfinite(transitionLength) &&
+           transitionLength >= 0 && transitionLength <= kCheckpointMaxPeriod &&
+           std::isfinite(transitionTime) && transitionTime >= 0 &&
+           transitionTime <= transitionLength && (!playing || generation != 0) &&
+           generation <= std::numeric_limits<u64>::max() - kCheckpointGenerationHeadroom &&
+           (!held || (playing && finished));
+}
+
+AnimationPlayer::Checkpoint AnimationPlayer::checkpoint() const {
+    return {m_index,
+            m_generation,
+            m_secondsPerFrame,
+            m_time,
+            m_frame,
+            m_speed,
+            m_transitionLength,
+            m_transitionTime,
+            playing(),
+            m_finished,
+            m_held,
+            m_smooth};
+}
+
+bool AnimationPlayer::restore(const Checkpoint& state, const TreeSequenceInfo* sequence) {
+    if (!state.valid() || state.playing != (sequence != nullptr) ||
+        (sequence != nullptr && state.frame > static_cast<f32>(std::max(sequence->frames, 0)))) {
+        return false;
+    }
+    m_sequence = sequence;
+    m_index = state.sequence;
+    m_generation = state.generation;
+    m_secondsPerFrame = state.secondsPerFrame;
+    m_time = state.time;
+    m_frame = state.frame;
+    m_speed = state.speed;
+    m_transitionLength = state.transitionLength;
+    m_transitionTime = state.transitionTime;
+    m_finished = state.finished;
+    m_held = state.held;
+    m_smooth = state.smooth;
+    return true;
 }
 
 void AnimationPlayer::start(const TreeSequenceInfo& sequence, u32 index, f32 transitionSeconds,

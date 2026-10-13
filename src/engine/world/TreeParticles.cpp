@@ -7,6 +7,31 @@
 #include "engine/core/Types.h"
 
 namespace gdl {
+bool TreeParticles::Checkpoint::valid() const {
+    if (!field.valid() || nodes.size() != field.entries.size()) {
+        return false;
+    }
+    for (usize i = 0; i < nodes.size(); ++i) {
+        if (nodes[i].node > 1'000'000 || (i > 0 && nodes[i].node <= nodes[i - 1].node) ||
+            (nodes[i].texture && *nodes[i].texture > 1'000'000)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TreeParticles::Checkpoint TreeParticles::checkpoint() const {
+    return {m_field.checkpoint(), m_nodes};
+}
+
+bool TreeParticles::canRestore(const Checkpoint& state) const {
+    return state.valid() && state.nodes == m_nodes && m_field.canRestore(state.field);
+}
+
+bool TreeParticles::restore(const Checkpoint& state) {
+    return canRestore(state) && m_field.restore(state.field);
+}
+
 void TreeParticles::bind(const TreeInfo& tree, ItemArchive& archive, RenderDevice& device,
                          const Mat4& root, std::span<const Mat4> pose,
                          std::span<TextureSet* const> lenders) {

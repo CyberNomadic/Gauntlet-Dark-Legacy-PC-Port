@@ -9,6 +9,8 @@ namespace gdl::game {
  * remains local and is never retained across the input playout delay. */
 class MatchInputs {
 public:
+    static std::vector<InputCommand> commands(const MatchSession& session,
+                                              const SessionInputs::Frame& local);
     static bool sample(MatchSession& session, const SessionInputs::Frame& local);
     static std::optional<SessionInputs::Frame> advance(MatchSession& session);
 };

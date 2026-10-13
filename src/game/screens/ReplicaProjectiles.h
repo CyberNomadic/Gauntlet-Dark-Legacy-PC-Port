@@ -3,6 +3,7 @@
 #include <map>
 
 #include "game/netplay/CombatSnapshot.h"
+#include "game/screens/ReplicaProjectileParticles.h"
 #include "game/world/EffectTrees.h"
 
 namespace gdl::game {
@@ -16,8 +17,8 @@ struct CombatantAssets;
 /** Trusted load-time resource roster, not a packet-driven asset loader. The host
  * and client bind the same IDs to their own assets before play. Borrowed meshes,
  * textures and archives must outlive the roster. IDs cannot be rebound in place.
- * Models/effect meshes and streaks are covered; particles, lights, impact sounds
- * and gameplay callbacks are deliberately not reconstructed by this renderer. */
+ * Models/effect meshes, authored weapon particles and streaks are covered;
+ * lights, impact sounds and gameplay callbacks are not reconstructed here. */
 class ProjectileResources {
 public:
     bool addModel(u32 id, const TreeModel& model);
@@ -55,6 +56,17 @@ public:
     u32 treeId(const ItemArchive* archive, const TreeInfo* tree,
                std::span<TextureSet* const> lenders = {}) const;
     bool accepts(const ProjectileState& state) const;
+    /** Validate every body, rider and streak before replacing authoritative visuals. */
+    bool acceptsWeapon(const PlayerWeaponState& state) const;
+    /** Sample a preloaded thrown tree without executing effect events. */
+    bool sampleWeapon(ProjectileState& state, f32 age, f32 textureFrame) const;
+    bool prepareParticles(const ProjectileState& state,
+                          ReplicaProjectileParticles& particles) const;
+    bool hasParticles(u32 resource) const;
+    f32 particleLifetime(u32 resource) const;
+    void drawParticles(RenderDevice& device, const ProjectileState& state,
+                       ReplicaProjectileParticles& particles, const Mat4& clip,
+                       const CameraFrame& camera);
     void draw(RenderDevice& device, const ProjectileState& state, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera,
               TreeModel::Pass pass = TreeModel::Pass::All);
@@ -71,6 +83,7 @@ private:
         std::vector<TextureSet*> lenders;
         TreeModel model;
         TextureAnimator textures;
+        TreeParticles particles;
     };
     bool available(u32 id) const;
     std::map<u32, Entry> m_entries;
@@ -78,13 +91,21 @@ private:
 
 class ProjectileCapture {
 public:
+    struct Tower {
+        const ItemArchive* items = nullptr;
+        const class SumnerFigure* sumner = nullptr;
+        const class TowerPromotion* promotion = nullptr;
+        const class TowerRelics* relics = nullptr;
+        bool speech = false;
+    };
     /** Replaces the projectile roster atomically. Unregistered visible resources
      * or capacity overflow fail rather than silently omit a shot. Call alongside
      * CombatCapture at the same end-of-tick boundary; no gameplay queues drain. */
     static bool append(CombatSnapshot& snapshot, const ProjectileResources& resources,
                        const PlayerMissiles& players, const EnemyMissiles& enemies,
                        const EffectTrees* worldEffects = nullptr,
-                       const LevelArrivalPresentation* arrival = nullptr);
+                       const LevelArrivalPresentation* arrival = nullptr,
+                       const Tower* tower = nullptr);
 };
 
 class ReplicaProjectiles {
@@ -96,10 +117,21 @@ public:
               const WorldLighting& lighting, const CameraFrame& camera,
               TreeModel::Pass pass = TreeModel::Pass::All) const;
     usize count() const { return m_shots.size(); }
+    const TreeParticles* particles(const ProjectileState& state) const;
 
 private:
     u64 m_epoch = 0;
     std::optional<u64> m_tick;
     std::vector<ProjectileState> m_shots;
+    struct ParticleKey {
+        ProjectileSource source{};
+        u32 resource = 0;
+        u64 instance = 0;
+        std::optional<ShotIdentity> origin;
+        std::optional<PotionIdentity> potionOrigin;
+        auto operator<=>(const ParticleKey&) const = default;
+    };
+    static ParticleKey particleKey(const ProjectileState& state);
+    mutable std::map<ParticleKey, ReplicaProjectileParticles> m_particles;
 };
 } // namespace gdl::game

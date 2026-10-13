@@ -1,0 +1,41 @@
+x-probe: &probe
+  image: ${GDL_PROBE_IMAGE:?Build the probe image first}
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  # Only the setup parent retains these; the native child drops all capabilities.
+  cap_add: [NET_ADMIN, SETPCAP]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=64m]
+  volumes:
+    - type: bind
+      source: ${GDL_PROBE_ASSETS:?Supply your native Gauntlet assets}
+      target: /assets
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${GDL_PROBE_OUTPUT:?Supply a new report directory}
+      target: /results
+      bind:
+        create_host_path: false
+  environment:
+    GDL_PROBE_DELAY: ${GDL_PROBE_DELAY:-0}
+    GDL_PROBE_JITTER: ${GDL_PROBE_JITTER:-0}
+    GDL_PROBE_LOSS: ${GDL_PROBE_LOSS:-0}
+    GDL_PROBE_SECONDS: ${GDL_PROBE_SECONDS:-20}
+    GDL_PROBE_PLAYERS: ${GDL_PROBE_PLAYERS:-2}
+    GDL_PROBE_FPS: ${GDL_PROBE_FPS:-60}
+    GDL_PROBE_PREDICTION: ${GDL_PROBE_PREDICTION:-on}
+  networks: [test]
+  stop_grace_period: 5s
+services:
+  host:
+    <<: *probe
+    command: [host]
+  guest:
+    <<: *probe
+    command: [guest]
+networks:
+  test:
+    internal: true

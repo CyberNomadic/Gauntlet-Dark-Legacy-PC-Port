@@ -2,8 +2,10 @@
 
 #include "game/netplay/PartyBootstrap.h"
 #include "game/screens/ReplicaView.h"
+#include "game/screens/TurboEffectResources.h"
 
 namespace gdl::game {
+class LocalTurboEffectPrediction;
 /** Owns a client's native level artwork and its immutable resource catalogs.
  * There is no PlayScene, gameplay update, sound player or save storage. Resolve
  * the level through the local catalog before open(), never from a packet path.
@@ -23,9 +25,16 @@ public:
     void clear();
     bool show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation = nullptr);
     void draw(RenderDevice& device, const Mat4& frameProjection, f32 width, f32 height,
-              f32 textureFrame, const GameConfig& video = {});
+              f32 textureFrame, const GameConfig& video = {},
+              const LocalTurboEffectPrediction* effects = nullptr, f32 effectBlend = 1);
     const ReplicaView* view() const;
     const LevelWorld* world() const;
+    const ProjectileResources* projectiles() const;
+    /** Trusted load-time class identity and move rows, owned until the next open/clear. */
+    s32 character(u8 seat) const;
+    const ClassStats* classStats(u8 seat) const;
+    const TurboEffectResources* turboEffects(u8 seat) const;
+    const ItemArchive* weapons() const;
 
 private:
     struct Assets;

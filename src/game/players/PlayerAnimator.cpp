@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <utility>
 
 #include "engine/core/Types.h"
 
@@ -44,6 +45,169 @@ constexpr bool isLegend(PlayerDeed deed) {
 
 } // namespace
 
+bool PlayerAnimator::Checkpoint::valid() const {
+    return animation.valid() && index(action) < kActionCount && footfall <= Foot::Second &&
+           meleeBlow <= MeleeBlow::Power && melee.range <= MeleeRange::Swing &&
+           std::isfinite(melee.yaw) && std::abs(melee.yaw) <= std::numbers::pi_v<f32> &&
+           character >= -1 && character < kClassCount && chain >= 0 && chain <= kMaxTicks &&
+           potionThrowTicks >= 0 && potionThrowTicks <= kMaxTicks && comboClass >= -1 &&
+           comboClass < kClassCount && stillTicks >= 0 && stillTicks <= kMaxTicks &&
+           fidgetTicks >= 0 && fidgetTicks <= kMaxTicks &&
+           itemReleased <= PlayerDeed::ComboThrown && strafe <= StrafeWay::Right &&
+           std::isfinite(guardArmor) && guardArmor >= 0 && guardArmor <= kMaxGuardArmor &&
+           std::isfinite(attackSeconds) && attackSeconds >= 0 &&
+           attackSeconds <= AnimationPlayer::kCheckpointSeconds && std::isfinite(phaseSeconds) &&
+           phaseSeconds >= 0 && phaseSeconds <= AnimationPlayer::kCheckpointSeconds &&
+           std::isfinite(shotFrame) && shotFrame >= 0 &&
+           shotFrame <= AnimationPlayer::kCheckpointFrames;
+}
+
+PlayerAnimator::Checkpoint PlayerAnimator::checkpoint() const {
+    Checkpoint state;
+    state.animation = m_player.checkpoint();
+    state.action = m_current;
+    state.footfall = m_footfall;
+    state.meleeBlow = m_meleeBlow;
+    state.melee = m_melee;
+    state.character = m_character;
+    state.chain = m_chain;
+    state.potionThrowTicks = m_potionThrowTicks;
+    state.comboClass = m_comboClass;
+    state.stillTicks = m_stillTicks;
+    state.fidgetTicks = m_fidgetTicks;
+    state.itemReleased = m_itemReleased;
+    state.strafe = m_strafe;
+    state.guardArmor = m_guardArmor;
+    state.attackSeconds = m_attackSeconds;
+    state.phaseSeconds = m_phaseSeconds;
+    state.shotFrame = m_shotFrame;
+    state.entered = m_entered;
+    state.released = m_released;
+    state.quickPress = m_quickPress;
+    state.strongPress = m_strongPress;
+    state.quickHeld = m_quickHeld;
+    state.strongHeld = m_strongHeld;
+    state.moved = m_moved;
+    state.shielded = m_shielded;
+    state.pushed = m_pushed;
+    state.potionUsed = m_potionUsed;
+    state.potionThrown = m_potionThrown;
+    state.potionThrowReleased = m_potionThrowReleased;
+    state.dead = m_dead;
+    state.turboBegan = m_turboBegan;
+    state.strongReleased = m_strongReleased;
+    state.potionShielded = m_potionShielded;
+    state.shieldAsked = m_shieldAsked;
+    state.legendAsked = m_legendAsked;
+    state.legendReleased = m_legendReleased;
+    state.superReleased = m_superReleased;
+    state.superHeld = m_superHeld;
+    state.rapid = m_rapid;
+    state.speed = m_speed;
+    state.comboRide = m_comboRide;
+    state.potionLatch = m_potionLatch;
+    return state;
+}
+
+bool PlayerAnimator::restore(const Checkpoint& state) {
+    if (m_tree == nullptr || !state.valid() || !state.animation.playing ||
+        state.animation.sequence >= m_tree->sequences.size() ||
+        state.animation.sequence != sequenceOf(state.action)) {
+        return false;
+    }
+    AnimationPlayer clock;
+    if (!clock.restore(state.animation, &m_tree->sequences[state.animation.sequence])) {
+        return false;
+    }
+    m_player = clock;
+    m_current = state.action;
+    m_footfall = state.footfall;
+    m_meleeBlow = state.meleeBlow;
+    m_melee = state.melee;
+    m_character = state.character;
+    m_chain = state.chain;
+    m_potionThrowTicks = state.potionThrowTicks;
+    m_comboClass = state.comboClass;
+    m_stillTicks = state.stillTicks;
+    m_fidgetTicks = state.fidgetTicks;
+    m_itemReleased = state.itemReleased;
+    m_strafe = state.strafe;
+    m_guardArmor = state.guardArmor;
+    m_attackSeconds = state.attackSeconds;
+    m_phaseSeconds = state.phaseSeconds;
+    m_shotFrame = state.shotFrame;
+    m_entered = state.entered;
+    m_released = state.released;
+    m_quickPress = state.quickPress;
+    m_strongPress = state.strongPress;
+    m_quickHeld = state.quickHeld;
+    m_strongHeld = state.strongHeld;
+    m_moved = state.moved;
+    m_shielded = state.shielded;
+    m_pushed = state.pushed;
+    m_potionUsed = state.potionUsed;
+    m_potionThrown = state.potionThrown;
+    m_potionThrowReleased = state.potionThrowReleased;
+    m_dead = state.dead;
+    m_turboBegan = state.turboBegan;
+    m_strongReleased = state.strongReleased;
+    m_potionShielded = state.potionShielded;
+    m_shieldAsked = state.shieldAsked;
+    m_legendAsked = state.legendAsked;
+    m_legendReleased = state.legendReleased;
+    m_superReleased = state.superReleased;
+    m_superHeld = state.superHeld;
+    m_rapid = state.rapid;
+    m_speed = state.speed;
+    m_comboRide = state.comboRide;
+    m_potionLatch = state.potionLatch;
+    m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
+    m_previous = m_pose;
+    m_presentationPrevious = m_pose;
+    m_presentationGeneration = m_player.generation();
+    return true;
+}
+
+bool PlayerAnimator::TransitionPose::valid() const {
+    return current.valid() && previous.valid() && current.tree == previous.tree &&
+           current.nodes == previous.nodes;
+}
+
+std::optional<PlayerAnimator::TransitionPose> PlayerAnimator::transitionPose() const {
+    if (m_tree == nullptr || !m_player.transitioning()) {
+        return std::nullopt;
+    }
+    auto current = m_pose.checkpoint();
+    auto previous = m_previous.checkpoint();
+    if (!current || !previous) {
+        return std::nullopt;
+    }
+    TransitionPose state{std::move(*current), std::move(*previous)};
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+
+bool PlayerAnimator::restore(const Checkpoint& state,
+                             const std::optional<TransitionPose>& transition) {
+    const bool blending = state.animation.transitionTime < state.animation.transitionLength;
+    if (m_tree == nullptr || blending != transition.has_value() ||
+        (transition && !transition->valid())) {
+        return false;
+    }
+    PlayerAnimator candidate = *this;
+    if (!candidate.restore(state)) {
+        return false;
+    }
+    if (transition) {
+        if (!candidate.m_pose.restore(*m_tree, transition->current) ||
+            !candidate.m_previous.restore(*m_tree, transition->previous)) {
+            return false;
+        }
+        candidate.m_presentationPrevious = candidate.m_pose;
+    }
+    *this = std::move(candidate);
+    return true;
+}
+
 bool PlayerAnimator::isBlockableAttack(Action action) {
     // PlayerAttacking(level 1): categories 2, 5, 10, and 11 or higher.
     // Recoveries retain their attack category; quick, step and low swings do not qualify.
@@ -74,6 +238,60 @@ bool PlayerAnimator::isBlockableAttack(Action action) {
     case Action::BreatheRecover: return true;
     default: return action >= Action::ComboAct1 && action <= Action::ComboJes;
     }
+}
+
+bool PlayerAnimator::locomotion(Action action) {
+    return action <= Action::Run2 ||
+           (action >= Action::StrafeForward1 && action <= Action::StrafeRight2) ||
+           action == Action::ShieldReady || action == Action::ShieldRun;
+}
+
+bool PlayerAnimator::rollbackAction(Action action) {
+    return locomotion(action) || isThrow(action) || action == Action::StrongThrow ||
+           action == Action::StrongThrowRecover ||
+           (action >= Action::DefendRaise && action <= Action::DefendLower) ||
+           (action >= Action::StrafeShootForward1 && action <= Action::StrafeShootRight2);
+}
+
+bool PlayerAnimator::rollbackMeleeAction(Action action) {
+    return isMelee(action) && (action < Action::Step1 || action > Action::WalkStrikeRecover);
+}
+
+bool PlayerAnimator::rollbackMovingMeleeAction(Action action) {
+    return isMelee(action);
+}
+
+bool PlayerAnimator::rollbackTurboAction(Action action) {
+    return action == Action::TurboStrong || action == Action::TurboFull;
+}
+
+bool PlayerAnimator::rollbackShoveAction(Action action) {
+    return action == Action::Shove;
+}
+
+bool PlayerAnimator::rollbackReactionAction(Action action) {
+    return action == Action::HitReact || action == Action::Stun || action == Action::SpikeHit;
+}
+
+bool PlayerAnimator::rollbackReactionDeed(PlayerDeed deed) {
+    return deed == PlayerDeed::None || deed == PlayerDeed::Flinch || deed == PlayerDeed::Reel ||
+           deed == PlayerDeed::Spike;
+}
+
+bool PlayerAnimator::restoreLocomotion(Action action, u32 sequence, f32 frame) {
+    if (m_tree == nullptr || !locomotion(action) || sequence != sequenceOf(action) ||
+        sequence >= m_tree->sequences.size() || !std::isfinite(frame) || frame < 0 ||
+        frame > static_cast<f32>(std::max(m_tree->sequences[sequence].frames - 1, 0))) {
+        return false;
+    }
+    m_current = action;
+    m_entered = true;
+    m_shielded = action == Action::ShieldReady || action == Action::ShieldRun;
+    m_player.start(m_tree->sequences[sequence], sequence, 0, frame);
+    m_pose.evaluate(*m_tree, sequence, frame);
+    m_previous = m_pose;
+    m_presentationPrevious = m_pose;
+    return true;
 }
 
 bool PlayerAnimator::bind(const TreeInfo& tree, bool enter) {

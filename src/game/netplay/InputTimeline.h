@@ -30,6 +30,21 @@ public:
     // two seconds of queued inputs and 100 ms of held-input concealment.
     static constexpr u64 kMaxAhead = 120;
     static constexpr u64 kHoldTicks = 6;
+    struct Diagnostics {
+        std::optional<u64> received;
+        s32 arrivalMargin = 0;
+        u32 late = 0;
+        u64 concealed = 0;
+        u64 neutral = 0;
+    };
+    const Diagnostics& diagnostics(usize seat) const { return m_seats.at(seat).diagnostics; }
+    /** Last actual input consumed, retaining its original tick for hold expiration. */
+    const std::optional<InputCommand>& previous(usize seat) const {
+        return m_seats.at(seat).previous;
+    }
+    /** Shared missing-input policy for authoritative playout and rollback replay. */
+    static InputCommand heldOrNeutral(const std::optional<InputCommand>& previous, u64 epoch,
+                                      u64 tick, u32 grant, u8 seat);
 
     /** Zero denotes no owner. Reassigning, even to the same peer, revokes old packets. */
     bool assign(usize seat, Peer peer);
@@ -51,6 +66,7 @@ private:
         u32 grant = 0;
         std::map<u64, InputCommand> pending;
         std::optional<InputCommand> previous;
+        Diagnostics diagnostics;
     };
     std::array<Seat, InputCommand::kSeats> m_seats;
     u64 m_epoch = 1;

@@ -20,9 +20,13 @@ struct ReplicaStage::Assets {
     ProjectileResources projectiles;
     PickupResources pickups;
     FixtureResources fixtures;
+    ClassDataSet classes;
+    std::array<std::optional<s32>, InputCommand::kSeats> characters;
     const Texture* flash = nullptr;
-    // Last so renderers release all borrowed resources before their owners.
+    // Renderers release all borrowed resources before their owners. The turbo
+    // prototypes also borrow class archives held by the view's player figures.
     ReplicaView view;
+    std::array<TurboEffectResources, InputCommand::kSeats> turboEffects;
 
     bool load(RenderDevice& device, const std::filesystem::path& root, const LevelRef& level,
               const MatchContext& context, const PartyBootstrap::Party& party,
@@ -73,7 +77,6 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
         return false;
     }
     std::array<PlayerFigure*, InputCommand::kSeats> figures{};
-    ClassDataSet classes;
     classes.load(root / "pdata");
     for (usize seat = 0; seat < party.size(); ++seat) {
         const auto& profile = party[seat];
@@ -85,7 +88,11 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
             return false;
         }
         figures[seat] = figure.get();
-        if (!view.setPlayer(static_cast<u8>(seat), std::move(figure), 1,
+        characters[seat] = profile->gameplayCopy().character;
+        const auto character = profile->gameplayCopy();
+        const f32 scale =
+            PlayerFigure::bodyScale(character, PowerupEffects::of(character.progress().inventory));
+        if (!view.setPlayer(static_cast<u8>(seat), std::move(figure), scale,
                             classes.stats(profile->gameplayCopy().character))) {
             return false;
         }
@@ -93,6 +100,15 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
     const std::array<TextureSet*, 5> lenders{&weapons.textures, &world.items().textures,
                                              &world.realmItems().textures,
                                              &world.powerups().textures, &common};
+    for (usize seat = 0; seat < figures.size(); ++seat) {
+        const auto character = characters[seat];
+        const auto* stats = character ? classes.stats(*character) : nullptr;
+        if (figures[seat] != nullptr && stats != nullptr) {
+            // Unsupported effect rows stay authoritative. A failed optional
+            // catalog must not prevent the ordinary stage from loading.
+            turboEffects[seat].bind(device, *character, *stats, *figures[seat], weapons, lenders);
+        }
+    }
     auto stocks = critters.resources();
     stocks.insert(stocks.end(), bossStocks.begin(), bossStocks.end());
     const std::array archives{&world.items(), &world.realmItems(), &world.powerups()};
@@ -103,6 +119,7 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
         return false;
     }
     view.loadPortalSkin(device, weapons.textures);
+    view.loadDeathSkins(device, weapons);
     std::vector<HealthMeterReading> meters;
     if (boss != nullptr) {
         const auto append = [&](const CritterData& data) {
@@ -165,10 +182,11 @@ bool ReplicaStage::show(const CombatSnapshot& snapshot, const EnemyPresentation*
     return m_assets != nullptr && m_assets->view.show(snapshot, presentation);
 }
 void ReplicaStage::draw(RenderDevice& device, const Mat4& frameProjection, f32 width, f32 height,
-                        f32 textureFrame, const GameConfig& video) {
+                        f32 textureFrame, const GameConfig& video,
+                        const LocalTurboEffectPrediction* effects, f32 effectBlend) {
     if (m_assets != nullptr) {
         m_assets->view.draw(device, frameProjection, width, height, textureFrame, m_assets->flash,
-                            nullptr, video);
+                            nullptr, video, effects, effectBlend);
     }
 }
 const ReplicaView* ReplicaStage::view() const {
@@ -176,5 +194,26 @@ const ReplicaView* ReplicaStage::view() const {
 }
 const LevelWorld* ReplicaStage::world() const {
     return m_assets != nullptr ? &m_assets->world : nullptr;
+}
+const ProjectileResources* ReplicaStage::projectiles() const {
+    return m_assets != nullptr ? &m_assets->projectiles : nullptr;
+}
+s32 ReplicaStage::character(u8 seat) const {
+    return m_assets != nullptr && seat < m_assets->characters.size()
+               ? m_assets->characters[seat].value_or(-1)
+               : -1;
+}
+const ClassStats* ReplicaStage::classStats(u8 seat) const {
+    const s32 known = character(seat);
+    return known >= 0 ? m_assets->classes.stats(known) : nullptr;
+}
+const TurboEffectResources* ReplicaStage::turboEffects(u8 seat) const {
+    return m_assets != nullptr && seat < m_assets->turboEffects.size() &&
+                   m_assets->turboEffects[seat].stats() != nullptr
+               ? &m_assets->turboEffects[seat]
+               : nullptr;
+}
+const ItemArchive* ReplicaStage::weapons() const {
+    return m_assets != nullptr ? &m_assets->weapons : nullptr;
 }
 } // namespace gdl::game

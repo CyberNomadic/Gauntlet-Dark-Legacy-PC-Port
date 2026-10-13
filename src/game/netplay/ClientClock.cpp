@@ -43,12 +43,12 @@ std::optional<CombatSnapshot> ClientClock::sample(const MatchSession& match, f64
             m_tick = available - kDelay;
             m_fraction = 0;
         } else {
-            // Gentle drift correction around two checkpoint intervals. Don't
+            // Gentle drift correction around one checkpoint interval. Don't
             // reset to latest-delay on every arrival: that visibly stutters.
             f64 speed = 1;
-            if (buffered < 3) {
+            if (buffered < kDelay) {
                 speed = 0.95;
-            } else if (buffered > 9) {
+            } else if (buffered > kDelay + 3) {
                 speed = 1.05;
             }
             const f64 advanced = m_fraction + std::min(seconds, 0.25) * m_context.tickRate * speed;

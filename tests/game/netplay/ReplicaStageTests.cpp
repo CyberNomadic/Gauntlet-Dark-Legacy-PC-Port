@@ -53,6 +53,7 @@ TEST_CASE("every playable native stage loads an independent four-player presenta
         CAPTURE(level.name);
         LevelWorld world;
         REQUIRE(world.load(device, root, level));
+        REQUIRE(world.motion().valid());
         PlayScene scene;
         PlayOptions options;
         options.welcome = false;
@@ -70,6 +71,17 @@ TEST_CASE("every playable native stage loads an independent four-player presenta
         REQUIRE(remote.open(device, root, level, match.context(), profiles));
         REQUIRE(remote.world() != &world);
         REQUIRE(remote.view());
+        for (u8 seat = 0; seat < 4; ++seat) {
+            CHECK(remote.character(seat) == seat);
+            REQUIRE(remote.classStats(seat));
+            CHECK_FALSE(remote.classStats(seat)->moveStrikes.empty());
+            const auto character = profiles[seat]->gameplayCopy();
+            CHECK(remote.view()->actors().playerScale(seat) ==
+                  PlayerFigure::bodyScale(character,
+                                          PowerupEffects::of(character.progress().inventory)));
+        }
+        CHECK(remote.character(4) == -1);
+        CHECK(remote.classStats(4) == nullptr);
         REQUIRE_FALSE(remote.view()->shown());
         REQUIRE(match.loaded());
         REQUIRE(match.phase() == MatchSession::Phase::Running);
@@ -118,5 +130,8 @@ TEST_CASE("every playable native stage loads an independent four-player presenta
         ++count;
     }
     CHECK(count > 50);
+    remote.clear();
+    CHECK(remote.character(0) == -1);
+    CHECK(remote.classStats(0) == nullptr);
 }
 } // namespace

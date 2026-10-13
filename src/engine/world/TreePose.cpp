@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <span>
+#include <utility>
 
 #include "engine/core/Assert.h"
 #include "engine/core/Types.h"
@@ -11,6 +12,20 @@
 namespace gdl {
 
 namespace {
+
+bool checkpointVector(const Vec3& value) {
+    for (s32 axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(value[axis]) ||
+            std::abs(value[axis]) > TreePose::Checkpoint::kMaxMagnitude) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool checkpointName(const std::string& value) {
+    return value.size() <= TreePose::Checkpoint::kMaxName && value.find('\0') == std::string::npos;
+}
 
 /** The pose triple channel 0..8 belongs to. */
 Vec3& channelTarget(NodePose& pose, u32 channel) {
@@ -43,6 +58,66 @@ Vec3 wrapAngles(Vec3 angles) {
 }
 
 } // namespace
+
+bool TreePose::Checkpoint::valid() const {
+    if (!checkpointName(tree) || nodes.empty() || nodes.size() > kMaxNodes ||
+        nodes.size() != poses.size()) {
+        return false;
+    }
+    for (usize index = 0; index < nodes.size(); ++index) {
+        const auto& node = nodes[index];
+        const auto& pose = poses[index];
+        if (!checkpointName(node.name) || node.parent < -1 ||
+            node.parent >= static_cast<s32>(index) || !checkpointVector(node.rest) ||
+            !checkpointVector(pose.rotation) || !checkpointVector(pose.position) ||
+            !checkpointVector(pose.scale)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<TreePose::Checkpoint> TreePose::checkpoint() const {
+    if (m_tree == nullptr || m_tree->nodes.size() != m_poses.size() ||
+        m_poses.size() > Checkpoint::kMaxNodes) {
+        return std::nullopt;
+    }
+    Checkpoint state;
+    state.tree = m_tree->name;
+    state.poses = m_poses;
+    state.nodes.reserve(m_tree->nodes.size());
+    for (const auto& node : m_tree->nodes) {
+        state.nodes.push_back({node.name, node.parent, node.position});
+    }
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+
+bool TreePose::restore(const TreeInfo& tree, const Checkpoint& state) {
+    if (!state.valid() || tree.name != state.tree || tree.nodes.size() != state.nodes.size()) {
+        return false;
+    }
+    for (usize index = 0; index < state.nodes.size(); ++index) {
+        const auto& expected = tree.nodes[index];
+        const auto& node = state.nodes[index];
+        if (expected.name != node.name || expected.parent != node.parent ||
+            expected.position != node.rest) {
+            return false;
+        }
+    }
+    TreePose candidate;
+    candidate.m_tree = &tree;
+    candidate.m_poses = state.poses;
+    candidate.compose();
+    for (const auto& matrix : candidate.m_matrices) {
+        for (const auto value : std::span<const f32, 16>{glm::value_ptr(matrix), 16}) {
+            if (!std::isfinite(value) || std::abs(value) > Checkpoint::kMaxMagnitude) {
+                return false;
+            }
+        }
+    }
+    *this = std::move(candidate);
+    return true;
+}
 
 f32 TreePose::wrapAngle(f32 angle) {
     if (angle > kPi) {

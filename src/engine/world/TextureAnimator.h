@@ -46,6 +46,16 @@ struct ScrollState {
  */
 class TextureAnimator {
 public:
+    struct Checkpoint {
+        u32 frame = 0;
+        f32 remainder = 0;
+        f32 advance = 0;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    /** Restores only the clock of this already-bound animation bank. */
+    bool restore(const Checkpoint& state);
     /** Resolves `animations` against the level's textures; those whose frames cannot be
      * found are dropped with a warning. */
     void bind(std::span<const TextureAnimationInfo> animations, TextureSet& textures,
@@ -87,6 +97,9 @@ public:
     std::optional<f32> presentationOffset(f32 alpha) const;
     /** Advances `ticks` game frames. */
     void step(u32 ticks = 1);
+    /** Set an absolute presentation clock in O(animation count), including
+     * backwards seeks. Preserves each native start offset; emits no events. */
+    void seek(u32 frame);
     /** Shows every animation where it stands. */
     void apply(WorldScene& scene) const;
     /** Static meshes have clock-driven textures, but no sequence or node overrides. */
