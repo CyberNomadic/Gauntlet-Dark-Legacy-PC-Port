@@ -6,6 +6,7 @@
 #include <cstring>
 #include <format>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 
 #include "game/world/ItemSupport.h"
@@ -105,8 +106,8 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
     bodies->kind = kind;
     bodies->textures.bind(archive->trees.textureAnimations(), archive->textures, device, lenders);
     const EnemyKind& info = enemyKind(kind);
-    // The state's object: "GEN_GRU3", tried with the level-one and root suffixes as the
-    // original does. Whole is three; nought is the ruin.
+    // The state's object: "GEN_GRU3", with the authored suffixes the original retries.
+    // Whole is three; nought is the ruin.
     for (s32 state = 0; state <= kStates; ++state) {
         const std::string base =
             std::format("GEN_{}{}", kind < -1 ? "SPECIAL" : info.prefix, state);
@@ -120,21 +121,15 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
             bodies->models[static_cast<usize>(state)].setFrame(0, 0);
             continue;
         }
-        for (const char* suffix : {"", "L1", "L1ROOT"}) {
-            const auto object = archive->models.find(base + suffix);
-            if (!object.has_value()) {
-                continue;
-            }
-            const u32 objectIndex = *object;
+        if (const auto object = AssetScope(*archive).findObject(base)) {
             TreeInfo& tree = bodies->trees[static_cast<usize>(state)];
             tree.name = base;
             TreeNodeInfo node;
             node.name = base;
-            node.object = archive->models.entry(objectIndex).name;
+            node.object = object->name;
             tree.nodes.push_back(node);
             bodies->models[static_cast<usize>(state)].bind(tree, archive->models, archive->textures,
                                                            device, lenders);
-            break;
         }
     }
     m_bodies.push_back(std::move(bodies));
@@ -343,15 +338,13 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.bossFigure = std::make_unique<ItemFigure>();
     // AtreeMatchAnyHeader also searches the summoned species' loaded archive.
     // The Genie's BOSSGEN tree lives with WIND, not with DJINN or the level items.
-    ItemArchive* art = &items;
-    if (!items.trees.find(tree)) {
-        if (ItemArchive* brood = enemies.archive(kind);
-            brood != nullptr && brood->trees.find(tree)) {
-            art = brood;
-        }
+    AssetScope scope(items);
+    if (ItemArchive* brood = enemies.archive(kind); brood != nullptr) {
+        scope.add(*brood);
     }
+    ItemArchive* art = scope.archiveForTree(tree);
     // A missing BOSSGEN tree does not prevent PlaceItem from creating its gameplay object.
-    generator.bossFigure->place(device, *art, tree, instance, collision);
+    generator.bossFigure->place(device, art != nullptr ? *art : items, tree, instance, collision);
     generator.bossFigure->play(0, !settled);
     if (settled) {
         // The projectile has already finished its landing before it leaves the generator.

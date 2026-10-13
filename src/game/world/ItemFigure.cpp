@@ -4,6 +4,7 @@
 #include <cmath>
 #include <string>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 
 namespace gdl::game {
@@ -62,7 +63,8 @@ bool levelWith(const Obstacle& box, const Vec3& position) {
 
 ItemArchive& itemArchiveForTree(ItemArchive& items, std::string_view name,
                                 ItemArchive* realmItems) {
-    return !items.trees.find(name) && realmItems != nullptr ? *realmItems : items;
+    ItemArchive* found = AssetScope(items, realmItems).archiveForTree(name);
+    return found != nullptr ? *found : items;
 }
 
 Vec3 Obstacle::pushOut(const Vec3& position, f32 radius) const {
@@ -229,30 +231,27 @@ bool ItemFigure::placeStaticFallback(RenderDevice& device, ItemArchive& items,
     if (!items.loaded() || items.trees.find(name)) {
         return false;
     }
-    for (const char* suffix : {"", "L1", "L1ROOT"}) {
-        const auto model = items.models.find(std::string{name} + suffix);
-        if (!model) {
-            continue;
-        }
-        m_staticTree = std::make_unique<TreeInfo>();
-        m_staticTree->name = name;
-        TreeNodeInfo node;
-        node.name = name;
-        node.object = items.models.entry(*model).name;
-        node.objectFlags = objectFlags;
-        m_staticTree->nodes.push_back(std::move(node));
-        if (!m_model.bind(*m_staticTree, items.models, items.textures, device)) {
-            m_staticTree.reset();
-            return false;
-        }
-        m_tree = m_staticTree.get();
-        m_pose.rest(*m_tree);
-        m_textures.bind(items.trees.textureAnimations(), items.textures, device);
-        m_holdPose = false;
-        m_index = 0;
-        return true;
+    const auto model = AssetScope(items).findObject(name);
+    if (!model) {
+        return false;
     }
-    return false;
+    m_staticTree = std::make_unique<TreeInfo>();
+    m_staticTree->name = name;
+    TreeNodeInfo node;
+    node.name = name;
+    node.object = model->name;
+    node.objectFlags = objectFlags;
+    m_staticTree->nodes.push_back(std::move(node));
+    if (!m_model.bind(*m_staticTree, items.models, items.textures, device)) {
+        m_staticTree.reset();
+        return false;
+    }
+    m_tree = m_staticTree.get();
+    m_pose.rest(*m_tree);
+    m_textures.bind(items.trees.textureAnimations(), items.textures, device);
+    m_holdPose = false;
+    m_index = 0;
+    return true;
 }
 
 void ItemFigure::gateParticlesOnSequence(bool enabled) {

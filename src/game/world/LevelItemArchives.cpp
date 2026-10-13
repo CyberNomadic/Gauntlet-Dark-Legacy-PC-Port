@@ -22,14 +22,7 @@ bool LevelItemArchives::load(const std::filesystem::path& root, const LevelRef& 
 }
 
 std::vector<TextureSet*> LevelItemArchives::textureLenders() {
-    std::vector<TextureSet*> lenders;
-    if (m_primary.loaded()) {
-        lenders.push_back(&m_primary.textures);
-    }
-    if (m_realm.loaded()) {
-        lenders.push_back(&m_realm.textures);
-    }
-    return lenders;
+    return scope().textureLenders();
 }
 
 void LevelItemArchives::clear() {

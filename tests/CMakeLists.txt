@@ -116,6 +116,7 @@ add_executable(tests
     engine/assets/PngImageTests.cpp
     engine/assets/TextureSetTests.cpp
     engine/assets/TextureBindingsTests.cpp
+    engine/assets/AssetScopeTests.cpp
     engine/assets/ObjectMaterialTests.cpp
     engine/world/AssetAuditTests.cpp
     engine/assets/NativeDataAuditTests.cpp

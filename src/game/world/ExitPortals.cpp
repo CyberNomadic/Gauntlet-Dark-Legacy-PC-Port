@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 
@@ -42,19 +43,15 @@ s32 ExitPortals::gateOf(std::string_view tag) {
 void ExitPortals::shut(RenderDevice& device, Portal& portal, ItemArchive& items,
                        ItemArchive* realmItems) {
     portal.shut = true;
-    for (ItemArchive* archive : {&items, realmItems}) {
-        if (archive == nullptr || !archive->loaded() ||
-            !archive->models.find(TowerAccess::kOffFigure).has_value()) {
-            continue;
-        }
+    if (const auto hit = AssetScope(items, realmItems).findObject(TowerAccess::kOffFigure)) {
         TreeInfo tree;
         tree.name = std::string(TowerAccess::kOffFigure);
         TreeNodeInfo node;
         node.name = tree.name;
-        node.object = tree.name;
+        node.object = hit->name;
         tree.nodes.push_back(node);
-        if (portal.model.bind(tree, archive->models, archive->textures, device)) {
-            portal.archive = archive;
+        if (portal.model.bind(tree, hit->archive->models, hit->archive->textures, device)) {
+            portal.archive = hit->archive;
             return;
         }
     }

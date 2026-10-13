@@ -1056,14 +1056,54 @@ TEST_CASE("Castle Courtyard switches are visible despite the level's own item ar
     REQUIRE(triggers.size() == 8);
     usize shown = 0;
     for (usize i = 0; i < triggers.size(); ++i) {
-        const auto& instance = world.layout().itemInstances()[static_cast<usize>(
-            triggers.trigger(i).instance)];
+        const auto& instance =
+            world.layout().itemInstances()[static_cast<usize>(triggers.trigger(i).instance)];
         const bool markerOnly = (instance.flags & 2U) != 0;
         INFO("trigger " << i);
         CHECK((triggers.figure(i) != nullptr) == !markerOnly);
         shown += triggers.figure(i) != nullptr ? 1 : 0;
     }
     CHECK(shown == 6);
+}
+
+TEST_CASE("every catalogued level resolves the art of each of its visible switches",
+          "[triggers][trigger-visibility][asset-conformance][assets]") {
+    const auto root = test::assetOrSkip("WDATA/CASTLE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    usize levels = 0;
+    usize figures = 0;
+    for (const auto& realm : catalog.realms()) {
+        // The developer test realm places BIGTRIGGER, whose art only the unsupported demo
+        // archive holds; every shipped realm must resolve all of its switches.
+        if (realm.file == "TEST") {
+            continue;
+        }
+        for (const std::string& name : realm.levels) {
+            const auto ref = catalog.byName(name);
+            REQUIRE(ref);
+            test::FakeRenderDevice device;
+            LevelWorld world;
+            CAPTURE(name);
+            REQUIRE(world.load(device, root, *ref));
+            ++levels;
+            const auto& triggers = world.triggers();
+            for (usize i = 0; i < triggers.size(); ++i) {
+                const auto& instance =
+                    world.layout()
+                        .itemInstances()[static_cast<usize>(triggers.trigger(i).instance)];
+                if ((instance.flags & 2U) != 0) {
+                    continue;
+                }
+                const auto& info = world.layout().itemInfos()[static_cast<usize>(instance.info)];
+                CAPTURE(i, info.name, instance.position);
+                CHECK(triggers.figure(i) != nullptr);
+                figures += triggers.figure(i) != nullptr ? 1 : 0;
+            }
+        }
+    }
+    CHECK(levels >= 62); // the shipped realms, without the three test levels
+    CHECK(figures > 0);
 }
 
 TEST_CASE("marker-only switches stay invisible without losing trigger behavior",

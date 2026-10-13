@@ -9,6 +9,7 @@
 #include <ranges>
 #include <utility>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 #include "engine/world/TreeModel.h"
 
@@ -983,12 +984,10 @@ void LevelFixtures::worldExplosion(const Vec3& position, std::span<PlayerRuntime
     ItemArchive* archive = &resources.weapons;
     std::string_view tree = "EXPLOSION";
     if (customRealm) {
-        for (ItemArchive* candidate : {&resources.world.items(), &resources.world.realmItems()}) {
-            if (candidate->trees.find("WORLD_EXP").has_value()) {
-                archive = candidate;
-                tree = "WORLD_EXP";
-                break;
-            }
+        if (const auto hit = AssetScope(resources.world.items(), &resources.world.realmItems())
+                                 .findTree("WORLD_EXP")) {
+            archive = hit->archive;
+            tree = "WORLD_EXP";
         }
     }
     EffectTrees::Setting setting;

@@ -121,6 +121,8 @@ add_library(engine STATIC
     assets/NativeSoundSet.cpp
     assets/ModelSet.h
     assets/ModelSet.cpp
+    assets/AssetScope.h
+    assets/AssetScope.cpp
     assets/ItemArchive.h
     assets/ItemArchive.cpp
     assets/ParticleTemplate.h
