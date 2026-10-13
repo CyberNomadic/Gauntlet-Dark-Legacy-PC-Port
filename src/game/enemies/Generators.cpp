@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <tuple>
+#include <utility>
 
 #include "engine/core/Types.h"
 
@@ -60,7 +62,253 @@ f32 flatDistance(const Vec3& a, const Vec3& b) {
     return std::sqrt(dx * dx + dz * dz);
 }
 
+bool sameObstacle(const Obstacle& a, const Obstacle& b) {
+    return a.centre == b.centre && a.yaw == b.yaw && a.halfAcross == b.halfAcross &&
+           a.halfAlong == b.halfAlong && a.height == b.height && a.solid == b.solid &&
+           a.cylinderRadius == b.cylinderRadius &&
+           a.enemyItem.has_value() == b.enemyItem.has_value() &&
+           (!a.enemyItem || (a.enemyItem->cylindrical == b.enemyItem->cylindrical &&
+                             a.enemyItem->radius == b.enemyItem->radius));
+}
+
+bool sameView(const std::optional<ViewVolume>& a, const std::optional<ViewVolume>& b) {
+    return a.has_value() == b.has_value() &&
+           (!a || (a->position == b->position && a->right == b->right && a->up == b->up &&
+                   a->forward == b->forward && a->sinX == b->sinX && a->cosX == b->cosX &&
+                   a->sinY == b->sinY && a->cosY == b->cosY));
+}
+
+constexpr f32 kCheckpointMagnitude = 1'000'000;
+bool bounded(f32 value, f32 minimum = -kCheckpointMagnitude, f32 maximum = kCheckpointMagnitude) {
+    return std::isfinite(value) && value >= minimum && value <= maximum;
+}
+
+bool bounded(const Vec3& value) {
+    return bounded(value.x) && bounded(value.y) && bounded(value.z);
+}
+
+bool bounded(const Mat4& value) {
+    for (s32 column = 0; column < 4; ++column) {
+        for (s32 row = 0; row < 4; ++row) {
+            if (!bounded(value[column][row])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool generatorKind(s32 kind) {
+    return kind == -3 || kind == -2 || (kind >= 0 && kind < kEnemyKindCount);
+}
+
+bool validSlot(const Generators::Slot& slot) {
+    const auto& box = slot.box;
+    return !slot.boss && slot.minPlayers >= -32768 && slot.minPlayers <= 32767 &&
+           slot.presence <= Generators::Slot::Presence::Suppressed && generatorKind(slot.kind) &&
+           slot.tier >= 0 && slot.tier <= 32767 && slot.algorithm >= -1 &&
+           slot.algorithm <= 32767 && slot.most >= -1'000'000 && slot.most <= 1'000'000 &&
+           slot.interval >= -1'000'000 && slot.interval <= 1'000'000 && bounded(slot.health, 0) &&
+           bounded(slot.threshold, 0) && bounded(slot.armor) && slot.state >= 0 &&
+           slot.state <= Generators::kStates && slot.countdown >= -100'000'000 &&
+           slot.countdown <= 100'000'000 && bounded(slot.ratio, 0, 1) && slot.bred >= 0 &&
+           slot.bred <= 100'000'000 && slot.living >= 0 && slot.living <= 100'000'000 &&
+           bounded(slot.position) && bounded(slot.collisionOffset) &&
+           bounded(slot.targetRadius, 0) && bounded(slot.targetHeight, 0) &&
+           bounded(slot.placement) && bounded(slot.yaw) && bounded(slot.direction) &&
+           bounded(slot.clearance, 0) && bounded(slot.patrolClearance, 0) &&
+           bounded(slot.viewRadius, 0) && bounded(box.centre) && bounded(box.yaw) &&
+           bounded(box.halfAcross, 0) && bounded(box.halfAlong, 0) && bounded(box.height, 0) &&
+           bounded(box.cylinderRadius, 0) &&
+           (!box.enemyItem || bounded(box.enemyItem->radius, 0)) && slot.support >= -1 &&
+           bounded(slot.supportLocal) && bounded(slot.boxOffset) && bounded(slot.boxYaw);
+}
+
+// Only the native mutable fields may depart from the initially bound item.
+// Support can be lost when its world object disappears, but never reassigned.
+bool sameDefinition(const Generators::Slot& a, const Generators::Slot& b) {
+    return a.kind == b.kind && a.minPlayers == b.minPlayers && a.interval == b.interval &&
+           a.threshold == b.threshold && a.armor == b.armor &&
+           a.collisionOffset == b.collisionOffset && a.targetRadius == b.targetRadius &&
+           a.targetHeight == b.targetHeight && a.clearance == b.clearance &&
+           a.patrolClearance == b.patrolClearance && a.viewRadius == b.viewRadius &&
+           a.alwaysActive == b.alwaysActive && a.box.halfAcross == b.box.halfAcross &&
+           a.box.halfAlong == b.box.halfAlong && a.box.height == b.box.height &&
+           a.box.cylinderRadius == b.box.cylinderRadius &&
+           a.box.enemyItem.has_value() == b.box.enemyItem.has_value() &&
+           (!a.box.enemyItem || (a.box.enemyItem->cylindrical == b.box.enemyItem->cylindrical &&
+                                 a.box.enemyItem->radius == b.box.enemyItem->radius)) &&
+           (a.support == b.support || a.support == -1) && a.supportLocal == b.supportLocal &&
+           a.boxOffset == b.boxOffset && a.boxYaw == b.boxYaw;
+}
+
 } // namespace
+
+bool Generators::Slot::operator==(const Slot& other) const {
+    const auto values = [](const Slot& s) {
+        return std::tie(s.minPlayers, s.presence, s.kind, s.tier, s.algorithm, s.most, s.interval,
+                        s.health, s.threshold, s.armor, s.state, s.countdown, s.ratio, s.bred,
+                        s.living, s.position, s.collisionOffset, s.targetRadius, s.targetHeight,
+                        s.placement, s.yaw, s.direction, s.clearance, s.patrolClearance,
+                        s.viewRadius, s.alwaysActive, s.support, s.supportLocal, s.boxOffset,
+                        s.boxYaw, s.boss);
+    };
+    return values(*this) == values(other) && sameObstacle(box, other.box);
+}
+
+bool Generators::Checkpoint::operator==(const Checkpoint& other) const {
+    return roster == other.roster && generators == other.generators && bodies == other.bodies &&
+           scales == other.scales && players == other.players &&
+           specialBirth == other.specialBirth && sameView(view, other.view) &&
+           attention == other.attention;
+}
+
+bool Generators::Checkpoint::valid() const {
+    if (roster.size() > kMaxGenerators || generators.size() != roster.size() ||
+        bodies.size() > static_cast<usize>(kEnemyKindCount) + 2 || players < 0 || players > 4 ||
+        !bounded(scales.health, 0, 10000) || !bounded(scales.rate, 0, 10000) ||
+        !bounded(scales.most, 0, 10000) || (attention && !bounded(*attention))) {
+        return false;
+    }
+    if (view &&
+        (!bounded(view->position) || !bounded(view->right) || !bounded(view->up) ||
+         !bounded(view->forward) || !bounded(view->sinX, -1, 1) || !bounded(view->cosX, -1, 1) ||
+         !bounded(view->sinY, -1, 1) || !bounded(view->cosY, -1, 1))) {
+        return false;
+    }
+    for (usize index = 0; index < bodies.size(); ++index) {
+        if (!generatorKind(bodies[index].kind) || !bodies[index].textures.valid()) {
+            return false;
+        }
+        for (usize previous = 0; previous < index; ++previous) {
+            if (bodies[index].kind == bodies[previous].kind) {
+                return false;
+            }
+        }
+    }
+    for (usize index = 0; index < generators.size(); ++index) {
+        const auto& slot = generators[index];
+        if (!validSlot(slot) || !validSlot(roster[index]) || !sameDefinition(slot, roster[index]) ||
+            std::ranges::none_of(bodies,
+                                 [&](const auto& body) { return body.kind == slot.kind; })) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<Generators::Checkpoint> Generators::checkpoint() const {
+    if (!m_bound || std::ranges::any_of(m_generators, [](const auto& generator) {
+            return generator.boss || generator.bossFigure != nullptr;
+        })) {
+        return std::nullopt;
+    }
+    Checkpoint result;
+    result.roster = m_roster;
+    result.generators.reserve(m_generators.size());
+    for (const auto& generator : m_generators) {
+        result.generators.push_back(generator);
+    }
+    result.bodies.reserve(m_bodies.size());
+    for (const auto& body : m_bodies) {
+        result.bodies.push_back({body->kind, body->textures.checkpoint()});
+    }
+    result.scales = m_scales;
+    result.players = m_players;
+    result.specialBirth = m_specialBirth;
+    result.view = m_view;
+    result.attention = m_attention;
+    return result.valid() ? std::optional{std::move(result)} : std::nullopt;
+}
+
+struct Generators::Prepared::Data {
+    const Generators* owner = nullptr;
+    std::shared_ptr<const u8> lifetime;
+    u64 generation = 0;
+    const WorldCollision* collision = nullptr;
+    Checkpoint values;
+    std::vector<Generator> generators;
+    std::vector<TextureAnimator> textures;
+};
+
+Generators::Prepared::Prepared(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
+Generators::Prepared::Prepared(Prepared&&) noexcept = default;
+Generators::Prepared& Generators::Prepared::operator=(Prepared&&) noexcept = default;
+Generators::Prepared::~Prepared() = default;
+
+std::optional<Generators::Prepared> Generators::prepareRestore(const Checkpoint& state) const {
+    if (!m_bound || !state.valid() || state.roster != m_roster ||
+        state.generators.size() != m_generators.size() || state.bodies.size() != m_bodies.size() ||
+        std::ranges::any_of(m_generators, [](const auto& generator) {
+            return generator.boss || generator.bossFigure != nullptr;
+        })) {
+        return std::nullopt;
+    }
+    auto data = std::make_unique<Prepared::Data>();
+    data->owner = this;
+    data->lifetime = m_lifetime;
+    data->generation = m_restoreGeneration;
+    data->collision = m_collision;
+    data->generators.resize(state.generators.size());
+    for (usize index = 0; index < state.generators.size(); ++index) {
+        const auto& slot = state.generators[index];
+        if (slot.support >= 0 &&
+            (m_collision == nullptr || !m_collision->objectTransform(slot.support))) {
+            return std::nullopt;
+        }
+        static_cast<Slot&>(data->generators[index]) = slot;
+    }
+    data->textures.reserve(m_bodies.size());
+    for (usize index = 0; index < m_bodies.size(); ++index) {
+        if (state.bodies[index].kind != m_bodies[index]->kind) {
+            return std::nullopt;
+        }
+        data->textures.push_back(m_bodies[index]->textures);
+        if (!data->textures.back().restore(state.bodies[index].textures)) {
+            return std::nullopt;
+        }
+    }
+    data->values = state;
+    return Prepared{std::move(data)};
+}
+
+bool Generators::canCommit(const Prepared& prepared) const {
+    if (!prepared.m_data || prepared.m_data->owner != this ||
+        prepared.m_data->lifetime != m_lifetime || !m_bound ||
+        prepared.m_data->generation != m_restoreGeneration ||
+        prepared.m_data->collision != m_collision ||
+        prepared.m_data->generators.size() != m_generators.size() ||
+        prepared.m_data->textures.size() != m_bodies.size()) {
+        return false;
+    }
+    return std::ranges::none_of(prepared.m_data->generators, [&](const auto& slot) {
+        return slot.support >= 0 &&
+               (m_collision == nullptr || !m_collision->objectTransform(slot.support));
+    });
+}
+
+bool Generators::commitRestore(Prepared&& prepared) {
+    if (!canCommit(prepared)) {
+        return false;
+    }
+    auto data = std::move(prepared.m_data);
+    m_generators = std::move(data->generators);
+    for (usize index = 0; index < m_bodies.size(); ++index) {
+        m_bodies[index]->textures = std::move(data->textures[index]);
+    }
+    m_scales = data->values.scales;
+    m_players = data->values.players;
+    m_specialBirth = data->values.specialBirth;
+    m_view = data->values.view;
+    m_attention = data->values.attention;
+    ++m_restoreGeneration;
+    return true;
+}
+
+bool Generators::restore(const Checkpoint& state) {
+    auto prepared = prepareRestore(state);
+    return prepared && commitRestore(std::move(*prepared));
+}
 
 s32 Generators::paramOf(const ItemInstance& instance, usize index) {
     if (index * 2 + 1 >= instance.params.size()) {
@@ -138,6 +386,7 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
         }
     }
     m_bodies.push_back(std::move(bodies));
+    ++m_restoreGeneration;
     return true;
 }
 
@@ -263,6 +512,11 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
         m_generators.push_back(std::move(generator));
     }
     syncFloors();
+    m_roster.reserve(m_generators.size());
+    for (const auto& generator : m_generators) {
+        m_roster.push_back(generator);
+    }
+    m_bound = true;
     return true;
 }
 
@@ -373,11 +627,15 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
         m_collision = collision;
     }
     m_generators.push_back(std::move(generator));
+    ++m_restoreGeneration;
     syncFloors();
     return true;
 }
 
 void Generators::clear() {
+    ++m_restoreGeneration;
+    m_bound = false;
+    m_roster.clear();
     m_collision = nullptr;
     m_view.reset();
     m_attention.reset();

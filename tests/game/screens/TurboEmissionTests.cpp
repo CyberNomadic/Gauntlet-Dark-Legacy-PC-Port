@@ -212,9 +212,9 @@ TEST_CASE("turbo particle descriptors preserve node names phases and previous-ef
     CHECK(descriptor.rate == std::array<f32, 4>{2.5f, 2.5f, 2.5f, 2.5f});
     CHECK(descriptor.speed == Approx(-0.015f));
     CHECK(descriptor.particleLife ==
-          ((effect.flags & MoveEffect::kParticleFlags) == 0x02000000U ? 6 : 15));
+          ((effect.flags & MoveEffect::kParticleFlags) == 0x02000000U ? 6U : 15U));
     CHECK(descriptor.particleFade ==
-          ((effect.flags & MoveEffect::kParticleFlags) == 0x02000000U ? 0 : 15));
+          ((effect.flags & MoveEffect::kParticleFlags) == 0x02000000U ? 0U : 15U));
     CHECK(descriptor.width.lifeStart == 3);
     CHECK(descriptor.width.fadeEnd == 3);
     CHECK(descriptor.alpha.lifeStart == 255);

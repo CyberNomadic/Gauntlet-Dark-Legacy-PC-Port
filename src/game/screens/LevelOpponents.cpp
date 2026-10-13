@@ -20,6 +20,7 @@
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/OpponentSimulation.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/BodyCollision.h"
 #include "game/world/DynamicLights.h"
@@ -152,16 +153,7 @@ void LevelOpponents::playEnemyCues() {
 /** The swarm and the great ones as a missile sent back or a blast reaches them, by id: the
  * ordinary enemies by their slots, the great ones and the boss past those. */
 std::vector<MissileTarget> LevelOpponents::swarmTargets() const {
-    std::vector<MissileTarget> swarm = m_enemies.targets();
-    for (MissileTarget target : m_critters.targets(true)) {
-        target.id += kCritterIds;
-        swarm.push_back(target);
-    }
-    for (MissileTarget target : m_bosses.targets()) {
-        target.id += kBossIds;
-        swarm.push_back(target);
-    }
-    return swarm;
+    return OpponentSimulation::targets(m_enemies, m_critters.targets(true), m_bosses.targets());
 }
 
 /** A hit on one of the swarm by its id in `swarmTargets`, credited to nobody. */
@@ -976,23 +968,10 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     const auto bosses = m_bosses.targets(true);
     combatants.insert(combatants.end(), bosses.begin(), bosses.end());
     m_enemies.setCombatantBodies(combatants);
-    m_generators.update(ticks, m_enemies, views, fixtures, timeStopped);
-    std::vector<Obstacle> boxes = m_generators.enemyObstacles();
-    boxes.insert(boxes.end(), fixtures.begin(), fixtures.end());
-    m_enemies.update(ticks, seconds, views, boxes, &m_enemyMissiles, missileSpeed, timeStopped);
-    std::vector<MissileStop> inTheWay;
-    for (const Obstacle& box : m_generators.obstacles()) {
-        inTheWay.push_back(MissileStop::of(box));
-    }
-    if (stops.empty()) {
-        for (const Obstacle& box : fixtures) {
-            inTheWay.push_back(MissileStop::of(box));
-        }
-    } else {
-        inTheWay.insert(inTheWay.end(), stops.begin(), stops.end());
-    }
-    m_enemyMissiles.update(seconds, &m_resources->world.collision(), views, swarmTargets(),
-                           inTheWay, events.blastScenery);
+    auto inTheWay = OpponentSimulation{m_generators, m_enemies, m_enemyMissiles}.advance(
+        {ticks, seconds, views, fixtures, stops, m_critters.targets(true), m_bosses.targets(),
+         &m_resources->world.collision(), missileSpeed, timeStopped},
+        events.blastScenery);
     landEnemyMissiles(players, events);
     playEnemyCues();
     // What blows itself up goes up with the bomb's bang; one struck down stops crying out

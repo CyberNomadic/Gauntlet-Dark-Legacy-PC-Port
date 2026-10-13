@@ -1,8 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
-#include <random>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -10,6 +10,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
+#include "engine/math/Mt19937.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/world/TreeModel.h"
 #include "engine/world/WorldCollision.h"
@@ -62,6 +63,7 @@ struct EnemyMissileKind {
     u32 hitFlags() const;
     /** Whether it goes through the players it hurts and the items in its way (the garm's). */
     bool pierces() const { return (flags & kPierces) != 0; }
+    bool operator==(const EnemyMissileKind&) const = default;
 };
 
 /** What a kind throws from a slot, as the original's table has it; nullopt for a kind and
@@ -127,6 +129,7 @@ struct EnemyMissileHit {
     bool liquid = false;  ///< replaces impact audio with the water cue
     std::string_view effect() const;
     std::string_view sound() const;
+    bool operator==(const EnemyMissileHit&) const = default;
 };
 
 /** An area one of the swarm's blasts harms as it grows (ProcessEffects' mode 1): in each of
@@ -143,6 +146,7 @@ struct EnemyBlast {
     std::vector<f32> stages; ///< how long each lasts
     s32 spared = -1;         ///< a player it never reaches: the one its lob struck
     bool lit = false;        ///< the lob's red light rides on it
+    bool operator==(const EnemyBlast&) const = default;
 };
 
 /** Something of the level's in the way of the swarm's missiles besides the world
@@ -164,12 +168,14 @@ struct PickupBlastReach {
     f32 radius = 0.0f;
     f32 damage = 0.0f;
     u32 flags = 0;
+    bool operator==(const PickupBlastReach&) const = default;
 };
 
 /** A missile's blow on a safe rock, for the level to deal. */
 struct RockHit {
     usize rock = 0;
     f32 damage = 0.0f;
+    bool operator==(const RockHit&) const = default;
 };
 
 /**
@@ -208,6 +214,10 @@ public:
     static constexpr f32 kSmallest = 0.01f;      ///< from this
 
     explicit EnemyMissiles(u32 seed = 0x4D15u) : m_random(seed) {}
+    EnemyMissiles(const EnemyMissiles&) = delete;
+    EnemyMissiles& operator=(const EnemyMissiles&) = delete;
+    EnemyMissiles(EnemyMissiles&&) = delete;
+    EnemyMissiles& operator=(EnemyMissiles&&) = delete;
 
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): what is thrown
      * meanwhile is that size and does half (EnemyStartMissile). */
@@ -260,13 +270,19 @@ public:
     /** The velocity a lob leaves with to land `to` from `from` at `speed` along the ground. */
     static Vec3 lobVelocity(const Vec3& from, const Vec3& to, f32 speed);
 
-private:
-    /** `kind` as the shrinkers leave it: its harm halved while the swarm is shrunk. */
-    EnemyMissileKind thrown(const EnemyMissileKind& kind) const;
+    /** Trusted, preloaded original stock models, independent of live shooter slots.
+     * IDs and pointers must be unique and nonzero. Clear this pool before releasing
+     * or rebinding a model; the manifest and prepared state never own game artwork. */
+    struct Resource {
+        u32 id = 0;
+        const TreeModel* model = nullptr;
+    };
+
     /** Who a blast has reached, and for how long it leaves them alone. */
     struct Held {
         s32 id = -1;
         f32 secondsLeft = 0.0f;
+        bool operator==(const Held&) const = default;
     };
     struct Burst {
         EnemyBlast blast;
@@ -275,8 +291,79 @@ private:
         std::vector<Held> players;
         std::vector<Held> swarm;
         std::vector<s32> scenery;
+        bool operator==(const Burst&) const = default;
     };
 
+    /** Pointer-free complete pool state, including undelivered outputs. These
+     * bounds limit a rollback capture, not native gameplay; overflow refuses the
+     * capture rather than deleting live missiles, contacts or pending events. */
+    struct Checkpoint {
+        static constexpr usize kMaxMissiles = 4096;
+        static constexpr usize kMaxBursts = 4096;
+        static constexpr usize kMaxEvents = 65536;
+        static constexpr usize kMaxContacts = 65536;
+        static constexpr usize kMaxStages = 65536;
+        static constexpr usize kMaxResources = 1024;
+        struct Flight {
+            u64 instance = 0;
+            u32 continuity = 1;
+            Vec3 position{0};
+            Vec3 velocity{0};
+            Vec3 turned{0};
+            EnemyMissileKind kind;
+            u32 resource = 0; ///< zero preserves a genuinely invisible native missile
+            s32 shooter = -1;
+            f32 secondsLeft = 0;
+            f32 lived = 0;
+            f32 heldLeft = 0;
+            f32 scale = 1;
+            bool reflected = false;
+            std::vector<std::pair<s32, f32>> pierced;
+            bool operator==(const Flight&) const = default;
+        };
+        std::vector<Flight> missiles;
+        std::vector<Burst> bursts;
+        std::vector<EnemyMissileHit> hits;
+        std::vector<RockHit> rockHits;
+        std::vector<PickupBlastReach> pickupBlasts;
+        u64 nextInstance = 1;
+        Mt19937::Checkpoint random = Mt19937{}.checkpoint();
+        f32 shrink = 1;
+        f32 ricochetIn = 0;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+
+    private:
+        friend class EnemyMissiles;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+
+    std::optional<Checkpoint> checkpoint(std::span<const Resource> resources = {}) const;
+    /** Resolve every borrowed resource and allocate all buffers before mutation.
+     * The caller must prepare, preflight and commit synchronously, without native
+     * gameplay or resource teardown between them. No gameplay callbacks run. */
+    std::optional<Prepared> prepareRestore(const Checkpoint& state,
+                                           std::span<const Resource> resources = {}) const;
+    bool canCommit(const Prepared& state) const noexcept;
+    /** Allocation-free, single-use commit to the exact pool that prepared it.
+     * Clear and a successful commit invalidate that pool's other preparations. */
+    bool commitRestore(Prepared&& state) noexcept;
+    bool restore(const Checkpoint& state, std::span<const Resource> resources = {});
+
+private:
+    /** `kind` as the shrinkers leave it: its harm halved while the swarm is shrunk. */
+    EnemyMissileKind thrown(const EnemyMissileKind& kind) const;
     bool stopped(const EnemyMissile& missile, std::span<const MissileStop> items, const Vec3& from,
                  const Vec3& to, f32 radius);
     void stepBursts(f32 seconds, const WorldCollision* collision,
@@ -289,9 +376,11 @@ private:
     std::vector<EnemyMissileHit> m_hits;
     std::vector<RockHit> m_rockHits;
     std::vector<PickupBlastReach> m_pickupBlasts;
-    std::mt19937 m_random;
+    Mt19937 m_random;
     f32 m_shrink = 1.0f;
     f32 m_ricochetIn = 0.0f; ///< before another ricochet is heard
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 1;
 };
 
 } // namespace gdl::game

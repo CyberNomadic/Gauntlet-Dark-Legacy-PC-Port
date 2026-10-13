@@ -330,13 +330,13 @@ bool Enemies::BodyState::valid() const {
 }
 
 bool Enemies::Checkpoint::valid() const {
-    if (nextInstance == 0 || most < 1 || most > kMost || stocks.size() > kEnemyKindCount ||
-        !checkpointSlot(bomber) || inView < 0 || inView > kMost || pendingTicks < 0 ||
-        pendingTicks >= 2 || !checkpointNumber(pendingSeconds, 0, 3600) ||
-        (pendingTicks == 0 && pendingSeconds != 0) || !checkpointNumber(shrink, 0.001f, 16) ||
-        !checkpointNumber(contactGridOrigin.x) || !checkpointNumber(contactGridOrigin.y) ||
-        !checkpointNumber(contactGridInverseWidth, 0) || scales.players < 0 || scales.players > 4 ||
-        lookouts.points.size() > LookoutRoute::kMost ||
+    if (!random.valid() || nextInstance == 0 || most < 1 || most > kMost ||
+        stocks.size() > kEnemyKindCount || !checkpointSlot(bomber) || inView < 0 ||
+        inView > kMost || pendingTicks < 0 || pendingTicks >= 2 ||
+        !checkpointNumber(pendingSeconds, 0, 3600) || (pendingTicks == 0 && pendingSeconds != 0) ||
+        !checkpointNumber(shrink, 0.001f, 16) || !checkpointNumber(contactGridOrigin.x) ||
+        !checkpointNumber(contactGridOrigin.y) || !checkpointNumber(contactGridInverseWidth, 0) ||
+        scales.players < 0 || scales.players > 4 || lookouts.points.size() > LookoutRoute::kMost ||
         lookouts.points.size() != lookouts.next.size() || combatants.size() > kMaxCombatants ||
         !checkpointEvents(blows) || !checkpointEvents(losses) || !checkpointEvents(bursts) ||
         !checkpointEvents(cues) || !checkpointEvents(feedback) || !checkpointEvents(deathEvents) ||
@@ -371,13 +371,9 @@ bool Enemies::Checkpoint::valid() const {
     }
     for (usize index = 0; index < stocks.size(); ++index) {
         const auto& stock = stocks[index];
-        if (!checkpointKind(stock.kind) || !stock.textures.valid()) {
+        if (!checkpointKind(stock.kind) || !stock.textures.valid() ||
+            (index > 0 && stocks[index - 1].kind >= stock.kind)) {
             return false;
-        }
-        for (usize prior = 0; prior < index; ++prior) {
-            if (stocks[prior].kind == stock.kind) {
-                return false;
-            }
         }
     }
     for (usize index = 0; index < enemies.size(); ++index) {
@@ -427,8 +423,12 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
     for (const auto& stock : m_stocks) {
         state.stocks.push_back({stock->kind, stock->textures.checkpoint()});
     }
+    // Loading placed enemies before optional presentation preloads can produce
+    // a different stock order on another machine. The value roster is canonical;
+    // native stock iteration and each already-bound resource remain untouched.
+    std::ranges::sort(state.stocks, {}, &Checkpoint::Stock::kind);
     state.nextInstance = m_nextInstance;
-    state.random = m_random;
+    state.random = m_random.checkpoint();
     state.most = m_most;
     state.scales = m_scales;
     state.lookouts = m_lookouts;
@@ -454,36 +454,62 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
-bool Enemies::restore(const Checkpoint& state) {
-    if (m_device == nullptr || !state.valid() || state.stocks.size() != m_stocks.size()) {
-        return false;
-    }
+struct Enemies::Prepared::Data {
+    const Enemies* owner = nullptr;
+    std::shared_ptr<const u8> lifetime;
+    u64 generation = 0;
+    const WorldCollision* collision = nullptr;
+    const HazardSurfaces* hazards = nullptr;
+    Checkpoint values;
+    std::vector<const Stock*> stocks;
     std::vector<TextureAnimator> textures;
+    std::array<Enemy, kMost> enemies;
+};
+
+Enemies::Prepared::Prepared(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
+Enemies::Prepared::Prepared(Prepared&&) noexcept = default;
+Enemies::Prepared& Enemies::Prepared::operator=(Prepared&&) noexcept = default;
+Enemies::Prepared::~Prepared() = default;
+
+std::optional<Enemies::Prepared> Enemies::prepareRestore(const Checkpoint& state) const {
+    if (m_device == nullptr || !state.valid() || state.stocks.size() != m_stocks.size()) {
+        return std::nullopt;
+    }
+    auto data = std::make_unique<Prepared::Data>();
+    data->owner = this;
+    data->lifetime = m_restoreOwner;
+    data->generation = m_restoreGeneration;
+    data->collision = m_collision;
+    data->hazards = m_hazards;
+    auto& textures = data->textures;
     textures.reserve(m_stocks.size());
-    for (usize index = 0; index < m_stocks.size(); ++index) {
-        if (state.stocks[index].kind != m_stocks[index]->kind) {
-            return false;
+    data->stocks.reserve(m_stocks.size());
+    for (const auto& stock : m_stocks) {
+        const auto source = std::ranges::find(state.stocks, stock->kind, &Checkpoint::Stock::kind);
+        if (source == state.stocks.end()) {
+            return std::nullopt;
         }
-        textures.push_back(m_stocks[index]->textures);
-        if (!textures.back().restore(state.stocks[index].textures)) {
-            return false;
+        data->stocks.push_back(stock.get());
+        textures.push_back(stock->textures);
+        if (!textures.back().restore(source->textures)) {
+            return std::nullopt;
         }
     }
-    std::array<Enemy, kMost> enemies;
+    auto& enemies = data->enemies;
     for (usize index = 0; index < state.enemies.size(); ++index) {
         const auto& body = state.enemies[index];
         auto& enemy = enemies[index];
         static_cast<BodyState&>(enemy) = body;
         if (body.floor &&
             (m_collision == nullptr || !m_collision->objectTransform(body.floor->object))) {
-            return false;
+            return std::nullopt;
         }
         if (!body.animator) {
             continue;
         }
         const Stock* stock = stockOf(body.kind);
         if (stock == nullptr) {
-            return false;
+            return std::nullopt;
         }
         const TreeInfo* tree = treeOf(body.kind, body.tier);
         if (body.variant >= kArcherStrength) {
@@ -494,18 +520,46 @@ bool Enemies::restore(const Checkpoint& state) {
         }
         if (tree == nullptr || !enemy.animator.bind(*tree) ||
             !enemy.animator.restore(*body.animator)) {
-            return false;
+            return std::nullopt;
         }
     }
     // Copy the remaining value buffers before committing any state; resource
     // validation and allocation failure cannot leave a partly restored pool.
-    Checkpoint values = state;
-    m_enemies = std::move(enemies);
+    data->values = state;
+    return Prepared{std::move(data)};
+}
+
+bool Enemies::canCommit(const Prepared& prepared) const {
+    if (!prepared.m_data || prepared.m_data->owner != this || m_device == nullptr ||
+        prepared.m_data->lifetime != m_restoreOwner ||
+        prepared.m_data->generation != m_restoreGeneration ||
+        prepared.m_data->collision != m_collision || prepared.m_data->hazards != m_hazards ||
+        prepared.m_data->stocks.size() != m_stocks.size()) {
+        return false;
+    }
     for (usize index = 0; index < m_stocks.size(); ++index) {
-        m_stocks[index]->textures = std::move(textures[index]);
+        if (prepared.m_data->stocks[index] != m_stocks[index].get()) {
+            return false;
+        }
+    }
+    return std::ranges::none_of(prepared.m_data->enemies, [&](const auto& enemy) {
+        return enemy.floor &&
+               (m_collision == nullptr || !m_collision->objectTransform(enemy.floor->object));
+    });
+}
+
+bool Enemies::commitRestore(Prepared&& prepared) {
+    if (!canCommit(prepared)) {
+        return false;
+    }
+    auto data = std::move(prepared.m_data);
+    auto& values = data->values;
+    m_enemies = std::move(data->enemies);
+    for (usize index = 0; index < m_stocks.size(); ++index) {
+        m_stocks[index]->textures = std::move(data->textures[index]);
     }
     m_nextInstance = values.nextInstance;
-    m_random = values.random;
+    m_random.restore(values.random);
     m_most = values.most;
     m_scales = values.scales;
     m_lookouts = std::move(values.lookouts);
@@ -528,7 +582,13 @@ bool Enemies::restore(const Checkpoint& state) {
     m_pendingTicks = values.pendingTicks;
     m_pendingSeconds = values.pendingSeconds;
     m_shrink = values.shrink;
+    ++m_restoreGeneration;
     return true;
+}
+
+bool Enemies::restore(const Checkpoint& state) {
+    auto prepared = prepareRestore(state);
+    return prepared && commitRestore(std::move(*prepared));
 }
 
 Enemies::~Enemies() {
@@ -547,6 +607,7 @@ void Enemies::open(RenderDevice& device, const std::filesystem::path& unpackedRo
 }
 
 void Enemies::close() {
+    ++m_restoreGeneration;
     for (Enemy& enemy : m_enemies) {
         enemy = Enemy{};
     }

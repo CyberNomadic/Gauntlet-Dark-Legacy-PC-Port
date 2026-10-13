@@ -382,6 +382,8 @@ add_library(game STATIC
     screens/PartyPickups.cpp
     screens/LevelFixtures.cpp
     screens/LevelOpponents.cpp
+    screens/OpponentSimulation.cpp
+    enemies/OpponentState.cpp
     screens/PlayerAttacks.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp

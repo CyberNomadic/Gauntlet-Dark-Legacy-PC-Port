@@ -21,11 +21,15 @@ struct Pool {
     std::array<EnemyView, 2> players;
     std::array<Obstacle, 1> obstacles;
 
-    Pool() {
+    explicit Pool(bool reverseStocks = false) {
         const auto root =
             test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
         enemies.open(device, root, nullptr, Enemies::kMost, {}, 125);
-        for (const s32 kind : kKinds) {
+        auto stocks = kKinds;
+        if (reverseStocks) {
+            std::ranges::reverse(stocks);
+        }
+        for (const s32 kind : stocks) {
             REQUIRE(enemies.loadKind(kind));
         }
         enemies.setContactGridBounds({-100, -10, -100}, {100, 20, 100});
@@ -89,6 +93,76 @@ struct Pool {
         enemies.update(1, kStep, players, obstacles, nullptr, 1, tick >= 30 && tick < 34);
     }
 };
+
+TEST_CASE("native enemy correction resolves the same trusted stocks in different load orders",
+          "[rollback][enemies][enemies-checkpoint][assets]") {
+    Pool host;
+    Pool guest(true);
+    const auto initialHost = host.enemies.checkpoint();
+    const auto initialGuest = guest.enemies.checkpoint();
+    REQUIRE(initialHost);
+    REQUIRE(initialGuest);
+    REQUIRE(initialHost == initialGuest);
+    CHECK(std::ranges::is_sorted(initialHost->stocks, {}, &Enemies::Checkpoint::Stock::kind));
+    // Distinct valid clocks prove the receiver binds by kind rather than merely
+    // accepting a reordered roster whose clocks all happen to be identical.
+    auto seeded = *initialHost;
+    for (usize index = 0; index < seeded.stocks.size(); ++index) {
+        seeded.stocks[index].textures.frame = static_cast<u32>(index * 17);
+        seeded.stocks[index].textures.remainder = 0.25f;
+        seeded.stocks[index].textures.advance = 0.5f;
+    }
+    REQUIRE(seeded.valid());
+    REQUIRE(host.enemies.restore(seeded));
+    const auto hostUploads = host.device.texturesCreated;
+    const auto guestUploads = guest.device.texturesCreated;
+    for (s32 tick = 0; tick < 23; ++tick) {
+        host.step(tick);
+    }
+    const auto correction = host.enemies.checkpoint();
+    REQUIRE(correction);
+    auto prepared = guest.enemies.prepareRestore(*correction);
+    REQUIRE(prepared);
+    CHECK(guest.enemies.checkpoint() == initialGuest);
+    REQUIRE(guest.enemies.canCommit(*prepared));
+    REQUIRE(guest.enemies.commitRestore(std::move(*prepared)));
+    CHECK(guest.enemies.checkpoint() == correction);
+    for (s32 tick = 23; tick < 72; ++tick) {
+        CAPTURE(tick);
+        host.step(tick);
+        guest.step(tick);
+        CHECK(host.enemies.checkpoint() == guest.enemies.checkpoint());
+    }
+    CHECK(host.device.texturesCreated == hostUploads);
+    CHECK(guest.device.texturesCreated == guestUploads);
+
+    const auto before = guest.enemies.checkpoint();
+    REQUIRE(before);
+    auto unsorted = *before;
+    std::ranges::reverse(unsorted.stocks);
+    CHECK_FALSE(unsorted.valid());
+    CHECK_FALSE(guest.enemies.restore(unsorted));
+    CHECK(guest.enemies.checkpoint() == before);
+    auto duplicate = *before;
+    duplicate.stocks[1].kind = duplicate.stocks[0].kind;
+    CHECK_FALSE(duplicate.valid());
+    CHECK_FALSE(guest.enemies.restore(duplicate));
+    CHECK(guest.enemies.checkpoint() == before);
+    auto missing = *before;
+    missing.stocks.pop_back();
+    REQUIRE(missing.valid());
+    CHECK_FALSE(guest.enemies.restore(missing));
+    CHECK(guest.enemies.checkpoint() == before);
+    auto different = *before;
+    REQUIRE(
+        std::ranges::none_of(different.stocks, [](const auto& stock) { return stock.kind == 2; }));
+    different.stocks.front().kind = 2;
+    std::ranges::sort(different.stocks, {}, &Enemies::Checkpoint::Stock::kind);
+    REQUIRE(different.valid());
+    CHECK_FALSE(guest.enemies.restore(different));
+    CHECK(guest.enemies.checkpoint() == before);
+    CHECK(guest.device.texturesCreated == guestUploads);
+}
 
 TEST_CASE("a whole native enemy pool rewinds RNG slot order clocks and pending gameplay events",
           "[rollback][enemies][enemies-checkpoint][assets]") {
@@ -227,5 +301,88 @@ TEST_CASE("whole enemy checkpoint rejects malformed slots and mismatched loaded 
     pool.enemies.close();
     CHECK_FALSE(pool.enemies.restore(*before));
     CHECK_FALSE(pool.enemies.checkpoint());
+}
+
+TEST_CASE("prepared enemy correction is inert owner bound and single use",
+          "[rollback][enemies][enemies-checkpoint][assets]") {
+    Pool pool;
+    Pool other;
+    const auto baseline = pool.enemies.checkpoint();
+    REQUIRE(baseline);
+    pool.step(0);
+    const auto current = pool.enemies.checkpoint();
+    const auto otherCurrent = other.enemies.checkpoint();
+    REQUIRE(current);
+    CHECK(current != baseline);
+    const auto uploads = pool.device.texturesCreated;
+    auto prepared = pool.enemies.prepareRestore(*baseline);
+    auto sibling = pool.enemies.prepareRestore(*baseline);
+    REQUIRE(prepared);
+    REQUIRE(sibling);
+    CHECK(pool.enemies.checkpoint() == current);
+    CHECK(pool.device.texturesCreated == uploads);
+    CHECK(pool.enemies.canCommit(*prepared));
+    CHECK_FALSE(other.enemies.canCommit(*prepared));
+    CHECK_FALSE(other.enemies.commitRestore(std::move(*prepared)));
+    CHECK(other.enemies.checkpoint() == otherCurrent);
+    REQUIRE(pool.enemies.commitRestore(std::move(*prepared)));
+    CHECK(pool.enemies.checkpoint() == baseline);
+    CHECK_FALSE(pool.enemies.canCommit(*prepared));
+    CHECK_FALSE(pool.enemies.commitRestore(std::move(*prepared)));
+    CHECK_FALSE(pool.enemies.canCommit(*sibling));
+    CHECK_FALSE(pool.enemies.commitRestore(std::move(*sibling)));
+    CHECK(pool.enemies.checkpoint() == baseline);
+    CHECK(pool.device.texturesCreated == uploads);
+}
+
+TEST_CASE("prepared enemy correction cannot outlive a level resource binding",
+          "[rollback][enemies][enemies-checkpoint][assets]") {
+    Pool pool;
+    const auto baseline = pool.enemies.checkpoint();
+    REQUIRE(baseline);
+    auto prepared = pool.enemies.prepareRestore(*baseline);
+    REQUIRE(prepared);
+    pool.enemies.close();
+    CHECK_FALSE(pool.enemies.canCommit(*prepared));
+    CHECK_FALSE(pool.enemies.commitRestore(std::move(*prepared)));
+    const auto root =
+        test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
+    pool.enemies.open(pool.device, root, nullptr, Enemies::kMost, {}, 125);
+    for (const auto kind : kKinds) {
+        REQUIRE(pool.enemies.loadKind(kind));
+    }
+    const auto rebound = pool.enemies.checkpoint();
+    REQUIRE(rebound);
+    CHECK_FALSE(pool.enemies.canCommit(*prepared));
+    CHECK_FALSE(pool.enemies.commitRestore(std::move(*prepared)));
+    CHECK(pool.enemies.checkpoint() == rebound);
+    // A new preparation resolves fresh native trees, not stale pointers.
+    REQUIRE(pool.enemies.restore(*baseline));
+    CHECK(pool.enemies.checkpoint() == baseline);
+}
+TEST_CASE("prepared enemy correction rejects a new owner reusing the same address",
+          "[rollback][enemies][enemies-checkpoint][assets]") {
+    test::FakeRenderDevice device;
+    const auto root =
+        test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
+    auto storage = std::make_unique<std::optional<Enemies>>(std::in_place);
+    auto& first = **storage;
+    first.open(device, root, nullptr, Enemies::kMost, {}, 125);
+    REQUIRE(first.loadKind(kGruntKind));
+    const auto baseline = first.checkpoint();
+    REQUIRE(baseline);
+    auto prepared = first.prepareRestore(*baseline);
+    REQUIRE(prepared);
+    const auto* address = &first;
+    storage->reset();
+    auto& replacement = storage->emplace();
+    CHECK(&replacement == address);
+    replacement.open(device, root, nullptr, Enemies::kMost, {}, 126);
+    REQUIRE(replacement.loadKind(kGruntKind));
+    const auto current = replacement.checkpoint();
+    REQUIRE(current);
+    CHECK_FALSE(replacement.canCommit(*prepared));
+    CHECK_FALSE(replacement.commitRestore(std::move(*prepared)));
+    CHECK(replacement.checkpoint() == current);
 }
 } // namespace

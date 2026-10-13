@@ -6,6 +6,7 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 include(Catch)
 
 add_executable(tests
+    engine/math/Mt19937Tests.cpp
     game/netplay/HostedRoomTests.cpp
     game/netplay/InputCommandTests.cpp
     game/netplay/InputTimelineTests.cpp
@@ -50,6 +51,9 @@ add_executable(tests
     game/players/PlayerActorCheckpointTests.cpp
     game/enemies/EnemyAnimatorCheckpointTests.cpp
     game/enemies/EnemiesCheckpointTests.cpp
+    game/enemies/GeneratorsCheckpointTests.cpp
+    game/enemies/EnemyMissilesCheckpointTests.cpp
+    game/screens/OpponentSimulationTests.cpp
     game/screens/LocalTerrainPredictionTests.cpp
     game/netplay/MatchSessionTests.cpp
     game/netplay/ShopSyncTests.cpp
@@ -495,6 +499,14 @@ if(GDL_ENABLE_NETPLAY)
         game/players/PlayerActorCheckpointTests.cpp
         game/enemies/EnemyAnimatorCheckpointTests.cpp
         game/enemies/EnemiesCheckpointTests.cpp
+        engine/math/Mt19937Tests.cpp
+        game/enemies/GeneratorsCheckpointTests.cpp
+        game/enemies/EnemyMissilesCheckpointTests.cpp
+        game/screens/OpponentSimulationTests.cpp
+        game/screens/LevelOpponentsTests.cpp
+        game/screens/LevelOpponentsDeathTests.cpp
+        game/enemies/EnemyMissilesTests.cpp
+        game/enemies/GeneratorsTests.cpp
         game/screens/LocalTerrainPredictionTests.cpp
         game/players/TurboMeterTests.cpp game/players/TurboMoveTests.cpp
         game/netplay/ReplicaStageTests.cpp

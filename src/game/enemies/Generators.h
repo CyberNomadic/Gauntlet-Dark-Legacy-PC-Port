@@ -29,6 +29,7 @@ struct GeneratorScales {
     f32 health = 1.0f;
     f32 rate = 1.0f; ///< the difficulty gain already in it
     f32 most = 1.0f;
+    bool operator==(const GeneratorScales&) const = default;
 };
 
 /** A generator struck: the state it is now in (three whole, down to nought, destroyed). */
@@ -40,6 +41,7 @@ struct GeneratorEvent {
     Mat4 placement{1};
     bool stateChanged = false;
     bool destroyed = false;
+    bool operator==(const GeneratorEvent&) const = default;
 };
 
 /** What a player's blow on a generator of `kind` (the kind it breeds) earns
@@ -56,6 +58,12 @@ s32 generatorExperience(s32 kind, bool destroyed);
  */
 class Generators {
 public:
+    Generators() = default;
+    Generators(const Generators&) = delete;
+    Generators& operator=(const Generators&) = delete;
+    Generators(Generators&&) = delete;
+    Generators& operator=(Generators&&) = delete;
+
     static constexpr s32 kStates = 3;
     static constexpr f32 kCountdownScale = 6.0f;    ///< ticks a unit of interval counts for
     static constexpr f32 kActiveDistance = 1000.0f; ///< no player this near, none breeds
@@ -147,15 +155,8 @@ public:
     /** The generator's parameters as a level's record gives them, for tests and tools. */
     static s32 paramOf(const ItemInstance& instance, usize index);
 
-private:
-    struct Bodies {
-        s32 kind = -1;
-        std::array<TreeInfo, kStates + 1> trees; ///< authored tree or single state object
-        std::array<TreeModel, kStates + 1> models;
-        TextureAnimator textures;
-    };
-
-    struct Generator {
+    /** Pointer-free native body, including dormant, suppressed and destroyed slots. */
+    struct Slot {
         enum class Presence : u8 { Shown, Hidden, Suppressed };
         s32 minPlayers = 0;
         Presence presence = Presence::Shown;
@@ -188,8 +189,62 @@ private:
         Mat4 supportLocal{1};
         Vec3 boxOffset{0};
         f32 boxYaw = 0;
-        std::unique_ptr<ItemFigure> bossFigure;
         bool boss = false;
+        bool operator==(const Slot&) const;
+    };
+
+    struct Checkpoint {
+        static constexpr usize kMaxGenerators = 4096;
+        struct BodyClock {
+            s32 kind = -1;
+            TextureAnimator::Checkpoint textures;
+            bool operator==(const BodyClock&) const = default;
+        };
+        /** Initial bound placement records identify the exact trusted level roster. */
+        std::vector<Slot> roster;
+        std::vector<Slot> generators;
+        std::vector<BodyClock> bodies;
+        GeneratorScales scales;
+        s32 players = 1;
+        u32 specialBirth = 0;
+        std::optional<ViewVolume> view;
+        std::optional<Vec3> attention;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const;
+    };
+
+    /** Boss ItemFigure animation/particles are not yet resumable: their presence
+     * rejects a checkpoint instead of silently dropping native state. */
+    std::optional<Checkpoint> checkpoint() const;
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+
+    private:
+        friend class Generators;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    /** Allocates and validates using already-loaded bodies; never spawns or loads art. */
+    std::optional<Prepared> prepareRestore(const Checkpoint& state) const;
+    bool canCommit(const Prepared& prepared) const;
+    /** Allocation-free after canCommit; success consumes the staged correction and
+     * invalidates sibling preparations. Failed ownership checks leave it untouched. */
+    bool commitRestore(Prepared&& prepared);
+    bool restore(const Checkpoint& state);
+
+private:
+    struct Bodies {
+        s32 kind = -1;
+        std::array<TreeInfo, kStates + 1> trees;
+        std::array<TreeModel, kStates + 1> models;
+        TextureAnimator textures;
+    };
+    struct Generator : Slot {
+        std::unique_ptr<ItemFigure> bossFigure;
     };
 
     Bodies* bodiesOf(s32 kind);
@@ -211,6 +266,11 @@ private:
     GeneratorScales m_scales;
     s32 m_players = 1;
     u32 m_specialBirth = 0; ///< shared round-robin cursor, as in retail's enemy spawner
+    std::vector<Slot> m_roster;
+    bool m_bound = false;
+    u64 m_restoreGeneration = 0;
+    // A Prepared may outlive its owner; address reuse must not revive it.
+    std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

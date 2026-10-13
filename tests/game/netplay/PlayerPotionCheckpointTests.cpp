@@ -113,7 +113,7 @@ TEST_CASE("potion checkpoint decoding rejects malformed counts flags tuning and 
     malformed.powers[1] *= malformed.bonuses[1];
     CHECK_FALSE(PlayerPotionCheckpoint::encode(malformed));
     malformed = state;
-    malformed.textureFrame = 0;
+    malformed.textureFrame = 0.0f;
     const auto zeroClock = PlayerPotionCheckpoint::encode(malformed);
     REQUIRE(zeroClock);
     const auto restoredClock = PlayerPotionCheckpoint::decode(*zeroClock);

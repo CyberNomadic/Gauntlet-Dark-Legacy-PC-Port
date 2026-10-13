@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <random>
 #include <span>
 #include <string>
 #include <utility>
@@ -13,6 +12,7 @@
 #include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
+#include "engine/math/Mt19937.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/TreeModel.h"
@@ -485,7 +485,7 @@ public:
         std::array<Body, kMost> enemies;
         std::vector<Stock> stocks;
         u64 nextInstance = 1;
-        std::mt19937 random;
+        Mt19937::Checkpoint random = Mt19937{}.checkpoint();
         s32 most = kMost;
         EnemyScales scales;
         LookoutRoute lookouts;
@@ -512,6 +512,26 @@ public:
         bool operator==(const Checkpoint&) const;
     };
     std::optional<Checkpoint> checkpoint() const;
+    /** Prepared against this owner's loaded resources. No live state is changed
+     * until commit; callers can prepare several dependent pools atomically. */
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+
+    private:
+        friend class Enemies;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    std::optional<Prepared> prepareRestore(const Checkpoint& state) const;
+    bool canCommit(const Prepared& prepared) const;
+    /** Allocation-free commit. Prepare/preflight/commit must run on the same
+     * simulation thread without intervening gameplay or resource mutation.
+     * A successful commit consumes its token and invalidates sibling prepares. */
+    bool commitRestore(Prepared&& prepared);
     /** Exact, atomic restore against the same opened world's loaded stock roster.
      * Never loads assets, spawns actors or dispatches queued world events. Rewinds
      * birth counters too: callers must quarantine replay and reconcile published
@@ -599,6 +619,8 @@ private:
     MeleeGeometry::Target meleeBody(s32 id) const;
 
     RenderDevice* m_device = nullptr;
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 0;
     std::filesystem::path m_root;
     const WorldCollision* m_collision = nullptr;
     const HazardSurfaces* m_hazards = nullptr; ///< borrowed from the level
@@ -620,7 +642,7 @@ private:
     std::vector<EnemyBody> m_combatants;
     Vec2 m_contactGridOrigin{0};
     f32 m_contactGridInverseWidth = 0;
-    std::mt19937 m_random;
+    Mt19937 m_random;
     s32 m_bomber = -1; ///< the lit suicide bomber the rest run from this tick
     std::optional<ViewVolume> m_view;
     s32 m_inView = 0;
