@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -90,9 +91,14 @@ public:
      * Both archives and the collision world must outlive the portals. With `access` (the tower's),
      * a portal the party may not pass wears the EXIT_OFF figure instead and takes nobody
      * (fn_8005B5B8). */
+    bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+              const LevelCatalog& catalog, const WorldCollision* collision,
+              const TowerAccess* access = nullptr);
     bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
               const LevelCatalog& catalog, const WorldCollision* collision,
-              ItemArchive* realmItems = nullptr, const TowerAccess* access = nullptr);
+              ItemArchive* realmItems = nullptr, const TowerAccess* access = nullptr) {
+        return bind(device, layout, AssetScope(items, realmItems), catalog, collision, access);
+    }
     void clear();
     usize size() const { return m_portals.size(); }
     const Portal& portal(usize index) const { return m_portals[index]; }
@@ -130,8 +136,7 @@ private:
     void advance(Portal& portal, s32 action);
     bool readyToLeave(s32 party) const;
     void updateReadiness(s32 ticks, std::span<const PortalVisitor> party, f32 extra);
-    static void shut(RenderDevice& device, Portal& portal, ItemArchive& items,
-                     ItemArchive* realmItems);
+    static void shut(RenderDevice& device, Portal& portal, const AssetScope& scope);
     static bool standsOn(const Portal& portal, const PortalVisitor& visitor, f32 extra);
 
     const TreeInfo* m_tree = nullptr;

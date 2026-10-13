@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -37,9 +38,13 @@ public:
         u64 previousGeneration = 0;
     };
 
-    /** Both archives must outlive the pads; level-specific art takes precedence. */
+    /** The scope's archives must outlive the pads; the first holding TRANS supplies them. */
+    void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+              s32 players);
     void bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items, s32 players,
-              ItemArchive* realmItems = nullptr);
+              ItemArchive* realmItems = nullptr) {
+        bind(device, layout, AssetScope(items, realmItems), players);
+    }
     void clear();
     void animate(f32 seconds);
     void capturePresentation() {

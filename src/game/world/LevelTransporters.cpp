@@ -20,14 +20,14 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 }
 } // namespace
 
-void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                             s32 players, ItemArchive* realmItems) {
+void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
+                             const AssetScope& scope, s32 players) {
     clear();
-    ItemArchive& art = itemArchiveForTree(items, "TRANS", realmItems);
-    const auto tree = art.trees.find("TRANS");
+    ItemArchive* art = scope.archiveForTree("TRANS");
+    const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
-        m_tree = &art.trees.tree(*tree);
-        m_textures.bind(art.trees.textureAnimations(), art.textures, device);
+        m_tree = &art->trees.tree(*tree);
+        m_textures.bind(art->trees.textureAnimations(), art->textures, device);
     }
     const auto& infos = layout.itemInfos();
     const auto& instances = layout.itemInstances();
@@ -52,7 +52,7 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, It
         // clearance on its artwork, without raising the contact or landing anchor.
         pad.transform =
             itemPlacement(pad.position + Vec3{0, ItemFigure::kFloorLift, 0}, instance.rotation);
-        if (m_tree != nullptr && pad.model.bind(*m_tree, art.models, art.textures, device)) {
+        if (m_tree != nullptr && pad.model.bind(*m_tree, art->models, art->textures, device)) {
             pad.pose.rest(*m_tree);
             if (const auto sequence = m_tree->findSequence("ACTIVE")) {
                 pad.animation.start(m_tree->sequences[*sequence], *sequence);

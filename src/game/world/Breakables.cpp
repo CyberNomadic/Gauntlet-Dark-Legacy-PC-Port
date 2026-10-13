@@ -33,8 +33,8 @@ f32 nearestOnGround(const Vec3& from, const Vec3& to, const Vec3& point, f32& al
 
 } // namespace
 
-bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                      const WorldCollision* collision, ItemArchive* realmItems) {
+bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+                      const WorldCollision* collision) {
     clear();
     m_collision = collision;
     const auto authored = itemSupportWorld(layout, collision);
@@ -70,8 +70,7 @@ bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, ItemArchi
             barrel->kind = BreakableStrike::Kind::Poison;
         }
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        ItemArchive& art = itemArchiveForTree(items, name, realmItems);
-        if (!barrel->figure.place(device, art, name, instance, collision)) {
+        if (!barrel->figure.place(device, scope, name, instance, collision)) {
             log::warn("Barrels: no figure {} in the item archive", name);
         }
         barrel->box = barrel->figure.obstacle(info);

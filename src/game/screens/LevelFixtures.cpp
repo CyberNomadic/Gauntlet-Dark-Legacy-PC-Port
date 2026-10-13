@@ -90,15 +90,16 @@ void LevelFixtures::bind(const Resources& resources) {
     m_resources.emplace(resources);
     LevelWorld& world = resources.world;
     RenderDevice& device = resources.device;
-    m_chests.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
-    m_gates.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+    const AssetScope scope = world.itemScope();
+    m_chests.bind(device, world.layout(), scope, &world.collision());
+    m_gates.bind(device, world.layout(), scope, &world.collision());
     const LevelInfo* level = world.level();
     m_traps.bind(device, world.layout(), world.items(), &world.collision(), 1,
                  level != nullptr ? level->tuning.trapTimeScale(resources.difficultyGain) : 1.0f,
                  trapDamageScale(), &world.realmItems());
-    m_barrels.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+    m_barrels.bind(device, world.layout(), scope, &world.collision());
     m_safeRocks.bind(device, world.layout(), world.items());
-    m_scenery.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+    m_scenery.bind(device, world.layout(), scope, &world.collision());
 }
 void LevelFixtures::clear() {
     if (m_resources) {
@@ -558,9 +559,8 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
             break;
         }
     }
-    const usize reveals = m_chests.updateXray(m_resources->device, m_resources->world.items(),
-                                              m_resources->world.powerups(), seconds, visitors,
-                                              &m_resources->world.realmItems());
+    const usize reveals = m_chests.updateXray(m_resources->device, m_resources->world.itemScope(),
+                                              m_resources->world.powerups(), seconds, visitors);
     for (usize i = 0; i < reveals; ++i) {
         m_resources->audio.playNamed("S_XRAY");
     }
@@ -739,12 +739,9 @@ void LevelFixtures::bless(const Vec3& position, f32 radius, MagicPerk perk, usiz
             } else if (turn->deed == MagicPerkDeed::JunkToSilver) {
                 figure = kGoldChestLesser;
             }
-            ItemArchive& source =
-                figure.empty() || resources.world.items().trees.find(figure).has_value()
-                    ? resources.world.items()
-                    : resources.world.realmItems();
             if (m_chests.changeContents(i, turn->record, resources.device, resources.world.layout(),
-                                        source, &resources.world.collision(), figure)) {
+                                        resources.world.itemScope(), &resources.world.collision(),
+                                        figure)) {
                 changes.push_back({turn->deed, chest.figure.transform()});
             }
         }
@@ -773,8 +770,7 @@ void LevelFixtures::bless(const Vec3& position, f32 radius, MagicPerk perk, usiz
             if (perk.greater) {
                 const Mat4 at = trap.figure.transform();
                 if (m_traps.disarm(i, resources.device, resources.world.layout(),
-                                   resources.world.items(), &resources.world.collision(),
-                                   &resources.world.realmItems())) {
+                                   resources.world.itemScope(), &resources.world.collision())) {
                     changes.push_back({MagicPerkDeed::DestroyTrap, at});
                 }
             } else {

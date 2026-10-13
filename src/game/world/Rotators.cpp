@@ -63,8 +63,8 @@ void Rotators::bind(const WorldLayout& layout) {
     }
 }
 
-void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                           ItemArchive* realmItems) {
+void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout,
+                           const AssetScope& scope) {
     for (Rotator& rotator : m_rotators) {
         rotator.pad.reset();
         if (rotator.subtype != kTurnedByPad) {
@@ -77,8 +77,7 @@ void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, Item
         }
         const ItemInfo& info = layout.itemInfos()[static_cast<usize>(instance.info)];
         auto pad = std::make_unique<ItemFigure>();
-        ItemArchive& art = itemArchiveForTree(items, info.name, realmItems);
-        if (pad->place(device, art, info.name, instance, nullptr)) {
+        if (pad->place(device, scope, info.name, instance, nullptr)) {
             rotator.pad = std::move(pad);
         }
     }

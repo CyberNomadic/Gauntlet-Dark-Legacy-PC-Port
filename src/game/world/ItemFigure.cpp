@@ -61,12 +61,6 @@ bool levelWith(const Obstacle& box, const Vec3& position) {
 
 } // namespace
 
-ItemArchive& itemArchiveForTree(ItemArchive& items, std::string_view name,
-                                ItemArchive* realmItems) {
-    ItemArchive* found = AssetScope(items, realmItems).archiveForTree(name);
-    return found != nullptr ? *found : items;
-}
-
 Vec3 Obstacle::pushOut(const Vec3& position, f32 radius) const {
     if (!solid || !levelWith(*this, position)) {
         return position;
@@ -221,20 +215,32 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
     return true;
 }
 
-bool ItemFigure::placeStaticFallback(RenderDevice& device, ItemArchive& items,
+bool ItemFigure::place(RenderDevice& device, const AssetScope& scope, std::string_view name,
+                       const ItemInstance& instance, const WorldCollision* collision) {
+    if (ItemArchive* archive = scope.archiveForTree(name)) {
+        return place(device, *archive, name, instance, collision);
+    }
+    // An empty scope: the item still takes its place, with nothing to show.
+    static ItemArchive none;
+    return place(device, none, name, instance, collision);
+}
+
+bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& scope,
                                      std::string_view name, const ItemInstance& instance,
                                      const WorldCollision* collision, u32 objectFlags) {
-    if (place(device, items, name, instance, collision)) {
+    if (place(device, scope, name, instance, collision)) {
         return true;
     }
     // A present but invalid tree is not a request to silently substitute another mesh.
-    if (!items.loaded() || items.trees.find(name)) {
+    if (scope.findTree(name)) {
         return false;
     }
-    const auto model = AssetScope(items).findObject(name);
+    const auto model = scope.findObject(name);
     if (!model) {
         return false;
     }
+    ItemArchive& items = *model->archive;
+    m_archive = &items;
     m_staticTree = std::make_unique<TreeInfo>();
     m_staticTree->name = name;
     TreeNodeInfo node;

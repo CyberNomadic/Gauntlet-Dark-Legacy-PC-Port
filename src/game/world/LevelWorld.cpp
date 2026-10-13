@@ -172,10 +172,10 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
     }
     // A level with an archive of its own (A1's holds only the tentacle) still takes its
     // switch art from the realm's, the second header the original searches.
-    ItemArchive* realmArt = realmItems().loaded() ? &realmItems() : nullptr;
-    m_triggers.bindFigures(device, m_layout, items(), realmArt);
+    const AssetScope scope = itemScope();
+    m_triggers.bindFigures(device, m_layout, scope);
     m_rotators.bind(m_layout);
-    m_rotators.bindFigures(device, m_layout, items(), realmArt);
+    m_rotators.bindFigures(device, m_layout, scope);
     m_worldAnimator.apply(m_scene);
     m_triggers.placeTargets(m_scene, &m_collision);
     syncCollision();

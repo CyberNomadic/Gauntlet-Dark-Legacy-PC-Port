@@ -98,8 +98,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     // stands coming back (fn_8005B5B8, SetPlayerStartPos).
     m_towerAccess = world.isTower() ? TowerAccess{party} : TowerAccess{};
     if (context.levels != nullptr) {
-        m_portals.bind(device, world.layout(), world.items(), *context.levels, &world.collision(),
-                       &world.realmItems(), world.isTower() ? &m_towerAccess : nullptr);
+        m_portals.bind(device, world.layout(), world.itemScope(), *context.levels,
+                       &world.collision(), world.isTower() ? &m_towerAccess : nullptr);
         for (const ExitPortals::ShutGate& gate : m_portals.shutGates()) {
             world.shutPortalGlow(gate.world, gate.gate);
         }
@@ -127,8 +127,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     if (!world.ref().isSecret()) {
         m_hud.showRelics();
     }
-    m_transporters.bind(device, world.layout(), world.items(), static_cast<s32>(m_players.size()),
-                        &world.realmItems());
+    m_transporters.bind(device, world.layout(), world.itemScope(),
+                        static_cast<s32>(m_players.size()));
     for (const DroppedItem& item : options.items) {
         world.placeItem(device, item.name, item.position);
     }
