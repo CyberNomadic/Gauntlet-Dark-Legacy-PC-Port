@@ -1341,6 +1341,43 @@ TEST_CASE("lift pads activate from the lowered deck rather than their authored m
     CHECK(world.triggers().opened(trigger.target));
 }
 
+TEST_CASE("the Mine's lift is walkable across its green centre, which is a child of its ring",
+          "[game][world][triggers][ice-lift][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELI3/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("I3");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    const auto& objects = world.layout().objects();
+    const auto indexOf = [&](std::string_view name) {
+        for (usize i = 0; i < objects.size(); ++i) {
+            if (objects[i].name == name) {
+                return static_cast<s32>(i);
+            }
+        }
+        return -1;
+    };
+    const s32 ring = indexOf("I3ELEV6");
+    const s32 centre = indexOf("I3NS_CYLINDER46");
+    REQUIRE(ring >= 0);
+    REQUIRE(centre >= 0);
+    const Vec3 lift = world.layout().worldPosition(static_cast<usize>(ring));
+    // The ring's walkable strip is half a unit wide; the shallow cone within it, raised
+    // 2.3 units in the ring's space, carries the rest of the platform.
+    const auto middle = world.collision().floorAt(lift + Vec3{0, 2.0f, 0}, 3.0f, 4.0f);
+    REQUIRE(middle.has_value());
+    CHECK(middle->object == centre);
+    CHECK(middle->y == Approx(lift.y + 2.3f + 0.5f).margin(0.2f));
+    const auto halfway = world.collision().floorAt(lift + Vec3{2.5f, 2.0f, 1.5f}, 3.0f, 4.0f);
+    REQUIRE(halfway.has_value());
+    CHECK(halfway->object == centre);
+    CHECK(halfway->y < middle->y);
+}
+
 TEST_CASE("Maze invisible platforms respond to floor contact", "[maze-triggers][assets]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELJ4/WORLDS.PS2").parent_path().parent_path().parent_path();
