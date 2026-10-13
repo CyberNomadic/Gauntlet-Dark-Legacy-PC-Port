@@ -102,6 +102,8 @@ bool TreeModel::bind(const TreeInfo& tree, ModelSet& models, TextureSet& texture
             node.additive = material.additive;
             node.depthWrite = material.depthWrite;
             node.depthTest = material.depthTest;
+            node.sorted = material.sorted;
+            node.deferAlways = material.deferAlways;
             node.facing = material.facing;
             if (!info.object.empty()) {
                 const auto model = models.find(info.object);
@@ -259,13 +261,22 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         }
         const Mat3 normalMatrix{placement};
         const Shape& shape = node.shape;
+        // The authored rule decides what waits: a sortable node that is faded, glowing,
+        // flagged behind or wears an alpha-textured mesh. A glow or a fading or dissolving
+        // figure waits as well, so it composites over what it stands among.
+        const bool additive = node.additive || m_additive;
+        const bool deferredNode =
+            node.sorted && (opacity < 1.0f || node.deferAlways || shape.mesh->alphaTextured());
+        // The original draws its items in placement order; this renderer draws the pickups
+        // before the fixtures they may stand against, so a pickup's alpha-textured mesh
+        // (the authored object bit) composites after them as a whole.
+        const bool pickupPass = pass == Pass::Opaque || pass == Pass::Blended;
+        const bool blended = deferredNode || additive || fading || dissolving ||
+                             (pickupPass && shape.mesh->alphaTextured());
+        if (blended != translucent) {
+            continue;
+        }
         for (usize p = 0; p < shape.mesh->parts.size(); ++p) {
-            // A fading figure blends its solid parts too, so the whole of it thins together.
-            const bool additive = node.additive || m_additive;
-            const bool blended = shape.translucent[p] || additive || fading || dissolving;
-            if (blended != translucent) {
-                continue;
-            }
             const bool deferred = blended || !depthWrite;
             if ((pass == Pass::Opaque && deferred) || (pass == Pass::Blended && !deferred)) {
                 continue;
@@ -326,7 +337,9 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
             state.maskedTexture = mask;
             // This explicit pass belongs to world pickups, not actor/world cutouts or UI.
             state.smoothSprite = pass == Pass::Blended && node.facing != 0 && blended;
-            state.alphaTest = blended ? DrawState::kTranslucentAlphaTest : 0.0f;
+            // setPrimAlpha sets the console's alpha compare (greater than 2) for every
+            // object; a solid cutout's clear texels never show or write depth.
+            state.alphaTest = DrawState::kTranslucentAlphaTest;
             state.depthWrite = depthWrite;
             state.depthTest = node.depthTest || occlusion == Occlusion::SolidWorld;
             state.uvOffset = textureOffset(shape.slots[p]);

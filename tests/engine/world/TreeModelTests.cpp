@@ -290,7 +290,8 @@ TEST_CASE("tree effects can composite after scenery without redrawing depth-writ
 TEST_CASE("pickup passes separate blended mesh parts without changing native depth state",
           "[world][model][effect-pass][pickup-occlusion]") {
     const auto dir = sampleFigure("tree-model-pickup-passes");
-    // The fruit and its shadow can be two materials in the very same native node.
+    // The fruit and its shadow can be two materials in the very same native node; the
+    // exporter marks such an object alpha-textured, and the whole of it waits.
     writeTextFile(dir / "models/000_BODY.obj",
                   "v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 1 0\n"
                   "usemtl tex0\nf 1//1 2//1 3//1\nusemtl tex1\nf 1//1 2//1 3//1\n");
@@ -310,17 +311,20 @@ TEST_CASE("pickup passes separate blended mesh parts without changing native dep
         device.draws.clear();
         figure.draw(device, Mat4{1}, Mat4{1}, {}, {}, nullptr, alpha, pass);
     };
+    REQUIRE(models.mesh(0).alphaTextured());
     draw(TreeModel::Pass::Opaque);
-    REQUIRE(device.draws.size() == 1);
-    CHECK(device.draws[0].texture == &textures.texture(device, 0));
-    CHECK(device.draws[0].state.depthWrite);
+    CHECK(device.draws.empty());
     draw(TreeModel::Pass::Blended);
-    REQUIRE(device.draws.size() == 1);
-    CHECK(device.draws[0].texture == &textures.texture(device, 1));
-    CHECK(device.draws[0].state.depthWrite);
-    CHECK(device.draws[0].state.depthTest);
-    CHECK(device.draws[0].state.blend == BlendMode::Alpha);
-    CHECK_FALSE(device.draws[0].state.usesAlphaToCoverage(4));
+    REQUIRE(device.draws.size() == 2);
+    CHECK(device.draws[0].texture == &textures.texture(device, 0));
+    CHECK(device.draws[1].texture == &textures.texture(device, 1));
+    for (const auto& part : device.draws) {
+        CHECK(part.state.depthWrite);
+        CHECK(part.state.depthTest);
+        CHECK(part.state.blend == BlendMode::Alpha);
+        CHECK(part.state.alphaTest == DrawState::kTranslucentAlphaTest);
+        CHECK_FALSE(part.state.usesAlphaToCoverage(4));
+    }
     // Existing actor/cutout passes keep their depth-write partition and MSAA coverage.
     draw(TreeModel::Pass::DepthWriting);
     REQUIRE(device.draws.size() == 2);
@@ -566,7 +570,9 @@ TEST_CASE("alternate skin preserves base coverage and the original opaque or tra
     REQUIRE(device.draws[0].state.blend == BlendMode::Opaque);
     REQUIRE(device.draws[0].state.depthWrite);
     CHECK(device.draws[0].state.usesAlphaToCoverage(4));
-    REQUIRE(device.draws[1].state.blend == BlendMode::Alpha);
+    // The banner's node is not authored to sort, so it is a solid too: its cutout comes
+    // from the alpha compare and coverage, not from blending.
+    REQUIRE(device.draws[1].state.blend == BlendMode::Opaque);
     REQUIRE(device.draws[1].state.alphaTest == DrawState::kTranslucentAlphaTest);
     CHECK(device.draws[1].state.usesAlphaToCoverage(4));
     device.draws.clear();
@@ -795,7 +801,7 @@ TEST_CASE("an object node shows the mesh of its run that the frame calls for", "
     flame.draw(device, Mat4{1.0f}, Mat4{1.0f});
     REQUIRE(device.draws.size() == 1);
     REQUIRE(device.draws[0].state.blend == BlendMode::Alpha);
-    REQUIRE(device.draws[0].state.alphaTest == 0.0f); // the body's texture is solid
+    REQUIRE(device.draws[0].state.alphaTest == DrawState::kTranslucentAlphaTest);
     // The banner has different UVs/materials. Opt-in sampling must leave this
     // incompatible pair at its discrete lower frame, not morph unrelated vertices.
     const auto discrete = device.draws[0];
@@ -846,7 +852,7 @@ TEST_CASE("an object node shows the mesh of its run that the frame calls for", "
     flame.setFrame(0, 4); // sequence frame 1 -> body
     flame.draw(device, Mat4{1}, Mat4{1});
     REQUIRE(device.draws.size() == 2);
-    CHECK(device.draws[1].state.alphaTest == 0);
+    CHECK(device.draws[1].state.alphaTest == DrawState::kTranslucentAlphaTest);
     flame.setFrame(0, 5); // sequence frame 0 -> before the run
     flame.draw(device, Mat4{1}, Mat4{1});
     CHECK(device.draws.size() == 2);
@@ -905,10 +911,11 @@ TEST_CASE("a tree model adds glowing nodes onto the frame without writing depth"
     REQUIRE(figure.bind(trees.tree(0), models, textures, device));
     figure.draw(device, Mat4{1.0f}, Mat4{1.0f});
     REQUIRE(device.draws.size() == 2);
-    // The body first, plainly; the glow after it, added, cut out and leaving depth alone.
+    // The body first, with the console's alpha compare like everything else; the glow after
+    // it, added and leaving depth alone.
     REQUIRE(device.draws[0].state.blend == BlendMode::Alpha);
     REQUIRE(device.draws[0].state.depthWrite);
-    REQUIRE(device.draws[0].state.alphaTest == 0.0f);
+    REQUIRE(device.draws[0].state.alphaTest == DrawState::kTranslucentAlphaTest);
     REQUIRE(device.draws[0].state.depthTest);
     REQUIRE(device.draws[1].state.blend == BlendMode::Additive);
     REQUIRE_FALSE(device.draws[1].state.depthWrite);
