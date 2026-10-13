@@ -24,6 +24,11 @@ add_library(game STATIC
     netplay/PredictedShotLedger.cpp
     netplay/PlayerActionCheckpoint.cpp
     netplay/AnimationCheckpoint.cpp
+    netplay/RandomCheckpoint.cpp
+    netplay/EnemyMissilesCheckpoint.cpp
+    netplay/EnemyPoolCheckpoint.cpp
+    netplay/GeneratorCheckpoint.cpp
+    netplay/OpponentCheckpoint.cpp
     netplay/PlatformCheckpoint.cpp
     world/WorldMotion.cpp
     screens/TurboEmission.cpp
@@ -383,6 +388,7 @@ add_library(game STATIC
     screens/LevelFixtures.cpp
     screens/LevelOpponents.cpp
     screens/OpponentSimulation.cpp
+    screens/OpponentResources.cpp
     enemies/OpponentState.cpp
     screens/PlayerAttacks.cpp
     screens/PlayerItemAttacks.cpp

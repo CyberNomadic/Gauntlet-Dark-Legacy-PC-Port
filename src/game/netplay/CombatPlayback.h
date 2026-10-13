@@ -31,6 +31,8 @@ public:
     bool begin(PacketTransport::Connection host, u64 epoch);
     void clear();
     CombatReplica::Admission receive(PacketTransport::Connection sender, std::span<const u8> bytes);
+    /** Display-only: complete opponent rollback state is available exclusively
+     * through latest(), never through an interpolated or clamped sample. */
     std::optional<CombatSnapshot> sample(u64 tick, f32 fraction = 0,
                                          EnemyPresentation* presentation = nullptr) const;
     const CombatSnapshot* latest() const { return m_receiver.latest(); }

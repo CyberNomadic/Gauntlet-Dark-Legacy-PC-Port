@@ -4,6 +4,7 @@
 
 #include "engine/world/SceneGeometry.h"
 
+#include "game/enemies/OpponentState.h"
 #include "game/netplay/AnimationCheckpoint.h"
 #include "game/netplay/EffectIdentity.h"
 #include "game/netplay/FighterSnapshot.h"
@@ -338,6 +339,12 @@ struct CombatSnapshot {
     std::optional<HudSnapshot> hud;
     std::optional<WorldMotion::State> worldMotion;
     u32 worldMotionTicks = 0;
+    /** Complete ordinary-opponent pools from this exact motion tick. Optional
+     * correction data, never a presentation-interpolated simulation seed. The
+     * containing packet's unchanged byte budget may refuse a combined frame;
+     * senders must deliberately omit this optional state or send a later seed,
+     * not truncate pools or discard existing presentation/replay components. */
+    std::optional<OpponentState> opponents = std::nullopt;
     bool valid() const;
 };
 
@@ -379,6 +386,9 @@ public:
         4 + InputCommand::kSeats *
                 (16 + PlayerLocomotionCheckpoint::kMaxBytes + PlayerPoseCheckpoint::kMaxBytes +
                  TurboEffectCheckpoint::kMaxBytes + PlayerPotionCheckpoint::kMaxBytes);
+    static constexpr usize kOpponentHeaderBytes = 20; ///< length plus exact epoch/tick echo
+    // Opponent corrections consume unused room inside this existing cap. It is
+    // deliberately not increased by the opponent codec's independent maximum.
     static constexpr usize kMaxBytes =
         kHeaderBytes + MotionPacket::kMaxBytes + InputCommand::kSeats * kPlayerBytes +
         CombatSnapshot::kMaxEnemies * kEnemyBytes +

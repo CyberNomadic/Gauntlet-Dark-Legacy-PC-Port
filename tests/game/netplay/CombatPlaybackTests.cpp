@@ -37,6 +37,39 @@ void receive(CombatPlayback& playback, const CombatSnapshot& state) {
                                                            : CombatReplica::Admission::Pending));
     }
 }
+TEST_CASE("opponent replay seeds never enter delayed or interpolated display history",
+          "[netplay][combat-playback][opponent-supplement]") {
+    CombatPlayback playback;
+    REQUIRE(playback.begin(1, 1));
+    auto first = state(10);
+    first.opponents.emplace();
+    REQUIRE(first.opponents->valid());
+    auto last = first;
+    last.motion.tick = 14;
+    last.opponents->enemies.frame = 4;
+    receive(playback, first);
+    receive(playback, last);
+    REQUIRE(playback.latest());
+    REQUIRE(playback.latest()->opponents);
+    CHECK(playback.latest()->motion.tick == 14);
+    CHECK(*playback.latest()->opponents == *last.opponents);
+    for (const u64 tick : {0U, 10U, 11U, 13U, 14U, 100U}) {
+        const auto shown = playback.sample(tick, 0.5f);
+        REQUIRE(shown);
+        CHECK_FALSE(shown->opponents);
+        CHECK(shown->valid());
+    }
+    // A later full snapshot omitting the optional island explicitly revokes it.
+    auto revoked = state(15);
+    receive(playback, revoked);
+    REQUIRE(playback.latest());
+    CHECK_FALSE(playback.latest()->opponents);
+    CHECK(playback.latest()->motion.tick == 15);
+    CHECK(playback.begin(1, 2));
+    CHECK_FALSE(playback.latest());
+    CHECK_FALSE(playback.sample(14));
+}
+
 TEST_CASE("static fixture terminal frames remain exactly in range at every sample fraction",
           "[netplay][combat-playback]") {
     CombatPlayback playback;

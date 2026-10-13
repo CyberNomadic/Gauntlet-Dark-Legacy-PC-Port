@@ -26,6 +26,11 @@ add_executable(tests
     game/netplay/ReplicaPotionParticleTests.cpp
     game/netplay/LocalParticlePredictionTests.cpp
     game/netplay/AnimationCheckpointTests.cpp
+    game/netplay/RandomCheckpointTests.cpp
+    game/netplay/EnemyMissilesCheckpointTests.cpp
+    game/netplay/EnemyPoolCheckpointTests.cpp
+    game/netplay/GeneratorCheckpointTests.cpp
+    game/netplay/OpponentCheckpointTests.cpp
     game/netplay/PlatformCheckpointTests.cpp
     game/netplay/EffectIdentityTests.cpp
     game/netplay/PlayerLocomotionCheckpointTests.cpp
@@ -54,6 +59,7 @@ add_executable(tests
     game/enemies/GeneratorsCheckpointTests.cpp
     game/enemies/EnemyMissilesCheckpointTests.cpp
     game/screens/OpponentSimulationTests.cpp
+    game/screens/OpponentResourcesTests.cpp
     game/screens/LocalTerrainPredictionTests.cpp
     game/netplay/MatchSessionTests.cpp
     game/netplay/ShopSyncTests.cpp
@@ -470,6 +476,11 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/ReplicaPotionParticleTests.cpp
         game/netplay/LocalParticlePredictionTests.cpp
         game/netplay/AnimationCheckpointTests.cpp
+        game/netplay/RandomCheckpointTests.cpp
+        game/netplay/EnemyMissilesCheckpointTests.cpp
+        game/netplay/EnemyPoolCheckpointTests.cpp
+        game/netplay/GeneratorCheckpointTests.cpp
+        game/netplay/OpponentCheckpointTests.cpp
         game/netplay/PlatformCheckpointTests.cpp
         game/netplay/EffectIdentityTests.cpp
         game/netplay/PlayerLocomotionCheckpointTests.cpp
@@ -503,6 +514,7 @@ if(GDL_ENABLE_NETPLAY)
         game/enemies/GeneratorsCheckpointTests.cpp
         game/enemies/EnemyMissilesCheckpointTests.cpp
         game/screens/OpponentSimulationTests.cpp
+        game/screens/OpponentResourcesTests.cpp
         game/screens/LevelOpponentsTests.cpp
         game/screens/LevelOpponentsDeathTests.cpp
         game/enemies/EnemyMissilesTests.cpp

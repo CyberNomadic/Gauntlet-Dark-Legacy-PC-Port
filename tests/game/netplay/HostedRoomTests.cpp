@@ -68,7 +68,8 @@ struct Pair {
 } // namespace
 TEST_CASE("peers missing replay capabilities cannot join even with the same build name",
           "[netplay][hosted-room]") {
-    for (const u8 oldProtocol : {u8{1}, u8{13}, u8{14}, u8{15}, u8{16}, u8{17}}) {
+    for (const u8 oldProtocol :
+         {u8{1}, u8{13}, u8{14}, u8{15}, u8{16}, u8{17}, u8{18}, u8{19}, u8{20}, u8{21}}) {
         Pair pair;
         pair.guest.update(0);
         bool rewrote = false;

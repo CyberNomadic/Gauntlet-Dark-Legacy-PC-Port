@@ -8,13 +8,15 @@
 #include "engine/io/ByteReader.h"
 
 #include "game/combat/DamageTypes.h"
+#include "game/netplay/OpponentCheckpoint.h"
 #include "game/players/PowerupEffects.h"
 #include "game/world/PowerupCompanion.h"
 
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 38;
+constexpr u32 kVersion = 39;
+constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
@@ -203,7 +205,8 @@ bool CombatSnapshot::valid() const {
         musicArea > 7 || musicLevel > 255 || enemies.size() > kMaxEnemies ||
         projectiles.size() > kMaxProjectiles || pickups.size() > kMaxPickups ||
         fixtures.size() > kMaxFixtures || (geometry && !geometry->valid()) ||
-        !FighterPacket::valid(fighters) || (hud && !hud->valid())) {
+        !FighterPacket::valid(fighters) || (hud && !hud->valid()) ||
+        (opponents && !opponents->valid())) {
         return false;
     }
     if (worldMotionTicks > PlatformState::kMaxTicks || (!worldMotion && worldMotionTicks != 0) ||
@@ -495,7 +498,7 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
         return std::nullopt;
     }
     std::vector<u8> replay;
-    u32 replayMask = 0;
+    u32 replayMask = snapshot.opponents ? kOpponentReplay : 0;
     for (usize seat = 0; seat < snapshot.players.size(); ++seat) {
         const auto& player = snapshot.players[seat];
         if (player && (player->locomotion || player->transitionPose || player->turboEffects ||
@@ -533,13 +536,29 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
             replay.insert(replay.end(), effects->begin(), effects->end());
             replay.insert(replay.end(), potion->begin(), potion->end());
         }
+        if (snapshot.opponents) {
+            const auto opponents = OpponentCheckpoint::encode(*snapshot.opponents);
+            if (!opponents) {
+                return std::nullopt;
+            }
+            word(replay, static_cast<u32>(opponents->size()));
+            wide(replay, snapshot.motion.epoch);
+            wide(replay, snapshot.motion.tick);
+            replay.insert(replay.end(), opponents->begin(), opponents->end());
+        }
     }
-    bytes.reserve(
-        kHeaderBytes + motion->size() + InputCommand::kSeats * kPlayerBytes +
+    const auto playerCount = static_cast<usize>(std::ranges::count_if(
+        snapshot.players, [](const auto& player) { return player.has_value(); }));
+    const usize requiredBytes =
+        kHeaderBytes + motion->size() + playerCount * kPlayerBytes +
         snapshot.enemies.size() * kEnemyBytes + snapshot.projectiles.size() * kProjectileBytes +
         snapshot.pickups.size() * kPickupBytes + snapshot.fixtures.size() * kFixtureBytes +
         geometryBytes + fighterBytes + hud->size() + melee.size() + turbo.size() +
-        platformBytes->size() + replay.size());
+        platformBytes->size() + replay.size();
+    if (requiredBytes > kMaxBytes) {
+        return std::nullopt;
+    }
+    bytes.reserve(requiredBytes);
     word(bytes, kMagic);
     word(bytes, kVersion | (static_cast<u32>(snapshot.enemies.size()) << 16U));
     word(bytes, static_cast<u32>(motion->size()));
@@ -897,7 +916,8 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         (meleeBytes != 0 && meleeBytes < 4) || turboBytes > kTurboBytes ||
         (turboBytes != 0 && turboBytes < 4) || platformBytes > PlatformCheckpoint::kMaxBytes ||
         (platformBytes != 0 && platformBytes < PlatformCheckpoint::kHeaderBytes) ||
-        replayBytes > kReplayBytes || (replayBytes != 0 && replayBytes < 4) ||
+        replayBytes > kReplayBytes + kOpponentHeaderBytes + OpponentCheckpoint::kMaxBytes ||
+        (replayBytes != 0 && replayBytes < 4) ||
         (geometryBytes != 0 && (geometryBytes < kGeometryHeaderBytes ||
                                 geometryBytes > kGeometryHeaderBytes + SceneGeometry::kMaxStates *
                                                                            kGeometryObjectBytes))) {
@@ -1492,7 +1512,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
     if (replayBytes != 0) {
         ByteReader replay(data.readBytes(replayBytes));
         const u32 mask = replay.readU32();
-        if (mask == 0 || (mask & ~15U) != 0) {
+        if (mask == 0 || (mask & ~(15U | kOpponentReplay)) != 0) {
             return std::nullopt;
         }
         for (usize seat = 0; seat < result.players.size(); ++seat) {
@@ -1538,6 +1558,23 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 if (!player.potion) {
                     return std::nullopt;
                 }
+            }
+        }
+        if ((mask & kOpponentReplay) != 0) {
+            if (replay.remaining() < kOpponentHeaderBytes) {
+                return std::nullopt;
+            }
+            const usize size = replay.readU32();
+            const u64 epoch = wide(replay);
+            const u64 tick = wide(replay);
+            if (size < OpponentCheckpoint::kHeaderBytes || size > OpponentCheckpoint::kMaxBytes ||
+                size > replay.remaining() || epoch != result.motion.epoch ||
+                tick != result.motion.tick) {
+                return std::nullopt;
+            }
+            result.opponents = OpponentCheckpoint::decode(replay.readBytes(size));
+            if (!result.opponents) {
+                return std::nullopt;
             }
         }
         if (!replay.atEnd()) {

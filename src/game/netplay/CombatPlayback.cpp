@@ -128,6 +128,11 @@ CombatReplica::Admission CombatPlayback::receive(PacketTransport::Connection sen
             if (const auto motion = MotionPacket::encode(snapshot->motion)) {
                 m_motion.receive(sender, *motion);
                 m_history.push_back(*snapshot);
+                // Only latest() is an authoritative simulation seed. The
+                // delayed history interpolates poses onto another clock and
+                // must never retain a complete opponent checkpoint that could
+                // be mistaken for state at that interpolated time.
+                m_history.back().opponents.reset();
                 if (m_history.size() > SnapshotPlayback::kHistory) {
                     m_history.pop_front();
                 }

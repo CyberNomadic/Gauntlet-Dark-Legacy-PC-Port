@@ -7,6 +7,7 @@
 
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/CombatReplica.h"
+#include "game/netplay/OpponentCheckpoint.h"
 #include "game/players/PlayerActor.h"
 
 namespace {
@@ -183,6 +184,22 @@ void writeWord(std::vector<u8>& bytes, usize offset, u32 value) {
     }
 }
 
+OpponentState opponentState() {
+    OpponentState result;
+    Generators::Slot generator;
+    generator.kind = kGruntKind;
+    generator.health = 17;
+    result.generators.roster.push_back(generator);
+    result.generators.generators.push_back(generator);
+    result.generators.bodies.push_back({kGruntKind, {13, 0.125f, 0.5f}});
+    result.enemies.enemies[0].generator = 0;
+    result.enemies.generatorEvents.push_back({0, EnemyGeneratorEvent::Kind::PatrolHit});
+    result.enemies.pendingTicks = 1;
+    result.enemies.pendingSeconds = 1.0f / 60;
+    REQUIRE(result.valid());
+    return result;
+}
+
 TEST_CASE(
     "authored strike effect origins survive snapshot roundtrip independently of missile releases",
     "[netplay][combat-snapshot][effect-identity]") {
@@ -301,7 +318,7 @@ TEST_CASE("combat payload round trips every seat mask and maximum enemy roster",
         CHECK(bytes.size() <= CombatPacket::kMaxBytes);
         CHECK(bytes[0] == 'G');
         CHECK(bytes[3] == 'B');
-        CHECK(bytes[4] == 38);
+        CHECK(bytes[4] == 39);
         CHECK(bytes[6] == 128);
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
@@ -400,6 +417,143 @@ TEST_CASE("combat supplemental replay payloads preserve independent contacts and
                       PlayerLocomotionCheckpoint::encode(*source.locomotion));
             }
         }
+    }
+}
+
+TEST_CASE("complete opponent correction shares the atomic motion tick and existing replay section",
+          "[netplay][combat-snapshot][opponent-supplement]") {
+    for (u32 mask = 0; mask < 16; ++mask) {
+        auto source = state(0x123456789ABCDEF0ULL, 0);
+        source.opponents = opponentState();
+        for (usize seat = 0; seat < source.players.size(); ++seat) {
+            if ((mask & (1U << seat)) == 0) {
+                continue;
+            }
+            auto& player = *source.players[seat];
+            player.rollback.emplace();
+            player.movement.enabled = true;
+            player.movement.current = true;
+            player.locomotion = locomotionContacts(source.motion.players[seat]->position);
+            player.rollback->animation.transitionLength = 0.125f;
+            player.rollback->animation.transitionTime = 0.03125f;
+            player.transitionPose = blendPose();
+        }
+        const auto bytes = encode(source);
+        const auto decoded = CombatPacket::decode(bytes);
+        REQUIRE(decoded);
+        CHECK(decoded->opponents == source.opponents);
+        CHECK(decoded->motion.epoch == source.motion.epoch);
+        CHECK(decoded->motion.tick == source.motion.tick);
+        CHECK(encode(*decoded) == bytes);
+        for (usize seat = 0; seat < source.players.size(); ++seat) {
+            CHECK(decoded->players[seat]->transitionPose == source.players[seat]->transitionPose);
+        }
+        const auto without = [&] {
+            auto value = source;
+            value.opponents.reset();
+            return encode(value);
+        }();
+        const auto opponentBytes = OpponentCheckpoint::encode(*source.opponents);
+        REQUIRE(opponentBytes);
+        CHECK(bytes.size() == without.size() + opponentBytes->size() +
+                                  CombatPacket::kOpponentHeaderBytes + (mask == 0 ? 4 : 0));
+        const auto absent = CombatPacket::decode(without);
+        REQUIRE(absent);
+        CHECK_FALSE(absent->opponents);
+    }
+}
+
+TEST_CASE("opponent supplements reject cross tick epochs malformed pools and partial prefixes",
+          "[netplay][combat-snapshot][opponent-supplement]") {
+    auto source = state(55, 0);
+    const auto baseline = encode(source);
+    source.opponents = opponentState();
+    const auto bytes = encode(source);
+    const usize supplement = baseline.size();
+    const usize record = supplement + 4;
+    const usize payload = record + CombatPacket::kOpponentHeaderBytes;
+    for (usize length = supplement + 1; length < bytes.size(); ++length) {
+        auto truncated = bytes;
+        truncated.resize(length);
+        writeWord(truncated, 60, static_cast<u32>(length - supplement));
+        CHECK_FALSE(CombatPacket::decode(truncated));
+    }
+    for (const auto [offset, value] : std::array<std::pair<usize, u32>, 14>{
+             {{supplement, 0},
+              {supplement, 32},
+              {supplement, 1},
+              {record, 0},
+              {record, static_cast<u32>(OpponentCheckpoint::kHeaderBytes - 1)},
+              {record, static_cast<u32>(OpponentCheckpoint::kMaxBytes + 1)},
+              {record + 4, 8},   // another epoch
+              {record + 8, 1},   // high epoch bits also matter
+              {record + 12, 54}, // earlier tick, even if it is a valid older checkpoint
+              {record + 12, 56}, // a future simulation seed
+              {record + 16, 1},
+              {payload, 0},
+              {payload + 4, 0},
+              {payload + 8, 0xFFFFFFFF}}}) {
+        CAPTURE(offset, value);
+        auto corrupt = bytes;
+        writeWord(corrupt, offset, value);
+        CHECK_FALSE(CombatPacket::decode(corrupt));
+    }
+    auto trailing = bytes;
+    trailing.push_back(0);
+    writeWord(trailing, 60, static_cast<u32>(trailing.size() - supplement));
+    CHECK_FALSE(CombatPacket::decode(trailing));
+    auto hidden = bytes;
+    writeWord(hidden, 60, 0);
+    CHECK_FALSE(CombatPacket::decode(hidden));
+    auto oldVersion = bytes;
+    oldVersion[4] = 38;
+    CHECK_FALSE(CombatPacket::decode(oldVersion));
+
+    auto invalid = source;
+    invalid.opponents->enemies.enemies[0].generator = 1;
+    REQUIRE(invalid.opponents->enemies.valid());
+    CHECK_FALSE(invalid.valid());
+    CHECK_FALSE(CombatPacket::encode(invalid));
+    invalid = source;
+    invalid.opponents->enemies.blows.resize(EnemyPoolCheckpoint::kMaxEvents + 1);
+    REQUIRE(invalid.valid()); // local state is valid but not a transportable envelope
+    CHECK_FALSE(CombatPacket::encode(invalid));
+    CHECK_FALSE(CombatReplica::packets(invalid));
+}
+
+TEST_CASE("fragment loss never publishes opponent pools from a different motion checkpoint",
+          "[netplay][combat-snapshot][opponent-supplement]") {
+    for (const auto compression :
+         {SnapshotBlock::Compression::None, SnapshotBlock::Compression::Automatic}) {
+        auto previous = state(40, 0);
+        previous.opponents = opponentState();
+        auto next = previous;
+        next.motion.tick = 41;
+        next.motion.players[0]->position.x = 7;
+        next.opponents->generators.generators[0].health = 9;
+        next.opponents->enemies.frame = 29;
+        CombatReplica receiver;
+        REQUIRE(receiver.begin(1, 9));
+        commit(receiver, previous);
+        const auto chunks = CombatReplica::packets(next, compression);
+        REQUIRE(chunks);
+        REQUIRE(chunks->size() > 1);
+        for (usize index = chunks->size(); index-- > 1;) {
+            CHECK(receiver.receive(1, (*chunks)[index]) == Admission::Pending);
+            REQUIRE(receiver.latest());
+            CHECK(receiver.latest()->motion.tick == previous.motion.tick);
+            CHECK(receiver.latest()->opponents == previous.opponents);
+        }
+        CHECK(receiver.receive(1, chunks->front()) == Admission::Committed);
+        REQUIRE(receiver.latest());
+        CHECK(receiver.latest()->motion.tick == next.motion.tick);
+        CHECK(receiver.latest()->motion.players[0]->position == next.motion.players[0]->position);
+        CHECK(receiver.latest()->opponents == next.opponents);
+
+        next.motion.tick = 42;
+        next.opponents.reset();
+        commit(receiver, next);
+        CHECK_FALSE(receiver.latest()->opponents); // absence revokes, never retains the old seed
     }
 }
 
@@ -985,7 +1139,7 @@ TEST_CASE("shove certificates require a complete native turbo replay context",
         case 3: unsafe.rollback.reset(); break;
         case 4: unsafe.movement.enabled = false; break;
         case 5: unsafe.movement.current = false; break;
-        case 6: unsafe.portalPhase = 0; break;
+        case 6: unsafe.portalPhase = 0.0f; break;
         default: FAIL("Unknown shove checkpoint mutation");
         }
         CHECK_FALSE(CombatPacket::encode(bad));
@@ -2307,6 +2461,15 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
         CHECK(effectBytes->size() == TurboEffectCheckpoint::kMaxBytes);
         CHECK(potionBytes->size() == PlayerPotionCheckpoint::kMaxBytes);
     }
+    CHECK(encode(next).size() == CombatPacket::kMaxBytes);
+    // Full legacy presentation/replay still fits its exact previous cap. The
+    // optional complete island competes for that same budget: compression does
+    // not authorize expanding the decoded allocation or silently dropping art.
+    next.opponents = opponentState();
+    REQUIRE(next.valid());
+    CHECK_FALSE(CombatPacket::encode(next));
+    CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
+    next.opponents.reset();
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
     auto chunks = packets(next);
     REQUIRE(chunks.size() == CombatReplica::kMaxChunks);
