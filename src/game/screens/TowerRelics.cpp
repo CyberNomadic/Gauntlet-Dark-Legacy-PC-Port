@@ -17,6 +17,9 @@ constexpr s32 kLeadTicks = 120;
 constexpr s32 kReadingTicks = 120;
 constexpr s32 kPageHoldTicks = 60;
 constexpr f32 kPlacementHold = 2;
+/** The window camera's forty ticks and then its count from 300 down to 250, after which
+ * TowerCheckMessages sounds the pane struck (S_STNDGLASS): 91 ticks after the shard sets out. */
+constexpr f32 kShardStrikeSeconds = 91.0f / 60.0f;
 std::optional<WorldCamera> cameraAt(const WorldLayout& layout, u32 id) {
     if (const auto* marker = layout.findLocator(LocatorKind::TriggerCamera, id)) {
         WorldCamera camera;
@@ -308,6 +311,7 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
             m_phase = Phase::Placement;
             m_wizard.clear();
             m_placementLeft = place(*current(), false) + kPlacementHold;
+            m_hitIn = current()->kind == Kind::Shard ? kShardStrikeSeconds : 0.0f;
             cue.placement = true;
             cue.sound = "S_RUNEFALL";
             if (current()->kind == Kind::Shard) {
@@ -317,8 +321,19 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
         }
     } else {
         m_placementLeft -= std::max(seconds, 0.0f);
+        if (m_hitIn > 0) {
+            m_hitIn -= std::max(seconds, 0.0f);
+            if (m_hitIn <= 0) {
+                cue.sound = "S_STNDGLASS"; // the pane struck, while the shard still flies
+            }
+        }
         if (m_placementLeft <= 0) {
-            cue.sound = current()->kind == Kind::Rune ? "S_RUNEHIT" : "S_STNDGLASS";
+            if (current()->kind == Kind::Rune) {
+                cue.sound = "S_RUNEHIT";
+            } else if (m_hitIn > 0) {
+                cue.sound = "S_STNDGLASS";
+                m_hitIn = 0;
+            }
             finish(cue);
         }
     }
