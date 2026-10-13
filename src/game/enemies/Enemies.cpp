@@ -241,6 +241,7 @@ void Enemies::close() {
     m_blows.clear();
     m_losses.clear();
     m_bursts.clear();
+    m_births.clear();
     m_cues.clear();
     m_feedback.clear();
     m_deathEvents.clear();
@@ -712,6 +713,9 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
     }
     if (enemy.generator >= 0) {
         m_generatorEvents.push_back({enemy.generator, EnemyGeneratorEvent::Kind::Born});
+    }
+    if (enemy.variant == 0) {
+        m_births.push_back({spawn.position, spawn.kind, enemy.tier});
     }
     enemy.instance = m_nextInstance++;
     return slot;
@@ -2012,6 +2016,10 @@ void Enemies::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& place
 
 std::vector<EnemyBurst> Enemies::takeBursts() {
     return std::exchange(m_bursts, {});
+}
+
+std::vector<EnemyBirth> Enemies::takeBirths() {
+    return std::exchange(m_births, {});
 }
 
 std::vector<EnemyBlow> Enemies::takeBlows() {

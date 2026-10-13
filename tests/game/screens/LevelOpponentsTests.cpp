@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,11 +16,14 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/world/SampleLevel.h"
+#include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/combat/Damage.h"
+#include "game/enemies/CombatantKind.h"
+#include "game/enemies/CritterStatues.h"
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/LegendItems.h"
 #include "game/players/PlayerAnimator.h"
@@ -28,6 +32,8 @@
 #include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelOpponents.h"
 #include "game/screens/PlayerHealth.h"
+#include "game/world/LevelCatalog.h"
+#include "game/world/LevelWorld.h"
 #include "game/world/SafeRocks.h"
 #include "game/world/TargetAssist.h"
 namespace {
@@ -3200,4 +3206,220 @@ TEST_CASE("generator population includes tower-waiting players but excludes quit
     CHECK(opponents.generators().obstacles().size() == solo);
     opponents.close();
 }
+TEST_CASE("the swamp's statues play their waking before the great ones stand",
+          "[level-opponents][forest-entrance][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/GOLEM/levelD/ANIM.PS2");
+    test::assetOrSkip("MONSTERS/GAR_EAGL/ANIM.PS2");
+    struct Statue {
+        const char* name;
+        Vec3 where;
+        CombatantKind kind;
+        s32 wakingFrames; ///< of its ACTIVE sequence
+        s32 wakingRate;
+    };
+    const Statue statue = GENERATE(
+        Statue{"golem", {124.921875f, 18.2421875f, -17.3125f}, CombatantKind::Golem, 15, 60},
+        Statue{"gargoyle", {-5.5f, 12.046875f, -34.1875f}, CombatantKind::Gargoyle, 85, 30});
+    CAPTURE(statue.name);
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("D1")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    // Stood just inside its sight, so that the first update wakes it.
+    players[0].actor.spawn(0, {}, nullptr, statue.where + Vec3{0, 0, 8}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    std::optional<usize> index;
+    for (usize i = 0; i < opponents.statues().count(); ++i) {
+        if (opponents.statues().placement(i).kind == statue.kind &&
+            glm::distance(opponents.statues().positionOf(i), statue.where) < 1.0f) {
+            index = i;
+        }
+    }
+    REQUIRE(index.has_value());
+    REQUIRE_FALSE(opponents.statues().woken(*index));
+    const u64 instance = opponents.statues().instanceOf(*index);
+    const usize critters = opponents.critters().count();
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    // Its waking plays out in view, the statue changing shape as it does; then it is gone and
+    // the great one stands in its place.
+    std::vector<f64> shapes;
+    std::vector<usize> counts;
+    s32 rising = 0;
+    bool woken = false;
+    for (s32 i = 0; i < 600; ++i) {
+        opponents.update(2, 1.0f / 30, players, {}, events);
+        std::optional<usize> at;
+        for (usize s = 0; s < opponents.statues().count(); ++s) {
+            if (opponents.statues().instanceOf(s) == instance) {
+                at = s;
+            }
+        }
+        if (!at.has_value()) {
+            break;
+        }
+        woken = woken || opponents.statues().woken(*at);
+        if (!opponents.statues().rising(*at)) {
+            continue;
+        }
+        ++rising;
+        device.draws.clear();
+        opponents.statues().draw(device, Mat4{1}, WorldLighting{});
+        f64 signature = 0.0;
+        usize vertices = 0;
+        for (const auto& draw : device.draws) {
+            for (const auto& vertex : draw.vertices) {
+                signature += vertex.position.x + 3.0 * vertex.position.y + 7.0 * vertex.position.z;
+            }
+            vertices += draw.vertices.size();
+        }
+        shapes.push_back(signature);
+        counts.push_back(vertices);
+    }
+    CAPTURE(rising, shapes, counts, opponents.statues().count(), opponents.critters().count());
+    CHECK(woken);
+    const s32 expected = CritterStatues::activeTicks(statue.wakingFrames, statue.wakingRate) / 2;
+    CHECK(rising >= expected - 1);
+    CHECK(rising <= expected + 1);
+    CHECK(std::ranges::all_of(counts, [](usize v) { return v > 0; }));
+    std::vector<f64> distinct = shapes;
+    std::ranges::sort(distinct);
+    distinct.erase(std::ranges::unique(distinct).begin(), distinct.end());
+    CHECK(distinct.size() >= 5);
+    CHECK(opponents.critters().count() == critters + 1);
+    opponents.close();
+}
+
+/** A one-triangle swarm kind whose archive also holds the burst trees named. */
+void writeBurstingEnemy(const std::filesystem::path& root, s32 kind,
+                        std::span<const std::string_view> bursts) {
+    writeMeleeEnemy(root, kind);
+    const std::string prefix{enemyKind(kind).prefix};
+    const auto archive = root / "MONSTERS" / prefix;
+    std::string trees = R"({"trees":[{"name":")" + prefix + R"(1",
+        "nodes":[{"name":"BODY","object":"BODY","parent":-1,"position":[0,0,0]}],
+        "sequences":[{"name":"READY","frames":2,"rate":30}]})";
+    for (const std::string_view burst : bursts) {
+        trees += R"(,{"name":")" + std::string(burst) + R"(",
+        "nodes":[{"name":"BODY","object":"BODY","parent":-1,"position":[0,0,0]}],
+        "sequences":[{"name":"ACTIVE","frames":4,"rate":30}]})";
+    }
+    writeTextFile(archive / "animations.json", trees + "]}");
+}
+
+TEST_CASE("births burst with the first loaded kind's GENFX trees, by tier, for the kinds up to it "
+          "whose reach is past two",
+          "[level-opponents][enemy-births]") {
+    constexpr s32 kHand = 22;
+    constexpr s32 kImp = 23;
+    constexpr s32 kWarlock = 24;
+    const auto root = test::scratchDirectory("enemy-births");
+    writeMeleeEnemy(root, kHand);
+    const std::array impBursts{std::string_view{"GENFX1"}, std::string_view{"GENFX2"}};
+    writeBurstingEnemy(root, kImp, impBursts);
+    const std::array warlockBursts{std::string_view{"GENFX3"}};
+    writeBurstingEnemy(root, kWarlock, warlockBursts);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0, 0, 40}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    // No level geometry: the bodies stand where they are put.
+    auto& enemies = opponents.enemies();
+    enemies.open(device, root, nullptr, 8, {}, 1);
+    REQUIRE(enemies.loadKind(kHand));
+    REQUIRE(enemies.loadKind(kImp));
+    REQUIRE(enemies.loadKind(kWarlock));
+    const auto stand = [&](s32 kind, s32 tier, const Vec3& at) {
+        EnemySpawn spawn;
+        spawn.kind = kind;
+        spawn.tier = tier;
+        spawn.placed = true;
+        spawn.position = at;
+        REQUIRE(enemies.spawn(spawn, {}));
+    };
+    stand(kImp, 1, {10, 0, 0});
+    stand(kImp, 2, {20, 0, 0});
+    stand(kImp, 3, {30, 0, 0});     // no GENFX3 of its own: the first burst stands in
+    stand(kHand, 1, {40, 0, 0});    // a small kind, its reach within two
+    stand(kWarlock, 1, {50, 0, 0}); // after the kind that lent the bursts
+    stand(kImp, kArcherStrength, {60, 0, 0});
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    REQUIRE(effects.count() == 0);
+    opponents.update(2, 1.0f / 30, players, {}, events);
+    REQUIRE(effects.count() == 3);
+    CHECK(effects.effect(0).name == "GENFX1");
+    CHECK(effects.effect(0).position == Vec3{10, 0, 0});
+    CHECK(effects.effect(1).name == "GENFX2");
+    CHECK(effects.effect(1).position == Vec3{20, 0, 0});
+    CHECK(effects.effect(2).name == "GENFX1");
+    CHECK(effects.effect(2).position == Vec3{30, 0, 0});
+    opponents.update(2, 1.0f / 30, players, {}, events);
+    CHECK(effects.count() == 3);
+    opponents.close();
+}
+
+TEST_CASE("the imp's archive lends the three birth bursts",
+          "[level-opponents][enemy-births][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/IMP/ANIM.PS2").parent_path().parent_path().parent_path();
+    constexpr s32 kImp = 23;
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0, 0, 40}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    auto& enemies = opponents.enemies();
+    enemies.open(device, root, nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kImp));
+    for (s32 tier = 1; tier <= 3; ++tier) {
+        EnemySpawn spawn;
+        spawn.kind = kImp;
+        spawn.tier = tier;
+        spawn.placed = true;
+        spawn.position = {10.0f * static_cast<f32>(tier), 0, 0};
+        REQUIRE(enemies.spawn(spawn, {}));
+    }
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    opponents.update(2, 1.0f / 30, players, {}, events);
+    REQUIRE(effects.count() == 3);
+    CHECK(effects.effect(0).name == "GENFX1");
+    CHECK(effects.effect(1).name == "GENFX2");
+    CHECK(effects.effect(2).name == "GENFX3");
+    opponents.close();
+}
+
 } // namespace

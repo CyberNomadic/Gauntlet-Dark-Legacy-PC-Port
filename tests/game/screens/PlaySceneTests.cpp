@@ -29,6 +29,7 @@
 #include "game/combat/DamageTypes.h"
 #include "game/config/GameConfig.h"
 #include "game/enemies/Enemies.h"
+#include "game/enemies/EnemyAnimator.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/menu/ScrollBox.h"
 #include "game/players/CharacterSave.h"
@@ -5061,6 +5062,104 @@ TEST_CASE("fully unlocked character walks both tower wing gates in both directio
         CHECK(glm::dot(position - center, direction) * sign >= 6);
         REQUIRE(tower.triggers().opened(static_cast<s32>(gate)));
     }
+    scene.close();
+}
+
+TEST_CASE("the swamp's lizards play their whole entrance in the scene before walking off",
+          "[game][screens][forest-entrance][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/LIZ/ANIM.PS2");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("D1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    save.progress().health = 400;
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    // A lizard generator of strength one, and open ground about it to stand on.
+    const Vec3 generator{43.0f, 12.6f, -16.8f};
+    std::optional<Vec3> ground;
+    for (s32 d = 0; d < 8 && !ground.has_value(); ++d) {
+        const f32 angle = static_cast<f32>(d) * kPi / 4.0f;
+        const Vec3 spot = generator + Vec3{12.0f * std::sin(angle), 0.0f, 12.0f * std::cos(angle)};
+        const auto floor = world.collision().floorAt(spot, 4.0f, 4.0f);
+        if (floor.has_value() && std::abs(floor->y - generator.y) < 1.5f &&
+            !world.collision().wallBetween(generator + Vec3{0, 2, 0}, spot + Vec3{0, 2, 0}, 1.5f)) {
+            ground = Vec3{spot.x, floor->y, spot.z};
+        }
+    }
+    REQUIRE(ground.has_value());
+    PlayOptions options;
+    options.welcome = false;
+    options.position = *ground;
+    options.yaw = std::atan2(generator.x - ground->x, generator.z - ground->z);
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.enemies().kindLoaded(10));
+    std::array<u64, Enemies::kMost> seen{};
+    const auto scan = [&](bool wantNew) -> std::optional<s32> {
+        for (s32 id = 0; id < Enemies::kMost; ++id) {
+            const auto now = scene.enemies().observe(id);
+            if (now.has_value() && now->instance != seen[static_cast<usize>(id)]) {
+                seen[static_cast<usize>(id)] = now->instance;
+                if (wantNew && scene.enemies().bred(id) && scene.enemies().kindOf(id) == 10) {
+                    return id;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    (void)scan(false);
+    // The next body bred plays its whole entrance, frame by frame, before it walks off.
+    std::optional<s32> born;
+    std::vector<s32> actions;
+    std::vector<f32> playerFrames;
+    std::vector<u32> sequences;
+    for (s32 i = 0; i < 3600; ++i) {
+        scene.update(1.0 / 60.0, still);
+        if (!born.has_value()) {
+            born = scan(true);
+            if (!born.has_value()) {
+                continue;
+            }
+        }
+        const EnemyAnimator* animator = scene.enemies().animatorOf(*born);
+        REQUIRE(animator != nullptr);
+        actions.push_back(static_cast<s32>(animator->action()));
+        playerFrames.push_back(animator->player().frame());
+        sequences.push_back(animator->player().sequence());
+        if (animator->action() != EnemyAction::Start) {
+            break;
+        }
+    }
+    CAPTURE(actions, playerFrames, sequences);
+    REQUIRE(born.has_value());
+    const TreeInfo* tree = scene.enemies().appearanceTree({10, 1, 0, false});
+    REQUIRE(tree != nullptr);
+    const auto entrance = tree->findSequence("START");
+    REQUIRE(entrance.has_value());
+    // Twenty frames at thirty a second, stepped at sixty.
+    CHECK(actions.size() >= 38);
+    CHECK(actions.size() <= 44);
+    const auto entering = std::span(sequences).first(sequences.size() - 1);
+    const auto advancing = std::span(playerFrames).first(playerFrames.size() - 1);
+    CHECK(std::ranges::all_of(entering, [&](u32 s) { return s == *entrance; }));
+    CHECK(std::ranges::is_sorted(advancing));
+    CHECK(advancing.back() > advancing.front() + 15.0f);
+    CHECK(actions.back() == static_cast<s32>(EnemyAction::Walk));
     scene.close();
 }
 

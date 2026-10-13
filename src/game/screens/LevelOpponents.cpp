@@ -716,6 +716,38 @@ void LevelOpponents::wakeStatueNear(const Vec3& spot) {
     m_statues.wake(statue->first);
 }
 
+/** Each birth of a body whose reach is past two (the medium and large kinds) is marked by
+ * the realm's burst for its tier, GENFX1 to GENFX3 (generate_enemy). The level finds them
+ * once, in the first loaded kind's archive holding them, kind by kind in order (InitEffects),
+ * a tier without its own sharing the first's, and only the kinds up to that one are marked. */
+void LevelOpponents::playBirths() {
+    const auto births = m_enemies.takeBirths();
+    if (births.empty()) {
+        return;
+    }
+    constexpr std::string_view kFirstBurst = "GENFX1";
+    ItemArchive* archive = nullptr;
+    s32 provider = -1;
+    for (s32 kind = 0; kind < kSwarmKindCount && archive == nullptr; ++kind) {
+        ItemArchive* candidate = m_enemies.archive(kind);
+        if (candidate != nullptr && candidate->trees.find(kFirstBurst).has_value()) {
+            archive = candidate;
+            provider = kind;
+        }
+    }
+    if (archive == nullptr) {
+        return;
+    }
+    for (const EnemyBirth& birth : births) {
+        if (birth.kind > provider || 0.5f * enemyKind(birth.kind).height <= 2.0f) {
+            continue;
+        }
+        const std::string own = std::format("GENFX{}", std::clamp(birth.tier, 1, 3));
+        const std::string_view tree = archive->trees.find(own).has_value() ? own : kFirstBurst;
+        m_resources->effects.start(m_resources->device, *archive, tree, birth.position);
+    }
+}
+
 void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRuntime> players) {
     if (m_statues.count() == 0) {
         return;
@@ -1004,6 +1036,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     std::vector<Obstacle> boxes = m_generators.enemyObstacles();
     boxes.insert(boxes.end(), fixtures.begin(), fixtures.end());
     m_enemies.update(ticks, seconds, views, boxes, &m_enemyMissiles, missileSpeed, timeStopped);
+    playBirths();
     std::vector<MissileStop> inTheWay;
     for (const Obstacle& box : m_generators.obstacles()) {
         inTheWay.push_back(MissileStop::of(box));

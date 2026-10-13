@@ -192,6 +192,7 @@ private:
     /** Stands the statues woken and seen whose ACTIVE has played out as the great ones they
      * are, and wakes what the triggers ask. */
     void updateStatues(s32 ticks, f32 seconds, std::span<PlayerRuntime> players);
+    void playBirths();
     std::vector<Placement> m_pending;
     CritterStatues m_statues;
     std::optional<ViewVolume> m_view; ///< what the camera last took in, and from where

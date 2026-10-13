@@ -3697,4 +3697,96 @@ TEST_CASE("IT stands with no archive of its own: unseen, and aimed at by nothing
     CHECK(device.draws.empty());
 }
 
+TEST_CASE("Swamp lizards and trents come in by their entrance before walking off",
+          "[enemies][forest-entrance][assets]") {
+    const s32 namedKind = GENERATE(kGruntKind, 5);
+    const auto root = unpackedRoot();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("D1")));
+    REQUIRE(world.level());
+    const s32 kind = levelKindOf(world.level()->enemies, namedKind, 1);
+    CAPTURE(kind);
+    Enemies enemies;
+    enemies.open(device, root, nullptr, 4, {}, 7);
+    REQUIRE(enemies.loadKind(kind));
+    const TreeInfo* tree = enemies.appearanceTree({kind, 1, 0, false});
+    REQUIRE(tree != nullptr);
+    CAPTURE(tree->name);
+    EnemySpawn spawn;
+    spawn.kind = kind;
+    spawn.algorithm = kSeekWay;
+    spawn.direction = {0, 0, -1};
+    spawn.generator = 0;
+    spawn.clearance = 3.0f;
+    const std::array nearby{playerAt({0, 0, 12})};
+    const auto id = enemies.spawn(spawn, nearby);
+    REQUIRE(id);
+    const EnemyAnimator* animator = enemies.animatorOf(*id);
+    REQUIRE(animator != nullptr);
+    REQUIRE(animator->action() == EnemyAction::Start);
+    const auto entrance = tree->findSequence("START");
+    REQUIRE(entrance.has_value());
+    CHECK(animator->player().sequence() == *entrance);
+    const auto& sequence = tree->sequences[*entrance];
+    CAPTURE(sequence.frames, sequence.frameRate);
+    std::vector<f64> shapes; ///< a signature of the body's vertices each frame
+    std::vector<usize> counts;
+    s32 entering = 0;
+    for (s32 frame = 0; frame < 120 && animator->action() == EnemyAction::Start; ++frame) {
+        device.draws.clear();
+        enemies.draw(device, Mat4{1}, WorldLighting{});
+        f64 signature = 0.0;
+        usize vertices = 0;
+        for (const auto& draw : device.draws) {
+            for (const auto& vertex : draw.vertices) {
+                signature += vertex.position.x + 3.0 * vertex.position.y + 7.0 * vertex.position.z;
+            }
+            vertices += draw.vertices.size();
+        }
+        shapes.push_back(signature);
+        counts.push_back(vertices);
+        ++entering;
+        enemies.update(kTicks, kStep, nearby);
+    }
+    CAPTURE(entering, shapes, counts);
+    // The entrance plays its frames out at its rate, each frame of the body drawn.
+    const f32 expected =
+        static_cast<f32>(sequence.frames) * 30.0f / static_cast<f32>(sequence.frameRate);
+    CHECK(static_cast<f32>(entering) >= expected - 1.0f);
+    CHECK(static_cast<f32>(entering) <= expected + 2.0f);
+    CHECK(std::ranges::all_of(counts, [](usize v) { return v > 0; }));
+    std::vector<f64> distinct = shapes;
+    std::ranges::sort(distinct);
+    distinct.erase(std::ranges::unique(distinct).begin(), distinct.end());
+    CHECK(distinct.size() >= 2);
+    CHECK(animator->action() == EnemyAction::Walk);
+}
+
+TEST_CASE("each ordinary birth is reported at its spot with its kind and tier, the variants' not",
+          "[enemies][enemy-births][assets]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.takeBirths().empty());
+    EnemySpawn spawn;
+    spawn.kind = kGruntKind;
+    spawn.placed = true;
+    spawn.position = {10, 20, 30};
+    spawn.tier = 2;
+    REQUIRE(enemies.spawn(spawn, {}));
+    spawn.position = {-5, 0, 5};
+    spawn.tier = kArcherStrength;
+    REQUIRE(enemies.spawn(spawn, {}));
+    const auto births = enemies.takeBirths();
+    REQUIRE(births.size() == 1);
+    CHECK(births[0].position == Vec3{10, 20, 30});
+    CHECK(births[0].kind == kGruntKind);
+    CHECK(births[0].tier == 2);
+    CHECK(enemies.takeBirths().empty());
+}
+
 } // namespace
