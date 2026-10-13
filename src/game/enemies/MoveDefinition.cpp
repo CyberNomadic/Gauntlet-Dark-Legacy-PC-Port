@@ -17,8 +17,9 @@ bool TargetCriteria::allows(f32 distance, f32 bearing, f32 vertical) const {
 }
 
 bool TargetCriteria::allowsPhase(f32 rateScale, f32 homeDistance) const {
-    return rateScale >= minRateScale &&
-           (maxRateScale <= minRateScale || rateScale < maxRateScale) &&
+    // CritterCalcTarget: a positive upper bound is exclusive whatever the lower; a band that
+    // closes on itself admits nothing, so such a move comes only by its pattern or link.
+    return rateScale >= minRateScale && (maxRateScale <= 0.0f || rateScale < maxRateScale) &&
            (maxHomeDistance <= 0.0f || homeDistance <= maxHomeDistance);
 }
 

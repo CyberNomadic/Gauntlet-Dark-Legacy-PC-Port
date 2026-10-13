@@ -2586,7 +2586,14 @@ TEST_CASE("the Lich's emergence cue hides the arena mound when he wakes",
     events.award = [](s32, s32, bool) {};
     opponents.update(2, 1.0f / 30, {}, {}, events);
     REQUIRE(world.scene().objectVisible(index)); // asleep: no callback yet
-    opponents.update(2, 1.0f / 30, players, {}, events);
+    // Two seconds pass before he may wake, however near the party stands (CritterBossAI).
+    for (s32 i = 0; i < 58; ++i) {
+        opponents.update(2, 1.0f / 30, players, {}, events);
+    }
+    REQUIRE(world.scene().objectVisible(index));
+    for (s32 i = 0; i < 3; ++i) {
+        opponents.update(2, 1.0f / 30, players, {}, events);
+    }
     REQUIRE_FALSE(world.scene().objectVisible(index));
     REQUIRE(world.scene().worldTransform(index) == transform);
     REQUIRE(world.collision().triangleCount() == triangles);

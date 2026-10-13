@@ -142,6 +142,7 @@ public:
     std::string_view moveName() const;
     /** The id targets and sweeps name the boss by. */
     static constexpr s32 kTargetId = 0;
+    static constexpr f32 kWakeArmSeconds = 2.0f; ///< asleep at least this long after placing
 
 private:
     void stageLegend(s32 ticks);
@@ -164,6 +165,7 @@ private:
     std::string m_name;
     bool m_awake = false;
     f32 m_wakeDistance = 0.0f;
+    f32 m_wakeClock = 0.0f; ///< seconds since it was placed; it may not wake in the first two
     LegendRite m_rite;
     bool m_roarAsked = false;
     bool m_legendStruck = false;
