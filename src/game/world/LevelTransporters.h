@@ -31,6 +31,9 @@ public:
         f32 radius = 0.0f;
         f32 height = 0.0f;
         Mat4 transform{1.0f};
+        s32 support = -1;        ///< the world object it stands on, when that one moves
+        Mat4 supportLocal{1.0f}; ///< its art, in the support's own space
+        Vec3 anchorLocal{0.0f};  ///< its contact and landing point, likewise
         mutable TreeModel model;
         TreePose pose;
         AnimationPlayer animation;
@@ -38,10 +41,13 @@ public:
         u64 previousGeneration = 0;
     };
 
-    /** The scope's archives must outlive the pads; the first holding TRANS supplies them. */
-    void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
-              s32 players);
+    /** The scope's archives must outlive the pads; the first holding TRANS supplies them. A
+     * pad on a moving floor is carried by it (AddItemSub parents it to the floor's node). */
+    void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope, s32 players,
+              const WorldCollision* collision = nullptr);
     void clear();
+    /** Carries the pads with their moving floors: art, contact and landing point alike. */
+    void syncFloors(const WorldCollision& collision);
     void animate(f32 seconds);
     void capturePresentation() {
         m_presentationAdvanced = false;

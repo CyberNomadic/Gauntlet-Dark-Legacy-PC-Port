@@ -209,7 +209,8 @@ void AfterLevelScene::drawMagicLine(const ShopLane& lane, s32 x) {
     s32 y = kMagicLineY;
     while (!rest.empty()) {
         const auto end = rest.find('\n');
-        line(x + kMagicLineX, y, rest.substr(0, end), message.scale, kMagicLineColor);
+        // shop_show_lv draws each line at the lane's centre column negated: centred on it.
+        line(-(x + kMagicLineX), y, rest.substr(0, end), message.scale, kMagicLineColor);
         if (end == std::string_view::npos) {
             break;
         }

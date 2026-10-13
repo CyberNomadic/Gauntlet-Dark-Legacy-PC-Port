@@ -49,8 +49,10 @@ f32 PlayerFigure::bodyScale(const CharacterSave& save, const PowerupEffects& eff
 
 Mat4 PlayerFigure::bodyPlacement(const Mat4& base, const CharacterSave& save,
                                  const PowerupEffects& effects) {
+    // The lift is in the costume root's own space, under the scaled node
+    // (player_motion_phase_exit).
     const f32 size = bodyScale(save, effects);
-    return glm::translate(Mat4{1.0f}, Vec3{0.0f, effects.lift(), 0.0f}) *
+    return glm::translate(Mat4{1.0f}, Vec3{0.0f, effects.lift() * size, 0.0f}) *
            glm::scale(base, Vec3{size, size, size});
 }
 
@@ -333,18 +335,14 @@ void PlayerFigure::loadActions(const std::filesystem::path& root, const Characte
     } else if (m_armNode >= 0 && save.character == kJesterClass) {
         m_armHidden = m_armNode;
     }
-    // Wings hang from p->node->child->child: the root's first child's first child.
+    // Wings hang from p->node->child->child (player.c 5804): p->node is the bare node the
+    // costume tree is parented to, its child the tree's root, and that root's first child
+    // is the back.
     m_backNode = -1;
-    const auto firstChildOf = [this](s32 parent) {
-        for (usize n = 0; n < m_costume->nodes.size(); ++n) {
-            if (m_costume->nodes[n].parent == parent) {
-                return static_cast<s32>(n);
-            }
+    for (usize n = 0; n < m_costume->nodes.size() && m_backNode < 0; ++n) {
+        if (m_costume->nodes[n].parent == 0) {
+            m_backNode = static_cast<s32>(n);
         }
-        return -1;
-    };
-    if (const s32 child = firstChildOf(0); child >= 0) {
-        m_backNode = firstChildOf(child);
     }
     const TreeInfo& actions = m_actions.tree(*tree);
     m_actionTree = &actions;

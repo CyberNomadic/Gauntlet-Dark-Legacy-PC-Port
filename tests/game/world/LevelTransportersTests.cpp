@@ -10,6 +10,7 @@
 #include "engine/assets/WorldData.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -67,6 +68,46 @@ TEST_CASE("transporters link ids rather than instance order and reject missing p
     CHECK(pads.size() == 4);
     pads.clear();
     CHECK(pads.size() == 0);
+}
+
+TEST_CASE("transporter pads ride their moving floor with their art, contact and landing point",
+          "[transporters][transporter-platform]") {
+    const auto dir = test::sampleLevel("transporters-moving-floor");
+    writeTextFile(dir / "world.json", R"({
+      "objects":[{"name":"LIFT","position":[10,5,20],"flags":4102}],
+      "itemInfos":[{"type":11,"name":"TRANS","radius":3,"height":4}],
+      "itemInstances":[
+        {"info":0,"position":[12,5,23],"rotation":[0,0,0],"params":[1,0,0,0,2,0,0,0,0,0,0,0]},
+        {"info":0,"position":[-20,0,-20],"rotation":[0,0,0],"params":[2,0,0,0,1,0,0,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    WorldCollision collision;
+    collision.build(
+        {CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{30, 0, 30}, Vec3{30, 0, -30}},
+                           .object = 0},
+         CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{-30, 0, 30}, Vec3{30, 0, 30}},
+                           .object = 0}});
+    collision.setMovingObjects(std::array<s32, 1>{0});
+    collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{10, -15, 20}));
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    LevelTransporters pads;
+    pads.bind(device, layout, AssetScope(items), 1, &collision);
+    REQUIRE(pads.size() == 2);
+    REQUIRE(pads.pad(0).support == 0);
+    CHECK(pads.pad(1).support == -1); // off the lift, on no floor: it stands where authored
+    const Mat4 moved =
+        glm::rotate(glm::translate(Mat4{1}, Vec3{30, 10, 40}), 1.57079637f, Vec3{0, 1, 0});
+    collision.setSolid(0, false);
+    collision.setObjectTransform(0, moved);
+    pads.syncFloors(collision);
+    const Vec3 expected{moved * Vec4{2, 0, 3, 1}}; // the authored spot, in the lift's space
+    CHECK(glm::distance(pads.pad(0).position, expected) < 0.001f);
+    CHECK(glm::distance(Vec3{pads.pad(0).transform[3]},
+                        expected + Vec3{0, ItemFigure::kFloorLift, 0}) < 0.001f);
+    // Standing where the pad now is finds it; where it was authored no longer does.
+    CHECK(pads.contact(expected, 0.75f, 2.0f) == 0);
+    CHECK_FALSE(pads.contact(Vec3{12, 5, 23}, 0.75f, 2.0f).has_value());
 }
 
 TEST_CASE("a transporter destination must fit within the shared camera", "[transporters]") {

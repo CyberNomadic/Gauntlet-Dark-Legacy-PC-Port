@@ -5163,4 +5163,75 @@ TEST_CASE("the swamp's lizards play their whole entrance in the scene before wal
     scene.close();
 }
 
+TEST_CASE("the lich comes for a party that waits by the crypt's gate",
+          "[game][screens][lich-gate][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELG5/WORLDS.PS2");
+    test::assetOrSkip("CRITTER/LICH.WAD");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    const auto crypt = levels.byName("G5");
+    REQUIRE(crypt.has_value());
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *crypt));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    save.progress().health = 9999;
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false; // the party stays where the level puts it: by the gate
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    REQUIRE(scene.bosses().present());
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    // The gate lies beyond his waking threshold; woken all the same, he makes his entrance.
+    scene.bosses().wake();
+    for (s32 i = 0; i < 60 * 12; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.bossView()->awake);
+    // Whole, half spent, or nearly done: his data narrows what he may do as he weakens.
+    const f32 left = GENERATE(1.0f, 0.5f, 0.2f);
+    CAPTURE(left);
+    if (left < 1.0f) {
+        EnemyHit hit;
+        hit.damage = scene.bossView()->maxHealth * (1.0f - left);
+        scene.bosses().hurt(hit);
+    }
+    std::vector<std::string> moves;
+    s32 attacks = 0;
+    for (s32 i = 0; i < 60 * 60; ++i) {
+        scene.update(1.0 / 60.0, still);
+        const std::string move{scene.bosses().moveName()};
+        if (moves.empty() || !moves.back().starts_with(move + " ")) {
+            const f32 apart =
+                scene.bosses().position() != nullptr
+                    ? glm::distance(*scene.bosses().position(), scene.actor(0)->position())
+                    : -1.0f;
+            moves.push_back(std::format("{} @{}s d{:.0f}", move, i / 60, apart));
+            attacks += move.starts_with("AXE") || move.starts_with("SPIKE") || move == "CHAIN" ||
+                               move == "STOMP" || move == "HEADTOSS" || move == "HEADTOSS2" ||
+                               move == "CHARGE" || move == "SPIT" || move == "CRACK" ||
+                               move == "HANDGRAB" || move == "GRAB"
+                           ? 1
+                           : 0;
+        }
+    }
+    // Head tosses, charges, cracks and hand grabs reach the gate at every strength; the data
+    // leaves him only SPIT when the party stands within twenty-five of his leashed body.
+    CAPTURE(moves, scene.actor(0)->position());
+    CHECK(attacks >= 3);
+    scene.close();
+}
+
 } // namespace

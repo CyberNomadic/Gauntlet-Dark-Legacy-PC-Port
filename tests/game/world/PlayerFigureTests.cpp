@@ -1068,8 +1068,10 @@ TEST_CASE("the body is placed at its scale and lifted by levitation, its shadow'
     PowerupEffects wings;
     wings.special = powerup::kLevitation | powerup::kGrowth;
     const Mat4 lifted = PlayerFigure::bodyPlacement(base, save, wings);
-    CHECK(Vec3{lifted[3]} == Vec3{1.0f, 2.0f + PowerupEffects::kLevitationLift, 3.0f});
-    CHECK(lifted[0].x == PowerupEffects::kGrowthScale); // the lift is not scaled
+    // The lift is the costume root's own, under the scaled node: it grows with the body.
+    CHECK(Vec3{lifted[3]} ==
+          Vec3{1.0f, 2.0f + PowerupEffects::kLevitationLift * PowerupEffects::kGrowthScale, 3.0f});
+    CHECK(lifted[0].x == PowerupEffects::kGrowthScale);
     CHECK(lifted[1].y == PowerupEffects::kGrowthScale);
 }
 } // namespace

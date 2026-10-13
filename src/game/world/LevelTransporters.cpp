@@ -8,6 +8,7 @@
 #include "engine/core/Log.h"
 
 #include "game/world/ItemFigure.h"
+#include "game/world/ItemSupport.h"
 
 namespace gdl::game {
 namespace {
@@ -21,8 +22,10 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 } // namespace
 
 void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
-                             const AssetScope& scope, s32 players) {
+                             const AssetScope& scope, s32 players,
+                             const WorldCollision* collision) {
     clear();
+    const auto authored = itemSupportWorld(layout, collision);
     ItemArchive* art = scope.archiveForTree("TRANS");
     const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
@@ -52,6 +55,20 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
         // clearance on its artwork, without raising the contact or landing anchor.
         pad.transform =
             itemPlacement(pad.position + Vec3{0, ItemFigure::kFloorLift, 0}, instance.rotation);
+        // On a floor that moves, the pad goes with it (AddItemSub parents the item to the
+        // floor object's node; each frame fn_8005A338 reads its world matrix back).
+        const auto* supportWorld =
+            itemSupportAt(instance.position, collision, authored ? &*authored : nullptr);
+        if (supportWorld != nullptr && (info.collisionFlags & 1U) == 0) {
+            if (const auto floor = supportWorld->floorAt(instance.position, 4, 10, 1)) {
+                if (const auto transform = supportWorld->objectTransform(floor->object)) {
+                    const Mat4 inverse = glm::inverse(*transform);
+                    pad.support = floor->object;
+                    pad.supportLocal = inverse * pad.transform;
+                    pad.anchorLocal = Vec3{inverse * Vec4{pad.position, 1.0f}};
+                }
+            }
+        }
         if (m_tree != nullptr && pad.model.bind(*m_tree, art->models, art->textures, device)) {
             pad.pose.rest(*m_tree);
             if (const auto sequence = m_tree->findSequence("ACTIVE")) {
@@ -73,6 +90,19 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
         }
     }
     animate(0.0f);
+}
+
+void LevelTransporters::syncFloors(const WorldCollision& collision) {
+    for (Pad& pad : m_pads) {
+        if (pad.support < 0) {
+            continue;
+        }
+        // Collision may switch off while the floor moves; the pad still rides it.
+        if (const auto transform = collision.objectTransform(pad.support)) {
+            pad.transform = *transform * pad.supportLocal;
+            pad.position = Vec3{*transform * Vec4{pad.anchorLocal, 1.0f}};
+        }
+    }
 }
 
 void LevelTransporters::clear() {

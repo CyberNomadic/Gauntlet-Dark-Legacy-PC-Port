@@ -128,7 +128,7 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
         m_hud.showRelics();
     }
     m_transporters.bind(device, world.layout(), world.itemScope(),
-                        static_cast<s32>(m_players.size()));
+                        static_cast<s32>(m_players.size()), &world.collision());
     for (const DroppedItem& item : options.items) {
         world.placeItem(device, item.name, item.position);
     }
@@ -993,6 +993,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     }
     m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
     m_opponents.syncFloors();
+    m_transporters.syncFloors(m_world->collision());
     m_world->revealCrystals(seconds);
     m_hud.pickups().step(ticks, seconds);
     m_sumner.update(seconds);
@@ -1048,6 +1049,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     m_world->updateTriggers(seconds, visitors());
     m_fixtures.syncFloors();
     m_opponents.syncFloors();
+    m_transporters.syncFloors(m_world->collision());
     handleTriggerEvents();
     if (m_switchCutscene.active()) {
         updateAmbience();

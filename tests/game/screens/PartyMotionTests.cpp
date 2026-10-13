@@ -107,7 +107,7 @@ TEST_CASE("attack contact segments belong only to the current player's motion in
     f.players[0].attackStep = PlayerRuntime::AttackStep{Vec3{999}, Vec3{999}};
     queries = 0;
     f.step();
-    CHECK(queries == 1);
+    CHECK(queries == 2); // the fade does not stop the motion, nor its floor probes
     CHECK_FALSE(f.players[0].attackStep);
 }
 
@@ -534,7 +534,7 @@ TEST_CASE("a damage flash expires after two simulation frames without holding co
     CHECK(f.players[0].hitFlashTicks == 0);
 }
 
-TEST_CASE("transport holds only its own player and clears on death",
+TEST_CASE("transport keeps its player moving through the fade and clears on death",
           "[party-motion][transporters]") {
     Fixture f;
     REQUIRE(f.players[0].transport.begin(Vec3{20, 0, 0}));
@@ -542,10 +542,11 @@ TEST_CASE("transport holds only its own player and clears on death",
     f.inputs[3].usePotion = true;
     f.inputs[1].move = MoveInput{Vec2{0, 1}, 1};
     f.step();
-    CHECK(f.players[0].actor.position() == Vec3{0});
-    CHECK_FALSE(f.players[0].actor.moving());
+    // DoTransporter never stops PlayerMotion: the stick carries the player through both
+    // halves of the fade, and only the warp frame moves them elsewhere.
+    CHECK(f.players[0].actor.position().z > 0);
+    CHECK(f.players[0].actor.moving());
     CHECK(f.players[1].actor.position().z > 0);
-    CHECK(std::ranges::find(f.calls, "help0") == f.calls.end());
     f.players[0].life = PlayerLife::Dying;
     f.step();
     // With no figure to play its death, it is gone at once, and says so once.
