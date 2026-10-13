@@ -18,8 +18,6 @@ namespace gdl::game {
 namespace {
 
 constexpr f32 kTicksPerSecond = 60.0f;
-constexpr f32 kFloorReachAbove = 0.5f;
-constexpr f32 kFloorReachBelow = 3.0f;
 constexpr usize kTagAt = 4; ///< where an exit's parameters keep its two characters
 
 } // namespace
@@ -91,8 +89,9 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, const As
         portal.destination = catalog.byTag(portal.tag);
         portal.position = instance.position;
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
-            if (const auto floor =
-                    collision->floorAt(instance.position, kFloorReachAbove, kFloorReachBelow);
+            if (const auto floor = collision->floorAt(
+                    instance.position, ItemFigure::kFloorReachAbove, ItemFigure::kFloorReachBelow,
+                    ItemFigure::kFloorReachRadius);
                 floor.has_value()) {
                 portal.position.y = floor->y + kFloorLift;
             }

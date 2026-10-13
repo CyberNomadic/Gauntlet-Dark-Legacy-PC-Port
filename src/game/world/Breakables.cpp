@@ -70,7 +70,8 @@ bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, const Ass
             barrel->kind = BreakableStrike::Kind::Poison;
         }
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!barrel->figure.place(device, scope, name, instance, collision)) {
+        if (!barrel->figure.place(device, scope, name, instance,
+                                  (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Barrels: no figure {} in the item archive", name);
         }
         barrel->box = barrel->figure.obstacle(info);

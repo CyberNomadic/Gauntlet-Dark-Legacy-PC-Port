@@ -1117,6 +1117,49 @@ TEST_CASE("barrels stand in the way until blows break them, each after its kind"
     CHECK_FALSE(barrels.barrel(2).box.solid);
 }
 
+TEST_CASE("items stand on a floor up to ten units beneath or four above them, unless their "
+          "record keeps their height",
+          "[game][world][fixtures][floor]") {
+    // A2's first barrel with Death is authored 4.3 units over its wagon's floor, and its
+    // sleeping black Death 3.5 over the floor of its shower; AddItemSub's FloorPos sweeps
+    // from four above to ten below and stands them on what it finds.
+    const auto dir = test::scratchDirectory("fixtures-floor-reach");
+    writeTextFile(dir / "world.json", R"({
+      "objects":[{"name":"GROUND","position":[0,0,0],"next":-1,"child":-1}],
+      "itemInfos":[
+        {"type":10,"subtype":43,"name":"BARREL","hitPoints":5,"radius":1,"height":3},
+        {"type":10,"subtype":43,"name":"BARREL","hitPoints":5,"radius":1,"height":3,
+         "collisionFlags":1}],
+      "itemInstances":[
+        {"info":0,"minPlayers":1,"position":[10,6.656,0],"rotation":[0,0,0],
+         "params":[0,0,0,0,0,0,0,0,0,0,0,0]},
+        {"info":0,"minPlayers":1,"position":[20,1.0,0],"rotation":[0,0,0],
+         "params":[0,0,0,0,0,0,0,0,0,0,0,0]},
+        {"info":0,"minPlayers":1,"position":[30,14.0,0],"rotation":[0,0,0],
+         "params":[0,0,0,0,0,0,0,0,0,0,0,0]},
+        {"info":1,"minPlayers":1,"position":[40,6.656,0],"rotation":[0,0,0],
+         "params":[0,0,0,0,0,0,0,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    WorldCollision collision;
+    collision.build({CollisionTriangle{.vertices = {Vec3{-50, 2.344f, -50}, Vec3{50, 2.344f, 50},
+                                                    Vec3{50, 2.344f, -50}},
+                                       .object = 0},
+                     CollisionTriangle{.vertices = {Vec3{-50, 2.344f, -50}, Vec3{-50, 2.344f, 50},
+                                                    Vec3{50, 2.344f, 50}},
+                                       .object = 0}});
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    Breakables barrels;
+    REQUIRE(barrels.bind(device, layout, AssetScope(items), &collision));
+    REQUIRE(barrels.size() == 4);
+    const f32 rest = 2.344f + ItemFigure::kFloorLift;
+    CHECK(barrels.barrel(0).figure.position().y == Approx(rest)); // 4.3 above: found
+    CHECK(barrels.barrel(1).figure.position().y == Approx(rest)); // 1.3 beneath: found
+    CHECK(barrels.barrel(2).figure.position().y == Approx(14.0f)); // 11.7 above: beyond
+    CHECK(barrels.barrel(3).figure.position().y == Approx(6.656f)); // keeps its height
+}
+
 TEST_CASE("Stop Time retracts live traps and leaves a half-second rest on release",
           "[game][world][fixtures][stop-time]") {
     Fixture f("fixtures-time-stop");

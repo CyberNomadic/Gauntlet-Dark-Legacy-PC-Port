@@ -11,8 +11,6 @@ namespace gdl::game {
 
 namespace {
 
-constexpr f32 kFloorReachAbove = 0.5f;
-constexpr f32 kFloorReachBelow = 3.0f;
 constexpr f32 kTicksPerSecond = 60.0f;
 constexpr s32 kExactPlayersMark = 10;
 constexpr f32 kPresentationCutDistance = 32.0f;
@@ -168,8 +166,8 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
                        const ItemInstance& instance, const WorldCollision* collision) {
     m_position = instance.position;
     if (collision != nullptr) {
-        if (const auto floor =
-                collision->floorAt(instance.position, kFloorReachAbove, kFloorReachBelow);
+        if (const auto floor = collision->floorAt(instance.position, kFloorReachAbove,
+                                                  kFloorReachBelow, kFloorReachRadius);
             floor.has_value()) {
             m_position.y = floor->y + kFloorLift;
         }

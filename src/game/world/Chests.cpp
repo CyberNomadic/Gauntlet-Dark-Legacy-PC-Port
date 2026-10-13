@@ -68,7 +68,8 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, const AssetSc
         chest->minPlayers = instance.minPlayers;
         chest->locked = (static_cast<u32>(info.activeType) & kLocked) != 0;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!chest->figure.place(device, scope, name, instance, collision)) {
+        if (!chest->figure.place(device, scope, name, instance,
+                                 (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Chests: no figure {} in the item archive", name);
         }
         const auto* support =

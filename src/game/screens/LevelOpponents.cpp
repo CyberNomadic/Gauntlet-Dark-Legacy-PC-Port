@@ -617,6 +617,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
                 CritterStatues::Placement statue;
                 statue.kind = family;
                 statue.instance = instance;
+                statue.onFloor = (info.collisionFlags & 1U) == 0;
                 statue.radius = info.radius;
                 statue.height = info.height;
                 statue.viewRadius = placement.viewRadius;
@@ -664,6 +665,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
             CritterStatues::Placement statue;
             statue.enemy = spawn;
             statue.instance = instance;
+            statue.onFloor = (info.collisionFlags & 1U) == 0;
             statue.radius = info.radius;
             statue.height = info.height;
             statue.viewRadius = placement.viewRadius;

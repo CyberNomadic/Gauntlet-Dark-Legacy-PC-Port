@@ -37,7 +37,8 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
     }
     auto statue = std::make_unique<Statue>();
     statue->placement = placement;
-    if (!statue->figure.place(device, archive, tree, placement.instance, collision)) {
+    if (!statue->figure.place(device, archive, tree, placement.instance,
+                              placement.onFloor ? collision : nullptr)) {
         return false;
     }
     statue->figure.play(kIdleSequence, true);

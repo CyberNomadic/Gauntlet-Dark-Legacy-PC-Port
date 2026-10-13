@@ -51,7 +51,8 @@ bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, const As
         gate->subtype = info.subtype;
         gate->minPlayers = instance.minPlayers;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!gate->figure.place(device, scope, name, instance, collision)) {
+        if (!gate->figure.place(device, scope, name, instance,
+                                (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Gates: no figure {} in the item archive", name);
         }
         gate->box = gate->figure.obstacle(info);

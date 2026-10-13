@@ -64,6 +64,10 @@ public:
      * case the item still has its place and its obstacle. */
     bool place(RenderDevice& device, ItemArchive& items, std::string_view name,
                const ItemInstance& instance, const WorldCollision* collision);
+    /** AddItemSub's FloorPos: a radius-one sweep from four above the instance to ten below. */
+    static constexpr f32 kFloorReachAbove = 4.0f;
+    static constexpr f32 kFloorReachBelow = 10.0f;
+    static constexpr f32 kFloorReachRadius = 1.0f;
     /** The same from whichever of the scope's archives holds the tree, in its search order. */
     bool place(RenderDevice& device, const AssetScope& scope, std::string_view name,
                const ItemInstance& instance, const WorldCollision* collision);
