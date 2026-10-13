@@ -5,6 +5,7 @@
 
 #include "engine/core/Log.h"
 
+#include "game/screens/CombatPrediction.h"
 #include "game/screens/OpponentPrediction.h"
 #include "game/screens/StageResources.h"
 
@@ -25,6 +26,7 @@ struct ReplicaStage::Assets {
     std::array<std::optional<s32>, InputCommand::kSeats> characters;
     const Texture* flash = nullptr;
     OpponentPrediction prediction;
+    CombatPrediction combat;
     // Renderers release all borrowed resources before their owners. The turbo
     // prototypes also borrow class archives held by the view's player figures.
     ReplicaView view;
@@ -68,6 +70,9 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
     // advances the catalog used by replica drawing or makes asset loads during replay.
     if (!prediction.open(device, root, world, enemies, players, difficultyGain)) {
         log::warn("Private opponent replay unavailable for {}", level.name);
+    }
+    if (!combat.open(device, root, level, context, party, difficultyGain)) {
+        log::warn("Private combat replay unavailable for {}", level.name);
     }
     auto bossStocks = bosses.resources();
     auto* boss = bossStocks.empty() ? nullptr : bossStocks.front();
@@ -181,6 +186,9 @@ bool ReplicaStage::resume(const MatchContext& context) {
         return false;
     }
     m_epoch = context.epoch;
+    if (m_assets->combat.loaded() && !m_assets->combat.resume(context)) {
+        m_assets->combat.clear();
+    }
     return true;
 }
 void ReplicaStage::clear() {
@@ -227,5 +235,8 @@ const ItemArchive* ReplicaStage::weapons() const {
 }
 OpponentPrediction* ReplicaStage::opponentPrediction() {
     return m_assets != nullptr && m_assets->prediction.loaded() ? &m_assets->prediction : nullptr;
+}
+CombatPrediction* ReplicaStage::combatPrediction() {
+    return m_assets != nullptr && m_assets->combat.loaded() ? &m_assets->combat : nullptr;
 }
 } // namespace gdl::game

@@ -205,11 +205,11 @@ CombatReplica::Admission CombatReplica::receive(PacketTransport::Connection send
         return Admission::Invalid;
     }
     const auto raw = SnapshotBlock::decode(joined);
-    const auto decoded = raw ? CombatPacket::decode(*raw) : std::nullopt;
+    auto decoded = raw ? CombatPacket::decode(*raw) : std::nullopt;
     if (!decoded || decoded->motion.epoch != epoch || decoded->motion.tick != tick) {
         return Admission::Invalid;
     }
-    m_latest = *decoded;
+    m_latest = std::move(*decoded);
     std::erase_if(m_pending, [tick](const auto& row) { return row.first <= tick; });
     return Admission::Committed;
 }

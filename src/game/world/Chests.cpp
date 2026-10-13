@@ -47,6 +47,7 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& 
                   const WorldCollision* collision, ItemArchive* realmItems) {
     clear();
     m_collision = collision;
+    m_layout = &layout;
     const auto restCollision = itemSupportWorld(layout, collision);
     m_infos = layout.itemInfos();
     const std::vector<ItemInstance>& instances = layout.itemInstances();
@@ -117,10 +118,12 @@ void Chests::syncFloors() {
 }
 
 void Chests::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     m_chests.clear();
     m_infos.clear();
     m_seed = 0;
     m_collision = nullptr;
+    m_layout = nullptr;
 }
 
 void Chests::setPlayerCount(s32 players) {

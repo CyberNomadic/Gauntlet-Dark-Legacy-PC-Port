@@ -20,6 +20,9 @@ public:
         bool valid() const;
         bool operator==(const State&) const = default;
     };
+    /** Validate split transport supplements without copying the native pools. */
+    static bool valid(const CombatRollbackCheckpoint::State& combat, const OpponentState& opponents,
+                      const OpponentCombatCheckpoint::State& adapter);
     class Prepared {
     public:
         Prepared(Prepared&&) noexcept;

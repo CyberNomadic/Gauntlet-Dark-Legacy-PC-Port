@@ -45,13 +45,16 @@ bool supportedWay(s32 way) {
 }
 
 bool unsupportedMinds(const OpponentSimulation::Checkpoint& state) {
-    if (state.placements && std::ranges::any_of(state.placements->roster, [](const auto& row) {
-            return row.kind < 0 || row.kind >= kSwarmKindCount || row.kind == kGarmBroodKind ||
-                   row.spawn.kind != row.kind || row.carried ||
-                   !supportedWay(resolvedWayOf(row.spawn.kind, row.spawn.tier, row.spawn.algorithm,
-                                               row.spawn.patrolBirth));
-        })) {
-        return true;
+    if (state.placements) {
+        const auto upcoming = state.placements->activations();
+        if (!upcoming || std::ranges::any_of(*upcoming, [](const auto& row) {
+                return row.kind < 0 || row.kind >= kSwarmKindCount || row.kind == kGarmBroodKind ||
+                       row.spawn.kind != row.kind || row.carried ||
+                       !supportedWay(resolvedWayOf(row.spawn.kind, row.spawn.tier,
+                                                   row.spawn.algorithm, row.spawn.patrolBirth));
+            })) {
+            return true;
+        }
     }
     for (const auto& enemy : state.enemies.enemies) {
         if (enemy.state == Enemies::State::Inactive) {
@@ -119,10 +122,13 @@ bool boundedFlights(const EnemyMissiles& pool, f32 seconds) {
     return true;
 }
 
-bool pendingInteraction(const OpponentSimulation::Checkpoint& state, bool melee = false) {
+bool pendingInteraction(const OpponentSimulation::Checkpoint& state, bool combat = false) {
     const auto& enemies = state.enemies;
     const auto& missiles = state.missiles;
-    return (!melee && !enemies.blows.empty()) || !enemies.losses.empty() ||
+    // The complete combat caller owns players, rewards and impact presentation.
+    // Cosmetic continuation must still refuse these gameplay/output queues.
+    return (!combat &&
+            (!enemies.blows.empty() || !enemies.losses.empty() || !enemies.feedback.empty())) ||
            !enemies.bursts.empty() || !enemies.deathEvents.empty() || !enemies.deathShots.empty() ||
            !enemies.tagged.empty() || !missiles.hits.empty() || !missiles.rockHits.empty() ||
            !missiles.pickupBlasts.empty();

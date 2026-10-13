@@ -7,6 +7,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/io/File.h"
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
+#include "game/enemies/CritterStatues.h"
+#include "game/enemies/Critters.h"
 #include "game/screens/OpponentPlacements.h"
 #include "game/world/ItemFigure.h"
 
@@ -113,6 +119,64 @@ TEST_CASE("ordinary placement filters never invent a fallback resource or a grea
         return allowsResource;
     }));
     CHECK(loads == expectedLoads);
+}
+
+TEST_CASE("native placement loader retains missing-statue fallbacks and ordered carried claims",
+          "[rollback][opponent-placements]") {
+    const auto directory = test::scratchDirectory("opponent-placement-fallbacks");
+    writeTextFile(directory / "world.json", R"({
+      "objects":[{"name":"FLOOR","position":[0,0,0]}],
+      "itemInfos":[
+        {"type":4,"name":"GOLEM","radius":2,"height":5},
+        {"type":4,"name":"GENERAL","radius":1,"height":3},
+        {"type":4,"name":"GAR","radius":4,"height":2},
+        {"type":4,"name":"GRU","radius":1,"height":2}],
+      "itemInstances":[
+        {"info":0,"position":[1,2,3],"rotation":[0,0.2,0]},
+        {"info":1,"position":[4,5,6],"rotation":[0,-0.4,0]},
+        {"info":2,"position":[7,8,9]},
+        {"info":1,"position":[4,5,6],"rotation":[0,-0.4,0]},
+        {"info":2,"position":[9,9,9],"minPlayers":2},
+        {"info":3,"position":[0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(directory));
+    test::FakeRenderDevice device;
+    // Unopened resource owners deliberately make the native statue/art lookups
+    // fail. Great-one fallback rows survive; ordinary missing art does not.
+    Enemies enemies;
+    Critters critters;
+    CritterStatues statues;
+    std::vector<Vec3> claimed;
+    const auto rows = OpponentPlacements::load(
+        device, layout, {}, 1, enemies, critters, statues, nullptr,
+        [&](const Vec3& position, f32 reach, f32 rise) -> std::optional<usize> {
+            CHECK(reach == 2);
+            CHECK(rise == 3);
+            claimed.push_back(position);
+            return claimed.size() + 30;
+        });
+    REQUIRE(rows.size() == 4);
+    CHECK(statues.count() == 0);
+    CHECK(claimed == std::vector<Vec3>{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {4, 5, 6}});
+    const std::array kinds{kGolemEnemyKind, kGeneralEnemyKind, kGargoyleEnemyKind,
+                           kGeneralEnemyKind};
+    for (usize index = 0; index < rows.size(); ++index) {
+        const auto& row = rows[index];
+        const auto& instance = layout.itemInstances()[index];
+        CHECK(row.kind == kinds[index]);
+        CHECK(row.spawn.kind == EnemySpawn{}.kind);
+        CHECK(row.spawn.position == instance.position);
+        CHECK(row.spawn.placed == EnemySpawn{}.placed);
+        CHECK(row.carried == std::optional<usize>{index + 31});
+        const Mat4 stood = itemPlacement(instance.position, instance.rotation);
+        CHECK(row.facing == std::atan2(stood[2][0], stood[2][2]));
+        REQUIRE(row.valid());
+    }
+    CHECK(rows[0].viewRadius == 10);
+    CHECK(rows[1].viewRadius == 6);
+    CHECK(rows[2].viewRadius == 8);
+    CHECK(rows[1].spawn.position == rows[3].spawn.position);
+    CHECK(rows[1].carried != rows[3].carried);
 }
 
 } // namespace

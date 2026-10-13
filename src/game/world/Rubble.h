@@ -32,7 +32,11 @@ public:
      * none does. */
     bool leave(RenderDevice& device, std::span<ItemArchive* const> archives,
                std::string_view object, const Mat4& transform);
-    void clear() { m_pieces.clear(); }
+    void clear() {
+        m_pieces.clear();
+        m_checkpointBinding = std::make_shared<const u8>(0);
+        m_checkpointGeneration = 0;
+    }
     usize size() const { return m_pieces.size(); }
     const Mat4& transform(usize index) const { return m_pieces[index]->transform; }
     struct Presentation {
@@ -46,6 +50,7 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
 
 private:
+    friend class RubbleCheckpoint;
     struct Piece {
         TreeModel model;
         Mat4 transform{1.0f};
@@ -53,6 +58,8 @@ private:
         std::string object;
     };
     std::vector<std::unique_ptr<Piece>> m_pieces;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

@@ -99,6 +99,20 @@ void PlayReplication::captureOpponents(CombatSnapshot& state) const {
     if (!CombatPacket::encode(state)) {
         state.opponents.reset();
         state.opponentFrame.reset();
+        return;
+    }
+    auto combat = m_scene->combatState();
+    auto combatFrame = m_scene->combatFrame();
+    if (!combat || !combatFrame) {
+        return;
+    }
+    state.combatState = std::move(combat);
+    state.combatFrame = std::move(combatFrame);
+    if (!CombatPacket::encode(state)) {
+        // A full combat seed is atomic. Retain the already-admitted ordinary
+        // opponent/presentation fallback when resources or the budget refuse it.
+        state.combatState.reset();
+        state.combatFrame.reset();
     }
 }
 

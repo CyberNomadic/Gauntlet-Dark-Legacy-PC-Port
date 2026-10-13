@@ -97,6 +97,7 @@ s32 PlacedItems::Item::realm() const {
 bool PlacedItems::bind(RenderDevice& device, const WorldLayout& layout,
                        const WorldCollision* collision, std::span<ItemArchive* const> archives) {
     clear();
+    m_layout = &layout;
     m_collision = collision;
     const auto restCollision = itemSupportWorld(layout, collision);
     m_archives.assign(archives.begin(), archives.end());
@@ -198,6 +199,9 @@ void PlacedItems::syncFloors() {
 }
 
 void PlacedItems::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
+    m_layout = nullptr;
     m_infos.clear();
     m_items.clear();
     m_effects.clear();

@@ -71,6 +71,13 @@ public:
         bool pojo = false;
         std::vector<MissileLaunch> missiles; ///< static physics specs, no visual bindings
     };
+    struct WeaponCue {
+        std::string_view name{};                ///< named level/common/ambient cue, when nonempty
+        std::optional<u32> call = std::nullopt; ///< otherwise the bound figure's class voice call
+        bool operator==(const WeaponCue&) const = default;
+    };
+    /** Native fan/element/class priority, without playing or decoding a voice. */
+    static WeaponCue weaponCue(u32 flags, const PlayerFigure& figure);
     /** Pure release preparation from trusted local actor/figure state. No artwork,
      * texture, audio, collision or inventory mutation occurs. An explicit release
      * belongs to a caller's native event; otherwise ordinary release latches supply
@@ -103,6 +110,8 @@ public:
     /** Unspecified magic advances one shared colour cycle for every caster and floor bottle. */
     s32 resolvePotionKind(s32 kind);
     void throwPotion(PlayerActor& actor, s32 heldTicks = 0, u64 generation = 0);
+    /** Existing bound native bottle artwork; querying never loads a resource. */
+    const TreeModel* potionModel(s32 kind) const;
     /** Keep short-lived cast effects attached without retaining a player address. */
     void followCaster(const PlayerActor& actor);
     void burstPotion(s32 kind, const Vec3& position, f32 power, bool castSound = true);
@@ -120,6 +129,11 @@ private:
     friend class PlayerArsenalCheckpoint;
     friend class CombatRollbackCheckpoint;
     friend class OrdinaryCombatTick;
+    friend class OrdinaryWeaponEmission;
+    MissileStreak weaponStreak(const PlayerActor& actor, const Texture* texture,
+                               bool superShot = false) const;
+    void bindWeaponAppearance(const PlayerActor& actor, PlayerFigure& figure,
+                              PreparedWeapon& prepared, const MissileStreak& streak) const;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
     void loadPotionModels();

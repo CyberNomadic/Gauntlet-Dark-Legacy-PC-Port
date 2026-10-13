@@ -78,9 +78,15 @@ public:
               f32 presentationAlpha = -1.0f) const;
 
 private:
+    friend class SafeRocksCheckpoint;
     std::vector<std::unique_ptr<Rock>> m_rocks;
     std::vector<u32> m_textureSlots;
     TextureAnimator m_textures;
+    const WorldLayout* m_layout = nullptr;
+    const ItemArchive* m_items = nullptr;
+    const ItemArchive* m_animationItems = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

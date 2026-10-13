@@ -146,12 +146,16 @@ public:
                                u32& seed);
 
 private:
+    friend class ChestsCheckpoint;
     static void rock(Chest& chest, f32 seconds);
 
     std::vector<std::unique_ptr<Chest>> m_chests;
     std::vector<ItemInfo> m_infos;
     u32 m_seed = 0;
     const WorldCollision* m_collision = nullptr;
+    const WorldLayout* m_layout = nullptr; ///< borrowed immutable authored roster
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

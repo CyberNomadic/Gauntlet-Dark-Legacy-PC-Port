@@ -100,6 +100,8 @@ void LevelFixtures::bind(const Resources& resources) {
     m_scenery.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
 }
 void LevelFixtures::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     if (m_resources) {
         for (const GasCloud& cloud : m_clouds) {
             m_resources->effects.stop(cloud.effect);

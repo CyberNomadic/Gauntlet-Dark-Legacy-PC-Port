@@ -601,6 +601,7 @@ u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
     }
     auto effect = std::make_unique<Effect>();
     effect->archive = prepared.archive;
+    effect->device = prepared.device;
     effect->lenders.assign(prepared.lenders.begin(), prepared.lenders.end());
     if (prepared.tree != nullptr) {
         if (prepared.model == nullptr || prepared.particles == nullptr ||

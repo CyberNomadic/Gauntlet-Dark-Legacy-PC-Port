@@ -297,56 +297,51 @@ TEST_CASE(
     REQUIRE(authority->placements);
     REQUIRE_FALSE(authority->placements->roster.empty());
     REQUIRE_FALSE(authority->placements->pending.empty());
+    REQUIRE(native.statues().count() > 0);
+    for (usize index = 0; index < native.statues().count(); ++index) {
+        const auto& statue = native.statues().placement(index);
+        const s32 kind = statue.enemy                          ? statue.enemy->kind
+                         : statue.kind == CombatantKind::Golem ? kGolemEnemyKind
+                                                               : kGargoyleEnemyKind;
+        CHECK(std::ranges::none_of(authority->placements->roster, [&](const auto& row) {
+            return row.kind == kind && row.spawn.position == statue.instance.position;
+        }));
+    }
 
     // Bind independently from immutable level metadata, just as a new guest
     // does. The complete native roster must match, not a compacted pending list.
-    const auto* info = world.level();
-    REQUIRE(info != nullptr);
-    std::vector<PlacedEnemies::Placement> ordinary;
-    const auto stocks = native.enemies().checkpoint();
-    REQUIRE(stocks);
-    for (const auto& instance : world.layout().itemInstances()) {
-        if (instance.info < 0 ||
-            static_cast<usize>(instance.info) >= world.layout().itemInfos().size()) {
-            continue;
-        }
-        auto row = OpponentPlacements::ordinary(
-            instance, world.layout().itemInfos()[static_cast<usize>(instance.info)], info->enemies,
-            1, [&](s32 kind) {
-                return kind >= 0 && kind < kSwarmKindCount && kind != kGarmBroodKind &&
-                       std::ranges::any_of(stocks->stocks, [kind](const auto& stock) {
-                           return stock.kind == kind;
-                       });
-            });
-        if (row) {
-            ordinary.push_back(*row);
-        }
-    }
-    REQUIRE_FALSE(ordinary.empty());
-    for (const auto& row : ordinary) {
-        CHECK(std::ranges::find(authority->placements->roster, row) !=
-              authority->placements->roster.end());
+    REQUIRE(std::ranges::any_of(authority->placements->roster, [](const auto& row) {
+        return row.kind >= kSwarmKindCount || row.carried.has_value();
+    }));
+    std::vector<std::pair<bool, Vec3>> pickups;
+    for (usize index = 0; index < world.placedItems().size(); ++index) {
+        const auto& item = world.placedItems().item(index);
+        pickups.emplace_back(item.carried, item.position);
     }
     OpponentPrediction prediction;
     REQUIRE(prediction.open(device, root, world, native.enemies(), 1, 1));
-    const auto before = prediction.checkpoint();
-    const auto uploads = device.texturesCreated;
-    const bool completeOrdinaryRoster = ordinary == authority->placements->roster;
-    CAPTURE(completeOrdinaryRoster, ordinary.size(), authority->placements->roster.size());
-    CHECK(prediction.begin(7, 100, *authority, world.collision()) == completeOrdinaryRoster);
-    if (completeOrdinaryRoster) {
-        CHECK(prediction.checkpoint() == authority);
-        auto forged = *authority;
-        forged.placements->roster.front().spawn.position.x += 1;
-        REQUIRE(forged.valid());
-        CHECK_FALSE(prediction.begin(7, 101, forged, world.collision()));
-        CHECK(prediction.checkpoint() == authority);
-    } else {
-        // Great creatures and carried pickups require their separate native
-        // owners. A partial ordinary roster is never treated as the whole level.
-        CHECK(prediction.checkpoint() == before);
+    for (usize index = 0; index < pickups.size(); ++index) {
+        CHECK(world.placedItems().item(index).carried == pickups[index].first);
+        CHECK(world.placedItems().item(index).position == pickups[index].second);
     }
+    const auto uploads = device.texturesCreated;
+    const auto updates = device.textureUpdates;
+    REQUIRE(prediction.begin(7, 100, *authority, world.collision()));
+    CHECK(prediction.checkpoint() == authority);
+    auto forged = *authority;
+    forged.placements->roster.front().spawn.position.x += 1;
+    REQUIRE(forged.valid());
+    CHECK_FALSE(prediction.begin(7, 101, forged, world.collision()));
+    CHECK(prediction.checkpoint() == authority);
+    // Restoration is not permission to activate a General/held pickup. With no
+    // watch frustum native loading selects every pending row, so the private
+    // phase must refuse before consuming any placement or mutating any pool.
+    REQUIRE(prediction.begin(7, 101, *authority, world.collision()));
+    CHECK(prediction.advance(102, {}) == OpponentSimulation::Result::Unsupported);
+    CHECK_FALSE(prediction.active());
+    CHECK(prediction.checkpoint() == authority);
     CHECK(device.texturesCreated == uploads);
+    CHECK(device.textureUpdates == updates);
 }
 
 } // namespace

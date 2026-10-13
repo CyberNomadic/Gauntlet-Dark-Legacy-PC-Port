@@ -15,8 +15,9 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 41;
+constexpr u32 kVersion = 42;
 constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
+constexpr u32 kCombatReplay = kOpponentReplay << 1U;
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
@@ -65,6 +66,54 @@ CombatAnimation animation(ByteReader& reader) {
     value.frame = real(reader);
     value.transition = real(reader);
     return value;
+}
+bool frameValid(const OrdinaryCombatTick::Frame& frame) {
+    const auto position = [](const Vec3& value) {
+        return bounded(value.x, -1'000'000, 1'000'000) && bounded(value.y, -1'000'000, 1'000'000) &&
+               bounded(value.z, -1'000'000, 1'000'000);
+    };
+    return frame.valid() && position(frame.camera.position) && position(frame.attention) &&
+           bounded(frame.camera.pitch, -1'000'000, 1'000'000) &&
+           bounded(frame.camera.yaw, -1'000'000, 1'000'000) &&
+           bounded(frame.camera.roll, -1'000'000, 1'000'000) && frame.damage.realm >= -1 &&
+           frame.damage.realm <= LevelRecord::kMostRealm;
+}
+void combatFrame(std::vector<u8>& bytes, const OrdinaryCombatTick::Frame& frame) {
+    word(bytes, static_cast<u32>(frame.ticks));
+    real(bytes, frame.seconds);
+    for (const f32 value :
+         {frame.camera.position.x, frame.camera.position.y, frame.camera.position.z,
+          frame.camera.pitch, frame.camera.yaw, frame.camera.roll, frame.projection.horizontalFov,
+          frame.projection.aspect, frame.attention.x, frame.attention.y, frame.attention.z}) {
+        real(bytes, value);
+    }
+    const auto& damage = frame.damage;
+    word(bytes, (damage.tower ? 1U : 0U) | (damage.bossEncounter ? 2U : 0U) |
+                    (damage.cutscene ? 4U : 0U) | (damage.lastRealmLevel ? 8U : 0U));
+    real(bytes, damage.damageScale);
+    word(bytes, static_cast<u32>(damage.realm));
+    real(bytes, damage.playSeconds);
+}
+std::optional<OrdinaryCombatTick::Frame> combatFrame(ByteReader& reader) {
+    OrdinaryCombatTick::Frame frame;
+    frame.ticks = static_cast<s32>(reader.readU32());
+    frame.seconds = real(reader);
+    frame.camera.position = {real(reader), real(reader), real(reader)};
+    frame.camera.pitch = real(reader);
+    frame.camera.yaw = real(reader);
+    frame.camera.roll = real(reader);
+    frame.projection.horizontalFov = real(reader);
+    frame.projection.aspect = real(reader);
+    frame.attention = {real(reader), real(reader), real(reader)};
+    const u32 flags = reader.readU32();
+    frame.damage.tower = (flags & 1U) != 0;
+    frame.damage.bossEncounter = (flags & 2U) != 0;
+    frame.damage.cutscene = (flags & 4U) != 0;
+    frame.damage.lastRealmLevel = (flags & 8U) != 0;
+    frame.damage.damageScale = real(reader);
+    frame.damage.realm = static_cast<s32>(reader.readU32());
+    frame.damage.playSeconds = real(reader);
+    return (flags & ~15U) == 0 && frameValid(frame) ? std::optional{frame} : std::nullopt;
 }
 } // namespace
 
@@ -217,6 +266,46 @@ bool CombatSnapshot::valid() const {
             return !motion.players[player.seat] || !players[player.seat];
         })) {
         return false;
+    }
+    if (combatState.has_value() != combatFrame.has_value() ||
+        (combatState && (!opponents || !combatState->valid() || !frameValid(*combatFrame) ||
+                         !OrdinaryCombatCheckpoint::valid(combatState->combat, *opponents,
+                                                          combatState->adapter)))) {
+        return false;
+    }
+    if (combatState) {
+        std::array<bool, InputCommand::kSeats> present{};
+        for (const auto& native : combatState->combat.players) {
+            const auto seat = static_cast<usize>(native.player);
+            if (seat >= players.size() || present[seat] || !players[seat] ||
+                !motion.players[seat] || native.departed ||
+                native.actor.position != motion.players[seat]->position ||
+                std::abs(std::remainder(native.actor.yaw - motion.players[seat]->yaw, kTwoPi)) >
+                    0.0001f) {
+                return false;
+            }
+            const auto expectedLife =
+                native.life == PlayerLife::Standing ? ReplicaPlayerLife::Standing
+                : native.life == PlayerLife::Dying  ? ReplicaPlayerLife::Dying
+                                                    : ReplicaPlayerLife::InTower;
+            const f32 health =
+                native.life == PlayerLife::Standing
+                    ? std::max(0.0f, static_cast<f32>(native.save.health()) + native.healthFraction)
+                    : 0;
+            if (players[seat]->life != expectedLife || players[seat]->health != health) {
+                return false;
+            }
+            present[seat] = true;
+        }
+        for (usize seat = 0; seat < players.size(); ++seat) {
+            if (present[seat] != players[seat].has_value()) {
+                return false;
+            }
+        }
+        if (combatFrame->ticks != opponentFrame->ticks ||
+            combatFrame->seconds != opponentFrame->seconds) {
+            return false;
+        }
     }
     if (worldMotionTicks > PlatformState::kMaxTicks || (!worldMotion && worldMotionTicks != 0) ||
         (worldMotion && (!worldMotion->valid() || !geometry ||
@@ -508,6 +597,9 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
     }
     std::vector<u8> replay;
     u32 replayMask = snapshot.opponents ? kOpponentReplay : 0;
+    if (snapshot.combatState) {
+        replayMask |= kCombatReplay;
+    }
     for (usize seat = 0; seat < snapshot.players.size(); ++seat) {
         const auto& player = snapshot.players[seat];
         if (player && (player->locomotion || player->transitionPose || player->turboEffects ||
@@ -557,6 +649,18 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
             wide(replay, snapshot.motion.tick);
             replay.insert(replay.end(), opponents->begin(), opponents->end());
             replay.insert(replay.end(), frame->begin(), frame->end());
+        }
+        if (snapshot.combatState) {
+            const auto combat = CombatStatePacket::encode(*snapshot.combatState);
+            if (!combat) {
+                return std::nullopt;
+            }
+            word(replay, static_cast<u32>(combat->size()));
+            word(replay, static_cast<u32>(kCombatFrameBytes));
+            wide(replay, snapshot.motion.epoch);
+            wide(replay, snapshot.motion.tick);
+            replay.insert(replay.end(), combat->begin(), combat->end());
+            combatFrame(replay, *snapshot.combatFrame);
         }
     }
     const auto playerCount = static_cast<usize>(std::ranges::count_if(
@@ -929,7 +1033,8 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         (turboBytes != 0 && turboBytes < 4) || platformBytes > PlatformCheckpoint::kMaxBytes ||
         (platformBytes != 0 && platformBytes < PlatformCheckpoint::kHeaderBytes) ||
         replayBytes > kReplayBytes + kOpponentHeaderBytes + OpponentCheckpoint::kMaxBytes +
-                          OpponentFrameCodec::kMaxBytes ||
+                          OpponentFrameCodec::kMaxBytes + kCombatHeaderBytes +
+                          CombatStatePacket::kMaxBytes + kCombatFrameBytes ||
         (replayBytes != 0 && replayBytes < 4) ||
         (geometryBytes != 0 && (geometryBytes < kGeometryHeaderBytes ||
                                 geometryBytes > kGeometryHeaderBytes + SceneGeometry::kMaxStates *
@@ -1525,7 +1630,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
     if (replayBytes != 0) {
         ByteReader replay(data.readBytes(replayBytes));
         const u32 mask = replay.readU32();
-        if (mask == 0 || (mask & ~(15U | kOpponentReplay)) != 0) {
+        if (mask == 0 || (mask & ~(15U | kOpponentReplay | kCombatReplay)) != 0) {
             return std::nullopt;
         }
         for (usize seat = 0; seat < result.players.size(); ++seat) {
@@ -1591,6 +1696,26 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             result.opponents = OpponentCheckpoint::decode(replay.readBytes(size));
             result.opponentFrame = OpponentFrameCodec::decode(replay.readBytes(frameSize));
             if (!result.opponents || !result.opponentFrame) {
+                return std::nullopt;
+            }
+        }
+        if ((mask & kCombatReplay) != 0) {
+            if ((mask & kOpponentReplay) == 0 || replay.remaining() < kCombatHeaderBytes) {
+                return std::nullopt;
+            }
+            const usize size = replay.readU32();
+            const usize frameSize = replay.readU32();
+            const u64 epoch = wide(replay);
+            const u64 tick = wide(replay);
+            if (size < CombatStatePacket::kHeaderBytes || size > CombatStatePacket::kMaxBytes ||
+                frameSize != kCombatFrameBytes || size > replay.remaining() ||
+                frameSize > replay.remaining() - size || epoch != result.motion.epoch ||
+                tick != result.motion.tick) {
+                return std::nullopt;
+            }
+            result.combatState = CombatStatePacket::decode(replay.readBytes(size));
+            result.combatFrame = combatFrame(replay);
+            if (!result.combatState || !result.combatFrame) {
                 return std::nullopt;
             }
         }

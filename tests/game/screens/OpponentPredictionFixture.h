@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 
 #include <catch2/catch_test_macros.hpp>
@@ -7,8 +8,11 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/config/GameConfig.h"
+#include "game/enemies/Bosses.h"
+#include "game/enemies/Critters.h"
 #include "game/screens/OpponentPrediction.h"
 #include "game/screens/OpponentResources.h"
+#include "game/screens/StageResources.h"
 #include "game/world/LevelWorld.h"
 
 namespace gdl::test {
@@ -74,6 +78,20 @@ struct ContinuationFixture {
         REQUIRE(generators.bind(device, world.layout(), enemies, &collision, breeding,
                                 initialPlayers, info->enemies, level.realmId, &world.items(),
                                 lenders));
+        // Match the online load boundary: placements can reference stock that
+        // no generator uses (including dormant Death). The private owner checks
+        // the complete trusted stock roster rather than inventing missing rows.
+        Critters critters;
+        Bosses bosses;
+        const auto gargoyle =
+            std::ranges::find(info->enemies, kGargoyleEnemyKind, &LevelEnemy::kind);
+        const std::string_view form =
+            gargoyle != info->enemies.end() ? std::string_view{gargoyle->form} : std::string_view{};
+        const std::array creatureTextures{&world.textures()};
+        const char realm = level.name.empty() ? 'G' : level.name.front();
+        critters.open(device, root, &collision, scales, realm, creatureTextures, form);
+        bosses.open(device, root, &collision, scales, realm, creatureTextures);
+        REQUIRE(StageResources::preload(world, enemies, critters, bosses));
         resources = OpponentResources::missiles(enemies);
         REQUIRE(prediction.open(device, root, world, enemies, initialPlayers, gain));
         players[0].player = 0;

@@ -80,7 +80,16 @@ MissileStreak PlayerArsenal::weaponStreak(const PlayerActor& actor, bool superSh
     if (!texture) {
         return streak;
     }
-    streak.texture = &m_resources->weapons.textures.texture(m_resources->device, *texture);
+    return weaponStreak(
+        actor, &m_resources->weapons.textures.texture(m_resources->device, *texture), superShot);
+}
+MissileStreak PlayerArsenal::weaponStreak(const PlayerActor& actor, const Texture* texture,
+                                          bool superShot) const {
+    MissileStreak streak;
+    if (!m_resources || texture == nullptr) {
+        return streak;
+    }
+    streak.texture = texture;
     // StartMissile's tables at GUNE5D 8011A178/8011A188: saturated costume colours,
     // not the pastel HUD tints. Wizard/sorceress families have transparency 192;
     // other classes and the white Super Shot use 64. MBPolyInst quantizes opacity
@@ -221,22 +230,15 @@ std::optional<PlayerArsenal::WeaponRider> PlayerArsenal::weaponRider(const Playe
     return rider;
 }
 
-void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
-                                 const Vec3& direction, f32 scale, bool spreads,
-                                 std::optional<Vec3> target,
-                                 std::optional<MissileRelease> explicitRelease) {
-    if (!m_resources || body == nullptr) {
+void PlayerArsenal::bindWeaponAppearance(const PlayerActor& actor, PlayerFigure& figure,
+                                         PreparedWeapon& prepared,
+                                         const MissileStreak& streak) const {
+    if (!m_resources || prepared.missiles.empty()) {
         return;
     }
-    PlayerFigure& figure = *body;
-    const auto prepared =
-        prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease);
-    if (!prepared || prepared->missiles.empty()) {
-        return;
-    }
-    const auto& launches = prepared->missiles;
+    auto& launches = prepared.missiles;
     const auto& save = actor.save();
-    const bool pojo = prepared->pojo;
+    const bool pojo = prepared.pojo;
     // The volley shares its muzzle and visual resources. Native launch math is
     // also used by physics-only replay, which never borrows these assets.
     MissileLaunch launch = launches.front();
@@ -245,7 +247,7 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     launch.model = pojo ? &m_phoenixShot : &figure.missile();
     launch.archive = pojo ? &m_resources->weapons : figure.missileArchive();
     launch.tree = pojo ? "PHOENIX_FBALL" : figure.missileTree();
-    launch.streak = weaponStreak(actor);
+    launch.streak = streak;
     launch.textureLender = pojo ? nullptr : &m_resources->weapons.textures;
     // An elemental weapon's throw carries the element's WEAP_TW effect of the costume
     // colour's effects (PlayerStartMissile, combat.c 1030); the wizards and sorceresses
@@ -255,13 +257,57 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     if (ItemArchive* effects = rider.empty() ? nullptr : figure.effects();
         effects != nullptr && effects->trees.find(rider).has_value()) {
         launch.riderArchive = effects;
-        launch.riderTree = rider;
+        // The descriptor can outlive this helper; borrow the authenticated
+        // archive name, not the temporary lookup string.
+        launch.riderTree = effects->trees.tree(*effects->trees.find(rider)).name;
         if (WeaponGlow::throwsEffectAlone(save.character)) {
             launch.model = nullptr;
             launch.archive = nullptr;
             launch.tree = {};
         }
     }
+    for (auto& member : launches) {
+        auto appearance = launch;
+        appearance.direction = member.direction;
+        appearance.velocity = member.velocity;
+        appearance.wallSound = member.wallSound;
+        appearance.release = member.release;
+        member = appearance;
+    }
+}
+
+PlayerArsenal::WeaponCue PlayerArsenal::weaponCue(u32 weapon, const PlayerFigure& figure) {
+    // GUNE5D PlayerMotion -> AudioPlayerEatSFX (8009F638) also follows this
+    // weapon/class dispatch for Pojo. S_POJOTURBO belongs to breath, not shots.
+    constexpr std::array<std::string_view, 5> kElementThrows{"", "S_AMULETFIRE", "S_AMULETLIGHTNI",
+                                                             "S_AMULETLIGHT", "S_AMULETACID"};
+    constexpr u32 kSpecialThrows =
+        powerup::kThreeWayShot | powerup::kFiveWayShot | powerup::kSuperShot;
+    const auto element = static_cast<usize>(weapon & 0xFU);
+    if ((weapon & kSpecialThrows) != 0) {
+        return {.name = "S_SUPERSHOT"};
+    }
+    if (element > 0 && element < kElementThrows.size()) {
+        return {.name = kElementThrows[element]};
+    }
+    return {.call = figure.throwSound()};
+}
+
+void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
+                                 const Vec3& direction, f32 scale, bool spreads,
+                                 std::optional<Vec3> target,
+                                 std::optional<MissileRelease> explicitRelease) {
+    if (!m_resources || body == nullptr) {
+        return;
+    }
+    PlayerFigure& figure = *body;
+    auto prepared =
+        prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease);
+    if (!prepared || prepared->missiles.empty()) {
+        return;
+    }
+    bindWeaponAppearance(actor, figure, *prepared, weaponStreak(actor));
+    const auto& launch = prepared->missiles.front();
     // An obstructed muzzle still produces a world impact, without a flying weapon.
     const f32 radius = launch.spec->radius;
     const Vec3 clear = m_resources->collision.resolveWalls(launch.position, radius,
@@ -273,35 +319,19 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     }
     const auto release = launch.release;
     bool launched = false;
-    for (usize ordinal = 0; ordinal < launches.size(); ++ordinal) {
-        const auto& member = launches[ordinal];
-        launch.direction = member.direction;
-        launch.velocity = member.velocity;
-        launch.wallSound = member.wallSound;
-        launch.release = member.release;
-        if (m_missiles.launch(launch)) {
+    for (const auto& member : prepared->missiles) {
+        if (m_missiles.launch(member)) {
             launched = true;
         }
     }
-    const u32 weapon = prepared->soundFlags;
-    // GUNE5D PlayerMotion -> AudioPlayerEatSFX (8009F638) also follows this
-    // weapon/class dispatch for Pojo. S_POJOTURBO belongs to breath, not shots.
-    constexpr std::array<std::string_view, 5> kElementThrows{"", "S_AMULETFIRE", "S_AMULETLIGHTNI",
-                                                             "S_AMULETLIGHT", "S_AMULETACID"};
-    constexpr u32 kSpecialThrows =
-        powerup::kThreeWayShot | powerup::kFiveWayShot | powerup::kSuperShot;
-    const auto element = static_cast<usize>(weapon & 0xFU);
+    const auto cue = weaponCue(prepared->soundFlags, figure);
     SoundHandle handle = kNoSound;
-    if ((weapon & kSpecialThrows) != 0) {
-        handle = m_resources->audio.playNamed("S_SUPERSHOT", LevelSoundscape::kStepVolume);
-    } else if (element > 0 && element < kElementThrows.size()) {
-        handle =
-            m_resources->audio.playNamed(kElementThrows[element], LevelSoundscape::kStepVolume);
-    } else if (const auto sound = figure.throwSound();
-               m_resources->sounds != nullptr && sound.has_value()) {
+    if (!cue.name.empty()) {
+        handle = m_resources->audio.playNamed(cue.name, LevelSoundscape::kStepVolume);
+    } else if (m_resources->sounds != nullptr && cue.call) {
         try {
             handle =
-                m_resources->sounds->play(figure.voice().sequence(*sound),
+                m_resources->sounds->play(figure.voice().sequence(*cue.call),
                                           LevelSoundscape::kStepVolume, SoundCategory::Effects);
         } catch (const std::exception& e) {
             log::warn("Tower: throw sound: {}", e.what());
@@ -459,6 +489,14 @@ void PlayerArsenal::launchGauntlet(const PlayerActor& actor, PlayerFigure* body,
         m_missiles.launch(launch);
     }
     m_resources->audio.playNamed(left ? "S_GAUNTLET1" : "S_GAUNTLET2");
+}
+
+const TreeModel* PlayerArsenal::potionModel(s32 kind) const {
+    if (kind < 0 || static_cast<usize>(kind) >= m_potionModels.size()) {
+        return nullptr;
+    }
+    const auto& model = m_potionModels[static_cast<usize>(kind)];
+    return model.bound() ? &model : nullptr;
 }
 
 void PlayerArsenal::loadPotionModels() {

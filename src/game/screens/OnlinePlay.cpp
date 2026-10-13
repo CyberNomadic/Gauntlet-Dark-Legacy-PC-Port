@@ -101,6 +101,7 @@ bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSe
     return true;
 }
 void OnlinePlay::quiet() {
+    m_combatReplay.clear();
     m_opponentReplay.clear();
     m_prediction.clear();
     m_projectilePrediction.clear();
@@ -751,6 +752,10 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
             m_prediction.begin(match.context(), match.localPeer(), world->collision(),
                                &world->scene(), &world->layout());
             m_opponentReplay.clear();
+            m_combatReplay.clear();
+            if (auto* combat = m_replica.combatPrediction()) {
+                m_combatReplay.begin(match.context(), match.localPeer(), *combat);
+            }
             if (auto* opponents = m_replica.opponentPrediction()) {
                 m_opponentReplay.begin(match.context(), match.localPeer(), *opponents,
                                        world->scene(), world->layout(), world->collision());
@@ -790,9 +795,13 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
                 }
             }
         }
+        const bool nativeCombat =
+            m_predictMovement &&
+            m_combatReplay.update(match.playback().latest(), match.sampledInputs());
         m_prediction.update(
             match.playback().latest(), match.sampledInputs(),
-            m_opponentReplay.callbacks(match.playback().latest(), match.sampledInputs()));
+            m_opponentReplay.callbacks(match.playback().latest(), match.sampledInputs()),
+            !nativeCombat);
         m_potionPrediction.update(match.playback().latest(), m_prediction, match.sampledInputs());
         m_effectPrediction.update(match.playback().latest(), m_prediction);
         if (const auto* authority = match.playback().latest()) {
@@ -984,8 +993,10 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
     if (auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
         m_presentEffects = false;
         if (m_predictMovement) {
-            m_prediction.present(*sample, frameBlend);
-            m_opponentReplay.present(*sample, presentation, frameBlend);
+            if (!m_combatReplay.present(*sample, presentation, frameBlend)) {
+                m_prediction.present(*sample, frameBlend);
+                m_opponentReplay.present(*sample, presentation, frameBlend);
+            }
             m_projectilePrediction.present(*sample, frameBlend);
             m_potionPrediction.present(*sample, frameBlend);
             m_presentEffects = m_effectPrediction.present(*sample);

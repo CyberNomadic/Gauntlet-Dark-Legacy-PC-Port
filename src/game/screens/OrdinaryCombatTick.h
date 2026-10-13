@@ -1,6 +1,9 @@
 #pragma once
 
+#include <string>
+
 #include "game/screens/OrdinaryCombatCheckpoint.h"
+#include "game/screens/OrdinaryWeaponEmission.h"
 #include "game/screens/PartyDamage.h"
 #include "game/screens/PartyMotion.h"
 
@@ -10,12 +13,14 @@ namespace gdl::game {
  * Starts at PartyMotion, AFTER the scene's world/powerup preparation. The caller
  * supplies the current gameplay camera; it is held observation, not a predicted
  * camera/world tick. Only static, fixture-free contacts and plain walking,
- * guard and nonlethal swarm melee are admitted. Attacks, pickups, world events,
- * lessons, death, and missile impacts refuse the complete phase.
+ * guard, plain close attacks/normal throws on the ordinary swarm, and nonlethal
+ * incoming blows are admitted. Special attacks, pickups, world events, lessons,
+ * promotions, player death, and non-swarm missile impacts refuse the complete phase.
  *
  * Sound/rumble/footstep and BLOCKFX presentation requests are returned only on
- * acceptance. Guard gameplay is exact; BLOCKFX allocation/attachment and figure
- * cosmetic clocks are deliberately deferred, not a full visual-world replay.
+ * acceptance. Swarm hit effects use the trusted prebound native pool. Guard
+ * gameplay is exact; BLOCKFX allocation/attachment and figure cosmetic clocks
+ * are deliberately deferred, not a full visual-world replay.
  * No online packet/admission or application-side output dispatch lives here. */
 class OrdinaryCombatTick {
 public:
@@ -36,6 +41,12 @@ public:
         Footing footing = Footing::Rock;
         bool operator==(const Footstep&) const = default;
     };
+    struct FeedbackSound {
+        std::string name;
+        Vec3 position{0};
+        f32 volume = 0;
+        bool operator==(const FeedbackSound&) const = default;
+    };
     enum class Status { Advanced, Invalid, Unsupported };
     struct Result {
         Status status = Status::Invalid;
@@ -44,6 +55,9 @@ public:
         std::vector<EnemyCue> enemyCues;
         std::optional<PlayerHealth::Heartbeat> heartbeat;
         std::vector<PartyDamage::Output> damage;
+        std::vector<s32> meleeHits; ///< accepted contacts, in native order/input IDs
+        std::vector<FeedbackSound> feedback;
+        std::vector<OrdinaryWeaponEmission::Cue> throws; ///< buffered once per native fan
     };
 
     /** Every owner and trusted archive must outlive this view. The supplied
@@ -59,7 +73,7 @@ private:
     bool bound(std::span<PlayerRuntime> party) const;
     bool environment() const;
     bool supported(const OrdinaryCombatCheckpoint::State& state,
-                   std::span<const PlayerRuntime> party) const;
+                   std::span<const PlayerRuntime> party, f32 seconds) const;
     OrdinaryCombatCheckpoint& m_checkpoint;
     const ClassDataSet& m_classes;
     LevelFixtures& m_fixtures;

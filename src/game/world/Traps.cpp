@@ -15,6 +15,9 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& i
                  ItemArchive* realmItems) {
     clear();
     m_collision = collision;
+    m_layout = &layout;
+    m_items = &items;
+    m_realmItems = realmItems;
     const auto authored = itemSupportWorld(layout, collision);
     m_random.seed(seed);
     m_timeScale = timeScale;
@@ -68,6 +71,11 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& i
 }
 
 void Traps::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
+    m_layout = nullptr;
+    m_items = nullptr;
+    m_realmItems = nullptr;
     m_collision = nullptr;
     m_traps.clear();
     m_wakes.clear();

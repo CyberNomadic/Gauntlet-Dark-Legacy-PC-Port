@@ -39,6 +39,7 @@ void Critters::open(RenderDevice& device, const std::filesystem::path& root,
     m_gargoyleForm = gargoyleForm;
 }
 void Critters::close() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     for (auto& actor : m_critters) {
         actor.clear();
     }
@@ -73,6 +74,7 @@ CombatantAssets* Critters::stockFor(const CombatantDefinition& definition) {
         return nullptr;
     }
     m_stocks.push_back(std::move(stock));
+    m_checkpointBinding = std::make_shared<const u8>(0);
     return m_stocks.back().get();
 }
 CombatantDefinition Critters::definitionOf(CombatantKind kind, std::string_view form) const {

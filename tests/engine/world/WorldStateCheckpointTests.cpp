@@ -1,0 +1,254 @@
+#include <array>
+#include <limits>
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include "engine/world/WorldStateCheckpoint.h"
+
+#include "FakeRenderDevice.h"
+#include "SampleLevel.h"
+
+namespace {
+using namespace gdl;
+
+TextureAnimationInfo cycle(std::string_view name, s32 texture, s32 source, s32 frames, s32 rate,
+                           std::string_view frameName = "") {
+    TextureAnimationInfo info;
+    info.name = name;
+    info.frameName = frameName;
+    info.texture = texture;
+    info.source = source;
+    info.frames = frames;
+    info.rate = rate;
+    return info;
+}
+
+struct Fixture {
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures, lender;
+    WorldLayout layout;
+    WorldScene scene;
+    WorldCollision collision;
+    WorldAnimator animator;
+    TextureAnimator textureClock;
+    std::shared_ptr<const u8> binding = std::make_shared<const u8>(0);
+    WorldStateCheckpoint checkpoint{scene, collision, animator, binding};
+
+    explicit Fixture(std::string_view name) {
+        const auto dir = test::sampleLevel(name);
+        REQUIRE(models.load(dir));
+        REQUIRE(textures.load(dir));
+        REQUIRE(lender.load(test::sampleLender(std::string(name) + "-lender")));
+        REQUIRE(layout.load(dir));
+        const std::array<TextureSet*, 1> lenders{&lender};
+        REQUIRE(scene.build(layout, models, textures, device, {}, lenders));
+        animator.bind(layout);
+        animator.apply(scene);
+        collision.build({{{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 8, 4},
+                         {{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 1000, 4}});
+        const std::array<s32, 1> moving{8};
+        collision.setMovingObjects(moving);
+        collision.setObjectTransform(8, scene.worldTransform(8));
+        const std::array animations{
+            cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 2, "TORCH00"),
+            cycle("STONE", 0, 1, 2, 1), cycle("GLASS", 1, TextureAnimationInfo::kScrollU, -4, 0)};
+        textureClock.bind(animations, textures, device, lenders);
+        textureClock.apply(scene);
+        REQUIRE(checkpoint.bind(textureClock));
+    }
+
+    void step(f32 seconds, u32 tick) {
+        scene.capturePresentation();
+        animator.step(seconds, scene);
+        collision.setObjectTransform(8, scene.worldTransform(8));
+        textureClock.advance(seconds);
+        textureClock.apply(scene);
+        scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
+        REQUIRE(scene.setObjectVisible(11, tick % 3 != 0));
+        scene.setDarken(static_cast<f32>(tick % 5) / 10);
+        const std::array<PointLight, 1> lights{
+            {{{10, 1, 50}, {1, 0.5f, 0.25f}, 4, static_cast<f32>(tick % 7)}}};
+        scene.setPointLights(lights);
+        collision.setSolid(1000, tick % 2 == 0);
+        collision.setContactOnly(1000, tick % 3 == 0);
+        collision.setFloorExitBlocked(1000, tick % 5 != 0);
+    }
+
+    WorldStateCheckpoint::State state() const {
+        auto result = checkpoint.checkpoint();
+        REQUIRE(result);
+        return std::move(*result);
+    }
+};
+
+void sameDraw(Fixture& first, Fixture& second, f32 alpha) {
+    first.device.draws.clear();
+    second.device.draws.clear();
+    const CameraFrame camera = CameraFrame::at(Vec3{10, 4, 0});
+    first.scene.draw(first.device, Mat4{1}, camera, alpha, -0.25f);
+    second.scene.draw(second.device, Mat4{1}, camera, alpha, -0.25f);
+    REQUIRE(first.device.draws.size() == second.device.draws.size());
+    for (usize i = 0; i < first.device.draws.size(); ++i) {
+        const auto& a = first.device.draws[i];
+        const auto& b = second.device.draws[i];
+        CHECK(a.transform == b.transform);
+        CHECK(a.state.uvOffset == b.state.uvOffset);
+        CHECK(a.state.darken == b.state.darken);
+        REQUIRE(a.vertices.size() == b.vertices.size());
+        for (usize j = 0; j < a.vertices.size(); ++j) {
+            CHECK(a.vertices[j].position == b.vertices[j].position);
+            CHECK(a.vertices[j].color == b.vertices[j].color);
+        }
+    }
+}
+
+TEST_CASE("world core checkpoints preserve native clocks, preceding poses and appended collision",
+          "[world][world-state-checkpoint]") {
+    const u32 rate = GENERATE(30u, 60u);
+    Fixture authority("world-core-authority");
+    Fixture replay("world-core-replay");
+    const f32 seconds = 1.0f / static_cast<f32>(rate);
+    for (u32 tick = 1; tick <= 7; ++tick) {
+        authority.step(seconds, tick);
+    }
+    const auto baseline = authority.state();
+    const auto clock = authority.textureClock.checkpoint();
+    const auto texturesBefore = replay.device.texturesCreated;
+    REQUIRE(replay.checkpoint.restore(baseline));
+    REQUIRE(replay.textureClock.restore(clock));
+    CHECK(replay.state() == baseline);
+    CHECK(replay.device.texturesCreated == texturesBefore);
+    CHECK(replay.scene.textureOf(3) != authority.scene.textureOf(3));
+    sameDraw(authority, replay, 0.0f);
+    sameDraw(authority, replay, 0.5f);
+    sameDraw(authority, replay, 1.0f);
+    CHECK(replay.state() == baseline); // Draw caches are not simulation changes.
+    for (u32 tick = 8; tick <= rate * 2; ++tick) {
+        CAPTURE(rate, tick);
+        authority.step(seconds, tick);
+        replay.step(seconds, tick);
+        CHECK(replay.state() == authority.state());
+        CHECK(replay.textureClock.checkpoint() == authority.textureClock.checkpoint());
+    }
+    REQUIRE(authority.checkpoint.restore(baseline));
+    REQUIRE(authority.textureClock.restore(clock));
+    REQUIRE(replay.checkpoint.restore(baseline));
+    REQUIRE(replay.textureClock.restore(clock));
+    CHECK(authority.state() == baseline);
+    CHECK(replay.state() == baseline);
+    CHECK(replay.device.texturesCreated == texturesBefore);
+}
+
+TEST_CASE("world core restore retains cycle outputs and raw masks without redispatch",
+          "[world][world-state-checkpoint]") {
+    Fixture fixture("world-core-events");
+    fixture.step(3.0f / 30.0f, 3);
+    REQUIRE_FALSE(fixture.animator.cycleEvents().empty());
+    fixture.collision.setSolid(1000, false);
+    fixture.collision.setContactOnly(1000, true);
+    fixture.collision.setFloorExitBlocked(1000, true);
+    const auto baseline = fixture.state();
+    REQUIRE(baseline.blockedFloorExits == std::vector<s32>{1000});
+    CHECK_FALSE(fixture.collision.floorExitBlocked(1000)); // Hidden masks the public query.
+    fixture.step(1.0f / 30.0f, 10);
+    REQUIRE(fixture.checkpoint.restore(baseline));
+    CHECK(fixture.state() == baseline);
+    CHECK(fixture.animator.cycleEvents().size() == baseline.cycles.size());
+    fixture.collision.setSolid(1000, true);
+    CHECK(fixture.collision.floorExitBlocked(1000));
+    CHECK(fixture.collision.contactOnly(1000));
+}
+
+TEST_CASE("world core preparations are inert, single-use and bound to the owning catalog",
+          "[world][world-state-checkpoint]") {
+    Fixture first("world-core-owner-one");
+    Fixture second("world-core-owner-two");
+    const auto baseline = first.state();
+    auto prepared = first.checkpoint.prepareRestore(baseline);
+    auto sibling = first.checkpoint.prepareRestore(baseline);
+    REQUIRE(prepared);
+    REQUIRE(sibling);
+    CHECK(first.state() == baseline);
+    CHECK_FALSE(second.checkpoint.canCommit(*prepared));
+    CHECK_FALSE(second.checkpoint.commitRestore(std::move(*prepared)));
+    REQUIRE(first.checkpoint.canCommit(*prepared));
+    first.step(1.0f / 30.0f, 1);
+    REQUIRE(first.checkpoint.commitRestore(std::move(*prepared)));
+    CHECK(first.state() == baseline);
+    CHECK_FALSE(first.checkpoint.canCommit(*prepared));
+    CHECK_FALSE(first.checkpoint.canCommit(*sibling));
+    auto stale = first.checkpoint.prepareRestore(baseline);
+    REQUIRE(stale);
+    first.binding = std::make_shared<const u8>(0);
+    CHECK_FALSE(first.checkpoint.canCommit(*stale));
+    CHECK_FALSE(first.checkpoint.checkpoint());
+    REQUIRE(first.checkpoint.bind(first.textureClock));
+    CHECK_FALSE(first.checkpoint.canCommit(*stale));
+    auto rebound = first.checkpoint.prepareRestore(baseline);
+    REQUIRE(rebound);
+    REQUIRE(first.checkpoint.bind(first.textureClock));
+    CHECK_FALSE(first.checkpoint.canCommit(*rebound));
+}
+
+TEST_CASE("world core rejects malformed state before changing any participating owner",
+          "[world][world-state-checkpoint]") {
+    const u32 mutation = GENERATE(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u);
+    Fixture fixture("world-core-malformed");
+    fixture.step(1.0f / 30.0f, 1);
+    const auto baseline = fixture.state();
+    auto invalid = baseline;
+    switch (mutation) {
+    case 0: invalid.placements[8].local[3].x = std::numeric_limits<f32>::quiet_NaN(); break;
+    case 1: invalid.placements[8].parent = 8; break;
+    case 2: invalid.placements[8].initial[3].x += 1; break;
+    case 3: invalid.resources.front().frame += 1; break;
+    case 4: invalid.slots.front().frame = static_cast<u32>(invalid.resources.size()); break;
+    case 5: invalid.moving.front().placed.front().vertices[0].x += 1; break;
+    case 6: invalid.moving.front().minimum.x += 1; break;
+    case 7: invalid.triangles.front().flags ^= 2; break;
+    case 8: invalid.animations.front().frames += 1; break;
+    case 9: invalid.animations.front().frame = std::numeric_limits<f32>::infinity(); break;
+    case 10: invalid.cycles.push_back({1000, true}); break;
+    case 11: invalid.hidden = {1000, 1000}; break;
+    case 12: invalid.units.front().alpha = 2; break;
+    case 13: invalid.light.points.front().radius = -1; break;
+    }
+    CAPTURE(mutation);
+    CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
+    CHECK_FALSE(fixture.checkpoint.restore(invalid));
+    CHECK(fixture.state() == baseline);
+}
+
+TEST_CASE("world core refuses unknown texture resources and changed collision topology",
+          "[world][world-state-checkpoint]") {
+    Fixture fixture("world-core-topology");
+    const auto baseline = fixture.state();
+    fixture.scene.setTextureFrame(0, &fixture.device.whiteTexture());
+    CHECK_FALSE(fixture.checkpoint.checkpoint());
+    REQUIRE(fixture.checkpoint.restore(baseline));
+    auto pending = fixture.checkpoint.prepareRestore(baseline);
+    REQUIRE(pending);
+    const std::array extra{
+        CollisionTriangle{{0, 1, 0}, {Vec3{10, 0, 10}, Vec3{12, 0, 10}, Vec3{10, 0, 12}}, 2000, 4}};
+    fixture.collision.append(extra);
+    CHECK_FALSE(fixture.checkpoint.canCommit(*pending));
+    CHECK_FALSE(fixture.checkpoint.restore(baseline));
+    CHECK_FALSE(fixture.checkpoint.checkpoint());
+}
+
+TEST_CASE("world core state rejects bounded rosters without truncating them",
+          "[world][world-state-checkpoint]") {
+    WorldStateCheckpoint::State state;
+    REQUIRE(state.valid());
+    state.hidden.resize(WorldStateCheckpoint::State::kMaxObjects + 1);
+    CHECK_FALSE(state.valid());
+    state = {};
+    state.resources.resize(WorldStateCheckpoint::State::kMaxTextures + 1);
+    CHECK_FALSE(state.valid());
+    state = {};
+    state.cycles.resize(WorldStateCheckpoint::State::kMaxEvents + 1);
+    CHECK_FALSE(state.valid());
+}
+} // namespace

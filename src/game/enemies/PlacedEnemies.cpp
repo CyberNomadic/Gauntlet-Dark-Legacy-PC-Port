@@ -30,6 +30,21 @@ auto spawnFields(const EnemySpawn& spawn) {
                     spawn.patrolBirth, spawn.allBirthDirections, spawn.asleep, spawn.throwInterval,
                     spawn.priority, spawn.sight);
 }
+
+std::optional<PlacedEnemies::Placement> activationOf(const PlacedEnemies::Placement& placement,
+                                                     const std::optional<ViewVolume>& view,
+                                                     const Vec3& attention) {
+    const auto& position = placement.spawn.position;
+    if (view && (!view->sees(position, placement.viewRadius) ||
+                 glm::distance(attention, position) > PlacedEnemies::kWatchReach)) {
+        return std::nullopt;
+    }
+    auto standing = placement;
+    if (!view) {
+        standing.spawn.priority = EnemySpawn::Priority::FreeSlotOnly;
+    }
+    return standing;
+}
 } // namespace
 
 bool PlacedEnemies::Placement::operator==(const Placement& other) const {
@@ -71,6 +86,26 @@ bool PlacedEnemies::Checkpoint::operator==(const Checkpoint& other) const {
            (!view || viewFields(*view) == viewFields(*other.view));
 }
 
+std::optional<std::vector<PlacedEnemies::Placement>>
+PlacedEnemies::Checkpoint::activations() const {
+    return activations(view, attention);
+}
+
+std::optional<std::vector<PlacedEnemies::Placement>>
+PlacedEnemies::Checkpoint::activations(std::optional<ViewVolume> nextView,
+                                       const Vec3& nextAttention) const {
+    if (!valid() || !bounded(nextAttention) || (nextView && !validView(*nextView))) {
+        return std::nullopt;
+    }
+    std::vector<Placement> result;
+    for (const usize index : pending) {
+        if (auto standing = activationOf(roster[index], nextView, nextAttention)) {
+            result.push_back(std::move(*standing));
+        }
+    }
+    return result;
+}
+
 void PlacedEnemies::bind(std::vector<Placement> roster) {
     std::vector<usize> pending(roster.size());
     std::iota(pending.begin(), pending.end(), usize{0});
@@ -103,17 +138,7 @@ bool PlacedEnemies::inView(const Vec3& position, f32 radius) const {
 }
 
 std::optional<PlacedEnemies::Placement> PlacedEnemies::activation(usize index) const {
-    const auto& placement = m_roster[index];
-    const auto& position = placement.spawn.position;
-    if (m_view && (!m_view->sees(position, placement.viewRadius) ||
-                   glm::distance(m_attention, position) > kWatchReach)) {
-        return std::nullopt;
-    }
-    auto standing = placement;
-    if (!m_view) {
-        standing.spawn.priority = EnemySpawn::Priority::FreeSlotOnly;
-    }
-    return standing;
+    return activationOf(m_roster[index], m_view, m_attention);
 }
 
 std::vector<PlacedEnemies::Placement> PlacedEnemies::activations() const {

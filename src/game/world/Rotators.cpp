@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 #include "engine/core/Types.h"
 
@@ -27,11 +28,19 @@ f32 paramF32(const ItemInstance& instance, usize at) {
 
 } // namespace
 
+void Rotators::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
+    m_layout = nullptr;
+    m_rotators.clear();
+}
+
 void Rotators::bind(const WorldLayout& layout) {
     constexpr usize kTargetAt = 0;
     constexpr usize kSpeedAt = 4;
     constexpr usize kLimitAt = 8;
-    m_rotators.clear();
+    clear();
+    m_layout = &layout;
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     const std::vector<WorldObject>& objects = layout.objects();
     const std::vector<ItemInstance>& instances = layout.itemInstances();
@@ -65,6 +74,8 @@ void Rotators::bind(const WorldLayout& layout) {
 
 void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
                            ItemArchive* realmItems) {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     for (Rotator& rotator : m_rotators) {
         rotator.pad.reset();
         if (rotator.subtype != kTurnedByPad) {
@@ -166,6 +177,12 @@ bool Rotators::accepts(std::span<const Cursor> state) const {
 bool Rotators::restore(std::span<const Cursor> state) {
     if (!accepts(state)) {
         return false;
+    }
+    if (m_checkpointGeneration == std::numeric_limits<u64>::max()) {
+        m_checkpointBinding = std::make_shared<const u8>(0);
+        m_checkpointGeneration = 0;
+    } else {
+        ++m_checkpointGeneration;
     }
     for (usize index = 0; index < state.size(); ++index) {
         auto& rotator = m_rotators[index];

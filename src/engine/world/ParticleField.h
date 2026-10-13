@@ -52,6 +52,9 @@ public:
     usize size() const { return m_entries.size(); }
     const ParticleEmitter& emitter(usize index) const { return m_entries[index].emitter; }
     const Texture* textureOf(usize index) const { return m_entries[index].texture; }
+    /** Authored layout marker identity, independent of texture batching order.
+     * Independently started effects have no layout marker and return -1. */
+    s32 sourceObject(usize index) const { return m_entries[index].sourceObject; }
     /** Live particles over every emitter. */
     usize particleCount() const;
     /** Starts an emitter of its own at `node`, apart from any layout; the index addresses
@@ -86,6 +89,7 @@ public:
 private:
     struct Entry {
         ParticleEmitter emitter;
+        s32 sourceObject = -1;
         s32 worldObject = -1; ///< animated source marker, kept with its batched emitter
         const Texture* texture = nullptr;
         DrawState state;

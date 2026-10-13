@@ -12,9 +12,9 @@ bool ordinary(s32 kind) {
     return kind >= 0 && kind < kSwarmKindCount && kind != kGarmBroodKind;
 }
 bool ordinary(const OpponentState& state) {
-    // Check the INCOMING populations, not only the adapter's currently bound
-    // ones. Installing Death or a carried placement before the adapter commits
-    // would otherwise invalidate that child after other owners had changed.
+    // Check the INCOMING live populations, not only the adapter's currently
+    // bound ones. Dormant placement definitions remain intact; the runner
+    // preflights their next activation before any native spawn can occur.
     const auto& swarm = state.enemies;
     if (!state.placements || !swarm.combatants.empty() || !swarm.deathEvents.empty() ||
         !swarm.deathShots.empty() || !swarm.tagged.empty() || swarm.scales.bossEncounter) {
@@ -30,11 +30,6 @@ bool ordinary(const OpponentState& state) {
     };
     return std::ranges::all_of(state.generators.roster, generator) &&
            std::ranges::all_of(state.generators.generators, generator) &&
-           std::ranges::all_of(state.placements->roster,
-                               [](const auto& placement) {
-                                   return ordinary(placement.kind) &&
-                                          ordinary(placement.spawn.kind) && !placement.carried;
-                               }) &&
            std::ranges::all_of(swarm.blows, [](const auto& blow) { return ordinary(blow.kind); }) &&
            std::ranges::all_of(swarm.losses,
                                [](const auto& loss) { return ordinary(loss.kind); }) &&
@@ -51,6 +46,11 @@ bool ordinary(const OpponentState& state) {
 } // namespace
 
 bool OrdinaryCombatCheckpoint::State::valid() const {
+    return OrdinaryCombatCheckpoint::valid(combat, opponents, adapter);
+}
+bool OrdinaryCombatCheckpoint::valid(const CombatRollbackCheckpoint::State& combat,
+                                     const OpponentState& opponents,
+                                     const OpponentCombatCheckpoint::State& adapter) {
     if (!combat.valid() || !opponents.valid() || !adapter.valid() || !ordinary(opponents)) {
         return false;
     }

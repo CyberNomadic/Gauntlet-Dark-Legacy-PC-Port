@@ -138,6 +138,7 @@ public:
     std::optional<Vec3> pickSurface(const Vec3& from, const Vec3& to) const;
 
 private:
+    friend class WorldStateCheckpoint;
     std::optional<FloorHit> surfaceAt(const Vec3& position, f32 above, f32 below, bool liquid,
                                       f32 edgeReach = 0.0f, const Vec2* direction = nullptr) const;
     /** An object whose triangles move with it. */

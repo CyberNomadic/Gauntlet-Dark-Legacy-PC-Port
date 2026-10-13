@@ -19,6 +19,7 @@ add_library(game STATIC
     netplay/PotionIdentity.cpp
     netplay/PlayerLocomotionCheckpoint.cpp
     netplay/PlayerRuntimePacket.cpp
+    netplay/CombatStatePacket.cpp
     netplay/PlayerHealthCheckpoint.cpp
     netplay/PlayerPoseCheckpoint.cpp
     netplay/PlayerPotionCheckpoint.cpp
@@ -208,6 +209,7 @@ add_library(game STATIC
     world/LevelItemArchives.cpp
     world/ItemFigure.h
     world/ItemFigure.cpp
+    world/ItemFigureCheckpoint.cpp
     world/ItemSupport.cpp
     world/BodyCollision.cpp
     world/MoveStrikes.h
@@ -262,8 +264,19 @@ add_library(game STATIC
     enemies/LegendItems.cpp
     world/Chests.h
     world/Chests.cpp
+    world/ChestsCheckpoint.cpp
     world/LockedGates.h
     world/LockedGates.cpp
+    world/LockedGatesCheckpoint.cpp
+    world/BreakablesCheckpoint.cpp
+    world/SafeRocksCheckpoint.cpp
+    world/StaticSceneryCheckpoint.cpp
+    world/RubbleCheckpoint.cpp
+    world/TrapsCheckpoint.cpp
+    world/FallingSceneryCheckpoint.cpp
+    world/DestructibleWallsCheckpoint.cpp
+    world/RotatorsCheckpoint.cpp
+    world/PlacedItemsCheckpoint.cpp
     world/Traps.h
     world/Traps.cpp
     world/TowerAccess.h
@@ -275,6 +288,7 @@ add_library(game STATIC
     world/LevelWorld.h
     world/LevelWorld.cpp
     world/WorldDestruction.cpp
+    world/WorldDestructionCheckpoint.cpp
     world/TowerCamera.h
     world/TowerCamera.cpp
     world/BossCamera.h
@@ -399,6 +413,7 @@ add_library(game STATIC
     screens/OpponentPrediction.cpp
     screens/OpponentPlacements.cpp
     screens/OnlineOpponentReplay.cpp
+    screens/OnlineCombatReplay.cpp
     netplay/OpponentFrame.cpp
     enemies/OpponentState.cpp
     screens/PlayerAttacks.cpp
@@ -408,6 +423,13 @@ add_library(game STATIC
     screens/OpponentCombatCheckpoint.cpp
     screens/OrdinaryCombatCheckpoint.cpp
     screens/OrdinaryCombatTick.cpp
+    screens/CombatPrediction.cpp
+    screens/CombatResources.cpp
+    screens/EnemyFeedbackEmission.cpp
+    screens/OrdinaryProjectilePhase.cpp
+    screens/OrdinaryWeaponEmission.cpp
+    screens/LevelFixturesCheckpoint.cpp
+    world/LevelWorldCheckpoint.cpp
     screens/PartyDamage.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp

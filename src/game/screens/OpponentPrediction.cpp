@@ -10,6 +10,8 @@
 #include "engine/core/Log.h"
 
 #include "game/config/GameConfig.h"
+#include "game/enemies/CritterStatues.h"
+#include "game/enemies/Critters.h"
 #include "game/screens/OpponentPlacements.h"
 #include "game/screens/OpponentResources.h"
 #include "game/world/LevelWorld.h"
@@ -86,6 +88,33 @@ struct OpponentPrediction::Data {
                              roster, world.ref().realmId, &world.items(), lenders)) {
             return false;
         }
+        // Resolve the complete native load-time roster, including great creatures
+        // and statue fallbacks. These temporary native owners select resources and
+        // carried items only; unsupported future activations still refuse replay.
+        Critters critters;
+        const auto gargoyle = std::ranges::find(roster, kGargoyleEnemyKind, &LevelEnemy::kind);
+        const std::string_view gargoyleForm =
+            gargoyle != roster.end() ? std::string_view(gargoyle->form) : std::string_view{};
+        const std::array creatureTextures{&world.textures()};
+        critters.open(device, root, &collision, scales,
+                      world.ref().name.empty() ? 'G' : world.ref().name.front(), creatureTextures,
+                      gargoyleForm);
+        CritterStatues statues;
+        statues.setContactGridBounds(world.layout().minBounds(), world.layout().maxBounds());
+        // LevelWorld binds pickups before appending breakable-item roofs. Recreate
+        // that same support query without changing the borrowed world's pickups.
+        auto pickupCollision = collision;
+        for (usize index = 0; index < world.walls().size(); ++index) {
+            pickupCollision.setSolid(world.walls().wall(index).object, false);
+        }
+        PlacedItems pickups;
+        pickups.bind(device, world.layout(), &pickupCollision, world.placedItems().archives());
+        pickups.setPlayerCount(initialPlayers);
+        placements.bind(OpponentPlacements::load(device, world.layout(), roster, initialPlayers,
+                                                 enemies, critters, statues, &collision,
+                                                 [&](const Vec3& position, f32 reach, f32 rise) {
+                                                     return pickups.claim(position, reach, rise);
+                                                 }));
         const auto local = enemies.checkpoint();
         if (!local || local->stocks.size() != trusted->stocks.size()) {
             return false;
@@ -95,28 +124,6 @@ struct OpponentPrediction::Data {
                 return false;
             }
         }
-        std::vector<PlacedEnemies::Placement> placed;
-        const auto& infos = world.layout().itemInfos();
-        for (const auto& instance : world.layout().itemInstances()) {
-            if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
-                continue;
-            }
-            auto row = OpponentPlacements::ordinary(
-                instance, infos[static_cast<usize>(instance.info)], roster, initialPlayers,
-                [&](s32 kind) {
-                    // Only already-trusted ordinary stocks enter this first
-                    // slice. A native pending Great-one/Death/IT row causes the
-                    // complete immutable roster comparison to refuse replay.
-                    return kind >= 0 && kind < kSwarmKindCount && kind != kGarmBroodKind &&
-                           std::ranges::any_of(local->stocks, [kind](const auto& stock) {
-                               return stock.kind == kind;
-                           });
-                });
-            if (row) {
-                placed.push_back(std::move(*row));
-            }
-        }
-        placements.bind(std::move(placed));
         gridOrigin = local->contactGridOrigin;
         gridInverseWidth = local->contactGridInverseWidth;
         resources = OpponentResources::missiles(enemies);

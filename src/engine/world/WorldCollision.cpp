@@ -338,7 +338,11 @@ void WorldCollision::MovingObject::place(const Mat4& world) {
     for (usize i = 0; i < local.size(); ++i) {
         const CollisionTriangle& from = local[i];
         CollisionTriangle& to = placed[i];
-        to.normal = glm::normalize(rotation * from.normal);
+        const Vec3 normal = rotation * from.normal;
+        // Authored explosion planes (for example L1's L1CFXP_EXPLODE) shrink to
+        // zero between bursts. Their collapsed surface has no normal or contact;
+        // keep the original local normal for the next nonzero animation frame.
+        to.normal = glm::dot(normal, normal) == 0 ? Vec3{0} : glm::normalize(normal);
         for (usize k = 0; k < 3; ++k) {
             to.vertices[k] = Vec3{world * Vec4{from.vertices[k], 1.0f}};
             boundsMin = first ? to.vertices[k] : glm::min(boundsMin, to.vertices[k]);
@@ -455,7 +459,9 @@ void WorldCollision::eachTriangle(f32 minX, f32 minZ, f32 maxX, f32 maxZ,
             continue;
         }
         for (const CollisionTriangle& triangle : mover.placed) {
-            visit(triangle);
+            if (triangle.normal != Vec3{0}) {
+                visit(triangle);
+            }
         }
     }
 }
@@ -912,7 +918,8 @@ bool WorldCollision::wallBetween(const Vec3& from, const Vec3& to, f32 radius) c
         for (usize i = 0; i < mover.placed.size(); ++i) {
             // WorldObjCollide transforms the ray into the object's space before
             // CTriListCollide filters normals. Rotation must not change that filter.
-            if (blocks(mover.placed[i], mover.local[i].normal.y)) {
+            if (mover.placed[i].normal != Vec3{0} &&
+                blocks(mover.placed[i], mover.local[i].normal.y)) {
                 return true;
             }
         }

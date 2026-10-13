@@ -86,6 +86,8 @@ TEST_CASE("placed enemy checkpoint retains complete metadata and ordered native 
     CHECK_FALSE(owner.inView({0, 0, 50.01f}, 1));
     CHECK_FALSE(owner.inView({100, 0, 10}, 1));
     const auto expected = owner.activations();
+    REQUIRE(checkpoint->activations());
+    CHECK(*checkpoint->activations() == expected);
     CHECK(owner.checkpoint() == checkpoint);
     REQUIRE(expected.size() == 3);
     CHECK(expected[0] == varied);
@@ -118,6 +120,8 @@ TEST_CASE("placed enemy no-view activation consumes failed attempts in native or
     owner.observe(std::nullopt, {123, 456, 789});
     const auto before = owner.checkpoint();
     REQUIRE(before);
+    REQUIRE(before->activations());
+    CHECK(*before->activations() == owner.activations());
     std::vector<PlacedEnemies::Placement> actual;
     // An empty-result dispatcher represents a full native pool. Activation is
     // still consumed, rather than retried on every later camera update.
@@ -126,6 +130,7 @@ TEST_CASE("placed enemy no-view activation consumes failed attempts in native or
         actual.push_back(standing);
     });
     REQUIRE(actual.size() == roster.size());
+    CHECK(*before->activations() == actual);
     CHECK(owner.count() == 0);
     owner.activate([&](const auto&) { FAIL("a consumed placement was retried"); });
     REQUIRE(owner.restore(*before));
@@ -144,6 +149,36 @@ TEST_CASE("placed enemy checkpoint preserves negative authored default-way selec
     REQUIRE(state->valid());
     REQUIRE(owner.restore(*state));
     CHECK(owner.activations().front().spawn.algorithm == -32768);
+}
+
+TEST_CASE("placement value preflight matches prospective native watch without mutation",
+          "[rollback][placed-enemies]") {
+    PlacedEnemies owner;
+    owner.bind({placement({0, 0, 10}), placement({0, 0, 100}, kDeathKind),
+                placement({0, 0, 100}, kDeathKind)});
+    owner.observe(ViewVolume{}, {});
+    const auto before = owner.checkpoint();
+    REQUIRE(before);
+    ViewVolume next;
+    next.position = {0, 0, 80};
+    const Vec3 attention{0, 0, 100};
+    const auto prospective = before->activations(next, attention);
+    REQUIRE(prospective);
+    REQUIRE(prospective->size() == 2);
+    CHECK(owner.checkpoint() == before);
+    owner.observe(next, attention);
+    CHECK(owner.activations() == *prospective);
+    std::vector<PlacedEnemies::Placement> born;
+    owner.activate([&](const auto& value) { born.push_back(value); });
+    CHECK(born == *prospective);
+
+    auto malformed = *before;
+    malformed.pending.push_back(malformed.roster.size());
+    CHECK_FALSE(malformed.activations());
+    next.position.x = std::numeric_limits<f32>::infinity();
+    CHECK_FALSE(before->activations(next, attention));
+    CHECK_FALSE(before->activations(std::nullopt, Vec3{std::numeric_limits<f32>::quiet_NaN()}));
+    CHECK(before->activations()->size() == 1);
 }
 
 TEST_CASE("placed enemy checkpoint rejects malformed order view and placement data atomically",

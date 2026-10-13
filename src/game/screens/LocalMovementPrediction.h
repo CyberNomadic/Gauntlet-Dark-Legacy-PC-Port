@@ -130,7 +130,7 @@ public:
     /** Exactly once per application simulation tick, even if no command was sent.
      * Never replay unsent/coalesced input or an already resolved simulation tick. */
     void update(const CombatSnapshot* authority, std::span<const InputCommand> sent,
-                const ReplayCallbacks& callbacks = {});
+                const ReplayCallbacks& callbacks = {}, bool simulate = true);
     void present(CombatSnapshot& displayed, f32 blend) const;
     /** Complete native local replay, replaced on update. Null on any unsafe or
      * unsupported path. Releases contain only ticks after the host checkpoint. */

@@ -145,9 +145,76 @@ struct Scene {
     }
 };
 
+TEST_CASE("native combat frame capture keeps the next phase clock and gameplay camera",
+          "[netplay][play-replication][combat-supplement][assets]") {
+    Scene scene;
+    CHECK_FALSE(scene.play.combatFrame());
+    CHECK_FALSE(scene.play.combatState());
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindReplicationResources(resources, scene.pickups, scene.fixtures));
+    scene.settle();
+    const auto before = scene.play.combatFrame();
+    REQUIRE(before);
+    CHECK(before->camera.position == scene.play.camera().camera().position);
+    CHECK(before->camera.yaw == scene.play.camera().camera().yaw);
+    CHECK(before->attention == scene.play.camera().attention());
+    CHECK(before->damage.tower);
+    CHECK(before->ticks == 1);
+    CHECK(before->seconds == 1.0f / 60);
+    const auto firstActor = scene.play.actor(0)->checkpoint();
+    const auto secondActor = scene.play.actor(1)->checkpoint();
+    const auto uploads = scene.device.texturesCreated;
+    const auto seed = scene.play.combatState();
+    REQUIRE(seed);
+    CHECK(scene.play.actor(0)->checkpoint() == firstActor);
+    CHECK(scene.play.actor(1)->checkpoint() == secondActor);
+    REQUIRE(seed->combat.players.size() == 2);
+    CHECK(seed->combat.players[0].actor == firstActor);
+    CHECK(seed->combat.players[1].actor == secondActor);
+    CHECK(scene.play.combatState() == seed);
+    CHECK(scene.device.texturesCreated == uploads);
+    const auto repeated = scene.play.combatFrame();
+    REQUIRE(repeated);
+    CHECK(repeated->damage.playSeconds == before->damage.playSeconds);
+    REQUIRE(scene.play.update(1.0 / 60, {}) == PlayOutcome::Running);
+    const auto after = scene.play.combatFrame();
+    REQUIRE(after);
+    CHECK(std::abs(after->damage.playSeconds - before->damage.playSeconds - 1.0f / 60) < 0.00001f);
+
+    SECTION("time stop holds the complete opponent phase") {
+        auto& player = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+        auto& inventory = player.actor.save().progress().inventory;
+        inventory.addPowerup(powerup::kSpecial, powerup::kStopTime, 0, -1);
+        REQUIRE(scene.play.update(1.0 / 60, {}) == PlayOutcome::Running);
+        CHECK_FALSE(scene.play.combatFrame());
+        CHECK_FALSE(scene.play.combatState());
+        for (auto& slot : inventory.powerups) {
+            if (slot.kind == powerup::kSpecial && (slot.flags & powerup::kStopTime) != 0) {
+                slot.on = false;
+            }
+        }
+        REQUIRE(scene.play.update(1.0 / 60, {}) == PlayOutcome::Running);
+        CHECK(scene.play.combatFrame());
+        CHECK(scene.play.combatState());
+    }
+    SECTION("replacing a figure revokes its retained resource catalog") {
+        auto& player = const_cast<PlayerRuntime&>(scene.play.participants()[0]);
+        const auto previous = std::move(player.figure);
+        REQUIRE(previous);
+        player.figure = PlayerFigure::load(scene.device, scene.root, player.actor.save(), false);
+        REQUIRE(player.figure);
+        CHECK_FALSE(scene.play.combatState());
+        scene.play.close(); // Retire borrowers before the retained old figure.
+        CHECK_FALSE(scene.play.combatFrame());
+        CHECK_FALSE(scene.play.combatState());
+    }
+}
+
 TEST_CASE("remote scroll dismissal advances the host once and respects the native page hold",
           "[netplay][play-replication][assets]") {
     Scene scene({}, false, false, true);
+    CHECK_FALSE(scene.play.combatFrame());
+    CHECK_FALSE(scene.play.combatState());
     for (s32 i = 0; i < 600 && !scene.play.scrollLook(); ++i) {
         REQUIRE(scene.play.update(1.0 / 60, {}) == PlayOutcome::Running);
     }
@@ -157,7 +224,7 @@ TEST_CASE("remote scroll dismissal advances the host once and respects the nativ
     Pair pair;
     PlayReplication driver;
     ProjectileResources resources;
-    REQUIRE(scene.play.bindSceneProjectiles(resources));
+    REQUIRE(scene.play.bindReplicationResources(resources, scene.pickups, scene.fixtures));
     pair.prepare();
     REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
     pair.ready();
@@ -178,6 +245,10 @@ TEST_CASE("remote scroll dismissal advances the host once and respects the nativ
             CHECK(captured->burnFrame == local->burnFrame);
             CHECK(captured->promptAlpha == local->promptAlpha);
             CHECK(scene.play.actor(1)->position() == start);
+            CHECK_FALSE(scene.play.combatFrame());
+            CHECK_FALSE(scene.play.combatState());
+            CHECK_FALSE(driver.latest()->combatState);
+            CHECK_FALSE(driver.latest()->combatFrame);
         }
         pair.pump();
     };
@@ -216,9 +287,20 @@ TEST_CASE("remote scroll dismissal advances the host once and respects the nativ
     }
     CHECK(sawBurn);
     CHECK_FALSE(scene.play.scrollLook());
-    for (s32 tick = 0; tick < 4; ++tick) {
+    REQUIRE(scene.play.intro() == PlayScene::Intro::Crystal);
+    s32 crystalTicks = 0;
+    for (; crystalTicks < TowerWelcome::kCrystalTicks + 1 &&
+           scene.play.intro() == PlayScene::Intro::Crystal;
+         ++crystalTicks) {
+        CHECK_FALSE(scene.play.combatFrame());
+        CHECK_FALSE(scene.play.combatState());
         step({});
     }
+    CHECK(crystalTicks > 0);
+    REQUIRE(scene.play.intro() == PlayScene::Intro::Done);
+    step({});
+    REQUIRE(scene.play.combatFrame());
+    REQUIRE(scene.play.combatState());
     REQUIRE(pair.guest.playback().latest());
     CHECK_FALSE(pair.guest.playback().latest()->hud->scroll);
 }

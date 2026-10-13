@@ -1900,6 +1900,19 @@ void PlayerAttacks::updateProjectiles(f32 seconds, std::span<PlayerRuntime> play
     if (!m_resources) {
         return;
     }
+    for (const MissileImpact& impact : advanceProjectileFlights(seconds, players, targets)) {
+        dispatchProjectileImpact(impact, players, targets);
+    }
+    updatePotions(seconds, players, targets);
+    updateItems(seconds, players, targets);
+}
+
+std::vector<MissileImpact> PlayerAttacks::advanceProjectileFlights(f32 seconds,
+                                                                   std::span<PlayerRuntime> players,
+                                                                   const Targets& targets) {
+    if (!m_resources) {
+        return {};
+    }
     glowWeapons(players, targets.occupiedHand);
     std::vector<MissileTarget> missileTargets = strikeTargets(targets);
     const PlacedItems& lying = m_resources->world.placedItems();
@@ -1937,115 +1950,120 @@ void PlayerAttacks::updateProjectiles(f32 seconds, std::span<PlayerRuntime> play
         targets.fixtures.shootScenery(missile.position,
                                       missile.spec != nullptr ? missile.spec->radius : 1.0f);
     }
-    for (const MissileImpact& impact : m_resources->arsenal.missiles().takeImpacts()) {
-        if (impact.worldObject >= 0) {
-            if (m_resources->world.explodeObject(impact.worldObject, impact.position)) {
-                for (const Vec3& position : m_resources->world.takeWorldExplosions()) {
-                    targets.fixtures.worldExplosion(position, players, targets.fixtureEvents);
-                }
-            }
-        }
-        f32 playerDistance = std::numeric_limits<f32>::max();
-        for (const PlayerRuntime& player : players) {
-            if (player.life == PlayerLife::Standing) {
-                playerDistance = std::min(
-                    playerDistance, glm::distance(player.actor.followPoint(), impact.position));
-            }
-        }
-        m_resources->arsenal.presentImpact(impact, playerDistance);
-        if (impact.player >= 0) {
-            const auto player = std::ranges::find_if(players, [&impact](const PlayerRuntime& p) {
-                return p.actor.player() == impact.player;
-            });
-            if (player != players.end() && player->effectGap <= 0 && targets.hurt) {
-                targets.hurt(
-                    static_cast<usize>(player - players.begin()), impact.stun ? 0 : impact.damage,
-                    impact.stun ? HurtKind::QuietBlow : HurtKind::Blow,
-                    {impact.flags | (impact.stun ? PlayerImpact::kStun : 0), impact.direction});
-                if (impact.damage > 2) {
-                    player->effectGap = impact.playerHitGap;
-                }
-            }
-            continue;
-        }
-        if (impact.potion != 0) {
-            beginPotion(impact);
-            continue;
-        }
-        if (impact.target >= kStatueTargetBase) {
-            targets.opponents.wakeStatue(static_cast<usize>(impact.target - kStatueTargetBase));
-            continue;
-        }
-        if (impact.target >= kPotionTargetBase) {
-            shootPotion(impact, players, targets);
-            continue;
-        }
-        if (impact.target >= kItemStopBase) {
-            continue;
-        }
-        if (strikeSwitch(impact.target, impact.flags)) {
-            continue;
-        }
-        f32 credit = 0.0f;
-        if (impact.target >= kWallTargetBase) {
-            targets.fixtures.strikeWall(static_cast<usize>(impact.target - kWallTargetBase),
-                                        impact.damage, impact.flags);
-        } else if (impact.target >= kSafeRockTargetBase) {
-            targets.fixtures.strikeSafeRock(static_cast<usize>(impact.target - kSafeRockTargetBase),
-                                            impact.damage);
-        } else if (impact.target >= kBossTargetBase) {
-            EnemyHit hit;
-            hit.damage = impact.damage;
-            hit.flags = impact.flags;
-            hit.player = impact.owner;
-            hit.where = impact.position;
-            hit.node = impact.node;
-            for (const PlayerRuntime& runtime : players) {
-                const PlayerActor& actor = runtime.actor;
-                if (actor.player() == impact.owner) {
-                    hit.direction = impact.position - actor.position();
-                    hit.direction.y = 0.0f;
-                    hit.level = experienceLevel(actor.save().experience());
-                }
-            }
-            credit = targets.opponents.bosses().hurt(hit, impact.target - kBossTargetBase);
-        } else if (impact.target >= kCritterTargetBase) {
-            Vec3 direction{0.0f, 0.0f, 1.0f};
-            for (const PlayerRuntime& runtime : players) {
-                const PlayerActor& actor = runtime.actor;
-                if (actor.player() == impact.owner) {
-                    direction = impact.position - actor.position();
-                    direction.y = 0.0f;
-                }
-            }
-            credit = targets.opponents.strikeCritter(
-                impact.target - kCritterTargetBase, impact.damage, impact.flags, direction,
-                impact.owner, impact.position, false, players, impact.node);
-        } else if (impact.target >= kGeneratorTargetBase) {
-            targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
-                                              impact.owner, players);
-        } else if (impact.target >= kEnemyTargetBase) {
-            // The hit travels the way the weapon flew: out from whoever threw it.
-            Vec3 direction{0.0f, 0.0f, 1.0f};
-            for (const PlayerRuntime& runtime : players) {
-                const PlayerActor& actor = runtime.actor;
-                if (actor.player() == impact.owner) {
-                    direction = impact.position - actor.position();
-                    direction.y = 0.0f;
-                }
-            }
-            credit = targets.opponents.strikeEnemy(impact.target - kEnemyTargetBase, impact.damage,
-                                                   impact.flags, direction, impact.owner, players,
-                                                   false, impact.position);
-        } else if (impact.target >= 0) {
-            targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
-                                          impact.owner, players, targets.fixtureEvents);
-            targets.fixtures.settleBlasts(players, targets.fixtureEvents);
-        }
-        healHit(impact.owner, impact.flags, credit, impact.position, players, targets);
+    return m_resources->arsenal.missiles().takeImpacts();
+}
+
+void PlayerAttacks::dispatchProjectileImpact(const MissileImpact& impact,
+                                             std::span<PlayerRuntime> players,
+                                             const Targets& targets) {
+    if (!m_resources) {
+        return;
     }
-    updatePotions(seconds, players, targets);
-    updateItems(seconds, players, targets);
+    if (impact.worldObject >= 0) {
+        if (m_resources->world.explodeObject(impact.worldObject, impact.position)) {
+            for (const Vec3& position : m_resources->world.takeWorldExplosions()) {
+                targets.fixtures.worldExplosion(position, players, targets.fixtureEvents);
+            }
+        }
+    }
+    f32 playerDistance = std::numeric_limits<f32>::max();
+    for (const PlayerRuntime& player : players) {
+        if (player.life == PlayerLife::Standing) {
+            playerDistance = std::min(playerDistance,
+                                      glm::distance(player.actor.followPoint(), impact.position));
+        }
+    }
+    m_resources->arsenal.presentImpact(impact, playerDistance);
+    if (impact.player >= 0) {
+        const auto player = std::ranges::find_if(players, [&impact](const PlayerRuntime& p) {
+            return p.actor.player() == impact.player;
+        });
+        if (player != players.end() && player->effectGap <= 0 && targets.hurt) {
+            targets.hurt(
+                static_cast<usize>(player - players.begin()), impact.stun ? 0 : impact.damage,
+                impact.stun ? HurtKind::QuietBlow : HurtKind::Blow,
+                {impact.flags | (impact.stun ? PlayerImpact::kStun : 0), impact.direction});
+            if (impact.damage > 2) {
+                player->effectGap = impact.playerHitGap;
+            }
+        }
+        return;
+    }
+    if (impact.potion != 0) {
+        beginPotion(impact);
+        return;
+    }
+    if (impact.target >= kStatueTargetBase) {
+        targets.opponents.wakeStatue(static_cast<usize>(impact.target - kStatueTargetBase));
+        return;
+    }
+    if (impact.target >= kPotionTargetBase) {
+        shootPotion(impact, players, targets);
+        return;
+    }
+    if (impact.target >= kItemStopBase) {
+        return;
+    }
+    if (strikeSwitch(impact.target, impact.flags)) {
+        return;
+    }
+    f32 credit = 0.0f;
+    if (impact.target >= kWallTargetBase) {
+        targets.fixtures.strikeWall(static_cast<usize>(impact.target - kWallTargetBase),
+                                    impact.damage, impact.flags);
+    } else if (impact.target >= kSafeRockTargetBase) {
+        targets.fixtures.strikeSafeRock(static_cast<usize>(impact.target - kSafeRockTargetBase),
+                                        impact.damage);
+    } else if (impact.target >= kBossTargetBase) {
+        EnemyHit hit;
+        hit.damage = impact.damage;
+        hit.flags = impact.flags;
+        hit.player = impact.owner;
+        hit.where = impact.position;
+        hit.node = impact.node;
+        for (const PlayerRuntime& runtime : players) {
+            const PlayerActor& actor = runtime.actor;
+            if (actor.player() == impact.owner) {
+                hit.direction = impact.position - actor.position();
+                hit.direction.y = 0.0f;
+                hit.level = experienceLevel(actor.save().experience());
+            }
+        }
+        credit = targets.opponents.bosses().hurt(hit, impact.target - kBossTargetBase);
+    } else if (impact.target >= kCritterTargetBase) {
+        Vec3 direction{0.0f, 0.0f, 1.0f};
+        for (const PlayerRuntime& runtime : players) {
+            const PlayerActor& actor = runtime.actor;
+            if (actor.player() == impact.owner) {
+                direction = impact.position - actor.position();
+                direction.y = 0.0f;
+            }
+        }
+        credit = targets.opponents.strikeCritter(impact.target - kCritterTargetBase, impact.damage,
+                                                 impact.flags, direction, impact.owner,
+                                                 impact.position, false, players, impact.node);
+    } else if (impact.target >= kGeneratorTargetBase) {
+        targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
+                                          impact.owner, players);
+    } else if (impact.target >= kEnemyTargetBase) {
+        // The hit travels the way the weapon flew: out from whoever threw it.
+        Vec3 direction{0.0f, 0.0f, 1.0f};
+        for (const PlayerRuntime& runtime : players) {
+            const PlayerActor& actor = runtime.actor;
+            if (actor.player() == impact.owner) {
+                direction = impact.position - actor.position();
+                direction.y = 0.0f;
+            }
+        }
+        credit = targets.opponents.strikeEnemy(impact.target - kEnemyTargetBase, impact.damage,
+                                               impact.flags, direction, impact.owner, players,
+                                               false, impact.position);
+    } else if (impact.target >= 0) {
+        targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
+                                      impact.owner, players, targets.fixtureEvents);
+        targets.fixtures.settleBlasts(players, targets.fixtureEvents);
+    }
+    healHit(impact.owner, impact.flags, credit, impact.position, players, targets);
 }
 
 /** A thrown weapon breaks a bottle lying about (fn_8005C1DC, PlayerDamagedItem): its own magic

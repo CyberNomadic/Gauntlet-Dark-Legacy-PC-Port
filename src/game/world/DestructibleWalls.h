@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -30,6 +31,7 @@ public:
         f32 flash = 0;
         s32 blinks = 0;     ///< white blinks still to come, revealing it
         f32 blinkTicks = 0; ///< into the present blink's cycle
+        bool white = false; ///< exact last-applied model mask, including cycle boundaries
     };
     static constexpr s32 kRevealBlinks = 3;
     static constexpr f32 kBlinkWhite = 30; ///< ticks of a cycle it shows white
@@ -37,7 +39,7 @@ public:
     static constexpr f32 kTicksPerSecond = 60;
     void bind(RenderDevice& device, const WorldLayout& layout, ModelSet& models,
               TextureSet& textures, WorldCollision& collision);
-    void clear() { m_walls.clear(); }
+    void clear();
     void setPlayerCount(s32 players, WorldCollision& collision);
     void update(f32 seconds);
     usize size() const { return m_walls.size(); }
@@ -52,7 +54,15 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
 
 private:
+    friend class DestructibleWallsCheckpoint;
+    void showWhite(Wall& wall, bool white);
     std::vector<Wall> m_walls;
     const Texture* m_white = nullptr;
+    const WorldLayout* m_layout = nullptr;
+    const ModelSet* m_models = nullptr;
+    const TextureSet* m_textures = nullptr;
+    const WorldCollision* m_collision = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 } // namespace gdl::game

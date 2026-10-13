@@ -2,6 +2,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -87,6 +88,14 @@ public:
     std::optional<std::pair<usize, f32>> nearestAsleep(const Vec3& spot) const;
     /** Wakes statues within their placement's sight and resolves solid body contact. */
     Vec3 touch(const Vec3& position, f32 radius, f32 height = 0.0f);
+    struct Visitor {
+        Vec3 position{0};
+        f32 radius = 0;
+        f32 height = 0;
+    };
+    /** No current or prospective activation, and no body correction, for this
+     * complete party. A caller may then leave dormant statue owners untouched. */
+    bool dormantFor(std::span<const Visitor> visitors) const;
     /** What the statues put in the way: an upright cylinder each. */
     std::vector<Obstacle> obstacles() const;
     /** What a blow can strike, by the statue's place in the list. */
@@ -154,6 +163,7 @@ private:
     };
     friend class OpponentCombatCheckpoint;
     static Obstacle obstacleOf(const Statue& statue);
+    static bool wakesAt(const Statue& statue, const Vec3& position, f32 radius, f32 height);
     s32 contactCell(f32 coordinate, f32 origin) const;
     bool inContactGrid(const Vec3& statue, const Vec3& player, f32 radius) const;
     std::vector<std::unique_ptr<Statue>> m_statues;

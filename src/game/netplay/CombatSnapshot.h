@@ -6,6 +6,7 @@
 
 #include "game/enemies/OpponentState.h"
 #include "game/netplay/AnimationCheckpoint.h"
+#include "game/netplay/CombatStatePacket.h"
 #include "game/netplay/EffectIdentity.h"
 #include "game/netplay/FighterSnapshot.h"
 #include "game/netplay/HudSnapshot.h"
@@ -22,6 +23,7 @@
 #include "game/netplay/PotionIdentity.h"
 #include "game/netplay/ShotIdentity.h"
 #include "game/netplay/TurboEffectCheckpoint.h"
+#include "game/screens/OrdinaryCombatTick.h"
 #include "game/world/PlayerMissiles.h"
 
 namespace gdl::game {
@@ -347,6 +349,11 @@ struct CombatSnapshot {
      * not truncate pools or discard existing presentation/replay components. */
     std::optional<OpponentState> opponents = std::nullopt;
     std::optional<OpponentFrame> opponentFrame = std::nullopt;
+    /** Full ordinary combat supplement paired with the same opponent pools.
+     * Only latest authority may seed replay; interpolated views must omit both.
+     * The frame holds native NEXT-step context, not the guest rendering camera. */
+    std::optional<CombatStatePacket::State> combatState = std::nullopt;
+    std::optional<OrdinaryCombatTick::Frame> combatFrame = std::nullopt;
     bool valid() const;
 };
 
@@ -389,6 +396,8 @@ public:
                 (16 + PlayerLocomotionCheckpoint::kMaxBytes + PlayerPoseCheckpoint::kMaxBytes +
                  TurboEffectCheckpoint::kMaxBytes + PlayerPotionCheckpoint::kMaxBytes);
     static constexpr usize kOpponentHeaderBytes = 24; ///< two lengths plus exact epoch/tick echo
+    static constexpr usize kCombatHeaderBytes = 24;
+    static constexpr usize kCombatFrameBytes = 68;
     // Preserve the schema-39 decoded/chunk budget independently of growing
     // optional codecs. Typed contacts and complete opponent observations compete
     // for this space; an oversized combination is refused, never truncated.

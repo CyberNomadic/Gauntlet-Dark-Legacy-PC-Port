@@ -246,6 +246,40 @@ bool PlayerMissiles::restoreVisualFlight(u64 instance, const ParticleFlight& his
 }
 
 bool PlayerMissiles::launch(const MissileLaunch& launch) {
+    return launchWithVisuals(launch, nullptr, nullptr, false);
+}
+
+bool PlayerMissiles::launchPrepared(const MissileLaunch& launch, const EffectTrees::Prepared& body,
+                                    const EffectTrees::Prepared* rider) {
+    const auto matches = [&](const EffectTrees::Prepared& value, ItemArchive* archive,
+                             std::string_view name) {
+        if (m_device == nullptr || value.device != m_device || archive == nullptr ||
+            value.archive != archive || value.tree == nullptr || value.tree->name != name ||
+            value.model == nullptr || value.particles == nullptr || value.textures == nullptr ||
+            value.descriptor != nullptr) {
+            return false;
+        }
+        const auto index = archive->trees.find(name);
+        if (!index || &archive->trees.tree(*index) != value.tree) {
+            return false;
+        }
+        const usize explicitCount = launch.textureLender != nullptr ? 1 : 0;
+        const auto fallback = m_visuals.textureLenders();
+        return value.lenders.size() == explicitCount + fallback.size() &&
+               (explicitCount == 0 || value.lenders.front() == launch.textureLender) &&
+               std::ranges::equal(value.lenders.subspan(explicitCount), fallback);
+    };
+    if (!matches(body, launch.archive, launch.tree) ||
+        (rider == nullptr ? launch.riderArchive != nullptr || !launch.riderTree.empty()
+                          : !matches(*rider, launch.riderArchive, launch.riderTree))) {
+        return false;
+    }
+    return launchWithVisuals(launch, &body, rider, true);
+}
+
+bool PlayerMissiles::launchWithVisuals(const MissileLaunch& launch,
+                                       const EffectTrees::Prepared* body,
+                                       const EffectTrees::Prepared* rider, bool prepared) {
     if (m_nextInstance == 0 || launch.spec == nullptr || launch.speed <= 0.0f ||
         launch.reach <= 0.0f) {
         return false;
@@ -274,9 +308,15 @@ bool PlayerMissiles::launch(const MissileLaunch& launch) {
         EffectTrees::Setting setting;
         setting.persistent = true;
         const std::array<TextureSet*, 1> lenders{launch.textureLender};
-        missile.effect = m_visuals.startSet(
-            *m_device, *launch.archive, launch.tree, missile.position, setting,
-            launch.textureLender != nullptr ? std::span{lenders} : std::span<TextureSet* const>{});
+        missile.effect = prepared ? m_visuals.startPrepared(*body, missile.position, setting)
+                                  : m_visuals.startSet(*m_device, *launch.archive, launch.tree,
+                                                       missile.position, setting,
+                                                       launch.textureLender != nullptr
+                                                           ? std::span{lenders}
+                                                           : std::span<TextureSet* const>{});
+        if (prepared && missile.effect == 0) {
+            return false;
+        }
         m_visuals.placeAt(missile.effect, transformOf(missile),
                           missile.spec->spin == 0 ? std::optional{missile.velocity} : std::nullopt);
     }
@@ -285,9 +325,15 @@ bool PlayerMissiles::launch(const MissileLaunch& launch) {
         setting.persistent = true;
         setting.missingObjectsAreEmpty = true;
         const std::array<TextureSet*, 1> lenders{launch.textureLender};
-        missile.rider = m_visuals.startSet(
-            *m_device, *launch.riderArchive, launch.riderTree, missile.position, setting,
-            launch.textureLender != nullptr ? std::span{lenders} : std::span<TextureSet* const>{});
+        missile.rider = prepared ? m_visuals.startPrepared(*rider, missile.position, setting)
+                                 : m_visuals.startSet(*m_device, *launch.riderArchive,
+                                                      launch.riderTree, missile.position, setting,
+                                                      launch.textureLender != nullptr
+                                                          ? std::span{lenders}
+                                                          : std::span<TextureSet* const>{});
+        if (prepared && missile.rider == 0) {
+            return false;
+        }
         m_visuals.placeAt(missile.rider, transformOf(missile),
                           missile.spec->spin == 0 ? std::optional{missile.velocity} : std::nullopt);
     }

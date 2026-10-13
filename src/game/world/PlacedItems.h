@@ -2,6 +2,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -270,6 +271,7 @@ public:
               f32 frameBlend = -1.0f) const;
 
 private:
+    friend class PlacedItemsCheckpoint;
     void startEffect(RenderDevice& device, std::string_view tree, const Vec3& position);
     static std::optional<s32> damagePotion(Item& item, const ItemInfo& info, f32 damage);
 
@@ -294,6 +296,9 @@ private:
     void fly(Item& item, f32 seconds);
     static void restOnFloor(Item& item, const WorldCollision* collision, f32 lift);
     std::vector<ArchiveMotion> m_motions;
+    const WorldLayout* m_layout = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
     const WorldCollision* m_collision = nullptr; ///< the floor thrown items land on
     s32 m_players = 0;
     f32 m_revealTime = 0.0f;

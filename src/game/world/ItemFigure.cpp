@@ -136,11 +136,15 @@ std::unique_ptr<ItemFigure> ItemFigure::restored(const Checkpoint& state) const 
         const auto* info = sequence(index);
         return info != nullptr && frame <= static_cast<f32>(std::max(info->frames, 0));
     };
-    // Static fallback trees have no sequence at all; their clock is stopped and
-    // all visual cursors remain at zero. Animated empty sequences are different.
-    const bool staticPose = m_staticTree != nullptr && m_tree->sequences.empty();
-    if (staticPose ? (state.animation.playing || state.poseSequence != 0 || state.poseFrame != 0 ||
-                      state.textureSequence != 0 || state.textureFrame != 0)
+    // Authored static trees and model-only fallbacks have no sequence at all;
+    // their stopped animation clock and visual cursors remain at zero. An
+    // existing sequence with zero frames is a different, animated empty state.
+    const bool staticPose = m_tree->sequences.empty();
+    if (staticPose ? (state.animation.playing || state.animation.sequence != 0 ||
+                      state.animation.time != 0 || state.animation.frame != 0 ||
+                      state.animation.transitionLength != 0 ||
+                      state.animation.transitionTime != 0 || state.poseSequence != 0 ||
+                      state.poseFrame != 0 || state.textureSequence != 0 || state.textureFrame != 0)
                    : (!validFrame(state.poseSequence, state.poseFrame) ||
                       !validFrame(state.textureSequence, static_cast<f32>(state.textureFrame)) ||
                       (state.animation.playing && sequence(state.animation.sequence) == nullptr))) {

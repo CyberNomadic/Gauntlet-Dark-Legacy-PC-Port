@@ -125,6 +125,7 @@ public:
     }
 
 private:
+    friend class WorldStateCheckpoint;
     /** One of the level's texture indices as the scene draws it. */
     struct Slot {
         const Texture* texture = nullptr; ///< what the set (or a lender) holds for it

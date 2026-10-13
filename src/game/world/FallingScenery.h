@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -73,6 +74,7 @@ public:
     static std::string_view leafSoundOf(std::string_view levelName);
 
 private:
+    friend class FallingSceneryCheckpoint;
     static bool within(const Piece& piece, const Vec3& position, f32 radius);
     std::vector<FallingCue> start(const Vec3& position, f32 radius, bool shot);
 
@@ -82,5 +84,10 @@ private:
     f32 m_remainder = 0.0f;
     f32 m_updateSeconds = 0.0f;
     f32 m_bottom = 0.0f;
+    const WorldLayout* m_layout = nullptr;
+    const ModelSet* m_models = nullptr;
+    const TextureSet* m_textures = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 } // namespace gdl::game

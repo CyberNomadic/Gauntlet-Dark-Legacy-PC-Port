@@ -22,6 +22,8 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 
 bool SafeRocks::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items) {
     clear();
+    m_layout = &layout;
+    m_items = &items;
     const auto& infos = layout.itemInfos();
     const auto& instances = layout.itemInstances();
     for (usize i = 0; i < instances.size(); ++i) {
@@ -89,6 +91,8 @@ bool SafeRocks::bind(RenderDevice& device, const WorldLayout& layout, ItemArchiv
 
 void SafeRocks::bindAnimations(RenderDevice& device, ItemArchive& items,
                                std::span<TextureSet* const> lenders) {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_animationItems = &items;
     std::vector<TextureAnimationInfo> animations;
     for (const auto& animation : items.trees.textureAnimations()) {
         // An item archive also contains effects keyed to other figures' sequences.
@@ -103,6 +107,10 @@ void SafeRocks::bindAnimations(RenderDevice& device, ItemArchive& items,
 }
 
 void SafeRocks::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_layout = nullptr;
+    m_items = nullptr;
+    m_animationItems = nullptr;
     m_rocks.clear();
     m_textureSlots.clear();
     m_textures.clear();

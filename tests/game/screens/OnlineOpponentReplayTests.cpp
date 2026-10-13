@@ -90,7 +90,6 @@ TEST_CASE(
     const auto native = *authority.opponents;
     REQUIRE(native.placements);
     REQUIRE_FALSE(native.placements->roster.empty());
-    const auto before = privateOpponents->checkpoint();
     const auto unsupported = std::ranges::count_if(native.placements->roster, [](const auto& row) {
         return row.kind < 0 || row.kind >= kSwarmKindCount || row.kind == kGarmBroodKind ||
                row.carried.has_value();
@@ -103,12 +102,14 @@ TEST_CASE(
             nativeKinds);
     const bool admitted = privateOpponents->begin(authority.motion.epoch, authority.motion.tick,
                                                   native, world.collision());
-    REQUIRE(admitted == (unsupported == 0));
-    CHECK(privateOpponents->active() == admitted);
+    REQUIRE(admitted);
+    REQUIRE(unsupported > 0);
+    CHECK(privateOpponents->active());
     // The complete native roster is the trust boundary. Pending Generals or
     // other separately owned creatures cannot be omitted to manufacture a
-    // successful ordinary-swarm bootstrap; rendering still uses authority.
-    const auto expected = admitted ? std::optional{native} : before;
+    // successful ordinary-swarm bootstrap; exact restoration is possible while
+    // their activation and the separately owned statues remain unsupported.
+    const auto expected = std::optional{native};
     CHECK(privateOpponents->checkpoint() == expected);
     // Presentation still uses its own trusted catalog and exact authority. The
     // private restore neither runs a frame nor consumes one-shot native outputs.
@@ -117,6 +118,10 @@ TEST_CASE(
     CHECK(privateOpponents->checkpoint() == expected);
     CHECK(device.texturesCreated == uploads);
     CHECK(device.textureUpdates == updates);
+    // This seed includes real dormant statues. Restoring the complete pending
+    // roster must not accidentally turn the coupled scheduler's special-body
+    // refusal into permission to replay an incomplete level.
+    REQUIRE(authority.opponentFrame->unsupportedCombatants);
     privateOpponents->resetReplay();
     CHECK_FALSE(privateOpponents->active());
     CHECK(privateOpponents->checkpoint() == expected);

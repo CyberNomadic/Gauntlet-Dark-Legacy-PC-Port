@@ -37,6 +37,11 @@ public:
         Vec3 attention{0};
         bool valid() const;
         bool operator==(const Checkpoint&) const;
+        /** Pure native watch-phase selection; malformed state/view refuses. The
+         * overload preflights a prospective watch without mutating this value. */
+        std::optional<std::vector<Placement>> activations() const;
+        std::optional<std::vector<Placement>> activations(std::optional<ViewVolume> nextView,
+                                                          const Vec3& nextAttention) const;
     };
 
     class Prepared {

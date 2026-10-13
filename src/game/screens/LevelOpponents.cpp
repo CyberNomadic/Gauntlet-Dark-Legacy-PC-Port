@@ -4,7 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <exception>
 #include <format>
 #include <functional>
@@ -19,6 +18,7 @@
 #include "game/players/PlayerAnimator.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
+#include "game/screens/EnemyFeedbackEmission.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentPlacements.h"
 #include "game/screens/OpponentSimulation.h"
@@ -63,8 +63,6 @@ constexpr f32 kCloudDrop = 1.0f;
 constexpr Vec3 kCloudStretch{2.5f, 1.0f, 2.5f};
 constexpr f32 kSmokeFade = 0.5f;
 constexpr f32 kBlastSeconds = 1.0f; ///< the blast's and the cloud's first stage without art
-constexpr f32 kCarryReach = 2.0f;   ///< how far along the ground a great one's pickup may lie
-constexpr f32 kCarryRise = 3.0f;    ///< and up or down
 constexpr f32 kCloudSeconds = 2.0f / 3.0f;
 constexpr f32 kPlacementWakeReach = 10.0f; ///< a trigger wakes the placed enemy nearest within
 
@@ -72,15 +70,6 @@ bool cloudRealm(const std::string& level) {
     return !level.empty() && (level.front() == 'G' || level.front() == 'K');
 }
 
-/** A placed enemy's sight radius: the float after its strength and way (SetItem's +0xC). */
-f32 sightParamOf(const ItemInstance& instance) {
-    constexpr usize kSightOffset = 4;
-    f32 sight = 0.0f;
-    if (instance.params.size() >= kSightOffset + sizeof(sight)) {
-        std::memcpy(&sight, &instance.params[kSightOffset], sizeof(sight));
-    }
-    return sight;
-}
 } // namespace
 
 f32 LevelOpponents::attenuation(const Vec3& at, std::span<const Vec3> hearers) {
@@ -542,103 +531,11 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
             }
         }
     }
-    std::vector<Placement> placements;
-    const std::vector<ItemInfo>& infos = world.layout().itemInfos();
-    for (const ItemInstance& instance : world.layout().itemInstances()) {
-        if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
-            continue;
-        }
-        const ItemInfo& info = infos[static_cast<usize>(instance.info)];
-        if (info.type != ItemInfo::kPlacedEnemy ||
-            !shownToParty(instance.minPlayers, playerCount)) {
-            continue;
-        }
-        const auto named = enemyKindOf(info.name);
-        const s32 strength = Generators::paramOf(instance, 0);
-        if (!named.has_value()) {
-            continue;
-        }
-        const std::optional<s32> kind = levelKindOf(roster, *named, strength);
-        if (!kind) {
-            continue;
-        }
-        // The great ones stand where they are put, facing as placed.
-        const Mat4 stood = itemPlacement(instance.position, instance.rotation);
-        Placement placement;
-        placement.kind = *kind;
-        placement.facing = std::atan2(stood[2][0], stood[2][2]);
-        placement.viewRadius = 2.0f * std::max(info.radius, info.height);
-        placement.sight = sightParamOf(instance);
-        placement.spawn.position = instance.position;
-        const bool great =
-            *kind == kGolemEnemyKind || *kind == kGeneralEnemyKind || *kind == kGargoyleEnemyKind;
-        if (great) {
-            // Statues preload their family's assets below. A General may wait offscreen
-            // for most of the level, but its resources must also be part of the fixed
-            // presentation catalog before the first online snapshot is published.
-            if (*kind == kGeneralEnemyKind) {
-                m_critters.archiveFor(CombatantKind::General);
-            }
-            // fn_8005D04C: each claims the pickup lying nearest it, to carry until slain.
-            placement.carried = world.claimItem(instance.position, kCarryReach, kCarryRise);
-            // A golem or gargoyle stands as a statue until woken (SetItem, items.c 6798).
-            CombatantKind family = CombatantKind::Unknown;
-            if (*kind == kGolemEnemyKind) {
-                family = CombatantKind::Golem;
-            } else if (*kind == kGargoyleEnemyKind) {
-                family = CombatantKind::Gargoyle;
-            }
-            if (family != CombatantKind::Unknown) {
-                CritterStatues::Placement statue;
-                statue.kind = family;
-                statue.instance = instance;
-                statue.radius = info.radius;
-                statue.height = info.height;
-                statue.viewRadius = placement.viewRadius;
-                statue.sight = placement.sight;
-                statue.activeOn = info.activeOn;
-                statue.carried = placement.carried;
-                ItemArchive* archive = m_critters.archiveFor(family);
-                if (archive != nullptr &&
-                    m_statues.add(device, *archive, statue, &world.collision())) {
-                    continue;
-                }
-            }
-            placements.push_back(placement);
-            continue;
-        }
-        const auto ordinary =
-            OpponentPlacements::ordinary(instance, info, roster, playerCount,
-                                         [this](s32 family) { return m_enemies.loadKind(family); });
-        if (!ordinary) {
-            continue;
-        }
-        placement = *ordinary;
-        EnemySpawn& spawn = placement.spawn;
-        if (*kind == kDeathKind) {
-            // SetItem's Death placement values are not ordinary strength tiers:
-            // 0/1 are red, 2/3 black; only the odd values start awakened.
-            // fn_80060114 creates the live enemy AFTER the statue item wakes.
-            spawn.tier = strength >= 2 ? 2 : 1;
-            CritterStatues::Placement statue;
-            statue.enemy = spawn;
-            statue.instance = instance;
-            statue.radius = info.radius;
-            statue.height = info.height;
-            statue.viewRadius = placement.viewRadius;
-            statue.sight = placement.sight;
-            statue.activeOn = info.activeOn;
-            ItemArchive* archive = m_enemies.archive(kDeathKind);
-            if (archive != nullptr && m_statues.add(device, *archive, statue, &world.collision())) {
-                if ((strength & 1) != 0) {
-                    m_statues.wake(m_statues.count() - 1);
-                }
-                continue;
-            }
-        }
-        placements.push_back(placement);
-    }
-    m_placements.bind(std::move(placements));
+    m_placements.bind(OpponentPlacements::load(device, world.layout(), roster, playerCount,
+                                               m_enemies, m_critters, m_statues, &world.collision(),
+                                               [&](const Vec3& position, f32 reach, f32 rise) {
+                                                   return world.claimItem(position, reach, rise);
+                                               }));
     if (!resources.standOnSight) {
         standPlacements(std::nullopt, Vec3{0.0f});
     }
@@ -1211,33 +1108,31 @@ void LevelOpponents::settleRewards(std::span<const PlayerRuntime> players, const
     events.levels();
 }
 
-void LevelOpponents::awardEnemyLosses(const Events& events) {
+bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublisher& publish) {
     if (!m_resources.has_value()) {
-        return;
+        return true;
     }
     for (const EnemyFeedback& feedback : m_enemies.takeFeedback()) {
-        if (const auto* level = m_resources->world.level()) {
-            playAt(feedback.sound(level->enemies, level->bossType), kLoudSound, feedback.position);
-        }
-        const std::string_view tree = feedback.effect();
-        ItemArchive* archive = m_enemies.archive(feedback.kind);
-        if (archive == nullptr || !archive->trees.find(tree).has_value()) {
-            archive = &m_resources->weapons;
-        }
-        if (!tree.empty() && archive->trees.find(tree).has_value()) {
-            EffectTrees::Setting setting;
-            setting.scale = feedback.effectScale();
-            setting.yaw = feedback.yaw;
-            // The common impact rows set node alpha to 96; TREEHIT/TREEDIE
-            // leave the archive's own opacity unchanged.
-            if (tree != "TREEHIT" && tree != "TREEDIE") {
-                setting.tint.a = 96;
+        const auto emission =
+            EnemyFeedbackEmission::resolve(feedback, m_enemies.archive(feedback.kind),
+                                           m_resources->weapons, m_resources->world.level());
+        u32 effect = 0;
+        if (publish) {
+            const auto emitted = publish(emission);
+            if (!emitted) {
+                return false;
             }
-            const u32 effect = m_resources->effects.startSet(m_resources->device, *archive, tree,
-                                                             feedback.position, setting);
-            if (effect != 0) {
-                m_cueEffects.push_back(effect);
+            effect = *emitted;
+        } else {
+            playAt(emission.sound, kLoudSound, emission.position);
+            if (emission.archive != nullptr) {
+                effect = m_resources->effects.startSet(m_resources->device, *emission.archive,
+                                                       emission.tree, emission.position,
+                                                       emission.setting);
             }
+        }
+        if (effect != 0) {
+            m_cueEffects.push_back(effect);
         }
     }
     for (const EnemyLoss& loss : m_enemies.takeLosses()) {
@@ -1251,6 +1146,7 @@ void LevelOpponents::awardEnemyLosses(const Events& events) {
         }
     }
     m_generatorRewards.clear();
+    return true;
 }
 
 /** A hit on one of the swarm, from a player or the world. */

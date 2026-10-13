@@ -37,10 +37,32 @@ add_executable(tests
     game/screens/PlayerRuntimeCheckpointTests.cpp
     game/screens/CombatRollbackCheckpointTests.cpp
     game/netplay/PlayerRuntimePacketTests.cpp
+    game/netplay/CombatStatePacketTests.cpp
     game/netplay/PlayerHealthCheckpointTests.cpp
     game/screens/OpponentCombatCheckpointTests.cpp
     game/screens/OrdinaryCombatCheckpointTests.cpp
     game/screens/OrdinaryCombatTickTests.cpp
+    game/screens/CombatPredictionTests.cpp
+    game/screens/CombatResourcesTests.cpp
+    game/world/ChestsCheckpointTests.cpp
+    game/world/LockedGatesCheckpointTests.cpp
+    game/world/BreakablesCheckpointTests.cpp
+    game/world/SafeRocksCheckpointTests.cpp
+    game/world/StaticSceneryCheckpointTests.cpp
+    game/world/RubbleCheckpointTests.cpp
+    game/world/TrapsCheckpointTests.cpp
+    game/world/FallingSceneryCheckpointTests.cpp
+    game/world/DestructibleWallsCheckpointTests.cpp
+    game/world/RotatorsCheckpointTests.cpp
+    game/world/PlacedItemsCheckpointTests.cpp
+    game/screens/OrdinaryWeaponEmissionTests.cpp
+    game/screens/LevelFixturesCheckpointTests.cpp
+    game/world/LevelWorldCheckpointTests.cpp
+    engine/world/WorldStateCheckpointTests.cpp
+    engine/world/WorldCollapsedCollisionTests.cpp
+    game/world/WorldDestructionCheckpointTests.cpp
+    game/screens/EnemyFeedbackEmissionTests.cpp
+    game/screens/OrdinaryProjectilePhaseTests.cpp
     game/screens/PartyDamageTests.cpp
     game/world/PlayerArsenalCheckpointTests.cpp
     game/world/MoveStrikesCheckpointTests.cpp
@@ -371,6 +393,7 @@ add_executable(tests
     game/world/MoveStrikesTests.cpp
     game/screens/HelpMessagesTests.cpp
     game/world/LevelTriggersTests.cpp
+    game/world/LevelTriggersCheckpointTests.cpp
     game/world/HazardSurfacesTests.cpp
     game/world/RotatorsTests.cpp
     game/world/TowerCameraTests.cpp
@@ -512,10 +535,35 @@ if(GDL_ENABLE_NETPLAY)
         game/screens/PlayerRuntimeCheckpointTests.cpp
         game/screens/CombatRollbackCheckpointTests.cpp
         game/netplay/PlayerRuntimePacketTests.cpp
+        game/netplay/CombatStatePacketTests.cpp
         game/netplay/PlayerHealthCheckpointTests.cpp
         game/screens/OpponentCombatCheckpointTests.cpp
         game/screens/OrdinaryCombatCheckpointTests.cpp
         game/screens/OrdinaryCombatTickTests.cpp
+        game/screens/CombatPredictionTests.cpp
+        game/screens/CombatResourcesTests.cpp
+        game/world/ChestsCheckpointTests.cpp
+        game/world/LockedGatesCheckpointTests.cpp
+        game/world/BreakablesCheckpointTests.cpp
+        game/world/SafeRocksCheckpointTests.cpp
+        game/world/StaticSceneryCheckpointTests.cpp
+        game/world/RubbleCheckpointTests.cpp
+        game/world/TrapsCheckpointTests.cpp
+        game/world/FallingSceneryCheckpointTests.cpp
+        game/world/DestructibleWallsCheckpointTests.cpp
+        game/world/RotatorsCheckpointTests.cpp
+        game/world/PlacedItemsCheckpointTests.cpp
+        game/screens/OrdinaryWeaponEmissionTests.cpp
+        game/screens/LevelFixturesCheckpointTests.cpp
+        game/world/LevelWorldCheckpointTests.cpp
+        engine/world/WorldStateCheckpointTests.cpp
+        engine/world/WorldCollapsedCollisionTests.cpp
+        engine/world/WorldCollisionTests.cpp
+        engine/world/ParticleFieldTests.cpp
+        game/world/WorldDestructionCheckpointTests.cpp
+        game/screens/EnemyFeedbackEmissionTests.cpp
+        game/screens/OrdinaryProjectilePhaseTests.cpp
+        game/world/LevelTriggersCheckpointTests.cpp
         game/screens/PartyDamageTests.cpp
         game/world/PlayerArsenalCheckpointTests.cpp
         game/world/MoveStrikesCheckpointTests.cpp

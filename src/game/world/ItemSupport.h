@@ -29,6 +29,10 @@ public:
     s32 object() const { return m_object; }
 
 private:
+    friend class LockedGatesCheckpoint;
+    friend class BreakablesCheckpoint;
+    friend class StaticSceneryCheckpoint;
+    friend class TrapsCheckpoint;
     s32 m_object = -1;
     Mat4 m_local{1};
     Vec3 m_boxOffset{0};

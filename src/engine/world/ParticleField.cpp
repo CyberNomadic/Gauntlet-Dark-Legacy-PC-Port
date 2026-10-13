@@ -140,6 +140,7 @@ void ParticleField::bind(const WorldLayout& layout, TextureSet& textures, Render
             continue;
         }
         Entry entry;
+        entry.sourceObject = static_cast<s32>(i);
         if ((object.flags & WorldObject::kAnimated) != 0) {
             entry.worldObject = static_cast<s32>(i);
         }

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -24,6 +25,7 @@ struct TriggerRefusal {
     s32 trigger = -1;
     s32 id = 0;           ///< the realm, or 100 plus the gargoyle tier
     bool crystals = true; ///< crystals were wanted, else the golden icons
+    bool operator==(const TriggerRefusal&) const = default;
 };
 
 /** A target that opened this update (or, from takeSettled, has just finished opening): where
@@ -37,6 +39,7 @@ struct TriggerOpening {
     s32 sound = -1;
     s32 subtype = 0;
     bool closed = false;
+    bool operator==(const TriggerOpening&) const = default;
 };
 
 /** A switch's rising activation edge, naming its camera marker and moving target. */
@@ -44,6 +47,7 @@ struct TriggerCameraCue {
     s32 id = 0;
     s32 target = -1;
     bool shakes = false;
+    bool operator==(const TriggerCameraCue&) const = default;
 };
 
 /** An active participant's position, supporting floor and progression requirements. */
@@ -63,6 +67,7 @@ struct TriggerVisitor {
 struct TriggerLesson {
     s32 party = -1;
     bool platform = false;
+    bool operator==(const TriggerLesson&) const = default;
 };
 
 /** One of a level's triggers: a spot that, stepped into, opens the world object it names
@@ -94,6 +99,7 @@ struct LevelTrigger {
     s32 floor = -1;              ///< animated supporting floor, when attached
     Mat4 localPlacement{1.0f};   ///< item placement in its supporting floor's space
     Mat4 placement{1.0f};        ///< current world placement, shared by contact and artwork
+    bool operator==(const LevelTrigger&) const = default;
 
     /** Whether it wants every visitor to carry a realm's crystals first. */
     bool needsCrystals() const { return (flags & kRequirement) != 0 && id < kGargoyleIds; }
@@ -126,6 +132,75 @@ struct LevelTrigger {
  */
 class LevelTriggers {
 public:
+    /** Exact state of this owner, including contacts and undelivered events.
+     * Authored roster/figures must already be bound. Animator, world geometry
+     * and collision are separate owners: restore never fires or poses them. */
+    struct Checkpoint {
+        static constexpr usize kMaxTriggers = 2048;
+        static constexpr usize kMaxObjects = 65535;
+        static constexpr usize kMaxEvents = 8192;
+        struct Target {
+            s32 subtype = 0;
+            s32 object = -1;
+            u32 kind = 0;
+            bool animated = false;
+            bool open = false;
+            bool settled = true;
+            bool pressed = false;
+            bool wholePartyReady = false;
+            bool returning = false;
+            bool forced = false;
+            f32 alpha = 1;
+            Vec3 origin{0};
+            f32 height = 0;
+            f32 closedHeight = 0;
+            f32 openHeight = 0;
+            std::vector<usize> subtree;
+            Vec3 spot{0};
+            s32 sound = -1;
+            bool operator==(const Target&) const = default;
+        };
+        std::vector<LevelTrigger> triggers;
+        std::vector<Target> targets;
+        std::vector<s32> parents;
+        /** Empty means figures have not been bound; otherwise one optional
+         * figure per trigger, retaining native marker-only holes. */
+        std::vector<std::optional<ItemFigure::Checkpoint>> figures;
+        std::vector<TriggerRefusal> refusals;
+        std::vector<TriggerLesson> lessons;
+        std::vector<TriggerOpening> openings;
+        std::vector<TriggerOpening> settled;
+        std::vector<TriggerCameraCue> cameraCues;
+        std::vector<Vec3> wakes;
+        f32 frameRemainder = 0;
+        f32 emptyToggleDelay = 0;
+        s32 playerCount = -1;
+        bool cameraHeld = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+
+    private:
+        friend class LevelTriggers;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    std::optional<Prepared> prepareRestore(const Checkpoint& state) const;
+    bool canCommit(const Prepared& prepared) const;
+    /** Allocation/callback-free after canCommit; invalidates sibling plans.
+     * Gameplay updates may run between prepare/commit for an enclosing undo;
+     * rebinding or another restore may not. Borrowed archives remain immutable. */
+    bool commitRestore(Prepared&& prepared);
+    bool restore(const Checkpoint& state);
     static constexpr std::array<s32, 9> kCrystalsToOpen{0, 15, 100, 125, 150, 175, 200, 225, 250};
     static constexpr f32 kFadeRate = 16.0f / 255.0f;
     static constexpr f32 kRefusalCooldown =
@@ -225,29 +300,11 @@ public:
     /** The spots of the triggers flagged to wake a statue that went active since the last
      * call (fn_800606FC's 0x2000: the nearest placed enemy within ten is woken). */
     std::vector<Vec3> takeWakes() { return std::exchange(m_wakes, {}); }
+    bool hasWakes() const { return !m_wakes.empty(); }
 
 private:
     std::vector<std::unique_ptr<ItemFigure>> m_figures;
-    struct Target {
-        s32 subtype = 0;
-        s32 object = -1;
-        u32 kind = 0;
-        bool animated = false;
-        bool open = false;
-        bool settled = true;
-        bool pressed = false; ///< contact combined across all switches naming this target
-        bool wholePartyReady = false;
-        bool returning = false; ///< descending half of an oscillating height target
-        bool forced = false;
-        f32 alpha = 1.0f;
-        Vec3 origin{0.0f};
-        f32 height = 0.0f;
-        f32 closedHeight = 0.0f;
-        f32 openHeight = 0.0f;
-        std::vector<usize> subtree;
-        Vec3 spot{0.0f, 0.0f, 0.0f}; ///< the spot of the trigger that opened it
-        s32 sound = -1;
-    };
+    using Target = Checkpoint::Target;
 
     Target* targetOf(s32 object);
     const Target* targetOf(s32 object) const;
@@ -283,6 +340,8 @@ private:
     f32 m_emptyToggleDelay = 0.0f;
     s32 m_playerCount = -1; ///< negative: infer joined count from the standing visitor span
     bool m_cameraHeld = false;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

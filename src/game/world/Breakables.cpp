@@ -36,6 +36,7 @@ f32 nearestOnGround(const Vec3& from, const Vec3& to, const Vec3& point, f32& al
 bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
                       const WorldCollision* collision, ItemArchive* realmItems) {
     clear();
+    m_layout = &layout;
     m_collision = collision;
     const auto authored = itemSupportWorld(layout, collision);
     m_infos = layout.itemInfos();
@@ -84,6 +85,8 @@ bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, ItemArchi
 }
 
 void Breakables::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_layout = nullptr;
     m_collision = nullptr;
     m_barrels.clear();
     m_infos.clear();

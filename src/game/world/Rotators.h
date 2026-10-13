@@ -57,7 +57,7 @@ public:
     void bind(const WorldLayout& layout);
     void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
                      ItemArchive* realmItems = nullptr);
-    void clear() { m_rotators.clear(); }
+    void clear();
     usize size() const { return m_rotators.size(); }
     const Rotator& rotator(usize index) const { return m_rotators[index]; }
     /** Turns what turns for `seconds`, starting pads that are stepped on. */
@@ -81,10 +81,14 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
 
 private:
+    friend class RotatorsCheckpoint;
     static void place(const Rotator& rotator, WorldScene& scene);
     static std::optional<RotatorCue::Kind> advance(Rotator& rotator, f32 ticks, WorldScene& scene);
 
     std::vector<Rotator> m_rotators;
+    const WorldLayout* m_layout = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

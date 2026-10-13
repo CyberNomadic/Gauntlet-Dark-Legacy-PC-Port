@@ -35,7 +35,11 @@ public:
     const Prop& prop(usize index) const { return *m_props[index]; }
 
 private:
+    friend class StaticSceneryCheckpoint;
     const WorldCollision* m_collision = nullptr;
+    const WorldLayout* m_layout = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
     std::vector<std::unique_ptr<Prop>> m_props;
 };
 } // namespace gdl::game

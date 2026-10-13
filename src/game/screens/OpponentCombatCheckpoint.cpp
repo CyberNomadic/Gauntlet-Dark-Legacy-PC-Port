@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
+#include <tuple>
 #include <unordered_set>
 
 #include "game/screens/HelpMessages.h"
@@ -19,6 +21,9 @@ bool finite(const Vec3& value) {
 bool ordinary(s32 kind) {
     return kind >= 0 && kind < kSwarmKindCount && kind != kGarmBroodKind;
 }
+auto bankKey(const OpponentCombatCheckpoint::State::DormantBank& bank) {
+    return std::tie(bank.kind, bank.name);
+}
 bool references(const OpponentCombatCheckpoint::State& state,
                 const EffectTrees::PoolCheckpoint& effects) {
     // Expired cues legitimately remain until followCritterEffects. Retain them,
@@ -29,12 +34,31 @@ bool references(const OpponentCombatCheckpoint::State& state,
 }
 } // namespace
 
+bool OpponentCombatCheckpoint::State::DormantBank::valid() const {
+    return (kind == CombatantKind::Golem || kind == CombatantKind::General ||
+            kind == CombatantKind::Gargoyle) &&
+           !name.empty() && name.size() <= kMaxName &&
+           std::ranges::all_of(name,
+                               [](char value) {
+                                   return (value >= 'A' && value <= 'Z') ||
+                                          (value >= '0' && value <= '9') || value == '_';
+                               }) &&
+           textures.valid();
+}
+
 bool OpponentCombatCheckpoint::State::valid() const {
     if (lessons.size() > kMaxRecords || generatorRewards.size() > kMaxRecords ||
         rockHits.size() > kMaxRecords || cueEffects.size() > kMaxRecords || hearers.size() > 4 ||
         !finite(shrink) || shrink <= 0 || shrink > 1 ||
-        std::ranges::any_of(hitStreak, [](s32 value) { return value < 0; })) {
+        std::ranges::any_of(hitStreak, [](s32 value) { return value < 0; }) || !statues.valid() ||
+        dormantBanks.size() > kMaxDormantBanks) {
         return false;
+    }
+    for (usize index = 0; index < dormantBanks.size(); ++index) {
+        if (!dormantBanks[index].valid() ||
+            (index > 0 && bankKey(dormantBanks[index - 1]) >= bankKey(dormantBanks[index]))) {
+            return false;
+        }
     }
     for (const auto& [lesson, player] : lessons) {
         if (lesson != HelpMessages::kDestroyGenerators || player < 0 || player >= 4) {
@@ -85,9 +109,9 @@ bool OpponentCombatCheckpoint::supported() const {
         return false;
     }
     const auto& critters = owner.m_critters;
-    if (!critters.m_stocks.empty() || !critters.m_blows.empty() || !critters.m_grabs.empty() ||
-        !critters.m_losses.empty() || !critters.m_cues.empty() || !critters.m_spews.empty() ||
-        !critters.m_shots.empty() || !critters.m_rams.empty() || !critters.m_pushes.empty() ||
+    if (!critters.m_blows.empty() || !critters.m_grabs.empty() || !critters.m_losses.empty() ||
+        !critters.m_cues.empty() || !critters.m_spews.empty() || !critters.m_shots.empty() ||
+        !critters.m_rams.empty() || !critters.m_pushes.empty() ||
         !std::ranges::all_of(critters.m_critters, unused)) {
         return false;
     }
@@ -104,10 +128,6 @@ bool OpponentCombatCheckpoint::supported() const {
         missiles.m_ricochetIn != 0) {
         return false;
     }
-    const auto& statues = owner.m_statues;
-    if (!statues.m_statues.empty() || !statues.m_prototypes.empty() || !statues.m_risen.empty()) {
-        return false;
-    }
     const auto& swarm = owner.m_enemies;
     if (!swarm.m_deathEvents.empty() || !swarm.m_deathShots.empty() || !swarm.m_tagged.empty() ||
         std::ranges::any_of(swarm.m_enemies, [](const auto& enemy) {
@@ -115,9 +135,9 @@ bool OpponentCombatCheckpoint::supported() const {
         })) {
         return false;
     }
-    return std::ranges::all_of(owner.m_placements.roster(), [](const auto& placement) {
-        return ordinary(placement.kind) && !placement.carried;
-    });
+    // Pending definitions and statues are value-owned separately. Merely
+    // retaining a special placement is not an active special combatant.
+    return true;
 }
 
 struct OpponentCombatCheckpoint::Prepared::Data {
@@ -127,6 +147,15 @@ struct OpponentCombatCheckpoint::Prepared::Data {
     u64 binding = 0;
     State state;
     std::vector<LevelOpponents::GeneratorReward> rewards;
+    std::optional<CritterStatues::Prepared> statues;
+    std::shared_ptr<const u8> critterBinding;
+    struct Bank {
+        CombatantAssets* resource = nullptr;
+        const TreeInfo* tree = nullptr;
+        State::DormantBank identity;
+        TextureAnimator textures;
+    };
+    std::vector<Bank> banks;
 };
 
 OpponentCombatCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data)
@@ -156,6 +185,19 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     state.cueEffects = m_owner.m_cueEffects;
     state.shrink = m_owner.m_shrink;
     state.bagSeed = m_owner.m_bagSeed;
+    auto statues = m_owner.m_statues.checkpoint();
+    if (!statues || m_owner.m_critters.m_stocks.size() > State::kMaxDormantBanks) {
+        return std::nullopt;
+    }
+    state.statues = std::move(*statues);
+    for (const auto& stock : m_owner.m_critters.m_stocks) {
+        if (!stock || !stock->archive.loaded() || stock->tree == nullptr) {
+            return std::nullopt;
+        }
+        state.dormantBanks.push_back(
+            {stock->definition.kind, stock->definition.name, stock->textures.checkpoint()});
+    }
+    std::ranges::sort(state.dormantBanks, {}, bankKey);
     return state.valid() && references(state, effects) ? std::optional{std::move(state)}
                                                        : std::nullopt;
 }
@@ -173,6 +215,29 @@ OpponentCombatCheckpoint::prepareRestore(const State& state,
     data->generation = m_generation;
     data->binding = m_owner.m_bindingGeneration;
     data->state = state;
+    data->statues = m_owner.m_statues.prepareRestore(state.statues);
+    const auto& critters = m_owner.m_critters;
+    if (!data->statues || state.dormantBanks.size() != critters.m_stocks.size()) {
+        return std::nullopt;
+    }
+    data->critterBinding = critters.m_checkpointBinding;
+    data->banks.reserve(critters.m_stocks.size());
+    for (const auto& stock : critters.m_stocks) {
+        if (!stock || !stock->archive.loaded() || stock->tree == nullptr) {
+            return std::nullopt;
+        }
+        const auto found = std::ranges::find_if(state.dormantBanks, [&](const auto& bank) {
+            return bank.kind == stock->definition.kind && bank.name == stock->definition.name;
+        });
+        if (found == state.dormantBanks.end()) {
+            return std::nullopt;
+        }
+        auto textures = stock->textures;
+        if (!textures.restore(found->textures)) {
+            return std::nullopt;
+        }
+        data->banks.push_back({stock.get(), stock->tree, *found, std::move(textures)});
+    }
     data->rewards.reserve(state.generatorRewards.size());
     for (const auto& reward : state.generatorRewards) {
         data->rewards.push_back({reward.player, reward.experience, reward.destroyed});
@@ -181,10 +246,30 @@ OpponentCombatCheckpoint::prepareRestore(const State& state,
 }
 
 bool OpponentCombatCheckpoint::canCommit(const Prepared& prepared) const {
-    return prepared.m_data && prepared.m_data->owner == this &&
-           prepared.m_data->lifetime == m_lifetime && prepared.m_data->generation == m_generation &&
-           m_generation != std::numeric_limits<u64>::max() &&
-           prepared.m_data->binding == m_owner.m_bindingGeneration && supported();
+    if (!(prepared.m_data && prepared.m_data->owner == this &&
+          prepared.m_data->lifetime == m_lifetime && prepared.m_data->generation == m_generation &&
+          m_generation != std::numeric_limits<u64>::max() &&
+          prepared.m_data->binding == m_owner.m_bindingGeneration && supported())) {
+        return false;
+    }
+    const auto& data = *prepared.m_data;
+    const auto& critters = m_owner.m_critters;
+    if (!data.statues || !m_owner.m_statues.canCommit(*data.statues) ||
+        data.critterBinding != critters.m_checkpointBinding ||
+        data.banks.size() != critters.m_stocks.size()) {
+        return false;
+    }
+    for (usize index = 0; index < data.banks.size(); ++index) {
+        const auto& preparedBank = data.banks[index];
+        const auto& stock = critters.m_stocks[index];
+        if (stock.get() != preparedBank.resource || !stock || !stock->archive.loaded() ||
+            stock->tree != preparedBank.tree ||
+            stock->definition.kind != preparedBank.identity.kind ||
+            stock->definition.name != preparedBank.identity.name) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool OpponentCombatCheckpoint::commitRestore(Prepared&& prepared) {
@@ -192,6 +277,12 @@ bool OpponentCombatCheckpoint::commitRestore(Prepared&& prepared) {
         return false;
     }
     auto data = std::move(prepared.m_data);
+    if (!m_owner.m_statues.commitRestore(std::move(*data->statues))) {
+        std::terminate(); // The joint preflight succeeded; no callbacks may interleave.
+    }
+    for (auto& bank : data->banks) {
+        std::swap(bank.resource->textures, bank.textures);
+    }
     m_owner.m_hitStreak = data->state.hitStreak;
     m_owner.m_lessons.swap(data->state.lessons);
     m_owner.m_generatorRewards.swap(data->rewards);

@@ -127,13 +127,25 @@ CombatReplica::Admission CombatPlayback::receive(PacketTransport::Connection sen
             // encoding does not send a second packet or admit another authority.
             if (const auto motion = MotionPacket::encode(snapshot->motion)) {
                 m_motion.receive(sender, *motion);
-                m_history.push_back(*snapshot);
                 // Only latest() is an authoritative simulation seed. The
                 // delayed history interpolates poses onto another clock and
                 // must never retain a complete opponent checkpoint that could
-                // be mistaken for state at that interpolated time.
-                m_history.back().opponents.reset();
-                m_history.back().opponentFrame.reset();
+                // be mistaken for state at that interpolated time. Do not deep
+                // copy the large native pools just to discard them here.
+                m_history.push_back({.motion = snapshot->motion,
+                                     .worldTextureFrame = snapshot->worldTextureFrame,
+                                     .musicArea = snapshot->musicArea,
+                                     .musicLevel = snapshot->musicLevel,
+                                     .players = snapshot->players,
+                                     .enemies = snapshot->enemies,
+                                     .projectiles = snapshot->projectiles,
+                                     .pickups = snapshot->pickups,
+                                     .fixtures = snapshot->fixtures,
+                                     .fighters = snapshot->fighters,
+                                     .geometry = snapshot->geometry,
+                                     .hud = snapshot->hud,
+                                     .worldMotion = snapshot->worldMotion,
+                                     .worldMotionTicks = snapshot->worldMotionTicks});
                 if (m_history.size() > SnapshotPlayback::kHistory) {
                     m_history.pop_front();
                 }
@@ -203,7 +215,7 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
             const auto& end = upper.motion.players[seat];
             if (from && to && start && end && from->life == to->life &&
                 start->grant == end->grant && start->continuity == end->continuity) {
-                auto player = *from;
+                auto& player = *shown.players[seat];
                 player.animation = between(from->animation, to->animation, t);
                 if (from->shadow && to->shadow &&
                     glm::distance(from->shadow->ground, to->shadow->ground) <= 32) {
@@ -231,7 +243,6 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
                     current->textureClock = std::lerp(current->textureClock, next->textureClock, t);
                     current->alpha = std::lerp(current->alpha, next->alpha, t);
                 }
-                shown.players[seat] = player;
             }
             if (shown.players[seat] && shown.players[seat]->locomotion &&
                 shown.motion.players[seat] &&

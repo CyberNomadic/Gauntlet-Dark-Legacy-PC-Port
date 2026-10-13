@@ -7,6 +7,7 @@
 namespace gdl::game {
 class LocalTurboEffectPrediction;
 class OpponentPrediction;
+class CombatPrediction;
 /** Owns a client's native level artwork and its immutable resource catalogs.
  * There is no PlayScene, gameplay update, sound player or save storage. Resolve
  * the level through the local catalog before open(), never from a packet path.
@@ -37,6 +38,7 @@ public:
     const TurboEffectResources* turboEffects(u8 seat) const;
     const ItemArchive* weapons() const;
     OpponentPrediction* opponentPrediction();
+    CombatPrediction* combatPrediction();
 
 private:
     struct Assets;

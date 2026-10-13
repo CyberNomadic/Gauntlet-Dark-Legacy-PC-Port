@@ -91,8 +91,9 @@ public:
     Result speculate(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {});
 
     /** The same bounded native phase inside a caller-owned complete combat
-     * rewind. Ordinary melee blows remain queued for that caller's PlayerHealth
-     * phase. Any other interaction refuses the step without undoing it here:
+     * rewind. Ordinary blows, loss rewards and hit feedback remain queued for
+     * that caller's native health/reward/presentation phases. Other interactions
+     * refuse the step without undoing it here:
      * the caller MUST rewind all participants and discard buffered outputs.
      * This deliberately does not relax speculate's no-interaction contract. */
     Result stageCombat(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {});

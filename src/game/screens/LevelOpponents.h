@@ -23,6 +23,7 @@
 #include "game/world/LevelSoundscape.h"
 #include "game/world/LevelWorld.h"
 namespace gdl::game {
+struct EnemyFeedbackEmission;
 /** Level enemy population, damage/reward routing and following combat cues.
  * Owns enemy archives, missiles, generators and the boss meter. Borrowed level services
  * must outlive close(). Phase hooks synchronously interleave scene-level rites,
@@ -183,7 +184,11 @@ private:
     void deliverLessons(std::span<const PlayerRuntime> players, const Events& events);
     void applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRuntime> players,
                         const Events& events);
-    void awardEnemyLosses(const Events& events);
+    using FeedbackPublisher = std::function<std::optional<u32>(const EnemyFeedbackEmission&)>;
+    /** A replay publisher uses trusted prepared artwork and buffers audio. A
+     * refusal belongs to the caller's complete combat undo; native callers use
+     * the default publisher and retain their original synchronous behavior. */
+    bool awardEnemyLosses(const Events& events, const FeedbackPublisher& publish = {});
     void awardBossLosses(std::span<const PlayerRuntime> players, const Events& events);
     void awardCritterLosses(std::span<const PlayerRuntime> players, const Events& events);
     void showCritterCue(const CombatCue& cue, ItemArchive* archive, bool ofBoss);

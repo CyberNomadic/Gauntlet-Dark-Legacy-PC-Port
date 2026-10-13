@@ -170,5 +170,7 @@ private:
     std::vector<CombatantRam> m_rams;
     std::vector<CombatPush> m_pushes;
     const Texture* m_hitFlash = nullptr; ///< borrowed from the level
+    /** Replaced on resource changes, independently of native animation clocks. */
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

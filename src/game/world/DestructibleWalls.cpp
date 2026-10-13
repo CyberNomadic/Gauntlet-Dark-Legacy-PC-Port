@@ -12,9 +12,28 @@
 #include "game/world/TargetAssist.h"
 
 namespace gdl::game {
+void DestructibleWalls::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_layout = nullptr;
+    m_models = nullptr;
+    m_textures = nullptr;
+    m_collision = nullptr;
+    m_walls.clear();
+}
+
+void DestructibleWalls::showWhite(Wall& wall, bool white) {
+    wall.white = white;
+    wall.model.setMaskedTexture(white ? m_white : nullptr);
+    wall.model.setAppearance(white);
+}
+
 void DestructibleWalls::bind(RenderDevice& device, const WorldLayout& layout, ModelSet& models,
                              TextureSet& textures, WorldCollision& collision) {
     clear();
+    m_layout = &layout;
+    m_models = &models;
+    m_textures = &textures;
+    m_collision = &collision;
     m_white = &device.whiteTexture();
     constexpr s32 kObstacle = 10;
     constexpr s32 kWall = 42;
@@ -114,8 +133,7 @@ std::optional<s32> DestructibleWalls::strike(usize index, f32 power, WorldCollis
         collision.setSolid(wall.object, false);
     } else {
         wall.flash = 1.0f / 30.0f;
-        wall.model.setMaskedTexture(m_white);
-        wall.model.setAppearance(true);
+        showWhite(wall, true);
     }
     return wall.health;
 }
@@ -138,8 +156,7 @@ void DestructibleWalls::update(f32 seconds) {
                 --wall.blinks;
             }
         }
-        wall.model.setMaskedTexture(white ? m_white : nullptr);
-        wall.model.setAppearance(white);
+        showWhite(wall, white);
     }
 }
 

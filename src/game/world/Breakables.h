@@ -111,12 +111,16 @@ public:
     void capturePresentation();
 
 private:
+    friend class BreakablesCheckpoint;
     static f32 opacity(const Barrel& barrel);
 
     std::vector<std::unique_ptr<Barrel>> m_barrels;
     std::vector<ItemInfo> m_infos;
     u32 m_seed = kSeedStart;
     const WorldCollision* m_collision = nullptr;
+    const WorldLayout* m_layout = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

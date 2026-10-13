@@ -398,6 +398,11 @@ public:
 
     /** Sets a missile flying; false when the launch names no spec. */
     bool launch(const MissileLaunch& launch);
+    /** Same native initialization/history as launch, using immutable artwork
+     * prepared at stage load. No lazy binding or device calls occur. Failure
+     * after a body/rider start requires the caller's whole-pool undo. */
+    bool launchPrepared(const MissileLaunch& launch, const EffectTrees::Prepared& body,
+                        const EffectTrees::Prepared* rider = nullptr);
     /** Binds rendering separately from physics. Texture lenders outlive clear(). */
     void bindVisuals(RenderDevice& device, std::span<TextureSet* const> lenders = {});
     const EffectTrees& visuals() const { return m_visuals; }
@@ -422,6 +427,8 @@ public:
     static Mat4 transformOf(const Missile& missile, f32 frameBlend = 1.0f);
 
 private:
+    bool launchWithVisuals(const MissileLaunch& launch, const EffectTrees::Prepared* body,
+                           const EffectTrees::Prepared* rider, bool prepared);
     u64 m_nextInstance = 1; ///< never reset by clear; network identities cannot be recycled
     std::vector<Missile> m_missiles;
     std::vector<MissileImpact> m_impacts;

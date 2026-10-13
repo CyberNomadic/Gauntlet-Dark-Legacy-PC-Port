@@ -6,6 +6,7 @@
 #include "game/screens/LocalPotionPrediction.h"
 #include "game/screens/LocalProjectilePrediction.h"
 #include "game/screens/LocalTurboEffectPrediction.h"
+#include "game/screens/OnlineCombatReplay.h"
 #include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
 #include "game/screens/OnlineOpponentReplay.h"
@@ -107,6 +108,7 @@ private:
     ClientClock m_clock;
     LocalMovementPrediction m_prediction;
     OnlineOpponentReplay m_opponentReplay;
+    OnlineCombatReplay m_combatReplay;
     LocalProjectilePrediction m_projectilePrediction;
     LocalPotionPrediction m_potionPrediction;
     LocalTurboEffectPrediction m_effectPrediction;

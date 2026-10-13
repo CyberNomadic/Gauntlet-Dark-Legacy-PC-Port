@@ -330,7 +330,7 @@ bool LocalMovementPrediction::supported(const InputCommand& input, const PlayerC
 }
 void LocalMovementPrediction::update(const CombatSnapshot* authority,
                                      std::span<const InputCommand> sent,
-                                     const ReplayCallbacks& callbacks) {
+                                     const ReplayCallbacks& callbacks, bool simulate) {
     ++m_clock;
     for (auto& seat : m_seats) {
         seat.previous = seat.pose;
@@ -412,7 +412,9 @@ void LocalMovementPrediction::update(const CombatSnapshot* authority,
             beforePoses[i] = m_seats[i].pose;
             authoritativeBefore[i] = m_seats[i].authoritativeOnly;
         }
-        replayAll(callbacks);
+        if (simulate) {
+            replayAll(callbacks);
+        }
         for (usize i = 0; i < m_seats.size(); ++i) {
             auto& seat = m_seats[i];
             const auto& before = beforePoses[i];
@@ -448,7 +450,15 @@ void LocalMovementPrediction::update(const CombatSnapshot* authority,
         }
     }
     m_metrics.pending = m_history.pending();
-    replayAll(callbacks);
+    if (simulate) {
+        replayAll(callbacks);
+    } else {
+        // A complete native combat pass already advanced these actors. Keep
+        // acknowledged input history for fallback without running them twice.
+        for (usize i = 0; i < m_seats.size(); ++i) {
+            authoritative(i);
+        }
+    }
     for (usize i = 0; i < m_seats.size(); ++i) {
         auto& seat = m_seats[i];
         if (!seat.pose || seat.authoritativeOnly) {

@@ -117,6 +117,65 @@ TEST_CASE("opponent admission handles inactive slots and native patrol reset ord
     CHECK(OpponentSimulation::supported(state, {}));
 }
 
+TEST_CASE("opponent admission preserves dormant special placements until native selection",
+          "[rollback][opponent-admission][opponent-placements]") {
+    auto state = ordinaryState();
+    PlacedEnemies::Placement row;
+    row.kind = kGruntKind;
+    row.spawn.kind = kGruntKind;
+    row.spawn.algorithm = kChaseWay;
+    row.spawn.position = {0, 0, 100};
+    row.spawn.placed = true;
+    row.spawn.priority = EnemySpawn::Priority::Visible;
+    row.viewRadius = 1;
+    SECTION("Death") {
+        row.kind = kDeathKind;
+        row.spawn.kind = kDeathKind;
+    }
+    SECTION("IT") {
+        row.kind = kItKind;
+        row.spawn.kind = kItKind;
+    }
+    SECTION("General retains native unused spawn kind") {
+        row.kind = kGeneralEnemyKind;
+    }
+    SECTION("carried pickup") {
+        row.carried = 37;
+    }
+    SECTION("unsupported future algorithm") {
+        row.spawn.algorithm = kLungeWay;
+    }
+    SECTION("Garm brood") {
+        row.kind = kGarmBroodKind;
+        row.spawn.kind = kGarmBroodKind;
+    }
+    state.placements = PlacedEnemies::Checkpoint{{row}, {0}, ViewVolume{}, {}};
+    REQUIRE(state.valid());
+    const auto dormant = state;
+    REQUIRE(state.placements->activations());
+    CHECK(state.placements->activations()->empty());
+    CHECK(OpponentSimulation::supported(state, {}));
+    CHECK(state == dormant);
+
+    // The same immutable row becomes imminent when attention approaches it.
+    state.placements->attention = row.spawn.position;
+    REQUIRE(state.placements->activations());
+    REQUIRE(state.placements->activations()->size() == 1);
+    const auto selected = state;
+    CHECK_FALSE(OpponentSimulation::supported(state, {}));
+    CHECK(state == selected);
+    state.placements->view.reset();
+    state.placements->attention = {};
+    CHECK_FALSE(OpponentSimulation::supported(state, {}));
+
+    // Consumed rows remain in the trusted roster; they must not permanently
+    // veto continuation merely because an unsupported family once stood there.
+    state.placements->pending.clear();
+    REQUIRE(state.valid());
+    CHECK(OpponentSimulation::supported(state, {}));
+    CHECK(state.placements->roster == dormant.placements->roster);
+}
+
 TEST_CASE("opponent admission does not discard pending gameplay outputs",
           "[rollback][opponent-admission]") {
     auto state = ordinaryState();
@@ -125,6 +184,9 @@ TEST_CASE("opponent admission does not discard pending gameplay outputs",
     }
     SECTION("reward") {
         state.enemies.losses.push_back({});
+    }
+    SECTION("hit feedback") {
+        state.enemies.feedback.push_back({});
     }
     SECTION("enemy explosion") {
         state.enemies.bursts.push_back({});
@@ -157,6 +219,18 @@ TEST_CASE("opponent admission does not discard pending gameplay outputs",
     REQUIRE(state.valid());
     const auto before = state;
     CHECK_FALSE(OpponentSimulation::supported(state, {}));
+    CHECK(state == before);
+}
+
+TEST_CASE("complete combat admission retains ordinary rewards and feedback without draining them",
+          "[rollback][opponent-admission][ordinary-melee]") {
+    auto state = ordinaryState();
+    state.enemies.losses.push_back({});
+    state.enemies.feedback.push_back({});
+    REQUIRE(state.valid());
+    const auto before = state;
+    CHECK_FALSE(OpponentSimulation::supported(state, {}));
+    CHECK(OpponentSimulation::combatSupported(state, {}));
     CHECK(state == before);
 }
 

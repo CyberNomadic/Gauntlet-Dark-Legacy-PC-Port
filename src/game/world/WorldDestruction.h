@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -24,6 +25,7 @@ public:
     bool hasExplosions() const { return !m_explosions.empty(); }
 
 private:
+    friend class WorldDestructionCheckpoint;
     bool valid(s32 object) const;
     bool below(usize descendant, s32 ancestor) const;
     void showSubtree(s32 object, bool visible, WorldScene& scene);
@@ -31,5 +33,7 @@ private:
     std::vector<bool> m_destroyed;
     std::vector<usize> m_controlled;
     std::vector<Vec3> m_explosions;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 } // namespace gdl::game

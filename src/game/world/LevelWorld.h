@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -280,6 +281,9 @@ public:
     }
 
 private:
+    friend class LevelWorldCheckpoint;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
     std::optional<f32> presentedTextureFrameOffset(f32 alpha) const;
     void loadLevelData(const std::filesystem::path& unpackedRoot);
     LevelRef m_ref = LevelRef::tower();

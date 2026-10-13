@@ -112,6 +112,7 @@ public:
     void capturePresentation();
 
 private:
+    friend class TrapsCheckpoint;
     s32 restTicks(const Trap& trap);
     static bool touches(const Trap& trap, const TrapVictim& victim);
 
@@ -121,6 +122,11 @@ private:
     std::minstd_rand m_random{1};
     f32 m_timeScale = 1.0f;
     const WorldCollision* m_collision = nullptr;
+    const WorldLayout* m_layout = nullptr;
+    ItemArchive* m_items = nullptr;
+    ItemArchive* m_realmItems = nullptr;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

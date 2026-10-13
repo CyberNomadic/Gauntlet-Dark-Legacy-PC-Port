@@ -133,6 +133,7 @@ public:
 
 private:
     friend class OrdinaryCombatTick;
+    friend class LevelFixturesCheckpoint;
     static Vec3 observePlayer(PlayerRuntime& player, const Vec3& position);
     static void advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks);
     void syncChestContents();
@@ -190,5 +191,7 @@ private:
     StaticScenery m_scenery;
     Rubble m_rubble;
     std::vector<usize> m_doomedChests; ///< trapped chests a blast set off, to go up next update
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 } // namespace gdl::game

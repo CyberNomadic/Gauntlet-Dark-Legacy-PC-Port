@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <string>
@@ -11,6 +12,8 @@
 #include "AttackCheckpointFixture.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentCombatCheckpoint.h"
+#include "game/screens/StageResources.h"
+#include "game/world/LevelCatalog.h"
 
 namespace {
 using namespace gdl;
@@ -210,7 +213,7 @@ TEST_CASE("native hit streak and generator rewards replay in their original sett
     CHECK(events == std::vector<std::string>{"levels"});
 }
 
-TEST_CASE("ordinary adapter refuses unsupported pending placements without consuming them",
+TEST_CASE("ordinary adapter preserves dormant special placements without activating them",
           "[opponent-combat-checkpoint]") {
     AdapterFixture fixture;
     const s32 kind = GENERATE(kDeathKind, kItKind, kGarmBroodKind, kGeneralEnemyKind);
@@ -220,9 +223,178 @@ TEST_CASE("ordinary adapter refuses unsupported pending placements without consu
     placement.spawn.placed = true;
     fixture.opponents.placements().bind({placement});
     REQUIRE(fixture.opponents.pendingPlacements() == 1);
-    CHECK_FALSE(fixture.adapter.checkpoint(fixture.visual()));
-    CHECK_FALSE(fixture.adapter.prepareRestore({}, fixture.visual()));
+    const auto pending = fixture.opponents.placements().checkpoint();
+    REQUIRE(pending);
+    const auto adapter = fixture.adapter.checkpoint(fixture.visual());
+    REQUIRE(adapter);
+    REQUIRE(fixture.adapter.restore(*adapter, fixture.visual()));
+    CHECK(fixture.opponents.placements().checkpoint() == pending);
     CHECK(fixture.opponents.pendingPlacements() == 1);
+}
+
+TEST_CASE("dormant family clocks resolve by trusted identity rather than load order",
+          "[opponent-combat-checkpoint][dormant-opponents][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GENERAL.WAD").parent_path().parent_path();
+    AdapterFixture host;
+    AdapterFixture guest;
+    host.opponents.critters().open(host.device, root, nullptr, {}, 'G');
+    guest.opponents.critters().open(guest.device, root, nullptr, {}, 'G');
+    for (const auto kind : {CombatantKind::General, CombatantKind::Gargoyle}) {
+        REQUIRE(host.opponents.critters().archiveFor(kind) != nullptr);
+    }
+    for (const auto kind : {CombatantKind::Gargoyle, CombatantKind::General}) {
+        REQUIRE(guest.opponents.critters().archiveFor(kind) != nullptr);
+    }
+    REQUIRE(host.opponents.critters().count() == 0);
+    REQUIRE(guest.opponents.critters().count() == 0);
+    auto expected = host.state();
+    REQUIRE(expected.dormantBanks.size() == 2);
+    expected.dormantBanks[0].textures = {17, 0.25f, 0.5f};
+    expected.dormantBanks[1].textures = {101, 0.75f, 1};
+    REQUIRE(expected.valid());
+    REQUIRE(host.adapter.restore(expected, host.visual()));
+    const auto uploads = guest.device.texturesCreated;
+    REQUIRE(guest.adapter.restore(expected, guest.visual()));
+    CHECK(guest.state() == host.state());
+    for (s32 tick = 0; tick < 30; ++tick) {
+        host.opponents.critters().update(1, 1.0f / 60, {});
+        guest.opponents.critters().update(1, 1.0f / 60, {});
+        CHECK(host.state() == guest.state());
+    }
+    CHECK(guest.device.texturesCreated == uploads);
+    const auto before = guest.state();
+    auto untrusted = before;
+    untrusted.dormantBanks.front().name = "UNBOUND";
+    REQUIRE(untrusted.valid());
+    CHECK_FALSE(guest.adapter.prepareRestore(untrusted, guest.visual()));
+    CHECK(guest.state() == before);
+    auto prepared = guest.adapter.prepareRestore(before, guest.visual());
+    REQUIRE(prepared);
+    REQUIRE(guest.opponents.critters().archiveFor(CombatantKind::Golem) != nullptr);
+    CHECK_FALSE(guest.adapter.canCommit(*prepared));
+    CHECK_FALSE(guest.adapter.commitRestore(std::move(*prepared)));
+}
+
+TEST_CASE("dormant bank identities and counts are strictly bounded",
+          "[opponent-combat-checkpoint][dormant-opponents]") {
+    OpponentCombatCheckpoint::State state;
+    state.dormantBanks = {{CombatantKind::Golem, "GOLEM", {}},
+                          {CombatantKind::Gargoyle, "GAR_EAGL", {}}};
+    REQUIRE(state.valid());
+    switch (GENERATE(0, 1, 2, 3, 4, 5)) {
+    case 0: state.dormantBanks[0].kind = CombatantKind::Boss; break;
+    case 1: state.dormantBanks[0].name = "../GOLEM"; break;
+    case 2: state.dormantBanks[0].name.assign(32, 'A'); break;
+    case 3: std::swap(state.dormantBanks[0], state.dormantBanks[1]); break;
+    case 4: state.dormantBanks[1] = state.dormantBanks[0]; break;
+    case 5: state.dormantBanks.resize(OpponentCombatCheckpoint::State::kMaxDormantBanks + 1); break;
+    }
+    CHECK_FALSE(state.valid());
+}
+
+TEST_CASE("native G1 adapter preserves its complete dormant statues and preloaded family banks",
+          "[opponent-combat-checkpoint][dormant-opponents][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("G1");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 2> players;
+    players[0].actor.spawn(3, {}, nullptr, {10000, 0, 10000}, 0);
+    players[1].actor.spawn(1, {}, nullptr, {10010, 0, 10000}, 0);
+    world.setPlayerCount(2);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1, true}, players);
+    REQUIRE(StageResources::preload(world, opponents.enemies(), opponents.critters(),
+                                    opponents.bosses()));
+    OpponentCombatCheckpoint adapter{opponents};
+    const auto visual = effects.checkpointPool();
+    REQUIRE(visual);
+    const auto before = adapter.checkpoint(*visual);
+    REQUIRE(before);
+    REQUIRE_FALSE(before->statues.roster.empty());
+    REQUIRE_FALSE(before->statues.statues.empty());
+    REQUIRE_FALSE(before->dormantBanks.empty());
+    REQUIRE(opponents.critters().count() == 0);
+    const auto placements = opponents.placements().checkpoint();
+    REQUIRE(placements);
+    REQUIRE_FALSE(placements->roster.empty());
+    const auto uploads = device.texturesCreated;
+    auto undo = adapter.prepareRestore(*before, *visual);
+    REQUIRE(undo);
+    opponents.critters().update(1, 1.0f / 60, {});
+    opponents.wakeStatue(0);
+    CHECK_FALSE(opponents.statues().dormantFor({}));
+    const auto changed = adapter.checkpoint(*visual);
+    REQUIRE(changed);
+    CHECK(changed->statues.statues.front().woken);
+    CHECK(changed->dormantBanks != before->dormantBanks);
+    REQUIRE(adapter.canCommit(*undo));
+    REQUIRE(adapter.commitRestore(std::move(*undo)));
+    CHECK(adapter.checkpoint(*visual) == before);
+    CHECK(opponents.placements().checkpoint() == placements);
+    CHECK(device.texturesCreated == uploads);
+    auto first = adapter.prepareRestore(*before, *visual);
+    auto sibling = adapter.prepareRestore(*before, *visual);
+    REQUIRE(first);
+    REQUIRE(sibling);
+    REQUIRE(adapter.commitRestore(std::move(*first)));
+    CHECK_FALSE(adapter.canCommit(*sibling));
+    opponents.close();
+}
+
+TEST_CASE("dormant statue admission uses the native grid wake and body predicates without mutation",
+          "[opponent-combat-checkpoint][dormant-opponents][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GOLEM.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    Critters resources;
+    resources.open(device, root, nullptr, {}, 'G');
+    auto* archive = resources.archiveFor(CombatantKind::Golem);
+    REQUIRE(archive);
+    CritterStatues statues;
+    CritterStatues::Placement placement;
+    placement.kind = CombatantKind::Golem;
+    placement.radius = 4;
+    placement.height = 5;
+    placement.viewRadius = 10;
+    placement.sight = 10;
+    CritterStatues::Visitor visitor{{0, 0, 12}, 1, 5};
+    const s32 variant = GENERATE(0, 1, 2, 3, 4);
+    switch (variant) {
+    case 1: visitor.position.z = 10; break;
+    case 2: visitor.position = {0, 20, 0}; break;
+    case 3:
+        placement.sight = -1;
+        visitor.position.z = 4.5f;
+        break;
+    case 4:
+        placement.sight = 100;
+        visitor.position.z = 90;
+        statues.setContactGridBounds({-100, 0, -100}, {100, 0, 100});
+        break;
+    }
+    REQUIRE(statues.add(device, *archive, placement, nullptr));
+    const auto before = statues.checkpoint();
+    REQUIRE(before);
+    const bool quiet = statues.dormantFor(std::span{&visitor, 1});
+    CHECK(statues.checkpoint() == before);
+    const Vec3 after = statues.touch(visitor.position, visitor.radius, visitor.height);
+    const bool changed = statues.woken(0) || after != visitor.position;
+    CHECK(quiet == !changed);
+    if (quiet) {
+        statues.update(1, 1.0f / 60, [](const Vec3&, f32) { return true; });
+        CHECK(statues.checkpoint() == before);
+    } else {
+        CHECK_FALSE(statues.dormantFor(std::span{&visitor, 1}));
+    }
 }
 
 TEST_CASE("ordinary adapter refuses queued special-owner outcomes even with no visible body",

@@ -57,6 +57,10 @@ std::string_view FallingScenery::leafSoundOf(std::string_view levelName) {
 }
 
 void FallingScenery::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_layout = nullptr;
+    m_models = nullptr;
+    m_textures = nullptr;
     m_pieces.clear();
     m_breakSound = {};
     m_leafSound = {};
@@ -68,6 +72,9 @@ void FallingScenery::clear() {
 void FallingScenery::bind(RenderDevice& device, const WorldLayout& layout, ModelSet& models,
                           TextureSet& textures, std::string_view levelName) {
     clear();
+    m_layout = &layout;
+    m_models = &models;
+    m_textures = &textures;
     m_breakSound = breakSoundOf(levelName);
     m_leafSound = leafSoundOf(levelName);
     m_bottom = FallingPiece::bottomOf(layout);

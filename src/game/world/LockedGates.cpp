@@ -36,6 +36,7 @@ bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
                        const WorldCollision* collision, ItemArchive* realmItems) {
     clear();
     m_collision = collision;
+    m_layout = &layout;
     const auto authored = itemSupportWorld(layout, collision);
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     const std::vector<ItemInstance>& instances = layout.itemInstances();
@@ -81,7 +82,9 @@ bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
 }
 
 void LockedGates::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     m_collision = nullptr;
+    m_layout = nullptr;
     m_gates.clear();
 }
 

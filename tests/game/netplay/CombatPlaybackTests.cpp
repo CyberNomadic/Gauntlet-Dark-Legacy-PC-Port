@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "game/netplay/CombatPlayback.h"
+#include "game/netplay/CombatSeedFixture.h"
 #include "game/netplay/ReplicaPose.h"
 
 namespace {
@@ -36,6 +37,61 @@ void receive(CombatPlayback& playback, const CombatSnapshot& state) {
                                                            ? CombatReplica::Admission::Committed
                                                            : CombatReplica::Admission::Pending));
     }
+}
+TEST_CASE("complete combat seeds stay only in latest authority never display history",
+          "[netplay][combat-playback][combat-supplement]") {
+    CombatPlayback playback;
+    REQUIRE(playback.begin(1, 1));
+    auto first = state(10);
+    test::combatSeed(first);
+    first.worldTextureFrame = 12;
+    first.musicArea = 2;
+    first.musicLevel = 3;
+    first.geometry = SceneGeometry{1, 1, 0.25f, {{0}}};
+    auto last = first;
+    last.motion.tick = 14;
+    last.worldTextureFrame = 16;
+    last.geometry->objects[0].local[3].x = 4;
+    last.players[0]->animation.frame = 4;
+    last.combatFrame->damage.playSeconds += 4.0f / 60;
+    CombatPlayback reference;
+    REQUIRE(reference.begin(1, 1));
+    for (auto snapshot : {first, last}) {
+        snapshot.opponents.reset();
+        snapshot.opponentFrame.reset();
+        snapshot.combatState.reset();
+        snapshot.combatFrame.reset();
+        receive(reference, snapshot);
+    }
+    receive(playback, first);
+    receive(playback, last);
+    REQUIRE(playback.latest());
+    CHECK(playback.latest()->combatState == last.combatState);
+    REQUIRE(playback.latest()->combatFrame);
+    CHECK(playback.latest()->combatFrame->damage.playSeconds ==
+          last.combatFrame->damage.playSeconds);
+    for (const u64 tick : {0U, 10U, 11U, 13U, 14U, 100U}) {
+        auto displayed = playback.sample(tick, 0.5f);
+        REQUIRE(displayed);
+        CHECK_FALSE(displayed->combatState);
+        CHECK_FALSE(displayed->combatFrame);
+        CHECK(displayed->valid());
+        const auto expected = reference.sample(tick, 0.5f);
+        REQUIRE(expected);
+        const auto expectedBytes = CombatPacket::encode(*expected);
+        REQUIRE(expectedBytes);
+        CHECK(CombatPacket::encode(*displayed) == expectedBytes);
+        // A renderer may modify its disposable sample without touching history
+        // or the latest authoritative native seed.
+        displayed->players[0]->health = 1;
+        displayed->enemies.clear();
+        CHECK(CombatPacket::encode(*playback.sample(tick, 0.5f)) == expectedBytes);
+        CHECK(CombatPacket::encode(*playback.latest()) == CombatPacket::encode(last));
+    }
+    receive(playback, state(15));
+    REQUIRE(playback.latest());
+    CHECK_FALSE(playback.latest()->combatState);
+    CHECK_FALSE(playback.latest()->combatFrame);
 }
 TEST_CASE("opponent replay seeds never enter delayed or interpolated display history",
           "[netplay][combat-playback][opponent-supplement]") {

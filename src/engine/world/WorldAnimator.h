@@ -71,6 +71,7 @@ public:
     std::span<const CycleEvent> cycleEvents() const { return m_cycleEvents; }
 
 private:
+    friend class WorldStateCheckpoint;
     struct Track {
         s32 object = -1;
         s32 frames = 0;

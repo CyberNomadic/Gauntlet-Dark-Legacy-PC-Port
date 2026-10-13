@@ -51,6 +51,7 @@ public:
     bool visible = true;
 
 private:
+    friend class FallingSceneryCheckpoint;
     Vec3 m_previousPosition{0.0f};
     Vec3 m_previousRotation{0.0f};
 };

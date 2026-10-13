@@ -10,6 +10,8 @@ constexpr u32 kLoopingCart = 0x50000;
 } // namespace
 
 void WorldDestruction::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     m_objects.clear();
     m_destroyed.clear();
     m_controlled.clear();

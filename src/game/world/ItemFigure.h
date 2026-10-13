@@ -162,6 +162,7 @@ public:
     Obstacle obstacle(const ItemInfo& info) const;
 
 private:
+    friend class ItemFigureCheckpoint;
     void refreshTextures();
 
     const TreeInfo* m_tree = nullptr;

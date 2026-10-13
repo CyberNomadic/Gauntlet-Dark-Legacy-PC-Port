@@ -18,6 +18,7 @@
 #include "engine/world/WorldCamera.h"
 
 #include "game/menu/CompassHud.h"
+#include "game/netplay/CombatStatePacket.h"
 #include "game/netplay/OpponentFrame.h"
 #include "game/netplay/PlayerLocomotionCheckpoint.h"
 #include "game/netplay/PlayerMeleeCheckpoint.h"
@@ -34,12 +35,14 @@
 #include "game/players/TurboMeter.h"
 #include "game/screens/BossSequence.h"
 #include "game/screens/ChallengeHud.h"
+#include "game/screens/CombatResources.h"
 #include "game/screens/GameContext.h"
 #include "game/screens/GameOver.h"
 #include "game/screens/LevelArrivalPresentation.h"
 #include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelMessages.h"
 #include "game/screens/LevelOpponents.h"
+#include "game/screens/OrdinaryCombatTick.h"
 #include "game/screens/PartyFigures.h"
 #include "game/screens/PartyHud.h"
 #include "game/screens/PartyMotion.h"
@@ -161,6 +164,11 @@ public:
      * initialPlayers must be their original bound EnemyScales::players value.
      * No queues are consumed, assets loaded, or simulation phases advanced. */
     std::optional<OpponentFrame> opponentFrame(u32 initialPlayers) const;
+    /** Complete native owners at the current post-step boundary. Unknown artwork
+     * bindings refuse the supplement; no retained effect clocks are discarded. */
+    std::optional<CombatStatePacket::State> combatState();
+    /** Exact gameplay (not shaken display) camera and next-step damage context. */
+    std::optional<OrdinaryCombatTick::Frame> combatFrame() const;
     const LevelWorld* world() const { return m_world; }
     CameraView cameraView() const;
     /** Same hard-cut rule used by local rendering and remote snapshot capture. */
@@ -469,6 +477,7 @@ private:
     SumnerFigure m_sumner;
     TextureSet m_staticTextures;
     LevelMessages m_messages;
+    std::unique_ptr<CombatResources> m_combatResources;
     PlayerArsenal m_arsenal;
     ExitPortals m_portals;
     LevelTransporters m_transporters;

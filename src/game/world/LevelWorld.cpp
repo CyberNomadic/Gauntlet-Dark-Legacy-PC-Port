@@ -351,6 +351,8 @@ void LevelWorld::loadLevelData(const std::filesystem::path& unpackedRoot) {
 }
 
 void LevelWorld::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     m_walls.clear();
     m_skorneArena.clear();
     m_fallingScenery.clear();

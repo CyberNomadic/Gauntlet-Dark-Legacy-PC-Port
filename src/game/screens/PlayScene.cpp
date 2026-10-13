@@ -279,7 +279,8 @@ void PlayScene::close() {
     m_attacks.clear();
     m_arsenal.clear(); // before the figures whose models they fly
     m_bossSequence.clear();
-    m_effects.clear(); // and before the archive whose trees they play
+    m_effects.clear();         // and before the archive whose trees they play
+    m_combatResources.reset(); // after borrowers, before opponent and player archives
     m_opponents.close();
     m_opponentsAdvanced = false;
     m_projectilesAdvanced = false;

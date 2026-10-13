@@ -7,6 +7,7 @@
 
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/CombatReplica.h"
+#include "game/netplay/CombatSeedFixture.h"
 #include "game/netplay/OpponentCheckpoint.h"
 #include "game/players/PlayerActor.h"
 
@@ -217,6 +218,101 @@ OpponentFrame opponentFrame(const CombatSnapshot& source) {
     return frame;
 }
 
+TEST_CASE("full native combat seeds share the exact opponent epoch tick and party envelope",
+          "[netplay][combat-snapshot][combat-supplement]") {
+    auto source = state(234, 0);
+    test::combatSeed(source);
+    const auto bytes = encode(source);
+    const auto decoded = CombatPacket::decode(bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->combatState);
+    REQUIRE(decoded->combatFrame);
+    CHECK(decoded->combatState == source.combatState);
+    CHECK(decoded->combatFrame->camera.position == source.combatFrame->camera.position);
+    CHECK(decoded->combatFrame->damage.playSeconds == 13.25f);
+    CHECK(encode(*decoded) == bytes);
+    CHECK(CombatPacket::kMaxBytes == 1'570'903);
+
+    for (usize fault = 0; fault < 11; ++fault) {
+        CAPTURE(fault);
+        auto invalid = source;
+        switch (fault) {
+        case 0: invalid.combatFrame.reset(); break;
+        case 1: invalid.combatState.reset(); break;
+        case 2:
+            invalid.opponents.reset();
+            invalid.opponentFrame.reset();
+            break;
+        case 3: invalid.combatState->combat.players.pop_back(); break;
+        case 4: invalid.combatState->combat.players[0].actor.position.x += 1; break;
+        case 5: invalid.combatState->combat.players[0].actor.yaw += 0.1f; break;
+        case 6:
+            invalid.combatFrame->seconds *= 2;
+            invalid.combatFrame->ticks = 2;
+            break;
+        case 7: invalid.combatFrame->damage.realm = 100; break;
+        case 8: invalid.combatState->combat.players[0].player = 1; break;
+        case 9: invalid.combatState->combat.players[0].healthFraction += 0.125f; break;
+        default: invalid.players[0]->life = ReplicaPlayerLife::Dying; break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(CombatPacket::encode(invalid));
+    }
+}
+
+TEST_CASE("full native combat envelope rejects malformed lengths identities and frame flags",
+          "[netplay][combat-snapshot][combat-supplement]") {
+    auto source = state(234, 0);
+    test::combatSeed(source);
+    const auto inner = CombatStatePacket::encode(*source.combatState);
+    REQUIRE(inner);
+    const auto bytes = encode(source);
+    const usize frame = bytes.size() - CombatPacket::kCombatFrameBytes;
+    const usize envelope = frame - inner->size() - CombatPacket::kCombatHeaderBytes;
+    for (const auto [offset, value] : std::array<std::pair<usize, u32>, 12>{
+             {{envelope, 0},
+              {envelope, static_cast<u32>(CombatStatePacket::kMaxBytes + 1)},
+              {envelope + 4, CombatPacket::kCombatFrameBytes - 4},
+              {envelope + 8, 10},
+              {envelope + 12, 1},
+              {envelope + 16, 235},
+              {envelope + 20, 1},
+              {frame, 0},
+              {frame + 4, 0x7FC00000},
+              {frame + 52, 16},
+              {frame + 60, 100},
+              {frame + 64, 0x7F800000}}}) {
+        CAPTURE(offset, value);
+        auto corrupt = bytes;
+        writeWord(corrupt, offset, value);
+        CHECK_FALSE(CombatPacket::decode(corrupt));
+    }
+    for (usize cut = envelope; cut < bytes.size(); ++cut) {
+        CHECK_FALSE(CombatPacket::decode(std::span(bytes).first(cut)));
+    }
+    auto trailing = bytes;
+    trailing.push_back(0);
+    CHECK_FALSE(CombatPacket::decode(trailing));
+}
+
+TEST_CASE("full combat correction remains atomic until every reordered chunk arrives",
+          "[netplay][combat-snapshot][combat-supplement]") {
+    auto source = state(234, 0);
+    test::combatSeed(source);
+    CombatReplica replica;
+    REQUIRE(replica.begin(1, source.motion.epoch));
+    const auto chunks = packets(source);
+    REQUIRE(chunks.size() > 1);
+    for (usize i = chunks.size(); i-- > 1;) {
+        CHECK(replica.receive(1, chunks[i]) == Admission::Pending);
+        CHECK_FALSE(replica.latest());
+    }
+    CHECK(replica.receive(1, chunks.front()) == Admission::Committed);
+    REQUIRE(replica.latest());
+    CHECK(replica.latest()->combatState == source.combatState);
+    CHECK(replica.latest()->motion.tick == 234);
+}
+
 TEST_CASE(
     "authored strike effect origins survive snapshot roundtrip independently of missile releases",
     "[netplay][combat-snapshot][effect-identity]") {
@@ -335,7 +431,7 @@ TEST_CASE("combat payload round trips every seat mask and maximum enemy roster",
         CHECK(bytes.size() <= CombatPacket::kMaxBytes);
         CHECK(bytes[0] == 'G');
         CHECK(bytes[3] == 'B');
-        CHECK(bytes[4] == 41);
+        CHECK(bytes[4] == 42);
         CHECK(bytes[6] == 128);
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
@@ -2582,6 +2678,14 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
     REQUIRE(next.valid());
     CHECK_FALSE(CombatPacket::encode(next));
     CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
+    next.opponents.reset();
+    next.opponentFrame.reset();
+    test::combatSeed(next);
+    REQUIRE(next.valid());
+    CHECK_FALSE(CombatPacket::encode(next));
+    CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
+    next.combatState.reset();
+    next.combatFrame.reset();
     next.opponents.reset();
     next.opponentFrame.reset();
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);

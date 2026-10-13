@@ -63,10 +63,14 @@ TEST_CASE("animated world markers move new emissions without carrying existing p
     REQUIRE(first < field.size());
     REQUIRE(second < field.size());
     REQUIRE(still < field.size());
+    CHECK(field.sourceObject(first) == 1);
+    CHECK(field.sourceObject(second) == 2);
+    CHECK(field.sourceObject(still) == 3);
     REQUIRE(field.textureOf(first) != field.textureOf(second));
     const ParticleDescriptor independent = field.emitter(first).descriptor();
     const Mat4 independentNode = glm::translate(Mat4{1}, Vec3{-9, 8, 7});
     const usize own = field.start(independent, independentNode, &device.whiteTexture());
+    CHECK(field.sourceObject(own) == -1);
     field.syncNodes(scene);
     field.step(1.0f / 30);
     REQUIRE(field.particleCount() == 4);

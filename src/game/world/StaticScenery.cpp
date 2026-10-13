@@ -6,6 +6,7 @@ namespace gdl::game {
 void StaticScenery::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
                          const WorldCollision* collision, ItemArchive* realmItems) {
     clear();
+    m_layout = &layout;
     m_collision = collision;
     for (usize index = 0; index < layout.itemInstances().size(); ++index) {
         const auto& instance = layout.itemInstances()[index];
@@ -53,6 +54,8 @@ void StaticScenery::bind(RenderDevice& device, const WorldLayout& layout, ItemAr
 }
 
 void StaticScenery::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_layout = nullptr;
     m_props.clear();
     m_collision = nullptr;
 }

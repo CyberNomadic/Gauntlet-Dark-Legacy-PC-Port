@@ -158,6 +158,7 @@ private:
     friend class PlayerAttacksCheckpoint;
     friend class CombatRollbackCheckpoint;
     friend class OrdinaryCombatTick;
+    friend class OrdinaryProjectilePhase;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,
@@ -165,6 +166,12 @@ private:
     void beginPotion(const MissileImpact& impact);
     void updatePotions(f32 seconds, std::span<PlayerRuntime> players, const Targets& targets);
     void updateItems(f32 seconds, std::span<PlayerRuntime> players, const Targets& targets);
+    /** The native projectile phase split at its output queue. Ordinary replay
+     * checks the complete batch before invoking any impact-side world owner. */
+    std::vector<MissileImpact>
+    advanceProjectileFlights(f32 seconds, std::span<PlayerRuntime> players, const Targets& targets);
+    void dispatchProjectileImpact(const MissileImpact& impact, std::span<PlayerRuntime> players,
+                                  const Targets& targets);
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
                       std::span<PlayerRuntime> players, const Targets& targets);
     struct ItemArea {

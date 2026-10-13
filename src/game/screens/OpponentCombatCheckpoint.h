@@ -3,9 +3,11 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "game/enemies/CritterStatues.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/world/EffectTrees.h"
 
@@ -27,6 +29,15 @@ public:
     };
     struct State {
         static constexpr usize kMaxRecords = 65535;
+        static constexpr usize kMaxDormantBanks = 16;
+        struct DormantBank {
+            static constexpr usize kMaxName = 31;
+            CombatantKind kind = CombatantKind::Unknown;
+            std::string name;
+            TextureAnimator::Checkpoint textures;
+            bool valid() const;
+            bool operator==(const DormantBank&) const = default;
+        };
         std::array<s32, 4> hitStreak{};
         std::vector<std::pair<s32, s32>> lessons;
         std::vector<Reward> generatorRewards;
@@ -36,6 +47,10 @@ public:
         std::vector<u32> cueEffects;
         f32 shrink = 1;
         u32 bagSeed = 1;
+        /** Retained preloaded statues and inactive family banks. These values
+         * preserve dormant owners; they do not admit great-creature simulation. */
+        CritterStatues::Checkpoint statues;
+        std::vector<DormantBank> dormantBanks;
         bool valid() const;
         bool operator==(const State&) const = default;
     };
@@ -65,9 +80,11 @@ public:
     OpponentCombatCheckpoint& operator=(OpponentCombatCheckpoint&&) = delete;
     ~OpponentCombatCheckpoint();
 
-    /** Refuses uncaptured great-creature, boss, statue, Death, carried-item and
+    /** Refuses uncaptured great-creature, boss, Death, carried-item and
      * following-effect owners, including their pending output queues. The
-     * supplied shared pool must be captured/restored by the enclosing bundle. */
+     * supplied shared pool must be captured/restored by the enclosing bundle.
+     * Dormant statues and loaded-but-unused family texture clocks are retained
+     * exactly; callers must refuse waking or activating a great creature. */
     std::optional<State> checkpoint(const EffectTrees::PoolCheckpoint& effects) const;
     std::optional<Prepared> prepareRestore(const State& state,
                                            const EffectTrees::PoolCheckpoint& effects) const;

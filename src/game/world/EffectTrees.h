@@ -123,6 +123,9 @@ public:
         const ParticleDescriptor* descriptor = nullptr;
         const Texture* texture = nullptr;
         std::optional<u32> textureSlot;
+        /** Borrowed native binding identity only. Prepared starts never invoke
+         * the device; full-pool checkpoints retain the original resource tuple. */
+        RenderDevice* device = nullptr;
     };
 
     /** One effect playing. */

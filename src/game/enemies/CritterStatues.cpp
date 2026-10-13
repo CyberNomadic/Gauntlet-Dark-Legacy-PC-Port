@@ -358,6 +358,47 @@ Obstacle CritterStatues::obstacleOf(const Statue& statue) {
     return cylinder;
 }
 
+bool CritterStatues::wakesAt(const Statue& statue, const Vec3& position, f32 radius, f32 height) {
+    const Vec3 away = position - statue.figure.position();
+    const f32 reach = statue.placement.sight + radius;
+    return away.x * away.x + away.z * away.z <= reach * reach &&
+           std::abs(away.y) <= statue.placement.height + 0.5f * height;
+}
+
+bool CritterStatues::dormantFor(std::span<const Visitor> visitors) const {
+    if (!m_risen.empty()) {
+        return false;
+    }
+    for (const auto& statue : m_statues) {
+        if (statue->woken || statue->rising) {
+            return false;
+        }
+        const Obstacle cylinder = obstacleOf(*statue);
+        for (const auto& visitor : visitors) {
+            if (!bounded(visitor.position.x) || !bounded(visitor.position.y) ||
+                !bounded(visitor.position.z) || !bounded(visitor.radius, 0) ||
+                !bounded(visitor.height, 0)) {
+                return false;
+            }
+            if (!inContactGrid(statue->figure.position(), visitor.position, visitor.radius)) {
+                continue;
+            }
+            if (statue->placement.sight >= 0) {
+                if (wakesAt(*statue, visitor.position, visitor.radius, visitor.height)) {
+                    return false;
+                }
+                // Native contact stops here too when a proximity-waking
+                // statue is outside sight, before considering its solid body.
+                continue;
+            }
+            if (cylinder.touchedBy(visitor.position, visitor.radius, 0)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 Vec3 CritterStatues::touch(const Vec3& position, f32 radius, f32 height) {
     Vec3 stood = position;
     for (auto& statue : m_statues) {
@@ -367,10 +408,7 @@ Vec3 CritterStatues::touch(const Vec3& position, f32 radius, f32 height) {
         const Obstacle cylinder = obstacleOf(*statue);
         // The wake probe uses placement sight, independently of the solid body's radius.
         if (statue->placement.sight >= 0.0f) {
-            const Vec3 away = stood - cylinder.centre;
-            const f32 reach = statue->placement.sight + radius;
-            if (away.x * away.x + away.z * away.z > reach * reach ||
-                std::abs(away.y) > statue->placement.height + 0.5f * height) {
+            if (!wakesAt(*statue, stood, radius, height)) {
                 continue;
             }
             statue->woken = true;
