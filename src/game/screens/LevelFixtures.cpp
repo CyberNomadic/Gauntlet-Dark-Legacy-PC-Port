@@ -609,7 +609,7 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         }
     }
     const usize reveals = m_chests.updateXray(m_resources->device, m_resources->world.itemScope(),
-                                              m_resources->world.powerups(), seconds, visitors);
+                                              m_resources->world.powerups(), visitors);
     for (usize i = 0; i < reveals; ++i) {
         m_resources->audio.playNamed("S_XRAY");
     }

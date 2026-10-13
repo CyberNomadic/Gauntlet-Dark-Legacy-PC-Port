@@ -225,7 +225,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     }
     ItemArchive powerups;
     const std::array visitors{ChestVisitor{Vec3{33, 0, 0}, 0.75f, 0, true}};
-    REQUIRE(chests.updateXray(device, AssetScope(own, &realm), powerups, 0, visitors) == 1);
+    REQUIRE(chests.updateXray(device, AssetScope(own, &realm), powerups, visitors) == 1);
     CHECK(chests.chest(0).revealed);
     CHECK(chests.chest(0).preview.hasFigure());
     // The borrowed realm remains loaded and reusable after releasing all consumers.

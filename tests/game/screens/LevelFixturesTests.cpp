@@ -1626,7 +1626,7 @@ TEST_CASE("X-Ray builds visible chest contents without spawning a collectible",
     const auto& chest = chests.chest(index);
     std::array party{ChestVisitor{chest.figure.position(), 0.75f, 0, true}};
     const auto pickups = f.world.placedItems().size();
-    REQUIRE(chests.updateXray(f.device, f.world.itemScope(), f.world.powerups(), 0, party) == 1);
+    REQUIRE(chests.updateXray(f.device, f.world.itemScope(), f.world.powerups(), party) == 1);
     CHECK(chest.revealed);
     CHECK(chest.preview.hasFigure());
     CHECK(chest.held == -1);
@@ -1639,7 +1639,7 @@ TEST_CASE("X-Ray builds visible chest contents without spawning a collectible",
     }
     CHECK(translucentShell);
     party[0].xray = false;
-    chests.updateXray(f.device, f.world.itemScope(), f.world.powerups(), 0, party);
+    chests.updateXray(f.device, f.world.itemScope(), f.world.powerups(), party);
     CHECK_FALSE(chest.revealed);
 }
 TEST_CASE("Temple entrance preserves keys and X-Ray reveals its actual container figures",

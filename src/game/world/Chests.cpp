@@ -21,6 +21,22 @@ s16 paramS16(const ItemInstance& instance, usize at) {
 
 } // namespace
 
+s32 Chests::contentsRecord(std::span<const ItemInfo> infos, s32 record, s32 count) {
+    constexpr s32 kKey = 2;
+    if (record < 0 || static_cast<usize>(record) >= infos.size() || count <= 1 ||
+        infos[static_cast<usize>(record)].type != ItemInfo::kPowerup ||
+        infos[static_cast<usize>(record)].subtype != kKey) {
+        return record;
+    }
+    for (usize i = 0; i < infos.size(); ++i) {
+        if (infos[i].type == ItemInfo::kPowerup && infos[i].subtype == kKey &&
+            infos[i].name == "KEYRING") {
+            return static_cast<s32>(i);
+        }
+    }
+    return record;
+}
+
 s32 Chests::resolveContents(std::span<const ItemInfo> infos, s32 record, usize itemIndex,
                             u32& seed) {
     // A list may name a list; each pick moves the seed on.
@@ -175,8 +191,11 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
                 chest.opener = static_cast<s32>(v);
                 chest.figure.play(kOpening, false);
                 event.kind = ChestEvent::Kind::Unlocked;
-                chest.contents = resolveContents(m_infos, chest.contents,
-                                                 static_cast<usize>(chest.instance), m_seed);
+                chest.contents =
+                    contentsRecord(m_infos,
+                                   resolveContents(m_infos, chest.contents,
+                                                   static_cast<usize>(chest.instance), m_seed),
+                                   chest.count);
                 if (chest.subtype != kTrappedChest && chest.subtype != kGoldChest) {
                     event.contents = chest.contents;
                 }
@@ -284,7 +303,7 @@ void Chests::hold(usize chest, s32 item) {
 }
 
 usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArchive& powerups,
-                         f32 seconds, std::span<const ChestVisitor> party) {
+                         std::span<const ChestVisitor> party) {
     std::vector<bool> selected(m_chests.size(), false);
     for (const auto& visitor : party) {
         if (!visitor.xray) {
@@ -324,8 +343,10 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
         if (selected[i]) {
             fresh += chest.revealed ? 0U : 1U;
             u32 seed = m_seed; // Looking must not change what opening a random chest produces.
-            const s32 inside =
-                resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed);
+            const s32 inside = contentsRecord(
+                m_infos,
+                resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed),
+                chest.count);
             if (inside != chest.previewContents) {
                 chest.previewContents = inside;
                 const auto& record = m_infos[static_cast<usize>(inside)];
@@ -340,9 +361,9 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
                 ItemInstance instance;
                 instance.position = chest.figure.position();
                 instance.rotation.y = -chest.figure.yaw();
+                // do_see_thru's overlay tree is never animated: it holds its first pose.
                 chest.preview.place(device, previewArt, name, instance, nullptr);
             }
-            chest.preview.update(seconds);
         }
         chest.revealed = selected[i];
     }

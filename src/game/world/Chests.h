@@ -118,7 +118,7 @@ public:
     /** Retail do_see_thru: one nearest eligible shut chest per X-Ray wearer,
      * within ten units. Returns the number of newly revealed chests for the cue. */
     usize updateXray(RenderDevice& device, const AssetScope& scope, ItemArchive& powerups,
-                     f32 seconds, std::span<const ChestVisitor> party);
+                     std::span<const ChestVisitor> party);
     /** Blocking boxes; open pickup and gold chests are passable until emptied. */
     std::vector<Obstacle> obstacles() const;
     /** Magic on a shut chest (fn_8005C1DC): what is in it becomes `record` and it rocks for
@@ -145,6 +145,9 @@ public:
      * list by the original's rule, which moves `seed` on. */
     static s32 resolveContents(std::span<const ItemInfo> infos, s32 record, usize itemIndex,
                                u32& seed);
+    /** The record a chest's resolved contents are shown and given as: keys with a count
+     * above one are the level's KEYRING record (fn_8005E90C's find_keyring_row). */
+    static s32 contentsRecord(std::span<const ItemInfo> infos, s32 record, s32 count);
 
 private:
     static void rock(Chest& chest, f32 seconds);

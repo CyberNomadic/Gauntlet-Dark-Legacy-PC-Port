@@ -246,7 +246,7 @@ TEST_CASE("fixture capture carries chests gates and X-Ray previews on the host f
     REQUIRE(f.gates.bind(f.device, f.layout, AssetScope(f.archive), &floor));
     REQUIRE(f.chests.chest(0).floor);
     const std::array visitors{ChestVisitor{{0, 0, 0}, 1, 1, true}};
-    REQUIRE(f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, 0, visitors) == 1);
+    REQUIRE(f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, visitors) == 1);
     const auto first = f.capture(10);
     REQUIRE(first.fixtures.size() == 3);
     CHECK(first.fixtures[0].alpha == Approx(63.0f / 255));
@@ -281,7 +281,7 @@ TEST_CASE("fixture capture carries chests gates and X-Ray previews on the host f
     f.device.draws.clear();
     f.resources.draw(f.device, second.fixtures[1], Mat4{1}, {}, camera, TreeModel::Pass::All);
     sameGeometry(f.device.draws, expected);
-    f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, 0, {});
+    f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, {});
     CHECK(f.capture(15).fixtures.size() == 2);
 }
 

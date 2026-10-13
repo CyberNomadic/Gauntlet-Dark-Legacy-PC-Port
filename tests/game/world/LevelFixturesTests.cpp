@@ -523,32 +523,32 @@ TEST_CASE("X-Ray reveals the nearest closed chest without spending keys or chang
     REQUIRE(chests.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     chests.setPlayerCount(2);
     std::array party{ChestVisitor{Vec3{3, 0, 0}, 0.75f, 0, true}};
-    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 1);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, party) == 1);
     CHECK(chests.chest(0).revealed);
     CHECK(chests.chest(0).state == Chests::kShut);
     CHECK(chests.chest(0).held == -1);
     const auto preview = chests.chest(0).previewContents;
     CHECK(preview == 1);
-    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 0);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, party) == 0);
     party[0].xray = false;
-    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 0);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, party) == 0);
     CHECK_FALSE(chests.chest(0).revealed);
     party[0].xray = true;
     party[0].position = Vec3{10, 0, 0};
-    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, party);
     CHECK_FALSE(chests.chest(0).revealed); // strict ten-unit reach
     party[0].position = Vec3{21.9f, 0, 0};
-    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 1);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, party) == 1);
     CHECK(chests.chest(1).revealed);
     party[0].position = Vec3{41.9f, 0, 0};
-    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, party);
     CHECK(chests.chest(2).revealed); // a trap must be visible before spending a key on it
     party[0].position = Vec3{1.9f, 0, 0};
     party[0].keys = 1;
     const auto opened = chests.update(0, party);
     REQUIRE(opened.size() == 1);
     CHECK(opened[0].contents == preview);
-    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, party);
     CHECK_FALSE(chests.chest(0).revealed);
 }
 
@@ -1158,6 +1158,47 @@ TEST_CASE("items stand on a floor up to ten units beneath or four above them, un
     CHECK(barrels.barrel(1).figure.position().y == Approx(rest)); // 1.3 beneath: found
     CHECK(barrels.barrel(2).figure.position().y == Approx(14.0f)); // 11.7 above: beyond
     CHECK(barrels.barrel(3).figure.position().y == Approx(6.656f)); // keeps its height
+}
+
+TEST_CASE("a chest of more than one key holds and shows the key ring", "[game][world][fixtures]") {
+    const auto dir = test::scratchDirectory("fixtures-keyring");
+    writeTextFile(dir / "world.json", R"({
+      "objects":[{"name":"GROUND","position":[0,0,0],"next":-1,"child":-1}],
+      "itemInfos":[
+        {"type":2,"subtype":46,"name":"CHEST","radius":3.9,"height":2,"xSize":1.2,"zSize":1},
+        {"type":1,"subtype":2,"name":"KEY","radius":0.5,"height":2,"value":1},
+        {"type":1,"subtype":2,"name":"KEYRING","radius":0.5,"height":2,"value":3}],
+      "itemInstances":[
+        {"info":0,"minPlayers":1,"position":[0,0,0],"rotation":[0,0,0],
+         "params":[1,0,0,0,3,0,0,0,0,0,0,0]},
+        {"info":0,"minPlayers":1,"position":[20,0,0],"rotation":[0,0,0],
+         "params":[1,0,0,0,1,0,0,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    Chests chests;
+    REQUIRE(chests.bind(device, layout, AssetScope(items), nullptr));
+    REQUIRE(chests.size() == 2);
+    chests.setPlayerCount(1);
+    // fn_8005E90C puts the KEYRING record in a chest of keys with a count above one, and
+    // do_see_thru shows that record too; a single key stays a KEY.
+    std::array<ChestVisitor, 1> party{ChestVisitor{Vec3{1.9f, 0.0f, 0.0f}, 0.75f, 0}};
+    std::vector<ChestEvent> events = chests.update(1.0f / 30.0f, party);
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == ChestEvent::Kind::Unlocked);
+    CHECK(events[0].contents == 2);
+    CHECK(chests.chest(0).contents == 2);
+    party[0].position = Vec3{21.9f, 0.0f, 0.0f};
+    events = chests.update(1.0f / 30.0f, party);
+    const auto single = std::ranges::find_if(events, [](const ChestEvent& event) {
+        return event.chest == 1 && event.kind == ChestEvent::Kind::Unlocked;
+    });
+    REQUIRE(single != events.end());
+    CHECK(single->contents == 1);
+    CHECK(Chests::contentsRecord(layout.itemInfos(), 1, 3) == 2);
+    CHECK(Chests::contentsRecord(layout.itemInfos(), 1, 1) == 1);
+    CHECK(Chests::contentsRecord(layout.itemInfos(), 2, 1) == 2);
 }
 
 TEST_CASE("Stop Time retracts live traps and leaves a half-second rest on release",
