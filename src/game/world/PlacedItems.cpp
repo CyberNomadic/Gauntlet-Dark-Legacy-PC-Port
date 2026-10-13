@@ -100,6 +100,7 @@ bool PlacedItems::bind(RenderDevice& device, const WorldLayout& layout,
     m_collision = collision;
     const auto restCollision = itemSupportWorld(layout, collision);
     m_archives.assign(archives.begin(), archives.end());
+    m_scope = AssetScope(archives);
     m_infos.clear();
     for (ItemArchive* archive : archives) {
         if (archive == nullptr || !archive->loaded()) {
@@ -438,33 +439,29 @@ std::vector<PlacedItems::BlastChange> PlacedItems::blast(RenderDevice& device, c
 }
 
 bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
-    for (ItemArchive* archive : m_archives) {
-        if (archive == nullptr || !archive->loaded()) {
-            continue;
-        }
-        const auto tree = archive->trees.find(item.name);
-        if (!tree.has_value()) {
-            continue;
-        }
-        const TreeInfo& figure = archive->trees.tree(*tree);
-        if (item.model.bind(figure, archive->models, archive->textures, device)) {
-            item.figure = &figure;
-            item.archive = archive;
-            if (figure.sequences.empty()) {
-                item.pose.rest(figure);
-            } else {
-                item.player.start(figure.sequences[0], 0);
-                item.pose.evaluate(figure, 0, 0.0f);
-                item.model.setFrame(0, 0);
-            }
-            // AtreeNodeInit also instantiates type-4 children. QUEST_PARCH's
-            // POOLFIRE is part of the pickup tree, not its collection effect.
-            item.particles.bind(figure, *archive, device, item.transform, item.pose.matrices());
-            item.particles.setLocalScales(item.pose.poses());
-            return true;
-        }
+    const auto hit = m_scope.findTree(item.name);
+    if (!hit.has_value()) {
+        return false;
     }
-    return false;
+    ItemArchive& archive = *hit->archive;
+    const TreeInfo& figure = archive.trees.tree(hit->index);
+    if (!item.model.bind(figure, archive.models, archive.textures, device)) {
+        return false;
+    }
+    item.figure = &figure;
+    item.archive = &archive;
+    if (figure.sequences.empty()) {
+        item.pose.rest(figure);
+    } else {
+        item.player.start(figure.sequences[0], 0);
+        item.pose.evaluate(figure, 0, 0.0f);
+        item.model.setFrame(0, 0);
+    }
+    // AtreeNodeInit also instantiates type-4 children. QUEST_PARCH's
+    // POOLFIRE is part of the pickup tree, not its collection effect.
+    item.particles.bind(figure, archive, device, item.transform, item.pose.matrices());
+    item.particles.setLocalScales(item.pose.poses());
+    return true;
 }
 
 bool PlacedItems::place(RenderDevice& device, std::string_view name, const Vec3& position,
@@ -642,15 +639,14 @@ std::vector<Pickup> PlacedItems::collect(RenderDevice& device,
 /** Starts a tree's particle nodes at `position`, riding its first sequence, from whichever
  * archive holds the tree. */
 void PlacedItems::startEffect(RenderDevice& device, std::string_view tree, const Vec3& position) {
-    for (ItemArchive* archive : m_archives) {
-        if (archive == nullptr || !archive->loaded()) {
-            continue;
-        }
-        const auto index = archive->trees.find(tree);
-        if (!index.has_value()) {
-            continue;
-        }
-        const TreeInfo& figure = archive->trees.tree(*index);
+    const auto hit = m_scope.findTree(tree);
+    if (!hit.has_value()) {
+        log::warn("Placed items: no archive holds the burst {}", tree);
+        return;
+    }
+    {
+        ItemArchive* archive = hit->archive;
+        const TreeInfo& figure = archive->trees.tree(hit->index);
         const std::vector<ParticleTemplate>& templates = archive->trees.particleTemplates();
         Effect effect;
         effect.figure = &figure;
@@ -694,9 +690,7 @@ void PlacedItems::startEffect(RenderDevice& device, std::string_view tree, const
         if (!effect.emitters.empty()) {
             m_effects.push_back(std::move(effect));
         }
-        return;
     }
-    log::warn("Placed items: no archive holds the burst {}", tree);
 }
 
 /** Shows every item the frames its archive's animations have reached and the way their

@@ -39,6 +39,14 @@ public:
 
     AssetScope() = default;
     explicit AssetScope(ItemArchive& only) { add(only); }
+    /** The loaded archives of `archives`, in their order; nulls are skipped. */
+    explicit AssetScope(std::span<ItemArchive* const> archives) {
+        for (ItemArchive* archive : archives) {
+            if (archive != nullptr) {
+                add(*archive);
+            }
+        }
+    }
     AssetScope(ItemArchive& first, ItemArchive* second) {
         add(first);
         if (second != nullptr) {

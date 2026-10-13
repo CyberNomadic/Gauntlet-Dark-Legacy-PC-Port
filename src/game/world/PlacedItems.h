@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -285,6 +286,7 @@ private:
     void applyTextureMotion();
 
     std::vector<ItemArchive*> m_archives;
+    AssetScope m_scope; ///< the same archives, searched in order for figures and bursts
     std::vector<ItemInfo> m_infos; ///< the level's item records, for dropping more
     /** Builds the figure of an item named `name`; false when no archive holds it. */
     bool makeFigure(RenderDevice& device, Item& item);
