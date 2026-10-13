@@ -7,15 +7,10 @@
 
 #include "game/players/PickupVoices.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/PartyDamage.h"
 #include "game/screens/PlayScene.h"
 
 namespace gdl::game {
-
-namespace {
-
-constexpr f32 kBlockLessonAfter = 60.0f; ///< the guard is taught only after a minute
-
-} // namespace
 
 void PlayScene::hurtPlayer(s32 player, f32 damage, HurtKind kind, bool directed) {
     for (usize i = 0; i < m_players.size(); ++i) {
@@ -61,36 +56,31 @@ void PlayScene::hurt(usize index, f32 damage, HurtKind kind, bool directed,
     }
     const LevelInfo* level = m_world->level();
     PlayerRuntime& runtime = m_players[index];
-    const bool stood = runtime.life == PlayerLife::Standing;
-    m_health.hurt(
-        runtime, damage, kind, directed, m_world->isTower(),
-        level != nullptr ? level->tuning.damage : 1.0f,
+    const PartyDamage::Context context{
+        .tower = m_world->isTower(),
+        .damageScale = level != nullptr ? level->tuning.damage : 1.0f,
+        .bossEncounter = level != nullptr && level->bossType >= 0,
+        .cutscene = m_switchCutscene.active(),
+        .lastRealmLevel =
+            m_context.levels != nullptr && m_context.levels->isLastLevel(m_world->ref()),
+        .realm = m_world->ref().realmId,
+        .playSeconds = m_playSeconds};
+    PartyDamage::hurt(
+        m_health, runtime, damage, kind, directed, context,
         {.block = [this, index](f32 taken,
                                 f32 left) { m_attacks.showBlock(index, taken, left, m_players); },
          .sound = [this](std::string_view sound) { m_audio.playNamed(sound); },
          .cry = [this, index](std::string_view voice) { m_attacks.cry(index, voice, m_players); },
          .named = [this, index](std::string_view line,
                                 f32 wait) { sayWithName(index, line, wait); },
-         .learnBlock =
-             [this, index] {
-                 if (m_playSeconds > kBlockLessonAfter) {
-                     postHelp(HelpMessages::kLearnBlock, index);
-                 }
-             },
+         .learnBlock = [this, index] { postHelp(HelpMessages::kLearnBlock, index); },
          .vibrate =
              [this, &runtime](s32 frames) {
                  if (m_context.vibrate) {
                      m_context.vibrate(runtime.actor.player(), frames, ControlFeedback::Damage);
                  }
              }},
-        impact, level != nullptr && level->bossType >= 0,
-        m_classes.stats(runtime.actor.save().character));
-    // A death on a realm's last level is a try at its boss, kept in the entry save the fallen
-    // go on with (inactivate_player, then playerGiveGargItem into the checkpoint copy).
-    if (stood && runtime.life == PlayerLife::Dying && m_context.levels != nullptr &&
-        m_context.levels->isLastLevel(m_world->ref())) {
-        runtime.entrySave.progress().levels.recordBossDeath(m_world->ref().realmId);
-    }
+        impact, m_classes.stats(runtime.actor.save().character));
 }
 
 /** Burning floors, rollers and carts hurt whoever is against or on them, at most once a
@@ -101,7 +91,7 @@ void PlayScene::updateHazardSurfaces(f32 seconds) {
     constexpr std::string_view kMineCartSound = "S_MINECARPHIT"; ///< AudioWorldHitPlyr's
     for (usize i = 0; i < m_players.size(); ++i) {
         PlayerRuntime& runtime = m_players[i];
-        runtime.surfaceGap = std::max(runtime.surfaceGap - seconds, 0.0f);
+        PlayerHealth::advanceSurfaceGap(runtime, seconds);
         if (runtime.surfaceGap > 0.0f || !PlayerHealth::canTakeSurfaceDamage(runtime)) {
             continue;
         }

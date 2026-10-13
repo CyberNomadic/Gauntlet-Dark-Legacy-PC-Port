@@ -2,10 +2,72 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 #include "engine/core/Types.h"
 
 namespace gdl::game {
+
+bool MoveStrikes::Checkpoint::valid() const {
+    if (strikes.size() > kMaxStrikes) {
+        return false;
+    }
+    const auto finite = [](f32 value) { return std::isfinite(value) && std::abs(value) <= 1e6f; };
+    const auto vector = [&](const Vec3& value) {
+        return finite(value.x) && finite(value.y) && finite(value.z);
+    };
+    std::unordered_set<u32> ids;
+    for (const auto& strike : strikes) {
+        if (strike.id == 0 || !ids.insert(strike.id).second || (next != 0 && strike.id >= next) ||
+            strike.owner < 0 || strike.owner >= 4 || (strike.flies && strike.expanding) ||
+            !vector(strike.position) || !vector(strike.facing) || strike.facing.y != 0 ||
+            std::abs(glm::length(strike.facing) - 1) > 1e-4f || !finite(strike.speed) ||
+            !finite(strike.radius) || strike.radius < 0 || !finite(strike.arc) || strike.arc < -1 ||
+            strike.arc > 1 || !finite(strike.damage) || !finite(strike.delayLeft) ||
+            !finite(strike.launchIn) || strike.launchIn < 0 || !finite(strike.secondsLeft) ||
+            !finite(strike.damageTime)) {
+            return false;
+        }
+    }
+    return true;
+}
+std::optional<MoveStrikes::Checkpoint> MoveStrikes::checkpoint() const {
+    if (m_strikes.size() > Checkpoint::kMaxStrikes) {
+        return std::nullopt;
+    }
+    Checkpoint state{m_strikes, m_next};
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+std::optional<MoveStrikes::Prepared> MoveStrikes::prepareRestore(const Checkpoint& state) const {
+    if (!state.valid() || m_restoreGeneration == 0) {
+        return std::nullopt;
+    }
+    Prepared result;
+    result.owner = this;
+    result.lifetime = m_restoreOwner;
+    result.generation = m_restoreGeneration;
+    result.state = state;
+    return result;
+}
+bool MoveStrikes::canCommit(const Prepared& state) const noexcept {
+    return state.owner == this && !state.lifetime.expired() &&
+           state.lifetime.lock() == m_restoreOwner && m_restoreGeneration != 0 &&
+           state.generation == m_restoreGeneration;
+}
+bool MoveStrikes::commitRestore(Prepared&& state) noexcept {
+    if (!canCommit(state)) {
+        return false;
+    }
+    m_strikes.swap(state.state.strikes);
+    m_next = state.state.next;
+    state.owner = nullptr;
+    ++m_restoreGeneration;
+    return true;
+}
+bool MoveStrikes::restore(const Checkpoint& state) {
+    auto prepared = prepareRestore(state);
+    return prepared && commitRestore(std::move(*prepared));
+}
 
 bool StrikeHit::reaches(const Vec3& position, f32 targetRadius, f32 targetHeight) const {
     if (radius <= 0 || damage <= 0) {
@@ -169,6 +231,7 @@ void MoveStrikes::stop(u32 id) {
 }
 
 void MoveStrikes::clear() {
+    ++m_restoreGeneration;
     m_strikes.clear();
     m_next = 1;
 }

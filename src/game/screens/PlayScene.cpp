@@ -13,6 +13,7 @@
 #include "engine/world/WorldCamera.h"
 
 #include "game/players/ClassData.h"
+#include "game/players/EnemyShrink.h"
 #include "game/players/NameCheats.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
@@ -574,6 +575,39 @@ void PlayScene::updateEnemies(s32 ticks, f32 seconds) {
     if (!rams.empty()) {
         settleBlasts();
     }
+}
+
+std::optional<OpponentFrame> PlayScene::opponentFrame(u32 initialPlayers) const {
+    if (!m_open || m_world == nullptr || simulationTickRate() != 60 ||
+        m_opponents.pendingPlacements() > OpponentFrame::kMaxPendingPlacements) {
+        return std::nullopt;
+    }
+    OpponentFrame frame;
+    frame.initialPlayers = initialPlayers;
+    frame.difficultyGain = m_opponents.difficultyGain();
+    frame.pendingPlacements = static_cast<u32>(m_opponents.pendingPlacements());
+    frame.held = !m_opponentsAdvanced;
+    frame.timeStopped = PlayerPowerups::timeStopped(m_players);
+    const LevelInfo* level = m_world->level();
+    frame.unsupportedCombatants =
+        m_opponents.hasUncapturedState() || m_attacks.pendingGameplay() ||
+        missiles().count() != 0 ||
+        PlayerPowerups::enemyShrink(m_players, level != nullptr && level->bossType >= 0) !=
+            EnemyShrink::kWhole;
+    if (level != nullptr) {
+        frame.missileSpeed = level->tuning.enemyMissileSpeed;
+    }
+    const auto views = LevelOpponents::enemyViews(m_players);
+    frame.players.reserve(views.size());
+    for (const auto& view : views) {
+        if (view.player < 0 || view.player >= static_cast<s32>(OpponentFrame::kMaxPlayers)) {
+            return std::nullopt;
+        }
+        frame.players.push_back({static_cast<u8>(view.player), view});
+    }
+    frame.fixtures = m_fixtures.obstacles();
+    frame.stops = m_fixtures.missileStops();
+    return frame.valid() ? std::optional{std::move(frame)} : std::nullopt;
 }
 
 /** What the enemies count as on screen is what the view shows, and the placed ones it comes

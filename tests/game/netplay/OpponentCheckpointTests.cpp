@@ -182,4 +182,64 @@ TEST_CASE("opponent wire rejects individually valid components with inconsistent
     CHECK_FALSE(OpponentCheckpoint::decode(bytes));
     CHECK(OpponentCheckpoint::decode(*valid) == original);
 }
+
+TEST_CASE("opponent wire carries complete optional placement state with an exact tail",
+          "[rollback][opponent-checkpoint][opponent-placements]") {
+    auto state = syntheticState();
+    PlacedEnemies::Placement row;
+    row.kind = row.spawn.kind = kGruntKind;
+    row.spawn.generator = 0;
+    row.spawn.position = {1, 2, 3};
+    row.spawn.placed = true;
+    row.viewRadius = 2;
+    state.placements.emplace();
+    state.placements->roster = {row, row};
+    state.placements->pending = {1};
+    state.placements->view.emplace();
+    state.placements->attention = {5, 7, 11};
+    REQUIRE(state.valid());
+    const auto encoded = OpponentCheckpoint::encode(state);
+    REQUIRE(encoded);
+    CHECK(readU32LE(*encoded, 4) == 2);
+    CHECK(OpponentCheckpoint::decode(*encoded) == state);
+    const usize tailSize = readU32LE(*encoded, 20);
+    const usize tail = encoded->size() - tailSize;
+    REQUIRE(tailSize > 0);
+    CHECK(PlacedEnemyCheckpoint::decode(std::span{*encoded}.subspan(tail)) == state.placements);
+
+    for (const u32 length : {0U, 1U, static_cast<u32>(tailSize - 1), static_cast<u32>(tailSize + 1),
+                             std::numeric_limits<u32>::max()}) {
+        auto bad = *encoded;
+        putWord(bad, 20, length);
+        CHECK_FALSE(OpponentCheckpoint::decode(bad));
+    }
+    for (usize length = tail; length < encoded->size(); ++length) {
+        CHECK_FALSE(OpponentCheckpoint::decode(std::span{*encoded}.first(length)));
+    }
+    auto bad = *encoded;
+    putWord(bad, 4, 1);
+    CHECK_FALSE(OpponentCheckpoint::decode(bad));
+    bad = *encoded;
+    putWord(bad, tail, 0);
+    CHECK_FALSE(OpponentCheckpoint::decode(bad));
+
+    // Every component is individually well-formed, but the placed spawn must
+    // not name a generator that does not exist in this same authoritative tick.
+    auto crossPool = state;
+    crossPool.placements->roster[0].spawn.generator = 1;
+    REQUIRE(crossPool.placements->valid());
+    CHECK_FALSE(crossPool.valid());
+    CHECK_FALSE(OpponentCheckpoint::encode(crossPool));
+    const auto wrongTail = PlacedEnemyCheckpoint::encode(*crossPool.placements);
+    REQUIRE(wrongTail);
+    bad.assign(encoded->begin(), encoded->begin() + static_cast<std::ptrdiff_t>(tail));
+    bad.insert(bad.end(), wrongTail->begin(), wrongTail->end());
+    CHECK_FALSE(OpponentCheckpoint::decode(bad));
+
+    // Absence is explicit and remains usable by isolated three-pool callers.
+    bad.assign(encoded->begin(), encoded->begin() + static_cast<std::ptrdiff_t>(tail));
+    putWord(bad, 20, 0);
+    state.placements.reset();
+    CHECK(OpponentCheckpoint::decode(bad) == state);
+}
 } // namespace

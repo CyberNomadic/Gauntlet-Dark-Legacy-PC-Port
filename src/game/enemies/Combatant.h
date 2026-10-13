@@ -178,6 +178,7 @@ public:
     std::vector<CombatArenaActivation> takeArenaActivations();
 
 private:
+    friend class OpponentCombatCheckpoint;
     static constexpr usize kPlayerSlots = 4;
     static constexpr f32 kAngerMemory = 15.0f;
     struct PlayerDamage {

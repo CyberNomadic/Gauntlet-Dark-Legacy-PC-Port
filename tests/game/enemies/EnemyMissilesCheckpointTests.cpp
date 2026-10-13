@@ -83,6 +83,96 @@ struct Battle {
     }
 };
 
+TEST_CASE("bounded enemy launches preserve native decisions and random consumption",
+          "[rollback][enemy-missiles-checkpoint][enemy-launch-budget]") {
+    EnemyMissiles native{891};
+    EnemyMissiles replay{891};
+    WorldCollision collision;
+    collision.build({});
+    Obstacle box;
+    box.centre = {0, 0, 1.5f};
+    box.halfAcross = 2;
+    box.halfAlong = 0.25f;
+    box.height = 10;
+    const std::array items{box};
+    EnemyMissileWork work;
+    EnemyMissileLaunch launch;
+    launch.body = {0, 3, 0};
+    launch.target = {0, 3, 20};
+    launch.point = enemyLaunchPointOf(kGruntKind, EnemyMissileKind::kArrow);
+    launch.aimError = 0.25f;
+    const auto kind = GENERATE(EnemyMissileKind::arrow(), EnemyMissileKind::bomb(),
+                               EnemyMissileKind::bolt(15, 25, 0.3f));
+    for (s32 step = 0; step < 6; ++step) {
+        CAPTURE(step, kind.slot);
+        launch.facing = step % 3 == 1 ? kPi : 0;
+        const auto obstacles =
+            step % 3 == 2 ? std::span<const Obstacle>{items} : std::span<const Obstacle>{};
+        const bool expected = native.launch(kind, launch, &collision, obstacles);
+        CHECK(replay.launch(kind, launch, &collision, obstacles, &work) == expected);
+        CHECK_FALSE(work.exhausted);
+        CHECK(capture(replay) == capture(native));
+    }
+    CHECK(native.count() == 2);
+    CHECK(work.sweepSamples < 4096);
+    CHECK(work.itemTests == 4094);
+}
+
+TEST_CASE("bounded enemy launch checks overflow before spatial sampling and never clamps aim",
+          "[rollback][enemy-missiles-checkpoint][enemy-launch-budget]") {
+    EnemyMissiles pool{62};
+    const auto before = capture(pool);
+    EnemyMissileWork work;
+    WorldCollision collision;
+    collision.build({});
+    const WorldCollision* world = &collision;
+    EnemyMissileLaunch launch;
+    launch.body = {0, 3, 0};
+    launch.target = {0, 1000000, 0.0011f};
+    SECTION("nearly vertical native lob exceeds the sample and integer-conversion bounds") {}
+    SECTION("nonfinite computed velocity is rejected even without a world sweep") {
+        launch.target = {0, 3, 20};
+        launch.speedScale = std::numeric_limits<f32>::max();
+        world = nullptr;
+    }
+    CHECK_FALSE(pool.launch(EnemyMissileKind::arrow(), launch, world, {}, &work));
+    CHECK(work.exhausted);
+    auto expected = before;
+    Mt19937 random;
+    REQUIRE(random.restore(before.random));
+    static_cast<void>(random.unitFloat24());
+    expected.random = random.checkpoint();
+    CHECK(capture(pool) == expected); // native draw consumed; no flight or instance allocated
+    CHECK_FALSE(pool.launch(EnemyMissileKind::arrow(), launch, world, {}, &work));
+    CHECK(capture(pool) == expected); // exhausted tick performs no additional launch work
+    REQUIRE(pool.restore(before));
+    CHECK(capture(pool) == before);
+}
+
+TEST_CASE("enemy launch allowance is shared and normal rejection is not budget exhaustion",
+          "[rollback][enemy-missiles-checkpoint][enemy-launch-budget]") {
+    EnemyMissiles pool;
+    WorldCollision collision;
+    collision.build({});
+    EnemyMissileLaunch launch;
+    launch.body = {0, 3, 0};
+    launch.target = {0, 3, 20};
+    EnemyMissileWork work;
+    work.sweepSamples = 12; // exactly one flat arrow's three-unit lead at radius / 2
+    auto kind = EnemyMissileKind::arrow();
+    kind.weight = 0;
+    REQUIRE(pool.launch(kind, launch, &collision, {}, &work));
+    CHECK(work.sweepSamples == 0);
+    CHECK_FALSE(work.exhausted);
+    launch.facing = kPi;
+    CHECK_FALSE(pool.launch(kind, launch, &collision, {}, &work));
+    CHECK_FALSE(work.exhausted); // facing rejection precedes any sweep
+    launch.facing = 0;
+    CHECK_FALSE(pool.launch(kind, launch, &collision, {}, &work));
+    CHECK(work.exhausted);
+    CHECK(pool.count() == 1);
+}
+
 TEST_CASE("whole enemy missile replay retains held flight reflection piercing bursts and RNG",
           "[rollback][enemy-missiles-checkpoint]") {
     const f32 step = GENERATE(1.0f / 30, 1.0f / 60);

@@ -919,6 +919,17 @@ std::vector<Obstacle> Generators::obstacles() const {
     return out;
 }
 
+std::vector<Generators::Contact> Generators::identifiedObstacles() const {
+    std::vector<Contact> out;
+    for (usize index = 0; index < m_generators.size(); ++index) {
+        const auto& generator = m_generators[index];
+        if (generator.state > 0 && generator.presence == Generator::Presence::Shown) {
+            out.push_back({static_cast<u32>(index), generator.box});
+        }
+    }
+    return out;
+}
+
 std::vector<Obstacle> Generators::enemyObstacles() const {
     std::vector<Obstacle> out;
     for (const Generator& generator : m_generators) {

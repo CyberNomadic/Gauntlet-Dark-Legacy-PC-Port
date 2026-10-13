@@ -28,6 +28,11 @@ namespace gdl::game {
  * (fn_80060114). The archives are borrowed and must outlive the statues. */
 class CritterStatues {
 public:
+    CritterStatues() = default;
+    CritterStatues(const CritterStatues&) = delete;
+    CritterStatues& operator=(const CritterStatues&) = delete;
+    CritterStatues(CritterStatues&&) = delete;
+    CritterStatues& operator=(CritterStatues&&) = delete;
     /** A placement standing as a statue, and what it becomes. */
     struct Placement {
         CombatantKind kind = CombatantKind::Unknown;
@@ -42,6 +47,7 @@ public:
         f32 sight = 0.0f;      ///< approach wake radius; negative disables proximity waking
         s32 activeOn = 0; ///< the record's, in half ticks; nought for the sequence's own length
         std::optional<usize> carried; ///< the pickup the great one holds
+        bool operator==(const Placement&) const;
     };
     /** Whether a sphere of a radius about a point is in view. */
     using Seen = std::function<bool(const Vec3&, f32)>;
@@ -92,6 +98,50 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera = nullptr) const;
 
+    struct Checkpoint {
+        static constexpr usize kMaxStatues = 512;
+        struct Definition {
+            u64 instance = 0;
+            Placement placement;
+            bool operator==(const Definition&) const = default;
+        };
+        struct Body {
+            u64 instance = 0;
+            ItemFigure::Checkpoint figure;
+            bool woken = false;
+            bool rising = false;
+            s32 ticksLeft = 0;
+            bool operator==(const Body&) const = default;
+        };
+        std::vector<Definition> roster;
+        std::vector<Body> statues;
+        std::vector<Placement> risen;
+        Vec2 contactGridOrigin{0};
+        f32 contactGridInverseWidth = 0;
+        u64 nextInstance = 1;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+
+    private:
+        friend class CritterStatues;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    /** Resolves original IDs against retained preloaded prototypes, even after
+     * native compaction. Preparation has no callbacks, asset loads or GPU work. */
+    std::optional<Prepared> prepareRestore(const Checkpoint& state) const;
+    bool canCommit(const Prepared& state) const;
+    bool commitRestore(Prepared&& state);
+    bool restore(const Checkpoint& state);
+
 private:
     struct Statue {
         u64 instance = 0;
@@ -102,13 +152,22 @@ private:
         bool rising = false;
         s32 ticksLeft = 0;
     };
+    friend class OpponentCombatCheckpoint;
     static Obstacle obstacleOf(const Statue& statue);
     s32 contactCell(f32 coordinate, f32 origin) const;
     bool inContactGrid(const Vec3& statue, const Vec3& player, f32 radius) const;
     std::vector<std::unique_ptr<Statue>> m_statues;
+    struct Prototype {
+        Checkpoint::Definition definition;
+        ItemArchive* archive = nullptr;
+        std::unique_ptr<ItemFigure> figure;
+    };
+    std::vector<Prototype> m_prototypes;
     std::vector<Placement> m_risen;
     Vec2 m_contactGridOrigin{0};
     f32 m_contactGridInverseWidth = 0;
     u64 m_nextInstance = 1; ///< not reset by clear; old snapshots cannot reuse a statue's ID
+    std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 0;
 };
 } // namespace gdl::game

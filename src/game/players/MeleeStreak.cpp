@@ -1,8 +1,25 @@
 #include "game/players/MeleeStreak.h"
 
+#include <cmath>
+
 #include "engine/core/Types.h"
 
 namespace gdl::game {
+
+bool MeleeStreak::Checkpoint::valid() const {
+    return count >= 0 && std::isfinite(quiet) && quiet >= 0 && quiet <= kQuiet &&
+           (running ? count > 0 : count == 0 && quiet == 0);
+}
+
+bool MeleeStreak::restore(const Checkpoint& state) {
+    if (!state.valid()) {
+        return false;
+    }
+    m_count = state.count;
+    m_quiet = state.quiet;
+    m_running = state.running;
+    return true;
+}
 
 void MeleeStreak::record(bool telling) {
     m_count += telling ? kTelling : kHurt;

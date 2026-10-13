@@ -53,6 +53,7 @@ void PlayerArsenal::bind(const Resources& resources, std::span<TextureSet* const
     }
 }
 void PlayerArsenal::clear() {
+    ++m_restoreGeneration;
     if (m_resources) {
         for (const auto& cast : m_castEffects) {
             m_resources->effects.stop(cast.effect);

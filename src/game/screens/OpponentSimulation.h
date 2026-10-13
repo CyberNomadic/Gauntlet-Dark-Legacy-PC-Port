@@ -17,8 +17,10 @@ public:
     static constexpr s32 kCritterIds = 3000;
     static constexpr s32 kBossIds = 4000;
 
-    OpponentSimulation(Generators& generators, Enemies& enemies, EnemyMissiles& missiles)
-        : m_generators(generators), m_enemies(enemies), m_missiles(missiles) {}
+    OpponentSimulation(Generators& generators, Enemies& enemies, EnemyMissiles& missiles,
+                       PlacedEnemies* placements = nullptr)
+        : m_generators(generators), m_enemies(enemies), m_missiles(missiles),
+          m_placements(placements) {}
 
     using Checkpoint = OpponentState;
 
@@ -43,7 +45,7 @@ public:
     prepareRestore(const Checkpoint& state,
                    std::span<const EnemyMissiles::Resource> resources = {}) const;
     bool canCommit(const Prepared& prepared) const;
-    /** All three preparations are checked before any pool changes. Synchronous,
+    /** All preparations are checked before any owner changes. Synchronous,
      * with no callbacks or resource changes between those checks and commits. */
     bool commitRestore(Prepared&& prepared);
     bool restore(const Checkpoint& state, std::span<const EnemyMissiles::Resource> resources = {});
@@ -74,20 +76,35 @@ public:
                                               std::span<const MissileTarget> bosses = {});
 
     enum class Result { Advanced, Invalid, Unsupported, Interaction };
+    /** Pure admission check for the captured gameplay state, before installing
+     * coordinated player replay callbacks. This does not certify future
+     * interactions or the live missile pool's separate per-step work budget. */
+    static bool supported(const Checkpoint& state, const Frame& frame);
     /** Private continuation only. A step requiring uncaptured outside gameplay
      * is rejected and all pools return to their preceding values. Generator
      * accounting and harmless presentation queues are never discarded. Private
      * births/shot ids may be reused after correction: do not publish them as
      * authoritative lifetimes. Static collision, view and fixture state are
-     * supplied observations, not predictions of the rest of the level. Shooting
-     * minds/broods remain authoritative until their initial launch sweep can be
-     * bounded; already captured flights continue within a finite work budget. */
+     * supplied observations, not predictions of the rest of the level. Launch
+     * sweeps and the complete post-AI missile pool must fit the private work
+     * allowance; native gameplay has no such allowance. */
     Result speculate(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {});
 
+    /** The same bounded native phase inside a caller-owned complete combat
+     * rewind. Ordinary melee blows remain queued for that caller's PlayerHealth
+     * phase. Any other interaction refuses the step without undoing it here:
+     * the caller MUST rewind all participants and discard buffered outputs.
+     * This deliberately does not relax speculate's no-interaction contract. */
+    Result stageCombat(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {});
+    static bool combatSupported(const Checkpoint& state, const Frame& frame);
+
 private:
+    std::vector<MissileStop> advance(const Frame& frame, const EnemyMissiles::SceneryBlast& scenery,
+                                     EnemyMissileWork* work, PlacedEnemies* placements);
     Generators& m_generators;
     Enemies& m_enemies;
     EnemyMissiles& m_missiles;
+    PlacedEnemies* m_placements = nullptr;
 };
 
 } // namespace gdl::game

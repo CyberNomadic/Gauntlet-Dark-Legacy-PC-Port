@@ -5,7 +5,8 @@
 namespace gdl::game {
 
 bool OpponentState::valid() const {
-    if (!generators.valid() || !enemies.valid() || !missiles.valid()) {
+    if (!generators.valid() || !enemies.valid() || !missiles.valid() ||
+        (placements && !placements->valid())) {
         return false;
     }
     const auto hasGenerator = [this](s32 id) {
@@ -19,7 +20,10 @@ bool OpponentState::valid() const {
                                    return enemy.generator == -1 || hasGenerator(enemy.generator);
                                }) &&
            std::ranges::all_of(enemies.generatorEvents,
-                               [&](const auto& event) { return hasGenerator(event.generator); });
+                               [&](const auto& event) { return hasGenerator(event.generator); }) &&
+           (!placements || std::ranges::all_of(placements->roster, [&](const auto& placement) {
+               return placement.spawn.generator == -1 || hasGenerator(placement.spawn.generator);
+           }));
 }
 
 } // namespace gdl::game

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <set>
 
 #include <catch2/catch_test_macros.hpp>
@@ -138,12 +139,29 @@ TEST_CASE("native guest movement starts locally before the host consumes its inp
     REQUIRE(confirmed->players[2]->movement.enabled);
     pair.wire.hostWire.latency = latency;
     pair.wire.guestWire.latency = latency;
+    const u64 checkpointTick = confirmed->motion.tick;
     const auto before = confirmed->motion.players[2]->position;
     const auto hostBefore = pair.host.hostScene()->actor(2)->position();
     SessionInputs::Frame input;
     input[0].move = {{1, 0}, 1};
     pair.step({}, input);
     pair.draw();
+    INFO("latency=" << latency << " checkpoint=" << checkpointTick
+                    << " samples=" << pair.guest.predictionMetrics().samples
+                    << " stalled=" << pair.guest.predictionMetrics().stalled
+                    << " pending=" << pair.guest.predictionMetrics().pending);
+    if (const auto* latest = pair.wire.guest.playback().latest(); latest && latest->opponents) {
+        const auto& opponents = *latest->opponents;
+        const auto alive = std::ranges::count_if(opponents.enemies.enemies, [](const auto& enemy) {
+            return enemy.state != Enemies::State::Inactive;
+        });
+        UNSCOPED_INFO("opponent bodies=" << alive
+                                         << " generators=" << opponents.generators.generators.size()
+                                         << " missiles=" << opponents.missiles.missiles.size());
+    }
+    CAPTURE(pair.guest.shown()->motion.players[2]->position.x,
+            pair.guest.shown()->motion.players[2]->position.y,
+            pair.guest.shown()->motion.players[2]->position.z, before.x, before.y, before.z);
     CHECK(pair.guest.shown()->motion.players[2]->position != before);
     CHECK(pair.host.hostScene()->actor(2)->position() == hostBefore);
     CHECK(pair.guest.predictionMetrics().samples > 0);

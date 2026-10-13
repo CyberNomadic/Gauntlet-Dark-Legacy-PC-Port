@@ -11,6 +11,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/screens/LocalMovementPrediction.h"
+#include "game/screens/LocalProjectilePrediction.h"
 #include "game/screens/PartyMotion.h"
 #include "game/screens/PlayerAttacks.h"
 #include "game/screens/SessionInputs.h"
@@ -169,6 +170,9 @@ struct MovingMeleeFixture {
             moving.radius = PlayerMeleeState::kMaxRadius;
             moving.ticks = PlayerMeleeState::kMaxTicks;
             moving.targets = opponents.enemies().meleeGeometry();
+            if (player.weapon) {
+                player.weapon->target = attacks.aim(actor, actor.facing(), targets);
+            }
         }
         return host;
     }
@@ -229,6 +233,108 @@ struct MovingMeleeFixture {
         CHECK(replay->releases.empty());
     }
 };
+
+TEST_CASE("bounded native melee acquisition can release a weapon with release-local aim",
+          "[netplay][rollback][moving-melee][bounded-throw][assets]") {
+    const bool strong = GENERATE(false, true);
+    const bool cursor = GENERATE(false, true);
+    MovingMeleeFixture fixture(0, false);
+    auto& runtime = fixture.native[0];
+    const auto distant = fixture.opponents.enemies().spawn(
+        {.kind = kGruntKind, .position = {0.5f, 0, -12}, .placed = true}, {});
+    REQUIRE(distant);
+    REQUIRE_FALSE(fixture.attacks.rangedOnly(runtime.actor, fixture.targets));
+    const auto tuning = fixture.arsenal.weaponThrow(runtime.actor, 0);
+    REQUIRE(tuning);
+    auto& descriptor = fixture.authority.players[1]->weapon.emplace();
+    descriptor.character = static_cast<u32>(tuning->character);
+    descriptor.hand = tuning->hand;
+    descriptor.speed = tuning->speed;
+    descriptor.resource = 7;
+    auto* archive = runtime.figure->missileArchive();
+    REQUIRE(archive != nullptr);
+    ProjectileResources resources;
+    REQUIRE(resources.addTree(7, *archive, runtime.figure->missileTree(), fixture.device));
+    LocalProjectilePrediction projectiles;
+    projectiles.begin(fixture.context, 2, fixture.world.collision());
+    PlayerMissiles nativeFlight;
+    std::optional<Vec3> nativeAim;
+    u64 nativeGeneration = 0;
+    usize nativeReleases = 0;
+    fixture.events.perform = [&](usize index, PartyMotion::Action action) {
+        if (action != PartyMotion::Action::ThrowWeapon &&
+            action != PartyMotion::Action::StrongThrow) {
+            return;
+        }
+        auto& member = fixture.native[index];
+        nativeAim = member.cursorAiming
+                        ? std::nullopt
+                        : fixture.attacks.aim(member.actor, member.actor.facing(), fixture.targets);
+        const auto prepared = fixture.arsenal.prepareWeapon(
+            member.actor, *member.figure, member.actor.facing(),
+            action == PartyMotion::Action::StrongThrow ? 2.0f : 1.0f, true, nativeAim);
+        REQUIRE(prepared);
+        REQUIRE(prepared->missiles.size() == 1);
+        REQUIRE(nativeFlight.launch(prepared->missiles.front()));
+        nativeGeneration = member.figure->animator().player().generation();
+        ++nativeReleases;
+    };
+    fixture.begin();
+    const auto originalAim = fixture.authority.players[1]->weapon->target;
+    REQUIRE(originalAim);
+    REQUIRE(originalAim->z > 0);
+    bool observed = false;
+    for (u64 tick = 11; tick <= 70 && !observed; ++tick) {
+        auto input = fixture.command(tick);
+        // The near enemy invalidates all-bearing ranged permission, but walking
+        // away selects a real throw. Its target is across the opposite bearing.
+        input.direction = {0, -1};
+        input.magnitude = 0.15f;
+        if (cursor) {
+            input.aimDirection = Vec3{0, 0, -1};
+        }
+        if (tick == 11) {
+            input.heldButtons =
+                static_cast<u32>(strong ? CommandHeld::StrongAttack : CommandHeld::Attack);
+        }
+        const std::array commands{input};
+        fixture.step(commands);
+        nativeFlight.update(1.0f / 60, &fixture.world.collision());
+        fixture.prediction.update(&fixture.authority, commands);
+        projectiles.update(&fixture.authority, fixture.prediction, resources, commands);
+        const auto* replay = fixture.prediction.replayed(1);
+        REQUIRE(replay != nullptr);
+        CHECK(*fixture.shown().players[1]->rollback == runtime.figure->animator().checkpoint());
+        if (nativeReleases != 0) {
+            REQUIRE(replay->releases.size() == 1);
+            const auto& release = replay->releases.front();
+            CHECK(release.tick == tick);
+            CHECK(release.generation == nativeGeneration);
+            CHECK(release.strong == strong);
+            CHECK(release.targetResolved);
+            CHECK(release.target == nativeAim);
+            CHECK(release.target != originalAim);
+            if (!cursor) {
+                REQUIRE(nativeAim);
+                CHECK(nativeAim->z < 0);
+            }
+            auto shown = fixture.shown();
+            projectiles.present(shown, 1);
+            REQUIRE(shown.projectiles.size() == 1);
+            REQUIRE(nativeFlight.count() == 1);
+            const auto& component = shown.projectiles.front();
+            REQUIRE(component.rollback);
+            CHECK(component.rollback->flight.position == nativeFlight.missile(0).position);
+            CHECK(component.rollback->flight.velocity == nativeFlight.missile(0).velocity);
+            CHECK(component.rollback->flight.age == nativeFlight.missile(0).age);
+            CHECK(projectiles.soundReleases().size() == 1);
+            observed = true;
+        } else if (tick % 4 == 0) {
+            fixture.accept(fixture.capture(tick));
+        }
+    }
+    REQUIRE(observed);
+}
 
 TEST_CASE("moving melee rewinds native class actions and released-stick lunges across delayed "
           "checkpoints",

@@ -14,6 +14,16 @@ namespace gdl::game {
  */
 class MeleeStreak {
 public:
+    struct Checkpoint {
+        s32 count = 0;
+        f32 quiet = 0;
+        bool running = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const { return {m_count, m_quiet, m_running}; }
+    /** Does not advance the silence timer or emit praise. */
+    bool restore(const Checkpoint& state);
     static constexpr s32 kHurt = 1;     ///< a blow that hurts
     static constexpr s32 kTelling = 3;  ///< one that kills, or is not taken (damage_enemy's -1)
     static constexpr s32 kHeroic = 30;  ///< 0x1E

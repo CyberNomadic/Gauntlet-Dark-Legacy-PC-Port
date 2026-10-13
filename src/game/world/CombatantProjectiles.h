@@ -63,6 +63,7 @@ public:
     usize count() const { return m_flying.size(); }
 
 private:
+    friend class OpponentCombatCheckpoint;
     struct Flying {
         CombatShot shot;
         ItemArchive* archive = nullptr;

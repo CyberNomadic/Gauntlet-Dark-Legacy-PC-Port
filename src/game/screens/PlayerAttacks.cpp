@@ -21,6 +21,7 @@
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/PartyDamage.h"
 #include "game/world/Chests.h"
 #include "game/world/DynamicLights.h"
 #include "game/world/TargetAssist.h"
@@ -37,10 +38,6 @@ constexpr f32 kShieldDamage = 25.0f;
 constexpr f32 kShieldPotency = 0.25f;  ///< of the character's magic power, its radius
 constexpr f32 kShieldHarmEvery = 0.5f; ///< seconds between its harming what it touches
 constexpr std::string_view kBlockEffect = "BLOCKFX";
-constexpr f32 kBlockWorth = 2.0f;      ///< what a guard must take off a hurt for it to show
-constexpr f32 kBlockPerDamage = 0.01f; ///< seconds it shows for each point left
-constexpr f32 kBlockLeast = 0.333f;
-constexpr f32 kBlockMost = 1.0f;
 constexpr f32 kRamDamage = 3.0f;   ///< what a charge does to what it runs into
 constexpr f32 kChargeBlow = 32.0f; ///< and to an enemy or a great one (PlayerMotion's anim 8)
 constexpr u32 kFireElement = 1;    ///< the fire shield's harm
@@ -87,6 +84,7 @@ void PlayerAttacks::bind(const Resources& resources) {
     m_resources.emplace(resources);
 }
 void PlayerAttacks::clear() {
+    ++m_restoreGeneration;
     if (m_resources.has_value()) {
         for (const auto& particle : m_particleEffects) {
             m_resources->effects.stop(particle.effect);
@@ -1088,12 +1086,14 @@ void PlayerAttacks::showBlock(usize index, f32 taken, f32 left, std::span<Player
     if (!m_resources.has_value()) {
         return;
     }
-    if (index >= players.size() || players[index].blockLeft > 0.0f || taken <= kBlockWorth) {
+    if (index >= players.size()) {
         return;
     }
-    const f32 shown = std::clamp(kBlockPerDamage * left, kBlockLeast, kBlockMost);
-    players[index].blockLeft = shown;
-    players[index].blocked = true;
+    const auto duration = PartyDamage::block(players[index], taken, left);
+    if (!duration) {
+        return;
+    }
+    const f32 shown = *duration;
     if (m_resources->weapons.loaded() &&
         m_resources->weapons.trees.find(kBlockEffect).has_value()) {
         EffectTrees::Setting setting;

@@ -396,10 +396,21 @@ TEST_CASE("native rollback starts the owning guest throw before host acknowledge
     bool guestProjectile = false;
     bool guestPredictedProjectile = false;
     bool hostIdentifiedProjectile = false;
+    usize guestAheadFrames = 0;
+    usize authoritativeThrowFrames = 0;
+    usize weaponReadyFrames = 0;
     std::vector<ProjectileKey> launched;
     for (s32 tick = 0; tick < 90; ++tick) {
         pair.step();
         pair.draw();
+        const auto& authority = *pair.wire.guest.playback().latest()->players[2];
+        const auto& shown = *pair.guest.shown()->players[2];
+        authoritativeThrowFrames += throwing(authority);
+        weaponReadyFrames += authority.weapon.has_value();
+        guestAheadFrames +=
+            throwing(shown) && shown.rollback && authority.rollback &&
+            (shown.rollback->animation.generation != authority.rollback->animation.generation ||
+             shown.rollback->animation.frame > authority.rollback->animation.frame);
         std::set<std::pair<ShotIdentity, ProjectileSource>> components;
         for (const auto& shot : pair.guest.shown()->projectiles) {
             if (shot.rollback) {
@@ -438,6 +449,13 @@ TEST_CASE("native rollback starts the owning guest throw before host acknowledge
         CHECK_FALSE(throwing(*pair.guest.shown()->players[1]));
     }
     CAPTURE(latency);
+    INFO("throw observation frames: local ahead=" << guestAheadFrames
+                                                  << " authority=" << authoritativeThrowFrames
+                                                  << " weapon available=" << weaponReadyFrames);
+    // A failed optional world continuation must not silently erase a supported
+    // local weapon release. Retain exact release telemetry so a regression can
+    // distinguish a missing native event from a resource/presentation refusal.
+    INFO(pair.wire.guest.latency().report(true));
     CHECK(hostThrow);
     CHECK_FALSE(launched.empty());
     CHECK(hostProjectile);

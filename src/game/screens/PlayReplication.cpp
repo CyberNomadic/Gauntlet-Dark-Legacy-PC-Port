@@ -6,6 +6,7 @@
 
 #include "game/screens/CombatCapture.h"
 #include "game/screens/MatchInputs.h"
+#include "game/screens/OpponentResources.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/screens/ReplicaHud.h"
 
@@ -74,6 +75,31 @@ PlayReplication::Result PlayReplication::fail() {
         m_quiet = true;
     }
     return Result::Failed;
+}
+
+void PlayReplication::captureOpponents(CombatSnapshot& state) const {
+    auto pools = OpponentResources::capture(m_scene->generators(), m_scene->enemies(),
+                                            m_scene->enemyMissiles());
+    if (!pools) {
+        return;
+    }
+    pools->placements = m_scene->placedEnemies().checkpoint();
+    if (!pools->placements) {
+        return;
+    }
+    auto frame = m_scene->opponentFrame(static_cast<u32>(pools->enemies.scales.players));
+    if (!frame) {
+        return;
+    }
+    state.opponents = std::move(pools);
+    state.opponentFrame = std::move(frame);
+    // Existing snapshots retain their fixed raw budget. Optional simulation data
+    // must never turn a valid presentation snapshot into a transport failure.
+    // The caller only attempts this supplement on actual publication ticks.
+    if (!CombatPacket::encode(state)) {
+        state.opponents.reset();
+        state.opponentFrame.reset();
+    }
 }
 
 std::optional<CombatSnapshot> PlayReplication::capture(u64 tick,
@@ -326,8 +352,10 @@ void PlayReplication::captureWeapons(CombatSnapshot& state, const ProjectileReso
         const auto seat = static_cast<usize>(runtime.actor.player());
         auto& player = state.players[seat];
         const auto preview = m_scene->weaponPreview(static_cast<s32>(seat));
-        if (!player || (!player->movement.ranged && !player->turbo) || !preview ||
-            runtime.figure == nullptr) {
+        // The resource/tuning descriptor identifies a supported native weapon;
+        // it does not authorize an attack. A bounded melee query can select a
+        // throw even when the all-bearing ranged certificate is unavailable.
+        if (!player || !preview || runtime.figure == nullptr) {
             continue;
         }
         auto* archive = runtime.figure->missileArchive();
@@ -641,9 +669,14 @@ PlayReplication::Result PlayReplication::advance(MatchSession& match,
             }
         }
     }
-    if (!state || ((state->motion.tick % kSnapshotStride == 0 || outcome != PlayOutcome::Running) &&
-                   !match.publish(*state))) {
+    if (!state) {
         return fail();
+    }
+    if (state->motion.tick % kSnapshotStride == 0 || outcome != PlayOutcome::Running) {
+        captureOpponents(*state);
+        if (!match.publish(*state)) {
+            return fail();
+        }
     }
     m_latest = std::move(state);
     m_finished = outcome != PlayOutcome::Running;

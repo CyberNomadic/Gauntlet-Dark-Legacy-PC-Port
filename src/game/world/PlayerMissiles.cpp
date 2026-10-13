@@ -625,6 +625,7 @@ void PlayerMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLig
 }
 
 void PlayerMissiles::clear() {
+    ++m_restoreGeneration;
     m_visualHistory.clear();
     m_ricochetIn = 0;
     m_missiles.clear();

@@ -368,6 +368,7 @@ void EffectTrees::stop(u32 id) {
 }
 
 void EffectTrees::setTextureLenders(std::span<TextureSet* const> lenders) {
+    ++m_restoreGeneration;
     m_lenders.assign(lenders.begin(), lenders.end());
 }
 
@@ -923,6 +924,7 @@ void EffectTrees::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
 }
 
 void EffectTrees::clear() {
+    ++m_restoreGeneration;
     m_effects.clear();
     m_motions.clear();
     m_lenders.clear();

@@ -110,12 +110,22 @@ std::optional<PlayerLocomotionState> PlayScene::locomotionPreview(s32 seat) {
         const Vec3 offset = position - result.origin;
         return std::hypot(offset.x, offset.z) <= result.radius + actor.radius() + radius;
     };
-    const auto appendBodies = [&](const auto& bodies) {
+    const auto appendBodies = [&](const auto& bodies, bool swarm = false) {
         for (const auto& body : bodies) {
             if (body.radius > 0 && body.height > 0 && nearby(body.base, body.radius)) {
-                result.bodies.push_back({body.base, body.radius, body.height});
+                PlayerLocomotionState::Body contact{body.base, body.radius, body.height};
+                if (swarm) {
+                    const auto observation = m_opponents.enemies().observe(body.id);
+                    if (!observation) {
+                        return false;
+                    }
+                    contact.identity = {PlayerLocomotionState::Identity::Kind::Swarm,
+                                        static_cast<u32>(body.id), observation->instance};
+                }
+                result.bodies.push_back(contact);
             }
         }
+        return true;
     };
     const auto worn = PowerupEffects::of(actor.save().progress().inventory);
     auto enemies = m_opponents.enemies().targets();
@@ -124,7 +134,9 @@ std::optional<PlayerLocomotionState> PlayScene::locomotionPreview(s32 seat) {
             return m_opponents.enemies().kindOf(body.id) == kDeathKind;
         });
     }
-    appendBodies(enemies);
+    if (!appendBodies(enemies, true)) {
+        return std::nullopt;
+    }
     appendBodies(m_opponents.critters().targets(true));
     appendBodies(m_opponents.bosses().targets());
     const auto appendBoxes = [&](std::vector<Obstacle>& output, const auto& boxes) {
@@ -136,7 +148,15 @@ std::optional<PlayerLocomotionState> PlayScene::locomotionPreview(s32 seat) {
             }
         }
     };
-    appendBoxes(result.generators, m_opponents.generators().obstacles());
+    for (const auto& contact : m_opponents.generators().identifiedObstacles()) {
+        const auto& box = contact.box;
+        const f32 extent = std::max(box.cylinderRadius, std::hypot(box.halfAcross, box.halfAlong));
+        if (box.solid && nearby(box.centre, extent)) {
+            result.generators.push_back(box);
+            result.generatorIdentities.push_back(
+                {PlayerLocomotionState::Identity::Kind::Generator, contact.slot, 0});
+        }
+    }
     appendBoxes(result.fixtures, m_fixtures.obstacles());
     for (const auto& other : m_players) {
         if (&other != &*player && other.life == PlayerLife::Standing && !other.departed &&

@@ -1,11 +1,11 @@
 #pragma once
 #include <functional>
 #include <optional>
-#include <random>
 #include <span>
 #include <string_view>
 
 #include "engine/core/Types.h"
+#include "engine/math/Mt19937.h"
 
 #include "game/players/ClassData.h"
 #include "game/players/PlayerImpact.h"
@@ -26,6 +26,12 @@ enum class HurtKind : u8 {
  * Like the scene it replaces, this cue sequence persists across level reopenings. */
 class PlayerHealth {
 public:
+    /** Cue selection belongs to the replay transaction too. Restoring this
+     * stream never repeats audio; participant health/reaction state is separate.
+     * Raw MT draws preserve the existing native sequence. */
+    using Checkpoint = Mt19937::Checkpoint;
+    Checkpoint checkpoint() const { return m_painRandom.checkpoint(); }
+    bool restore(const Checkpoint& state) { return m_painRandom.restore(state); }
     static constexpr s32 kHitFlashTicks = 4;
     struct Events {
         std::function<void(f32, f32)> block;
@@ -35,6 +41,7 @@ public:
         /** A heavy blow taken unguarded by one who has never blocked. */
         std::function<void()> learnBlock;
         std::function<void(s32)> vibrate; ///< native controller frames, not simulation ticks
+        bool logDeaths = true; ///< private replay may reject a lethal result without a false log
     };
     static constexpr f32 kBlockLessonFrom = 15.0f; ///< over this a blow teaches the guard
     static constexpr u32 kHeavyFlags = 0x10160;    ///< knock-back, knock-down and knock-over
@@ -44,6 +51,9 @@ public:
     /** PlayerMotion_FloorFX skips hurt/recovery states (native motion state >= 31).
      * This is surface-hazard protection, not invulnerability to ordinary attacks. */
     static bool canTakeSurfaceDamage(const PlayerRuntime& runtime);
+    /** The scene's pre-contact surface-hurt clock, independently of whether the
+     * current surface is harmful. Shared with private ordinary combat steps. */
+    static void advanceSurfaceGap(PlayerRuntime& runtime, f32 seconds);
     void hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool directed, bool inTower,
               f32 damageScale, const Events& events, const PlayerImpact& impact = {},
               bool bossEncounter = false, const ClassStats* stats = nullptr);
@@ -65,6 +75,6 @@ public:
 private:
     void cryPain(const Events& events);
     static void landBlow(PlayerRuntime& runtime, const Events& events, u32 flags);
-    std::mt19937 m_painRandom{0x5A17u};
+    Mt19937 m_painRandom{0x5A17u};
 };
 } // namespace gdl::game

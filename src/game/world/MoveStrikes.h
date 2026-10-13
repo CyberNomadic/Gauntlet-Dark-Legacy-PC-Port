@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include "engine/core/Types.h"
@@ -23,6 +25,7 @@ struct StrikeHit {
     Vec3 from{0.0f}; ///< beginning of a flying strike's swept contact segment
     bool swept = false;
     f32 hitGap = 0.0f; ///< area-contact immunity, independent of projectile contacts
+    bool operator==(const StrikeHit&) const = default;
 
     /** Whether something standing at `position` is caught by it. */
     bool reaches(const Vec3& position, f32 targetRadius, f32 targetHeight) const;
@@ -36,6 +39,11 @@ struct StrikeHit {
  */
 class MoveStrikes {
 public:
+    MoveStrikes() = default;
+    MoveStrikes(const MoveStrikes&) = delete;
+    MoveStrikes& operator=(const MoveStrikes&) = delete;
+    MoveStrikes(MoveStrikes&&) = delete;
+    MoveStrikes& operator=(MoveStrikes&&) = delete;
     /** One strike under way. */
     struct Strike {
         u32 id = 0;
@@ -53,7 +61,35 @@ public:
         f32 launchIn = 0.0f; ///< DAMG 0x800 holds motion until the birth effect morphs
         f32 secondsLeft = 0.0f;
         f32 damageTime = 0.0f; ///< effect lifetime less the burst's wind-up
+        bool operator==(const Strike&) const = default;
     };
+    struct Checkpoint {
+        static constexpr usize kMaxStrikes = 4096;
+        std::vector<Strike> strikes;
+        u32 next = 1;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept = default;
+        Prepared& operator=(Prepared&&) noexcept = default;
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+
+    private:
+        friend class MoveStrikes;
+        Prepared() = default;
+        const MoveStrikes* owner = nullptr;
+        std::weak_ptr<const u8> lifetime;
+        u64 generation = 0;
+        Checkpoint state;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    std::optional<Prepared> prepareRestore(const Checkpoint& state) const;
+    bool canCommit(const Prepared& state) const noexcept;
+    bool commitRestore(Prepared&& state) noexcept;
+    bool restore(const Checkpoint& state);
 
     /** What a character's own harm is multiplied by when a strike's amount is negative. */
     static f32 damageOf(const MoveStrike& strike, f32 ownDamage);
@@ -81,6 +117,8 @@ public:
 private:
     std::vector<Strike> m_strikes;
     u32 m_next = 1;
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 1;
 };
 
 } // namespace gdl::game

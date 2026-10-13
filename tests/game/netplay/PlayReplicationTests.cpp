@@ -947,9 +947,10 @@ TEST_CASE("native G1 captures moving melee geometry without replaying combat sid
     CHECK(received.movement.current);
     CHECK(received.movement.enabled);
     CHECK_FALSE(received.movement.ranged);
-    // A certified turbo context may carry its single-volley weapon descriptor
-    // even while ordinary ranged input is not authorized near a melee target.
-    CHECK(received.weapon.has_value() == received.turbo.has_value());
+    // Weapon identity is independent of whether all bearings select a throw.
+    // The bounded native selector can still release it when facing away.
+    REQUIRE(received.weapon);
+    CHECK(resources.acceptsWeapon(*received.weapon));
     CHECK(received.melee->moving->origin == runtime.actor.position());
     const auto bytes = CombatPacket::encode(*driver.latest());
     REQUIRE(bytes);

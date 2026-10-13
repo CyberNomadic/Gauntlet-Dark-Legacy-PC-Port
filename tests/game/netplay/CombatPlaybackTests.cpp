@@ -43,20 +43,28 @@ TEST_CASE("opponent replay seeds never enter delayed or interpolated display his
     REQUIRE(playback.begin(1, 1));
     auto first = state(10);
     first.opponents.emplace();
+    first.opponentFrame.emplace();
+    EnemyView view;
+    view.player = 0;
+    first.opponentFrame->players.push_back({0, view});
     REQUIRE(first.opponents->valid());
     auto last = first;
     last.motion.tick = 14;
     last.opponents->enemies.frame = 4;
+    last.opponentFrame->held = true;
     receive(playback, first);
     receive(playback, last);
     REQUIRE(playback.latest());
     REQUIRE(playback.latest()->opponents);
+    REQUIRE(playback.latest()->opponentFrame);
     CHECK(playback.latest()->motion.tick == 14);
     CHECK(*playback.latest()->opponents == *last.opponents);
+    CHECK(playback.latest()->opponentFrame == last.opponentFrame);
     for (const u64 tick : {0U, 10U, 11U, 13U, 14U, 100U}) {
         const auto shown = playback.sample(tick, 0.5f);
         REQUIRE(shown);
         CHECK_FALSE(shown->opponents);
+        CHECK_FALSE(shown->opponentFrame);
         CHECK(shown->valid());
     }
     // A later full snapshot omitting the optional island explicitly revokes it.
@@ -64,6 +72,7 @@ TEST_CASE("opponent replay seeds never enter delayed or interpolated display his
     receive(playback, revoked);
     REQUIRE(playback.latest());
     CHECK_FALSE(playback.latest()->opponents);
+    CHECK_FALSE(playback.latest()->opponentFrame);
     CHECK(playback.latest()->motion.tick == 15);
     CHECK(playback.begin(1, 2));
     CHECK_FALSE(playback.latest());

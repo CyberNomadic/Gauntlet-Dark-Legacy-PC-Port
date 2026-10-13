@@ -28,6 +28,21 @@ struct LevelChange {
  */
 class LevelWatch {
 public:
+    struct Mark {
+        s32 player = -1;
+        s32 level = 1;
+        bool operator==(const Mark&) const = default;
+    };
+    struct Checkpoint {
+        std::vector<Mark> marks;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const { return {m_marks}; }
+    /** Ordered comparison for a prepared transaction; performs no allocation. */
+    bool matches(const Checkpoint& state) const noexcept { return m_marks == state.marks; }
+    /** Preserve party order without announcing, healing, or observing a level. */
+    bool restore(const Checkpoint& state);
     /** Notes `level` for `player`; the first sighting sets the mark and reports nothing. */
     std::optional<LevelChange> observe(s32 player, s32 level);
     /** Forgets a player, or everyone. */
@@ -36,10 +51,6 @@ public:
     std::optional<s32> markOf(s32 player) const;
 
 private:
-    struct Mark {
-        s32 player = -1;
-        s32 level = 1;
-    };
     std::vector<Mark> m_marks;
 };
 

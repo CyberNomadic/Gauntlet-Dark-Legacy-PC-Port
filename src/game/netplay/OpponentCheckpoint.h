@@ -8,6 +8,7 @@
 #include "game/netplay/EnemyMissilesCheckpoint.h"
 #include "game/netplay/EnemyPoolCheckpoint.h"
 #include "game/netplay/GeneratorCheckpoint.h"
+#include "game/netplay/PlacedEnemyCheckpoint.h"
 
 namespace gdl::game {
 
@@ -16,10 +17,10 @@ namespace gdl::game {
  * sender and bind it to an epoch, simulation tick and trusted resource roster. */
 class OpponentCheckpoint {
 public:
-    static constexpr usize kHeaderBytes = 20;
-    static constexpr usize kMaxBytes = kHeaderBytes + GeneratorCheckpoint::kMaxBytes +
-                                       EnemyPoolCheckpoint::kMaxBytes +
-                                       EnemyMissilesCheckpoint::kMaxBytes;
+    static constexpr usize kHeaderBytes = 24;
+    static constexpr usize kMaxBytes =
+        kHeaderBytes + GeneratorCheckpoint::kMaxBytes + EnemyPoolCheckpoint::kMaxBytes +
+        EnemyMissilesCheckpoint::kMaxBytes + PlacedEnemyCheckpoint::kMaxBytes;
     static std::optional<std::vector<u8>> encode(const OpponentState& state);
     static std::optional<OpponentState> decode(std::span<const u8> bytes);
 };

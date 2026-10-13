@@ -5,6 +5,7 @@
 
 #include "engine/core/Log.h"
 
+#include "game/screens/OpponentPrediction.h"
 #include "game/screens/StageResources.h"
 
 namespace gdl::game {
@@ -23,6 +24,7 @@ struct ReplicaStage::Assets {
     ClassDataSet classes;
     std::array<std::optional<s32>, InputCommand::kSeats> characters;
     const Texture* flash = nullptr;
+    OpponentPrediction prediction;
     // Renderers release all borrowed resources before their owners. The turbo
     // prototypes also borrow class archives held by the view's player figures.
     ReplicaView view;
@@ -30,13 +32,14 @@ struct ReplicaStage::Assets {
 
     bool load(RenderDevice& device, const std::filesystem::path& root, const LevelRef& level,
               const MatchContext& context, const PartyBootstrap::Party& party,
-              const StringTable* strings);
+              const StringTable* strings, f32 difficultyGain);
 };
 ReplicaStage::ReplicaStage() = default;
 ReplicaStage::~ReplicaStage() = default;
 bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::path& root,
                                 const LevelRef& level, const MatchContext& context,
-                                const PartyBootstrap::Party& party, const StringTable* strings) {
+                                const PartyBootstrap::Party& party, const StringTable* strings,
+                                f32 difficultyGain) {
     if (!world.load(device, root, level) || !weapons.load(root / "WEAPONS") ||
         !common.load(root / "STATIC")) {
         return false;
@@ -60,6 +63,11 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
                     level.realmId, &world.items(), generatorTextures);
     if (!StageResources::preload(world, enemies, critters, bosses)) {
         return false;
+    }
+    // Optional private simulation owns its own native stocks/clocks. It never
+    // advances the catalog used by replica drawing or makes asset loads during replay.
+    if (!prediction.open(device, root, world, enemies, players, difficultyGain)) {
+        log::warn("Private opponent replay unavailable for {}", level.name);
     }
     auto bossStocks = bosses.resources();
     auto* boss = bossStocks.empty() ? nullptr : bossStocks.front();
@@ -143,7 +151,8 @@ bool ReplicaStage::Assets::load(RenderDevice& device, const std::filesystem::pat
 }
 bool ReplicaStage::open(RenderDevice& device, const std::filesystem::path& root,
                         const LevelRef& level, const MatchContext& context,
-                        const PartyBootstrap::Party& party, const StringTable* strings) {
+                        const PartyBootstrap::Party& party, const StringTable* strings,
+                        f32 difficultyGain) {
     if (!context.valid() || context.epoch <= m_epoch ||
         context.transition == MatchTransition::Resume || (level.isTower() && level.name != "L1")) {
         return false;
@@ -156,7 +165,7 @@ bool ReplicaStage::open(RenderDevice& device, const std::filesystem::path& root,
     }
     try {
         auto next = std::make_unique<Assets>();
-        if (!next->load(device, root, level, context, party, strings)) {
+        if (!next->load(device, root, level, context, party, strings, difficultyGain)) {
             return false;
         }
         m_assets = std::move(next);
@@ -215,5 +224,8 @@ const TurboEffectResources* ReplicaStage::turboEffects(u8 seat) const {
 }
 const ItemArchive* ReplicaStage::weapons() const {
     return m_assets != nullptr ? &m_assets->weapons : nullptr;
+}
+OpponentPrediction* ReplicaStage::opponentPrediction() {
+    return m_assets != nullptr && m_assets->prediction.loaded() ? &m_assets->prediction : nullptr;
 }
 } // namespace gdl::game

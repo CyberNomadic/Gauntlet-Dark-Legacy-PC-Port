@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "engine/core/Types.h"
@@ -59,6 +60,148 @@ bool levelWith(const Obstacle& box, const Vec3& position) {
 }
 
 } // namespace
+
+bool ItemFigure::Checkpoint::valid() const {
+    constexpr f32 kMagnitude = TreePose::Checkpoint::kMaxMagnitude;
+    const auto bounded = [](f32 value) {
+        return std::isfinite(value) && std::abs(value) <= kMagnitude;
+    };
+    const auto matrix = [&](const Mat4& value) {
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 4; ++row) {
+                if (!bounded(value[column][row])) {
+                    return false;
+                }
+            }
+        }
+        return value[0].w == 0 && value[1].w == 0 && value[2].w == 0 && value[3].w == 1;
+    };
+    return animation.valid() && pose.valid() &&
+           (!presentationPose ||
+            (presentationPose->valid() && presentationPose->tree == pose.tree &&
+             presentationPose->nodes == pose.nodes)) &&
+           textures.valid() && particles.valid() && bounded(poseFrame) && poseFrame >= 0 &&
+           bounded(previousFrame) && previousFrame >= 0 && bounded(position.x) &&
+           bounded(position.y) && bounded(position.z) && bounded(yaw) &&
+           matrix(previousTransform) && matrix(transform) && matrix(placement) &&
+           poseGeneration <=
+               std::numeric_limits<u64>::max() - AnimationPlayer::kCheckpointGenerationHeadroom &&
+           previousGeneration <=
+               std::numeric_limits<u64>::max() - AnimationPlayer::kCheckpointGenerationHeadroom &&
+           textureFrame >= 0 && textureFrame <= static_cast<s32>(kMagnitude) && index >= -1 &&
+           index <= static_cast<s32>(kMagnitude);
+}
+
+std::optional<ItemFigure::Checkpoint> ItemFigure::checkpoint() const {
+    const auto pose = m_pose.checkpoint();
+    if (m_tree == nullptr || m_archive == nullptr || !pose) {
+        return std::nullopt;
+    }
+    Checkpoint state{m_player.checkpoint(),
+                     *pose,
+                     m_presentationPose.checkpoint(),
+                     m_textures.checkpoint(),
+                     m_particles.checkpoint(),
+                     m_poseSequence,
+                     m_poseFrame,
+                     m_poseGeneration,
+                     m_continuity,
+                     m_previousTransform,
+                     m_previousFrame,
+                     m_previousGeneration,
+                     m_presentationCaptured,
+                     m_presentationAdvanced,
+                     m_textureSequence,
+                     m_textureFrame,
+                     m_gateParticles,
+                     m_position,
+                     m_yaw,
+                     m_transform,
+                     m_placement,
+                     m_index,
+                     m_loop,
+                     m_holdPose};
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+
+std::unique_ptr<ItemFigure> ItemFigure::restored(const Checkpoint& state) const {
+    if (m_tree == nullptr || m_archive == nullptr || !state.valid() ||
+        state.pose.tree != m_tree->name || !m_particles.canRestore(state.particles)) {
+        return nullptr;
+    }
+    const auto sequence = [&](u32 index) -> const TreeSequenceInfo* {
+        return index < m_tree->sequences.size() ? &m_tree->sequences[index] : nullptr;
+    };
+    const auto validFrame = [&](u32 index, f32 frame) {
+        const auto* info = sequence(index);
+        return info != nullptr && frame <= static_cast<f32>(std::max(info->frames, 0));
+    };
+    // Static fallback trees have no sequence at all; their clock is stopped and
+    // all visual cursors remain at zero. Animated empty sequences are different.
+    const bool staticPose = m_staticTree != nullptr && m_tree->sequences.empty();
+    if (staticPose ? (state.animation.playing || state.poseSequence != 0 || state.poseFrame != 0 ||
+                      state.textureSequence != 0 || state.textureFrame != 0)
+                   : (!validFrame(state.poseSequence, state.poseFrame) ||
+                      !validFrame(state.textureSequence, static_cast<f32>(state.textureFrame)) ||
+                      (state.animation.playing && sequence(state.animation.sequence) == nullptr))) {
+        return nullptr;
+    }
+    auto result = std::make_unique<ItemFigure>();
+    if (m_staticTree) {
+        result->m_staticTree = std::make_unique<TreeInfo>(*m_staticTree);
+    }
+    result->m_tree = result->m_staticTree ? result->m_staticTree.get() : m_tree;
+    result->m_archive = m_archive;
+    result->m_model = m_model;
+    result->m_textures = m_textures;
+    result->m_particles = m_particles;
+    const auto* playing =
+        state.animation.playing ? &result->m_tree->sequences[state.animation.sequence] : nullptr;
+    if (!result->m_player.restore(state.animation, playing) ||
+        !result->m_pose.restore(*result->m_tree, state.pose) ||
+        (state.presentationPose &&
+         !result->m_presentationPose.restore(*result->m_tree, *state.presentationPose)) ||
+        !result->m_textures.restore(state.textures) ||
+        !result->m_particles.restore(state.particles)) {
+        return nullptr;
+    }
+    result->m_poseSequence = state.poseSequence;
+    result->m_poseFrame = state.poseFrame;
+    result->m_poseGeneration = state.poseGeneration;
+    result->m_continuity = state.continuity;
+    result->m_previousTransform = state.previousTransform;
+    result->m_previousFrame = state.previousFrame;
+    result->m_previousGeneration = state.previousGeneration;
+    result->m_presentationCaptured = state.presentationCaptured;
+    result->m_presentationAdvanced = state.presentationAdvanced;
+    result->m_textureSequence = state.textureSequence;
+    result->m_textureFrame = state.textureFrame;
+    result->m_gateParticles = state.gateParticles;
+    result->m_position = state.position;
+    result->m_yaw = state.yaw;
+    result->m_transform = state.transform;
+    result->m_placement = state.placement;
+    result->m_index = state.index;
+    result->m_loop = state.loop;
+    result->m_holdPose = state.holdPose;
+    result->m_model.setFrame(state.animation.sequence, static_cast<s32>(state.animation.frame));
+    // Reapply the saved cursor, not refreshTextures(): a held empty state can
+    // deliberately retain a different texture/pose sequence from its mesh.
+    result->m_textures.apply(result->m_model, *result->m_tree, state.textureSequence,
+                             state.textureFrame);
+    result->m_textures.apply(result->m_particles, *result->m_tree, state.textureSequence,
+                             state.textureFrame);
+    return result;
+}
+
+bool ItemFigure::restore(const Checkpoint& state) {
+    auto staged = restored(state);
+    if (!staged) {
+        return false;
+    }
+    *this = std::move(*staged);
+    return true;
+}
 
 ItemArchive& itemArchiveForTree(ItemArchive& items, std::string_view name,
                                 ItemArchive* realmItems) {

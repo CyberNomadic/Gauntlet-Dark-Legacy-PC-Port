@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 
 #include "engine/io/ByteReader.h"
 
@@ -17,7 +18,25 @@ bool vectorValid(const Vec3& value) {
 }
 bool bodyValid(const PlayerLocomotionState::Body& value) {
     return vectorValid(value.base) && bounded(value.radius, 0.01f, 100) &&
-           bounded(value.height, 0.01f, 1000);
+           bounded(value.height, 0.01f, 1000) && value.identity.valid() &&
+           value.identity.kind != PlayerLocomotionState::Identity::Kind::Generator;
+}
+template <class Range, class IdentityOf>
+bool uniqueIdentities(const Range& values, IdentityOf identityOf) {
+    for (usize index = 0; index < values.size(); ++index) {
+        const auto& identity = identityOf(values[index]);
+        if (identity.kind == PlayerLocomotionState::Identity::Kind::Anonymous) {
+            continue;
+        }
+        for (usize previous = 0; previous < index; ++previous) {
+            const auto& other = identityOf(values[previous]);
+            // One live native slot cannot contain two lifetimes simultaneously.
+            if (identity.kind == other.kind && identity.slot == other.slot) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 bool obstacleValid(const Obstacle& value) {
     return vectorValid(value.centre) && bounded(value.yaw, -kTwoPi, kTwoPi) &&
@@ -44,13 +63,28 @@ void vector(std::vector<u8>& bytes, const Vec3& value) {
 Vec3 vector(ByteReader& reader) {
     return {real(reader), real(reader), real(reader)};
 }
+void identity(std::vector<u8>& bytes, const PlayerLocomotionState::Identity& value) {
+    word(bytes, static_cast<u32>(value.kind));
+    word(bytes, value.slot);
+    word(bytes, static_cast<u32>(value.instance));
+    word(bytes, static_cast<u32>(value.instance >> 32));
+}
+PlayerLocomotionState::Identity identity(ByteReader& reader) {
+    PlayerLocomotionState::Identity value;
+    value.kind = static_cast<PlayerLocomotionState::Identity::Kind>(reader.readU32());
+    value.slot = reader.readU32();
+    value.instance = reader.readU32();
+    value.instance |= static_cast<u64>(reader.readU32()) << 32;
+    return value;
+}
 void body(std::vector<u8>& bytes, const PlayerLocomotionState::Body& value) {
     vector(bytes, value.base);
     real(bytes, value.radius);
     real(bytes, value.height);
+    identity(bytes, value.identity);
 }
 PlayerLocomotionState::Body body(ByteReader& reader) {
-    return {vector(reader), real(reader), real(reader)};
+    return {vector(reader), real(reader), real(reader), identity(reader)};
 }
 void obstacle(std::vector<u8>& bytes, const Obstacle& value) {
     vector(bytes, value.centre);
@@ -84,6 +118,17 @@ std::optional<Obstacle> obstacle(ByteReader& reader) {
 }
 } // namespace
 
+bool PlayerLocomotionState::Identity::valid() const {
+    switch (kind) {
+    case Kind::Anonymous: return slot == 0 && instance == 0;
+    case Kind::Swarm:
+        return slot <= static_cast<u32>(std::numeric_limits<s32>::max()) && instance != 0;
+    case Kind::Generator:
+        return slot <= static_cast<u32>(std::numeric_limits<s32>::max()) && instance == 0;
+    }
+    return false;
+}
+
 bool PlayerLocomotionState::valid() const {
     if (!vectorValid(origin) || !bounded(radius, 0.01f, kMaxRadius) || ticks == 0 ||
         ticks > kMaxTicks || bodies.size() > kMaxBodies || generators.size() > kMaxGenerators ||
@@ -91,6 +136,20 @@ bool PlayerLocomotionState::valid() const {
         !std::ranges::all_of(bodies, bodyValid) || !std::ranges::all_of(party, bodyValid) ||
         !std::ranges::all_of(generators, obstacleValid) ||
         !std::ranges::all_of(fixtures, obstacleValid)) {
+        return false;
+    }
+    if ((!generatorIdentities.empty() && generatorIdentities.size() != generators.size()) ||
+        !std::ranges::all_of(generatorIdentities,
+                             [](const auto& value) {
+                                 return value.valid() && value.kind != Identity::Kind::Swarm;
+                             }) ||
+        !std::ranges::all_of(
+            party,
+            [](const auto& value) { return value.identity.kind == Identity::Kind::Anonymous; }) ||
+        !uniqueIdentities(bodies,
+                          [](const auto& value) -> const auto& { return value.identity; }) ||
+        !uniqueIdentities(generatorIdentities,
+                          [](const auto& value) -> const auto& { return value; })) {
         return false;
     }
     return !automaticGeometry ||
@@ -116,7 +175,7 @@ PlayerLocomotionCheckpoint::encode(const PlayerLocomotionState& state) {
     std::vector<u8> bytes;
     bytes.reserve(kHeaderBytes + (state.bodies.size() + state.party.size()) * kBodyBytes +
                   (state.generators.size() + state.fixtures.size()) * kObstacleBytes +
-                  acquisition.size());
+                  state.generators.size() * kIdentityBytes + acquisition.size());
     vector(bytes, state.origin);
     real(bytes, state.radius);
     word(bytes, state.ticks);
@@ -129,8 +188,10 @@ PlayerLocomotionCheckpoint::encode(const PlayerLocomotionState& state) {
     for (const auto& value : state.bodies) {
         body(bytes, value);
     }
-    for (const auto& value : state.generators) {
-        obstacle(bytes, value);
+    for (usize index = 0; index < state.generators.size(); ++index) {
+        obstacle(bytes, state.generators[index]);
+        identity(bytes, state.generatorIdentities.empty() ? PlayerLocomotionState::Identity{}
+                                                          : state.generatorIdentities[index]);
     }
     for (const auto& value : state.fixtures) {
         obstacle(bytes, value);
@@ -164,7 +225,8 @@ std::optional<PlayerLocomotionState> PlayerLocomotionCheckpoint::decode(std::spa
         acquisition > PlayerMeleeCheckpoint::kMaxBytes ||
         (acquisition != 0 && (flags == 0 || acquisition < PlayerMeleeCheckpoint::kHeaderBytes)) ||
         bytes.size() != kHeaderBytes + (bodies + party) * kBodyBytes +
-                            (generators + fixtures) * kObstacleBytes + acquisition) {
+                            (generators + fixtures) * kObstacleBytes + generators * kIdentityBytes +
+                            acquisition) {
         return std::nullopt;
     }
     state.automatic = flags != 0;
@@ -183,7 +245,22 @@ std::optional<PlayerLocomotionState> PlayerLocomotionCheckpoint::decode(std::spa
         }
         return true;
     };
-    if (!boxes(state.generators, generators) || !boxes(state.fixtures, fixtures)) {
+    state.generators.reserve(generators);
+    state.generatorIdentities.reserve(generators);
+    for (usize index = 0; index < generators; ++index) {
+        const auto value = obstacle(reader);
+        if (!value) {
+            return std::nullopt;
+        }
+        state.generators.push_back(*value);
+        state.generatorIdentities.push_back(identity(reader));
+    }
+    if (std::ranges::all_of(state.generatorIdentities, [](const auto& value) {
+            return value == PlayerLocomotionState::Identity{};
+        })) {
+        state.generatorIdentities.clear();
+    }
+    if (!boxes(state.fixtures, fixtures)) {
         return std::nullopt;
     }
     state.party.reserve(party);

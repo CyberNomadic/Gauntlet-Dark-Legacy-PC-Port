@@ -11,6 +11,20 @@ namespace gdl::game {
  * The held matrix is owned here, never a pointer into the captor's animation tree. */
 class PlayerCapture {
 public:
+    struct Checkpoint {
+        std::optional<Mat4> body;
+        Vec3 velocity{0};
+        f32 supportHeight = 0;
+        f32 damage = 0;
+        bool flying = false;
+        s32 owner = -1;
+        bool boss = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const;
+    /** Restores a deferred throw without attaching, moving, or damaging its actor. */
+    bool restore(const Checkpoint& state);
     void attach(s32 owner, bool boss, const Mat4& contact, PlayerActor& actor);
     void release(const Vec3& velocity, f32 damage);
     void clear();

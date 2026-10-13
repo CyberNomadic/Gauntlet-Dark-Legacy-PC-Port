@@ -21,6 +21,7 @@ public:
     void update(std::span<const WorldAnimator::CycleEvent> events, WorldScene& scene,
                 WorldCollision& collision);
     std::vector<Vec3> takeExplosions();
+    bool hasExplosions() const { return !m_explosions.empty(); }
 
 private:
     bool valid(s32 object) const;

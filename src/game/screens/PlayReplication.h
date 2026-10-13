@@ -34,6 +34,7 @@ private:
     bool rosterMatches(const MatchContext& context) const;
     void filterArrivalSkip(SessionInputs::Frame& inputs);
     std::optional<CombatSnapshot> capture(u64 tick, const ProjectileResources& resources);
+    void captureOpponents(CombatSnapshot& state) const;
     void captureWeapons(CombatSnapshot& state, const ProjectileResources& resources);
     void captureShotOrigins(CombatSnapshot& state, const ProjectileResources& resources);
     void captureEffectOrigins(CombatSnapshot& state);

@@ -105,6 +105,13 @@ public:
     std::vector<s32> within(const Vec3& centre, f32 radius) const;
     /** The standing generators' boxes. */
     std::vector<Obstacle> obstacles() const;
+    struct Contact {
+        u32 slot = 0;
+        Obstacle box;
+    };
+    /** Same native order and visibility as obstacles, retaining append-only
+     * pool slots for a caller's epoch-scoped collision replay. */
+    std::vector<Contact> identifiedObstacles() const;
     /** Worm pits allow enemies to walk across, but remain targets and block other births. */
     std::vector<Obstacle> enemyObstacles() const;
 

@@ -163,4 +163,99 @@ TEST_CASE("automatic melee unknown context differs from certified empty acquisit
     CHECK_FALSE(state.valid());
     CHECK_FALSE(PlayerLocomotionCheckpoint::encode(state));
 }
+
+TEST_CASE("typed locomotion contacts retain native pool slots and lifetime identity",
+          "[netplay][locomotion-checkpoint][dynamic-contacts]") {
+    using Identity = PlayerLocomotionState::Identity;
+    auto state = contacts();
+    state.bodies[0].identity = {Identity::Kind::Swarm, 7, 0x1234567800000001ULL};
+    state.generatorIdentities = {{Identity::Kind::Generator, 12, 0}};
+    const auto bytes = PlayerLocomotionCheckpoint::encode(state);
+    REQUIRE(bytes);
+    CHECK(bytes->size() == PlayerLocomotionCheckpoint::kHeaderBytes +
+                               3 * PlayerLocomotionCheckpoint::kBodyBytes +
+                               2 * PlayerLocomotionCheckpoint::kObstacleBytes +
+                               PlayerLocomotionCheckpoint::kIdentityBytes);
+    const auto decoded = PlayerLocomotionCheckpoint::decode(*bytes);
+    REQUIRE(decoded);
+    CHECK(decoded->bodies == state.bodies);
+    CHECK(decoded->generatorIdentities == state.generatorIdentities);
+    CHECK(decoded->party == state.party);
+    CHECK(decoded->bodies[1].identity == Identity{});
+    CHECK(PlayerLocomotionCheckpoint::encode(*decoded) == bytes);
+}
+
+TEST_CASE("contact identities reject ambiguous families and recycled slot duplicates",
+          "[netplay][locomotion-checkpoint][dynamic-contacts]") {
+    using Identity = PlayerLocomotionState::Identity;
+    auto state = contacts();
+    state.bodies[0].identity = {Identity::Kind::Swarm, 7, 10};
+    state.generatorIdentities = {{Identity::Kind::Generator, 12, 0}};
+    REQUIRE(state.valid());
+    SECTION("anonymous identity is canonical") {
+        state.bodies[1].identity.slot = 1;
+    }
+    SECTION("swarm requires a lifetime") {
+        state.bodies[0].identity.instance = 0;
+    }
+    SECTION("unknown family") {
+        state.bodies[0].identity.kind = static_cast<Identity::Kind>(99);
+    }
+    SECTION("native signed slot bounds") {
+        state.bodies[0].identity.slot = std::numeric_limits<u32>::max();
+    }
+    SECTION("two lifetimes in one current slot") {
+        state.bodies[1].identity = {Identity::Kind::Swarm, 7, 11};
+    }
+    SECTION("a body cannot pretend to be a generator") {
+        state.bodies[0].identity = state.generatorIdentities[0];
+    }
+    SECTION("a partner cannot pretend to be a swarm enemy") {
+        state.party[0].identity = state.bodies[0].identity;
+    }
+    SECTION("generator identities cannot be a partial roster") {
+        state.generatorIdentities.push_back({Identity::Kind::Generator, 13, 0});
+    }
+    SECTION("generator slots have no recycled lifetime") {
+        state.generatorIdentities[0].instance = 1;
+    }
+    SECTION("duplicate generator slot") {
+        state.generators.push_back(state.generators[0]);
+        state.generatorIdentities.push_back(state.generatorIdentities[0]);
+    }
+    CHECK_FALSE(state.valid());
+    CHECK_FALSE(PlayerLocomotionCheckpoint::encode(state));
+}
+
+TEST_CASE("typed contact wire rejects unknown and noncanonical identity fields",
+          "[netplay][locomotion-checkpoint][dynamic-contacts]") {
+    using Identity = PlayerLocomotionState::Identity;
+    auto state = contacts();
+    state.bodies[0].identity = {Identity::Kind::Swarm, 7, 10};
+    state.generatorIdentities = {{Identity::Kind::Generator, 12, 0}};
+    const auto original = PlayerLocomotionCheckpoint::encode(state);
+    REQUIRE(original);
+    auto bytes = *original;
+    constexpr usize kFirstIdentity = PlayerLocomotionCheckpoint::kHeaderBytes + 20;
+    constexpr usize kGeneratorIdentity = PlayerLocomotionCheckpoint::kHeaderBytes +
+                                         2 * PlayerLocomotionCheckpoint::kBodyBytes +
+                                         PlayerLocomotionCheckpoint::kObstacleBytes;
+    SECTION("unknown body family") {
+        word(bytes, kFirstIdentity, 3);
+    }
+    SECTION("zero swarm lifetime") {
+        word(bytes, kFirstIdentity + 8, 0);
+    }
+    SECTION("noncanonical anonymous tail") {
+        word(bytes, kFirstIdentity, 0);
+    }
+    SECTION("generator with a swarm family") {
+        word(bytes, kGeneratorIdentity, 1);
+    }
+    SECTION("generator with a lifetime") {
+        word(bytes, kGeneratorIdentity + 8, 1);
+    }
+    CHECK_FALSE(PlayerLocomotionCheckpoint::decode(bytes));
+    CHECK(PlayerLocomotionCheckpoint::decode(*original));
+}
 } // namespace

@@ -1,12 +1,14 @@
 // Native, independently paced host/guest processes. The renderer runs the real
 // presentation code but discards GPU commands. Audio is not initialized: these
 // timings measure visual submission, not sound output or monitor scanout.
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -17,6 +19,7 @@
 #include "engine/net/SessionTransport.h"
 
 #include "FakeRenderDevice.h"
+#include "fixtures/MeasuredPacketTransport.h"
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/AssetDigest.h"
 #include "game/netplay/HostedRoom.h"
@@ -37,6 +40,7 @@ struct Options {
     bool requireVolleys = false;
     std::string workload = "throw";
     std::string element = "none";
+    std::string stage = "tower";
     s32 players = 2;
     s32 seconds = 20;
     s32 fps = 60;
@@ -73,6 +77,7 @@ Options parse(std::span<char*> args) {
             "[--seconds 20] [--players 2] [--assets path] [--data path] "
             "[--workload throw|rapid-five|speed-rapid-five|turbo-B|turbo-C|shove] "
             "[--element none|fire|lightning|light|acid] "
+            "[--stage tower|G1] "
             "[--character 0..7] [--require-volleys] "
             "[--hold-after-report]");
     Options result;
@@ -122,6 +127,9 @@ Options parse(std::span<char*> args) {
                         value == "light" || value == "acid",
                     "Invalid element");
             result.element = value;
+        } else if (key == "--stage") {
+            require(value == "tower" || value == "G1", "Stage must be tower or G1");
+            result.stage = value;
         } else {
             throw std::runtime_error("Unknown option");
         }
@@ -168,6 +176,360 @@ bool idleForThrow(const CombatSnapshot* state, u8 seat, bool native) {
                                                   : player.animation.action;
     return player.movement.enabled && action <= static_cast<u32>(PlayerAnimator::Action::Idle2Loop);
 }
+
+/** Request windows classify observations, not exact input acceptance or hit acknowledgements.
+ * Keep typed bounded records during play; JSON formatting happens only in the final report. */
+struct ThrowDiagnostics {
+    static constexpr usize kRequests = 256;
+    static constexpr usize kObservations = 64;
+    static constexpr usize kOrigins = 64;
+    static constexpr auto kWindow = std::chrono::seconds(1);
+    struct Observation {
+        u64 tick = 0;
+        u64 generation = 0;
+        u64 actualInput = 0;
+        u64 receivedInput = 0;
+        u32 action = 0;
+        u32 reaction = 0;
+        u32 lateInputs = 0;
+        f64 elapsedMs = 0;
+        bool rollback = false;
+        bool enabled = false;
+        bool current = false;
+        bool ranged = false;
+        bool weapon = false;
+        bool melee = false;
+        bool turbo = false;
+        bool released = false;
+    };
+    struct Origin {
+        ShotIdentity identity;
+        u64 observedTick = 0;
+        f64 elapsedMs = 0;
+        bool live = false;
+        bool tail = false;
+    };
+    struct Request {
+        InputCommand input;
+        Clock::time_point pressed;
+        Observation shownSeed;
+        Observation hostSeed;
+        u32 continuity = 0;
+        std::optional<Observation> firstFrame;
+        std::optional<Observation> hostAction;
+        std::vector<Observation> host;
+        std::vector<Origin> origins;
+        u64 lastTick = 0;
+        u64 omittedObservations = 0;
+        u64 omittedOrigins = 0;
+        bool closed = false;
+        bool interrupted = false;
+    };
+    std::vector<Request> requests;
+    u64 omitted = 0;
+    struct Physical {
+        u64 instance = 0;
+        u64 snapshotTick = 0;
+        s32 owner = 0;
+        f32 age = 0;
+        std::optional<MissileRelease> release;
+    };
+    static constexpr usize kPhysical = 4096;
+    std::vector<Physical> physical;
+    u64 omittedPhysical = 0;
+
+    void observePhysical(const PlayScene* scene, const CombatSnapshot* shown) {
+        if (scene == nullptr) {
+            return;
+        }
+        const auto& missiles = scene->missiles();
+        for (usize index = 0; index < missiles.count(); ++index) {
+            const auto& missile = missiles.missile(index);
+            if (std::ranges::find(physical, missile.instance, &Physical::instance) !=
+                physical.end()) {
+                continue;
+            }
+            if (physical.size() == kPhysical) {
+                ++omittedPhysical;
+                continue;
+            }
+            physical.push_back({missile.instance, shown ? shown->motion.tick : 0, missile.owner,
+                                missile.age, missile.release});
+        }
+    }
+
+    static Observation observation(const CombatSnapshot& state, u8 seat, bool native,
+                                   f64 elapsedMs = 0) {
+        Observation result;
+        result.tick = state.motion.tick;
+        result.elapsedMs = elapsedMs;
+        if (seat >= state.players.size() || !state.players[seat]) {
+            return result;
+        }
+        const auto& player = *state.players[seat];
+        result.rollback = player.rollback.has_value();
+        result.action = native && player.rollback ? static_cast<u32>(player.rollback->action)
+                                                  : player.animation.action;
+        result.generation = native && player.rollback ? player.rollback->animation.generation
+                                                      : player.animation.generation;
+        result.actualInput = player.rollbackInput ? player.rollbackInput->tick : 0;
+        result.receivedInput = player.movement.receivedInput;
+        result.lateInputs = player.movement.lateInputs;
+        result.reaction = static_cast<u32>(player.reaction);
+        result.enabled = player.movement.enabled;
+        result.current = player.movement.current;
+        result.ranged = player.movement.ranged;
+        result.weapon = player.weapon.has_value();
+        result.melee = player.melee.has_value();
+        result.turbo = player.turbo.has_value();
+        result.released = player.rollback && player.rollback->released;
+        return result;
+    }
+    void bind(const InputCommand& input, const CombatSnapshot& shown, const Observation& hostSeed,
+              Clock::time_point pressed) {
+        if (requests.size() == kRequests) {
+            ++omitted;
+            return;
+        }
+        Request request;
+        request.input = input;
+        request.pressed = pressed;
+        request.shownSeed = observation(shown, input.seat, false);
+        request.hostSeed = hostSeed;
+        request.continuity = shown.motion.players[input.seat]->continuity;
+        request.host.reserve(kObservations);
+        request.origins.reserve(kOrigins);
+        requests.push_back(std::move(request));
+    }
+    void observe(const CombatSnapshot* state, Clock::time_point now) {
+        for (auto& request : requests) {
+            if (request.closed) {
+                continue;
+            }
+            if (now - request.pressed > kWindow) {
+                request.closed = true;
+                continue;
+            }
+            if (state == nullptr) {
+                continue;
+            }
+            const auto& input = request.input;
+            if (state->motion.epoch != input.epoch || !state->motion.players[input.seat] ||
+                state->motion.players[input.seat]->grant != input.grant ||
+                state->motion.players[input.seat]->continuity != request.continuity ||
+                !state->players[input.seat] ||
+                state->players[input.seat]->life != ReplicaPlayerLife::Standing ||
+                state->players[input.seat]->portalPhase) {
+                request.closed = request.interrupted = true;
+                continue;
+            }
+            if (state->motion.tick < input.tick || state->motion.tick <= request.lastTick) {
+                continue;
+            }
+            request.lastTick = state->motion.tick;
+            const auto elapsed =
+                std::chrono::duration<f64, std::milli>(now - request.pressed).count();
+            const auto observed = observation(*state, input.seat, true, elapsed);
+            if (request.host.size() < kObservations) {
+                request.host.push_back(observed);
+            } else {
+                ++request.omittedObservations;
+            }
+            if (!request.hostAction && attack(observed.action) &&
+                observed.generation > request.hostSeed.generation &&
+                observed.actualInput >= input.tick && observed.actualInput <= observed.tick) {
+                request.hostAction = observed;
+            }
+            for (const auto& shot : state->projectiles) {
+                const auto* origin = shot.releaseOrigin();
+                if (origin == nullptr || origin->epoch != input.epoch ||
+                    origin->seat != input.seat || origin->grant != input.grant ||
+                    origin->tick < input.tick) {
+                    continue;
+                }
+                auto found = std::ranges::find(request.origins, *origin, &Origin::identity);
+                if (found == request.origins.end()) {
+                    if (request.origins.size() == kOrigins) {
+                        ++request.omittedOrigins;
+                        continue;
+                    }
+                    request.origins.push_back({*origin, state->motion.tick, elapsed});
+                    found = std::prev(request.origins.end());
+                }
+                found->live |= shot.rollback.has_value();
+                found->tail |= shot.particles && shot.particles->flight.retiring;
+            }
+        }
+    }
+    static bool attack(u32 action) {
+        using Action = PlayerAnimator::Action;
+        const auto value = static_cast<Action>(action);
+        return (value >= Action::Throw && value <= Action::ThrowMovingRecover) ||
+               (value >= Action::Quick1 && value <= Action::PowerLowRecover);
+    }
+    void presented(const CombatSnapshot* state, Clock::time_point now) {
+        if (state == nullptr) {
+            return;
+        }
+        for (auto& request : requests) {
+            if (request.closed || request.firstFrame) {
+                continue;
+            }
+            if (now - request.pressed > kWindow) {
+                request.closed = true;
+                continue;
+            }
+            const auto& input = request.input;
+            const auto& pose = state->motion.players[input.seat];
+            const auto& player = state->players[input.seat];
+            if (state->motion.epoch != input.epoch || !pose || !player ||
+                pose->grant != input.grant || pose->continuity != request.continuity ||
+                player->life != ReplicaPlayerLife::Standing || player->portalPhase) {
+                request.closed = request.interrupted = true;
+                continue;
+            }
+            const auto observed =
+                observation(*state, input.seat, false,
+                            std::chrono::duration<f64, std::milli>(now - request.pressed).count());
+            if (attack(observed.action) && observed.generation > request.shownSeed.generation) {
+                request.firstFrame = observed;
+            }
+        }
+    }
+    static nlohmann::json encode(const Observation& value) {
+        using Action = PlayerAnimator::Action;
+        const auto action = static_cast<Action>(value.action);
+        const char* family = "other";
+        if (action >= Action::Throw && action <= Action::ThrowMovingRecover) {
+            family = "throw";
+        } else if (action >= Action::Quick1 && action <= Action::PowerLowRecover) {
+            family = "melee";
+        } else if (action <= Action::Idle2Loop) {
+            family = "idle";
+        }
+        return {{"tick", value.tick},
+                {"action", value.action},
+                {"action_family", family},
+                {"generation", value.generation},
+                {"elapsed_ms", value.elapsedMs},
+                {"rollback", value.rollback},
+                {"actual_input_tick", value.actualInput},
+                {"received_input_tick", value.receivedInput},
+                {"late_inputs", value.lateInputs},
+                {"reaction", value.reaction},
+                {"movement_enabled", value.enabled},
+                {"movement_current", value.current},
+                {"ranged", value.ranged},
+                {"weapon", value.weapon},
+                {"melee", value.melee},
+                {"turbo", value.turbo},
+                {"released", value.released}};
+    }
+    void append(nlohmann::json& report) const {
+        auto records = nlohmann::json::array();
+        LatencyTelemetry::Distribution frames;
+        LatencyTelemetry::Distribution authority;
+        usize complete = 0;
+        usize pending = 0;
+        usize interrupted = 0;
+        usize expired = 0;
+        for (const auto& request : requests) {
+            if (request.firstFrame) {
+                frames.add(request.firstFrame->elapsedMs);
+            }
+            if (request.hostAction) {
+                authority.add(request.hostAction->elapsedMs);
+            }
+            if (request.firstFrame && request.hostAction) {
+                ++complete;
+            } else if (request.interrupted) {
+                ++interrupted;
+            } else if (request.closed) {
+                ++expired;
+            } else {
+                ++pending;
+            }
+            auto host = nlohmann::json::array();
+            for (const auto& value : request.host) {
+                host.push_back(encode(value));
+            }
+            auto origins = nlohmann::json::array();
+            for (const auto& value : request.origins) {
+                const auto& id = value.identity;
+                origins.push_back({{"epoch", id.epoch},
+                                   {"tick", id.tick},
+                                   {"generation", id.generation},
+                                   {"seat", id.seat},
+                                   {"grant", id.grant},
+                                   {"strong", id.strong},
+                                   {"ordinal", id.ordinal},
+                                   {"emission", id.emission},
+                                   {"observed_tick", value.observedTick},
+                                   {"elapsed_ms", value.elapsedMs},
+                                   {"live", value.live},
+                                   {"retiring_tail", value.tail}});
+            }
+            records.push_back(
+                {{"epoch", request.input.epoch},
+                 {"tick", request.input.tick},
+                 {"seat", request.input.seat},
+                 {"grant", request.input.grant},
+                 {"shown_seed", encode(request.shownSeed)},
+                 {"host_seed", encode(request.hostSeed)},
+                 {"first_attack_frame",
+                  request.firstFrame ? encode(*request.firstFrame) : nlohmann::json(nullptr)},
+                 {"host_attack_action",
+                  request.hostAction ? encode(*request.hostAction) : nlohmann::json(nullptr)},
+                 {"closed", request.closed},
+                 {"interrupted", request.interrupted},
+                 {"host_observations", std::move(host)},
+                 {"projectile_origins", std::move(origins)},
+                 {"omitted_observations", request.omittedObservations},
+                 {"omitted_origins", request.omittedOrigins}});
+        }
+        report["throw_diagnostics"] = {
+            {"scope",
+             "post-request observations; not exact input acceptance or hit acknowledgements"},
+            {"window_ms", 1000},
+            {"omitted_requests", omitted},
+            {"requests", std::move(records)}};
+        const auto distribution = [](const LatencyTelemetry::Distribution& values) {
+            const auto summary = values.summary();
+            return nlohmann::json{{"count", summary.count},      {"window", summary.window},
+                                  {"median_ms", summary.median}, {"p95_ms", summary.p95},
+                                  {"p99_ms", summary.p99},       {"max_ms", summary.maximum}};
+        };
+        report["attack_probe_schema"] = 1;
+        report["attack_observation_scope"] =
+            "new ordinary melee or throw action after an idle request; not an input or hit ACK";
+        report["attack_to_first_frame"] = distribution(frames);
+        report["attack_to_host_action"] = distribution(authority);
+        report["complete_attack_requests"] = complete;
+        report["pending_attack_requests"] = pending;
+        report["interrupted_attack_requests"] = interrupted;
+        report["expired_attack_requests"] = expired;
+        auto native = nlohmann::json::array();
+        for (const auto& value : physical) {
+            nlohmann::json record = {{"instance", value.instance},
+                                     {"observed_snapshot_tick", value.snapshotTick},
+                                     {"owner", value.owner},
+                                     {"age", value.age},
+                                     {"weapon_release", value.release.has_value()}};
+            if (value.release) {
+                record["generation"] = value.release->generation;
+                record["ordinal"] = value.release->ordinal;
+                record["emission"] = value.release->emission;
+                record["strong"] = value.release->strong;
+            }
+            native.push_back(std::move(record));
+        }
+        report["native_projectile_diagnostics"] = {
+            {"scope", "host physical pool first observations; not input acknowledgements; "
+                      "same-update impacts may be absent"},
+            {"omitted_observations", omittedPhysical},
+            {"projectiles", std::move(native)}};
+    }
+};
 
 /** Sparse turbo observations are action-start evidence, not accepted-input or hit
  * acknowledgements. Both clocks live only in this guest process. */
@@ -670,12 +1032,91 @@ struct LoopDiagnostics {
     }
 };
 
+/** Observe complete host snapshots, never the locally extrapolated display.
+ * Fixed-size previous-state storage avoids adding per-tick profiling allocations. */
+struct StageDiagnostics {
+    struct Enemy {
+        u64 instance = 0;
+        Vec3 position{0};
+        CombatAnimation animation;
+    };
+    std::array<Enemy, CombatSnapshot::kMaxEnemies> previous{};
+    usize previousCount = 0;
+    u64 epoch = 0;
+    u64 tick = 0;
+    u64 observations = 0;
+    u64 enemyFrames = 0;
+    u64 motions = 0;
+    u64 animations = 0;
+    u64 opponentSeeds = 0;
+    usize peak = 0;
+
+    void observe(const CombatSnapshot* state) {
+        if (state == nullptr || (state->motion.epoch == epoch && state->motion.tick <= tick)) {
+            return;
+        }
+        if (state->motion.epoch != epoch) {
+            previousCount = 0;
+        }
+        epoch = state->motion.epoch;
+        tick = state->motion.tick;
+        ++observations;
+        opponentSeeds += state->opponents && state->opponentFrame ? 1 : 0;
+        usize active = 0;
+        usize previousIndex = 0;
+        for (const auto& enemy : state->enemies) {
+            if (enemy.life != ReplicaEnemyLife::Active) {
+                continue;
+            }
+            // Snapshot instances and the filtered previous list are ordered.
+            while (previousIndex < previousCount &&
+                   previous[previousIndex].instance < enemy.instance) {
+                ++previousIndex;
+            }
+            if (previousIndex < previousCount &&
+                previous[previousIndex].instance == enemy.instance) {
+                const auto& before = previous[previousIndex];
+                motions += before.position != enemy.position ? 1 : 0;
+                animations += before.animation.action != enemy.animation.action ||
+                                      before.animation.generation != enemy.animation.generation ||
+                                      before.animation.frame != enemy.animation.frame
+                                  ? 1
+                                  : 0;
+            }
+            ++active;
+        }
+        peak = std::max(peak, active);
+        enemyFrames += active != 0 ? 1 : 0;
+        previousCount = 0;
+        for (const auto& enemy : state->enemies) {
+            if (enemy.life == ReplicaEnemyLife::Active && previousCount < previous.size()) {
+                previous[previousCount++] = {enemy.instance, enemy.position, enemy.animation};
+            }
+        }
+    }
+    void append(nlohmann::json& report) const {
+        report["stage_probe_schema"] = 1;
+        report["stage_activity_scope"] = "authority-checkpoints";
+        report["stage_authority_observations"] = observations;
+        report["stage_enemy_frames"] = enemyFrames;
+        report["stage_enemy_motion_samples"] = motions;
+        report["stage_enemy_animation_samples"] = animations;
+        report["stage_enemy_peak"] = peak;
+        report["stage_opponent_seed_observations"] = opponentSeeds;
+    }
+};
+
 void run(const Options& options, Clock::time_point processBegin) {
     const GameConfig config;
     LevelCatalog levels;
     StringTable strings;
     require(levels.load(options.assets), "Native assets missing");
     require(strings.load(options.data / "text", "en"), "Shipped text missing");
+    const auto requestedLevel =
+        options.stage == "tower" ? std::optional{LevelRef::tower()} : levels.byName(options.stage);
+    require(requestedLevel.has_value(), "Requested native stage is missing");
+    const auto requestedScene = OnlinePlay::sceneId(levels, *requestedLevel);
+    require(requestedScene.has_value(), "Requested stage has no native scene ID");
     if (options.requireVolleys) {
         ClassDataSet classes;
         require(classes.load(options.assets / "PDATA"), "Native class data missing");
@@ -707,10 +1148,12 @@ void run(const Options& options, Clock::time_point processBegin) {
     require(wire != nullptr, "Could not open iroh transport");
     // Refuse separate-machine peers that provision a different native workload.
     // Presentation rate and prediction intentionally remain local A/B settings.
-    const std::string probeBuild = "native-latency-probe-3:" + options.workload + ":" +
-                                   options.element + ":" + std::to_string(options.character) + ":" +
+    const std::string probeBuild = "native-latency-probe-4:" + options.stage + ":" +
+                                   options.workload + ":" + options.element + ":" +
+                                   std::to_string(options.character) + ":" +
                                    (options.requireVolleys ? "volleys" : "startup");
-    HostedRoom room(*wire, options.host, 1, probeBuild, content);
+    test::MeasuredPacketTransport measuredWire(*wire);
+    HostedRoom room(measuredWire, options.host, 1, probeBuild, content);
     OnlineSession session(room, room.transport(), options.host, 1);
     OnlineParty party;
     PartyMember member;
@@ -741,6 +1184,7 @@ void run(const Options& options, Clock::time_point processBegin) {
     LatencyTelemetry::Distribution updateCost;
     LatencyTelemetry::Distribution renderCost;
     LoopDiagnostics diagnostics;
+    StageDiagnostics stage;
     u64 overruns = 0;
     s32 lastThrow = -1;
     const bool speedWorkload = options.workload == "speed-rapid-five";
@@ -753,6 +1197,7 @@ void run(const Options& options, Clock::time_point processBegin) {
                              : fullTurbo   ? PlayerAnimator::Action::TurboFull
                                            : PlayerAnimator::Action::TurboStrong;
     TurboDiagnostics turbo;
+    ThrowDiagnostics throws;
     FanDiagnostics fan;
     ElementDiagnostics elemental;
     VolleyDiagnostics volleys;
@@ -760,6 +1205,7 @@ void run(const Options& options, Clock::time_point processBegin) {
     struct ThrowProbe {
         Clock::time_point pressed;
         CombatSnapshot shown;
+        ThrowDiagnostics::Observation hostSeed;
     };
     std::optional<ThrowProbe> pendingThrow;
     while (Clock::now() - launch < std::chrono::seconds(180 + options.seconds)) {
@@ -795,7 +1241,10 @@ void run(const Options& options, Clock::time_point processBegin) {
                                          session.seats().front(), true)) {
                             lastThrow = pulse;
                             input[0].attack = input[0].attackPressed = true;
-                            pendingThrow = ThrowProbe{now, *play.shown()};
+                            pendingThrow = ThrowProbe{
+                                now, *play.shown(),
+                                ThrowDiagnostics::observation(*session.match().playback().latest(),
+                                                              session.seats().front(), true)};
                         }
                         if (turboWorkload && phase >= 0.6 && lastThrow != pulse &&
                             elapsed < options.seconds - 2.1 && play.shown() != nullptr &&
@@ -818,6 +1267,12 @@ void run(const Options& options, Clock::time_point processBegin) {
                     }
                     throw std::runtime_error("Native gameplay failed");
                 }
+                if (started && !reported) {
+                    require(session.match().context().scene == *requestedScene,
+                            "Probe traveled away from its requested stage");
+                    stage.observe(options.host ? play.shown()
+                                               : session.match().playback().latest());
+                }
                 // Adaptive lead and backpressure can change the accepted tick
                 // during update. Associate the original press with its actual
                 // sampled command, never a guessed tick or a receipt watermark.
@@ -827,9 +1282,18 @@ void run(const Options& options, Clock::time_point processBegin) {
                             command.pressed(CommandPress::Attack)) {
                             session.match().latency().throwRequest(command, pendingThrow->shown,
                                                                    pendingThrow->pressed);
+                            throws.bind(command, pendingThrow->shown, pendingThrow->hostSeed,
+                                        pendingThrow->pressed);
                             pendingThrow.reset();
                             break;
                         }
+                    }
+                }
+                if (!turboWorkload && started && !reported) {
+                    if (options.host) {
+                        throws.observePhysical(play.hostScene(), play.shown());
+                    } else {
+                        throws.observe(session.match().playback().latest(), Clock::now());
                     }
                 }
                 if (turboWorkload && !options.host) {
@@ -864,10 +1328,12 @@ void run(const Options& options, Clock::time_point processBegin) {
                 if (session.phase() == OnlineSession::Phase::Active) {
                     PlayOptions settings;
                     settings.welcome = false;
-                    settings.position = Vec3{0};
+                    if (requestedLevel->isTower()) {
+                        settings.position = Vec3{0};
+                    }
                     const auto sceneBegin = Clock::now();
                     const bool loaded =
-                        play.open(device, context, session, party, LevelRef::tower(), settings);
+                        play.open(device, context, session, party, *requestedLevel, settings);
                     diagnostics.record(LoopDiagnostics::Operation::SceneOpen, sceneBegin,
                                        Clock::now(), processBegin, started, play.phase());
                     require(loaded, "Could not load native scene");
@@ -900,6 +1366,9 @@ void run(const Options& options, Clock::time_point processBegin) {
                 nextRender = now + frameTime;
             }
             const auto renderEnd = Clock::now();
+            if (!turboWorkload && !options.host && started && !reported) {
+                throws.presented(play.shown(), renderEnd);
+            }
             if (turboWorkload && !options.host) {
                 turbo.observe(play.shown(), false, renderEnd);
                 if (options.requireVolleys) {
@@ -919,7 +1388,21 @@ void run(const Options& options, Clock::time_point processBegin) {
                 const auto seat = session.seats().front();
                 const auto& player = play.shown()->players[seat];
                 if (player && player->movement.enabled) {
+                    require(session.match().context().scene == *requestedScene &&
+                                OnlinePlay::levelOf(levels, session.match().context().scene) ==
+                                    requestedLevel,
+                            "Loaded session stage differs from requested stage");
+                    if (options.host) {
+                        require(play.hostScene() != nullptr &&
+                                    play.hostScene()->world() != nullptr &&
+                                    play.hostScene()->world()->ref() == *requestedLevel,
+                                "Host native world differs from requested stage");
+                    } else {
+                        require(play.replica() != nullptr,
+                                "Guest native stage resources have not loaded");
+                    }
                     started = Clock::now();
+                    measuredWire.reset();
                 }
             }
         }
@@ -933,6 +1416,15 @@ void run(const Options& options, Clock::time_point processBegin) {
             report["element"] = options.element;
             report["character"] = options.character;
             report["require_volleys"] = options.requireVolleys;
+            const auto loadedLevel = OnlinePlay::levelOf(levels, session.match().context().scene);
+            require(loadedLevel == requestedLevel, "Report stage differs from requested stage");
+            report["stage"] = options.stage;
+            report["loaded_stage"] = loadedLevel->isTower() ? "tower" : loadedLevel->name;
+            report["scene_id"] = session.match().context().scene;
+            stage.append(report);
+            if (!turboWorkload) {
+                throws.append(report);
+            }
             if (options.requireVolleys) {
                 volleys.append(report);
             }
@@ -953,6 +1445,20 @@ void run(const Options& options, Clock::time_point processBegin) {
             report["internet_enabled"] = options.internet;
             report["update_p95_ms"] = updateCost.summary().p95;
             report["render_p95_ms"] = renderCost.summary().p95;
+            const auto& traffic = measuredWire.counters();
+            const f64 networkSeconds = std::chrono::duration<f64>(Clock::now() - *started).count();
+            report["network_payload_schema"] = 1;
+            report["network_payload_scope"] = "gameplay-provider-payload-no-protocol-overhead";
+            report["network_measurement_seconds"] = networkSeconds;
+            report["network_sent_bytes"] = traffic.sentBytes;
+            report["network_received_bytes"] = traffic.receivedBytes;
+            report["network_sent_packets"] = traffic.sentPackets;
+            report["network_received_packets"] = traffic.receivedPackets;
+            report["network_sent_bytes_per_second"] = traffic.sentBytes / networkSeconds;
+            report["network_received_bytes_per_second"] = traffic.receivedBytes / networkSeconds;
+            report["network_unreliable_sent_bytes"] = traffic.deliveryBytes[0];
+            report["network_reliable_sent_bytes"] = traffic.deliveryBytes[1];
+            report["network_send_results"] = traffic.sendResults;
             diagnostics.append(report);
             report["process_begin_monotonic_ms"] =
                 std::chrono::duration<f64, std::milli>(processBegin.time_since_epoch()).count();

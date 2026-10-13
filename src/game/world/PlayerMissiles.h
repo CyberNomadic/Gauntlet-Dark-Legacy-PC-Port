@@ -157,6 +157,11 @@ struct MissilePlayer {
  */
 class PlayerMissiles {
 public:
+    PlayerMissiles() = default;
+    PlayerMissiles(const PlayerMissiles&) = delete;
+    PlayerMissiles& operator=(const PlayerMissiles&) = delete;
+    PlayerMissiles(PlayerMissiles&&) = delete;
+    PlayerMissiles& operator=(PlayerMissiles&&) = delete;
     static constexpr u32 kPlainModifiers =
         powerup::kRapidFire | powerup::kThreeWayShot | powerup::kFiveWayShot;
     static constexpr u32 kReplayModifiers = kPlainModifiers | 0xFU;
@@ -231,6 +236,7 @@ public:
         Vec3 direction{0};
         s32 potion = 0; ///< zero selects the ordinary class spec; 1..4 use MissileSpec::potion
         std::optional<MissilePotionRelease> potionRelease;
+        bool operator==(const VisualHistory&) const = default;
     };
 
     /** One weapon in flight. */
@@ -267,9 +273,105 @@ public:
         struct PlayerContact {
             s32 player = -1;
             f32 remaining = 0;
+            bool operator==(const PlayerContact&) const = default;
         };
         std::vector<PlayerContact> playerContacts;
     };
+
+    /** Original immutable specs and prebound artwork, not live shooter slots.
+     * A nonzero ID names the exact spec/model/streak-texture tuple. Invisible
+     * missiles still need their actual spec. All resources outlive clear(). */
+    struct Resource {
+        u32 id = 0;
+        const MissileSpec* spec = nullptr;
+        const TreeModel* model = nullptr;
+        const Texture* streak = nullptr;
+    };
+    struct Checkpoint {
+        static constexpr usize kMaxMissiles = 4096;
+        static constexpr usize kMaxEvents = 65536;
+        static constexpr usize kMaxContacts = 65536;
+        static constexpr usize kMaxResources = 4096;
+        struct Flight {
+            u64 instance = 0;
+            u32 continuity = 1;
+            s32 owner = 0;
+            Vec3 position{0}, velocity{0};
+            f32 tumble = 0, age = 0;
+            Vec3 previousPosition{0}, previousVelocity{0};
+            f32 previousTumble = 0, previousAge = 0;
+            bool presentationCaptured = false;
+            s32 potion = 0;
+            f32 potency = 0, damage = 0, scale = 1;
+            u32 resource = 0, effect = 0, rider = 0;
+            MissileWallSound wallSound = MissileWallSound::Level;
+            u32 flags = 0;
+            std::vector<s32> pierced;
+            std::optional<MissileRelease> release;
+            Color streakColor = Color::white();
+            f32 streakForward = 0;
+            std::optional<MissilePotionRelease> potionRelease;
+            MultiplayerMode multiplayer = MultiplayerMode::Normal;
+            f32 playerHitGap = 0.25f;
+            bool breaksPotions = true;
+            std::vector<Missile::PlayerContact> playerContacts;
+            bool operator==(const Flight&) const = default;
+        };
+        struct Impact {
+            Vec3 position{0};
+            s32 owner = 0, potion = 0;
+            f32 potency = 0, damage = 0;
+            s32 target = -1;
+            u32 effectResource = 0; ///< zero is empty; otherwise the trusted spec's impactTree
+            MissileWallSound wallSound = MissileWallSound::Level;
+            u32 flags = 0;
+            s32 node = -1, worldObject = -1;
+            bool liquid = false;
+            s32 player = -1;
+            Vec3 direction{0};
+            bool stun = false;
+            f32 playerHitGap = 0.25f;
+            bool operator==(const Impact&) const = default;
+        };
+        std::vector<Flight> missiles;
+        std::vector<Impact> impacts;
+        std::vector<VisualHistory> history;
+        EffectTrees::PoolCheckpoint visuals;
+        u64 nextInstance = 1;
+        f32 ricochetIn = 0;
+        bool visualsBound = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept;
+        Prepared& operator=(Prepared&&) noexcept;
+        ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+
+    private:
+        friend class PlayerMissiles;
+        struct Data;
+        explicit Prepared(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    /** Complete gameplay and visual state, including undelivered impacts. Bounds
+     * refuse rollback capture, never truncate native gameplay. Render binding
+     * mode and fallback lenders must match the destination's trusted setup. */
+    std::optional<Checkpoint>
+    checkpoint(std::span<const Resource> resources,
+               std::span<const EffectTrees::PoolResource> effects = {}) const;
+    std::optional<Prepared>
+    prepareRestore(const Checkpoint& state, std::span<const Resource> resources,
+                   std::span<const EffectTrees::PoolResource> effects = {}) const;
+    bool canCommit(const Prepared& state) const noexcept;
+    /** Prepare/preflight/commit synchronously with no intervening gameplay or
+     * resource teardown. Commit allocates nothing and dispatches no callbacks. */
+    bool commitRestore(Prepared&& state) noexcept;
+    bool restore(const Checkpoint& state, std::span<const Resource> resources,
+                 std::span<const EffectTrees::PoolResource> effects = {});
 
     /** A missile's pace from the stat that throws it. */
     static f32 speedFor(s32 stat);
@@ -327,6 +429,8 @@ private:
     f32 m_ricochetIn = 0;
     RenderDevice* m_device = nullptr;
     EffectTrees m_visuals;
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 1;
 };
 
 } // namespace gdl::game

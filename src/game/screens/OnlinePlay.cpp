@@ -101,6 +101,7 @@ bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSe
     return true;
 }
 void OnlinePlay::quiet() {
+    m_opponentReplay.clear();
     m_prediction.clear();
     m_projectilePrediction.clear();
     m_potionPrediction.clear();
@@ -363,9 +364,13 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
             }
             m_host = std::move(candidate);
         } else {
+            const auto* room = m_session->room();
+            const f32 difficulty = room != nullptr && room->settings.valid()
+                                       ? DifficultyConfig::kGains[room->settings.difficulty]
+                                       : 1;
             if (profiles == nullptr ||
                 !m_replica.open(*m_device, m_context.unpackedRoot, *level, context, *profiles,
-                                m_context.strings) ||
+                                m_context.strings, difficulty) ||
                 !m_clock.begin(match)) {
                 fail(Failure::Assets);
                 return false;
@@ -745,6 +750,11 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
             }
             m_prediction.begin(match.context(), match.localPeer(), world->collision(),
                                &world->scene(), &world->layout());
+            m_opponentReplay.clear();
+            if (auto* opponents = m_replica.opponentPrediction()) {
+                m_opponentReplay.begin(match.context(), match.localPeer(), *opponents,
+                                       world->scene(), world->layout(), world->collision());
+            }
             m_projectilePrediction.begin(match.context(), match.localPeer(), world->collision(),
                                          &world->scene(), &world->layout());
             if (const auto* weapons = m_replica.weapons()) {
@@ -780,7 +790,9 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
                 }
             }
         }
-        m_prediction.update(match.playback().latest(), match.sampledInputs());
+        m_prediction.update(
+            match.playback().latest(), match.sampledInputs(),
+            m_opponentReplay.callbacks(match.playback().latest(), match.sampledInputs()));
         m_potionPrediction.update(match.playback().latest(), m_prediction, match.sampledInputs());
         m_effectPrediction.update(match.playback().latest(), m_prediction);
         if (const auto* authority = match.playback().latest()) {
@@ -791,6 +803,9 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
                     continue;
                 }
                 for (const auto& release : replay->releases) {
+                    if (!release.aimingKnown(authority->players[seat]->movement.ranged)) {
+                        continue;
+                    }
                     match.latency().localRelease({match.context().epoch, release.tick,
                                                   release.generation, release.motion.grant,
                                                   static_cast<u8>(seat), release.strong, 0,
@@ -970,6 +985,7 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
         m_presentEffects = false;
         if (m_predictMovement) {
             m_prediction.present(*sample, frameBlend);
+            m_opponentReplay.present(*sample, presentation, frameBlend);
             m_projectilePrediction.present(*sample, frameBlend);
             m_potionPrediction.present(*sample, frameBlend);
             m_presentEffects = m_effectPrediction.present(*sample);

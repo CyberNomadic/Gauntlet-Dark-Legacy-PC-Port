@@ -8,6 +8,7 @@
 #include "game/screens/LocalTurboEffectPrediction.h"
 #include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
+#include "game/screens/OnlineOpponentReplay.h"
 #include "game/screens/OnlineParty.h"
 #include "game/screens/PlayReplication.h"
 #include "game/screens/ReplicaAudio.h"
@@ -105,6 +106,7 @@ private:
     ReplicaAudio m_audio;
     ClientClock m_clock;
     LocalMovementPrediction m_prediction;
+    OnlineOpponentReplay m_opponentReplay;
     LocalProjectilePrediction m_projectilePrediction;
     LocalPotionPrediction m_potionPrediction;
     LocalTurboEffectPrediction m_effectPrediction;

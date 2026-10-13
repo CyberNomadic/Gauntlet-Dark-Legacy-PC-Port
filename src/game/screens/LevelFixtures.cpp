@@ -430,6 +430,18 @@ void LevelFixtures::syncChestContents() {
                                       chest.state != Chests::kOpen);
     }
 }
+Vec3 LevelFixtures::observePlayer(PlayerRuntime& player, const Vec3& position) {
+    const Vec3 step = player.fixtureSpot ? position - *player.fixtureSpot : Vec3{0};
+    player.fixtureSpot = position;
+    return step;
+}
+
+void LevelFixtures::advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks) {
+    for (PlayerRuntime& runtime : players) {
+        runtime.hitSoundGap = std::max(runtime.hitSoundGap - ticks, 0);
+    }
+}
+
 /** The level's chests, gates and traps under the party: nobody walks through a chest or a
  * gate that is shut; against one, a key carried is spent and it opens (a chest's sound is
  * the common one, a gate's its realm's); an opened chest offers its contents to whoever
@@ -491,8 +503,7 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         // The rocks and leaves that give way to a body brushing them (fn_8005D730's case 10).
         playFallingCues(m_resources->world.fallingScenery().touch(position, actor.radius()));
         const PowerupEffects worn = PowerupEffects::of(actor.save().progress().inventory);
-        const Vec3 step = player.fixtureSpot ? position - *player.fixtureSpot : Vec3{0.0f};
-        player.fixtureSpot = position;
+        const Vec3 step = observePlayer(player, position);
         visitors.push_back(ChestVisitor{position, actor.radius(),
                                         actor.save().progress().inventory.keys, worn.xray(), step,
                                         goldCapacity(actor.save())});
@@ -599,9 +610,7 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
     }
     updateClouds(seconds, players, events);
     advanceBlasts(seconds, players, events);
-    for (PlayerRuntime& runtime : players) {
-        runtime.hitSoundGap = std::max(runtime.hitSoundGap - ticks, 0);
-    }
+    advanceHitSounds(players, ticks);
 }
 
 bool LevelFixtures::enchantChest(usize index, f32 power) {

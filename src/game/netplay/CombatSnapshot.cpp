@@ -15,7 +15,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 39;
+constexpr u32 kVersion = 41;
 constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
@@ -206,7 +206,16 @@ bool CombatSnapshot::valid() const {
         projectiles.size() > kMaxProjectiles || pickups.size() > kMaxPickups ||
         fixtures.size() > kMaxFixtures || (geometry && !geometry->valid()) ||
         !FighterPacket::valid(fighters) || (hud && !hud->valid()) ||
-        (opponents && !opponents->valid())) {
+        opponents.has_value() != opponentFrame.has_value() ||
+        (opponents &&
+         (!opponents->valid() || !opponentFrame->valid() ||
+          opponentFrame->initialPlayers != static_cast<u32>(opponents->enemies.scales.players) ||
+          opponentFrame->initialPlayers != static_cast<u32>(opponents->generators.players)))) {
+        return false;
+    }
+    if (opponentFrame && std::ranges::any_of(opponentFrame->players, [&](const auto& player) {
+            return !motion.players[player.seat] || !players[player.seat];
+        })) {
         return false;
     }
     if (worldMotionTicks > PlatformState::kMaxTicks || (!worldMotion && worldMotionTicks != 0) ||
@@ -281,8 +290,8 @@ bool CombatSnapshot::valid() const {
             }
             if (player->melee &&
                 (!player->melee->valid() || !player->rollback || !player->movement.enabled ||
-                 (player->melee->moving && (!player->movement.current || player->movement.ranged ||
-                                            (player->weapon && !player->turbo))))) {
+                 (player->melee->moving &&
+                  (!player->movement.current || player->movement.ranged)))) {
                 return false;
             }
             if (player->weapon && !player->weapon->valid()) {
@@ -538,13 +547,16 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
         }
         if (snapshot.opponents) {
             const auto opponents = OpponentCheckpoint::encode(*snapshot.opponents);
-            if (!opponents) {
+            const auto frame = OpponentFrameCodec::encode(*snapshot.opponentFrame);
+            if (!opponents || !frame) {
                 return std::nullopt;
             }
             word(replay, static_cast<u32>(opponents->size()));
+            word(replay, static_cast<u32>(frame->size()));
             wide(replay, snapshot.motion.epoch);
             wide(replay, snapshot.motion.tick);
             replay.insert(replay.end(), opponents->begin(), opponents->end());
+            replay.insert(replay.end(), frame->begin(), frame->end());
         }
     }
     const auto playerCount = static_cast<usize>(std::ranges::count_if(
@@ -916,7 +928,8 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         (meleeBytes != 0 && meleeBytes < 4) || turboBytes > kTurboBytes ||
         (turboBytes != 0 && turboBytes < 4) || platformBytes > PlatformCheckpoint::kMaxBytes ||
         (platformBytes != 0 && platformBytes < PlatformCheckpoint::kHeaderBytes) ||
-        replayBytes > kReplayBytes + kOpponentHeaderBytes + OpponentCheckpoint::kMaxBytes ||
+        replayBytes > kReplayBytes + kOpponentHeaderBytes + OpponentCheckpoint::kMaxBytes +
+                          OpponentFrameCodec::kMaxBytes ||
         (replayBytes != 0 && replayBytes < 4) ||
         (geometryBytes != 0 && (geometryBytes < kGeometryHeaderBytes ||
                                 geometryBytes > kGeometryHeaderBytes + SceneGeometry::kMaxStates *
@@ -1565,15 +1578,19 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 return std::nullopt;
             }
             const usize size = replay.readU32();
+            const usize frameSize = replay.readU32();
             const u64 epoch = wide(replay);
             const u64 tick = wide(replay);
             if (size < OpponentCheckpoint::kHeaderBytes || size > OpponentCheckpoint::kMaxBytes ||
-                size > replay.remaining() || epoch != result.motion.epoch ||
+                frameSize < OpponentFrameCodec::kHeaderBytes ||
+                frameSize > OpponentFrameCodec::kMaxBytes || size > replay.remaining() ||
+                frameSize > replay.remaining() - size || epoch != result.motion.epoch ||
                 tick != result.motion.tick) {
                 return std::nullopt;
             }
             result.opponents = OpponentCheckpoint::decode(replay.readBytes(size));
-            if (!result.opponents) {
+            result.opponentFrame = OpponentFrameCodec::decode(replay.readBytes(frameSize));
+            if (!result.opponents || !result.opponentFrame) {
                 return std::nullopt;
             }
         }

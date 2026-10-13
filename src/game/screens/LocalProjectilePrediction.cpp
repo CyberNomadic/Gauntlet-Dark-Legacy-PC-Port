@@ -162,7 +162,7 @@ void LocalProjectilePrediction::update(const CombatSnapshot* authority,
         std::vector<ShotIdentity> releases;
         if (predicting) {
             for (const auto& release : replay->releases) {
-                if (supportedFan(release.shots)) {
+                if (supportedFan(release.shots) && release.aimingKnown(player->movement.ranged)) {
                     for (u8 ordinal = 0; ordinal < release.shots; ++ordinal) {
                         releases.push_back(identity(m_context.epoch, index, release, ordinal));
                     }
@@ -253,7 +253,8 @@ void LocalProjectilePrediction::update(const CombatSnapshot* authority,
         for (const auto& release : replay->releases) {
             if (!supportedFan(release.shots) ||
                 !PlayerMissiles::replayModifiers(release.weaponFlags) ||
-                ((release.weaponFlags & 0xFU) != 0) != (weapon.rider != 0)) {
+                ((release.weaponFlags & 0xFU) != 0) != (weapon.rider != 0) ||
+                !release.aimingKnown(player->movement.ranged)) {
                 continue;
             }
             PlayerMissiles::WeaponThrow request;
@@ -269,8 +270,9 @@ void LocalProjectilePrediction::update(const CombatSnapshot* authority,
             request.scale = release.strong ? 2.0f : 1.0f;
             request.attackSeconds = release.attackSeconds;
             request.flags = release.weaponFlags;
-            request.target =
-                release.cursorAiming || release.emission != 0 ? std::nullopt : weapon.target;
+            if (!release.cursorAiming && release.emission == 0) {
+                request.target = release.targetResolved ? release.target : weapon.target;
+            }
             request.shots = release.shots;
             const auto launches = PlayerMissiles::weaponLaunches(request);
             if (launches.size() != release.shots) {

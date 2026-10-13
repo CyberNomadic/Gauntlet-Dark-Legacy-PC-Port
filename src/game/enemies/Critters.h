@@ -144,6 +144,7 @@ public:
     s32 lookoutOf(s32 id) const;
 
 private:
+    friend class OpponentCombatCheckpoint;
     std::optional<s32> spawn(const CombatantDefinition& definition, const Vec3& position, f32 yaw,
                              f32 sight = 0.0f);
     CombatantAssets* stockFor(const CombatantDefinition& definition);

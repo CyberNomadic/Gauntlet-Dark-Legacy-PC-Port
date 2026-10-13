@@ -20,7 +20,9 @@
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/OpponentPlacements.h"
 #include "game/screens/OpponentSimulation.h"
+#include "game/screens/PartyDamage.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/BodyCollision.h"
 #include "game/world/DynamicLights.h"
@@ -64,7 +66,6 @@ constexpr f32 kBlastSeconds = 1.0f; ///< the blast's and the cloud's first stage
 constexpr f32 kCarryReach = 2.0f;   ///< how far along the ground a great one's pickup may lie
 constexpr f32 kCarryRise = 3.0f;    ///< and up or down
 constexpr f32 kCloudSeconds = 2.0f / 3.0f;
-constexpr f32 kPlacementReach = 50.0f;     ///< a placement stands seen from no further off
 constexpr f32 kPlacementWakeReach = 10.0f; ///< a trigger wakes the placed enemy nearest within
 
 bool cloudRealm(const std::string& level) {
@@ -407,9 +408,11 @@ Vec3 LevelOpponents::resolveMovement(const PlayerActor& player, const Vec3& from
 }
 
 void LevelOpponents::close() {
-    m_pending.clear();
+    if (m_bindingGeneration != 0) {
+        ++m_bindingGeneration; // zero permanently refuses preparations after exhaustion
+    }
+    m_placements.clear();
     m_statues.clear();
-    m_view.reset();
     clearDeaths();
     if (m_resources.has_value()) {
         m_combatantProjectiles.clear(m_resources->effects);
@@ -539,6 +542,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
             }
         }
     }
+    std::vector<Placement> placements;
     const std::vector<ItemInfo>& infos = world.layout().itemInfos();
     for (const ItemInstance& instance : world.layout().itemInstances()) {
         if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
@@ -555,6 +559,9 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
             continue;
         }
         const std::optional<s32> kind = levelKindOf(roster, *named, strength);
+        if (!kind) {
+            continue;
+        }
         // The great ones stand where they are put, facing as placed.
         const Mat4 stood = itemPlacement(instance.position, instance.rotation);
         Placement placement;
@@ -597,33 +604,17 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
                     continue;
                 }
             }
-            m_pending.push_back(placement);
+            placements.push_back(placement);
             continue;
         }
-        // IT waits for company (fn_80060114: never with one player).
-        if (*kind == kItKind && playerCount <= 1) {
+        const auto ordinary =
+            OpponentPlacements::ordinary(instance, info, roster, playerCount,
+                                         [this](s32 family) { return m_enemies.loadKind(family); });
+        if (!ordinary) {
             continue;
         }
-        if ((*kind >= kSwarmKindCount && *kind != kDeathKind && *kind != kItKind) ||
-            !m_enemies.loadKind(*kind)) {
-            continue;
-        }
+        placement = *ordinary;
         EnemySpawn& spawn = placement.spawn;
-        spawn.kind = *kind;
-        spawn.tier = std::max(strength, 1);
-        spawn.algorithm = Generators::paramOf(instance, 1);
-        // Enemy placements pack a float sight radius into words 2/3; their interval
-        // follows at byte 8. Unlike a generator's word 3, it is in tenths of a second
-        // (SetItem), with 1 meaning no wait and 0 retaining the default.
-        if (const s32 interval = Generators::paramOf(instance, 4); interval > 0) {
-            spawn.throwInterval = interval == 1 ? 0.0f : static_cast<f32>(interval) * 0.1f;
-        }
-        spawn.position = instance.position;
-        spawn.direction = Vec3{stood[2][0], 0.0f, stood[2][2]};
-        spawn.sight = placement.sight;
-        spawn.placed = true;
-        spawn.priority = EnemySpawn::Priority::Visible;
-        spawn.asleep = strength == 0 && *kind != kDeathKind;
         if (*kind == kDeathKind) {
             // SetItem's Death placement values are not ordinary strength tiers:
             // 0/1 are red, 2/3 black; only the odd values start awakened.
@@ -645,8 +636,9 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
                 continue;
             }
         }
-        m_pending.push_back(placement);
+        placements.push_back(placement);
     }
+    m_placements.bind(std::move(placements));
     if (!resources.standOnSight) {
         standPlacements(std::nullopt, Vec3{0.0f});
     }
@@ -659,14 +651,17 @@ void LevelOpponents::watch(const ViewVolume& view, const Vec3& attention) {
     m_generators.setView(view, level != nullptr && level->bossType >= 0
                                    ? std::nullopt
                                    : std::optional<Vec3>{attention});
-    m_view = view;
-    m_attention = attention;
     standPlacements(view, attention);
 }
 
+bool LevelOpponents::hasUncapturedState() const {
+    return m_critters.count() != 0 || m_bosses.present() || m_statues.count() != 0 ||
+           m_combatantProjectiles.count() != 0 || !m_bags.empty() || !m_clouds.empty() ||
+           !m_deathShots.empty() || m_shrink != EnemyShrink::kWhole;
+}
+
 bool LevelOpponents::inView(const Vec3& at, f32 radius) const {
-    return !m_view.has_value() ||
-           (m_view->sees(at, radius) && glm::distance(m_attention, at) <= kPlacementReach);
+    return m_placements.inView(at, radius);
 }
 
 void LevelOpponents::wakeStatueNear(const Vec3& spot) {
@@ -676,7 +671,8 @@ void LevelOpponents::wakeStatueNear(const Vec3& spot) {
     if (!statue.has_value() || statue->second >= kPlacementWakeReach) {
         return;
     }
-    for (const Placement& pending : m_pending) {
+    for (const usize index : m_placements.pending()) {
+        const auto& pending = m_placements.roster()[index];
         if (glm::distance(pending.spawn.position, spot) < statue->second) {
             return;
         }
@@ -722,21 +718,8 @@ void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRunti
  * than fifty away (fn_80060114); seen, it is gone from the waiting list whether or not the
  * swarm had room for it. With no view, all stand. */
 void LevelOpponents::standPlacements(std::optional<ViewVolume> view, const Vec3& attention) {
-    std::erase_if(m_pending, [&](const Placement& placement) {
-        const Vec3& at = placement.spawn.position;
-        if (view.has_value() && (!view->sees(at, placement.viewRadius) ||
-                                 glm::distance(attention, at) > kPlacementReach)) {
-            return false;
-        }
-        // Seen, a placement may take the place of what is on screen (generate_enemy's
-        // importance 1); all standing at once, they only fill what is free.
-        Placement standing = placement;
-        if (!view.has_value()) {
-            standing.spawn.priority = EnemySpawn::Priority::FreeSlotOnly;
-        }
-        stand(standing);
-        return true;
-    });
+    m_placements.observe(std::move(view), attention);
+    m_placements.activate([this](const Placement& placement) { stand(placement); });
 }
 
 void LevelOpponents::stand(const Placement& placement) {
@@ -819,21 +802,20 @@ void LevelOpponents::applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRunti
     }
     for (usize i = 0; i < players.size(); ++i) {
         PlayerRuntime& player = players[i];
-        if (player.actor.player() != blow.player || !PlayerHealth::canBeDamaged(player)) {
+        const LevelInfo* level = m_resources->world.level();
+        const auto impact =
+            PartyDamage::enemy(blow, player,
+                               level != nullptr ? std::span<const LevelEnemy>(level->enemies)
+                                                : std::span<const LevelEnemy>{},
+                               level != nullptr ? level->bossType : -1);
+        if (!impact) {
             continue;
         }
-        const LevelInfo* level = m_resources->world.level();
-        const auto sound =
-            EnemyFeedback::meleeSound(blow.kind, blow.tier,
-                                      level != nullptr ? std::span<const LevelEnemy>(level->enemies)
-                                                       : std::span<const LevelEnemy>{},
-                                      level != nullptr ? level->bossType : -1);
-        if (sound.has_value()) {
-            m_resources->audio.playNamed(*sound);
+        if (impact->sound) {
+            m_resources->audio.playNamed(*impact->sound);
         }
         if (blow.ward == EnemyMeleeWard::None) {
-            events.hurt(i, blow.damage, sound.has_value() ? HurtKind::QuietBlow : HurtKind::Blow,
-                        true, {blow.flags, blow.direction});
+            events.hurt(i, blow.damage, impact->kind, true, impact->impact);
             continue;
         }
         if (blow.ward == EnemyMeleeWard::HealthVamp && blow.damage > 0) {
@@ -942,6 +924,19 @@ void LevelOpponents::syncFloors() {
     m_generators.syncFloors();
 }
 
+void LevelOpponents::beginOrdinaryFrame(f32 seconds, std::span<PlayerRuntime> players) {
+    for (PlayerRuntime& player : players) {
+        player.breathGap = std::max(0.0f, player.breathGap - std::max(seconds, 0.0f));
+        player.effectGap = std::max(0.0f, player.effectGap - std::max(seconds, 0.0f));
+    }
+    hearFrom(players);
+}
+
+void LevelOpponents::countOrdinaryPlayers(std::span<const PlayerRuntime> players) {
+    m_generators.setPlayerCount(static_cast<s32>(std::ranges::count_if(
+        players, [](const PlayerRuntime& player) { return !player.departed; })));
+}
+
 void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
                             std::span<const Obstacle> fixtures, const Events& events,
                             std::span<const MissileStop> stops,
@@ -949,16 +944,11 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     if (!m_resources.has_value()) {
         return;
     }
-    for (PlayerRuntime& player : players) {
-        player.breathGap = std::max(0.0f, player.breathGap - std::max(seconds, 0.0f));
-        player.effectGap = std::max(0.0f, player.effectGap - std::max(seconds, 0.0f));
-    }
-    hearFrom(players);
+    beginOrdinaryFrame(seconds, players);
     updateBags(seconds);
     shrinkOpponents(players);
     const std::vector<EnemyView> views = enemyViews(players);
-    m_generators.setPlayerCount(static_cast<s32>(std::ranges::count_if(
-        players, [](const PlayerRuntime& player) { return !player.departed; })));
+    countOrdinaryPlayers(players);
     const LevelInfo* level = m_resources->world.level();
     const f32 missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1.0f;
     const bool timeStopped = PlayerPowerups::timeStopped(players);

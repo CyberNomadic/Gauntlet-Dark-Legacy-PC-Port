@@ -6,6 +6,7 @@
 
 namespace gdl::game {
 class LocalTurboEffectPrediction;
+class OpponentPrediction;
 /** Owns a client's native level artwork and its immutable resource catalogs.
  * There is no PlayScene, gameplay update, sound player or save storage. Resolve
  * the level through the local catalog before open(), never from a packet path.
@@ -20,7 +21,7 @@ public:
     ReplicaStage& operator=(ReplicaStage&&) = delete;
     bool open(RenderDevice& device, const std::filesystem::path& root, const LevelRef& level,
               const MatchContext& context, const PartyBootstrap::Party& party,
-              const StringTable* strings = nullptr);
+              const StringTable* strings = nullptr, f32 difficultyGain = 1);
     bool resume(const MatchContext& context);
     void clear();
     bool show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation = nullptr);
@@ -35,6 +36,7 @@ public:
     const ClassStats* classStats(u8 seat) const;
     const TurboEffectResources* turboEffects(u8 seat) const;
     const ItemArchive* weapons() const;
+    OpponentPrediction* opponentPrediction();
 
 private:
     struct Assets;

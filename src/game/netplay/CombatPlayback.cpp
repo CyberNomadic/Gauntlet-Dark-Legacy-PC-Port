@@ -133,6 +133,7 @@ CombatReplica::Admission CombatPlayback::receive(PacketTransport::Connection sen
                 // must never retain a complete opponent checkpoint that could
                 // be mistaken for state at that interpolated time.
                 m_history.back().opponents.reset();
+                m_history.back().opponentFrame.reset();
                 if (m_history.size() > SnapshotPlayback::kHistory) {
                     m_history.pop_front();
                 }

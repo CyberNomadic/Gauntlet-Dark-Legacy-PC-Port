@@ -200,6 +200,23 @@ OpponentState opponentState() {
     return result;
 }
 
+OpponentFrame opponentFrame(const CombatSnapshot& source) {
+    OpponentFrame frame;
+    for (usize seat = 0; seat < source.players.size(); ++seat) {
+        if (!source.players[seat]) {
+            continue;
+        }
+        EnemyView view;
+        view.player = static_cast<s32>(seat);
+        view.position = source.motion.players[seat]->position;
+        frame.players.push_back({static_cast<u8>(seat), view});
+    }
+    frame.fixtures.push_back({{3, 2, 1}, 0.25f, 1, 2, 3, true});
+    frame.stops.push_back({frame.fixtures.front(), -1, 0, 0});
+    REQUIRE(frame.valid());
+    return frame;
+}
+
 TEST_CASE(
     "authored strike effect origins survive snapshot roundtrip independently of missile releases",
     "[netplay][combat-snapshot][effect-identity]") {
@@ -318,7 +335,7 @@ TEST_CASE("combat payload round trips every seat mask and maximum enemy roster",
         CHECK(bytes.size() <= CombatPacket::kMaxBytes);
         CHECK(bytes[0] == 'G');
         CHECK(bytes[3] == 'B');
-        CHECK(bytes[4] == 39);
+        CHECK(bytes[4] == 41);
         CHECK(bytes[6] == 128);
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
@@ -425,6 +442,7 @@ TEST_CASE("complete opponent correction shares the atomic motion tick and existi
     for (u32 mask = 0; mask < 16; ++mask) {
         auto source = state(0x123456789ABCDEF0ULL, 0);
         source.opponents = opponentState();
+        source.opponentFrame = opponentFrame(source);
         for (usize seat = 0; seat < source.players.size(); ++seat) {
             if ((mask & (1U << seat)) == 0) {
                 continue;
@@ -442,6 +460,7 @@ TEST_CASE("complete opponent correction shares the atomic motion tick and existi
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
         CHECK(decoded->opponents == source.opponents);
+        CHECK(decoded->opponentFrame == source.opponentFrame);
         CHECK(decoded->motion.epoch == source.motion.epoch);
         CHECK(decoded->motion.tick == source.motion.tick);
         CHECK(encode(*decoded) == bytes);
@@ -451,15 +470,19 @@ TEST_CASE("complete opponent correction shares the atomic motion tick and existi
         const auto without = [&] {
             auto value = source;
             value.opponents.reset();
+            value.opponentFrame.reset();
             return encode(value);
         }();
         const auto opponentBytes = OpponentCheckpoint::encode(*source.opponents);
+        const auto frameBytes = OpponentFrameCodec::encode(*source.opponentFrame);
         REQUIRE(opponentBytes);
-        CHECK(bytes.size() == without.size() + opponentBytes->size() +
+        REQUIRE(frameBytes);
+        CHECK(bytes.size() == without.size() + opponentBytes->size() + frameBytes->size() +
                                   CombatPacket::kOpponentHeaderBytes + (mask == 0 ? 4 : 0));
         const auto absent = CombatPacket::decode(without);
         REQUIRE(absent);
         CHECK_FALSE(absent->opponents);
+        CHECK_FALSE(absent->opponentFrame);
     }
 }
 
@@ -468,31 +491,42 @@ TEST_CASE("opponent supplements reject cross tick epochs malformed pools and par
     auto source = state(55, 0);
     const auto baseline = encode(source);
     source.opponents = opponentState();
+    source.opponentFrame = opponentFrame(source);
     const auto bytes = encode(source);
     const usize supplement = baseline.size();
     const usize record = supplement + 4;
     const usize payload = record + CombatPacket::kOpponentHeaderBytes;
+    const auto stateBytes = OpponentCheckpoint::encode(*source.opponents);
+    REQUIRE(stateBytes);
+    const usize frame = payload + stateBytes->size();
     for (usize length = supplement + 1; length < bytes.size(); ++length) {
         auto truncated = bytes;
         truncated.resize(length);
         writeWord(truncated, 60, static_cast<u32>(length - supplement));
         CHECK_FALSE(CombatPacket::decode(truncated));
     }
-    for (const auto [offset, value] : std::array<std::pair<usize, u32>, 14>{
+    for (const auto [offset, value] : std::array<std::pair<usize, u32>, 21>{
              {{supplement, 0},
               {supplement, 32},
               {supplement, 1},
               {record, 0},
               {record, static_cast<u32>(OpponentCheckpoint::kHeaderBytes - 1)},
               {record, static_cast<u32>(OpponentCheckpoint::kMaxBytes + 1)},
-              {record + 4, 8},   // another epoch
-              {record + 8, 1},   // high epoch bits also matter
-              {record + 12, 54}, // earlier tick, even if it is a valid older checkpoint
-              {record + 12, 56}, // a future simulation seed
-              {record + 16, 1},
+              {record + 4, 0},
+              {record + 4, static_cast<u32>(OpponentFrameCodec::kHeaderBytes - 1)},
+              {record + 4, static_cast<u32>(OpponentFrameCodec::kMaxBytes + 1)},
+              {record + 8, 8},   // another epoch
+              {record + 12, 1},  // high epoch bits also matter
+              {record + 16, 54}, // earlier tick, even if it is a valid older checkpoint
+              {record + 16, 56}, // a future simulation seed
+              {record + 20, 1},
               {payload, 0},
               {payload + 4, 0},
-              {payload + 8, 0xFFFFFFFF}}}) {
+              {payload + 8, 0xFFFFFFFF},
+              {frame, 0},
+              {frame + 24, 2}, // valid frame count disagrees with captured pool scales
+              {frame + 36, 5},
+              {frame + 48, 4}}}) {
         CAPTURE(offset, value);
         auto corrupt = bytes;
         writeWord(corrupt, offset, value);
@@ -506,7 +540,7 @@ TEST_CASE("opponent supplements reject cross tick epochs malformed pools and par
     writeWord(hidden, 60, 0);
     CHECK_FALSE(CombatPacket::decode(hidden));
     auto oldVersion = bytes;
-    oldVersion[4] = 38;
+    oldVersion[4] = 40;
     CHECK_FALSE(CombatPacket::decode(oldVersion));
 
     auto invalid = source;
@@ -527,11 +561,13 @@ TEST_CASE("fragment loss never publishes opponent pools from a different motion 
          {SnapshotBlock::Compression::None, SnapshotBlock::Compression::Automatic}) {
         auto previous = state(40, 0);
         previous.opponents = opponentState();
+        previous.opponentFrame = opponentFrame(previous);
         auto next = previous;
         next.motion.tick = 41;
         next.motion.players[0]->position.x = 7;
         next.opponents->generators.generators[0].health = 9;
         next.opponents->enemies.frame = 29;
+        next.opponentFrame->players[0].view.position.x = 7;
         CombatReplica receiver;
         REQUIRE(receiver.begin(1, 9));
         commit(receiver, previous);
@@ -543,18 +579,69 @@ TEST_CASE("fragment loss never publishes opponent pools from a different motion 
             REQUIRE(receiver.latest());
             CHECK(receiver.latest()->motion.tick == previous.motion.tick);
             CHECK(receiver.latest()->opponents == previous.opponents);
+            CHECK(receiver.latest()->opponentFrame == previous.opponentFrame);
         }
         CHECK(receiver.receive(1, chunks->front()) == Admission::Committed);
         REQUIRE(receiver.latest());
         CHECK(receiver.latest()->motion.tick == next.motion.tick);
         CHECK(receiver.latest()->motion.players[0]->position == next.motion.players[0]->position);
         CHECK(receiver.latest()->opponents == next.opponents);
+        CHECK(receiver.latest()->opponentFrame == next.opponentFrame);
 
         next.motion.tick = 42;
         next.opponents.reset();
+        next.opponentFrame.reset();
         commit(receiver, next);
         CHECK_FALSE(receiver.latest()->opponents); // absence revokes, never retains the old seed
+        CHECK_FALSE(receiver.latest()->opponentFrame);
     }
+}
+
+TEST_CASE("opponent pools require matching observations and present player seats",
+          "[netplay][combat-snapshot][opponent-supplement]") {
+    auto source = state(77, 0);
+    source.opponents = opponentState();
+    source.opponentFrame = opponentFrame(source);
+    REQUIRE(source.valid());
+    for (u32 change = 0; change < 7; ++change) {
+        CAPTURE(change);
+        auto invalid = source;
+        switch (change) {
+        case 0: invalid.opponents.reset(); break;
+        case 1: invalid.opponentFrame.reset(); break;
+        case 2: invalid.opponentFrame->initialPlayers = 2; break;
+        case 3: invalid.opponents->enemies.scales.players = 2; break;
+        case 4: invalid.opponents->generators.players = 2; break;
+        case 5:
+            invalid.players[0].reset();
+            invalid.motion.players[0].reset();
+            break;
+        default: invalid.opponentFrame->players[0].view.player = 1; break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(CombatPacket::encode(invalid));
+    }
+    // Initial party size is the level-load scaling input. It is deliberately
+    // independent of the current number of living/observed seats.
+    source.opponentFrame->initialPlayers = 3;
+    source.opponents->enemies.scales.players = 3;
+    source.opponents->generators.players = 3;
+    source.opponentFrame->players.resize(1);
+    REQUIRE(source.valid());
+    CHECK(CombatPacket::decode(encode(source)));
+
+    // A valid inner frame naming an absent seat must also be refused when it
+    // arrives as bytes, not only by callers of valid().
+    source.players[1].reset();
+    source.motion.players[1].reset();
+    const auto bytes = encode(source);
+    const auto frame = OpponentFrameCodec::encode(*source.opponentFrame);
+    REQUIRE(frame);
+    auto wrongSeat = bytes;
+    const usize player = bytes.size() - frame->size() + OpponentFrameCodec::kHeaderBytes;
+    writeWord(wrongSeat, player, 1);
+    writeWord(wrongSeat, player + 4, 1);
+    CHECK_FALSE(CombatPacket::decode(wrongSeat));
 }
 
 TEST_CASE("combat supplemental replay payloads reject forged lengths seats origins and poses",
@@ -963,6 +1050,14 @@ TEST_CASE("combat packets retain moving melee context only with matching local r
     invalid = input;
     invalid.players[0]->weapon = PlayerWeaponState{};
     CHECK_FALSE(invalid.valid());
+    auto ordinaryPreview = input;
+    ordinaryPreview.players[0]->weapon.emplace().resource = 1;
+    const auto ordinaryDecoded = CombatPacket::decode(encode(ordinaryPreview));
+    REQUIRE(ordinaryDecoded);
+    REQUIRE(ordinaryDecoded->players[0]->weapon);
+    CHECK_FALSE(ordinaryDecoded->players[0]->turbo);
+    CHECK_FALSE(ordinaryDecoded->players[0]->movement.ranged);
+    REQUIRE(ordinaryDecoded->players[0]->melee->moving);
     auto volleyPreview = input;
     auto& preview = *volleyPreview.players[0];
     preview.weapon.emplace().resource = 1;
@@ -1931,7 +2026,7 @@ TEST_CASE("elemental wire rejects missing resources invalid elements and hidden 
     CHECK_FALSE(CombatPacket::encode(source));
     player.weapon->rider = 0;
     CHECK(CombatPacket::encode(source));
-    player.weapon->riderTextureFrame = 0;
+    player.weapon->riderTextureFrame = 0.0f;
     CHECK_FALSE(CombatPacket::encode(source)); // even frame zero needs an actual rider
 }
 
@@ -2461,15 +2556,34 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
         CHECK(effectBytes->size() == TurboEffectCheckpoint::kMaxBytes);
         CHECK(potionBytes->size() == PlayerPotionCheckpoint::kMaxBytes);
     }
+    // The new typed contacts add 16 bytes per body/party/generator entry.
+    // Combined component maxima now exceed the fixed schema-39 packet budget;
+    // neither encoding nor compression is allowed to silently prune that state.
+    CHECK(CombatPacket::kMaxBytes == 1'570'903);
+    CHECK(CombatReplica::kMaxChunks == 1535);
+    REQUIRE(next.valid());
+    CHECK_FALSE(CombatPacket::encode(next));
+    CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
+    CHECK(next.fixtures.size() == CombatSnapshot::kMaxFixtures);
+    CHECK(next.players[0]->locomotion->bodies.size() == PlayerLocomotionState::kMaxBodies);
+    // Build a separately chosen exact-budget fixture for the fragmentation
+    // test. This is not an encoder fallback: all 920 requested fixtures remain
+    // intact through encoding, reordered delivery and loss recovery.
+    constexpr usize kTypedGrowth =
+        InputCommand::kSeats * 16 *
+        (PlayerLocomotionState::kMaxBodies + PlayerLocomotionState::kMaxParty +
+         PlayerLocomotionState::kMaxGenerators);
+    static_assert(kTypedGrowth % CombatPacket::kFixtureBytes == 0);
+    next.fixtures.resize(CombatSnapshot::kMaxFixtures - kTypedGrowth / CombatPacket::kFixtureBytes);
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
-    // Full legacy presentation/replay still fits its exact previous cap. The
-    // optional complete island competes for that same budget: compression does
-    // not authorize expanding the decoded allocation or silently dropping art.
+    // The optional complete island still competes for that same fixed budget.
     next.opponents = opponentState();
+    next.opponentFrame = opponentFrame(next);
     REQUIRE(next.valid());
     CHECK_FALSE(CombatPacket::encode(next));
     CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
     next.opponents.reset();
+    next.opponentFrame.reset();
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
     auto chunks = packets(next);
     REQUIRE(chunks.size() == CombatReplica::kMaxChunks);

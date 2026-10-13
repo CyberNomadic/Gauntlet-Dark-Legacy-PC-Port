@@ -144,6 +144,7 @@ public:
     static constexpr s32 kTargetId = 0;
 
 private:
+    friend class OpponentCombatCheckpoint;
     void stageLegend(s32 ticks);
     void strikeWithLegend();
 

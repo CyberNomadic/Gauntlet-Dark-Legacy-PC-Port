@@ -1,3 +1,5 @@
+#include <limits>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -49,6 +51,16 @@ void captureAction(PlayerCombatState& state, const PlayerAnimator& animator) {
     state.animation = {static_cast<u32>(animator.action()), cursor.sequence(), cursor.generation(),
                        cursor.presentationFrame(), cursor.transition()};
 }
+void checkMotion(const std::optional<SeatMotion>& actual,
+                 const std::optional<SeatMotion>& expected) {
+    REQUIRE(actual.has_value() == expected.has_value());
+    if (actual) {
+        CHECK(actual->grant == expected->grant);
+        CHECK(actual->continuity == expected->continuity);
+        CHECK(actual->position == expected->position);
+        CHECK(actual->yaw == expected->yaw);
+    }
+}
 struct Prediction {
     TreeInfo tree = locomotionTree();
     WorldCollision floor = flatFloor();
@@ -98,6 +110,14 @@ struct Prediction {
         auto result = state;
         client.present(result, blend);
         REQUIRE(result.valid());
+        return result;
+    }
+    PlayerLocomotionState& contacts(u8 seat = 1) {
+        auto& result = state.players[seat]->locomotion.emplace();
+        result.origin = state.motion.players[seat]->position;
+        result.radius = PlayerLocomotionState::kMaxRadius;
+        result.ticks = PlayerLocomotionState::kMaxTicks;
+        state.players[seat]->floor = PlayerFloorState{0, 0, {}};
         return result;
     }
 };
@@ -2103,5 +2123,556 @@ TEST_CASE("two local seats predict independently while remote actors remain inte
     CHECK(shown.motion.players[1]->position.z > 0);
     CHECK(shown.motion.players[2]->position.z < 0);
     CHECK(fixture.client.metrics().pending == 2);
+}
+TEST_CASE("coordinated local replay advances each native actor once per common tick",
+          "[netplay][prediction][rollback][synchronized-rollback]") {
+    using Status = LocalMovementPrediction::ReplayStatus;
+    Prediction fixture;
+    fixture.state.motion.players[2]->position.x = 10;
+    fixture.reset();
+    const auto authority = fixture.state;
+    std::array<PlayerActor, 2> actors;
+    std::array<PlayerAnimator, 2> animations;
+    for (usize index = 0; index < actors.size(); ++index) {
+        const usize seat = index + 1;
+        const auto& movement = fixture.state.players[seat]->movement;
+        const auto& motion = *fixture.state.motion.players[seat];
+        actors[index].restoreMotion(motion.position, motion.yaw, movement.speed, movement.radius,
+                                    movement.height, movement.followHeight);
+        REQUIRE(animations[index].bind(fixture.tree, false));
+        REQUIRE(animations[index].restore(*fixture.state.players[seat]->rollback));
+    }
+    std::vector<InputCommand> commands;
+    for (u64 tick = 11; tick <= 15; ++tick) {
+        auto second = fixture.command(tick, 2);
+        commands.push_back(second); // Input packet order must not become simulation order.
+        if (tick <= 13) {
+            auto first = fixture.command(tick, 1);
+            first.heldButtons = static_cast<u32>(CommandHeld::Attack);
+            commands.push_back(first);
+        }
+    }
+    usize begun = 0;
+    usize ended = 0;
+    std::vector<u64> ticks;
+    fixture.client.update(
+        &fixture.state, commands,
+        {.begin =
+             [&](const CombatSnapshot& baseline) {
+                 CHECK(baseline.motion.tick == 10);
+                 ++begun;
+                 return true;
+             },
+         .afterTick =
+             [&](const LocalMovementPrediction::ReplayTick& completed) {
+                 ticks.push_back(completed.tick);
+                 REQUIRE(completed.tick == 10 + ticks.size());
+                 CHECK(completed.actors[0].status == Status::Remote);
+                 CHECK(completed.actors[0].tick == 10);
+                 CHECK(completed.actors[0].motion->position == Vec3{0});
+                 CHECK(completed.actors[3].status == Status::Inactive);
+                 CHECK_FALSE(completed.actors[3].motion);
+                 for (usize index = 0; index < actors.size(); ++index) {
+                     const usize seat = index + 1;
+                     const u64 horizon = seat == 1 ? 13 : 15;
+                     auto& actor = actors[index];
+                     auto& animator = animations[index];
+                     if (completed.tick <= horizon) {
+                         const auto input =
+                             SessionInputs::playInput(fixture.command(completed.tick));
+                         const auto deed = seat == 1 ? PlayerDeed::Attack : PlayerDeed::None;
+                         const auto pace = PartyMotion::actionPace(&animator, deed);
+                         actor.update(PartyMotion::attackMove(actor, &animator, input.move, deed, 0,
+                                                              1.0f / 60, false),
+                                      0, 1.0f / 60, &fixture.floor, pace);
+                         actor.fall(1.0f / 60, fixture.floor);
+                         animator.update(PlayerMotion::Run, 1, 1.0f / 60, deed);
+                     }
+                     const auto& observed = completed.actors[seat];
+                     CHECK(observed.tick == std::min(completed.tick, horizon));
+                     CHECK(observed.status ==
+                           (completed.tick < horizon ? Status::Active : Status::Complete));
+                     REQUIRE(observed.motion);
+                     REQUIRE(observed.animation);
+                     CHECK(observed.motion->position == actor.position());
+                     CHECK(*observed.animation == animator.checkpoint());
+                 }
+                 return true;
+             },
+         .end =
+             [&](bool committed) {
+                 CHECK(committed);
+                 ++ended;
+             }});
+    CHECK(begun == 1);
+    CHECK(ended == 1);
+    CHECK(ticks == std::vector<u64>{11, 12, 13, 14, 15});
+    REQUIRE(fixture.client.replayed(1));
+    REQUIRE(fixture.client.replayed(2));
+    CHECK(fixture.client.replayed(1)->frames.size() == 3);
+    CHECK(fixture.client.replayed(2)->frames.size() == 5);
+    const auto shown = fixture.shown();
+    for (usize index = 0; index < actors.size(); ++index) {
+        CHECK(shown.motion.players[index + 1]->position == actors[index].position());
+        CHECK(shown.players[index + 1]->rollback == animations[index].checkpoint());
+    }
+    for (usize seat = 0; seat < authority.motion.players.size(); ++seat) {
+        checkMotion(fixture.state.motion.players[seat], authority.motion.players[seat]);
+    }
+    CHECK(fixture.state.players[1]->health == authority.players[1]->health);
+}
+
+TEST_CASE("fresh correction gives each coordinated pass an independent world lifecycle",
+          "[netplay][prediction][rollback][synchronized-rollback]") {
+    Prediction fixture;
+    std::vector<InputCommand> commands;
+    for (u64 tick = 11; tick <= 15; ++tick) {
+        commands.push_back(fixture.command(tick, 1));
+        commands.push_back(fixture.command(tick, 2));
+    }
+    fixture.client.update(&fixture.state, commands);
+    for (u8 seat : std::array<u8, 2>{1, 2}) {
+        const auto* replay = fixture.client.replayed(seat);
+        REQUIRE(replay);
+        REQUIRE(replay->frames.size() == 5);
+        const auto& step = replay->frames[1];
+        fixture.state.motion.players[seat] = step.motion;
+        PlayerAnimator animation;
+        REQUIRE(animation.bind(fixture.tree, false));
+        REQUIRE(animation.restore(step.animation, step.transitionPose));
+        captureAction(*fixture.state.players[seat], animation);
+        fixture.state.players[seat]->rollbackInput = fixture.command(12, seat);
+    }
+    fixture.state.motion.tick = 12;
+    std::vector<std::vector<u64>> passes;
+    std::vector<u64> committedWorldTicks;
+    u64 privateWorldTick = 0;
+    fixture.client.update(&fixture.state,
+                          std::array{fixture.command(16, 1), fixture.command(16, 2)},
+                          {.begin =
+                               [&](const CombatSnapshot& baseline) {
+                                   privateWorldTick = baseline.motion.tick;
+                                   passes.emplace_back();
+                                   return true;
+                               },
+                           .afterTick =
+                               [&](const LocalMovementPrediction::ReplayTick& completed) {
+                                   CHECK(completed.tick == privateWorldTick + 1);
+                                   privateWorldTick = completed.tick;
+                                   passes.back().push_back(completed.tick);
+                                   CHECK(completed.actors[1].tick == completed.tick);
+                                   CHECK(completed.actors[2].tick == completed.tick);
+                                   return true;
+                               },
+                           .end =
+                               [&](bool committed) {
+                                   REQUIRE(committed);
+                                   committedWorldTicks.push_back(privateWorldTick);
+                               }});
+    REQUIRE(passes.size() == 2);
+    CHECK(passes[0] == std::vector<u64>{13, 14, 15});
+    CHECK(passes[1] == std::vector<u64>{13, 14, 15, 16});
+    CHECK(committedWorldTicks == std::vector<u64>{15, 16});
+    REQUIRE(fixture.client.replayed(1));
+    REQUIRE(fixture.client.replayed(2));
+    CHECK(fixture.client.replayed(1)->frames.size() == 4);
+    CHECK(fixture.client.replayed(2)->frames.size() == 4);
+    // The first tick moves from Ready, then the native Run1 pace applies to
+    // the remaining five ticks, including those replayed after correction.
+    CHECK(fixture.shown().motion.players[1]->position.z ==
+          Approx((1 + 5 * PlayerAnimator::kRunPace) * 5.0f / 60));
+}
+
+TEST_CASE("a coordinated world refusal discards every speculative actor and release",
+          "[netplay][prediction][rollback][synchronized-rollback]") {
+    Prediction fixture;
+    for (auto& sequence : fixture.tree.sequences) {
+        sequence.frames = 8;
+    }
+    fixture.reset();
+    std::vector<InputCommand> commands;
+    for (u64 tick = 11; tick <= 36; ++tick) {
+        for (u8 seat : std::array<u8, 2>{1, 2}) {
+            auto input = fixture.command(tick, seat);
+            input.heldButtons = static_cast<u32>(CommandHeld::Attack);
+            commands.push_back(input);
+        }
+    }
+    fixture.client.update(&fixture.state, commands);
+    for (u8 seat : std::array<u8, 2>{1, 2}) {
+        REQUIRE(fixture.client.replayed(seat));
+        REQUIRE_FALSE(fixture.client.replayed(seat)->releases.empty());
+        REQUIRE(fixture.shown().motion.players[seat]->position.z > 0);
+    }
+    const bool rejectBegin = GENERATE(false, true);
+    usize began = 0;
+    usize ended = 0;
+    std::vector<u64> privateWorld;
+    fixture.client.update(
+        &fixture.state, {},
+        {.begin =
+             [&](const CombatSnapshot&) {
+                 ++began;
+                 privateWorld.clear();
+                 return !rejectBegin;
+             },
+         .afterTick =
+             [&](const LocalMovementPrediction::ReplayTick& completed) {
+                 CHECK_FALSE(rejectBegin);
+                 privateWorld.push_back(completed.tick);
+                 return completed.tick < 36;
+             },
+         .end =
+             [&](bool committed) {
+                 CHECK_FALSE(committed);
+                 CHECK(privateWorld.size() == (rejectBegin ? 0 : 26));
+                 privateWorld.clear(); // A private opponent session rolls back this transaction.
+                 ++ended;
+             }});
+    CHECK(began == 1);
+    CHECK(ended == 1);
+    CHECK(privateWorld.empty());
+    const auto shown = fixture.shown();
+    for (u8 seat : std::array<u8, 2>{1, 2}) {
+        CHECK(fixture.client.replayed(seat) == nullptr);
+        checkMotion(shown.motion.players[seat], fixture.state.motion.players[seat]);
+        CHECK(shown.players[seat]->rollback == fixture.state.players[seat]->rollback);
+        CHECK(shown.players[seat]->health == fixture.state.players[seat]->health);
+    }
+    // Refusal never consumes actual inputs; the next accepted pass can replay them.
+    fixture.client.update(&fixture.state, {});
+    REQUIRE(fixture.client.replayed(1));
+    REQUIRE(fixture.client.replayed(2));
+    CHECK_FALSE(fixture.client.replayed(1)->releases.empty());
+    CHECK_FALSE(fixture.client.replayed(2)->releases.empty());
+}
+
+TEST_CASE("coordinated replay labels unsupported actors instead of inventing their inputs",
+          "[netplay][prediction][rollback][synchronized-rollback]") {
+    using Status = LocalMovementPrediction::ReplayStatus;
+    Prediction fixture;
+    auto unsupported = fixture.command(11, 1);
+    unsupported.heldButtons = static_cast<u32>(CommandHeld::ShieldPotion);
+    std::vector<u64> ticks;
+    fixture.client.update(
+        &fixture.state, std::array{unsupported, fixture.command(11, 2), fixture.command(13, 2)},
+        {.afterTick = [&](const LocalMovementPrediction::ReplayTick& completed) {
+            ticks.push_back(completed.tick);
+            CHECK(completed.actors[1].status == Status::Unsupported);
+            CHECK(completed.actors[1].tick == 10);
+            checkMotion(completed.actors[1].motion, fixture.state.motion.players[1]);
+            CHECK(completed.actors[2].tick == completed.tick);
+            CHECK(completed.actors[2].status ==
+                  (completed.tick == 13 ? Status::Complete : Status::Active));
+            return true;
+        }});
+    CHECK(ticks == std::vector<u64>{11, 12, 13});
+    CHECK(fixture.client.replayed(1) == nullptr);
+    REQUIRE(fixture.client.replayed(2));
+    CHECK(fixture.client.replayed(2)->frames.size() == 3);
+    checkMotion(fixture.shown().motion.players[1], fixture.state.motion.players[1]);
+}
+TEST_CASE("coordinated refusal cannot revive an ineligible newest-authority fallback",
+          "[netplay][prediction][rollback][synchronized-rollback]") {
+    enum class Cause { Disabled, Portal, Life, Grant, Stale, Exhausted };
+    const auto cause = GENERATE(Cause::Disabled, Cause::Portal, Cause::Life, Cause::Grant,
+                                Cause::Stale, Cause::Exhausted);
+    Prediction fixture;
+    auto delayed = fixture.state;
+    delayed.motion.players[1]->position = {-4, 0, 0};
+    fixture.client.update(&fixture.state, std::array{fixture.command(11, 1)});
+    fixture.state.motion.tick = 11;
+    fixture.state.motion.players[1]->position = {5, 0, 0};
+    auto& player = *fixture.state.players[1];
+    if (cause == Cause::Disabled || cause == Cause::Portal || cause == Cause::Life) {
+        player.movement.enabled = false;
+        player.movement.current = false;
+        player.movement.ranged = false;
+    }
+    if (cause == Cause::Portal) {
+        player.portalPhase = 0.5f;
+    } else if (cause == Cause::Life) {
+        player.life = ReplicaPlayerLife::Dying;
+    } else if (cause == Cause::Grant) {
+        ++fixture.state.motion.players[1]->grant;
+        // Match the displayed grant so a wrongly restored fallback could really
+        // overwrite this delayed pose instead of being hidden by present's check.
+        delayed.motion.players[1]->grant = fixture.state.motion.players[1]->grant;
+    }
+    REQUIRE(fixture.state.valid());
+    REQUIRE(delayed.valid());
+    fixture.client.update(&fixture.state, std::array{fixture.command(12, 2)});
+    if (cause == Cause::Stale) {
+        for (u64 tick = 0; tick <= LocalMovementPrediction::kStaleTicks; ++tick) {
+            fixture.client.update(nullptr, {});
+        }
+    } else if (cause == Cause::Exhausted) {
+        fixture.client.update(&fixture.state,
+                              std::array{fixture.command(12 + LocalMovementPrediction::kHistory)});
+    }
+    usize ended = 0;
+    fixture.client.update(&fixture.state, {},
+                          {.begin = [](const CombatSnapshot&) { return false; },
+                           .afterTick =
+                               [](const LocalMovementPrediction::ReplayTick&) {
+                                   CHECK(false);
+                                   return false;
+                               },
+                           .end =
+                               [&](bool committed) {
+                                   CHECK_FALSE(committed);
+                                   ++ended;
+                               }});
+    CHECK(ended == 1);
+    CHECK(fixture.client.replayed(1) == nullptr);
+    const auto oldMotion = delayed.motion.players[1];
+    const auto oldAction = delayed.players[1]->rollback;
+    const auto oldPortal = delayed.players[1]->portalPhase;
+    const auto oldLife = delayed.players[1]->life;
+    fixture.client.present(delayed, 1);
+    checkMotion(delayed.motion.players[1], oldMotion);
+    CHECK(delayed.players[1]->rollback == oldAction);
+    CHECK(delayed.players[1]->portalPhase == oldPortal);
+    CHECK(delayed.players[1]->life == oldLife);
+    REQUIRE(delayed.valid());
+}
+TEST_CASE("pre-step opponent contacts follow native body phases without replacing fixtures",
+          "[netplay][prediction][rollback][dynamic-contacts]") {
+    using Identity = PlayerLocomotionState::Identity;
+    Prediction fixture;
+    fixture.state.motion.players[2]->position.x = 10;
+    auto& contacts = fixture.contacts();
+    contacts.bodies = {{{0, 0, 0.9f}, 0.5f, 5, {Identity::Kind::Swarm, 1, 20}},
+                       {{1.1f, 0, 1}, 0.5f, 5}};
+    contacts.generators = {{{0, 0, 0.6f}, 0, 0.1f, 0.1f, 5}, {{-1, 0, 1.6f}, 0, 0.1f, 0.1f, 5}};
+    contacts.generatorIdentities = {{Identity::Kind::Generator, 3, 0}, {}};
+    contacts.fixtures = {{{0, 0, 1.6f}, 0, 0.1f, 0.1f, 5}};
+    fixture.contacts(2);
+    fixture.reset();
+    const auto original = PlayerLocomotionCheckpoint::encode(contacts);
+    REQUIRE(original);
+    PlayerActor native;
+    const auto& movement = fixture.state.players[1]->movement;
+    native.restoreMotion(Vec3{0}, 0, movement.speed, movement.radius, movement.height,
+                         movement.followHeight);
+    PlayerAnimator animation;
+    REQUIRE(animation.bind(fixture.tree, false));
+    REQUIRE(animation.restore(*fixture.state.players[1]->rollback));
+    std::vector<InputCommand> commands;
+    for (u64 tick = 11; tick <= 22; ++tick) {
+        commands.push_back(fixture.command(tick, 1));
+        commands.push_back(fixture.command(tick, 2));
+    }
+    usize beforeCalls = 0;
+    usize afterCalls = 0;
+    std::vector<MissileTarget> nativeBodies;
+    std::vector<Obstacle> nativeGenerators;
+    fixture.client.update(
+        &fixture.state, commands,
+        {.beforeTick =
+             [&](const LocalMovementPrediction::ReplayTick& before,
+                 LocalMovementPrediction::ContactOverlay& overlay) {
+                 CHECK(before.tick == 11 + beforeCalls);
+                 CHECK(before.actors[1].tick == before.tick - 1);
+                 CHECK(before.actors[2].tick == before.tick - 1);
+                 CHECK(before.actors[1].motion->position == native.position());
+                 CHECK(afterCalls == beforeCalls);
+                 ++beforeCalls;
+                 auto& dynamic = overlay.seats[1].emplace();
+                 const Vec3 base = before.tick < 15 ? Vec3{0, 0, 1.4f} : Vec3{6, 0, 1.4f};
+                 dynamic.swarm.push_back({base, 0.5f, 5, {Identity::Kind::Swarm, 1, 20}});
+                 dynamic.generators.push_back(
+                     {{Identity::Kind::Generator, 3, 0}, {{6, 0, 2}, 0, 0.1f, 0.1f, 5}});
+                 nativeBodies = {dynamic.swarm[0].target(), contacts.bodies[1].target()};
+                 nativeGenerators = {dynamic.generators[0].box, contacts.generators[1]};
+                 return true;
+             },
+         .afterTick =
+             [&](const LocalMovementPrediction::ReplayTick& after) {
+                 CHECK(beforeCalls == afterCalls + 1);
+                 ++afterCalls;
+                 const auto input = SessionInputs::playInput(fixture.command(after.tick));
+                 native.clearWallContacts();
+                 const Vec3 from = native.position();
+                 native.update(input.move, 0, 1.0f / 60, &fixture.floor, animation.moveScale());
+                 native.slide(BodyCollision::resolveMovement(native, from, native.position(),
+                                                             nativeBodies, nativeGenerators,
+                                                             &fixture.floor) -
+                                  native.position(),
+                              &fixture.floor);
+                 native.fall(1.0f / 60, fixture.floor);
+                 animation.update(PlayerMotion::Run, 1, 1.0f / 60);
+                 for (const auto& box : contacts.fixtures) {
+                     native.slide(box.pushOut(native.position(), native.radius()) -
+                                      native.position(),
+                                  &fixture.floor);
+                 }
+                 REQUIRE(after.actors[1].animation);
+                 CHECK(*after.actors[1].animation == animation.checkpoint());
+                 CHECK(after.actors[1].motion->position == native.position());
+                 CHECK(after.actors[2].motion->position.x == 10);
+                 return true;
+             }});
+    CHECK(beforeCalls == 12);
+    CHECK(afterCalls == 12);
+    REQUIRE(fixture.client.replayed(1));
+    CHECK(fixture.shown().motion.players[1]->position == native.position());
+    CHECK(fixture.shown().projectiles.empty());
+    CHECK(fixture.state.players[1]->health == 100);
+    CHECK(PlayerLocomotionCheckpoint::encode(contacts) == original);
+}
+
+TEST_CASE("dynamic removal never erases anonymous bodies generators fixtures or partners",
+          "[netplay][prediction][rollback][dynamic-contacts]") {
+    enum class Retained { Body, Generator, Fixture, Party };
+    const auto retained =
+        GENERATE(Retained::Body, Retained::Generator, Retained::Fixture, Retained::Party);
+    using Identity = PlayerLocomotionState::Identity;
+    Prediction fixture;
+    auto& contacts = fixture.contacts();
+    contacts.bodies = {{{0, 0, 0.4f}, 0.5f, 5, {Identity::Kind::Swarm, 1, 20}}};
+    contacts.generators = {{{0, 0, 0.4f}, 0, 0.1f, 0.1f, 5}};
+    contacts.generatorIdentities = {{Identity::Kind::Generator, 3, 0}};
+    switch (retained) {
+    case Retained::Body: contacts.bodies.push_back({{0, 0, 1}, 0.5f, 5}); break;
+    case Retained::Generator:
+        contacts.generators.push_back({{0, 0, 0.7f}, 0, 0.1f, 0.1f, 5});
+        contacts.generatorIdentities.push_back({});
+        break;
+    case Retained::Fixture: contacts.fixtures.push_back({{0, 0, 0.7f}, 0, 0.1f, 0.1f, 5}); break;
+    case Retained::Party: contacts.party.push_back({{0, 0, 1}, 0.75f, 5}); break;
+    }
+    fixture.reset();
+    fixture.client.update(&fixture.state, std::array{fixture.command(11)},
+                          {.beforeTick = [](const auto&, auto& overlay) {
+                              overlay.seats[1].emplace();
+                              return true;
+                          }});
+    if (retained == Retained::Party) {
+        CHECK(fixture.client.replayed(1) == nullptr);
+    } else {
+        REQUIRE(fixture.client.replayed(1));
+        CHECK(fixture.shown().motion.players[1]->position.z < 5.0f / 60);
+    }
+    CHECK(fixture.state.players[1]->health == 100);
+}
+
+TEST_CASE("contact overlays are per tick and corrections restart from captured identities",
+          "[netplay][prediction][rollback][dynamic-contacts]") {
+    using Identity = PlayerLocomotionState::Identity;
+    Prediction fixture;
+    auto& contacts = fixture.contacts();
+    contacts.bodies = {{{0, 0, 1.35f}, 0.5f, 5, {Identity::Kind::Swarm, 2, 100}}};
+    fixture.reset();
+    std::vector<InputCommand> commands{fixture.command(11), fixture.command(12)};
+    usize calls = 0;
+    fixture.client.update(
+        &fixture.state, commands, {.beforeTick = [&](const auto& before, auto& overlay) {
+            ++calls;
+            if (before.tick == 11) {
+                auto& dynamic = overlay.seats[1].emplace();
+                // Same slot, newer native lifetime, no inherited old geometry.
+                dynamic.swarm.push_back({{8, 0, 8}, 1, 5, {Identity::Kind::Swarm, 2, 101}});
+            }
+            return true;
+        }});
+    REQUIRE(fixture.client.replayed(1));
+    const auto& first = fixture.client.replayed(1)->frames[0];
+    CHECK(first.motion.position.z == Approx(5.0f / 60));
+    CHECK(fixture.shown().motion.players[1]->position.z < (1 + PlayerAnimator::kRunPace) * 5 / 60);
+    CHECK(calls == 2);
+    // Replaying without the callback restores the original frozen contact roster,
+    // not an earlier overlay. The new host checkpoint also cannot retain it.
+    fixture.client.update(&fixture.state, {});
+    CHECK(fixture.shown().motion.players[1]->position.z < (1 + PlayerAnimator::kRunPace) * 5 / 60);
+    fixture.state.motion.tick = 12;
+    fixture.state.motion.players[1]->position = {3, 0, 0};
+    contacts.origin = {3, 0, 0};
+    contacts.bodies.clear();
+    fixture.client.update(&fixture.state, std::array{fixture.command(13)},
+                          {.beforeTick = [](const auto&, auto& overlay) {
+                              overlay.seats[1].emplace();
+                              return true;
+                          }});
+    REQUIRE(fixture.client.replayed(1));
+    CHECK(fixture.client.replayed(1)->frames[0].motion.position.x == 3);
+}
+
+TEST_CASE("invalid contact overlays atomically reject all local speculative output",
+          "[netplay][prediction][rollback][dynamic-contacts]") {
+    enum class Invalid {
+        Epoch,
+        Tick,
+        Remote,
+        Anonymous,
+        Duplicate,
+        OldInstance,
+        Nonfinite,
+        BodyOverflow,
+        GeneratorFamily,
+        GeneratorOverflow,
+        Automatic,
+        Callback
+    };
+    const auto invalid = GENERATE(
+        Invalid::Epoch, Invalid::Tick, Invalid::Remote, Invalid::Anonymous, Invalid::Duplicate,
+        Invalid::OldInstance, Invalid::Nonfinite, Invalid::BodyOverflow, Invalid::GeneratorFamily,
+        Invalid::GeneratorOverflow, Invalid::Automatic, Invalid::Callback);
+    using Identity = PlayerLocomotionState::Identity;
+    Prediction fixture;
+    auto& contacts = fixture.contacts();
+    contacts.bodies = {{{8, 0, 8}, 1, 5, {Identity::Kind::Swarm, 1, 20}}};
+    contacts.automatic = invalid == Invalid::Automatic;
+    fixture.contacts(2);
+    fixture.reset();
+    usize ends = 0;
+    usize after = 0;
+    fixture.client.update(
+        &fixture.state, std::array{fixture.command(11, 1), fixture.command(11, 2)},
+        {.beforeTick =
+             [&](const auto&, auto& overlay) {
+                 auto& dynamic = overlay.seats[1].emplace();
+                 dynamic.swarm.push_back({{8, 0, 8}, 1, 5, {Identity::Kind::Swarm, 1, 20}});
+                 switch (invalid) {
+                 case Invalid::Epoch: ++overlay.epoch; break;
+                 case Invalid::Tick: --overlay.tick; break;
+                 case Invalid::Remote: overlay.seats[0].emplace(); break;
+                 case Invalid::Anonymous: dynamic.swarm[0].identity = {}; break;
+                 case Invalid::Duplicate: dynamic.swarm.push_back(dynamic.swarm[0]); break;
+                 case Invalid::OldInstance: --dynamic.swarm[0].identity.instance; break;
+                 case Invalid::Nonfinite:
+                     dynamic.swarm[0].base.x = std::numeric_limits<f32>::infinity();
+                     break;
+                 case Invalid::BodyOverflow:
+                     dynamic.swarm.resize(PlayerLocomotionState::kMaxBodies + 1);
+                     break;
+                 case Invalid::GeneratorFamily:
+                     dynamic.generators.push_back({dynamic.swarm[0].identity, {}});
+                     break;
+                 case Invalid::GeneratorOverflow:
+                     dynamic.generators.resize(PlayerLocomotionState::kMaxGenerators + 1);
+                     break;
+                 case Invalid::Automatic: break;
+                 case Invalid::Callback: return false;
+                 }
+                 return true;
+             },
+         .afterTick =
+             [&](const auto&) {
+                 ++after;
+                 return true;
+             },
+         .end =
+             [&](bool committed) {
+                 CHECK_FALSE(committed);
+                 ++ends;
+             }});
+    CHECK(ends == 1);
+    CHECK(after == 0);
+    for (u8 seat : std::array<u8, 2>{1, 2}) {
+        CHECK(fixture.client.replayed(seat) == nullptr);
+        checkMotion(fixture.shown().motion.players[seat], fixture.state.motion.players[seat]);
+        CHECK(fixture.shown().players[seat]->rollback == fixture.state.players[seat]->rollback);
+    }
 }
 } // namespace

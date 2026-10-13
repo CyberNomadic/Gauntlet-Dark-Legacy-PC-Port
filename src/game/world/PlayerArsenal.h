@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -116,6 +117,11 @@ public:
     const PlayerMissiles& missiles() const { return m_missiles; }
 
 private:
+    friend class PlayerArsenalCheckpoint;
+    friend class CombatRollbackCheckpoint;
+    friend class OrdinaryCombatTick;
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 1;
     void loadPotionModels();
     void presentPotion(const PotionEmission::Burst& burst, bool castSound);
     void healingCast(const PlayerActor& actor, f32 power);

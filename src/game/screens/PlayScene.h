@@ -18,6 +18,7 @@
 #include "engine/world/WorldCamera.h"
 
 #include "game/menu/CompassHud.h"
+#include "game/netplay/OpponentFrame.h"
 #include "game/netplay/PlayerLocomotionCheckpoint.h"
 #include "game/netplay/PlayerMeleeCheckpoint.h"
 #include "game/netplay/PlayerPotionCheckpoint.h"
@@ -156,6 +157,10 @@ public:
     usize actorCount() const { return m_players.size(); }
     /** Read-only end-of-tick observation; callers must not retain the span across open/close. */
     std::span<const PlayerRuntime> participants() const { return m_players; }
+    /** Exact end-of-tick outside observations for the three opponent pools.
+     * initialPlayers must be their original bound EnemyScales::players value.
+     * No queues are consumed, assets loaded, or simulation phases advanced. */
+    std::optional<OpponentFrame> opponentFrame(u32 initialPlayers) const;
     const LevelWorld* world() const { return m_world; }
     CameraView cameraView() const;
     /** Same hard-cut rule used by local rendering and remote snapshot capture. */
@@ -220,6 +225,7 @@ public:
     Enemies& enemies() { return m_opponents.enemies(); }
     const Generators& generators() const { return m_opponents.generators(); }
     Generators& generators() { return m_opponents.generators(); }
+    const PlacedEnemies& placedEnemies() const { return m_opponents.placements(); }
     const Critters& critters() const { return m_opponents.critters(); }
     const CritterStatues& statues() const { return m_opponents.statues(); }
     Critters& critters() { return m_opponents.critters(); }

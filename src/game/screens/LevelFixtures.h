@@ -132,6 +132,9 @@ public:
     static constexpr f32 kBarrelWarning = 9.0f;  ///< a player this near a spent barrel is told
 
 private:
+    friend class OrdinaryCombatTick;
+    static Vec3 observePlayer(PlayerRuntime& player, const Vec3& position);
+    static void advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks);
     void syncChestContents();
     void updateClouds(f32 seconds, std::span<PlayerRuntime> players, const Events& events);
     /** A trapped chest goes up: its burst, its bang and a blast of fifty at the trap scale;

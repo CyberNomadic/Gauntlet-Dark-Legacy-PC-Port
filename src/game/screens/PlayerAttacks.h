@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 
@@ -143,11 +144,22 @@ public:
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     const MoveStrikes& strikes() const { return m_strikes; }
     usize shieldCount() const { return m_shields.size(); }
+    /** Persistent outgoing damage not owned by ordinary-opponent replay. A
+     * completed player action can leave these areas active for later ticks. */
+    bool pendingGameplay() const {
+        return m_strikes.count() != 0 || !m_items.empty() || !m_potions.empty() ||
+               !m_shields.empty();
+    }
 
     /** Native base damage used to prepare the same visual strike descriptors. */
     f32 meleeDamageOf(usize index, std::span<const PlayerRuntime> players) const;
 
 private:
+    friend class PlayerAttacksCheckpoint;
+    friend class CombatRollbackCheckpoint;
+    friend class OrdinaryCombatTick;
+    std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
+    u64 m_restoreGeneration = 1;
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,
                                         const Targets& targets) const;
     void beginPotion(const MissileImpact& impact);

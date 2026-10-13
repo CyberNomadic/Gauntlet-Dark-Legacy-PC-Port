@@ -7,7 +7,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLO");
-constexpr u32 kVersion = 1;
+constexpr u32 kVersion = 2;
 
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
@@ -23,10 +23,13 @@ std::optional<std::vector<u8>> OpponentCheckpoint::encode(const OpponentState& s
     const auto generators = GeneratorCheckpoint::encode(state.generators);
     const auto enemies = EnemyPoolCheckpoint::encode(state.enemies);
     const auto missiles = EnemyMissilesCheckpoint::encode(state.missiles);
-    if (!generators || !enemies || !missiles) {
+    const auto placements = state.placements ? PlacedEnemyCheckpoint::encode(*state.placements)
+                                             : std::optional<std::vector<u8>>{};
+    if (!generators || !enemies || !missiles || (state.placements && !placements)) {
         return std::nullopt;
     }
-    const usize size = kHeaderBytes + generators->size() + enemies->size() + missiles->size();
+    const usize size = kHeaderBytes + generators->size() + enemies->size() + missiles->size() +
+                       (placements ? placements->size() : 0);
     if (size > kMaxBytes) {
         return std::nullopt;
     }
@@ -37,9 +40,13 @@ std::optional<std::vector<u8>> OpponentCheckpoint::encode(const OpponentState& s
     word(bytes, static_cast<u32>(generators->size()));
     word(bytes, static_cast<u32>(enemies->size()));
     word(bytes, static_cast<u32>(missiles->size()));
+    word(bytes, placements ? static_cast<u32>(placements->size()) : 0);
     bytes.insert(bytes.end(), generators->begin(), generators->end());
     bytes.insert(bytes.end(), enemies->begin(), enemies->end());
     bytes.insert(bytes.end(), missiles->begin(), missiles->end());
+    if (placements) {
+        bytes.insert(bytes.end(), placements->begin(), placements->end());
+    }
     return bytes;
 }
 
@@ -54,10 +61,12 @@ std::optional<OpponentState> OpponentCheckpoint::decode(std::span<const u8> byte
     const usize generatorsSize = reader.readU32();
     const usize enemiesSize = reader.readU32();
     const usize missilesSize = reader.readU32();
+    const usize placementsSize = reader.readU32();
     if (generatorsSize == 0 || generatorsSize > GeneratorCheckpoint::kMaxBytes ||
         enemiesSize == 0 || enemiesSize > EnemyPoolCheckpoint::kMaxBytes || missilesSize == 0 ||
         missilesSize > EnemyMissilesCheckpoint::kMaxBytes ||
-        static_cast<u64>(generatorsSize) + enemiesSize + missilesSize !=
+        placementsSize > PlacedEnemyCheckpoint::kMaxBytes ||
+        static_cast<u64>(generatorsSize) + enemiesSize + missilesSize + placementsSize !=
             bytes.size() - kHeaderBytes) {
         return std::nullopt;
     }
@@ -76,6 +85,12 @@ std::optional<OpponentState> OpponentCheckpoint::decode(std::span<const u8> byte
         return std::nullopt;
     }
     OpponentState state{std::move(*generators), std::move(*enemies), std::move(*missiles)};
+    if (placementsSize != 0) {
+        state.placements = PlacedEnemyCheckpoint::decode(bytes.last(placementsSize));
+        if (!state.placements) {
+            return std::nullopt;
+        }
+    }
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 } // namespace gdl::game

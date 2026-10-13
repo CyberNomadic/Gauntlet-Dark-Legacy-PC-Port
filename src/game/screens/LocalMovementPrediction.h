@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -52,6 +53,11 @@ public:
         u32 weaponFlags = 0; ///< complete certified native weapon mask at this release
         u32 emission = 0;  ///< zero for ordinary throws; native chain occurrence for a turbo volley
         Vec3 direction{0}; ///< turbo volley bearing, independent of the character's facing
+        bool targetResolved = false; ///< release-local acquisition, including an empty result
+        std::optional<Vec3> target;  ///< not the authority checkpoint's earlier aim
+        bool aimingKnown(bool ranged) const {
+            return emission != 0 || cursorAiming || targetResolved || ranged;
+        }
     };
     struct Replay {
         /** Completed native steps, including exact action cursors and observed
@@ -69,6 +75,49 @@ public:
         std::vector<Frame> frames;
         std::vector<PotionSimulation::Release> potions;
     };
+    enum class ReplayStatus { Remote, Inactive, Active, Complete, Unsupported };
+    struct ReplayActor {
+        ReplayStatus status = ReplayStatus::Inactive;
+        u64 tick = 0; ///< age of this state; completed/unsupported seats do not invent later input
+        std::optional<SeatMotion> motion;
+        std::optional<PlayerAnimator::Checkpoint> animation;
+    };
+    struct ReplayTick {
+        u64 tick = 0;
+        std::array<ReplayActor, InputCommand::kSeats> actors;
+    };
+    struct GeneratorContact {
+        PlayerLocomotionState::Identity identity;
+        Obstacle box;
+    };
+    /** Complete current native rosters, in ascending pool-slot order. These
+     * replace only tagged swarm/generator observations, not anonymous bodies,
+     * fixtures or party members. They do not extend a movement certificate. */
+    struct DynamicContacts {
+        std::vector<PlayerLocomotionState::Body> swarm;
+        std::vector<GeneratorContact> generators;
+    };
+    struct ContactOverlay {
+        u64 epoch = 0;
+        u64 tick = 0; ///< upcoming player step; geometry is observed before that step
+        std::array<std::optional<DynamicContacts>, InputCommand::kSeats> seats;
+    };
+    /** Synchronous private-world coordination. Each pass begins at the exact
+     * authority checkpoint, visits completed local actor ticks in ascending
+     * order, then ends once. A fresh correction can perform two independent
+     * passes; begin must restore the consumer's private world each time.
+     * beforeTick observes all actors before any advances and may supply fresh
+     * private-world contacts for active local seats. An absent seat retains its
+     * captured contacts; a present empty roster removes only tagged contacts.
+     * Rejecting any callback or overlay discards every local speculative result in that
+     * pass. Remote/unsupported/completed seats are explicit observations, never
+     * synthesized input. Callbacks must not mutate this predictor or authority. */
+    struct ReplayCallbacks {
+        std::function<bool(const CombatSnapshot&)> begin;
+        std::function<bool(const ReplayTick&, ContactOverlay&)> beforeTick;
+        std::function<bool(const ReplayTick&)> afterTick;
+        std::function<void(bool committed)> end;
+    };
     void begin(const MatchContext& context, u8 localPeer, const WorldCollision& collision,
                const WorldScene* scene = nullptr, const WorldLayout* layout = nullptr);
     void clear();
@@ -80,7 +129,8 @@ public:
     bool setFireShield(u8 seat, const TreeInfo& tree, f32 bodyScale);
     /** Exactly once per application simulation tick, even if no command was sent.
      * Never replay unsent/coalesced input or an already resolved simulation tick. */
-    void update(const CombatSnapshot* authority, std::span<const InputCommand> sent);
+    void update(const CombatSnapshot* authority, std::span<const InputCommand> sent,
+                const ReplayCallbacks& callbacks = {});
     void present(CombatSnapshot& displayed, f32 blend) const;
     /** Complete native local replay, replaced on update. Null on any unsafe or
      * unsupported path. Releases contain only ticks after the host checkpoint. */
@@ -115,14 +165,11 @@ private:
         Vec3 correction{0};
         Vec3 previousCorrection{0};
     };
-    void replay(usize index);
-    bool replayKnockback(Seat& seat, const PlayerCombatState& state, const SeatMotion& motion,
-                         std::span<const RollbackInputHistory::Entry> commands, PlayerActor& actor,
-                         PlayerAnimator& animator) const;
-    bool replayBounded(Seat& seat, const PlayerCombatState& state, const SeatMotion& motion,
-                       std::span<const RollbackInputHistory::Entry> commands, PlayerActor& actor,
-                       PlayerAnimator& animator, const PlayerMeleeState& geometry,
-                       bool turboReplay) const;
+    struct Continuation;
+    std::unique_ptr<Continuation> prepare(usize index);
+    void replayAll(const ReplayCallbacks& callbacks);
+    bool currentAuthority(usize index) const;
+    void authoritative(usize index);
     static bool supported(const InputCommand& input, const PlayerCombatState& state,
                           bool turboReplay = false, bool potionReplay = false);
     MatchContext m_context;

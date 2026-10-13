@@ -62,6 +62,10 @@ bool PlayerHealth::canTakeSurfaceDamage(const PlayerRuntime& runtime) {
            (runtime.figure == nullptr || !runtime.figure->animator().reacting());
 }
 
+void PlayerHealth::advanceSurfaceGap(PlayerRuntime& runtime, f32 seconds) {
+    runtime.surfaceGap = std::max(runtime.surfaceGap - seconds, 0.0f);
+}
+
 void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool directed,
                         bool inTower, f32 damageScale, const Events& events,
                         const PlayerImpact& impact, bool bossEncounter, const ClassStats* stats) {
@@ -148,7 +152,9 @@ void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool 
         runtime.turbo.reset();
         events.sound(kDeathSound);
         events.cry("DIE2");
-        log::info("Player {} has fallen", runtime.actor.player() + 1);
+        if (events.logDeaths) {
+            log::info("Player {} has fallen", runtime.actor.player() + 1);
+        }
         return;
     }
     const s32 before = save.health();

@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 #include <format>
+#include <limits>
 #include <span>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
@@ -847,6 +851,159 @@ void PlayerFigure::drawMarker(RenderDevice& device, ItemArchive& archive, std::s
         m_marker.bind(m_markerTree, archive.models, archive.textures, device);
     }
     m_marker.draw(device, clip, body, lighting, {}, nullptr, alpha);
+}
+
+bool PlayerFigure::GameplayCheckpoint::valid() const {
+    const auto text = [](const std::string& value) {
+        return value.size() <= 256 && value.find('\0') == std::string::npos;
+    };
+    const auto objects = [&](const std::vector<std::string>& values) {
+        return values.size() <= kMaxNodes && std::ranges::all_of(values, text);
+    };
+    if (actions.empty() || costume.empty() || !text(actions) || !text(costume) ||
+        !objects(costumeObjects) || !objects(handObjects) || !objects(armObjects) ||
+        familiarTier < 0 || familiarTier > 10 || companion < PowerupCompanion::Kind::None ||
+        companion > PowerupCompanion::Kind::Wings || companion == PowerupCompanion::Kind::Pojo ||
+        !animation.valid() || (transition && !transition->valid()) ||
+        (!transforms.empty() && transforms.size() != costumeObjects.size()) ||
+        animationRevision > std::numeric_limits<u64>::max() - 1024 || !std::isfinite(phoenixSide) ||
+        std::abs(phoenixSide) > 1'000'000) {
+        return false;
+    }
+    for (const auto& transform : transforms) {
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 4; ++row) {
+                const auto value = transform[column][row];
+                if (!std::isfinite(value) || std::abs(value) > 1'000'000) {
+                    return false;
+                }
+            }
+        }
+        if (transform[0].w != 0 || transform[1].w != 0 || transform[2].w != 0 ||
+            transform[3].w != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<PlayerFigure::GameplayCheckpoint> PlayerFigure::gameplayCheckpoint() const {
+    if (!m_actionTree || !m_costume || !m_animator.bound() || pojoActive()) {
+        return std::nullopt;
+    }
+    GameplayCheckpoint state;
+    state.actions = m_actionTree->name;
+    state.costume = m_costume->name;
+    const auto objects = [](const TreeInfo& tree) {
+        std::vector<std::string> result;
+        result.reserve(tree.nodes.size());
+        for (const auto& node : tree.nodes) {
+            result.push_back(node.object);
+        }
+        return result;
+    };
+    state.costumeObjects = objects(*m_costume);
+    state.handObjects = objects(m_handItemTree);
+    state.armObjects = objects(m_armTree);
+    state.familiarTier = m_familiar.tier();
+    state.companion = m_companion.kind();
+    state.handHeld = m_handItemHeld;
+    state.armHeld = m_armHeld;
+    state.staysInHand = m_staysInHand;
+    state.animation = m_animator.checkpoint();
+    state.transition = m_animator.transitionPose();
+    state.transforms = m_transforms;
+    state.animationRevision = m_animationRevision;
+    state.familiarPending = m_familiarPending;
+    state.familiarReleased = m_familiarReleased;
+    state.phoenixSide = m_phoenixSide;
+    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+}
+
+bool PlayerFigure::gameplayBindingMatches(const GameplayCheckpoint& state) const {
+    const auto objects = [](const TreeInfo& tree, const std::vector<std::string>& expected) {
+        if (tree.nodes.size() != expected.size()) {
+            return false;
+        }
+        for (usize index = 0; index < expected.size(); ++index) {
+            if (tree.nodes[index].object != expected[index]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return m_actionTree && m_costume && m_animator.bound() && state.actions == m_actionTree->name &&
+           state.costume == m_costume->name && objects(*m_costume, state.costumeObjects) &&
+           objects(m_handItemTree, state.handObjects) && objects(m_armTree, state.armObjects) &&
+           state.familiarTier == m_familiar.tier() && state.companion == m_companion.kind() &&
+           !pojoActive() && state.handHeld == m_handItemHeld && state.armHeld == m_armHeld &&
+           state.staysInHand == m_staysInHand && state.phoenixSide == m_phoenixSide &&
+           state.animation.character == m_animator.checkpoint().character;
+}
+
+struct PlayerFigure::PreparedGameplay::Data {
+    const PlayerFigure* owner = nullptr;
+    std::weak_ptr<const u8> lifetime;
+    std::shared_ptr<const u8> successor = std::make_shared<const u8>(0);
+    const TreeInfo* actions = nullptr;
+    const TreeInfo* costume = nullptr;
+    GameplayCheckpoint state;
+    PlayerAnimator animator;
+};
+PlayerFigure::PreparedGameplay::PreparedGameplay(std::unique_ptr<Data> data)
+    : m_data(std::move(data)) {}
+PlayerFigure::PreparedGameplay::PreparedGameplay(PreparedGameplay&&) noexcept = default;
+PlayerFigure::PreparedGameplay&
+PlayerFigure::PreparedGameplay::operator=(PreparedGameplay&&) noexcept = default;
+PlayerFigure::PreparedGameplay::~PreparedGameplay() = default;
+
+std::optional<PlayerFigure::PreparedGameplay>
+PlayerFigure::prepareGameplayRestore(const GameplayCheckpoint& state) const {
+    if (!state.valid() || !gameplayBindingMatches(state)) {
+        return std::nullopt;
+    }
+    auto data = std::make_unique<PreparedGameplay::Data>();
+    data->owner = this;
+    data->lifetime = m_gameplayOwner;
+    data->actions = m_actionTree;
+    data->costume = m_costume;
+    data->state = state;
+    data->animator = m_animator;
+    if (!data->animator.restore(state.animation, state.transition)) {
+        return std::nullopt;
+    }
+    for (usize node = 0; node < state.transforms.size(); ++node) {
+        if (state.transforms[node] != poseTransform(node, data->animator.pose())) {
+            return std::nullopt;
+        }
+    }
+    return PreparedGameplay{std::move(data)};
+}
+bool PlayerFigure::canCommitGameplay(const PreparedGameplay& prepared) const {
+    return prepared.m_data && prepared.m_data->owner == this &&
+           prepared.m_data->lifetime.lock() == m_gameplayOwner &&
+           prepared.m_data->actions == m_actionTree && prepared.m_data->costume == m_costume &&
+           gameplayBindingMatches(prepared.m_data->state);
+}
+bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
+    if (!canCommitGameplay(prepared)) {
+        return false;
+    }
+    auto& data = *prepared.m_data;
+    static_assert(std::is_nothrow_move_assignable_v<PlayerAnimator>);
+    m_animator = std::move(data.animator);
+    m_transforms.swap(data.state.transforms);
+    m_animationRevision = data.state.animationRevision;
+    m_familiarPending = data.state.familiarPending;
+    m_familiarReleased = data.state.familiarReleased;
+    // Preparation owns the allocation. Rotating this token invalidates sibling
+    // preparations without allocating or invoking any callbacks during commit.
+    m_gameplayOwner = std::move(data.successor);
+    // Render interpolation must not reuse a future pose. Other cosmetic owners
+    // are intentionally unchanged; this transaction promises gameplay only.
+    m_visualTransforms.clear();
+    prepared.m_data.reset();
+    return true;
 }
 
 } // namespace gdl::game

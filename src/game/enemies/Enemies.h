@@ -277,7 +277,8 @@ public:
      * Moving-floor attachment is refreshed even when no full step is due. */
     void update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                 std::span<const Obstacle> obstacles = {}, class EnemyMissiles* missiles = nullptr,
-                f32 missileSpeedScale = 1.0f, bool timeStopped = false);
+                f32 missileSpeedScale = 1.0f, bool timeStopped = false,
+                struct EnemyMissileWork* missileWork = nullptr);
     std::vector<EnemyBlow> takeBlows();
     std::vector<EnemyLoss> takeLosses();
     std::vector<EnemyBurst> takeBursts();
@@ -578,7 +579,8 @@ private:
     void chooseTarget(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
                       std::span<f32> crowding);
     void step(f32 seconds, std::span<const EnemyView> players, std::span<const Obstacle> obstacles,
-              EnemyMissiles* missiles, f32 missileSpeedScale, bool timeStopped);
+              EnemyMissiles* missiles, f32 missileSpeedScale, bool timeStopped,
+              EnemyMissileWork* missileWork);
     /** Whether the swing it has just landed casts its missile rather than striking. */
     static bool castsNow(const Enemy& enemy);
     void resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> players);
@@ -593,7 +595,7 @@ private:
     void think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView> players,
                std::span<const Obstacle> obstacles);
     void shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players, EnemyMissiles& missiles,
-               f32 speedScale, std::span<const Obstacle> items);
+               f32 speedScale, std::span<const Obstacle> items, EnemyMissileWork* work);
     struct Figure {
         TreeModel* model = nullptr;
         const TreeInfo* tree = nullptr;
@@ -618,6 +620,7 @@ private:
     static Vec3 bodyCentre(const Enemy& enemy);
     MeleeGeometry::Target meleeBody(s32 id) const;
 
+    friend class OpponentCombatCheckpoint;
     RenderDevice* m_device = nullptr;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 0;

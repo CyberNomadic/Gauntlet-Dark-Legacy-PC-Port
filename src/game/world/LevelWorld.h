@@ -89,6 +89,7 @@ public:
     const Rotators& rotators() const { return m_rotators; }
     std::vector<RotatorCue> takeRotatorCues() { return std::exchange(m_rotatorCues, {}); }
     std::vector<Vec3> takeWorldExplosions() { return m_destruction.takeExplosions(); }
+    bool hasWorldExplosions() const { return m_destruction.hasExplosions(); }
     bool explodeObject(s32 object, const Vec3& position) {
         return m_destruction.explode(object, position, m_scene, m_collision);
     }

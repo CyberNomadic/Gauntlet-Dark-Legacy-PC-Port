@@ -92,6 +92,17 @@ struct EnemyMissileLaunch {
     s32 shooter = -1;
 };
 
+/** A private continuation's shared launch-work allowance, never a gameplay limit.
+ * Exhaustion requires the caller to restore the entire speculative tick, including
+ * RNG and enemy release cues; it is not an ordinary failed throw. Native play
+ * passes no budget and retains its original launch decisions. */
+struct EnemyMissileWork {
+    static constexpr usize kPerLaunchSamples = 256;
+    usize sweepSamples = 4096;
+    usize itemTests = 4096;
+    bool exhausted = false;
+};
+
 /** One of the swarm's missiles in flight. */
 struct EnemyMissile {
     u64 instance = 0;
@@ -228,7 +239,8 @@ public:
      * wall or one of the `items` stands between it and the point it leaves from (and nothing
      * goes). */
     bool launch(const EnemyMissileKind& kind, const EnemyMissileLaunch& launch,
-                const WorldCollision* collision = nullptr, std::span<const Obstacle> items = {});
+                const WorldCollision* collision = nullptr, std::span<const Obstacle> items = {},
+                EnemyMissileWork* work = nullptr);
     /** Sends one from `from` at `aim` (a body's middle) with no error, `speedScale` the
      * level's; for a shot along a line already chosen. */
     void launch(const EnemyMissileKind& kind, const Vec3& from, const Vec3& aim, f32 speedScale,

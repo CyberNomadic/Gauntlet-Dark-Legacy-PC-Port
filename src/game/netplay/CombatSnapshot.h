@@ -10,6 +10,7 @@
 #include "game/netplay/FighterSnapshot.h"
 #include "game/netplay/HudSnapshot.h"
 #include "game/netplay/MotionSnapshot.h"
+#include "game/netplay/OpponentFrame.h"
 #include "game/netplay/PlatformCheckpoint.h"
 #include "game/netplay/PlayerActionCheckpoint.h"
 #include "game/netplay/PlayerKnockbackCheckpoint.h"
@@ -345,6 +346,7 @@ struct CombatSnapshot {
      * senders must deliberately omit this optional state or send a later seed,
      * not truncate pools or discard existing presentation/replay components. */
     std::optional<OpponentState> opponents = std::nullopt;
+    std::optional<OpponentFrame> opponentFrame = std::nullopt;
     bool valid() const;
 };
 
@@ -386,17 +388,11 @@ public:
         4 + InputCommand::kSeats *
                 (16 + PlayerLocomotionCheckpoint::kMaxBytes + PlayerPoseCheckpoint::kMaxBytes +
                  TurboEffectCheckpoint::kMaxBytes + PlayerPotionCheckpoint::kMaxBytes);
-    static constexpr usize kOpponentHeaderBytes = 20; ///< length plus exact epoch/tick echo
-    // Opponent corrections consume unused room inside this existing cap. It is
-    // deliberately not increased by the opponent codec's independent maximum.
-    static constexpr usize kMaxBytes =
-        kHeaderBytes + MotionPacket::kMaxBytes + InputCommand::kSeats * kPlayerBytes +
-        CombatSnapshot::kMaxEnemies * kEnemyBytes +
-        CombatSnapshot::kMaxProjectiles * kProjectileBytes +
-        CombatSnapshot::kMaxPickups * kPickupBytes + CombatSnapshot::kMaxFixtures * kFixtureBytes +
-        kGeometryHeaderBytes + SceneGeometry::kMaxStates * kGeometryObjectBytes +
-        FighterPacket::kMaxBytes + HudPacket::kMaxBytes + kMeleeBytes + kTurboBytes +
-        PlatformCheckpoint::kMaxBytes + kReplayBytes;
+    static constexpr usize kOpponentHeaderBytes = 24; ///< two lengths plus exact epoch/tick echo
+    // Preserve the schema-39 decoded/chunk budget independently of growing
+    // optional codecs. Typed contacts and complete opponent observations compete
+    // for this space; an oversized combination is refused, never truncated.
+    static constexpr usize kMaxBytes = 1'570'903;
     static std::optional<std::vector<u8>> encode(const CombatSnapshot& snapshot);
     static std::optional<CombatSnapshot> decode(std::span<const u8> bytes);
 };

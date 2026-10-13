@@ -15,6 +15,7 @@
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/enemies/Generators.h"
+#include "game/enemies/PlacedEnemies.h"
 #include "game/screens/BossMeter.h"
 #include "game/screens/PlayerHealth.h"
 #include "game/world/CombatantProjectiles.h"
@@ -67,7 +68,14 @@ public:
     /** What the camera takes in and where it looks: what is on screen, and the placed
      * enemies it comes to see stand (fn_80060114). */
     void watch(const ViewVolume& view, const Vec3& attention);
-    usize pendingPlacements() const { return m_pending.size(); }
+    usize pendingPlacements() const { return m_placements.count(); }
+    PlacedEnemies& placements() { return m_placements; }
+    const PlacedEnemies& placements() const { return m_placements; }
+    /** Original load-time tuning, unaffected by later changes to game options. */
+    f32 difficultyGain() const { return m_resources ? m_resources->difficultyGain : 1.0f; }
+    /** Outside-pool phases that can change bodies, items, or missile blockers.
+     * Ordinary native enemies and generators alone do not trigger this gate. */
+    bool hasUncapturedState() const;
     /** `stops` are what else stands in the way of the swarm's missiles, `walkedInto` what
      * of the fixtures stands where the great ones walk. */
     /** Follows moving scenery without advancing AI, attacks or animation. */
@@ -137,6 +145,11 @@ public:
     static f32 attenuation(const Vec3& at, std::span<const Vec3> hearers);
 
 private:
+    friend class OpponentCombatCheckpoint;
+    friend class OrdinaryCombatCheckpoint;
+    friend class OrdinaryCombatTick;
+    // Identifies the lifetime of the borrowed level services, not gameplay state.
+    u64 m_bindingGeneration = 1;
     /** Plays `name` at `level` of 255 as heard from where the players stand. */
     SoundHandle playAt(std::string_view name, f32 level, const Vec3& at);
     void landEnemyMissiles(std::span<PlayerRuntime> players, const Events& events);
@@ -165,6 +178,8 @@ private:
     void fireDeathShot(const EnemyDeathShot& shot);
     void advanceDeathShots();
     void hearFrom(std::span<const PlayerRuntime> players);
+    void beginOrdinaryFrame(f32 seconds, std::span<PlayerRuntime> players);
+    void countOrdinaryPlayers(std::span<const PlayerRuntime> players);
     void deliverLessons(std::span<const PlayerRuntime> players, const Events& events);
     void applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRuntime> players,
                         const Events& events);
@@ -176,15 +191,7 @@ private:
     void updateDeaths(std::span<PlayerRuntime> players, const Events& events);
     void clearDeaths();
     void finishSummons(std::span<const EnemyView> players);
-    /** A placed enemy or great one waiting to be seen. */
-    struct Placement {
-        EnemySpawn spawn;
-        s32 kind = -1;
-        f32 facing = 0.0f;
-        f32 viewRadius = 0.0f;
-        f32 sight = 0.0f;             ///< the placement's sight radius, a great one's visrad
-        std::optional<usize> carried; ///< the pickup a great one holds, as the level opens
-    };
+    using Placement = PlacedEnemies::Placement;
     void standPlacements(std::optional<ViewVolume> view, const Vec3& attention);
     void stand(const Placement& placement);
     /** Whether the camera sees a sphere from close enough for a placement to stand. */
@@ -192,10 +199,8 @@ private:
     /** Stands the statues woken and seen whose ACTIVE has played out as the great ones they
      * are, and wakes what the triggers ask. */
     void updateStatues(s32 ticks, f32 seconds, std::span<PlayerRuntime> players);
-    std::vector<Placement> m_pending;
+    PlacedEnemies m_placements;
     CritterStatues m_statues;
-    std::optional<ViewVolume> m_view; ///< what the camera last took in, and from where
-    Vec3 m_attention{0.0f};
     /** What each of the great ones carries, by its place in the pool. */
     std::array<std::optional<usize>, Critters::kMost> m_carried{};
     struct Bag {

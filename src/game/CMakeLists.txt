@@ -18,6 +18,8 @@ add_library(game STATIC
     netplay/EffectIdentity.cpp
     netplay/PotionIdentity.cpp
     netplay/PlayerLocomotionCheckpoint.cpp
+    netplay/PlayerRuntimePacket.cpp
+    netplay/PlayerHealthCheckpoint.cpp
     netplay/PlayerPoseCheckpoint.cpp
     netplay/PlayerPotionCheckpoint.cpp
     netplay/TurboEffectCheckpoint.cpp
@@ -29,6 +31,7 @@ add_library(game STATIC
     netplay/EnemyPoolCheckpoint.cpp
     netplay/GeneratorCheckpoint.cpp
     netplay/OpponentCheckpoint.cpp
+    netplay/PlacedEnemyCheckpoint.cpp
     netplay/PlatformCheckpoint.cpp
     world/WorldMotion.cpp
     screens/TurboEmission.cpp
@@ -229,6 +232,7 @@ add_library(game STATIC
     enemies/CritterMovement.cpp
     enemies/CritterPatrol.cpp
     enemies/CritterStatues.cpp
+    enemies/PlacedEnemies.cpp
     enemies/CombatantBreath.cpp
     enemies/CombatantProjectile.cpp
     world/CombatantProjectiles.cpp
@@ -285,6 +289,7 @@ add_library(game STATIC
     world/SumnerHints.cpp
     world/PlayerMissiles.h
     world/PlayerMissiles.cpp
+    world/PlayerMissilesCheckpoint.cpp
     world/MissileStreak.cpp
     world/TargetAssist.cpp
     world/BlobShadow.cpp
@@ -302,12 +307,14 @@ add_library(game STATIC
     screens/PlaySceneRelics.cpp
     screens/PlayScenePromotion.cpp
     world/PlayerArsenal.cpp
+    world/PlayerArsenalCheckpoint.cpp
     world/PotionEmission.cpp
     world/LevelSoundscape.cpp
     world/VoiceQueue.cpp
     world/EffectTrees.h
     world/DynamicLights.cpp
     world/EffectTrees.cpp
+    world/EffectTreesCheckpoint.cpp
     world/PlacedItems.h
     world/PlacedItems.cpp
     world/AmbientSounds.h
@@ -389,8 +396,19 @@ add_library(game STATIC
     screens/LevelOpponents.cpp
     screens/OpponentSimulation.cpp
     screens/OpponentResources.cpp
+    screens/OpponentPrediction.cpp
+    screens/OpponentPlacements.cpp
+    screens/OnlineOpponentReplay.cpp
+    netplay/OpponentFrame.cpp
     enemies/OpponentState.cpp
     screens/PlayerAttacks.cpp
+    screens/PlayerAttacksCheckpoint.cpp
+    screens/PlayerRuntimeCheckpoint.cpp
+    screens/CombatRollbackCheckpoint.cpp
+    screens/OpponentCombatCheckpoint.cpp
+    screens/OrdinaryCombatCheckpoint.cpp
+    screens/OrdinaryCombatTick.cpp
+    screens/PartyDamage.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp
     players/HeadGem.cpp

@@ -323,6 +323,57 @@ TEST_CASE("native ordinary and strong release produces a renderable shot before 
     CHECK(fixture.draw(shown) == 2);
 }
 
+TEST_CASE("a weapon descriptor alone cannot authorize an unresolved ordinary release",
+          "[netplay][projectile-prediction][bounded-throw]") {
+    const bool alreadyThrowing = GENERATE(false, true);
+    Prediction fixture;
+    auto host = fixture.authority;
+    host.motion.tick = ++fixture.endTick;
+    auto& player = *host.players[1];
+    player.movement.ranged = false;
+    player.weapon->target = Vec3{1, 1, 12};
+    PlayerAnimator animator;
+    REQUIRE(animator.bind(fixture.tree, false));
+    if (alreadyThrowing) {
+        animator.update(PlayerMotion::Stand, 1, 1.0f / 60, PlayerDeed::Attack);
+        player.rollback = animator.checkpoint();
+        player.transitionPose = animator.transitionPose();
+        const auto& cursor = animator.player();
+        player.animation = {static_cast<u32>(animator.action()), cursor.sequence(),
+                            cursor.generation(), cursor.presentationFrame(), cursor.transition()};
+    }
+    fixture.accept(host);
+    bool released = false;
+    // The synthetic four-frame wind-up and release retain separate native
+    // 30 Hz phase boundaries. Their real release can exceed twelve 60 Hz ticks;
+    // use the freshness window and compare the actual animator, not a guessed deadline.
+    for (u64 step = 0; step < LocalMovementPrediction::kStaleTicks - 1; ++step) {
+        fixture.step(!alreadyThrowing);
+        if (alreadyThrowing) {
+            animator.update(PlayerMotion::Stand, 1, 1.0f / 60, PlayerDeed::None);
+            const auto* replay = fixture.movement.replayed(1);
+            REQUIRE(replay);
+            REQUIRE_FALSE(replay->frames.empty());
+            CHECK(replay->frames.back().animation.action == animator.action());
+            CHECK(replay->frames.back().animation.released == animator.released());
+        }
+        if (const auto* replay = fixture.movement.replayed(1)) {
+            for (const auto& release : replay->releases) {
+                CHECK_FALSE(release.targetResolved);
+                released = true;
+            }
+        }
+        CHECK(fixture.projectiles.count() == 0);
+        CHECK(fixture.projectiles.soundReleases().empty());
+        CHECK(fixture.shown().projectiles.empty());
+        if (released) {
+            CHECK(animator.released());
+            break;
+        }
+    }
+    CHECK(released == alreadyThrowing);
+}
+
 TEST_CASE("elemental fans replay native flight with separate authored body and rider components",
           "[netplay][projectile-prediction][elemental-prediction]") {
     const u32 element = GENERATE(1U, 2U, 3U, 4U);
