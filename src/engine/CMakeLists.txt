@@ -113,6 +113,7 @@ add_library(engine STATIC
     assets/TextureSet.cpp
     assets/TextureBindings.cpp
     assets/TextureBindings.h
+    assets/ObjectFlags.h
     assets/ObjectMaterial.h
     assets/BitmapFont.h
     assets/BitmapFont.cpp

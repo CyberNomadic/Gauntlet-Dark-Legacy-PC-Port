@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "engine/assets/ObjectFlags.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
@@ -31,8 +32,8 @@ struct Mesh {
     bool prelit = false; ///< the vertices' colours are the lighting the level was built with
     u32 flags = 0;       ///< the archive object's header flags
 
-    /** Whether the exporter marked the object as using an alpha texture (header bit 0). */
-    bool alphaTextured() const { return (flags & 1U) != 0; }
+    /** Whether the exporter marked the object as using an alpha texture. */
+    bool alphaTextured() const { return (flags & mesh_flags::kAlphaTextured) != 0; }
 
     usize triangleCount() const {
         usize count = 0;
