@@ -43,7 +43,7 @@ TEST_CASE("transporters link ids rather than instance order and reject missing p
     test::FakeRenderDevice device;
     ItemArchive items;
     LevelTransporters pads;
-    pads.bind(device, layout, items, 1);
+    pads.bind(device, layout, AssetScope(items), 1);
     REQUIRE(pads.size() == 3);
     CHECK(pads.pad(0).destination == 1);
     CHECK(pads.pad(1).destination == 0);
@@ -63,7 +63,7 @@ TEST_CASE("transporters link ids rather than instance order and reject missing p
     WorldCamera away;
     away.position.z = 30;
     CHECK_FALSE(pads.landing(0, 0.75f, collision, away, {}));
-    pads.bind(device, layout, items, 2);
+    pads.bind(device, layout, AssetScope(items), 2);
     CHECK(pads.size() == 4);
     pads.clear();
     CHECK(pads.size() == 0);
@@ -140,7 +140,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     REQUIRE(realm.load(root / "realm"));
     REQUIRE(layout.load(root));
     LevelTransporters pads;
-    pads.bind(device, layout, own, 1, &realm);
+    pads.bind(device, layout, AssetScope(own, &realm), 1);
     REQUIRE(pads.size() == 1);
     REQUIRE(pads.pad(0).model.bound());
     CHECK(pads.pad(0).animation.playing());
@@ -153,7 +153,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     CHECK(device.draws[0].state.depthTest);
     CHECK(device.draws[0].state.depthWrite);
     ExitPortals exits;
-    REQUIRE(exits.bind(device, layout, own, catalog, nullptr, &realm));
+    REQUIRE(exits.bind(device, layout, AssetScope(own, &realm), catalog, nullptr));
     REQUIRE(exits.size() == 2);
     CHECK(exits.portal(0).model.bound());
     CHECK(exits.portal(1).icon.hasFigure());
@@ -161,9 +161,9 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     Chests chests;
     LockedGates gates;
     Breakables barrels;
-    REQUIRE(chests.bind(device, layout, own, nullptr, &realm));
-    REQUIRE(gates.bind(device, layout, own, nullptr, &realm));
-    REQUIRE(barrels.bind(device, layout, own, nullptr, &realm));
+    REQUIRE(chests.bind(device, layout, AssetScope(own, &realm), nullptr));
+    REQUIRE(gates.bind(device, layout, AssetScope(own, &realm), nullptr));
+    REQUIRE(barrels.bind(device, layout, AssetScope(own, &realm), nullptr));
     REQUIRE(chests.size() == 1);
     REQUIRE(gates.size() == 1);
     REQUIRE(barrels.size() == 1);
@@ -184,7 +184,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     }
     ItemArchive powerups;
     const std::array visitors{ChestVisitor{Vec3{33, 0, 0}, 0.75f, 0, true}};
-    REQUIRE(chests.updateXray(device, own, powerups, 0, visitors, &realm) == 1);
+    REQUIRE(chests.updateXray(device, AssetScope(own, &realm), powerups, 0, visitors) == 1);
     CHECK(chests.chest(0).revealed);
     CHECK(chests.chest(0).preview.hasFigure());
     // The borrowed realm remains loaded and reusable after releasing all consumers.
@@ -275,7 +275,7 @@ TEST_CASE("every catalogued transporter has a partner, a landing floor and anima
             LevelWorld world;
             REQUIRE(world.load(device, root, *ref));
             LevelTransporters pads;
-            pads.bind(device, layout, world.items(), players, &world.realmItems());
+            pads.bind(device, layout, world.itemScope(), players);
             for (usize i = 0; i < pads.size(); ++i) {
                 const auto& pad = pads.pad(i);
                 CAPTURE(i, pad.id, pad.destinationId);
@@ -308,7 +308,7 @@ TEST_CASE("Castle transporters clear their supporting ground without bypassing w
     LevelWorld world;
     REQUIRE(world.load(device, root, *ref));
     LevelTransporters pads;
-    pads.bind(device, world.layout(), world.items(), 1, &world.realmItems());
+    pads.bind(device, world.layout(), world.itemScope(), 1);
     REQUIRE(pads.size() > 0);
     const auto& instances = world.layout().itemInstances();
     for (usize i = 0; i < pads.size(); ++i) {

@@ -49,7 +49,7 @@ TEST_CASE("rotator NoGeometry suppresses the pad mesh without disabling contact"
     test::FakeRenderDevice device;
     Rotators rotators;
     rotators.bind(layout);
-    rotators.bindFigures(device, layout, items);
+    rotators.bindFigures(device, layout, AssetScope(items));
     REQUIRE(rotators.size() == 1);
     CHECK(static_cast<bool>(rotators.rotator(0).pad) == (flags == 0));
     WorldScene scene;
@@ -71,7 +71,7 @@ TEST_CASE("native mines and ice turntable sensors remain invisible but functiona
     test::FakeRenderDevice device;
     Rotators rotators;
     rotators.bind(layout);
-    rotators.bindFigures(device, layout, items);
+    rotators.bindFigures(device, layout, AssetScope(items));
     WorldScene scene;
     usize pads = 0;
     for (usize i = 0; i < rotators.size(); ++i) {

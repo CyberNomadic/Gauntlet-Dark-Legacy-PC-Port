@@ -4827,7 +4827,7 @@ TEST_CASE("tower portal columns draw after horizon sheets while retaining wall o
     LevelWorld world;
     REQUIRE(world.load(device, root, *levels.byName("L1")));
     ExitPortals probe;
-    REQUIRE(probe.bind(device, world.layout(), world.items(), levels, &world.collision()));
+    REQUIRE(probe.bind(device, world.layout(), world.itemScope(), levels, &world.collision()));
     std::optional<Vec3> position;
     for (usize i = 0; i < probe.size(); ++i) {
         if (probe.portal(i).tag == "b1") {

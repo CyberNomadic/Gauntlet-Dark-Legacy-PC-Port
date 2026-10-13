@@ -106,10 +106,6 @@ public:
     /** Stands a chest at every chest item of the layout (barrels are not chests). */
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision);
-    bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-              const WorldCollision* collision, ItemArchive* realmItems = nullptr) {
-        return bind(device, layout, AssetScope(items, realmItems), collision);
-    }
     void clear();
     usize size() const { return m_chests.size(); }
     const Chest& chest(usize index) const { return *m_chests[index]; }
@@ -123,10 +119,6 @@ public:
      * within ten units. Returns the number of newly revealed chests for the cue. */
     usize updateXray(RenderDevice& device, const AssetScope& scope, ItemArchive& powerups,
                      f32 seconds, std::span<const ChestVisitor> party);
-    usize updateXray(RenderDevice& device, ItemArchive& items, ItemArchive& powerups, f32 seconds,
-                     std::span<const ChestVisitor> party, ItemArchive* realmItems = nullptr) {
-        return updateXray(device, AssetScope(items, realmItems), powerups, seconds, party);
-    }
     /** Blocking boxes; open pickup and gold chests are passable until emptied. */
     std::vector<Obstacle> obstacles() const;
     /** Magic on a shut chest (fn_8005C1DC): what is in it becomes `record` and it rocks for
@@ -138,11 +130,6 @@ public:
     bool changeContents(usize index, s32 record, RenderDevice& device, const WorldLayout& layout,
                         const AssetScope& scope, const WorldCollision* collision,
                         std::string_view figure = {});
-    bool changeContents(usize index, s32 record, RenderDevice& device, const WorldLayout& layout,
-                        ItemArchive& items, const WorldCollision* collision,
-                        std::string_view figure = {}) {
-        return changeContents(index, record, device, layout, AssetScope(items), collision, figure);
-    }
     /** What came out of an opened chest lies in it as dropped item number `item`. */
     void hold(usize chest, s32 item);
     /** The open chest `visitor` is against that still holds something (touching it is how

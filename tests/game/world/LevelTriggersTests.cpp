@@ -534,7 +534,7 @@ TEST_CASE("a switch and its artwork follow the floor from its rest pose through 
       "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
     ItemArchive items;
     REQUIRE(items.load(dir));
-    f.triggers.bindFigures(f.device, f.layout, items);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(items));
     f.triggers.draw(f.device, Mat4{1}, {});
     REQUIRE(f.device.draws.size() == 1);
     CHECK(f.device.draws.front().vertices.front().position.y == Approx(30.1f));
@@ -1034,9 +1034,9 @@ TEST_CASE("switch art missing from the level's own item archive comes from the r
     ItemArchive realmItems;
     REQUIRE(ownItems.load(own));
     REQUIRE(realmItems.load(realm));
-    f.triggers.bindFigures(f.device, f.layout, ownItems);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(ownItems));
     CHECK(f.triggers.figure(0) == nullptr);
-    f.triggers.bindFigures(f.device, f.layout, ownItems, &realmItems);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(ownItems, &realmItems));
     REQUIRE(f.triggers.figure(0) != nullptr);
     f.triggers.draw(f.device, Mat4{1}, {});
     CHECK(f.device.draws.size() == 1);
@@ -1118,7 +1118,7 @@ TEST_CASE("marker-only switches stay invisible without losing trigger behavior",
       "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
     ItemArchive items;
     REQUIRE(items.load(dir));
-    f.triggers.bindFigures(f.device, f.layout, items);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(items));
     f.triggers.draw(f.device, Mat4{1}, {});
     REQUIRE(f.device.draws.size() == 1);
     CHECK(f.device.draws.front().vertices.front().position.x == Approx(20));
@@ -1147,7 +1147,7 @@ TEST_CASE("Tower and Province trigger figures respect their authored geometry ex
         REQUIRE(items.load(root / "ITEMS" / std::format("LEVEL{}", level.front())));
         LevelTriggers triggers;
         triggers.bind(layout, animator, nullptr);
-        triggers.bindFigures(device, layout, items);
+        triggers.bindFigures(device, layout, AssetScope(items));
         triggers.draw(device, Mat4{1}, {});
         const usize actual = device.draws.size();
         device.draws.clear();
@@ -1186,7 +1186,7 @@ TEST_CASE("Temple bridge pads are visible and activate their authored world targ
     triggers.bind(layout, animator, nullptr);
     ItemArchive items;
     REQUIRE(items.load(root / "ITEMS/LEVELE"));
-    triggers.bindFigures(device, layout, items);
+    triggers.bindFigures(device, layout, AssetScope(items));
     triggers.draw(device, Mat4{1}, {});
     REQUIRE_FALSE(device.draws.empty());
     ModelSet models;
@@ -1517,7 +1517,7 @@ TEST_CASE("Underworld switch artwork remains visible before and after trigger co
     animator.bind(layout);
     LevelTriggers triggers;
     triggers.bind(layout, animator, nullptr);
-    triggers.bindFigures(device, layout, items);
+    triggers.bindFigures(device, layout, AssetScope(items));
     REQUIRE(triggers.size() == 11);
     triggers.setPlayerCount(3);
     WorldScene scene;

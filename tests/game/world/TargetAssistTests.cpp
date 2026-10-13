@@ -47,7 +47,7 @@ TEST_CASE("barrel snapshots retain ordinary and explosive acquisition weights wi
     ItemArchive noArtwork;
     test::FakeRenderDevice device;
     Breakables barrels;
-    REQUIRE(barrels.bind(device, layout, noArtwork, nullptr));
+    REQUIRE(barrels.bind(device, layout, AssetScope(noArtwork), nullptr));
     REQUIRE(barrels.size() == 3);
     for (usize index = 0; index < barrels.size(); ++index) {
         const auto target = barrels.target(index, static_cast<s32>(index));
@@ -75,7 +75,7 @@ TEST_CASE("invulnerable barrels still stop shots without attracting acquisition"
     ItemArchive noArtwork;
     test::FakeRenderDevice device;
     Breakables barrels;
-    REQUIRE(barrels.bind(device, layout, noArtwork, nullptr));
+    REQUIRE(barrels.bind(device, layout, AssetScope(noArtwork), nullptr));
     const std::array targets{barrels.target(0, 0), barrels.target(1, 1)};
     REQUIRE(targets[1].acquisition);
     CHECK(TargetAssist::select({0, 3, 0}, {0, 0, 1}, targets, 30) == targets[1].acquisition->point);

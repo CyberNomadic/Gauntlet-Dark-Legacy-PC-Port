@@ -86,12 +86,6 @@ public:
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision, u32 seed = 1, f32 timeScale = 1.0f,
               f32 damageScale = 1.0f);
-    bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-              const WorldCollision* collision, u32 seed = 1, f32 timeScale = 1.0f,
-              f32 damageScale = 1.0f, ItemArchive* realmItems = nullptr) {
-        return bind(device, layout, AssetScope(items, realmItems), collision, seed, timeScale,
-                    damageScale);
-    }
     void clear();
     void syncFloors();
     usize size() const { return m_traps.size(); }
@@ -110,10 +104,6 @@ public:
      * good, or without one it goes. False for a trap already disarmed. */
     bool disarm(usize index, RenderDevice& device, const WorldLayout& layout,
                 const AssetScope& scope, const WorldCollision* collision);
-    bool disarm(usize index, RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                const WorldCollision* collision, ItemArchive* realmItems = nullptr) {
-        return disarm(index, device, layout, AssetScope(items, realmItems), collision);
-    }
 
     std::vector<TrapHit> update(s32 ticks, f32 seconds, std::span<const TrapVictim> party,
                                 bool timeStopped = false);

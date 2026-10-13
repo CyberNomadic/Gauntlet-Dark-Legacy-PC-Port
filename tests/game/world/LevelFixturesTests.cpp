@@ -44,8 +44,7 @@ TEST_CASE("G3 exit lift and G4 lowered platform carry their chests throughout tr
         LevelWorld world;
         REQUIRE(world.load(device, root, *catalog.byName(name)));
         Chests chests;
-        REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision(),
-                            &world.realmItems()));
+        REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
         const bool lift = std::string_view{name} == "G3";
         const s32 object = lift ? 744 : 738;
         for (const s32 instance :
@@ -180,10 +179,9 @@ TEST_CASE("Maze traps and fixtures ride their authored floors from the initial a
     Traps traps;
     Breakables barrels;
     LockedGates gates;
-    traps.bind(device, world.layout(), world.items(), &world.collision(), 1, 1, 1,
-               &world.realmItems());
-    barrels.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
-    gates.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+    traps.bind(device, world.layout(), world.itemScope(), &world.collision(), 1, 1, 1);
+    barrels.bind(device, world.layout(), world.itemScope(), &world.collision());
+    gates.bind(device, world.layout(), world.itemScope(), &world.collision());
     struct Rider {
         const ItemFigure* figure;
         const Obstacle* box;
@@ -305,9 +303,9 @@ TEST_CASE("floor attachments move trap damage and fixture collision without revi
     Traps traps;
     Breakables barrels;
     LockedGates gates;
-    REQUIRE(traps.bind(device, layout, art, &collision));
-    REQUIRE(barrels.bind(device, layout, art, &collision));
-    REQUIRE(gates.bind(device, layout, art, &collision));
+    REQUIRE(traps.bind(device, layout, AssetScope(art), &collision));
+    REQUIRE(barrels.bind(device, layout, AssetScope(art), &collision));
+    REQUIRE(gates.bind(device, layout, AssetScope(art), &collision));
     CHECK(traps.trap(0).figure.position().y == Approx(20.1f));
     CHECK(barrels.barrel(0).figure.position().y == Approx(20.1f));
     CHECK(gates.gate(0).figure.position().y == Approx(20.1f));
@@ -349,7 +347,7 @@ TEST_CASE("floor attachments move trap damage and fixture collision without revi
     CHECK(traps.trap(0).support.object() == 1);
     CHECK(glm::distance(traps.trap(0).figure.position(), expected) < 0.001f);
     traps.clear();
-    REQUIRE(traps.bind(device, layout, art, nullptr));
+    REQUIRE(traps.bind(device, layout, AssetScope(art), nullptr));
     CHECK(traps.trap(0).support.object() == -1);
     CHECK(traps.trap(0).figure.position().y == Approx(10));
 }
@@ -366,8 +364,7 @@ TEST_CASE("Temple chests ride their native switch-driven platforms",
     LevelWorld world;
     REQUIRE(world.load(device, root, *level));
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision(),
-                        &world.realmItems()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     std::vector<Vec3> before;
     for (usize i = 0; i < chests.size(); ++i) {
         before.push_back(chests.chest(i).figure.position());
@@ -480,7 +477,7 @@ TEST_CASE("chests follow descending and rotating platforms with their obstacle a
     test::FakeRenderDevice device;
     ItemArchive art;
     Chests chests;
-    REQUIRE(chests.bind(device, layout, art, &collision));
+    REQUIRE(chests.bind(device, layout, AssetScope(art), &collision));
     REQUIRE(chests.chest(0).floor);
     CHECK(chests.chest(0).figure.position().y == Approx(20.1f));
     CHECK(collision.objectTransform(1) == initial);
@@ -523,35 +520,35 @@ TEST_CASE("X-Ray reveals the nearest closed chest without spending keys or chang
           "[game][world][fixtures][xray]") {
     Fixture f("fixtures-xray");
     Chests chests;
-    REQUIRE(chests.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(chests.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     chests.setPlayerCount(2);
     std::array party{ChestVisitor{Vec3{3, 0, 0}, 0.75f, 0, true}};
-    CHECK(chests.updateXray(f.device, f.items, f.items, 0, party) == 1);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 1);
     CHECK(chests.chest(0).revealed);
     CHECK(chests.chest(0).state == Chests::kShut);
     CHECK(chests.chest(0).held == -1);
     const auto preview = chests.chest(0).previewContents;
     CHECK(preview == 1);
-    CHECK(chests.updateXray(f.device, f.items, f.items, 0, party) == 0);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 0);
     party[0].xray = false;
-    CHECK(chests.updateXray(f.device, f.items, f.items, 0, party) == 0);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 0);
     CHECK_FALSE(chests.chest(0).revealed);
     party[0].xray = true;
     party[0].position = Vec3{10, 0, 0};
-    chests.updateXray(f.device, f.items, f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
     CHECK_FALSE(chests.chest(0).revealed); // strict ten-unit reach
     party[0].position = Vec3{21.9f, 0, 0};
-    CHECK(chests.updateXray(f.device, f.items, f.items, 0, party) == 1);
+    CHECK(chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party) == 1);
     CHECK(chests.chest(1).revealed);
     party[0].position = Vec3{41.9f, 0, 0};
-    chests.updateXray(f.device, f.items, f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
     CHECK(chests.chest(2).revealed); // a trap must be visible before spending a key on it
     party[0].position = Vec3{1.9f, 0, 0};
     party[0].keys = 1;
     const auto opened = chests.update(0, party);
     REQUIRE(opened.size() == 1);
     CHECK(opened[0].contents == preview);
-    chests.updateXray(f.device, f.items, f.items, 0, party);
+    chests.updateXray(f.device, AssetScope(f.items), f.items, 0, party);
     CHECK_FALSE(chests.chest(0).revealed);
 }
 
@@ -650,7 +647,7 @@ TEST_CASE("triangle-list gate floors do not consume keys but upright barriers st
     test::FakeRenderDevice device;
     ItemArchive items;
     LockedGates gates;
-    REQUIRE(gates.bind(device, layout, items, nullptr));
+    REQUIRE(gates.bind(device, layout, AssetScope(items), nullptr));
     REQUIRE(gates.size() == 2);
     CHECK_FALSE(gates.gate(0).blocksPassage);
     CHECK(gates.gate(1).blocksPassage);
@@ -686,7 +683,7 @@ TEST_CASE("a locked chest wants a key, opens, and gives up what it held",
           "[game][world][fixtures]") {
     Fixture f("fixtures-chests");
     Chests chests;
-    REQUIRE(chests.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(chests.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     REQUIRE(chests.size() == 3); // the barrel is not a chest
     chests.setPlayerCount(1);
     REQUIRE(chests.chest(0).locked);
@@ -761,7 +758,7 @@ TEST_CASE("an open gold chest ignores full wallets and waits for an eligible vis
           "[fixtures][chest][gold-cap]") {
     Fixture f("fixtures-full-gold-chest");
     Chests chests;
-    REQUIRE(chests.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(chests.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     chests.setPlayerCount(1);
     std::array party{ChestVisitor{Vec3{20, 0, 0}, 0.75f, 1}};
     party[0].goldCapacity = 0;
@@ -813,7 +810,7 @@ TEST_CASE("simultaneous gold chests reserve wallet room before retiring", "[ches
     ItemArchive items;
     REQUIRE(layout.load(directory));
     Chests chests;
-    REQUIRE(chests.bind(device, layout, items, nullptr));
+    REQUIRE(chests.bind(device, layout, AssetScope(items), nullptr));
     chests.setPlayerCount(1);
     std::array party{ChestVisitor{Vec3{0}, 0.75f, 2}};
     party[0].goldCapacity = 1;
@@ -833,7 +830,7 @@ TEST_CASE("simultaneous gold chests reserve wallet room before retiring", "[ches
 TEST_CASE("a gate bars the way until a key is spent on it", "[game][world][fixtures]") {
     Fixture f("fixtures-gates");
     LockedGates gates;
-    REQUIRE(gates.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(gates.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     REQUIRE(gates.size() == 1);
     gates.setPlayerCount(1);
     REQUIRE(gates.obstacles().size() == 1);
@@ -879,7 +876,7 @@ TEST_CASE("gate opening cues follow realm and subtype rather than metal-first fa
     CHECK(LockedGates::openingSound(1, 4).empty());
     Fixture f("fixtures-gate-subtype");
     LockedGates gates;
-    REQUIRE(gates.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(gates.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     const auto& gate = gates.gate(0);
     const auto& instance = f.layout.itemInstances()[static_cast<usize>(gate.instance)];
     CHECK(gate.subtype == f.layout.itemInfos()[static_cast<usize>(instance.info)].subtype);
@@ -889,7 +886,7 @@ TEST_CASE("a trap rests, comes out to hurt whoever is in it, and rests again",
           "[game][world][fixtures]") {
     Fixture f("fixtures-traps");
     Traps traps;
-    REQUIRE(traps.bind(f.device, f.layout, f.items, nullptr, 7));
+    REQUIRE(traps.bind(f.device, f.layout, AssetScope(f.items), nullptr, 7));
     REQUIRE(traps.size() == 1);
     traps.setPlayerCount(1);
     REQUIRE(traps.trap(0).damage == 20.0f);
@@ -955,10 +952,10 @@ TEST_CASE("traps prefer level-specific figures and fall back to the realm archiv
     ItemArchive missing;
     Traps traps;
     SECTION("realm archive supplies missing boss-level figures") {
-        REQUIRE(traps.bind(f.device, f.layout, missing, nullptr, 1, 1, 1, &f.items));
+        REQUIRE(traps.bind(f.device, f.layout, AssetScope(missing, &f.items), nullptr, 1, 1, 1));
     }
     SECTION("level-specific figures retain precedence") {
-        REQUIRE(traps.bind(f.device, f.layout, f.items, nullptr, 1, 1, 1, &missing));
+        REQUIRE(traps.bind(f.device, f.layout, AssetScope(f.items, &missing), nullptr, 1, 1, 1));
     }
     REQUIRE(traps.size() == 1);
     REQUIRE(traps.trap(0).figure.hasFigure());
@@ -991,7 +988,7 @@ TEST_CASE("trap hits preserve authored impact properties and rotated direction",
     test::FakeRenderDevice device;
     ItemArchive items;
     Traps traps;
-    REQUIRE(traps.bind(device, layout, items, nullptr));
+    REQUIRE(traps.bind(device, layout, AssetScope(items), nullptr));
     const std::array<TrapVictim, 4> victims{TrapVictim{{0, 0, 0}}, TrapVictim{{20, 0, 0}},
                                             TrapVictim{{40, 0, 0}}, TrapVictim{{60, 0, 0}}};
     CHECK(traps.update(2, 1.0f / 30, victims).empty());    // wind-up
@@ -1025,7 +1022,7 @@ TEST_CASE("trap contact uses body height and independently expanded rectangular 
     test::FakeRenderDevice device;
     ItemArchive items;
     Traps traps;
-    REQUIRE(traps.bind(device, layout, items, nullptr));
+    REQUIRE(traps.bind(device, layout, AssetScope(items), nullptr));
     REQUIRE(traps.trap(0).box.centre == Vec3{0, 1, 0});
     const std::array victims{
         TrapVictim{{5.4f, 1, 2.4f}, 1.5f, 2}, // expanded corner, not a rounded corner
@@ -1045,7 +1042,7 @@ TEST_CASE("a level scales how fast its traps cycle and how much they hurt",
           "[game][world][fixtures]") {
     Fixture f("fixtures-trap-scales");
     Traps traps;
-    REQUIRE(traps.bind(f.device, f.layout, f.items, nullptr, 7, 2.0f, 0.5f));
+    REQUIRE(traps.bind(f.device, f.layout, AssetScope(f.items), nullptr, 7, 2.0f, 0.5f));
     REQUIRE(traps.trap(0).damage == 10.0f);
     // Twice the forty to a hundred and twenty ticks it rests unscaled.
     REQUIRE(traps.trap(0).ticksLeft >= 80);
@@ -1069,7 +1066,7 @@ TEST_CASE("barrels stand in the way until blows break them, each after its kind"
           "[game][world][fixtures]") {
     Fixture f("fixtures-barrels");
     Breakables barrels;
-    REQUIRE(barrels.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(barrels.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     REQUIRE(barrels.size() == 4); // one that holds a key, one that blows up, one of gas, one more
     barrels.setPlayerCount(1);
     REQUIRE(barrels.barrel(0).kind == BreakableStrike::Kind::Holding);
@@ -1124,7 +1121,7 @@ TEST_CASE("Stop Time retracts live traps and leaves a half-second rest on releas
           "[game][world][fixtures][stop-time]") {
     Fixture f("fixtures-time-stop");
     Traps traps;
-    REQUIRE(traps.bind(f.device, f.layout, f.items, nullptr, 7));
+    REQUIRE(traps.bind(f.device, f.layout, AssetScope(f.items), nullptr, 7));
     traps.setPlayerCount(1);
     const std::array party{TrapVictim{Vec3{100, 0, 0}, 0.75f}};
     for (s32 frame = 0; frame < 120 && !traps.armed(0); ++frame) {
@@ -1147,7 +1144,7 @@ TEST_CASE("potion magic stops a trap for 600 ticks, or disarms it for good",
           "[game][world][fixtures][magic-perks]") {
     Fixture f("fixtures-time-stop");
     Traps traps;
-    REQUIRE(traps.bind(f.device, f.layout, f.items, nullptr, 7));
+    REQUIRE(traps.bind(f.device, f.layout, AssetScope(f.items), nullptr, 7));
     traps.setPlayerCount(1);
     const std::array party{TrapVictim{Vec3{100, 0, 0}, 0.75f}};
     for (s32 frame = 0; frame < 120 && !traps.armed(0); ++frame) {
@@ -1164,10 +1161,10 @@ TEST_CASE("potion magic stops a trap for 600 ticks, or disarms it for good",
     CHECK(traps.armed(0));
 
     // The greater perk: this archive has no SPIKES_D, so the trap goes altogether.
-    REQUIRE(traps.disarm(0, f.device, f.layout, f.items, nullptr));
+    REQUIRE(traps.disarm(0, f.device, f.layout, AssetScope(f.items), nullptr));
     CHECK(traps.trap(0).disarmed);
     CHECK(traps.trap(0).gone);
-    CHECK_FALSE(traps.disarm(0, f.device, f.layout, f.items, nullptr));
+    CHECK_FALSE(traps.disarm(0, f.device, f.layout, AssetScope(f.items), nullptr));
     CHECK_FALSE(traps.stop(0));
     traps.setPlayerCount(1);
     CHECK_FALSE(traps.trap(0).shown);
@@ -1191,7 +1188,7 @@ TEST_CASE("chests pass the camera to their authored bomb sprites", "[fixtures][v
     test::convertModelFixture(directory);
     REQUIRE(f.items.load(directory));
     Chests chests;
-    REQUIRE(chests.bind(f.device, f.layout, f.items, nullptr));
+    REQUIRE(chests.bind(f.device, f.layout, AssetScope(f.items), nullptr));
     chests.setPlayerCount(1);
     for (const Vec3 eye : {Vec3{20, 12, -30}, Vec3{-20, 15, 30}}) {
         const auto camera = CameraFrame::at(eye);
@@ -1264,7 +1261,7 @@ TEST_CASE("light walls retain transparent shutdown textures through the safe res
     REQUIRE(layout.load(dir));
     for (const s32 ticks : {1, 2}) {
         Traps traps;
-        REQUIRE(traps.bind(device, layout, items, nullptr));
+        REQUIRE(traps.bind(device, layout, AssetScope(items), nullptr));
         traps.setPlayerCount(1);
         for (s32 cycle = 0; cycle < 2; ++cycle) {
             for (const s32 state : {0, 1, 2, 3}) {
@@ -1302,8 +1299,7 @@ TEST_CASE("Courtyard tentacles retain authored height and hit the rotated offset
     // the approach trigger does before putting a walker in the tentacle lane.
     world.activateTrigger(2, true);
     Traps traps;
-    REQUIRE(traps.bind(device, world.layout(), world.items(), &world.collision(), 1, 1, 1,
-                       &world.realmItems()));
+    REQUIRE(traps.bind(device, world.layout(), world.itemScope(), &world.collision(), 1, 1, 1));
     std::vector<usize> ids;
     std::vector<TrapVictim> victims;
     for (usize i = 0; i < traps.size(); ++i) {
@@ -1373,8 +1369,7 @@ TEST_CASE("Courtyard tentacles' rendered strikes overlap their native shore cont
     REQUIRE(world.load(device, root, *catalog.byName("A1")));
     world.activateTrigger(2, true);
     Traps traps;
-    REQUIRE(traps.bind(device, world.layout(), world.items(), &world.collision(), 1, 1, 1,
-                       &world.realmItems()));
+    REQUIRE(traps.bind(device, world.layout(), world.itemScope(), &world.collision(), 1, 1, 1));
     traps.setPlayerCount(2);
     std::vector<TrapVictim> party;
     std::vector<usize> tentacles;
@@ -1445,7 +1440,7 @@ TEST_CASE("C1 trapped chest bomb faces the camera throughout its fuse",
     REQUIRE(layout.load(root / "LEVELS/LEVELC1"));
     REQUIRE(items.load(root / "ITEMS/LEVELC"));
     Chests chests;
-    REQUIRE(chests.bind(device, layout, items, nullptr));
+    REQUIRE(chests.bind(device, layout, AssetScope(items), nullptr));
     chests.setPlayerCount(1);
     usize index = 0;
     while (index < chests.size() &&

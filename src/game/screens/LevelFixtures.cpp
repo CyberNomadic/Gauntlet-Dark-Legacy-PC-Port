@@ -94,9 +94,9 @@ void LevelFixtures::bind(const Resources& resources) {
     m_chests.bind(device, world.layout(), scope, &world.collision());
     m_gates.bind(device, world.layout(), scope, &world.collision());
     const LevelInfo* level = world.level();
-    m_traps.bind(device, world.layout(), world.items(), &world.collision(), 1,
+    m_traps.bind(device, world.layout(), world.itemScope(), &world.collision(), 1,
                  level != nullptr ? level->tuning.trapTimeScale(resources.difficultyGain) : 1.0f,
-                 trapDamageScale(), &world.realmItems());
+                 trapDamageScale());
     m_barrels.bind(device, world.layout(), scope, &world.collision());
     m_safeRocks.bind(device, world.layout(), world.items());
     m_scenery.bind(device, world.layout(), scope, &world.collision());

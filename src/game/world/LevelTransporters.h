@@ -41,10 +41,6 @@ public:
     /** The scope's archives must outlive the pads; the first holding TRANS supplies them. */
     void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               s32 players);
-    void bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items, s32 players,
-              ItemArchive* realmItems = nullptr) {
-        bind(device, layout, AssetScope(items, realmItems), players);
-    }
     void clear();
     void animate(f32 seconds);
     void capturePresentation() {

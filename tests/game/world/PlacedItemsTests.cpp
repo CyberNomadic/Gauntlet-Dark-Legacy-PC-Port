@@ -47,7 +47,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     LevelWorld world;
     REQUIRE(world.load(device, root, *level));
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     chests.setPlayerCount(1);
     usize index = 0;
     while (index < chests.size() &&

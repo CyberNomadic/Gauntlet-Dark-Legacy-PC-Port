@@ -94,11 +94,6 @@ public:
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const LevelCatalog& catalog, const WorldCollision* collision,
               const TowerAccess* access = nullptr);
-    bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-              const LevelCatalog& catalog, const WorldCollision* collision,
-              ItemArchive* realmItems = nullptr, const TowerAccess* access = nullptr) {
-        return bind(device, layout, AssetScope(items, realmItems), catalog, collision, access);
-    }
     void clear();
     usize size() const { return m_portals.size(); }
     const Portal& portal(usize index) const { return m_portals[index]; }
