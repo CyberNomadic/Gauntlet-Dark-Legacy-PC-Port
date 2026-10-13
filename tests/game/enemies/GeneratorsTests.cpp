@@ -61,6 +61,41 @@ void writeGeneratorArchive(const std::filesystem::path& root) {
                      {"name":"WALK","frames":10,"rate":30}]}]})");
 }
 
+TEST_CASE("generator bodies resolve the native root-suffixed object name",
+          "[game][generators][generator-bodies]") {
+    const auto root = test::scratchDirectory("generator-root-suffix");
+    const auto archive = root / "MONSTERS/GRU";
+    std::filesystem::create_directories(archive);
+    writeTextFile(archive / "body.obj",
+                  "v 0 0 1\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nusemtl tex0\nf 1//1 2//1 3//1\n");
+    writeTextFile(archive / "objects.json", R"({"objects":[
+        {"index":0,"name":"BODY","file":"body.obj","meshTriangles":1},
+        {"index":1,"name":"GEN_GRU1L1ROOT","file":"body.obj","meshTriangles":1}]})");
+    writeFile(archive / "skin.png", test::kTinyPng);
+    writeTextFile(archive / "textures.json", R"({"bitmaps":[
+        {"index":0,"name":"SKIN","file":"skin.png","width":2,"height":2}]})");
+    test::convertModelFixture(archive);
+    writeTextFile(archive / "animations.json", R"({"trees":[{"name":"GRU1",
+        "nodes":[{"name":"BODY","object":"BODY","parent":-1,"position":[0,0,0]}],
+        "sequences":[{"name":"READY","frames":10,"rate":30}]}]})");
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"GROUND","position":[0,0,0]}],
+      "itemInfos":[{"type":3,"name":"GRU","radius":2,"height":5,"hitPoints":10}],
+      "itemInstances":[{"info":0,"minPlayers":1,"position":[0,0,0],
+                        "params":[1,0,7,0,5,0,20,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(root));
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, root, nullptr, 4, {}, 1);
+    Generators generators;
+    REQUIRE(generators.bind(device, layout, enemies, nullptr, {}, 1));
+    REQUIRE(generators.count() == 1);
+    CHECK(generators.bodyShown(0));
+    REQUIRE(generators.bodyResources().size() == 1);
+    CHECK(generators.bodyResources()[0].state == 1);
+}
+
 TEST_CASE("generator visibility uses its expanded activation sphere and freezes distant timers",
           "[game][generators][generator-activation]") {
     const auto root = test::scratchDirectory("generator-activation-sphere");
