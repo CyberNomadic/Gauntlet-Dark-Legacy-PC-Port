@@ -296,7 +296,7 @@ void LevelTriggers::refreshEligibility(s32 players) {
 }
 
 void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
-                                ItemArchive& items) {
+                                ItemArchive& items, ItemArchive* realmItems) {
     m_figures.clear();
     for (const auto& trigger : m_triggers) {
         const auto& instance = layout.itemInstances()[static_cast<usize>(trigger.instance)];
@@ -309,7 +309,8 @@ void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
         auto figure = std::make_unique<ItemFigure>();
         // Marker-only triggers have no tree. Preserve authored height: these pads
         // may sit on a moving bridge rather than on the static collision floor.
-        if (!figure->place(device, items, info.name, instance, nullptr)) {
+        ItemArchive& art = itemArchiveForTree(items, info.name, realmItems);
+        if (!figure->place(device, art, info.name, instance, nullptr)) {
             figure.reset();
         } else {
             figure->placeAt(trigger.placement);

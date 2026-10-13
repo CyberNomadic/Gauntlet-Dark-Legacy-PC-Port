@@ -54,7 +54,8 @@ public:
     };
 
     void bind(const WorldLayout& layout);
-    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items);
+    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                     ItemArchive* realmItems = nullptr);
     void clear() { m_rotators.clear(); }
     usize size() const { return m_rotators.size(); }
     const Rotator& rotator(usize index) const { return m_rotators[index]; }
