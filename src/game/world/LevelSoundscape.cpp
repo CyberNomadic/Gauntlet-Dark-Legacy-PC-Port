@@ -112,6 +112,18 @@ void LevelSoundscape::pauseAmbience() {
     }
 }
 
+void LevelSoundscape::holdSounds() {
+    if (m_output != nullptr) {
+        m_output->setCategoryPaused(SoundCategory::Effects, true);
+    }
+}
+
+void LevelSoundscape::releaseSounds() {
+    if (m_output != nullptr) {
+        m_output->setCategoryPaused(SoundCategory::Effects, false);
+    }
+}
+
 void LevelSoundscape::updateMusicAreas(std::span<const Vec3> listeners, const WorldScene* world) {
     if (const std::optional<MusicCue> cue = m_areas.update(listeners, m_musicArea, world);
         cue.has_value()) {

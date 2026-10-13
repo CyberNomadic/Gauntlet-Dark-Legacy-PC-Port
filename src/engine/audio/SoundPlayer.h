@@ -57,6 +57,9 @@ public:
      * ignored. */
     void setVolume(SoundHandle handle, f32 volume);
     void setPan(SoundHandle handle, f32 pan);
+    /** Holds every voice of a category where it is, still playing but silent, until let
+     * go; a sequence waiting on one of them waits too. */
+    void setCategoryPaused(SoundCategory category, bool paused);
     /** Fades a voice (or every voice) out over a few milliseconds; it no longer plays. */
     void stop(SoundHandle handle);
     void stopAll();
@@ -106,6 +109,7 @@ private:
     f32 m_masterVolume = 1.0f;
     std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryVolumes{1.0f, 1.0f, 1.0f};
     std::array<f32, static_cast<usize>(SoundCategory::Count)> m_categoryScales{1.0f, 1.0f, 1.0f};
+    std::array<bool, static_cast<usize>(SoundCategory::Count)> m_categoryPaused{};
 };
 
 } // namespace gdl

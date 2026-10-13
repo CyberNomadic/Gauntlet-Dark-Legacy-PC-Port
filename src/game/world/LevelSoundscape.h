@@ -52,6 +52,10 @@ public:
      * update restores loops whose motion has not settled. Leaves music, narration and
      * menu sounds under their own controls. */
     void pauseAmbience();
+    /** Holds every effect and line of speech where it is while play is paused, so that the
+     * words and their captions stay together, and lets them go on again. */
+    void holdSounds();
+    void releaseSounds();
     static constexpr f32 kDuckedLevel = 16.0f / 255.0f;
     /** Lets the zones ask for the area holding the party (items.c 4514-4522, 4733-4736). */
     void updateMusicAreas(std::span<const Vec3> listeners, const WorldScene* world = nullptr);

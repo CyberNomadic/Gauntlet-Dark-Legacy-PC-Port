@@ -98,8 +98,21 @@ f32 AudioStream::pan() const {
     return m_pan;
 }
 
+void AudioStream::setPaused(bool paused) {
+    const std::scoped_lock lock(m_mutex);
+    m_paused = paused;
+}
+
+bool AudioStream::paused() const {
+    const std::scoped_lock lock(m_mutex);
+    return m_paused;
+}
+
 void AudioStream::mixInto(std::span<f32> stereoOut) {
     const std::scoped_lock lock(m_mutex);
+    if (m_paused) {
+        return;
+    }
     const usize channels = m_desc.channels;
     const usize outputFrames = stereoOut.size() / 2;
     const f32 targetLeft = m_stopping ? 0.0f : m_volume * m_leftGain;
