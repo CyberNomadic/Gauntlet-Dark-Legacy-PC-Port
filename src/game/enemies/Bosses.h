@@ -75,6 +75,12 @@ public:
     const LegendRite& legend() const { return m_rite; }
 
     void update(s32 ticks, f32 seconds, std::span<const EnemyView> players);
+    /** Its waking clock runs from its placement, through an entrance that holds it still. */
+    void arm(f32 seconds) {
+        if (!m_awake) {
+            m_wakeClock += seconds;
+        }
+    }
     void setArenaAnchors(std::span<const Mat4> anchors) { m_fighter.setArenaAnchors(anchors); }
     void setArenaTargets(std::span<const CombatArenaTarget> targets) {
         m_fighter.setArenaTargets(targets);

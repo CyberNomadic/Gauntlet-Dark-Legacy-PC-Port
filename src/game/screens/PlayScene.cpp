@@ -917,6 +917,8 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
         // earlyenemies: the Mountain's Peak).
         if (const LevelInfo* level = m_world->level(); level != nullptr && level->earlyEnemies) {
             updateEnemies(ticks, seconds);
+        } else {
+            m_opponents.bosses().arm(seconds);
         }
         updateAmbience();
         const bool cameraHandoff = m_arrival.camera().active();

@@ -3456,11 +3456,24 @@ TEST_CASE("in the town's crypt the lich rises for the party, its meter over the 
     }
     // The boss stands at its mark; the meter shows it whole; the fight's own camera looks
     // from behind the party toward the boss. The approach pitch eases into the fight,
-    // rather than snapping to the combat record's shallow angle on the wake frame.
+    // rather than snapping to the combat record's shallow angle on the wake frame: the
+    // camera holds its place while its look pans to the boss, and turns no faster than
+    // its speed allows.
     REQUIRE(glm::distance(*scene.bosses().position(), Vec3{0.0f, 0.0f, -0.5f}) < 2.0f);
     REQUIRE(world.level()->bossCamera.has_value());
     REQUIRE(scene.bossCameraOn());
     REQUIRE(scene.viewCamera().position.z > scene.actor(0)->position().z);
+    REQUIRE(std::abs(scene.viewCamera().pitch - approachPitch) < 0.05f);
+    // It wakes for the party within its threshold, its look panning to it, and backs off
+    // under its speed until the boss and the party both fit, the pitch easing all the while.
+    for (s32 i = 0; i < 900 && (!scene.bosses().view().awake || scene.bossCamera().margin() < 0.0f ||
+                                 scene.viewCamera().pitch >= approachPitch);
+         ++i) {
+        const f32 before = scene.viewCamera().pitch;
+        scene.update(1.0 / 60.0, still);
+        REQUIRE(std::abs(scene.viewCamera().pitch - before) < 0.1f);
+    }
+    REQUIRE(scene.bosses().view().awake);
     REQUIRE(scene.viewCamera().pitch < approachPitch);
     REQUIRE(scene.bossCamera().margin() >= 0.0f);
     REQUIRE(scene.bossMeter().showing());
