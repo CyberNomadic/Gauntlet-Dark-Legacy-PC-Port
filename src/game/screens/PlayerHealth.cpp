@@ -93,7 +93,9 @@ void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool 
     if (kind != HurtKind::DeathDrain) {
         damage = guarded(runtime, damage, directed);
     }
-    if (runtime.figure != nullptr && runtime.figure->animator().defending()) {
+    // P_SHOVE sets hud_flags 0x400 as the guards set 0x200; damage_player flashes for either.
+    if (runtime.figure != nullptr &&
+        (runtime.figure->animator().defending() || runtime.figure->animator().shoving())) {
         events.block(unguarded - damage, damage);
     } else if (unguarded > kBlockLessonFrom && (received.flags & kHeavyFlags) != 0 &&
                !runtime.blocked && events.learnBlock) {

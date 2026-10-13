@@ -980,13 +980,19 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
             EffectTrees::Setting settings;
             settings.persistent = true;
             settings.depthWrite = false;
+            settings.yaw = actor.yaw();
             runtime.deathHeldEffect = m_resources->effects.startSet(
                 m_resources->device, *archive,
                 DeathRules::effect(DeathRules::form(enemies.tierOf(slot))), actor.position(),
                 settings);
         }
     } else {
-        m_resources->effects.moveTo(runtime.deathHeldEffect, actor.position());
+        // StartDeathFX hangs the arc on the player's node: it goes where they go and turns
+        // as they turn, toward Death, the way Death's own arc turns toward its victim.
+        m_resources->effects.placeAt(
+            runtime.deathHeldEffect,
+            glm::rotate(glm::translate(Mat4{1.0f}, actor.position()), actor.yaw(),
+                        Vec3{0.0f, 1.0f, 0.0f}));
     }
     return at;
 }
