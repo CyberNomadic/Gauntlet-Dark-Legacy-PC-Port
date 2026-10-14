@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 
 #include "engine/assets/ItemArchive.h"
@@ -40,6 +41,22 @@ public:
     /** What it hangs from: the body (p->node), the head (weapon_node), or the back (the
      * root's first child's first child). */
     enum class Mount : u8 { Body, Head, Back };
+    struct Checkpoint {
+        Kind kind = Kind::None;
+        std::string tree;
+        AnimationPlayer::Checkpoint animation;
+        TextureAnimator::Checkpoint textures;
+        std::optional<TreePose::Checkpoint> pose;
+        f32 previousFrame = 0;
+        u64 previousGeneration = 0;
+        bool presentationAdvanced = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    /** Restores the existing kind only, never binds artwork or calls a renderer. */
+    bool restore(const Checkpoint& state);
+    u64 bindingRevision() const { return m_bindingRevision; }
     /** Pojo's sequences, by index (the POJO tree's READY, RUN, ATTACK, ATTPWR, HIT, DEATH). */
     static constexpr s32 kReady = 0;
     static constexpr s32 kRun = 1;
@@ -93,6 +110,7 @@ private:
 
     Kind m_kind = Kind::None;
     const TreeInfo* m_tree = nullptr;
+    const TreeInfo* m_poseTree = nullptr; ///< clear preserves the native dormant pose
     mutable TreeModel m_model;
     TreePose m_pose;
     AnimationPlayer m_player;
@@ -100,6 +118,7 @@ private:
     f32 m_previousFrame = 0;
     u64 m_previousGeneration = 0;
     bool m_presentationAdvanced = false;
+    u64 m_bindingRevision = 0;
 };
 
 } // namespace gdl::game

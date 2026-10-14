@@ -435,6 +435,7 @@ add_library(game STATIC
     screens/OrdinaryBarrelEmission.cpp
     screens/OrdinaryPickupPhase.cpp
     screens/OrdinaryCritterPhase.cpp
+    screens/OrdinaryEnemyMissilePhase.cpp
     screens/CritterCueEmission.cpp
     screens/PartyLighting.cpp
     screens/CombatResources.cpp

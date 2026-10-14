@@ -4,7 +4,7 @@
 #include <bit>
 
 namespace gdl {
-void Sha256::block() {
+void Sha256::block(std::span<const u8, 64> bytes) {
     static constexpr std::array<u32, 64> kRound{
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -19,7 +19,7 @@ void Sha256::block() {
     std::array<u32, 64> words{};
     for (usize i = 0; i < 16; ++i) {
         for (usize j = 0; j < 4; ++j) {
-            words[i] = (words[i] << 8) | m_buffer[i * 4 + j];
+            words[i] = (words[i] << 8) | bytes[i * 4 + j];
         }
     }
     for (usize i = 16; i < words.size(); ++i) {
@@ -50,18 +50,25 @@ void Sha256::block() {
 }
 void Sha256::update(std::span<const u8> bytes) {
     m_size += bytes.size();
-    while (!bytes.empty()) {
+    if (m_used != 0) {
         const auto count = std::min(bytes.size(), m_buffer.size() - m_used);
-        for (usize i = 0; i < count; ++i) {
-            m_buffer[m_used + i] = bytes[i];
-        }
+        std::copy_n(bytes.begin(), count, m_buffer.begin() + m_used);
         m_used += count;
         bytes = bytes.subspan(count);
-        if (m_used == m_buffer.size()) {
-            block();
-            m_used = 0;
+        if (m_used != m_buffer.size()) {
+            return;
         }
+        block(m_buffer);
+        m_used = 0;
     }
+    // Full blocks can be read directly, including from unaligned input. Only
+    // the incomplete tail needs to survive the caller's span.
+    while (bytes.size() >= m_buffer.size()) {
+        block(bytes.first<64>());
+        bytes = bytes.subspan(m_buffer.size());
+    }
+    std::copy(bytes.begin(), bytes.end(), m_buffer.begin());
+    m_used = bytes.size();
 }
 std::array<u8, 32> Sha256::finish() const {
     auto copy = *this;

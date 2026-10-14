@@ -424,6 +424,17 @@ void PlayerFigure::setCompanionPowerups(RenderDevice& device, ItemArchive& power
     m_companionAlpha = inventory.permanentPojo ? 1.0f : PowerupCompanion::fadeOf(inventory);
 }
 
+bool PlayerFigure::syncCompanionPowerups(const Inventory& inventory) {
+    const bool shieldRunning = m_animator.action() == PlayerAnimator::Action::ShieldRun;
+    const auto kind = PowerupCompanion::choose(PowerupEffects::of(inventory), shieldRunning);
+    if (kind != m_companion.kind() ||
+        (kind != PowerupCompanion::Kind::None && !m_companion.shown())) {
+        return false;
+    }
+    m_companionAlpha = inventory.permanentPojo ? 1.0f : PowerupCompanion::fadeOf(inventory);
+    return true;
+}
+
 ItemArchive* PlayerFigure::effects() {
     if (!m_effects.loaded() && !m_effectDirectory.empty()) {
         m_effects.load(m_effectDirectory);
@@ -875,7 +886,10 @@ bool PlayerFigure::GameplayCheckpoint::valid() const {
         !animation.valid() || (transition && !transition->valid()) ||
         (!transforms.empty() && transforms.size() != costumeObjects.size()) ||
         animationRevision > std::numeric_limits<u64>::max() - 1024 || !std::isfinite(phoenixSide) ||
-        std::abs(phoenixSide) > 1'000'000) {
+        std::abs(phoenixSide) > 1'000'000 || !familiar.valid() || !powerupCompanion.valid() ||
+        familiarTier != (familiar.tree.empty() ? 0 : familiar.tier) ||
+        companion != powerupCompanion.kind || !std::isfinite(companionAlpha) ||
+        companionAlpha < 0 || companionAlpha > 1) {
         return false;
     }
     for (const auto& transform : transforms) {
@@ -925,6 +939,14 @@ std::optional<PlayerFigure::GameplayCheckpoint> PlayerFigure::gameplayCheckpoint
     state.familiarPending = m_familiarPending;
     state.familiarReleased = m_familiarReleased;
     state.phoenixSide = m_phoenixSide;
+    auto familiar = m_familiar.checkpoint();
+    auto companion = m_companion.checkpoint();
+    if (!familiar || !companion) {
+        return std::nullopt;
+    }
+    state.familiar = std::move(*familiar);
+    state.powerupCompanion = std::move(*companion);
+    state.companionAlpha = m_companionAlpha;
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
@@ -957,6 +979,10 @@ struct PlayerFigure::PreparedGameplay::Data {
     const TreeInfo* costume = nullptr;
     GameplayCheckpoint state;
     PlayerAnimator animator;
+    PlayerFamiliar familiar;
+    PowerupCompanion companion;
+    u64 familiarBinding = 0;
+    u64 companionBinding = 0;
 };
 PlayerFigure::PreparedGameplay::PreparedGameplay(std::unique_ptr<Data> data)
     : m_data(std::move(data)) {}
@@ -977,7 +1003,13 @@ PlayerFigure::prepareGameplayRestore(const GameplayCheckpoint& state) const {
     data->costume = m_costume;
     data->state = state;
     data->animator = m_animator;
-    if (!data->animator.restore(state.animation, state.transition)) {
+    data->familiar = m_familiar;
+    data->companion = m_companion;
+    data->familiarBinding = m_familiar.bindingRevision();
+    data->companionBinding = m_companion.bindingRevision();
+    if (!data->animator.restore(state.animation, state.transition) ||
+        !data->familiar.restore(state.familiar) ||
+        !data->companion.restore(state.powerupCompanion)) {
         return std::nullopt;
     }
     for (usize node = 0; node < state.transforms.size(); ++node) {
@@ -991,6 +1023,8 @@ bool PlayerFigure::canCommitGameplay(const PreparedGameplay& prepared) const {
     return prepared.m_data && prepared.m_data->owner == this &&
            prepared.m_data->lifetime.lock() == m_gameplayOwner &&
            prepared.m_data->actions == m_actionTree && prepared.m_data->costume == m_costume &&
+           prepared.m_data->familiarBinding == m_familiar.bindingRevision() &&
+           prepared.m_data->companionBinding == m_companion.bindingRevision() &&
            gameplayBindingMatches(prepared.m_data->state);
 }
 bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
@@ -1004,6 +1038,11 @@ bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
     m_animationRevision = data.state.animationRevision;
     m_familiarPending = data.state.familiarPending;
     m_familiarReleased = data.state.familiarReleased;
+    static_assert(std::is_nothrow_move_assignable_v<PlayerFamiliar>);
+    static_assert(std::is_nothrow_move_assignable_v<PowerupCompanion>);
+    m_familiar = std::move(data.familiar);
+    m_companion = std::move(data.companion);
+    m_companionAlpha = data.state.companionAlpha;
     // Preparation owns the allocation. Rotating this token invalidates sibling
     // preparations without allocating or invoking any callbacks during commit.
     m_gameplayOwner = std::move(data.successor);

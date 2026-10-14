@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <future>
@@ -14,6 +15,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/netplay/InputCommand.h"
 #include "game/netplay/StageStatePacket.h"
 #include "game/screens/CombatCapture.h"
 #include "game/screens/CombatReplayWorker.h"
@@ -69,14 +71,18 @@ struct Gate {
     std::mutex mutex;
     std::condition_variable changed;
     std::vector<Worker::Request> requests;
+    std::vector<Worker::Request> rebases;
     std::thread::id producer;
     usize permitted = 0;
+    usize rebasePermitted = 0;
     bool released = false;
     bool throws = false;
+    bool rebaseEnabled = false;
+    bool rebaseThrows = false;
     usize finishes = 0;
 
     Worker::Executor executor() {
-        return {
+        Worker::Executor result{
             [this](const Worker::Request& request) {
                 std::unique_lock lock{mutex};
                 producer = std::this_thread::get_id();
@@ -88,6 +94,10 @@ struct Gate {
                     throw std::runtime_error{"bounded executor failure"};
                 }
                 Worker::Output output;
+                // Scheduler-only success: native publication contents are
+                // validated by the loaded fixture below, not these envelopes.
+                output.status =
+                    rebaseEnabled ? Worker::Status::Published : Worker::Status::Unsupported;
                 auto counters = std::make_shared<OnlineCombatReplay::Diagnostics>();
                 counters->domains[static_cast<usize>(OnlineCombatReplay::Domain::Stage)].updates =
                     number;
@@ -99,6 +109,22 @@ struct Gate {
                 ++finishes;
                 changed.notify_all();
             }};
+        if (rebaseEnabled) {
+            result.rebase = [this](const Worker::Request& request) {
+                std::unique_lock lock{mutex};
+                rebases.push_back(request);
+                const auto number = rebases.size();
+                changed.notify_all();
+                changed.wait(lock, [&] { return released || rebasePermitted >= number; });
+                if (rebaseThrows) {
+                    throw std::runtime_error{"bounded rebase failure"};
+                }
+                Worker::Output output;
+                output.status = Worker::Status::Published;
+                return output;
+            };
+        }
+        return result;
     }
     bool wait(usize count) {
         std::unique_lock lock{mutex};
@@ -107,6 +133,19 @@ struct Gate {
     Worker::Request request(usize index) {
         std::lock_guard lock{mutex};
         return requests.at(index);
+    }
+    bool waitRebase(usize count) {
+        std::unique_lock lock{mutex};
+        return changed.wait_for(lock, 5s, [&] { return rebases.size() >= count; });
+    }
+    Worker::Request rebase(usize index) {
+        std::lock_guard lock{mutex};
+        return rebases.at(index);
+    }
+    void permitRebase(usize count) {
+        std::lock_guard lock{mutex};
+        rebasePermitted = count;
+        changed.notify_all();
     }
     void permit(usize count) {
         std::lock_guard lock{mutex};
@@ -306,6 +345,45 @@ TEST_CASE("combat worker stop joins an in-flight transaction and discards pendin
     CHECK(worker.submit(authority.get(), {}) == Worker::Submission::Stopped);
 }
 
+TEST_CASE("combat worker duplicate identity preserves exact floating-point command bits",
+          "[rollback][combat-replay-worker][combat-replay-rebase]") {
+    const auto match = context();
+    auto authority = envelope(match, 100);
+    const auto lifetime = std::make_shared<const u8>(0);
+    Gate gate;
+    Worker worker;
+    ReleaseGate release{gate};
+    REQUIRE(worker.start(match, 1, lifetime, gate.executor()));
+    auto original = command(match, 101);
+    original.aimDirection = Vec3{0};
+    const auto bytes = InputPacket::encode(std::span{&original, 1});
+    REQUIRE(bytes);
+    REQUIRE(worker.submit(authority.get(), std::span{&original, 1}) == Worker::Submission::Queued);
+    REQUIRE(gate.wait(1));
+    CHECK(worker.submit(nullptr, std::span{&original, 1}) == Worker::Submission::Unchanged);
+    const auto before = worker.queueState();
+    for (usize field = 0; field < 6; ++field) {
+        CAPTURE(field);
+        auto changed = original;
+        std::array<f32*, 6> fields{&changed.direction.x,     &changed.direction.y,
+                                   &changed.magnitude,       &changed.aimDirection->x,
+                                   &changed.aimDirection->y, &changed.aimDirection->z};
+        *fields[field] = -0.0f;
+        REQUIRE(changed.valid());
+        CHECK(InputPacket::encode(std::span{&changed, 1}) != bytes);
+        CHECK(worker.submit(nullptr, std::span{&changed, 1}) == Worker::Submission::Conflict);
+    }
+    CHECK(worker.queueState().submitted == before.submitted);
+    CHECK(worker.queueState().retainedCommands == 1);
+    const auto next = command(match, 102);
+    REQUIRE(worker.submit(nullptr, std::span{&next, 1}) == Worker::Submission::Queued);
+    gate.permit(1);
+    REQUIRE(gate.wait(2));
+    const auto pending = gate.request(1);
+    REQUIRE(pending.commands.size() == 2);
+    CHECK(InputPacket::encode(std::span{&pending.commands.front(), 1}) == bytes);
+}
+
 TEST_CASE("combat worker exceptions and expired resource fences cannot publish success",
           "[rollback][combat-replay-worker]") {
     const auto match = context();
@@ -372,6 +450,170 @@ TEST_CASE("combat worker restart isolates epoch grants and foreign local input",
     CHECK(worker.queueState().retainedCommands == 1);
     worker.stop();
     CHECK(gate.finishes == 2);
+}
+
+TEST_CASE("combat worker rebases once to newest authority without consuming future edges",
+          "[rollback][combat-replay-worker][combat-replay-rebase]") {
+    const auto match = context();
+    auto authority = envelope(match, 100);
+    const auto lifetime = std::make_shared<const u8>(0);
+    Gate gate;
+    gate.rebaseEnabled = true;
+    Worker worker;
+    ReleaseGate release{gate};
+    REQUIRE(worker.start(match, 1, lifetime, gate.executor()));
+    std::vector<InputCommand> inputs;
+    for (u8 seat = 0; seat < 4; ++seat) {
+        auto input = command(match, 105, seat);
+        input.pressedButtons = static_cast<u32>(CommandPress::Attack);
+        inputs.push_back(input);
+    }
+    REQUIRE(worker.submit(authority.get(), inputs) == Worker::Submission::Queued);
+    REQUIRE(gate.wait(1));
+    authority->motion.tick = 101;
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    for (u8 seat = 0; seat < 4; ++seat) {
+        auto input = command(match, 110, seat);
+        input.heldButtons = static_cast<u32>(CommandHeld::ThrowPotion);
+        inputs.push_back(input);
+        inputs.push_back(command(match, 112, seat));
+    }
+    authority->motion.tick = 102;
+    REQUIRE(worker.submit(authority.get(), inputs) == Worker::Submission::Queued);
+    REQUIRE(worker.submit(authority.get(), inputs) == Worker::Submission::Unchanged);
+    gate.permit(1);
+    REQUIRE(gate.waitRebase(1));
+    const auto rebasing = gate.rebase(0);
+    CHECK(rebasing.authority->motion.tick == 102);
+    REQUIRE(rebasing.commands.size() == 12);
+    CHECK(worker.queueState().pending);
+    gate.permitRebase(1);
+    REQUIRE(gate.wait(2));
+    const auto done = worker.take();
+    REQUIRE(done);
+    CHECK(done->status == Worker::Status::Published);
+    CHECK(done->authorityTick == 102);
+    CHECK(done->request == rebasing.revision);
+    CHECK(worker.queueState().rebaseAttempts == 1);
+    CHECK(worker.queueState().rebased == 1);
+    CHECK(worker.queueState().superseded == 0);
+    const auto pending = gate.request(1);
+    REQUIRE(pending.commands.size() == rebasing.commands.size());
+    for (usize i = 0; i < pending.commands.size(); ++i) {
+        CHECK(InputPacket::encode(std::span{&pending.commands[i], 1}) ==
+              InputPacket::encode(std::span{&rebasing.commands[i], 1}));
+    }
+    CHECK(worker.queueState().retainedCommands == 12);
+    gate.release();
+    worker.stop();
+    CHECK(gate.rebases.size() == 1);
+    CHECK(gate.finishes == 1);
+}
+
+TEST_CASE("authority arriving during bounded worker rebase still supersedes publication",
+          "[rollback][combat-replay-worker][combat-replay-rebase]") {
+    const auto match = context();
+    auto authority = envelope(match, 100);
+    const auto lifetime = std::make_shared<const u8>(0);
+    Gate gate;
+    gate.rebaseEnabled = true;
+    Worker worker;
+    ReleaseGate release{gate};
+    REQUIRE(worker.start(match, 1, lifetime, gate.executor()));
+    const auto first = command(match, 106);
+    REQUIRE(worker.submit(authority.get(), std::span{&first, 1}) == Worker::Submission::Queued);
+    REQUIRE(gate.wait(1));
+    authority->motion.tick = 102;
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    gate.permit(1);
+    REQUIRE(gate.waitRebase(1));
+    authority->motion.tick = 103;
+    auto edge = command(match, 110);
+    edge.pressedButtons = static_cast<u32>(CommandPress::Attack);
+    REQUIRE(worker.submit(authority.get(), std::span{&edge, 1}) == Worker::Submission::Queued);
+    gate.permitRebase(1);
+    REQUIRE(gate.wait(2));
+    const auto done = worker.take();
+    REQUIRE(done);
+    CHECK(done->status == Worker::Status::Superseded);
+    CHECK_FALSE(done->publication);
+    CHECK(done->authorityTick == 102);
+    CHECK(worker.queueState().rebaseAttempts == 1);
+    CHECK(worker.queueState().superseded == 1);
+    const auto next = gate.request(1);
+    CHECK(next.authority->motion.tick == 103);
+    REQUIRE(next.commands.size() == 2);
+    CHECK(next.commands.back().pressed(CommandPress::Attack));
+    gate.release();
+    worker.stop();
+    CHECK(gate.rebases.size() == 1);
+}
+
+TEST_CASE("combat worker joins a bounded rebase before releasing resources",
+          "[rollback][combat-replay-worker][combat-replay-rebase]") {
+    const auto match = context();
+    auto authority = envelope(match, 100);
+    const auto lifetime = std::make_shared<const u8>(0);
+    Gate gate;
+    gate.rebaseEnabled = true;
+    Worker worker;
+    ReleaseGate release{gate};
+    REQUIRE(worker.start(match, 1, lifetime, gate.executor()));
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    REQUIRE(gate.wait(1));
+    authority->motion.tick = 101;
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    gate.permit(1);
+    REQUIRE(gate.waitRebase(1));
+    auto stopping = std::async(std::launch::async, [&] { worker.stop(); });
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (worker.queueState().pending && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    CHECK_FALSE(worker.queueState().pending);
+    CHECK(stopping.wait_for(0ms) == std::future_status::timeout);
+    gate.release();
+    REQUIRE(stopping.wait_for(5s) == std::future_status::ready);
+    stopping.get();
+    CHECK(gate.requests.size() == 1);
+    CHECK(gate.rebases.size() == 1);
+    CHECK(gate.finishes == 1);
+    CHECK_FALSE(worker.take());
+}
+
+TEST_CASE("failed or invalidated worker rebase cannot publish a picture",
+          "[rollback][combat-replay-worker][combat-replay-rebase]") {
+    const auto match = context();
+    auto authority = envelope(match, 100);
+    auto lifetime = std::make_shared<const u8>(0);
+    Gate gate;
+    gate.rebaseEnabled = true;
+    Worker worker;
+    ReleaseGate release{gate};
+    SECTION("exception") {
+        gate.rebaseThrows = true;
+    }
+    SECTION("resource fence") {}
+    REQUIRE(worker.start(match, 1, lifetime, gate.executor()));
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    REQUIRE(gate.wait(1));
+    authority->motion.tick = 101;
+    REQUIRE(worker.submit(authority.get(), {}) == Worker::Submission::Queued);
+    gate.permit(1);
+    REQUIRE(gate.waitRebase(1));
+    if (!gate.rebaseThrows) {
+        lifetime.reset();
+    }
+    gate.release();
+    const auto done = completion(worker);
+    REQUIRE(done);
+    CHECK(done->status ==
+          (gate.rebaseThrows ? Worker::Status::Exception : Worker::Status::Resources));
+    CHECK_FALSE(done->publication);
+    worker.stop();
+    CHECK(gate.requests.size() == 1);
+    CHECK(gate.rebases.size() == 1);
+    CHECK(gate.finishes == 1);
 }
 
 struct NativeFixture {

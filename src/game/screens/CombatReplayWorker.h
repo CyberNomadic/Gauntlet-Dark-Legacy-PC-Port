@@ -48,7 +48,7 @@ public:
         u64 request = 0;
         MatchContext context;
         u64 authorityTick = 0;
-        u64 inputThroughTick = 0;
+        u64 inputThroughTick = 0; ///< published endpoint, or requested horizon on refusal
         std::weak_ptr<const void> resources;
     };
     struct QueueState {
@@ -62,6 +62,8 @@ public:
         u64 coalesced = 0;
         u64 executed = 0;
         u64 superseded = 0;
+        u64 rebaseAttempts = 0;
+        u64 rebased = 0; ///< successful proof; a still-newer authority may supersede it
     };
 
     CombatReplayWorker();
@@ -85,6 +87,10 @@ public:
     struct Executor {
         std::function<Output(const Request&)> run;
         std::function<void()> finish;
+        // Optional exact-authority-only reconciliation at the completed native
+        // endpoint. Called at most once per job, never under the mailbox mutex.
+        // It must not advance through the request's newly appended inputs.
+        std::function<Output(const Request&)> rebase;
     };
     bool start(const MatchContext& context, u8 localPeer, std::weak_ptr<const void> resources,
                Executor executor);

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
+
+#include "game/screens/PartyHelpAdmission.h"
 
 namespace gdl::game {
 LevelFixtures::Phase OrdinaryFixturePhase::advance(LevelFixtures& fixtures, s32 ticks, f32 seconds,
@@ -19,6 +22,23 @@ LevelFixtures::Phase OrdinaryFixturePhase::advance(LevelFixtures& fixtures, s32 
         party.size() > 4 || !std::ranges::all_of(party, valid)) {
         return {LevelFixtures::Boundary::InvalidStep};
     }
-    return fixtures.updatePhase(ticks, seconds, party, nullptr);
+    std::vector<LevelFixtures::NamedSound> sounds;
+    bool lesson = false;
+    const LevelFixtures::Events events{.help = [&](s32 id, usize index) {
+        lesson |= !PartyHelpAdmission::suppressed(id, index, party);
+        // A proven suppressed native request returns false. A new request
+        // refuses the whole transaction rather than changing its help owner.
+        return false;
+    }};
+    auto result = fixtures.updatePhase(ticks, seconds, party, nullptr, [&](const GateEvent& event) {
+        fixtures.dispatchGateEvent(event, party, events, [&](std::string_view name, f32 volume) {
+            sounds.push_back({std::string{name}, volume});
+        });
+        return !lesson;
+    });
+    if (!result.refusal) {
+        result.sounds = std::move(sounds);
+    }
+    return result;
 }
 } // namespace gdl::game

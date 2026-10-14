@@ -168,6 +168,10 @@ struct CombatPrediction::Data {
             if (!player.figure) {
                 return false;
             }
+            // Bind carried companion artwork during loading, before the frozen
+            // replay resource catalog. Replay itself may not allocate assets.
+            player.figure->setCompanionPowerups(device, world.powerups(), save.progress().inventory,
+                                                &weapons);
             levels.observe(static_cast<s32>(seat), experienceLevel(save.experience()));
             party.push_back(std::move(player));
         }

@@ -13,6 +13,7 @@
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OrdinaryBarrelEmission.h"
 #include "game/screens/OrdinaryCritterPhase.h"
+#include "game/screens/OrdinaryEnemyMissilePhase.h"
 #include "game/screens/OrdinaryFixturePhase.h"
 #include "game/screens/OrdinaryFloorSupport.h"
 #include "game/screens/OrdinaryProjectilePhase.h"
@@ -60,8 +61,7 @@ bool quiet(const OpponentState& opponents) {
     const auto& enemies = opponents.enemies;
     const auto& missiles = opponents.missiles;
     return enemies.bursts.empty() && enemies.deathEvents.empty() && enemies.deathShots.empty() &&
-           enemies.tagged.empty() && missiles.hits.empty() && missiles.rockHits.empty() &&
-           missiles.pickupBlasts.empty() && missiles.bursts.empty() &&
+           enemies.tagged.empty() && OrdinaryEnemyMissilePhase::supported(missiles) &&
            std::ranges::none_of(enemies.cues,
                                 [](const auto& cue) { return cue.kind == EnemyCue::Kind::Yell; });
 }
@@ -269,7 +269,7 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
                                    std::span<const PlayerRuntime> party, f32 seconds) const {
     if (!OrdinaryStrongPhase::supported(m_checkpoint.m_combat.m_attacks, party) ||
         !OrdinaryProjectilePhase::supported(state.combat.arsenal, m_checkpoint.m_combat.m_missiles,
-                                            seconds) ||
+                                            seconds, &m_checkpoint.m_combat.m_arsenal, party) ||
         !quiet(state.opponents) || !OrdinaryCritterPhase::supported(state.adapter) ||
         std::ranges::any_of(state.adapter.lessons,
                             [&](const auto& lesson) {
@@ -321,16 +321,18 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
             player.figure->animator().entering() ||
             !ordinaryAction(player.figure->animator().action()) ||
             !PlayerAnimator::rollbackReactionDeed(player.reaction) ||
-            player.figure->familiarTier() != 0 ||
-            player.figure->companion().kind() != PowerupCompanion::Kind::None ||
+            (player.figure->companion().kind() != PowerupCompanion::Kind::None &&
+             player.figure->companion().kind() != PowerupCompanion::Kind::Phoenix) ||
             !OrdinaryFloorSupport::accepts(player, collision,
                                            OrdinaryFloorSupport::Phase::BeforeCarry,
                                            m_checkpoint.stageBound())) {
             return false;
         }
         const auto& inventory = player.actor.save().progress().inventory;
-        if (std::ranges::any_of(inventory.powerups,
-                                [](const auto& slot) { return slot.working(); })) {
+        if (std::ranges::any_of(inventory.powerups, [](const auto& slot) {
+                return slot.working() &&
+                       (slot.kind != powerup::kSpecial || slot.flags != powerup::kPhoenix);
+            })) {
             return false;
         }
         const auto impulse = player.knockback.checkpoint();
@@ -532,6 +534,11 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
             m_checkpoint.m_transporters->m_owner.animate(frame.seconds);
         }
     }
+    for (auto& player : party) {
+        if (!player.figure->syncCompanionPowerups(player.actor.save().progress().inventory)) {
+            return {Status::Unsupported, Refusal::Powerups};
+        }
+    }
     const PlayerAttacks::Targets targets{
         .opponents = opponents,
         .fixtures = m_fixtures,
@@ -645,14 +652,15 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
                         }
                     }
                 } else if (action == PartyMotion::Action::FamiliarShot) {
-                    const auto& player = party[index];
-                    const auto worn = PowerupEffects::of(player.actor.save().progress().inventory);
-                    // A just-expired Phoenix can leave the previous tick's
-                    // familiarPending latch. Native launchFamiliar returns
-                    // before any work when neither actual shooter remains.
-                    if ((worn.special & powerup::kPhoenix) != 0 ||
-                        (player.figure->familiarTier() > 0 &&
-                         player.figure->familiarMissile().bound())) {
+                    auto& player = party[index];
+                    const auto& actor = player.actor;
+                    const auto target = player.cursorAiming
+                                            ? std::nullopt
+                                            : combat.m_attacks.aim(actor, actor.facing(), targets);
+                    if (!OrdinaryWeaponEmission::familiar(
+                             combat.m_arsenal, actor, *player.figure, target,
+                             {combat.m_missiles, combat.m_missileEffects, combat.m_sharedEffects})
+                             .accepted) {
                         refuseParty(PartyRefusal::FamiliarShot);
                     }
                 } else if (action == PartyMotion::Action::NoPotion) {
@@ -765,13 +773,16 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     }
     PartyRecords::advanceTime(party, frame.seconds);
     if (staged) {
-        if (OrdinaryFixturePhase::advance(m_fixtures, frame.ticks, frame.seconds, party).refusal ||
-            !dormantStatues() || std::ranges::any_of(party, [&](const auto& player) {
+        auto fixtures =
+            OrdinaryFixturePhase::advance(m_fixtures, frame.ticks, frame.seconds, party);
+        if (fixtures.refusal || !dormantStatues() ||
+            std::ranges::any_of(party, [&](const auto& player) {
                 return !OrdinaryFloorSupport::accepts(
                     player, collision, OrdinaryFloorSupport::Phase::AfterLanding, staged);
             })) {
             return {Status::Unsupported, Refusal::Fixtures};
         }
+        result.fixtureSounds = std::move(fixtures.sounds);
     } else {
         for (auto& player : party) {
             LevelFixtures::observePlayer(player, player.actor.position());
@@ -820,6 +831,17 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
         }) != OpponentSimulation::Result::Advanced) {
         return {Status::Unsupported, Refusal::OpponentStep};
     }
+    auto damage = frame.damage;
+    damage.playSeconds += frame.seconds;
+    auto missileHits = OrdinaryEnemyMissilePhase::advance(
+        opponents, party, combat.m_health, m_classes, damage, combat.m_sharedEffects);
+    if (!missileHits.advanced()) {
+        return {Status::Unsupported, Refusal::Damage};
+    }
+    result.damage = std::move(missileHits.damage);
+    for (auto& cue : missileHits.sounds) {
+        result.feedback.push_back({std::move(cue.name), cue.position, cue.volume});
+    }
     result.enemyCues = opponents.m_enemies.takeCues();
     if (std::ranges::any_of(result.enemyCues,
                             [](const auto& cue) { return cue.kind == EnemyCue::Kind::Yell; })) {
@@ -830,8 +852,6 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     if (!critterStep.advanced()) {
         return {Status::Unsupported, Refusal::OpponentStep};
     }
-    auto damage = frame.damage;
-    damage.playSeconds += frame.seconds;
     auto critterFinish = OrdinaryCritterPhase::finish(
         opponents, party, combat.m_health, m_classes, damage, combat.m_sharedEffects,
         [&](const Vec3& from, const Vec3& to) {
@@ -846,7 +866,8 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     for (auto& cue : critterFinish.sounds) {
         result.feedback.push_back({std::move(cue.name), cue.position, cue.volume});
     }
-    result.damage = std::move(critterFinish.damage);
+    result.damage.insert(result.damage.end(), std::make_move_iterator(critterFinish.damage.begin()),
+                         std::make_move_iterator(critterFinish.damage.end()));
     // Native levels precede the ordinary blow queue. A new level needs healing,
     // equipment rebinding and lesson owners; refuse rather than emulate those.
     for (const auto& player : party) {

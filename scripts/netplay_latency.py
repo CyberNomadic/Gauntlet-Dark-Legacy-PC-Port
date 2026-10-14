@@ -288,6 +288,7 @@ REPLAY_REFUSALS = ("unbound", "invalid_authority", "invalid_input", "input_histo
                    "divergent_horizon", "horizon", "stage_decode", "seed_restore", "input_gap",
                    "picture", "native_invalid", "native_unsupported", "exception")
 WORKER_COUNTERS = ("starts", "stops", "submitted", "coalesced", "executed", "superseded",
+                   "rebase_attempts", "rebased",
                    "publications", "adoptions", "rejected_publications", "presents",
                    "present_refusals", "submission_refusals", "expired", "errors")
 

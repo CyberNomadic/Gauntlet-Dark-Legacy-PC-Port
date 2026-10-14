@@ -23,6 +23,22 @@ std::unique_ptr<State> capture(const CombatPrediction& owner, bool stage) {
     return state ? std::make_unique<State>(std::move(*state)) : nullptr;
 }
 
+std::shared_ptr<const StageParticlePresentation>
+sampleParticles(const std::shared_ptr<const StageReplayPresentation::Publication>& publication,
+                const CombatSnapshot& authority) {
+    auto shown = std::make_unique<CombatSnapshot>(authority);
+    EnemyPresentation presentation;
+    presentation.epoch = shown->motion.epoch;
+    presentation.tick = shown->motion.tick;
+    presentation.shownGeometry = shown->geometry;
+    StageReplayPresentation presenter;
+    const StageReplayPresentation::Time start{};
+    REQUIRE(presenter.adopt(publication, publication->authority(), start));
+    REQUIRE(presenter.present(*shown, presentation, publication->authority(), start));
+    REQUIRE(presentation.particles);
+    return presentation.particles;
+}
+
 struct Fixture {
     test::FakeRenderDevice device;
     CombatPrediction host, guest;
@@ -225,6 +241,149 @@ TEST_CASE("matching authority cannot retain a suffix with changed effective comm
             input.direction = {1, 0};
         }
         f.stepHost(tick, input, remote);
+    }
+    CHECK(*capture(f.guest, true) == *capture(f.host, true));
+}
+
+TEST_CASE("authority-only promotion retains its endpoint and queues all newer input",
+          "[rollback][online-combat-promotion][combat-replay-rebase][assets]") {
+    auto fixture = std::make_unique<Fixture>(true);
+    auto& f = *fixture;
+    auto initial = f.authority(100);
+    for (u64 tick = 101; tick <= 106; ++tick) {
+        const auto input = f.local(tick);
+        REQUIRE(f.replay.update(tick == 101 ? initial.get() : nullptr, std::span{&input, 1}));
+        if (tick <= 102) {
+            f.stepHost(tick, input);
+        }
+    }
+    auto corrected = f.authority(102);
+    const auto baseline = capture(f.host, true);
+    const auto before = capture(f.guest, true);
+    REQUIRE(baseline);
+    REQUIRE(before);
+    const auto previousPublication = f.replay.publication();
+    REQUIRE(previousPublication);
+    const auto particles = sampleParticles(previousPublication, *initial);
+    const auto uploads = f.device.texturesCreated;
+    const auto textureUpdates = f.device.textureUpdates;
+    const auto draws = f.device.draws.size();
+    std::vector<InputCommand> future;
+    for (u64 tick = 107; tick <= 110; ++tick) {
+        auto input = f.local(tick);
+        input.direction = {1, 0};
+        future.push_back(input);
+    }
+    REQUIRE(f.replay.promoteAuthority(*corrected, future));
+    CHECK(f.replay.tick() == 106);
+    CHECK(*capture(f.guest, true) == *before);
+    const auto& counters = f.replay.diagnostics().domains[2];
+    CHECK(counters.advancedTicks == 6);
+    CHECK(counters.attemptedTicks == 6);
+    CHECK(counters.promotedPasses == 1);
+    CHECK(counters.restorePasses == 1);
+    auto promoted = f.replay.publication();
+    REQUIRE(promoted);
+    CHECK(promoted->authority().tick() == 102);
+    CHECK(promoted->tick() == 106);
+    CHECK(promoted->revision() > previousPublication->revision());
+    CHECK(sampleParticles(promoted, *corrected) == particles);
+    CHECK(f.device.texturesCreated == uploads);
+    CHECK(f.device.textureUpdates == textureUpdates);
+    CHECK(f.device.draws.size() == draws);
+
+    const auto diagnostics = f.replay.diagnostics();
+    CHECK_FALSE(f.replay.promoteAuthority(*corrected, future));
+    CHECK(f.replay.diagnostics() == diagnostics);
+    CHECK(f.replay.publication()->revision() == promoted->revision());
+    // No retransmission of the future list is needed. Promotion recorded it,
+    // but did not consume or run any of its ticks.
+    REQUIRE(f.replay.update(nullptr, {}));
+    CHECK(f.replay.tick() == 110);
+    CHECK(counters.advancedTicks == 10);
+    for (u64 tick = 103; tick <= 110; ++tick) {
+        f.stepHost(tick, tick < 107 ? f.local(tick) : future[static_cast<usize>(tick - 107)]);
+    }
+    CHECK(*capture(f.guest, true) == *capture(f.host, true));
+    auto refused = f.local(111);
+    refused.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
+    CHECK_FALSE(f.replay.update(nullptr, std::span{&refused, 1}));
+    CHECK(*capture(f.guest, true) == *baseline);
+}
+
+TEST_CASE("authority-only promotion refuses changed local or remote effective suffixes",
+          "[rollback][online-combat-promotion][combat-replay-rebase][assets]") {
+    const bool remoteChanged = GENERATE(false, true);
+    auto fixture = std::make_unique<Fixture>(true);
+    auto& f = *fixture;
+    auto initial = f.authority(100);
+    const auto first = f.local(101);
+    REQUIRE(f.replay.update(initial.get(), std::span{&first, 1}));
+    const auto horizon = f.local(106);
+    REQUIRE(f.replay.update(nullptr, std::span{&horizon, 1}));
+    f.stepHost(101, first);
+    f.stepHost(102, f.local(102));
+    auto corrected = f.authority(102);
+    std::vector<InputCommand> incoming;
+    std::optional<InputCommand> remote;
+    if (remoteChanged) {
+        remote = InputCommand{f.context.epoch, 102, f.context.grants[1], 1};
+        remote->direction = {1, 0};
+        remote->magnitude = .25f;
+        corrected->players[1]->rollbackInput = remote;
+    } else {
+        auto late = f.local(105);
+        late.direction = {1, 0};
+        incoming.push_back(late);
+    }
+    incoming.push_back(f.local(107));
+    const auto attempted = f.replay.diagnostics().domains[2].attemptedTicks;
+    CHECK_FALSE(f.replay.promoteAuthority(*corrected, incoming));
+    CHECK_FALSE(f.replay.active());
+    CHECK_FALSE(f.replay.publication());
+    CHECK(f.replay.diagnostics().domains[2].attemptedTicks == attempted);
+    CHECK(f.replay.diagnostics().domains[2].promotedPasses == 0);
+    // The ordinary latest job still has a complete input journal and may
+    // recover by restoring the new authority instead of retaining a wrong C.
+    REQUIRE(f.replay.update(corrected.get(), incoming));
+    for (u64 tick = 103; tick <= 107; ++tick) {
+        auto input = f.local(tick);
+        if (!remoteChanged && tick == 105) {
+            input.direction = {1, 0};
+        }
+        f.stepHost(tick, input, remote);
+    }
+    CHECK(*capture(f.guest, true) == *capture(f.host, true));
+}
+
+TEST_CASE("authority at or beyond the native endpoint requires a new interval",
+          "[rollback][online-combat-promotion][combat-replay-rebase][assets]") {
+    const u64 extra = GENERATE(u64{0}, u64{1});
+    auto fixture = std::make_unique<Fixture>(true);
+    auto& f = *fixture;
+    auto initial = f.authority(100);
+    for (u64 tick = 101; tick <= 106 + extra; ++tick) {
+        const auto input = f.local(tick);
+        if (tick <= 106) {
+            REQUIRE(f.replay.update(tick == 101 ? initial.get() : nullptr, std::span{&input, 1}));
+        }
+        f.stepHost(tick, input);
+    }
+    auto corrected = f.authority(106 + extra);
+    const auto before = capture(f.guest, true);
+    REQUIRE(before);
+    const auto next = f.local(108);
+    CHECK_FALSE(f.replay.promoteAuthority(*corrected, std::span{&next, 1}));
+    CHECK(f.replay.tick() == 106);
+    CHECK(*capture(f.guest, true) == *before);
+    CHECK(f.replay.diagnostics().domains[2].advancedTicks == 6);
+    REQUIRE(f.replay.update(corrected.get(), std::span{&next, 1}));
+    const auto publication = f.replay.publication();
+    REQUIRE(publication);
+    CHECK(publication->authority().tick() == 106 + extra);
+    CHECK(publication->tick() == 108);
+    for (u64 tick = 107 + extra; tick <= 108; ++tick) {
+        f.stepHost(tick, f.local(tick));
     }
     CHECK(*capture(f.guest, true) == *capture(f.host, true));
 }

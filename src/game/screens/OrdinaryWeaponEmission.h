@@ -38,6 +38,11 @@ public:
     static Result advance(PlayerArsenal& arsenal, const PlayerActor& actor, PlayerFigure& figure,
                           const Vec3& direction, std::optional<Vec3> target,
                           const CombatRollbackCheckpoint::Resources& resources);
+    /** Native delayed familiar latch. Both silent shots are validated before
+     * either is launched; failure still requires the enclosing transaction undo. */
+    static Result familiar(PlayerArsenal& arsenal, const PlayerActor& actor, PlayerFigure& figure,
+                           std::optional<Vec3> target,
+                           const CombatRollbackCheckpoint::Resources& resources);
 };
 
 } // namespace gdl::game

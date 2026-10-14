@@ -15,7 +15,7 @@ public:
     std::string hex() const;
 
 private:
-    void block();
+    void block(std::span<const u8, 64> bytes);
     std::array<u32, 8> m_state{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     std::array<u8, 64> m_buffer{};

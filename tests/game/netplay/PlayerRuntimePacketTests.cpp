@@ -385,8 +385,11 @@ TEST_CASE("participant packet retains trusted native figure poses and resource b
     decorated.figure->familiarPending = true;
     decorated.figure->familiarReleased = true;
     decorated.figure->phoenixSide = 0.25f;
-    decorated.figure->familiarTier = 5;
+    // Raw requested tier can survive failed optional art binding, while the
+    // public tier remains zero. Complete child state now enforces that relation.
+    decorated.figure->familiar.tier = 2;
     decorated.figure->companion = PowerupCompanion::Kind::Wings;
+    decorated.figure->powerupCompanion.kind = PowerupCompanion::Kind::Wings;
     decorated.figure->handHeld = !decorated.figure->handHeld;
     decorated.figure->armHeld = !decorated.figure->armHeld;
     decorated.figure->staysInHand = !decorated.figure->staysInHand;

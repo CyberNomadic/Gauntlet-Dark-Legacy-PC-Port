@@ -107,6 +107,15 @@ public:
     void launchGauntlet(const PlayerActor& actor, PlayerFigure* body, bool left);
     void launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
                         std::optional<Vec3> target = std::nullopt);
+    /** Native companion physics; stable addresses also identify trusted pool resources. */
+    static const MissileSpec& familiarSpec(bool boss = false);
+    const TreeModel& phoenixMissile() const { return m_phoenixShot; }
+    /** Pure native companion volley, earned familiar first then Phoenix. Only
+     * already-loaded artwork is borrowed; no muzzle query or release provenance
+     * belongs to these silent shots. Empty means neither companion fires. */
+    std::optional<std::vector<MissileLaunch>>
+    prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
+                    std::optional<Vec3> target = std::nullopt) const;
     std::optional<MissileImpact> usePotion(PlayerActor& actor);
     /** Unspecified magic advances one shared colour cycle for every caster and floor bottle. */
     s32 resolvePotionKind(s32 kind);

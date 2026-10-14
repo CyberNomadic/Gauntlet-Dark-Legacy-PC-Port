@@ -129,7 +129,7 @@ struct Fixture {
     explicit Fixture(bool explosive = false, bool statue = false, bool melee = false,
                      s32 firstClass = 0, bool ranged = false, bool stageG1 = false,
                      MovingStage moving = MovingStage::None, bool impactCue = false,
-                     bool generators = false)
+                     bool generators = false, s32 firstLevel = 0, bool phoenix = false)
         : stage(stageG1 || moving != MovingStage::None) {
         REQUIRE(classes.load(root / "PDATA"));
         if (melee || stage) {
@@ -143,8 +143,19 @@ struct Fixture {
                 REQUIRE(level);
                 REQUIRE(world.load(device, root, *level));
             } else {
-                REQUIRE(
-                    world.load(device, movingStage(moving), {.name = "TEST", .directory = "."}));
+                const auto directory = movingStage(moving);
+                if (phoenix) {
+                    // Bind pickup texture clocks against the final archive set,
+                    // exactly as a real level load does. Loading POWERUPS after
+                    // LevelWorld::load changes its borrowed archive identity.
+                    std::filesystem::create_directories(directory / "POWERUPS");
+                    for (const auto file : {"ANIM.PS2", "objects.ngc", "textures.ngc"}) {
+                        std::filesystem::copy_file(
+                            root / "POWERUPS" / file, directory / "POWERUPS" / file,
+                            std::filesystem::copy_options::overwrite_existing);
+                    }
+                }
+                REQUIRE(world.load(device, directory, {.name = "TEST", .directory = "."}));
             }
             world.setPlayerCount(2);
             portals.bind(device, world.layout(), world.itemScope(), catalog, &world.collision());
@@ -185,8 +196,11 @@ struct Fixture {
             floor.build({{{0, 1, 0}, {{{-200, 0, -200}, {200, 0, -200}, {200, 0, 200}}}, -1, 14},
                          {{0, 1, 0}, {{{-200, 0, -200}, {200, 0, 200}, {-200, 0, 200}}}, -1, 14}});
         }
+        if (phoenix && !world.powerups().loaded()) {
+            REQUIRE(world.powerups().load(root / "POWERUPS"));
+        }
         arsenal.bind({device, classes, weapons, world.collision(), effects, audio, nullptr,
-                      impactCue ? "S_WEAPONHITWOOD" : "", false, false});
+                      impactCue ? "S_WEAPONHITWOOD" : "", false, false, &world.powerups()});
         attacks.bind({device, classes, world, weapons, effects, audio, nullptr, arsenal, dimmer});
         fixtures.bind({device, world, weapons, effects, audio});
         fixtures.setPlayerCount(2);
@@ -201,6 +215,12 @@ struct Fixture {
             save.progress().health = 10000;
             if (melee) {
                 save.progress().experience = levelExperience(20);
+            }
+            if (index == 0 && firstLevel > 0) {
+                save.progress().experience = levelExperience(firstLevel);
+            }
+            if (index == 0 && phoenix) {
+                save.progress().inventory.addPowerup(powerup::kSpecial, powerup::kPhoenix, 0, 60);
             }
             const auto* stats = classes.stats(save.character);
             REQUIRE(stats);
@@ -223,6 +243,8 @@ struct Fixture {
             player.entrySave = save;
             player.figure = PlayerFigure::load(device, root, save, false);
             REQUIRE(player.figure);
+            player.figure->setCompanionPowerups(device, world.powerups(), save.progress().inventory,
+                                                &weapons);
             player.figure->setGuardArmor(armorDefense(*stats, save.progress()));
             player.turbo.add(100);
             owners[index] = std::make_unique<PlayerRuntimeCheckpoint>(player, stats);
@@ -448,6 +470,10 @@ struct Fixture {
                 player.transport.observeContact(false);
             }
             transporters.animate(frame.seconds);
+        }
+        for (auto& player : players) {
+            player.figure->setCompanionPowerups(device, world.powerups(),
+                                                player.actor.save().progress().inventory, &weapons);
         }
         const PlayerAttacks::Targets targets{
             .opponents = opponents,
@@ -2096,6 +2122,59 @@ TEST_CASE("stage combat preserves capped gold then collects it with native Pick 
     }
     REQUIRE(fixture->boundary->restore(baseline));
     CHECK(fixture->state() == baseline);
+    CHECK(fixture->device.texturesCreated == textures);
+    CHECK(fixture->device.textureUpdates == uploads);
+}
+TEST_CASE("stage combat continues earned and Phoenix familiars through native delayed releases",
+          "[ordinary-combat-tick][ordinary-stage-tick][familiar-stage-tick][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    const bool phoenix = GENERATE(false, true);
+    const s32 level = GENERATE(40, 80);
+    auto fixture = std::make_unique<Fixture>(false, false, true, 0, false, false, MovingStage::Lift,
+                                             false, false, level, phoenix);
+    REQUIRE(fixture->players[0].figure->familiarTier() > 0);
+    REQUIRE(fixture->players[0].figure->phoenixActive() == phoenix);
+    const auto baseline = std::make_unique<Boundary::State>(fixture->state());
+    const auto textures = fixture->device.texturesCreated;
+    const auto uploads = fixture->device.textureUpdates;
+    bool released = false;
+    bool sawPair = false;
+    for (s32 tick = 0; tick < 90 / ticks; ++tick) {
+        CAPTURE(tick, ticks, phoenix, level);
+        std::array<PlayInput, 4> input{};
+        input[3].attack = true;
+        input[3].attackPressed = tick == 0;
+        input[3].aimDirection = Vec3{0, 0, -1};
+        const auto frame = Fixture::frame(tick, ticks);
+        const auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        const auto expected = std::make_unique<Boundary::State>(fixture->state());
+        REQUIRE(fixture->boundary->restore(*before));
+        const auto result = fixture->runner->step(fixture->players, input, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        INFO(Tick::kPartyRefusals[static_cast<usize>(result.partyRefusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(fixture->state() == *expected);
+        released |= fixture->players[0].figure->familiarReleased();
+        usize earned = 0;
+        usize fire = 0;
+        for (usize i = 0; i < fixture->arsenal.missiles().count(); ++i) {
+            const auto& missile = fixture->arsenal.missiles().missile(i);
+            if (!missile.release && !missile.potionRelease) {
+                CHECK_FALSE(missile.breaksPotions);
+                if ((missile.flags & 0x11) != 0) {
+                    ++fire;
+                } else {
+                    ++earned;
+                }
+            }
+        }
+        sawPair |= earned > 0 && (!phoenix || fire > 0);
+    }
+    CHECK(released);
+    CHECK(sawPair);
+    REQUIRE(fixture->boundary->restore(*baseline));
+    CHECK(fixture->state() == *baseline);
     CHECK(fixture->device.texturesCreated == textures);
     CHECK(fixture->device.textureUpdates == uploads);
 }

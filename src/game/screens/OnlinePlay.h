@@ -77,6 +77,7 @@ public:
         usize retainedCommands = 0;
         u64 starts = 0, stops = 0;
         u64 submitted = 0, coalesced = 0, executed = 0, superseded = 0;
+        u64 rebaseAttempts = 0, rebased = 0;
         u64 publications = 0, adoptions = 0, rejectedPublications = 0;
         u64 presents = 0, presentRefusals = 0;
         u64 submissionRefusals = 0, expired = 0, errors = 0;

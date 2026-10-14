@@ -80,11 +80,16 @@ public:
     };
 
     /** Pure admission/work check against complete native state and a trusted
-     * immutable resource manifest. Plain normal-multiplayer class weapons only;
-     * potion, piercing, reflected, and special-weapon gameplay remain excluded.
-     * Retained visual banks and particle tails are not silently discarded. */
+     * immutable resource manifest. Supplying the bound arsenal and complete party
+     * also admits its exact earned-familiar/Phoenix model/spec tuples. Already
+     * queued nonplain impacts remain excluded: only a validated native flight
+     * may create a Phoenix hit in this phase. Potion, piercing, reflected, and
+     * other special-weapon gameplay remain excluded. Retained visual banks and
+     * particle tails are not silently discarded. */
     static bool supported(const PlayerArsenalCheckpoint::State& state,
-                          std::span<const PlayerMissiles::Resource> resources, f32 seconds);
+                          std::span<const PlayerMissiles::Resource> resources, f32 seconds,
+                          const PlayerArsenal* arsenal = nullptr,
+                          std::span<const PlayerRuntime> players = {});
     /** Trusted native ordinary weapon-impact artwork may remain after its shot
      * retires. This does not admit potion, elemental, or world-explosion effects. */
     static bool supportsEffect(const PlayerArsenal& arsenal,

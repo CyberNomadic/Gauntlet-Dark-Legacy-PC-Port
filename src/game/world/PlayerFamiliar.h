@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 
 #include "engine/assets/ItemArchive.h"
@@ -16,6 +17,24 @@ namespace gdl::game {
 /** The familiar a character earns at thirty and eighty, animated from its class archive. */
 class PlayerFamiliar {
 public:
+    struct Checkpoint {
+        s32 tier = 0;
+        std::string tree;
+        Vec3 offset{0};
+        AnimationPlayer::Checkpoint animation;
+        TextureAnimator::Checkpoint textures;
+        std::optional<TreePose::Checkpoint> pose;
+        std::optional<TreePose::Checkpoint> previousPose;
+        u64 previousGeneration = 0;
+        f32 previousFrame = 0;
+        bool presentationAdvanced = false;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    std::optional<Checkpoint> checkpoint() const;
+    /** Atomic CPU-only restore against this familiar's existing immutable bindings. */
+    bool restore(const Checkpoint& state);
+    u64 bindingRevision() const { return m_bindingRevision; }
     static s32 tierFor(s32 level) {
         if (level >= 80) {
             return 2;
@@ -51,5 +70,6 @@ private:
     Vec3 m_offset{0};
     bool m_presentationAdvanced = false;
     s32 m_tier = 0;
+    u64 m_bindingRevision = 0;
 };
 } // namespace gdl::game

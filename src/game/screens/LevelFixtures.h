@@ -2,6 +2,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -67,9 +68,17 @@ public:
         Cloud,
         Blast
     };
+    struct NamedSound {
+        std::string name;
+        f32 volume = 1;
+        bool operator==(const NamedSound&) const = default;
+    };
     struct Phase {
         std::optional<Boundary> refusal;
         usize index = 0;
+        /** Buffered private outputs, valid only after the enclosing tick commits.
+         * These are named, non-positional sounds: no distance attenuation. */
+        std::vector<NamedSound> sounds;
     };
     void bind(const Resources& resources);
     void clear();
@@ -175,8 +184,14 @@ private:
     friend class OrdinaryProjectilePhase;
     friend class OrdinaryFixturePhase;
     friend class LevelFixturesCheckpoint;
+    using GatePublisher = std::function<bool(const GateEvent&)>;
+    using NamedPublisher = std::function<void(std::string_view, f32)>;
     Phase updatePhase(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
-                      const Events* events);
+                      const Events* events, const GatePublisher& gate = {});
+    /** Shared native post-selection dispatch. The publisher replaces only audio;
+     * selected key consumption and help ordering remain the native operations. */
+    void dispatchGateEvent(const GateEvent&, std::span<PlayerRuntime>, const Events&,
+                           const NamedPublisher& publish = {});
     static Vec3 observePlayer(PlayerRuntime& player, const Vec3& position);
     static void advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks);
     static void advanceCloudGaps(std::span<PlayerRuntime> players, f32 seconds);
@@ -193,7 +208,7 @@ private:
     void leaveRubble(std::string_view object, const Mat4& transform);
     static std::optional<usize> nearestStanding(std::span<const PlayerRuntime> players,
                                                 const Vec3& position, f32 reach);
-    void playGateSound(s32 subtype);
+    void playGateSound(s32 subtype, const NamedPublisher& publish = {});
     void playRealmSound(std::string_view stem);
     /** Sounds the scenery that gave way (fn_8009D8CC, fn_8009D91C). */
     void playFallingCues(std::span<const FallingCue> cues);

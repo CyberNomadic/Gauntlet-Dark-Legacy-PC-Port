@@ -41,7 +41,7 @@ public:
               std::span<const Particle> particles = {});
     /** Both peers call after StageResources preloading, with the same selected
      * native profiles and scene lender order. Covers shared/stage/swarm/class
-     * trees, native SFXX particles, ordinary weapon and potion physical models.
+     * trees, native SFXX particles, ordinary weapon, familiar/Phoenix and potion models.
      * Unknown special missile specs and code-attached trail topologies remain
      * explicit whole-checkpoint refusals, rather than omitted state. */
     bool bindStage(RenderDevice& device, LevelWorld& world, ItemArchive& weapons,

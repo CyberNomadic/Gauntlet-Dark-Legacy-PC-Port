@@ -1370,6 +1370,8 @@ nlohmann::json workerReport(const OnlinePlay::CombatWorkerMetrics& before,
     field("coalesced", before.coalesced, after.coalesced);
     field("executed", before.executed, after.executed);
     field("superseded", before.superseded, after.superseded);
+    field("rebase_attempts", before.rebaseAttempts, after.rebaseAttempts);
+    field("rebased", before.rebased, after.rebased);
     field("publications", before.publications, after.publications);
     field("adoptions", before.adoptions, after.adoptions);
     field("rejected_publications", before.rejectedPublications, after.rejectedPublications);

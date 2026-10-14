@@ -389,25 +389,31 @@ void PlayerArsenal::launchSuperShot(PlayerActor& actor, PlayerFigure* body,
     m_resources->audio.playNamed("S_SUPERSHOT", LevelSoundscape::kStepVolume);
 }
 
-void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
-                                   std::optional<Vec3> target) {
-    if (!m_resources || body == nullptr) {
-        return;
+const MissileSpec& PlayerArsenal::familiarSpec(bool boss) {
+    static constexpr MissileSpec kLevelShot{"FAMILIAR_SPIT", {}, 1, 0, 10, true, {}};
+    static constexpr MissileSpec kBossShot{"FAMILIAR_SPIT", {}, 1, 0, 0, true, {}};
+    return boss ? kBossShot : kLevelShot;
+}
+
+std::optional<std::vector<MissileLaunch>>
+PlayerArsenal::prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
+                               std::optional<Vec3> target) const {
+    if (!m_resources) {
+        return std::nullopt;
     }
+    std::vector<MissileLaunch> shots;
     const auto worn = PowerupEffects::of(actor.save().progress().inventory);
     const bool phoenix = (worn.special & powerup::kPhoenix) != 0;
-    const bool familiar = body->familiarTier() > 0 && body->familiarMissile().bound();
+    const bool familiar = figure.familiarTier() > 0 && figure.familiarMissile().bound();
     if (!phoenix && !familiar) {
-        return;
+        return shots;
     }
     const auto* stats = m_resources->classes.stats(actor.save().character);
     if (stats == nullptr) {
-        return;
+        return std::nullopt;
     }
     // PlayerMotion / Start familiar spit: radius one, three-second life, speed 35;
     // damage is 0.1 * (level - 25) + 2.5, independent of weapon powerups.
-    static constexpr MissileSpec kLevelShot{"FAMILIAR_SPIT", {}, 1, 0, 10, true, {}};
-    static constexpr MissileSpec kBossShot{"FAMILIAR_SPIT", {}, 1, 0, 0, true, {}};
     MissileLaunch launch;
     // Companion shots do not hit players or detonate collectible potions.
     launch.owner = actor.player();
@@ -416,7 +422,7 @@ void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
     launch.position = Vec3{placement * Vec4{stats->familiarShotOffset, 1}};
     launch.direction = actor.facing();
     launch.speed = 35;
-    launch.spec = m_resources->bossEncounter ? &kBossShot : &kLevelShot;
+    launch.spec = &familiarSpec(m_resources->bossEncounter);
     launch.wallSound = MissileWallSound::Silent;
     // CalcTargetDir normalizes horizontal displacement, uses a 50-unit/second
     // flight estimate, then StartFX scales the direction by 35.
@@ -431,25 +437,43 @@ void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
                                         (delta.y + drop) * 50.0f * inverse),
                                delta.z * inverse} *
                           launch.speed;
-        m_missiles.launch(launch);
+        shots.push_back(launch);
     };
     // Both companions share the release and aim, but retain independent damage and visuals.
     if (familiar) {
         launch.damage = 0.1f * static_cast<f32>(experienceLevel(actor.save().experience()));
-        launch.model = &body->familiarMissile();
-        launch.archive = body->effects();
+        launch.model = &figure.familiarMissile();
+        launch.archive = figure.loadedEffects();
         launch.tree = "FAMILIAR_SPIT";
         launchShot();
     }
     if (phoenix) {
         launch.position =
-            Vec3{body->phoenixAttachment(placement) * Vec4{stats->familiarShotOffset, 1}};
+            Vec3{figure.phoenixAttachment(placement) * Vec4{stats->familiarShotOffset, 1}};
         launch.damage = kPhoenixDamage;
         launch.flags = kPhoenixDamageFlags;
         launch.model = &m_phoenixShot;
         launch.archive = &m_resources->weapons;
         launch.tree = "PHOENIX_FBALL";
         launchShot();
+    }
+    return shots;
+}
+
+void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
+                                   std::optional<Vec3> target) {
+    if (!m_resources || body == nullptr) {
+        return;
+    }
+    // Keep the native lazy archive boundary outside the callback-free preparation.
+    if (m_resources->classes.stats(actor.save().character) != nullptr && body->familiarTier() > 0 &&
+        body->familiarMissile().bound()) {
+        body->effects();
+    }
+    if (const auto shots = prepareFamiliar(actor, *body, target)) {
+        for (const auto& launch : *shots) {
+            m_missiles.launch(launch);
+        }
     }
 }
 

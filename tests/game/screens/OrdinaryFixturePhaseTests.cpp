@@ -12,6 +12,7 @@
 #include "TestSupport.h"
 #include "game/players/ItemPickup.h"
 #include "game/players/PowerupEffects.h"
+#include "game/screens/HelpMessages.h"
 #include "game/screens/LevelFixturesCheckpoint.h"
 #include "game/screens/OrdinaryFixturePhase.h"
 #include "game/screens/PlayerRuntimeCheckpoint.h"
@@ -251,6 +252,111 @@ TEST_CASE("malformed fixture phase requests leave every owner unchanged",
     }
     CHECK(OrdinaryFixturePhase::advance(fixture.fixtures, 1, 1.0f / 60, {}).refusal ==
           LevelFixtures::Boundary::InvalidStep);
+    CHECK(fixture.state() == before);
+}
+
+TEST_CASE("staged keyed gates share native key spending and preserve nonpositional sound",
+          "[rollback][ordinary-fixture-phase][ordinary-keyed-gate]") {
+    const auto directory = fixtureStage("ordinary-fixture-phase-keyed-gate");
+    const LevelRef level{.realmId = 7, .name = "TEST", .directory = "."};
+    Fixture native(directory, level), replay(directory, level);
+    const s32 ticks = GENERATE(1, 2);
+    const f32 seconds = static_cast<f32>(ticks) / 60;
+    for (auto* fixture : {&native, &replay}) {
+        auto& actor = fixture->players[0].actor;
+        actor.slide(fixture->fixtures.gates().gate(0).figure.position() - actor.position(),
+                    nullptr);
+        actor.save().progress().inventory.keys = 1;
+    }
+    const auto before = replay.state();
+    auto undo = replay.prepare(before);
+    const auto textures = replay.device.texturesCreated;
+    usize cues = 0;
+    for (s32 tick = 0; tick < 100; tick += ticks) {
+        native.fixtures.update(ticks, seconds, native.players, native.events);
+        const auto result =
+            OrdinaryFixturePhase::advance(replay.fixtures, ticks, seconds, replay.players);
+        CAPTURE(tick, ticks, result.refusal);
+        REQUIRE_FALSE(result.refusal);
+        CHECK(replay.state() == native.state());
+        for (const auto& sound : result.sounds) {
+            CHECK(sound.name == LockedGates::openingSound(7, 0));
+            CHECK(sound.volume == 127.0f / 255);
+            ++cues;
+        }
+    }
+    CHECK(cues == 1);
+    CHECK(replay.players[0].actor.save().progress().inventory.keys == 0);
+    CHECK(replay.fixtures.gates().gate(0).state == LockedGates::kOpen);
+    CHECK_FALSE(replay.fixtures.gates().gate(0).box.solid);
+    CHECK(replay.device.texturesCreated == textures);
+    CHECK(replay.external == 0);
+    replay.rewind(std::move(undo));
+    CHECK(replay.state() == before);
+}
+
+TEST_CASE("keyless gate admission proves the native lesson is already suppressed",
+          "[rollback][ordinary-fixture-phase][ordinary-keyed-gate]") {
+    const bool known = GENERATE(false, true);
+    const auto directory = fixtureStage("ordinary-fixture-phase-keyless-gate");
+    Fixture fixture(directory, {.realmId = 7, .name = "TEST", .directory = "."});
+    auto& actor = fixture.players[0].actor;
+    actor.slide(fixture.fixtures.gates().gate(0).figure.position() - actor.position(), nullptr);
+    if (known) {
+        for (auto& player : fixture.players) {
+            player.actor.save().helpSeen = {HelpMessages::kDoorNeedsKey};
+            player.helpHeard = {HelpMessages::kDoorNeedsKey};
+        }
+    }
+    const auto before = fixture.state();
+    auto undo = fixture.prepare(before);
+    const auto result =
+        OrdinaryFixturePhase::advance(fixture.fixtures, 1, 1.0f / 60, fixture.players);
+    CHECK(result.refusal.has_value() == !known);
+    if (!known) {
+        CHECK(result.refusal == LevelFixtures::Boundary::Gate);
+    }
+    CHECK(result.sounds.empty());
+    CHECK(fixture.fixtures.gates().gate(0).refusalLeft > 0);
+    CHECK(fixture.players[0].actor.save().progress().inventory.keys == 0);
+    CHECK(fixture.external == 0);
+    fixture.rewind(std::move(undo));
+    CHECK(fixture.state() == before);
+}
+
+TEST_CASE("a later trap refusal retracts the entire keyed gate step and its cue",
+          "[rollback][ordinary-fixture-phase][ordinary-keyed-gate]") {
+    const auto directory = fixtureStage("ordinary-fixture-phase-gate-late-refusal");
+    Fixture fixture(directory, {.realmId = 7, .name = "TEST", .directory = "."});
+    for (s32 tick = 0; tick < 180 && fixture.fixtures.traps().trap(0).action != 2; ++tick) {
+        fixture.fixtures.update(1, 1.0f / 60, fixture.players, fixture.events);
+    }
+    REQUIRE(fixture.fixtures.traps().trap(0).action == 2);
+    auto& opener = fixture.players[0].actor;
+    const auto& gate = fixture.fixtures.gates().gate(0);
+    // Warm-up records fixtureSpot. Enter the near face from that historical
+    // position: placing the actor at the box centre would push it out the far
+    // face and correctly trigger the native backing-away exclusion instead.
+    const Vec3 approach = gate.box.centre - Vec3{0, 0, gate.box.halfAlong};
+    opener.slide(approach - opener.position(), nullptr);
+    REQUIRE(fixture.players[0].fixtureSpot);
+    const Vec3 contact = gate.box.pushOut(opener.position(), opener.radius());
+    const Vec3 step = contact - *fixture.players[0].fixtureSpot;
+    const Vec3 toward = gate.figure.position() - contact;
+    REQUIRE(gate.box.touchedBy(contact, opener.radius()));
+    REQUIRE(step.x * toward.x + step.z * toward.z > 0);
+    opener.save().progress().inventory.keys = 1;
+    auto& victim = fixture.players[1].actor;
+    victim.slide(fixture.fixtures.traps().trap(0).figure.position() - victim.position(), nullptr);
+    const auto before = fixture.state();
+    auto undo = fixture.prepare(before);
+    const auto result =
+        OrdinaryFixturePhase::advance(fixture.fixtures, 1, 1.0f / 60, fixture.players);
+    REQUIRE(result.refusal == LevelFixtures::Boundary::Trap);
+    CHECK(opener.save().progress().inventory.keys == 0);
+    CHECK(fixture.fixtures.gates().gate(0).state == LockedGates::kOpening);
+    CHECK(result.sounds.empty());
+    fixture.rewind(std::move(undo));
     CHECK(fixture.state() == before);
 }
 

@@ -151,6 +151,24 @@ OnlineCombatReplay::picture(std::shared_ptr<const StageParticlePresentation>& pa
 
 bool OnlineCombatReplay::update(const CombatSnapshot* authority,
                                 std::span<const InputCommand> sent) {
+    return updateThrough(authority, sent, std::nullopt);
+}
+
+bool OnlineCombatReplay::promoteAuthority(const CombatSnapshot& authority,
+                                          std::span<const InputCommand> sent) {
+    // The existing interval is [C-1,C]. A baseline at C cannot certify that
+    // interval, even though the native promotion owner can accept such a seed.
+    const auto endpoint = tick();
+    if (!staged() || !m_authority || authority.motion.epoch != m_context.epoch ||
+        authority.motion.tick <= m_authority->motion.tick || authority.motion.tick >= endpoint) {
+        return false;
+    }
+    return updateThrough(&authority, sent, endpoint);
+}
+
+bool OnlineCombatReplay::updateThrough(const CombatSnapshot* authority,
+                                       std::span<const InputCommand> sent,
+                                       std::optional<u64> endpoint) {
     const bool incoming = authority != nullptr && authority->motion.epoch == m_context.epoch &&
                           (!m_authority || authority->motion.tick > m_authority->motion.tick);
     m_domain = domainOf(incoming ? authority : m_authority.get());
@@ -163,7 +181,7 @@ bool OnlineCombatReplay::update(const CombatSnapshot* authority,
             std::max(counters.maximumTicksPerPass, counters.attemptedTicks - attemptsBefore);
     };
     try {
-        const bool accepted = updatePass(authority, sent);
+        const bool accepted = updatePass(authority, sent, endpoint);
         counters.passes += accepted ? 1 : 0;
         finish();
         return accepted;
@@ -178,7 +196,8 @@ bool OnlineCombatReplay::update(const CombatSnapshot* authority,
 }
 
 bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
-                                    std::span<const InputCommand> sent) {
+                                    std::span<const InputCommand> sent,
+                                    std::optional<u64> endpoint) {
     ++m_clock;
     if (m_prediction == nullptr) {
         return refuse(Refusal::Unbound);
@@ -211,6 +230,9 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
                     break;
                 }
             }
+        }
+        if (endpoint && !promotionCandidate) {
+            return refuse(Refusal::SeedRestore);
         }
         if (!promotionCandidate) {
             discard();
@@ -263,7 +285,7 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
     }
     const auto baseline = m_authority->motion.tick;
     std::array<std::span<const RollbackInputHistory::Entry>, InputCommand::kSeats> commands;
-    u64 end = baseline;
+    u64 end = endpoint.value_or(baseline);
     for (usize seat = 0; seat < commands.size(); ++seat) {
         if (m_context.owners[seat] == 0) {
             continue;
@@ -278,10 +300,16 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
             if (commands[seat].empty()) {
                 return refuse(Refusal::NoLocalInput);
             }
-            if (end != baseline && end != commands[seat].back().input.tick) {
-                return refuse(Refusal::DivergentHorizon);
+            if (endpoint) {
+                if (commands[seat].back().input.tick < end) {
+                    return refuse(Refusal::InputGap);
+                }
+            } else {
+                if (end != baseline && end != commands[seat].back().input.tick) {
+                    return refuse(Refusal::DivergentHorizon);
+                }
+                end = commands[seat].back().input.tick;
             }
-            end = commands[seat].back().input.tick;
         }
     }
     if (end == baseline || end - baseline > CombatPrediction::kMaxTicks) {
@@ -370,6 +398,9 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
             m_revision = m_prediction->replayRevision();
             ++counters.promotedPasses;
         } else {
+            if (endpoint) {
+                return refuse(Refusal::SeedRestore);
+            }
             discard();
         }
     }
@@ -381,6 +412,9 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
                        return std::equal(first.begin(), first.end(), second.begin(), sameInput);
                    });
     if (!continuing) {
+        if (endpoint) {
+            return refuse(Refusal::InputHistory);
+        }
         ++counters.restorePasses;
         const MeasureReplayCost measured{counters.restoreCost};
         discard();
@@ -396,6 +430,11 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         return true;
     } else {
         ++counters.appendPasses;
+    }
+    // Promotion-only callers must never fall through into a native advance,
+    // even if a future change alters the executed-suffix bookkeeping above.
+    if (endpoint) {
+        return refuse(Refusal::InputHistory);
     }
     auto frame = continuing ? *m_nextFrame : *m_authority->combatFrame;
     for (usize index = m_executed.size(); index < effective.size(); ++index) {

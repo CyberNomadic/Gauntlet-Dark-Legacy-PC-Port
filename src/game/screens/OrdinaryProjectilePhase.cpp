@@ -21,11 +21,13 @@ bool ordinarySpec(const MissileSpec* spec) {
     return false;
 }
 
-template <class Impact> bool ordinaryImpact(const Impact& impact) {
+template <class Impact> bool ordinaryImpact(const Impact& impact, bool phoenix = false) {
     return impact.owner >= 0 && impact.owner < 4 && impact.potion == 0 && impact.potency == 0 &&
            impact.player == -1 && !impact.stun &&
            (impact.target == -1 || (impact.worldObject == -1 && !impact.liquid)) &&
-           (impact.flags & ~PlayerMissiles::kPlainModifiers) == 0;
+           ((impact.flags & ~PlayerMissiles::kPlainModifiers) == 0 ||
+            (phoenix && impact.flags == 0x11 && impact.damage == 10 &&
+             impact.wallSound == MissileWallSound::Silent && impact.playerHitGap == 0.25f));
 }
 
 bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
@@ -110,7 +112,8 @@ std::optional<u32> OrdinaryProjectilePhase::generatorPresentation(
 
 bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& state,
                                         std::span<const PlayerMissiles::Resource> resources,
-                                        f32 seconds) {
+                                        f32 seconds, const PlayerArsenal* arsenal,
+                                        std::span<const PlayerRuntime> players) {
     if (!std::isfinite(seconds) || seconds <= 0 || seconds > 1.0f / 30 || !state.valid() ||
         !state.bound || !state.casts.empty() || state.missiles.ricochetIn != 0 ||
         resources.size() > PlayerMissiles::Checkpoint::kMaxResources ||
@@ -118,29 +121,50 @@ bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& st
         state.missiles.missiles.size() > kMaxImpacts - state.missiles.impacts.size()) {
         return false;
     }
-    std::unordered_map<u32, const MissileSpec*> specs;
+    std::unordered_map<u32, const PlayerMissiles::Resource*> specs;
     specs.reserve(resources.size());
     for (const auto& resource : resources) {
         if (resource.id == 0 || resource.spec == nullptr ||
-            !specs.emplace(resource.id, resource.spec).second) {
+            !specs.emplace(resource.id, &resource).second) {
             return false;
         }
     }
     usize total = 0;
     for (const auto& flight : state.missiles.missiles) {
         const auto resource = specs.find(flight.resource);
-        if (resource == specs.end() || !ordinarySpec(resource->second) || flight.potion != 0 ||
+        if (resource == specs.end()) {
+            return false;
+        }
+        const auto& binding = *resource->second;
+        bool companion = false;
+        if (arsenal && arsenal->m_resources &&
+            binding.spec == &PlayerArsenal::familiarSpec(arsenal->m_resources->bossEncounter)) {
+            const auto player = std::ranges::find_if(players, [&](const auto& value) {
+                return !value.departed && value.actor.player() == flight.owner && value.figure;
+            });
+            const bool phoenix = binding.model == &arsenal->phoenixMissile();
+            const bool earned =
+                player != players.end() && binding.model == &player->figure->familiarMissile();
+            companion = player != players.end() && binding.model && binding.model->bound() &&
+                        binding.streak == nullptr && (phoenix || earned) &&
+                        flight.flags == (phoenix ? 0x11U : 0U) &&
+                        (!phoenix || flight.damage == 10) && flight.scale == 1 &&
+                        flight.wallSound == MissileWallSound::Silent && !flight.breaksPotions &&
+                        flight.playerHitGap == 0.25f && !flight.release;
+        }
+        if ((!ordinarySpec(binding.spec) && !companion) || flight.potion != 0 ||
             flight.potency != 0 || flight.potionRelease ||
             flight.multiplayer != MultiplayerMode::Normal || flight.rider != 0 ||
-            (flight.flags & ~PlayerMissiles::kPlainModifiers) != 0 || !flight.pierced.empty() ||
-            !flight.playerContacts.empty() || (flight.release && flight.release->emission != 0)) {
+            (!companion && (flight.flags & ~PlayerMissiles::kPlainModifiers) != 0) ||
+            !flight.pierced.empty() || !flight.playerContacts.empty() ||
+            (flight.release && flight.release->emission != 0)) {
             return false;
         }
         // PlayerMissiles uses this exact pre-gravity f32 expression to choose
         // its spatial substeps. Check it before its float-to-s32 conversion;
         // finite captured velocity alone does not bound native update work.
         const f32 steps = std::max(1.0f, std::ceil(glm::length(flight.velocity) * seconds /
-                                                   (resource->second->radius * 0.5f)));
+                                                   (binding.spec->radius * 0.5f)));
         if (!std::isfinite(steps) || steps > static_cast<f32>(kMaxFlightSteps)) {
             return false;
         }
@@ -153,7 +177,7 @@ bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& st
         const auto resource = specs.find(impact.effectResource);
         if (!ordinaryImpact(impact) || !ordinaryTarget(impact.target) ||
             (impact.effectResource != 0 &&
-             (resource == specs.end() || !ordinarySpec(resource->second)))) {
+             (resource == specs.end() || !ordinarySpec(resource->second->spec)))) {
             return false;
         }
     }
@@ -224,7 +248,7 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
     if (!before) {
         return refuse(Refusal::Capture);
     }
-    if (!supported(*before, resources.missiles, seconds)) {
+    if (!supported(*before, resources.missiles, seconds, &bound.arsenal, players)) {
         return refuse(Refusal::State);
     }
     if (std::ranges::any_of(
@@ -256,7 +280,11 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
     std::vector<std::optional<EffectTrees::Prepared>> presentation;
     presentation.reserve(impacts.size());
     for (const auto& impact : impacts) {
-        if (!ordinaryImpact(impact)) {
+        // The complete preflight above rejected every preexisting special
+        // impact and admitted 0x11 only on the exact native Phoenix model/spec.
+        // Thus a new 0x11 impact here is from a validated native flight, never
+        // a blanket admission of an unproven queued elemental hit.
+        if (!ordinaryImpact(impact, true) || (impact.flags == 0x11 && !impact.effect.empty())) {
             return refuse(Refusal::Impact, impact.target);
         }
         if (!ordinaryTarget(impact.target)) {

@@ -45,10 +45,10 @@ public:
     PlayerFigure& operator=(PlayerFigure&&) = delete;
     ~PlayerFigure() = default;
 
-    /** Gameplay-only continuation: exact action/attachment pose and the familiar
-     * release latches consumed by PartyMotion. Costume texture clocks, cosmetic
-     * companion/familiar animation and weapon trails are not visual snapshots.
-     * Pojo is refused because its animated head also places native projectiles. */
+    /** Exact action/attachment and companion continuation, including familiar
+     * release latches and both companion presentation clocks. Costume texture
+     * clocks and weapon trails remain separate presentation owners. Pojo is
+     * refused because its animated head also places other native projectiles. */
     struct GameplayCheckpoint {
         static constexpr usize kMaxNodes = TreePose::Checkpoint::kMaxNodes;
         std::string actions;
@@ -68,6 +68,9 @@ public:
         bool familiarPending = false;
         bool familiarReleased = false;
         f32 phoenixSide = 0;
+        PlayerFamiliar::Checkpoint familiar;
+        PowerupCompanion::Checkpoint powerupCompanion;
+        f32 companionAlpha = 1;
         bool valid() const;
         bool operator==(const GameplayCheckpoint&) const = default;
     };
@@ -112,6 +115,9 @@ public:
      * invalidate missiles already in flight. */
     void setCompanionPowerups(RenderDevice& device, ItemArchive& powerups,
                               const Inventory& inventory, ItemArchive* weapons = nullptr);
+    /** Refreshes the native pre-animation fade only when the existing trusted
+     * companion binding already matches. A kind change needs the native loader. */
+    bool syncCompanionPowerups(const Inventory& inventory);
     bool hasShadow() const { return m_shadow.bound(); }
     /** The costume's shadow, unscaled, lying on the floor at `ground` along its `normal`. */
     void drawShadow(RenderDevice& device, const Mat4& clip, const Vec3& eye, const Vec3& ground,
@@ -212,6 +218,7 @@ public:
     ItemArchive* effects();
     /** Read-only access for post-step capture; never loads an archive. */
     const ItemArchive* loadedEffects() const { return m_effects.loaded() ? &m_effects : nullptr; }
+    ItemArchive* loadedEffects() { return m_effects.loaded() ? &m_effects : nullptr; }
     /** A temporary full-bright skin; null restores the costume's normal appearance. */
     void setSkinTexture(const Texture* texture) {
         m_model.setMaskedTexture(texture);

@@ -13,6 +13,7 @@ bool PlayerFamiliar::bind(RenderDevice& device, ItemArchive& archive, s32 level,
 }
 bool PlayerFamiliar::bindTree(RenderDevice& device, ItemArchive& archive, std::string_view name,
                               const Vec3& offset, std::span<TextureSet* const> lenders) {
+    ++m_bindingRevision;
     m_tree = nullptr;
     m_model.clear();
     m_textures.clear();
@@ -34,6 +35,74 @@ bool PlayerFamiliar::bindTree(RenderDevice& device, ItemArchive& archive, std::s
     m_textures.bind(archive.trees.textureAnimations(), archive.textures, device, lenders);
     m_player.start(tree.sequences[0], 0);
     update(0, false);
+    return true;
+}
+bool PlayerFamiliar::Checkpoint::valid() const {
+    if (tier < 0 || tier > 2 || tree.size() > TreePose::Checkpoint::kMaxName ||
+        tree.find('\0') != std::string::npos || !animation.valid() || !textures.valid() ||
+        (pose && !pose->valid()) || (previousPose && !previousPose->valid()) ||
+        !std::isfinite(previousFrame) || previousFrame < 0 ||
+        previousFrame > AnimationPlayer::kCheckpointFrames ||
+        previousGeneration > animation.generation || tree.empty() == animation.playing ||
+        (!tree.empty() && (!pose || pose->tree != tree)) ||
+        (previousPose && previousPose->tree != tree) || (tree.empty() && (pose || previousPose))) {
+        return false;
+    }
+    for (s32 axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(offset[axis]) ||
+            std::abs(offset[axis]) > TreePose::Checkpoint::kMaxMagnitude) {
+            return false;
+        }
+    }
+    return true;
+}
+std::optional<PlayerFamiliar::Checkpoint> PlayerFamiliar::checkpoint() const {
+    Checkpoint state{m_tier,
+                     m_tree ? m_tree->name : std::string{},
+                     m_offset,
+                     m_player.checkpoint(),
+                     m_textures.checkpoint(),
+                     m_pose.checkpoint(),
+                     m_previousPose.checkpoint(),
+                     m_previousGeneration,
+                     m_previousFrame,
+                     m_presentationAdvanced};
+    if ((m_pose.posed() && !state.pose) || (m_previousPose.posed() && !state.previousPose) ||
+        !state.valid()) {
+        return std::nullopt;
+    }
+    return state;
+}
+bool PlayerFamiliar::restore(const Checkpoint& state) {
+    if (!state.valid() || state.tier != m_tier || state.offset != m_offset ||
+        state.tree != (m_tree ? m_tree->name : std::string{})) {
+        return false;
+    }
+    const TreeSequenceInfo* sequence = nullptr;
+    if (state.animation.playing) {
+        if (!m_tree || state.animation.sequence >= m_tree->sequences.size()) {
+            return false;
+        }
+        sequence = &m_tree->sequences[state.animation.sequence];
+    }
+    auto next = *this;
+    if (!next.m_player.restore(state.animation, sequence) ||
+        !next.m_textures.restore(state.textures) ||
+        (state.pose && !next.m_pose.restore(*m_tree, *state.pose)) ||
+        (state.previousPose && !next.m_previousPose.restore(*m_tree, *state.previousPose))) {
+        return false;
+    }
+    if (!state.pose) {
+        next.m_pose = {};
+    }
+    if (!state.previousPose) {
+        next.m_previousPose = {};
+    }
+    next.m_drawPose = {};
+    next.m_previousFrame = state.previousFrame;
+    next.m_previousGeneration = state.previousGeneration;
+    next.m_presentationAdvanced = state.presentationAdvanced;
+    *this = std::move(next);
     return true;
 }
 void PlayerFamiliar::update(f32 seconds, bool attack) {

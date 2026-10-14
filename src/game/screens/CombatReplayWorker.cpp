@@ -1,6 +1,7 @@
 #include "game/screens/CombatReplayWorker.h"
 
 #include <algorithm>
+#include <bit>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
@@ -10,10 +11,17 @@
 namespace gdl::game {
 namespace {
 bool sameInput(const InputCommand& a, const InputCommand& b) {
+    const auto real = [](f32 first, f32 second) {
+        return std::bit_cast<u32>(first) == std::bit_cast<u32>(second);
+    };
     return a.epoch == b.epoch && a.tick == b.tick && a.grant == b.grant && a.seat == b.seat &&
-           a.direction == b.direction && a.magnitude == b.magnitude &&
-           a.aimDirection == b.aimDirection && a.heldButtons == b.heldButtons &&
-           a.pressedButtons == b.pressedButtons;
+           real(a.direction.x, b.direction.x) && real(a.direction.y, b.direction.y) &&
+           real(a.magnitude, b.magnitude) &&
+           a.aimDirection.has_value() == b.aimDirection.has_value() &&
+           (!a.aimDirection || (real(a.aimDirection->x, b.aimDirection->x) &&
+                                real(a.aimDirection->y, b.aimDirection->y) &&
+                                real(a.aimDirection->z, b.aimDirection->z))) &&
+           a.heldButtons == b.heldButtons && a.pressedButtons == b.pressedButtons;
 }
 bool inputBefore(const InputCommand& a, const InputCommand& b) {
     return a.tick < b.tick || (a.tick == b.tick && a.seat < b.seat);
@@ -86,6 +94,39 @@ struct CombatReplayWorker::Data {
                         result->publication.reset();
                     }
                 }
+                std::optional<Request> rebasing;
+                {
+                    std::lock_guard lock{mutex};
+                    if (!stopping && result->status == Status::Published && executor.rebase &&
+                        authority != request.authority) {
+                        // Harvest exactly once. Chasing an unbounded sequence of
+                        // arrivals would starve ordinary input continuation.
+                        rebasing = Request{revision, context, local, authority, journal};
+                        ++state.rebaseAttempts;
+                    }
+                }
+                if (rebasing) {
+                    request = std::move(*rebasing);
+                    result->request = request.revision;
+                    result->authorityTick = request.authority->motion.tick;
+                    result->inputThroughTick = request.commands.empty()
+                                                   ? result->authorityTick
+                                                   : request.commands.back().tick;
+                    static_cast<Output&>(*result) = executor.rebase(request);
+                    if (resources.expired()) {
+                        result->status = Status::Resources;
+                        result->publication.reset();
+                    }
+                    if (result->status == Status::Published) {
+                        std::lock_guard lock{mutex};
+                        ++state.rebased;
+                    }
+                    // Leave pending and the complete journal intact. Inputs
+                    // beyond the retained endpoint still need the next job.
+                }
+                if (result->publication) {
+                    result->inputThroughTick = result->publication->tick();
+                }
             } catch (...) {
                 // Inability to allocate even a completion is visible through
                 // running=false. Never let an exception escape std::thread.
@@ -157,10 +198,13 @@ bool CombatReplayWorker::start(const MatchContext& context, u8 localPeer,
         return false;
     }
     Executor executor;
-    executor.run = [replay](const Request& request) {
+    const auto execute = [replay](const Request& request, bool rebase) {
         Output result;
         try {
-            if (replay->update(request.authority.get(), request.commands)) {
+            const bool accepted =
+                rebase ? replay->promoteAuthority(*request.authority, request.commands)
+                       : replay->update(request.authority.get(), request.commands);
+            if (accepted) {
                 result.publication = replay->publication();
                 result.status = result.publication ? Status::Published : Status::Unsupported;
             }
@@ -175,6 +219,8 @@ bool CombatReplayWorker::start(const MatchContext& context, u8 localPeer,
             std::make_shared<const OnlineCombatReplay::Diagnostics>(replay->diagnostics());
         return result;
     };
+    executor.run = [execute](const Request& request) { return execute(request, false); };
+    executor.rebase = [execute](const Request& request) { return execute(request, true); };
     // This CPU-only reset needs no fresh diagnostic allocation. OnlineCombatReplay
     // itself is destroyed on main after the joined executor is released.
     executor.finish = [&prediction] { prediction.resetReplay(); };

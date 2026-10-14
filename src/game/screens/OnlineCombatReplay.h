@@ -149,6 +149,11 @@ public:
     bool begin(const MatchContext& context, u8 localPeer, CombatPrediction& prediction);
     void clear();
     bool update(const CombatSnapshot* authority, std::span<const InputCommand> sent);
+    /** Rebind an already completed Stage interval to newer exact authority, without
+     * advancing native ticks. All sent commands are retained, including those
+     * after the current endpoint; only the already executed suffix is compared.
+     * Failure never permits publication under the incoming authority. */
+    bool promoteAuthority(const CombatSnapshot& authority, std::span<const InputCommand> sent);
     bool active() const;
     bool staged() const;
     bool present(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend);
@@ -165,7 +170,10 @@ private:
     bool presentPass(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend,
                      PresentRefusal& refusal) const;
     void discard();
-    bool updatePass(const CombatSnapshot* authority, std::span<const InputCommand> sent);
+    bool updateThrough(const CombatSnapshot* authority, std::span<const InputCommand> sent,
+                       std::optional<u64> endpoint);
+    bool updatePass(const CombatSnapshot* authority, std::span<const InputCommand> sent,
+                    std::optional<u64> endpoint);
     std::unique_ptr<CombatSnapshot>
     picture(std::shared_ptr<const StageParticlePresentation>& particles) const;
     MatchContext m_context;

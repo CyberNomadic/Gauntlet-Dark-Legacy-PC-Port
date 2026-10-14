@@ -180,7 +180,8 @@ public:
         std::vector<PartyDamage::Output> damage;
         std::vector<s32> meleeHits; ///< accepted contacts, in native order/input IDs
         std::vector<FeedbackSound> feedback;
-        std::vector<OrdinaryWeaponEmission::Cue> throws; ///< buffered once per native fan
+        std::vector<LevelFixtures::NamedSound> fixtureSounds; ///< named, not distance-attenuated
+        std::vector<OrdinaryWeaponEmission::Cue> throws;      ///< buffered once per native fan
         std::vector<OrdinaryStrongPhase::Cue> strong; ///< authored free-A cues, never played here
         std::vector<OrdinaryProjectilePhase::Cue> impacts;
         std::vector<OrdinaryPickupPhase::Output>

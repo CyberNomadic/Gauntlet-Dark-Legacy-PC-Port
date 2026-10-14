@@ -90,6 +90,8 @@ void workerCounts(OnlinePlay::CombatWorkerMetrics& total,
     total.coalesced += value.coalesced - previous.coalesced;
     total.executed += value.executed - previous.executed;
     total.superseded += value.superseded - previous.superseded;
+    total.rebaseAttempts += value.rebaseAttempts - previous.rebaseAttempts;
+    total.rebased += value.rebased - previous.rebased;
     total.running = value.running;
     total.inFlight = value.inFlight;
     total.pending = value.pending;

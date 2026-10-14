@@ -56,6 +56,11 @@ add_executable(tests
     game/netplay/OnlineCombatWorkerTests.cpp
     game/screens/OrdinaryPickupPhaseTests.cpp
     game/screens/OrdinaryCritterPhaseTests.cpp
+    game/screens/OrdinaryEnemyMissilePhaseTests.cpp
+    game/screens/OrdinaryKeyedGateTickTests.cpp
+    game/netplay/CanonicalDigestSinkTests.cpp
+    game/screens/OrdinaryFamiliarEmissionTests.cpp
+    game/world/PlayerCompanionCheckpointTests.cpp
     game/screens/PartyLightingTests.cpp
     game/screens/OrdinaryBarrelEmissionTests.cpp
     game/screens/StageSnapshotSamplingTests.cpp
@@ -588,6 +593,11 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/OnlineCombatWorkerTests.cpp
         game/screens/OrdinaryPickupPhaseTests.cpp
         game/screens/OrdinaryCritterPhaseTests.cpp
+        game/screens/OrdinaryEnemyMissilePhaseTests.cpp
+        game/screens/OrdinaryKeyedGateTickTests.cpp
+        game/netplay/CanonicalDigestSinkTests.cpp
+        game/screens/OrdinaryFamiliarEmissionTests.cpp
+        game/world/PlayerCompanionCheckpointTests.cpp
         game/screens/PartyLightingTests.cpp
         game/screens/OrdinaryBarrelEmissionTests.cpp
         game/screens/StageSnapshotSamplingTests.cpp

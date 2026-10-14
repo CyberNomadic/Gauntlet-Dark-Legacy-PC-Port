@@ -8,6 +8,7 @@
 
 #include "engine/io/ByteReader.h"
 
+#include "game/netplay/AnimationCheckpoint.h"
 #include "game/netplay/PlayerActionCheckpoint.h"
 #include "game/netplay/PlayerKnockbackCheckpoint.h"
 #include "game/netplay/PlayerPoseCheckpoint.h"
@@ -237,6 +238,27 @@ template <class A, class T> void actor(A& archive, T& value) {
                  vector(a, contact.point);
              });
 }
+template <class A, class T> void companionPose(A& archive, T& value) {
+    text(archive, value.tree, TreePose::Checkpoint::kMaxName);
+    sequence(archive, value.nodes, TreePose::Checkpoint::kMaxNodes, 20, [](auto& a, auto& node) {
+        text(a, node.name, TreePose::Checkpoint::kMaxName);
+        a.number(node.parent);
+        vector(a, node.rest);
+    });
+    sequence(archive, value.poses, TreePose::Checkpoint::kMaxNodes, 37, [](auto& a, auto& node) {
+        vector(a, node.rotation);
+        vector(a, node.position);
+        vector(a, node.scale);
+        a.number(node.pitchYawRoll);
+    });
+}
+template <class A, class T> void companionClock(A& archive, T& value) {
+    text(archive, value.tree, TreePose::Checkpoint::kMaxName);
+    block<AnimationCheckpoint>(archive, value.animation, AnimationCheckpoint::kBytes);
+    numbers(archive, value.textures.frame, value.textures.remainder, value.textures.advance);
+    optional(archive, value.pose, [](auto& a, auto& pose) { companionPose(a, pose); });
+    numbers(archive, value.previousFrame, value.previousGeneration, value.presentationAdvanced);
+}
 template <class A, class T> void figure(A& archive, T& value) {
     text(archive, value.actions, 256);
     text(archive, value.costume, 256);
@@ -254,6 +276,14 @@ template <class A, class T> void figure(A& archive, T& value) {
              [](auto& a, auto& transform) { matrix(a, transform); });
     numbers(archive, value.animationRevision, value.familiarPending, value.familiarReleased,
             value.phoenixSide);
+    archive.number(value.familiar.tier);
+    vector(archive, value.familiar.offset);
+    companionClock(archive, value.familiar);
+    optional(archive, value.familiar.previousPose,
+             [](auto& a, auto& pose) { companionPose(a, pose); });
+    archive.number(value.powerupCompanion.kind);
+    companionClock(archive, value.powerupCompanion);
+    archive.number(value.companionAlpha);
 }
 
 template <class A, class T> void runtime(A& archive, T& state) {

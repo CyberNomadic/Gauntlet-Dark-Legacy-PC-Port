@@ -23,6 +23,7 @@
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentPlacements.h"
 #include "game/screens/OpponentSimulation.h"
+#include "game/screens/OrdinaryEnemyMissilePhase.h"
 #include "game/screens/PartyDamage.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/BodyCollision.h"
@@ -173,46 +174,59 @@ void LevelOpponents::landEnemyMissiles(std::span<PlayerRuntime> players, const E
         return;
     }
     for (const EnemyMissileHit& hit : m_enemyMissiles.takeHits()) {
-        if (hit.worldObject >= 0) {
-            m_resources->world.explodeObject(hit.worldObject, hit.position);
+        (void)dispatchEnemyMissileHit(hit, players, events);
+    }
+}
+
+bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
+                                             std::span<PlayerRuntime> players, const Events& events,
+                                             const MissilePublisher& publish) {
+    if (!m_resources) {
+        return false;
+    }
+    if (hit.worldObject >= 0) {
+        m_resources->world.explodeObject(hit.worldObject, hit.position);
+    }
+    if (!hit.ricochet && hit.target >= 0) {
+        strikeSwarm(hit.target, hit.damage, hit.flags, hit.direction, players);
+    }
+    const auto emission = EnemyMissileEmission::resolve(hit, m_resources->weapons);
+    u32 effect = 0;
+    if (publish) {
+        const auto started = publish(emission);
+        if (!started) {
+            return false;
         }
-        if (hit.ricochet) {
-            playAt(kRicochetSound, kQuietSound, hit.position);
-            continue;
-        }
-        if (hit.target >= 0) {
-            strikeSwarm(hit.target, hit.damage, hit.flags, hit.direction, players);
-        }
-        u32 effect = 0;
-        if (const std::string_view tree = hit.effect(); !tree.empty()) {
-            EffectTrees::Setting setting;
-            setting.unlit = true;
-            setting.depthWrite = false;
-            if (hit.burstRadius <= 0) {
-                setting.tint.a = 96;
-            }
-            if (m_resources->weapons.loaded()) {
-                effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
-                                                       tree, hit.position, setting);
-                if (effect != 0) {
-                    m_cueEffects.push_back(effect);
-                }
-            }
-        }
-        playAt(hit.sound(), hit.liquid ? LevelSoundscape::kSplashLevel : kLoudSound, hit.position);
-        const HurtKind kind = (hit.flags & EnemyBlast::kGas) != 0 ? HurtKind::Gas : HurtKind::Blow;
-        for (usize i = 0; i < players.size(); ++i) {
-            if (hit.player >= 0 && players[i].actor.player() == hit.player &&
-                players[i].life == PlayerLife::Standing) {
-                events.hurt(i, hit.damage, kind, true, {hit.flags, hit.direction});
-            }
-        }
-        if (hit.burstRadius > 0.0f) {
-            const f32 life = m_resources->effects.remaining(effect).value_or(kUnseenBurst);
-            m_enemyMissiles.burst(hit.position, hit.burstRadius, hit.damage, hit.flags,
-                                  life > 0.0f ? life : kUnseenBurst, hit.player);
+        effect = *started;
+    } else if (!hit.ricochet && !hit.effect().empty() && m_resources->weapons.loaded()) {
+        // Keep the native attempt (including a missing-tree refusal) exactly;
+        // private preparation separately distinguishes absent art from an
+        // available tree omitted from its trusted resource catalog.
+        effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
+                                               hit.effect(), hit.position, emission.setting);
+    }
+    if (effect != 0) {
+        m_cueEffects.push_back(effect);
+    }
+    if (!publish) {
+        playAt(emission.sound, emission.level, hit.position);
+    }
+    if (hit.ricochet) {
+        return true;
+    }
+    const HurtKind kind = (hit.flags & EnemyBlast::kGas) != 0 ? HurtKind::Gas : HurtKind::Blow;
+    for (usize i = 0; i < players.size(); ++i) {
+        if (hit.player >= 0 && players[i].actor.player() == hit.player &&
+            players[i].life == PlayerLife::Standing) {
+            events.hurt(i, hit.damage, kind, true, {hit.flags, hit.direction});
         }
     }
+    if (hit.burstRadius > 0.0f) {
+        const f32 life = m_resources->effects.remaining(effect).value_or(kUnseenBurst);
+        m_enemyMissiles.burst(hit.position, hit.burstRadius, hit.damage, hit.flags,
+                              life > 0.0f ? life : kUnseenBurst, hit.player);
+    }
+    return true;
 }
 
 /** A suicide going up (SuicideExplosion): a burning blast of six with its ring and red light,

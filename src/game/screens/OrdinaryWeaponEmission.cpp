@@ -36,6 +36,7 @@ bodyResource(const MissileLaunch& launch, std::span<const EffectTrees::PoolResou
         if (resource.id == 0 || resource.archive != launch.archive ||
             resource.textures == nullptr || prototype == nullptr ||
             !std::ranges::equal(resource.lenders, lenders) ||
+            !std::ranges::equal(prototype->lenders, lenders) ||
             prototype->archive != launch.archive || prototype->tree != tree ||
             !prototype->emitParticles || prototype->missingObjectsAreEmpty ||
             prototype->trails.size() != 0 ||
@@ -152,6 +153,53 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
         }
     }
     return {.accepted = true, .launched = true, .cue = cue};
+}
+
+OrdinaryWeaponEmission::Result
+OrdinaryWeaponEmission::familiar(PlayerArsenal& arsenal, const PlayerActor& actor,
+                                 PlayerFigure& figure, std::optional<Vec3> target,
+                                 const CombatRollbackCheckpoint::Resources& resources) {
+    if (!arsenal.m_resources || !figure.familiarReleased() || actor.player() < 0 ||
+        actor.player() >= 4 || figure.pojoActive() || (target && !finite(*target)) ||
+        resources.missiles.size() > PlayerMissiles::Checkpoint::kMaxResources ||
+        resources.missileEffects.size() >
+            EffectTrees::PoolCheckpoint::kMaxEffects + EffectTrees::PoolCheckpoint::kMaxBanks) {
+        return {};
+    }
+    const auto launches = arsenal.prepareFamiliar(actor, figure, target);
+    if (!launches || launches->size() > 2) {
+        return {};
+    }
+    std::vector<EffectTrees::Prepared> bodies;
+    bodies.reserve(launches->size());
+    for (const auto& launch : *launches) {
+        const auto matches = std::ranges::count_if(resources.missiles, [&](const auto& resource) {
+            return resource.id != 0 && resource.spec == launch.spec &&
+                   resource.model == launch.model && resource.streak == nullptr;
+        });
+        if (matches != 1 || launch.model == nullptr || !launch.model->bound() ||
+            launch.spec != &PlayerArsenal::familiarSpec(arsenal.m_resources->bossEncounter) ||
+            launch.owner != actor.player() || launch.release || launch.potionRelease ||
+            launch.potion != 0 || launch.riderArchive != nullptr || !launch.riderTree.empty() ||
+            launch.streak.texture != nullptr || launch.multiplayer != MultiplayerMode::Normal ||
+            launch.breaksPotions || launch.wallSound != MissileWallSound::Silent ||
+            !finite(launch.position) || !finite(launch.direction) || !launch.velocity ||
+            !finite(*launch.velocity) || !finite(launch.damage) || launch.damage < 0) {
+            return {};
+        }
+        const auto body = bodyResource(launch, resources.missileEffects,
+                                       arsenal.missiles().visuals().textureLenders());
+        if (!body || body->device != &arsenal.m_resources->device) {
+            return {};
+        }
+        bodies.push_back(*body);
+    }
+    for (usize index = 0; index < launches->size(); ++index) {
+        if (!arsenal.missiles().launchPrepared((*launches)[index], bodies[index])) {
+            return {};
+        }
+    }
+    return {.accepted = true, .launched = !launches->empty()};
 }
 
 } // namespace gdl::game

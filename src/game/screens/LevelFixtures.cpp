@@ -506,7 +506,7 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
 
 LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
                                                 std::span<PlayerRuntime> players,
-                                                const Events* events) {
+                                                const Events* events, const GatePublisher& gate) {
     if (!m_resources.has_value()) {
         return {Boundary::Unbound};
     }
@@ -663,13 +663,11 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
             continue;
         }
         if (events == nullptr) {
-            return {Boundary::Gate, event.gate};
-        }
-        if (event.kind == GateEvent::Kind::Unlocked) {
-            players[event.visitor].actor.save().progress().inventory.spendKey();
-            playGateSound(m_gates.gate(event.gate).subtype);
-        } else if (event.kind == GateEvent::Kind::Refused) {
-            events->help(HelpMessages::kDoorNeedsKey, event.visitor);
+            if (!gate || !gate(event)) {
+                return {Boundary::Gate, event.gate};
+            }
+        } else {
+            dispatchGateEvent(event, players, *events);
         }
     }
     for (const TrapHit& hit :
@@ -1422,13 +1420,27 @@ void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
 }
 
 /** A gate's opening sounds from the realm's own bank, named after the level's letter. */
-void LevelFixtures::playGateSound(s32 subtype) {
+void LevelFixtures::dispatchGateEvent(const GateEvent& event, std::span<PlayerRuntime> players,
+                                      const Events& events, const NamedPublisher& publish) {
+    if (event.kind == GateEvent::Kind::Unlocked) {
+        players[event.visitor].actor.save().progress().inventory.spendKey();
+        playGateSound(m_gates.gate(event.gate).subtype, publish);
+    } else if (event.kind == GateEvent::Kind::Refused) {
+        events.help(HelpMessages::kDoorNeedsKey, event.visitor);
+    }
+}
+
+void LevelFixtures::playGateSound(s32 subtype, const NamedPublisher& publish) {
     if (!m_resources.has_value()) {
         return;
     }
     const auto sound = LockedGates::openingSound(m_resources->world.ref().realmId, subtype);
     if (!sound.empty()) {
-        m_resources->audio.playNamed(sound, 127.0f / 255.0f);
+        if (publish) {
+            publish(sound, 127.0f / 255.0f);
+        } else {
+            m_resources->audio.playNamed(sound, 127.0f / 255.0f);
+        }
     }
 }
 

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "game/enemies/Critters.h"
+#include "game/screens/OrdinaryEnemyMissilePhase.h"
 
 namespace gdl::game {
 namespace {
@@ -136,8 +137,10 @@ bool pendingInteraction(const OpponentSimulation::Checkpoint& state, bool combat
     return (!combat &&
             (!enemies.blows.empty() || !enemies.losses.empty() || !enemies.feedback.empty())) ||
            !enemies.bursts.empty() || !enemies.deathEvents.empty() || !enemies.deathShots.empty() ||
-           !enemies.tagged.empty() || !missiles.hits.empty() || !missiles.rockHits.empty() ||
-           !missiles.pickupBlasts.empty();
+           !enemies.tagged.empty() ||
+           (combat ? !OrdinaryEnemyMissilePhase::supported(missiles)
+                   : !missiles.hits.empty() || !missiles.rockHits.empty() ||
+                         !missiles.pickupBlasts.empty());
 }
 
 bool ordinary(const EnemyView& player) {

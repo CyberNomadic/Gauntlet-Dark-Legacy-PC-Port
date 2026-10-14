@@ -242,6 +242,7 @@ bool CombatResources::bindStage(RenderDevice& device, LevelWorld& world, ItemArc
         add(base + 1, classEffects, weaponLenders);
         add(base + 2, weaponArchive, weaponLenders);
         add(base + 4, classEffects, {});
+        add(base + 5, classEffects, thrown); // Native earned familiar has no primary lender.
         std::vector<TextureSet*> gauntletLenders{&classEffects->textures};
         gauntletLenders.insert(gauntletLenders.end(), thrown.begin(), thrown.end());
         add(base + 3, &weapons, gauntletLenders);
@@ -249,6 +250,14 @@ bool CombatResources::bindStage(RenderDevice& device, LevelWorld& world, ItemArc
         const u32 shot = 1 + static_cast<u32>(seat) * 4;
         missiles.push_back({shot, &MissileSpec::of(character), &figure.missile(), streak});
         missiles.push_back({shot + 1, &MissileSpec::of(character), nullptr, streak});
+        const bool boss = world.level() != nullptr && world.level()->bossType >= 0;
+        const auto* familiar = &PlayerArsenal::familiarSpec(boss);
+        if (figure.familiarMissile().bound()) {
+            missiles.push_back({shot + 2, familiar, &figure.familiarMissile(), nullptr});
+        }
+        if (arsenal.phoenixMissile().bound()) {
+            missiles.push_back({shot + 3, familiar, &arsenal.phoenixMissile(), nullptr});
+        }
         for (usize row = 0; row < stats->moveEffects.size(); ++row) {
             const auto& authored = stats->moveEffects[row];
             if (!authored.particle()) {
