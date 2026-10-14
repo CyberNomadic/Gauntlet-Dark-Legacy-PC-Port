@@ -557,10 +557,11 @@ bool ReplicaProjectiles::show(const CombatSnapshot& snapshot,
 }
 void ReplicaProjectiles::draw(RenderDevice& device, ProjectileResources& resources,
                               const Mat4& clip, const WorldLighting& lighting,
-                              const CameraFrame& camera, TreeModel::Pass pass) const {
+                              const CameraFrame& camera, TreeModel::Pass pass,
+                              bool drawParticles) const {
     for (const auto& shot : m_shots) {
         resources.draw(device, shot, clip, lighting, camera, pass);
-        if (shot.particles && pass != TreeModel::Pass::DepthWriting &&
+        if (drawParticles && shot.particles && pass != TreeModel::Pass::DepthWriting &&
             pass != TreeModel::Pass::Opaque) {
             const auto found = m_particles.find(particleKey(shot));
             if (found != m_particles.end()) {

@@ -248,9 +248,9 @@ TEST_CASE("dormant family clocks resolve by trusted identity rather than load or
     REQUIRE(host.opponents.critters().count() == 0);
     REQUIRE(guest.opponents.critters().count() == 0);
     auto expected = host.state();
-    REQUIRE(expected.dormantBanks.size() == 2);
-    expected.dormantBanks[0].textures = {17, 0.25f, 0.5f};
-    expected.dormantBanks[1].textures = {101, 0.75f, 1};
+    REQUIRE(expected.critters.banks.size() == 2);
+    expected.critters.banks[0].clock = {17, 0.25f, 0.5f};
+    expected.critters.banks[1].clock = {101, 0.75f, 1};
     REQUIRE(expected.valid());
     REQUIRE(host.adapter.restore(expected, host.visual()));
     const auto uploads = guest.device.texturesCreated;
@@ -264,7 +264,7 @@ TEST_CASE("dormant family clocks resolve by trusted identity rather than load or
     CHECK(guest.device.texturesCreated == uploads);
     const auto before = guest.state();
     auto untrusted = before;
-    untrusted.dormantBanks.front().name = "UNBOUND";
+    untrusted.critters.banks.front().name = "UNBOUND";
     REQUIRE(untrusted.valid());
     CHECK_FALSE(guest.adapter.prepareRestore(untrusted, guest.visual()));
     CHECK(guest.state() == before);
@@ -275,21 +275,52 @@ TEST_CASE("dormant family clocks resolve by trusted identity rather than load or
     CHECK_FALSE(guest.adapter.commitRestore(std::move(*prepared)));
 }
 
-TEST_CASE("dormant bank identities and counts are strictly bounded",
+TEST_CASE("critter bank identities and counts are strictly bounded",
           "[opponent-combat-checkpoint][dormant-opponents]") {
     OpponentCombatCheckpoint::State state;
-    state.dormantBanks = {{CombatantKind::Golem, "GOLEM", {}},
-                          {CombatantKind::Gargoyle, "GAR_EAGL", {}}};
+    state.critters.banks = {{1, CombatantKind::Golem, "GOLEM", "GOLEM", {}},
+                            {2, CombatantKind::Gargoyle, "GAR_EAGL", "GAR_EAGL", {}}};
+    state.projectiles.catalog = {{1, CombatantKind::Golem, "GOLEM", {}},
+                                 {2, CombatantKind::Gargoyle, "GAR_EAGL", {}}};
     REQUIRE(state.valid());
     switch (GENERATE(0, 1, 2, 3, 4, 5)) {
-    case 0: state.dormantBanks[0].kind = CombatantKind::Boss; break;
-    case 1: state.dormantBanks[0].name = "../GOLEM"; break;
-    case 2: state.dormantBanks[0].name.assign(32, 'A'); break;
-    case 3: std::swap(state.dormantBanks[0], state.dormantBanks[1]); break;
-    case 4: state.dormantBanks[1] = state.dormantBanks[0]; break;
-    case 5: state.dormantBanks.resize(OpponentCombatCheckpoint::State::kMaxDormantBanks + 1); break;
+    case 0: state.critters.banks[0].kind = CombatantKind::Boss; break;
+    case 1: state.critters.banks[0].name.push_back('\0'); break;
+    case 2: state.critters.banks[0].name.assign(65, 'A'); break;
+    case 3: std::swap(state.critters.banks[0], state.critters.banks[1]); break;
+    case 4: state.critters.banks[1] = state.critters.banks[0]; break;
+    case 5: state.critters.banks.resize(CrittersCheckpoint::kMaxStocks + 1); break;
     }
     CHECK_FALSE(state.valid());
+}
+
+TEST_CASE("complete critter state does not authorize dormant-only simulation",
+          "[opponent-combat-checkpoint][dormant-opponents]") {
+    OpponentCombatCheckpoint::State state;
+    REQUIRE(state.valid());
+    REQUIRE(state.dormant());
+    switch (GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)) {
+    case 0: state.critters.actors[0].parts[0].actor.state = 1; break;
+    case 1: state.critters.actors[0].parts[0].actor.definition.resource = 1; break;
+    case 2: state.critters.actors[0].parts.emplace_back(); break;
+    case 3: state.critters.actors[0].parts[0].events.cues.emplace_back(); break;
+    case 4: state.critters.events.losses.emplace_back(); break;
+    case 5: state.projectiles.flying.emplace_back(); break;
+    case 6: state.projectiles.emittedEffects.push_back(1); break;
+    case 7: state.projectiles.hits.emplace_back(); break;
+    case 8: state.projectiles.worldHits.emplace_back(); break;
+    case 9: state.projectiles.rockHits.emplace_back(); break;
+    case 10: state.projectiles.generators.emplace_back(1); break;
+    case 11: state.projectiles.summons.emplace_back(1); break;
+    case 12: state.projectiles.ricochetIn = 0.1f; break;
+    case 13: state.critterEffects.emplace_back(); break;
+    case 14: state.moveEffects.emplace_back(); break;
+    case 15: state.barrelRams.emplace_back(); break;
+    }
+    CHECK_FALSE(state.dormant());
+    state = {};
+    state.critterExperienceOwed[2] = 0.25f;
+    CHECK_FALSE(state.dormant());
 }
 
 TEST_CASE("native G1 adapter preserves its complete dormant statues and preloaded family banks",
@@ -322,7 +353,7 @@ TEST_CASE("native G1 adapter preserves its complete dormant statues and preloade
     REQUIRE(before);
     REQUIRE_FALSE(before->statues.roster.empty());
     REQUIRE_FALSE(before->statues.statues.empty());
-    REQUIRE_FALSE(before->dormantBanks.empty());
+    REQUIRE_FALSE(before->critters.banks.empty());
     REQUIRE(opponents.critters().count() == 0);
     const auto placements = opponents.placements().checkpoint();
     REQUIRE(placements);
@@ -336,7 +367,7 @@ TEST_CASE("native G1 adapter preserves its complete dormant statues and preloade
     const auto changed = adapter.checkpoint(*visual);
     REQUIRE(changed);
     CHECK(changed->statues.statues.front().woken);
-    CHECK(changed->dormantBanks != before->dormantBanks);
+    CHECK(changed->critters.banks != before->critters.banks);
     REQUIRE(adapter.canCommit(*undo));
     REQUIRE(adapter.commitRestore(std::move(*undo)));
     CHECK(adapter.checkpoint(*visual) == before);
@@ -419,7 +450,7 @@ TEST_CASE("ordinary adapter refuses queued special-owner outcomes even with no v
     CHECK(fixture.opponents.enemies().checkpoint() == swarm);
 }
 
-TEST_CASE("ordinary adapter refuses defeated great creatures and their pending rewards",
+TEST_CASE("opponent adapter preserves defeated critters and their pending rewards without dispatch",
           "[opponent-combat-checkpoint][assets]") {
     const auto native = test::assetOrSkip("CRITTER/GENERAL.WAD").parent_path().parent_path();
     AdapterFixture fixture;
@@ -427,7 +458,10 @@ TEST_CASE("ordinary adapter refuses defeated great creatures and their pending r
     critters.open(fixture.device, native, nullptr, {}, 'G');
     const auto general = critters.spawnGeneral({}, 0);
     REQUIRE(general);
-    CHECK_FALSE(fixture.adapter.checkpoint(fixture.visual()));
+    const auto alive = fixture.adapter.checkpoint(fixture.visual());
+    REQUIRE(alive);
+    auto undo = fixture.adapter.prepareRestore(*alive, fixture.visual());
+    REQUIRE(undo);
     EnemyHit hit;
     hit.damage = 1000000;
     hit.player = 2;
@@ -437,8 +471,14 @@ TEST_CASE("ordinary adapter refuses defeated great creatures and their pending r
         critters.update(2, 1.0f / 30, {});
     }
     REQUIRE(critters.count() == 0);
-    CHECK_FALSE(fixture.adapter.checkpoint(fixture.visual()));
-    CHECK_FALSE(critters.takeLosses().empty()); // refusal never consumes unsupported rewards
+    const auto dead = fixture.adapter.checkpoint(fixture.visual());
+    REQUIRE(dead);
+    CHECK_FALSE(dead->critters.events.losses.empty());
+    REQUIRE(fixture.adapter.canCommit(*undo));
+    REQUIRE(fixture.adapter.commitRestore(std::move(*undo)));
+    CHECK(fixture.adapter.checkpoint(fixture.visual()) == alive);
+    REQUIRE(fixture.adapter.restore(*dead, fixture.visual()));
+    CHECK_FALSE(critters.takeLosses().empty()); // Capture and restore never dispatch rewards.
     CHECK_FALSE(fixture.adapter.prepareRestore({}, fixture.visual()));
 }
 } // namespace

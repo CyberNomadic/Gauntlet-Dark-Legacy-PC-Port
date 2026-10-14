@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -53,22 +54,29 @@ public:
     static constexpr f32 kReach = 3.0f;      ///< how far over or under a portal one counts
     static constexpr f32 kFloorLift = 0.1f;
 
-    /** One portal. */
-    struct Portal {
+    /** Authored contact/support values, independent of artwork and travel state. */
+    struct Contact {
         s32 instance = -1;
         bool secret = false;
+        s32 minPlayers = 1;
+        Vec3 position{0};
+        Mat4 transform{1};
+        s32 support = -1;
+        Mat4 supportLocal{1};
+        f32 radius = 3;
+        void sync(const WorldCollision* collision);
+        bool touches(const PortalVisitor& visitor, f32 extra) const;
+    };
+    static std::vector<Contact> contacts(const WorldLayout& layout,
+                                         const WorldCollision* collision);
+    /** One portal. */
+    struct Portal : Contact {
         bool consumed = false;
         bool shut = false; ///< the tower has not opened it: it wears EXIT_OFF and takes nobody
         f32 alpha = 1.0f;  ///< tower route reveal; does not change progression eligibility
         std::optional<Vec3> departurePosition;
-        s32 minPlayers = 1;
         const ItemArchive* archive = nullptr; ///< borrowed source of the ordinary/off figure
         ItemFigure icon;
-        Vec3 position{0.0f, 0.0f, 0.0f};
-        Mat4 transform{1.0f};
-        s32 support = -1;
-        Mat4 supportLocal{1.0f}; ///< placement relative to the authored moving floor
-        f32 radius = 3.0f;
         std::string tag;                     ///< "g1"
         std::optional<LevelRef> destination; ///< none for a tag naming no level
         s32 action = 0;                      ///< which of kSequences it plays
@@ -123,6 +131,7 @@ public:
     static s32 gateOf(std::string_view tag);
 
 private:
+    friend class ExitPortalsCheckpoint;
     struct VisitorWait {
         s32 party = -1;
         s32 ticks = 0;
@@ -140,6 +149,8 @@ private:
     std::vector<s32> m_waiting;
     std::vector<VisitorWait> m_visitors;
     std::vector<Portal> m_portals;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

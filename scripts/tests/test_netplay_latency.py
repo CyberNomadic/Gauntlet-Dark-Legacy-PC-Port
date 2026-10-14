@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from netplay_latency import attack_response, evaluate, evaluate_stage, launch, main, throw_diagnostics
+from netplay_latency import (REPLAY_COUNTERS, REPLAY_REFUSALS, attack_response, evaluate,
+                            evaluate_stage, evaluate_stage_replay, launch, main, stage_replay_coverage,
+                            throw_diagnostics)
 
 
 class LatencyReportTests(unittest.TestCase):
@@ -274,6 +276,236 @@ class LatencyReportTests(unittest.TestCase):
                       stage_enemy_frames=90, stage_enemy_motion_samples=240,
                       stage_enemy_animation_samples=300)
         return report
+
+    def stage_replay_report(self):
+        report = self.active_stage_report()
+        report["prediction"] = True
+        report["combat_seeds"] = {
+            "schema": 1, "scope": "distinct-authority-post-step-checkpoints",
+            "observation": "guest-received", "observations": 100,
+            "opponent": 95, "combat": 90, "stage": 80,
+            "stage_bytes_total": 8000, "stage_bytes_max": 100,
+        }
+        report["combat_replay"] = {
+            "schema": 1, "scope": "measurement-window-native-replay", "counter_resets": 0,
+            **{domain: {**dict.fromkeys(REPLAY_COUNTERS, 0),
+                        "reasons": dict.fromkeys(REPLAY_REFUSALS, 0)}
+               for domain in ("unseeded", "legacy", "stage")},
+        }
+        stage = report["combat_replay"]["stage"]
+        stage.update(updates=100, passes=97, refusals=3, advanced_ticks=220,
+                     unsupported_ticks=2, presents=70, present_refusals=20,
+                     decode_attempts=100, decode_successes=99, decode_failures=1,
+                     decode_nanoseconds=300000, advance_nanoseconds=600000)
+        stage["reasons"].update(native_unsupported=2, stage_decode=1)
+        return report
+
+    def test_stage_replay_evidence_is_separate_from_latency_and_native_enemy_activity(self):
+        report = self.active_stage_report()
+        self.assertEqual(evaluate(report, 75), [])
+        self.assertEqual(evaluate_stage_replay(report), [])
+        self.assertTrue(evaluate_stage_replay(report, True))
+        report = self.stage_replay_report()
+        unchanged = deepcopy(report)
+        self.assertEqual(evaluate_stage_replay(report), [])
+        self.assertEqual(evaluate_stage_replay(report, True), [])
+        self.assertEqual(report, unchanged)
+        # Real refusals are retained, not erased to pass an admission assertion.
+        self.assertEqual(report["combat_replay"]["stage"]["refusals"], 3)
+
+    def test_stage_replay_cannot_be_proved_by_legacy_passes_or_failed_prefix_ticks(self):
+        report = self.stage_replay_report()
+        stage = report["combat_replay"]["stage"]
+        stage.update(passes=0, refusals=100, unsupported_ticks=99, presents=0)
+        stage["reasons"]["native_unsupported"] = 99
+        legacy = report["combat_replay"]["legacy"]
+        legacy.update(updates=100, passes=100, advanced_ticks=100, presents=200)
+        self.assertEqual(evaluate_stage_replay(report), [])
+        failures = evaluate_stage_replay(report, True)
+        self.assertIn("No measured Stage replay passes", failures)
+        self.assertIn("No measured Stage replay presents", failures)
+        self.assertTrue(stage["advanced_ticks"])
+        report = self.stage_replay_report()
+        report["combat_seeds"].update(stage=0, stage_bytes_total=0, stage_bytes_max=0)
+        self.assertIn("No complete Stage seeds received during measurement",
+                      evaluate_stage_replay(report, True))
+
+    def test_stage_replay_requires_guest_window_not_host_or_disabled_prediction(self):
+        for value in (None, False, 1, "on"):
+            report = self.stage_replay_report()
+            report["prediction"] = value
+            self.assertTrue(evaluate_stage_replay(report, True), value)
+        report = self.stage_replay_report()
+        report["role"] = "host"
+        report["combat_seeds"]["observation"] = "host-captured"
+        self.assertTrue(evaluate_stage_replay(report))
+        for domain in ("unseeded", "legacy", "stage"):
+            report["combat_replay"][domain] = {**dict.fromkeys(REPLAY_COUNTERS, 0),
+                                               "reasons": dict.fromkeys(REPLAY_REFUSALS, 0)}
+        self.assertEqual(evaluate_stage_replay(report), [])
+        self.assertTrue(evaluate_stage_replay(report, True))
+        report["combat_seeds"]["observation"] = "guest-received"
+        self.assertTrue(evaluate_stage_replay(report))
+        for key, value in (("schema", True), ("schema", 2), ("scope", "since-process-start"),
+                           ("counter_resets", True), ("counter_resets", 1)):
+            report = self.stage_replay_report()
+            report["combat_replay"][key] = value
+            self.assertTrue(evaluate_stage_replay(report, True), (key, value))
+
+    def test_strict_stage_replay_rejects_one_success_before_repeated_attack_fallback(self):
+        report = self.stage_replay_report()
+        stage = report["combat_replay"]["stage"]
+        stage.update(passes=1, refusals=99, unsupported_ticks=98, presents=1)
+        stage["reasons"]["native_unsupported"] = 98
+        # Plenty of decoded seeds and partially advanced ticks are not coverage.
+        self.assertEqual(evaluate_stage_replay(report), [])
+        coverage = stage_replay_coverage(report)
+        self.assertEqual(coverage["coverage"], 0.01)
+        self.assertEqual(coverage["fallback_updates"], 99)
+        failures = evaluate_stage_replay(report, True)
+        self.assertTrue(any("1/100 (1.00%) is below 95.00%" in reason for reason in failures))
+
+    def test_stage_coverage_denominator_includes_every_domain_and_refusal(self):
+        report = self.stage_replay_report()
+        evidence = report["combat_replay"]
+        for domain in ("unseeded", "legacy", "stage"):
+            evidence[domain] = {**dict.fromkeys(REPLAY_COUNTERS, 0),
+                                "reasons": dict.fromkeys(REPLAY_REFUSALS, 0)}
+        evidence["stage"].update(updates=1, passes=1, advanced_ticks=1, presents=1,
+                                 decode_attempts=1, decode_successes=1)
+        evidence["legacy"].update(updates=49, passes=49, advanced_ticks=49, presents=49)
+        evidence["unseeded"].update(updates=50, refusals=50)
+        evidence["unseeded"]["reasons"]["missing_seed"] = 50
+        self.assertEqual(evaluate_stage_replay(report), [])
+        coverage = stage_replay_coverage(report)
+        self.assertEqual(coverage["domain_updates"], {"unseeded": 50, "legacy": 49, "stage": 1})
+        self.assertEqual(coverage["updates"], 100)
+        self.assertEqual(coverage["stage_only_coverage"], 1)
+        self.assertEqual(coverage["coverage"], 0.01)
+        self.assertTrue(evaluate_stage_replay(report, True))
+        for reason in ("no_local_input", "horizon", "stale_authority", "held"):
+            report = self.stage_replay_report()
+            stage = report["combat_replay"]["stage"]
+            stage.update(updates=104, refusals=7)
+            stage["reasons"][reason] = 4
+            self.assertEqual(evaluate_stage_replay(report), [], reason)
+            self.assertEqual(stage_replay_coverage(report)["coverage"], 97 / 104)
+            self.assertTrue(evaluate_stage_replay(report, True), reason)
+
+    def test_stage_coverage_threshold_is_explicit_inclusive_and_bounded(self):
+        for passes in (94, 95):
+            report = self.stage_replay_report()
+            stage = report["combat_replay"]["stage"]
+            stage.update(passes=passes, refusals=100 - passes, unsupported_ticks=99 - passes)
+            stage["reasons"]["native_unsupported"] = 99 - passes
+            self.assertEqual(bool(evaluate_stage_replay(report, True)), passes < 95)
+            self.assertEqual(evaluate_stage_replay(report, True, 0.94), [])
+            self.assertTrue(evaluate_stage_replay(report, True, 1))
+        for threshold in (None, True, False, 0, -1, 1.01, float("nan"), float("inf"), "0.95"):
+            self.assertTrue(evaluate_stage_replay(self.stage_replay_report(), True, threshold))
+        for threshold in ("0", "-1", "1.01", "nan", "inf"):
+            with patch("netplay_latency.subprocess.Popen") as create:
+                with self.assertRaises(SystemExit), redirect_stderr(StringIO()):
+                    main(["--require-stage-replay", "--min-stage-replay-coverage", threshold])
+                create.assert_not_called()
+
+    def test_stage_coverage_missing_and_zero_denominators_do_not_invent_a_ratio(self):
+        self.assertIsNone(stage_replay_coverage({}))
+        for value in (None, True, -1, "100", 1 << 64):
+            report = self.stage_replay_report()
+            report["combat_replay"]["stage"]["updates"] = value
+            self.assertIsNone(stage_replay_coverage(report))
+        report = self.stage_replay_report()
+        for domain in ("unseeded", "legacy", "stage"):
+            report["combat_replay"][domain] = {**dict.fromkeys(REPLAY_COUNTERS, 0),
+                                               "reasons": dict.fromkeys(REPLAY_REFUSALS, 0)}
+        coverage = stage_replay_coverage(report)
+        self.assertEqual(coverage["updates"], 0)
+        self.assertIsNone(coverage["coverage"])
+        self.assertIsNone(coverage["stage_only_coverage"])
+        self.assertTrue(evaluate_stage_replay(report, True))
+
+    def test_stage_replay_rejects_missing_malformed_and_inconsistent_counters(self):
+        for domain in ("unseeded", "legacy", "stage"):
+            for key in REPLAY_COUNTERS:
+                for value in (None, True, False, -1, 1.0, "1", 1 << 64):
+                    report = self.stage_replay_report()
+                    report["combat_replay"][domain][key] = value
+                    self.assertTrue(evaluate_stage_replay(report), (domain, key, value))
+            for value in (None, {}, [], {"unknown": 0}, dict.fromkeys(REPLAY_REFUSALS, True)):
+                report = self.stage_replay_report()
+                report["combat_replay"][domain]["reasons"] = value
+                self.assertTrue(evaluate_stage_replay(report), (domain, value))
+        for key in ("updates", "passes", "refusals", "invalid_ticks", "unsupported_ticks",
+                    "decode_attempts", "decode_successes", "decode_failures"):
+            report = self.stage_replay_report()
+            report["combat_replay"]["stage"][key] += 1
+            self.assertTrue(evaluate_stage_replay(report), key)
+        report = self.stage_replay_report()
+        report["combat_replay"]["stage"]["advanced_ticks"] = 84
+        self.assertTrue(evaluate_stage_replay(report))
+        report = self.stage_replay_report()
+        report["combat_replay"]["legacy"]["decode_nanoseconds"] = 1
+        self.assertTrue(evaluate_stage_replay(report))
+        report = self.stage_replay_report()
+        report["combat_replay"]["unseeded"]["presents"] = 1
+        self.assertTrue(evaluate_stage_replay(report))
+
+    def test_stage_replay_rejects_false_payload_or_seed_accounting(self):
+        for key in ("observations", "opponent", "combat", "stage", "stage_bytes_total", "stage_bytes_max"):
+            for value in (None, True, False, -1, 1.0, "1", 1 << 64):
+                report = self.stage_replay_report()
+                report["combat_seeds"][key] = value
+                self.assertTrue(evaluate_stage_replay(report), (key, value))
+        for patch_values in ({"combat": 96}, {"stage": 91}, {"opponent": 101},
+                             {"stage_bytes_max": 512 * 1024 + 1}, {"stage_bytes_total": 99},
+                             {"stage_bytes_total": 8001}, {"stage_bytes_max": 0},
+                             {"stage": 0}):
+            report = self.stage_replay_report()
+            report["combat_seeds"].update(patch_values)
+            self.assertTrue(evaluate_stage_replay(report), patch_values)
+        for field in ("combat_seeds", "combat_replay"):
+            for value in (None, 1, [], "yes"):
+                report = self.stage_replay_report()
+                report[field] = value
+                self.assertTrue(evaluate_stage_replay(report), (field, value))
+
+    def test_stage_replay_cli_requires_real_guest_admission_without_changing_latency_verdict(self):
+        for options in (["--require-stage-replay", "--prediction", "off"],
+                        ["--require-stage-replay", "--role", "host", "--invitation", "unused"]):
+            with patch("netplay_latency.subprocess.Popen") as create:
+                with self.assertRaises(SystemExit), redirect_stderr(StringIO()):
+                    main(options)
+                create.assert_not_called()
+        for evidence, threshold in ((False, 0.95), (True, 0.95), (True, 0.99), (True, 0.97)):
+            guest = self.stage_replay_report() if evidence else self.active_stage_report()
+            host = deepcopy(guest)
+            host["role"] = "host"
+            if evidence:
+                host["combat_seeds"]["observation"] = "host-captured"
+                for domain in ("unseeded", "legacy", "stage"):
+                    host["combat_replay"][domain] = {**dict.fromkeys(REPLAY_COUNTERS, 0),
+                                                      "reasons": dict.fromkeys(REPLAY_REFUSALS, 0)}
+            with tempfile.TemporaryDirectory() as directory, redirect_stderr(StringIO()) as error, \
+                    redirect_stdout(StringIO()) as output, \
+                    patch("netplay_latency.pathlib.Path.is_file", return_value=True), \
+                    patch("netplay_latency.launch", return_value=(object(), Path(directory) / "unused")), \
+                    patch("netplay_latency.wait_invitation"), \
+                    patch("netplay_latency.read_report", side_effect=[guest, host]):
+                result = main(["--stage", "G1", "--require-stage-replay", "--prediction", "on",
+                               "--seconds", "8", "--build-dir", directory,
+                               "--min-stage-replay-coverage", str(threshold)])
+                qualified = evidence and threshold <= 0.97
+                self.assertEqual(result, 0 if qualified else 1)
+                self.assertIn('"stage_replay_required": true', output.getvalue())
+                self.assertIn('"stage_replay_observed": ' + str(qualified).lower(), output.getvalue())
+                self.assertIn('"stage_replay_minimum_coverage": ' + str(threshold), output.getvalue())
+                if evidence:
+                    self.assertIn('"coverage": 0.97', output.getvalue())
+                    self.assertIn('"domain_updates": {"unseeded": 0, "legacy": 0, "stage": 100}',
+                                  output.getvalue())
+                if not evidence:
+                    self.assertIn("Missing native Stage replay diagnostics", error.getvalue())
 
     def test_native_stage_requires_exact_loaded_identity_and_observations(self):
         for report in (self.report(), self.active_stage_report()):

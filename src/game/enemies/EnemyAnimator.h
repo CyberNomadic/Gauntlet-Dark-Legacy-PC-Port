@@ -154,6 +154,18 @@ public:
     /** Read-only fractional drawing pose. Cuts and wraps never blend unrelated actions. */
     void evaluatePresentation(TreePose& pose, f32 blend) const;
     f32 presentationFrame(f32 blend) const;
+    /** Immutable drawing anchors; the trusted bound tree must outlive them.
+     * Captures the already blended action pose, never replays animation events. */
+    struct Presentation {
+        TreePose current;
+        TreePose previous;
+        f32 currentFrame = 0;
+        f32 previousFrame = 0;
+        bool continuous = false;
+        TreePose pose(f32 blend) const;
+        f32 frame(f32 blend) const;
+    };
+    Presentation presentation() const;
     /** Holds the current pose when its owner skips animation (off screen or stopped). */
     void holdPresentation();
 

@@ -80,6 +80,9 @@ private:
     std::array<WorldCollision, 3> m_presentationFloors;
     ReplicaHud m_hud;
     std::optional<CombatSnapshot> m_shown;
+    std::shared_ptr<const StageParticlePresentation> m_particles;
+    u64 m_particleTick = 0;
+    f32 m_particleBlend = 0;
     bool m_resuming = false;
     std::optional<Mat4> m_presentedClip;
     std::array<std::optional<Vec3>, InputCommand::kSeats> m_presentedPlayers;

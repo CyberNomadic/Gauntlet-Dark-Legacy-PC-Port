@@ -15,7 +15,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 42;
+constexpr u32 kVersion = 44;
 constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
 constexpr u32 kCombatReplay = kOpponentReplay << 1U;
 void word(std::vector<u8>& bytes, u32 value) {
@@ -89,7 +89,8 @@ void combatFrame(std::vector<u8>& bytes, const OrdinaryCombatTick::Frame& frame)
     }
     const auto& damage = frame.damage;
     word(bytes, (damage.tower ? 1U : 0U) | (damage.bossEncounter ? 2U : 0U) |
-                    (damage.cutscene ? 4U : 0U) | (damage.lastRealmLevel ? 8U : 0U));
+                    (damage.cutscene ? 4U : 0U) | (damage.lastRealmLevel ? 8U : 0U) |
+                    (frame.autoMelee ? 16U : 0U));
     real(bytes, damage.damageScale);
     word(bytes, static_cast<u32>(damage.realm));
     real(bytes, damage.playSeconds);
@@ -110,10 +111,11 @@ std::optional<OrdinaryCombatTick::Frame> combatFrame(ByteReader& reader) {
     frame.damage.bossEncounter = (flags & 2U) != 0;
     frame.damage.cutscene = (flags & 4U) != 0;
     frame.damage.lastRealmLevel = (flags & 8U) != 0;
+    frame.autoMelee = (flags & 16U) != 0;
     frame.damage.damageScale = real(reader);
     frame.damage.realm = static_cast<s32>(reader.readU32());
     frame.damage.playSeconds = real(reader);
-    return (flags & ~15U) == 0 && frameValid(frame) ? std::optional{frame} : std::nullopt;
+    return (flags & ~31U) == 0 && frameValid(frame) ? std::optional{frame} : std::nullopt;
 }
 } // namespace
 
@@ -502,6 +504,11 @@ bool CombatSnapshot::valid() const {
 }
 
 std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapshot) {
+    auto prepared = prepare(snapshot);
+    return prepared ? std::optional{std::move(prepared->m_bytes)} : std::nullopt;
+}
+
+std::optional<CombatPacket::Prepared> CombatPacket::prepare(const CombatSnapshot& snapshot) {
     if (!snapshot.valid() || std::ranges::any_of(snapshot.projectiles, [&](const auto& shot) {
             return (shot.rollback && shot.rollback->origin.tick > snapshot.motion.tick) ||
                    (shot.particles && shot.particles->origin &&
@@ -999,7 +1006,7 @@ std::optional<std::vector<u8>> CombatPacket::encode(const CombatSnapshot& snapsh
     bytes.insert(bytes.end(), turbo.begin(), turbo.end());
     bytes.insert(bytes.end(), platformBytes->begin(), platformBytes->end());
     bytes.insert(bytes.end(), replay.begin(), replay.end());
-    return bytes;
+    return Prepared{snapshot.motion, std::move(bytes)};
 }
 
 std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {

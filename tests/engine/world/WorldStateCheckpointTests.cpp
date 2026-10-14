@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <nlohmann/json.hpp>
 
 #include "engine/world/WorldStateCheckpoint.h"
 
@@ -36,8 +37,17 @@ struct Fixture {
     std::shared_ptr<const u8> binding = std::make_shared<const u8>(0);
     WorldStateCheckpoint checkpoint{scene, collision, animator, binding};
 
-    explicit Fixture(std::string_view name) {
+    explicit Fixture(std::string_view name, s32 variant = 0) {
         const auto dir = test::sampleLevel(name);
+        if (variant == 3 || variant == 4) {
+            auto authored = nlohmann::json::parse(readTextFile(dir / "world.json"));
+            if (variant == 3) {
+                authored["animations"][0]["track"]["values"][1] = 0.5f;
+            } else {
+                authored["objects"][0]["radius"] = 7.0f;
+            }
+            writeTextFile(dir / "world.json", authored.dump());
+        }
         REQUIRE(models.load(dir));
         REQUIRE(textures.load(dir));
         REQUIRE(lender.load(test::sampleLender(std::string(name) + "-lender")));
@@ -46,17 +56,34 @@ struct Fixture {
         REQUIRE(scene.build(layout, models, textures, device, {}, lenders));
         animator.bind(layout);
         animator.apply(scene);
-        collision.build({{{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 8, 4},
-                         {{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 1000, 4}});
+        std::vector<CollisionTriangle> triangles{
+            {{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 8, 4},
+            {{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 1000, 4}};
+        if (variant == 1 || variant == 2) {
+            triangles[variant == 1 ? 1 : 0].vertices[0].x -= 0.25f;
+        }
+        collision.build(std::move(triangles));
         const std::array<s32, 1> moving{8};
         collision.setMovingObjects(moving);
         collision.setObjectTransform(8, scene.worldTransform(8));
-        const std::array animations{
-            cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 2, "TORCH00"),
-            cycle("STONE", 0, 1, 2, 1), cycle("GLASS", 1, TextureAnimationInfo::kScrollU, -4, 0)};
+        std::array animations{cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 2, "TORCH00"),
+                              cycle("STONE", 0, 1, 2, 1),
+                              cycle("GLASS", 1, TextureAnimationInfo::kScrollU, -4, 0)};
+        if (variant == 5) {
+            animations[0].rate = 3;
+        }
+        if (variant == 6) {
+            animations[0].start = 1;
+        }
+        if (variant == 7) {
+            animations[2].frames = 4;
+        }
+        if (variant == 8) {
+            animations[0].frameName = "TORCH01";
+        }
         textureClock.bind(animations, textures, device, lenders);
         textureClock.apply(scene);
-        REQUIRE(checkpoint.bind(textureClock));
+        REQUIRE(checkpoint.bind(textureClock, layout));
     }
 
     void step(f32 seconds, u32 tick) {
@@ -184,11 +211,11 @@ TEST_CASE("world core preparations are inert, single-use and bound to the owning
     first.binding = std::make_shared<const u8>(0);
     CHECK_FALSE(first.checkpoint.canCommit(*stale));
     CHECK_FALSE(first.checkpoint.checkpoint());
-    REQUIRE(first.checkpoint.bind(first.textureClock));
+    REQUIRE(first.checkpoint.bind(first.textureClock, first.layout));
     CHECK_FALSE(first.checkpoint.canCommit(*stale));
     auto rebound = first.checkpoint.prepareRestore(baseline);
     REQUIRE(rebound);
-    REQUIRE(first.checkpoint.bind(first.textureClock));
+    REQUIRE(first.checkpoint.bind(first.textureClock, first.layout));
     CHECK_FALSE(first.checkpoint.canCommit(*rebound));
 }
 
@@ -201,13 +228,13 @@ TEST_CASE("world core rejects malformed state before changing any participating 
     auto invalid = baseline;
     switch (mutation) {
     case 0: invalid.placements[8].local[3].x = std::numeric_limits<f32>::quiet_NaN(); break;
-    case 1: invalid.placements[8].parent = 8; break;
-    case 2: invalid.placements[8].initial[3].x += 1; break;
-    case 3: invalid.resources.front().frame += 1; break;
-    case 4: invalid.slots.front().frame = static_cast<u32>(invalid.resources.size()); break;
-    case 5: invalid.moving.front().placed.front().vertices[0].x += 1; break;
-    case 6: invalid.moving.front().minimum.x += 1; break;
-    case 7: invalid.triangles.front().flags ^= 2; break;
+    case 1: invalid.placements[8].previous[0].w = 1; break;
+    case 2: invalid.catalog[0] ^= 1; break;
+    case 3: invalid.resourceCount += 1; break;
+    case 4: invalid.slots.front().frame = invalid.resourceCount; break;
+    case 5: invalid.moving.front().object = 1000; break;
+    case 6: invalid.moving.front().transform[0].x = std::numeric_limits<f32>::infinity(); break;
+    case 7: invalid.hidden.push_back(2000); break;
     case 8: invalid.animations.front().frames += 1; break;
     case 9: invalid.animations.front().frame = std::numeric_limits<f32>::infinity(); break;
     case 10: invalid.cycles.push_back({1000, true}); break;
@@ -245,10 +272,68 @@ TEST_CASE("world core state rejects bounded rosters without truncating them",
     state.hidden.resize(WorldStateCheckpoint::State::kMaxObjects + 1);
     CHECK_FALSE(state.valid());
     state = {};
-    state.resources.resize(WorldStateCheckpoint::State::kMaxTextures + 1);
+    state.resourceCount = static_cast<u32>(WorldStateCheckpoint::State::kMaxTextures + 1);
     CHECK_FALSE(state.valid());
     state = {};
     state.cycles.resize(WorldStateCheckpoint::State::kMaxEvents + 1);
     CHECK_FALSE(state.valid());
+}
+
+TEST_CASE("compact world catalogs reject equal-count but different authored resources",
+          "[world][world-state-checkpoint]") {
+    const s32 variant = GENERATE(1, 2, 3, 4, 5, 6, 7, 8);
+    CAPTURE(variant);
+    Fixture source("world-core-catalog-source");
+    Fixture other("world-core-catalog-other", variant);
+    const auto sourceState = source.state();
+    const auto before = other.state();
+    CHECK(sourceState.placements.size() == before.placements.size());
+    CHECK(sourceState.moving.size() == before.moving.size());
+    CHECK(sourceState.animations.size() == before.animations.size());
+    CHECK(sourceState.resourceCount == before.resourceCount);
+    CHECK(sourceState.catalog != before.catalog);
+    CHECK_FALSE(other.checkpoint.prepareRestore(sourceState));
+    CHECK_FALSE(other.checkpoint.restore(sourceState));
+    CHECK(other.state() == before);
+}
+
+TEST_CASE("compact world state keeps every placement and appended collision owner",
+          "[world][world-state-checkpoint]") {
+    Fixture source("world-core-full-placement");
+    Fixture other("world-core-full-placement-other");
+    REQUIRE_FALSE(source.scene.moving(0));
+    const auto initial = source.state();
+    auto shifted = initial;
+    shifted.placements[0].local[3].x += 2;
+    shifted.placements[0].previous[3].x -= 3;
+    shifted.placements[0].continuity = 9;
+    REQUIRE(source.checkpoint.restore(shifted));
+    CHECK(source.state() == shifted);
+    REQUIRE(other.checkpoint.restore(source.state()));
+    CHECK(other.state() == shifted);
+    CHECK(other.scene.worldTransform(0) == shifted.placements[0].local);
+    CHECK(source.checkpoint.hasCollisionObject(8));
+    CHECK(source.checkpoint.hasCollisionObject(1000));
+    CHECK_FALSE(source.checkpoint.hasCollisionObject(0));
+    CHECK_FALSE(source.checkpoint.hasCollisionObject(1001));
+    const auto owners = source.checkpoint.collisionObjects();
+    CHECK(std::vector<s32>(owners.begin(), owners.end()) == std::vector<s32>{8, 1000});
+    REQUIRE(source.checkpoint.restore(initial));
+    CHECK(source.state() == initial);
+}
+
+TEST_CASE("catalog fingerprints are independent of mutable clocks transforms and masks",
+          "[world][world-state-checkpoint]") {
+    Fixture fixture("world-core-late-catalog");
+    const auto initial = fixture.state();
+    for (u32 tick = 1; tick < 20; ++tick) {
+        fixture.step(1.0f / 60, tick);
+    }
+    const auto advanced = fixture.state();
+    CHECK(advanced.catalog == initial.catalog);
+    REQUIRE(fixture.checkpoint.bind(fixture.textureClock, fixture.layout));
+    CHECK(fixture.state() == advanced);
+    REQUIRE(fixture.checkpoint.restore(initial));
+    CHECK(fixture.state() == initial);
 }
 } // namespace

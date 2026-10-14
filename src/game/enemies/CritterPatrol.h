@@ -30,6 +30,7 @@ public:
     std::optional<Vec3> aim(const Vec3& position);
 
 private:
+    friend class CombatantCheckpoint;
     /** Whether a lookout is part of a chain: it names another, not itself. */
     static bool chained(const LookoutRoute& route, usize index);
     const LookoutRoute* m_route = nullptr;

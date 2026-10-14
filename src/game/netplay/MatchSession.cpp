@@ -744,19 +744,31 @@ std::optional<InputTimeline::Frame> MatchSession::advance() {
     }
     return m_timeline.advance();
 }
-bool MatchSession::publish(const CombatSnapshot& state) {
+bool MatchSession::canPublish(const MotionSnapshot& motion) const {
     if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
-        m_timeline.tick() == 0 || state.motion.epoch != m_context.epoch ||
-        state.motion.tick != m_timeline.tick() - 1 ||
-        (m_published && state.motion.tick <= *m_published)) {
+        m_timeline.tick() == 0 || motion.epoch != m_context.epoch ||
+        motion.tick != m_timeline.tick() - 1 || (m_published && motion.tick <= *m_published)) {
         return false;
     }
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
-        const auto& player = state.motion.players[seat];
+        const auto& player = motion.players[seat];
         if (player.has_value() != (m_owners[seat] != 0) ||
             (player && player->grant != m_context.grants[seat])) {
             return false;
         }
+    }
+    return true;
+}
+bool MatchSession::publish(const CombatSnapshot& state) {
+    if (!canPublish(state.motion)) {
+        return false;
+    }
+    const auto prepared = CombatPacket::prepare(state);
+    return prepared && publish(*prepared);
+}
+bool MatchSession::publish(const CombatPacket::Prepared& state) {
+    if (!canPublish(state.motion())) {
+        return false;
     }
     const auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::Automatic,
                                                 CombatReplica::Recovery::SingleLoss);
@@ -777,7 +789,7 @@ bool MatchSession::publish(const CombatSnapshot& state) {
             }
         }
     }
-    m_published = state.motion.tick;
+    m_published = state.motion().tick;
     return true;
 }
 void MatchSession::flush(PacketTransport& transport) {

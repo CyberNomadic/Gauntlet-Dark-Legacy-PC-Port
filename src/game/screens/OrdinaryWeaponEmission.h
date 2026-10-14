@@ -6,7 +6,7 @@
 
 namespace gdl::game {
 
-/** A native normal throw inside a caller-owned combat transaction. Physics,
+/** A native normal or strong throw inside a caller-owned combat transaction. Physics,
  * artwork and release-cue selection are shared with PlayerArsenal; this adapter
  * supplies only the restricted admission policy and prebound effect resources.
  * It never spends inventory, plays sound, or publishes damage/impact events. */
@@ -23,7 +23,7 @@ public:
         std::optional<Cue> cue;
     };
 
-    /** Call only at the native normal-release latch, after PartyMotion has
+    /** Call only at a native normal/strong release latch, after PartyMotion has
      * updated the figure. Resources are immutable authenticated local bindings.
      * Every fan member and its muzzle are checked before starting any missile.
      * A later pool refusal can still leave private flights/effects: the caller

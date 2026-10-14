@@ -24,6 +24,7 @@ CombatantAssets::~CombatantAssets() {
     clear();
 }
 void CombatantAssets::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     children.clear();
     meter.clear();
     meterArchive.reset();

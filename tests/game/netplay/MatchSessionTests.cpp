@@ -943,6 +943,54 @@ TEST_CASE("guest clock skew stays bounded during a long running match",
     CHECK(guest.phase() == Phase::Running);
 }
 
+TEST_CASE("prepared publications keep session admission and the original captured bytes",
+          "[netplay][match-session][prepared-publication]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(host.advance());
+    auto source = snapshot(host);
+    const auto prepared = CombatPacket::prepare(source);
+    REQUIRE(prepared);
+    const auto bytes = CombatPacket::encode(source);
+    REQUIRE(bytes);
+    for (usize fault = 0; fault < 4; ++fault) {
+        CAPTURE(fault);
+        auto invalid = source;
+        switch (fault) {
+        case 0: ++invalid.motion.epoch; break;
+        case 1: ++invalid.motion.tick; break;
+        case 2: ++invalid.motion.players[1]->grant; break;
+        default:
+            invalid.motion.players[1].reset();
+            invalid.players[1].reset();
+            break;
+        }
+        const auto rejected = CombatPacket::prepare(invalid);
+        REQUIRE(rejected); // Valid wire data is not sufficient session authority.
+        CHECK_FALSE(host.publish(*rejected));
+    }
+    CHECK_FALSE(guest.publish(*prepared));
+    source.motion.epoch = 0;
+    source.players[0]->health = 7;
+    REQUIRE(host.publish(*prepared));
+    CHECK_FALSE(host.publish(*prepared));
+    room.pump();
+    REQUIRE(guest.playback().latest());
+    CHECK(CombatPacket::encode(*guest.playback().latest()) == bytes);
+    REQUIRE(host.advance());
+    CHECK_FALSE(host.publish(*prepared)); // Previous tick, even though bytes remain valid.
+    const auto next = CombatPacket::prepare(snapshot(host));
+    REQUIRE(next);
+    REQUIRE(host.requestPause());
+    CHECK_FALSE(host.publish(*next));
+    room.pump();
+    room.ready(MatchTransition::Resume);
+    REQUIRE(host.advance());
+    CHECK_FALSE(host.publish(*prepared)); // Same tick, different admitted epoch.
+}
+
 TEST_CASE("pause resume and travel isolate queued actions and replicated state by epoch",
           "[netplay][match-session]") {
     Room room({1, 2, 0, 0});
@@ -1044,7 +1092,8 @@ TEST_CASE("unsent snapshots and input are bounded latest state not a reliable ba
 }
 
 TEST_CASE("a congested partial snapshot completes while newer captures coalesce",
-          "[netplay][match-session]") {
+          "[netplay][match-session][prepared-publication]") {
+    const bool usePrepared = GENERATE(false, true);
     Room room({1, 2, 0, 0});
     room.ready();
     auto& host = room.sessions[1];
@@ -1061,13 +1110,20 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
         }
         return state;
     };
+    const auto publish = [&](const CombatSnapshot& state) {
+        if (!usePrepared) {
+            return host.publish(state);
+        }
+        const auto prepared = CombatPacket::prepare(state);
+        return prepared && host.publish(*prepared);
+    };
     REQUIRE(host.advance());
     const auto first = dense();
     const auto packets = CombatReplica::packets(first, SnapshotBlock::Compression::Automatic,
                                                 CombatReplica::Recovery::SingleLoss);
     REQUIRE(packets);
     REQUIRE(packets->size() > 2);
-    REQUIRE(host.publish(first));
+    REQUIRE(publish(first));
     const auto drain = [&] {
         host.flush(wire);
         for (const auto& packet : wire.sent) {
@@ -1080,7 +1136,7 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
     // here used to send first fragments forever without one complete checkpoint.
     for (usize tick = 0; tick < packets->size() * 2 + 5; ++tick) {
         REQUIRE(host.advance());
-        REQUIRE(host.publish(dense()));
+        REQUIRE(publish(dense()));
         wire.budget = 1;
         drain();
     }
@@ -1092,7 +1148,7 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
     wire.budget = 0;
     for (usize tick = 0; tick < 200; ++tick) {
         REQUIRE(host.advance());
-        REQUIRE(host.publish(dense()));
+        REQUIRE(publish(dense()));
         drain();
     }
     wire.budget = std::numeric_limits<usize>::max();

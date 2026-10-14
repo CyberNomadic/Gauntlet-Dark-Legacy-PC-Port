@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "game/enemies/CritterStatues.h"
+#include "game/enemies/CrittersCheckpoint.h"
 #include "game/enemies/EnemyMissiles.h"
+#include "game/world/CombatantProjectilesCheckpoint.h"
 #include "game/world/EffectTrees.h"
 
 namespace gdl::game {
@@ -29,15 +31,30 @@ public:
     };
     struct State {
         static constexpr usize kMaxRecords = 65535;
-        static constexpr usize kMaxDormantBanks = 16;
-        struct DormantBank {
-            static constexpr usize kMaxName = 31;
-            CombatantKind kind = CombatantKind::Unknown;
-            std::string name;
-            TextureAnimator::Checkpoint textures;
-            bool valid() const;
-            bool operator==(const DormantBank&) const = default;
+        struct FollowingEffect {
+            u32 effect = 0;
+            s32 critter = -1;
+            bool ofBoss = false;
+            Vec3 offset{0};
+            std::optional<std::string> node;
+            Vec3 nodeOffset{0};
+            bool rootAttachment = false;
+            Vec2 pitchYaw{0};
+            std::optional<s32> playerAttachment;
+            bool operator==(const FollowingEffect&) const = default;
         };
+        struct MoveEffect {
+            u32 effect = 0;
+            s32 critter = -1;
+            bool ofBoss = false;
+            bool operator==(const MoveEffect&) const = default;
+        };
+        struct Ram {
+            s32 id = -1;
+            f32 damage = 0;
+            bool operator==(const Ram&) const = default;
+        };
+        State();
         std::array<s32, 4> hitStreak{};
         std::vector<std::pair<s32, s32>> lessons;
         std::vector<Reward> generatorRewards;
@@ -47,11 +64,20 @@ public:
         std::vector<u32> cueEffects;
         f32 shrink = 1;
         u32 bagSeed = 1;
-        /** Retained preloaded statues and inactive family banks. These values
-         * preserve dormant owners; they do not admit great-creature simulation. */
         CritterStatues::Checkpoint statues;
-        std::vector<DormantBank> dormantBanks;
+        /** Full population and independent launched attacks. The population
+         * alone owns each shared stock texture clock. */
+        CrittersCheckpoint::State critters;
+        CombatantProjectilesCheckpoint::State projectiles;
+        std::array<f32, 4> critterExperienceOwed{};
+        std::vector<FollowingEffect> critterEffects;
+        std::vector<MoveEffect> moveEffects;
+        std::vector<Ram> barrelRams;
         bool valid() const;
+        /** Prior dormant-only simulation domain. Complete capture is not
+         * permission to advance or dispatch any of these additional owners. */
+        bool dormant() const;
+        bool references(u8 playerMask, const EffectTrees::PoolCheckpoint& effects) const;
         bool operator==(const State&) const = default;
     };
 
@@ -73,18 +99,18 @@ public:
     /** The owner, its borrowed archives, and shared effect pool must outlive this
      * wrapper and every preparation. Close/rebind invalidates existing plans;
      * restoring the separate population pools does not. */
-    explicit OpponentCombatCheckpoint(LevelOpponents& owner);
+    explicit OpponentCombatCheckpoint(LevelOpponents& owner,
+                                      std::span<const EffectTrees::PoolResource> resources = {});
     OpponentCombatCheckpoint(const OpponentCombatCheckpoint&) = delete;
     OpponentCombatCheckpoint& operator=(const OpponentCombatCheckpoint&) = delete;
     OpponentCombatCheckpoint(OpponentCombatCheckpoint&&) = delete;
     OpponentCombatCheckpoint& operator=(OpponentCombatCheckpoint&&) = delete;
     ~OpponentCombatCheckpoint();
 
-    /** Refuses uncaptured great-creature, boss, Death, carried-item and
-     * following-effect owners, including their pending output queues. The
-     * supplied shared pool must be captured/restored by the enclosing bundle.
-     * Dormant statues and loaded-but-unused family texture clocks are retained
-     * exactly; callers must refuse waking or activating a great creature. */
+    /** Refuses uncaptured boss, Death and carried-item owners, including their
+     * pending outputs. The enclosing bundle restores the supplied shared effect
+     * pool once. Capturing an ordinary critter does not authorize dispatch of
+     * grabs, drops, arena callbacks or unprepared effects. */
     std::optional<State> checkpoint(const EffectTrees::PoolCheckpoint& effects) const;
     std::optional<Prepared> prepareRestore(const State& state,
                                            const EffectTrees::PoolCheckpoint& effects) const;
@@ -98,6 +124,7 @@ private:
     static bool unused(const Combatant& actor);
     bool supported() const;
     LevelOpponents& m_owner;
+    std::vector<EffectTrees::PoolResource> m_effectResources;
     u64 m_generation = 0;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
 };

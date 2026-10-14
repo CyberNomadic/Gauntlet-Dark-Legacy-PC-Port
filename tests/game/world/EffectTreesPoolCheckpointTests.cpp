@@ -1,5 +1,10 @@
+#include <array>
 #include <limits>
+#include <optional>
+#include <span>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -106,7 +111,7 @@ TEST_CASE("effect pool preparation rejects malformed state and has exact single 
         case 0: bad.effects[0].resource = 999; break;
         case 1: bad.effects[0].instance = 0; break;
         case 2: bad.effects.push_back(bad.effects[0]); break;
-        case 3: bad.effects[0].state.setting.then = "FLIGHT"; break;
+        case 3: bad.effects[0].state.setting.then = "UNBOUND_FUTURE"; break;
         case 4: bad.effects[0].previousTransform[1][3] = 1; break;
         case 5: bad.effects[0].previousFrame = std::numeric_limits<f32>::quiet_NaN(); break;
         case 6: bad.effects[0].state.particles.field.entries[0].emitter.random = 0; break;
@@ -177,5 +182,247 @@ TEST_CASE("standalone emitter pool resumes exact RNG and attached trail topology
         compareDraws(native, replay, fixture.device);
     }
     CHECK_FALSE(native.playing(id));
+}
+
+struct MorphFixture {
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    TextureAnimator textures;
+    EffectTrees prototypes;
+    std::array<EffectTrees::PoolResource, 2> resources;
+
+    MorphFixture() {
+        const auto directory = test::projectileCheckpointArchive();
+        writeTextFile(directory / "animations.json", R"({
+          "particles":[{"enables":16928,"texture":"WHITE","particleLife":[1,0.2],
+            "rate":[30,30,30,30],"flags":128,"flagMask":128}],
+          "trees":[
+            {"name":"ENTRANCE","nodes":[
+              {"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+              {"name":"EMITTER","parent":0,"position":[0,1,0],"particle":0}],
+             "sequences":[{"name":"ACTIVE","frames":4,"frameRate":30,
+               "tracks":[{"node":0,"flags":32,"frames":[0,3],"values":[0,2]}]}]},
+            {"name":"LOOP","nodes":[
+              {"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+              {"name":"JOINT","parent":0,"position":[1,2,0]},
+              {"name":"EMITTER","parent":1,"position":[0,1,0],"particle":0}],
+             "sequences":[{"name":"ACTIVE","frames":9,"frameRate":30,
+               "tracks":[{"node":1,"flags":16,"frames":[0,8],"values":[1,3]}]}]}]})");
+        REQUIRE(archive.load(directory));
+        textures.bind(archive.trees.textureAnimations(), archive.textures, device);
+        EffectTrees::Setting setting;
+        setting.persistent = true;
+        REQUIRE(prototypes.startSet(device, archive, "ENTRANCE", {}, setting) != 0);
+        REQUIRE(prototypes.startSet(device, archive, "LOOP", {}, setting) != 0);
+        resources = {{{1, &archive, {}, &textures, &prototypes.effect(0)},
+                      {2, &archive, {}, &textures, &prototypes.effect(1)}}};
+    }
+};
+
+void compareTexture(const Texture* actual, const Texture* expected) {
+    REQUIRE((actual != nullptr) == (expected != nullptr));
+    if (actual == nullptr) {
+        return;
+    }
+    const auto* a = dynamic_cast<const test::FakeTexture*>(actual);
+    const auto* b = dynamic_cast<const test::FakeTexture*>(expected);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(a->width() == b->width());
+    CHECK(a->height() == b->height());
+    CHECK((a->pixels == b->pixels));
+}
+
+void compareMorphDraws(EffectTrees& native, EffectTrees& replay, test::FakeRenderDevice& device) {
+    const CameraFrame camera;
+    for (const f32 blend : {0.0f, 0.5f, 1.0f}) {
+        device.draws.clear();
+        native.draw(device, Mat4{1}, {}, &camera, blend);
+        const auto expected = device.draws;
+        device.draws.clear();
+        replay.draw(device, Mat4{1}, {}, &camera, blend);
+        REQUIRE(device.draws.size() == expected.size());
+        for (usize index = 0; index < expected.size(); ++index) {
+            const auto& actual = device.draws[index];
+            const auto& oracle = expected[index];
+            CHECK(actual.vertices == oracle.vertices);
+            CHECK(actual.transform == oracle.transform);
+            compareTexture(actual.texture, oracle.texture);
+            compareTexture(actual.state.lightmap, oracle.state.lightmap);
+            compareTexture(actual.state.maskedTexture, oracle.state.maskedTexture);
+            compareTexture(actual.state.nextTexture, oracle.state.nextTexture);
+            auto normalized = actual.state;
+            normalized.lightmap = oracle.state.lightmap;
+            normalized.maskedTexture = oracle.state.maskedTexture;
+            normalized.nextTexture = oracle.state.nextTexture;
+            CHECK(normalized == oracle.state);
+        }
+    }
+}
+
+TEST_CASE("effect pool chains restore native morph timing particle birth and presentation cuts",
+          "[effect-pool-checkpoint][effect-pool-morph]") {
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    const bool timedMorph = GENERATE(false, true);
+    CAPTURE(seconds, timedMorph);
+    MorphFixture host, guest;
+    EffectTrees native, replay;
+    EffectTrees::Setting setting;
+    setting.seconds = 3;
+    setting.then = "LOOP";
+    setting.velocity = {2, 1, 0};
+    setting.stretch = {2, 0.5f, 1};
+    setting.alpha = 0.75f;
+    setting.unlit = true;
+    setting.depthWrite = false;
+    if (timedMorph) {
+        setting.morphIn = 0.137f;
+        setting.holdForMorph = true;
+    }
+    const auto retired = native.startSet(host.device, host.archive, "LOOP", {}, {});
+    REQUIRE(retired != 0);
+    native.stop(retired);
+    const auto id = native.startSet(host.device, host.archive, "ENTRANCE", {4, 5, 6}, setting);
+    REQUIRE(id > retired);
+    REQUIRE(native.tag(id, {3, 51, 2, 1}));
+    native.capturePresentation();
+    native.update(seconds * 0.5f);
+    const auto baseline = native.checkpointPool(host.resources);
+    REQUIRE(baseline);
+    REQUIRE(baseline->effects[0].state.setting.then == "LOOP");
+    const auto textures = guest.device.texturesCreated;
+    const auto uploads = guest.device.textureUpdates;
+    REQUIRE(replay.restorePool(*baseline, guest.resources));
+    REQUIRE(native.effect(0).morphPrototype == nullptr);
+    REQUIRE(replay.effect(0).morphPrototype != nullptr);
+    CHECK(replay.checkpointPool(guest.resources) == baseline);
+    compareMorphDraws(native, replay, guest.device);
+    bool crossedMorph = false, emittedAfterMorph = false;
+    for (s32 tick = 0; tick < 35; ++tick) {
+        CAPTURE(tick);
+        native.capturePresentation();
+        replay.capturePresentation();
+        native.update(seconds);
+        replay.update(seconds);
+        const auto expected = native.checkpointPool(host.resources);
+        REQUIRE(expected);
+        CHECK(replay.checkpointPool(guest.resources) == expected);
+        REQUIRE(native.effect(0).morphPrototype == nullptr);
+        compareMorphDraws(native, replay, guest.device);
+        const auto& entry = expected->effects[0];
+        if (entry.previousResource != 0) {
+            crossedMorph = true;
+            REQUIRE(entry.resource == 2);
+            REQUIRE(entry.previousResource == 1);
+            REQUIRE(entry.previousTree);
+            REQUIRE(entry.state.setting.then.empty());
+            // Restore at the exact topology-changing tick too: treating its
+            // previous tree as the new one would interpolate a nonexistent pose.
+            EffectTrees boundary;
+            REQUIRE(boundary.restorePool(*expected, guest.resources));
+            CHECK(boundary.checkpointPool(guest.resources) == expected);
+            compareMorphDraws(native, boundary, guest.device);
+        }
+        if (entry.state.name == "LOOP") {
+            emittedAfterMorph |= native.effect(0).particles.field().particleCount() > 0;
+        }
+    }
+    REQUIRE(crossedMorph);
+    REQUIRE(emittedAfterMorph);
+    const auto final = native.checkpointPool(host.resources);
+    REQUIRE(final);
+    // Rewind both independent resource owners back before the pending morph.
+    REQUIRE(native.restorePool(*baseline, host.resources));
+    REQUIRE(replay.restorePool(*baseline, guest.resources));
+    for (s32 tick = 0; tick < 35; ++tick) {
+        native.capturePresentation();
+        replay.capturePresentation();
+        native.update(seconds);
+        replay.update(seconds);
+    }
+    CHECK(native.checkpointPool(host.resources) == final);
+    CHECK(replay.checkpointPool(guest.resources) == final);
+    CHECK(guest.device.texturesCreated == textures);
+    CHECK(guest.device.textureUpdates == uploads);
+}
+
+TEST_CASE("effect pool morph catalogs reject missing future resources and forged previous trees "
+          "atomically",
+          "[effect-pool-checkpoint][effect-pool-morph]") {
+    MorphFixture fixture, other;
+    EffectTrees native, replay;
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    setting.then = "LOOP";
+    const auto id = native.startSet(fixture.device, fixture.archive, "ENTRANCE", {}, setting);
+    REQUIRE(id != 0);
+    const auto saved = native.checkpointPool(fixture.resources);
+    REQUIRE(saved);
+    REQUIRE(replay.restorePool(*saved, fixture.resources));
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    const auto limited = std::span{fixture.resources}.first(1);
+    CHECK_FALSE(native.checkpointPool(limited));
+    CHECK_FALSE(replay.prepareRestorePool(*saved, limited));
+    CHECK(replay.checkpointPool(fixture.resources) == saved);
+    for (const s32 mutation : {0, 1, 2, 3, 4}) {
+        CAPTURE(mutation);
+        auto resources = fixture.resources;
+        auto future = fixture.prototypes.effect(1);
+        auto invalid = *saved;
+        switch (mutation) {
+        case 0: invalid.effects[0].state.setting.then = "ABSENT"; break;
+        case 1: future.device = &other.device; break;
+        case 2:
+            future.archive = &other.archive;
+            resources[1].archive = &other.archive;
+            break;
+        case 3:
+            future.lenders.push_back(&other.archive.textures);
+            resources[1].lenders = future.lenders;
+            break;
+        case 4: future.particles.step(1.0f / 30, Mat4{1}, future.pose.matrices()); break;
+        }
+        resources[1].prototype = &future;
+        CHECK_FALSE(replay.prepareRestorePool(invalid, resources));
+        CHECK(replay.checkpointPool(fixture.resources) == saved);
+    }
+    std::optional<EffectTrees::PoolCheckpoint> morphed;
+    for (s32 tick = 0; tick < 30; ++tick) {
+        native.capturePresentation();
+        native.update(1.0f / 60);
+        auto state = native.checkpointPool(fixture.resources);
+        REQUIRE(state);
+        if (state->effects[0].previousResource != 0) {
+            morphed = std::move(state);
+            break;
+        }
+    }
+    REQUIRE(morphed);
+    for (const s32 mutation : {0, 1, 2, 3, 4, 5}) {
+        CAPTURE(mutation);
+        auto invalid = *morphed;
+        auto resources = fixture.resources;
+        auto previous = fixture.prototypes.effect(0);
+        switch (mutation) {
+        case 0: invalid.effects[0].previousTree = false; break;
+        case 1: invalid.effects[0].previousResource = 2; break;
+        case 2: invalid.effects[0].previousResource = 999; break;
+        case 3: previous.device = &other.device; break;
+        case 4:
+            previous.archive = &other.archive;
+            resources[0].archive = &other.archive;
+            break;
+        case 5:
+            previous.lenders.push_back(&other.archive.textures);
+            resources[0].lenders = previous.lenders;
+            break;
+        }
+        resources[0].prototype = &previous;
+        CHECK_FALSE(replay.prepareRestorePool(invalid, resources));
+        CHECK(replay.checkpointPool(fixture.resources) == saved);
+    }
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
 }
 } // namespace

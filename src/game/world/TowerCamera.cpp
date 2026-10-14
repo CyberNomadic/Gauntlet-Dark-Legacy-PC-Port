@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <utility>
 
 #include "engine/core/Types.h"
 
@@ -24,6 +25,39 @@ f32 wrapAngle(f32 angle) {
 
 } // namespace
 
+TowerCamera::TowerCamera(const TowerCamera& other) {
+    copyValues(other);
+}
+TowerCamera& TowerCamera::operator=(const TowerCamera& other) {
+    if (this != &other) {
+        auto binding = std::make_shared<const u8>(0);
+        copyValues(other);
+        m_checkpointBinding = std::move(binding);
+        m_checkpointGeneration = 0;
+    }
+    return *this;
+}
+// A normal camera owns only scalar history. Moving its value need not alter
+// the source, and must not transfer either camera's restore-domain identity.
+TowerCamera::TowerCamera(TowerCamera&& other)
+    : TowerCamera(static_cast<const TowerCamera&>(other)) {}
+TowerCamera& TowerCamera::operator=(TowerCamera&& other) {
+    return operator=(static_cast<const TowerCamera&>(other));
+}
+void TowerCamera::copyValues(const TowerCamera& other) noexcept {
+    m_camera = other.m_camera;
+    m_attention = other.m_attention;
+    m_distance = other.m_distance;
+    m_marker = other.m_marker;
+    m_aimedMarker = other.m_aimedMarker;
+    m_yawRate = other.m_yawRate;
+    m_pitchRate = other.m_pitchRate;
+    m_turnStep = other.m_turnStep;
+    m_ringPositions = other.m_ringPositions;
+    m_ringDistances = other.m_ringDistances;
+    m_ringIndex = other.m_ringIndex;
+}
+
 /** The middle of the box around the followed points, kept inside the level's camera box. */
 Vec3 TowerCamera::middleOf(std::span<const CameraSubject> subjects, const CameraRange& range) {
     Vec3 low{1.0e20f, 1.0e20f, 1.0e20f};
@@ -44,6 +78,8 @@ Vec3 TowerCamera::middleOf(std::span<const CameraSubject> subjects, const Camera
 void TowerCamera::reset(std::span<const CameraSubject> subjects,
                         std::span<const WorldLocator> markers, const CameraRange& range,
                         const CameraView& view) {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     m_camera = WorldCamera{};
     m_camera.yaw = kPi;
     m_ringPositions.fill(Vec3{0.0f, 0.0f, 0.0f});

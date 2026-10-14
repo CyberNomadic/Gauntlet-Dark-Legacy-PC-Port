@@ -24,6 +24,10 @@ public:
     void loadPortalSkin(RenderDevice& device, TextureSet& weapons);
     void loadDeathSkins(RenderDevice& device, Enemies& enemies, ItemArchive& weapons);
     bool companionsReady(const CombatSnapshot& snapshot) const;
+    /** CPU-only trusted-tree preflight before a viewport changes any geometry
+     * or actor state. show() independently stages the same poses atomically. */
+    bool acceptsPresentation(const CombatSnapshot& snapshot, Enemies& resources,
+                             const EnemyPresentation& presentation) const;
     bool show(const CombatSnapshot& snapshot, Enemies& resources,
               const EnemyPresentation* presentation = nullptr,
               std::span<const WorldCollision> presentationFloors = {});
@@ -53,6 +57,7 @@ private:
         PlayerAnimator::Action action = PlayerAnimator::Action::Ready;
         std::unique_ptr<PlayerFigure> figure;
         ReplicaPose pose;
+        std::optional<TreePose> nativePose;
         CompanionResources resources;
         std::array<std::optional<CompanionState>, 2> companions;
     };
@@ -67,7 +72,16 @@ private:
         bool hitFlash = false;
         Mat4 placement{1};
         ReplicaPose pose;
+        std::optional<TreePose> nativePose;
+        std::optional<f32> nativeTextureFrame;
     };
+    struct NativePoses {
+        std::array<std::optional<TreePose>, InputCommand::kSeats> players;
+        std::vector<std::pair<u64, TreePose>> enemies;
+    };
+    std::optional<NativePoses> preparePresentation(const CombatSnapshot& snapshot,
+                                                   Enemies& resources,
+                                                   const EnemyPresentation& presentation) const;
     u64 m_epoch = 0;
     std::optional<u64> m_tick;
     std::array<Player, InputCommand::kSeats> m_players;

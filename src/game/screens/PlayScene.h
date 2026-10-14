@@ -24,6 +24,7 @@
 #include "game/netplay/PlayerMeleeCheckpoint.h"
 #include "game/netplay/PlayerPotionCheckpoint.h"
 #include "game/netplay/PlayerTurboCheckpoint.h"
+#include "game/netplay/StageStatePacket.h"
 #include "game/netplay/TurboEffectCheckpoint.h"
 #include "game/players/CharacterSave.h"
 #include "game/players/ClassData.h"
@@ -478,6 +479,11 @@ private:
     TextureSet m_staticTextures;
     LevelMessages m_messages;
     std::unique_ptr<CombatResources> m_combatResources;
+    std::unique_ptr<LevelWorldCheckpoint> m_combatWorld;
+    std::unique_ptr<LevelFixturesCheckpoint> m_combatFixtures;
+    std::unique_ptr<TowerCameraCheckpoint> m_combatCamera;
+    std::unique_ptr<ExitPortalsCheckpoint> m_combatPortals;
+    StageStatePacket::Catalog m_combatStageCatalog;
     PlayerArsenal m_arsenal;
     ExitPortals m_portals;
     LevelTransporters m_transporters;

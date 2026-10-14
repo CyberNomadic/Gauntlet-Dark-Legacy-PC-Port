@@ -26,6 +26,7 @@ public:
 
     /** What is added to the ambient light at the moment. */
     f32 offset() const { return m_current; }
+    bool active() const { return m_current != 0 || m_wanted != 0 || m_holdLeft > 0; }
     /** An ambient level with it applied, kept between none and full. */
     f32 applied(f32 ambient) const;
 

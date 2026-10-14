@@ -74,8 +74,7 @@ void WorldDestruction::showSubtree(s32 object, bool visible, WorldScene& scene) 
     }
 }
 
-bool WorldDestruction::explode(s32 object, const Vec3& position, WorldScene& scene,
-                               WorldCollision& collision) {
+bool WorldDestruction::wouldExplode(s32 object) const {
     if (!valid(object) || destroyed(object)) {
         return false;
     }
@@ -86,11 +85,16 @@ bool WorldDestruction::explode(s32 object, const Vec3& position, WorldScene& sce
         at = m_objects[static_cast<usize>(at)].parent;
     }
     const u32 kind = flags & kKindMask;
-    if (kind != kExplosive && kind != kLoopingCart) {
+    return kind == kExplosive || kind == kLoopingCart;
+}
+
+bool WorldDestruction::explode(s32 object, const Vec3& position, WorldScene& scene,
+                               WorldCollision& collision) {
+    if (!wouldExplode(object)) {
         return false;
     }
     m_explosions.push_back(position);
-    at = object;
+    auto at = object;
     for (usize guard = 0; valid(at) && guard < m_objects.size(); ++guard) {
         m_destroyed[static_cast<usize>(at)] = true;
         showSubtree(at, false, scene);

@@ -30,6 +30,7 @@ public:
     Vec2 tracked(usize index) const;
 
 private:
+    friend class CombatantCheckpoint;
     struct Bearing {
         f32 yaw = 0.0f;
         f32 pitch = 0.0f;

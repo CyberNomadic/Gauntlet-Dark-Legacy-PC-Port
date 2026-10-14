@@ -348,6 +348,18 @@ public:
         u32 deathFrame = 0;
     };
     std::optional<Observation> observe(s32 id) const;
+    /** Native current-roster draw state, including the swarm's two-tick clock.
+     * Pose artwork is borrowed from the already loaded kind archive. */
+    struct Presentation {
+        u64 instance = 0;
+        s32 kind = 0, tier = 1, variant = 0;
+        Vec3 previousPosition{0}, position{0};
+        f32 previousYaw = 0, yaw = 0;
+        f32 blendStart = 1, blendEnd = 1;
+        f32 textureStart = 0, textureEnd = 0;
+        EnemyAnimator::Presentation animation;
+    };
+    std::optional<Presentation> presentation(s32 id) const;
     /** Resource selection, independent of a live enemy slot. */
     struct Appearance {
         s32 kind = 0;

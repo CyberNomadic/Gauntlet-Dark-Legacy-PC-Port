@@ -67,6 +67,10 @@ void PartyNames::step(std::span<PlayerRuntime> players, s32 ticks, bool held) {
     if (held) {
         return;
     }
+    advance(players, ticks);
+}
+
+void PartyNames::advance(std::span<PlayerRuntime> players, s32 ticks) {
     for (PlayerRuntime& runtime : players) {
         runtime.nameTicks = std::max(runtime.nameTicks - ticks, 0);
     }

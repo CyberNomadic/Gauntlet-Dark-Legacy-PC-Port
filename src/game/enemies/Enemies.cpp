@@ -2631,6 +2631,38 @@ f32 Enemies::presentationBlend(const Enemy& enemy, f32 alpha) const {
     return std::clamp((static_cast<f32>(m_pendingTicks) + alpha) * 0.5f, 0.0f, 1.0f);
 }
 
+std::optional<Enemies::Presentation> Enemies::presentation(s32 id) const {
+    if (id < 0 || id >= m_most) {
+        return std::nullopt;
+    }
+    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    if (enemy.state == State::Inactive || !enemy.animator.bound() ||
+        (enemy.killed && enemy.algorithm == kSuicideWay)) {
+        return std::nullopt;
+    }
+    const auto* stock = stockOf(enemy.kind);
+    if (stock == nullptr) {
+        return std::nullopt;
+    }
+    const auto clock = [&](f32 blend) {
+        return static_cast<f32>(stock->textures.frame()) +
+               stock->textures.presentationOffset(blend).value_or(0);
+    };
+    return Presentation{enemy.instance,
+                        enemy.kind,
+                        enemy.tier,
+                        enemy.variant,
+                        enemy.presentationPosition,
+                        enemy.position,
+                        enemy.presentationYaw,
+                        enemy.yaw,
+                        presentationBlend(enemy, 0),
+                        presentationBlend(enemy, 1),
+                        clock(0),
+                        clock(1),
+                        enemy.animator.presentation()};
+}
+
 void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                    const Texture* hitFlash, ItemArchive* weapons, const CameraFrame* camera,
                    f32 presentationAlpha, TreeModel::Pass pass) {

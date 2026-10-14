@@ -308,13 +308,51 @@ f32 PlayerAttacks::meleeDamageOf(usize index, std::span<const PlayerRuntime> pla
  * pays what the move still owes if the strike does harm, and the harm is set going. */
 void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRuntime> players,
                                std::optional<Vec3> at, std::optional<usize> occurrence) {
-    if (!m_resources.has_value() || index >= players.size() || players[index].figure == nullptr) {
+    const auto prepared = prepareStrike(index, strikeIndex, players, at);
+    if (!prepared) {
         return;
+    }
+    const StrikeEvents events{
+        .tree =
+            [this](ItemArchive& archive, std::string_view tree, const Vec3& position,
+                   const EffectTrees::Setting& setting) {
+                return std::optional{m_resources->effects.startSet(m_resources->device, archive,
+                                                                   tree, position, setting)};
+            },
+        .particle =
+            [this](ItemArchive& archive, const ParticleDescriptor& descriptor, u32 texture) {
+                return std::optional{m_resources->effects.startParticles(
+                    m_resources->device, archive, descriptor, texture, Mat4{1})};
+            },
+        .sound =
+            [this, players](usize actor, usize, std::string_view sound) {
+                if (const auto call = players[actor].figure->voice().find(sound);
+                    call && m_resources->sounds != nullptr) {
+                    m_resources->sounds->play(players[actor].figure->voice().sequence(*call), 1.0f,
+                                              SoundCategory::Effects);
+                } else {
+                    m_resources->audio.playNamed(sound);
+                }
+            },
+        .shake =
+            [this] {
+                if (m_resources->shake != nullptr) {
+                    m_resources->shake->start();
+                }
+            }};
+    applyStrike(index, *prepared, players, occurrence, events, at);
+}
+
+std::optional<TurboEmission::Strike> PlayerAttacks::prepareStrike(usize index, s32 strikeIndex,
+                                                                  std::span<PlayerRuntime> players,
+                                                                  std::optional<Vec3> at) {
+    if (!m_resources.has_value() || index >= players.size() || players[index].figure == nullptr) {
+        return std::nullopt;
     }
     const ClassStats* stats = m_resources->classes.stats(players[index].actor.save().character);
     if (stats == nullptr || strikeIndex < 0 ||
         static_cast<usize>(strikeIndex) >= stats->moveStrikes.size()) {
-        return;
+        return std::nullopt;
     }
     const MoveStrike& strike = stats->moveStrikes[static_cast<usize>(strikeIndex)];
     const PlayerActor& actor = players[index].actor;
@@ -333,26 +371,33 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
     const s32 partner = players[index].combo.partner;
     const bool partnerAvailable = partner >= 0 && static_cast<usize>(partner) < players.size();
     const f32 meleeDamage = meleeDamageOf(index, players);
-    const auto prepared = TurboEmission::prepare(
+    return TurboEmission::prepare(
         *stats, strikeIndex,
         {actor.save().character, base, facing, at.has_value(), partnerAvailable}, meleeDamage,
         effectSeconds);
-    if (!prepared) {
-        return;
-    }
+}
+
+bool PlayerAttacks::applyStrike(usize index, const TurboEmission::Strike& prepared,
+                                std::span<PlayerRuntime> players, std::optional<usize> occurrence,
+                                const StrikeEvents& events, std::optional<Vec3> at) {
+    const auto& actor = players[index].actor;
+    const Vec3 base = at.value_or(actor.position());
+    const Vec3 facing = actor.facing();
+    const s32 partner = players[index].combo.partner;
+    const bool partnerAvailable = partner >= 0 && static_cast<usize>(partner) < players.size();
     // A span that only lasts, or a volley, harms nothing of itself; the rest are set going.
     u32 id = 0;
-    if (prepared->carrier) {
-        id = m_strikes.start(prepared->volume, actor.player(), base, facing, meleeDamage,
-                             effectSeconds);
+    if (prepared.carrier) {
+        id = m_strikes.start(prepared.volume, actor.player(), base, facing,
+                             meleeDamageOf(index, players), prepared.effectSeconds);
         m_strikeSources.push_back(StrikeSource{id,
                                                index,
-                                               strikeIndex,
+                                               prepared.row,
                                                {},
                                                m_resources->multiplayer != nullptr
                                                    ? *m_resources->multiplayer
                                                    : MultiplayerMode::Normal,
-                                               strike.damageType});
+                                               prepared.volume.damageType});
     }
     // An effect may bring another with it.
     u32 previousEffect = 0;
@@ -366,27 +411,22 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
                                       static_cast<u16>(*occurrence), static_cast<u16>(ordinal)});
         }
     };
-    for (usize ordinal = 0; ordinal < prepared->effects.size(); ++ordinal) {
-        const auto& emission = prepared->effects[ordinal];
+    for (usize ordinal = 0; ordinal < prepared.effects.size(); ++ordinal) {
+        const auto& emission = prepared.effects[ordinal];
         const MoveEffect& effect = emission.authored;
-        if (emission.shake && m_resources->shake != nullptr) {
-            m_resources->shake->start();
+        if (emission.shake && events.shake) {
+            events.shake();
         }
         if (emission.particle) {
-            const u32 shown = startParticles(index, *emission.particle, previousEffect, players);
+            const u32 shown =
+                startParticles(index, *emission.particle, previousEffect, players, events);
             tag(shown, ordinal);
             previousEffect = 0;
             continue;
         }
         previousEffect = 0;
-        if (!effect.sound.empty()) {
-            if (const auto sound = players[index].figure->voice().find(effect.sound);
-                sound.has_value() && m_resources->sounds != nullptr) {
-                m_resources->sounds->play(players[index].figure->voice().sequence(*sound), 1.0f,
-                                          SoundCategory::Effects);
-            } else {
-                m_resources->audio.playNamed(effect.sound);
-            }
+        if (!effect.sound.empty() && events.sound) {
+            events.sound(index, ordinal, effect.sound);
         }
         std::optional<MoveAttachment> attachment;
         if (emission.attachment) {
@@ -407,8 +447,12 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
             }
             continue;
         }
-        const u32 shown = m_resources->effects.startSet(m_resources->device, *archive, effect.tree,
-                                                        emission.position, emission.setting);
+        const auto started =
+            events.tree(*archive, effect.tree, emission.position, emission.setting);
+        if (!started) {
+            return false;
+        }
+        const u32 shown = *started;
         tag(shown, ordinal);
         previousEffect = shown;
         if (attachment && (shown != 0 || attachment->strike != 0)) {
@@ -420,6 +464,7 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
         }
     }
     updateMoveAttachments(players);
+    return true;
 }
 
 void PlayerAttacks::updateMoveAttachments(std::span<PlayerRuntime> players) {
@@ -452,7 +497,7 @@ void PlayerAttacks::updateMoveAttachments(std::span<PlayerRuntime> players) {
 }
 
 u32 PlayerAttacks::startParticles(usize index, const TurboEmission::Particle& emission, u32 parent,
-                                  std::span<PlayerRuntime> players) {
+                                  std::span<PlayerRuntime> players, const StrikeEvents& events) {
     if (!m_resources || index >= players.size()) {
         return 0;
     }
@@ -487,8 +532,11 @@ u32 PlayerAttacks::startParticles(usize index, const TurboEmission::Particle& em
             particle.node.clear();
         }
     }
-    particle.effect = m_resources->effects.startParticles(
-        m_resources->device, *textureArchive, emission.descriptor, textureSlot, Mat4{1});
+    const auto started = events.particle(*textureArchive, emission.descriptor, textureSlot);
+    if (!started) {
+        return 0;
+    }
+    particle.effect = *started;
     const u32 shown = particle.effect;
     m_particleEffects.push_back(std::move(particle));
     updateParticles(players);
@@ -562,8 +610,20 @@ void PlayerAttacks::presentStrikeHit(usize index, const MoveStrike& row, const V
 
 void PlayerAttacks::updateStrikes(f32 seconds, std::span<PlayerRuntime> players,
                                   const Targets& targets) {
-    if (!m_resources.has_value()) {
+    if (!m_resources) {
         return;
+    }
+    for (const auto& hit : advanceStrikes(seconds, players)) {
+        dispatchStrikeHit(hit, players, targets);
+    }
+    targets.fixtures.settleBlasts(players, targets.fixtureEvents);
+    finishStrikes();
+}
+
+std::vector<StrikeHit> PlayerAttacks::advanceStrikes(f32 seconds,
+                                                     std::span<PlayerRuntime> players) {
+    if (!m_resources.has_value()) {
+        return {};
     }
     updateParticles(players);
     updateMoveAttachments(players);
@@ -572,155 +632,173 @@ void PlayerAttacks::updateStrikes(f32 seconds, std::span<PlayerRuntime> players,
             contact.remaining -= seconds;
         }
     }
-    for (const StrikeHit& hit : m_strikes.update(seconds, &m_resources->world.collision())) {
-        const auto source = std::ranges::find(m_strikeSources, hit.strike, &StrikeSource::strike);
-        if (source == m_strikeSources.end() || source->actor >= players.size()) {
+    return m_strikes.update(seconds, &m_resources->world.collision());
+}
+
+std::vector<MissileTarget> PlayerAttacks::strikeContacts(const StrikeHit& hit,
+                                                         const StrikeSource& source,
+                                                         const Targets& targets) const {
+    std::vector<MissileTarget> result;
+    for (const auto& target : strikeTargets(targets)) {
+        MissileTarget contactTarget = target;
+        if (!hit.swept && target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase) {
+            // Stationary swarm contacts are planar; flying/node contacts retain height.
+            contactTarget.base.y = hit.centre.y;
+        }
+        if (!contactTarget.reachedBy(hit)) {
             continue;
         }
-        const auto& owner = players[source->actor].actor;
-        const ClassStats* stats = m_resources->classes.stats(owner.save().character);
-        if (stats == nullptr || source->row < 0 ||
-            static_cast<usize>(source->row) >= stats->moveStrikes.size()) {
-            continue;
-        }
-        MoveStrike row = stats->moveStrikes[static_cast<usize>(source->row)];
-        row.damageType = source->damageType;
-        bool stoppedByPlayer = false;
-        if (source->multiplayer == MultiplayerMode::Hurt && targets.hurt &&
-            (row.damageType & Damage::kMagic) == 0) {
-            for (usize index = 0; index < players.size(); ++index) {
-                auto& player = players[index];
-                if (player.actor.player() == hit.owner || player.life != PlayerLife::Standing ||
-                    player.departed) {
-                    continue;
-                }
-                const Vec3 toward = player.actor.position() - hit.centre;
-                const f32 across = std::hypot(toward.x, toward.z);
-                StrikeHit contact = hit;
-                constexpr f32 kNearShare = 0.3f;
-                constexpr f32 kNearCone = 0.85f;
-                if (!hit.swept && across < kNearShare * (hit.radius + player.actor.radius())) {
-                    contact.arc *= kNearCone;
-                }
-                if (!contact.reaches(player.actor.position(), player.actor.radius(),
-                                     player.actor.height())) {
-                    continue;
-                }
-                constexpr f32 kCoverFrom = 10.0f;
-                if (!hit.swept && across > kCoverFrom &&
-                    playerAreaBlocked(hit.centre, player.actor.followPoint(), targets.fixtures,
-                                      m_resources->world)) {
-                    continue;
-                }
-                constexpr u32 kReflectiveArmor = 0x01020000;
-                const u32 armor =
-                    PowerupEffects::of(player.actor.save().progress().inventory).armor;
-                if (hit.swept && (armor & kReflectiveArmor) != 0) {
-                    m_strikes.hitPlayer(hit.strike, true, hit.from);
-                    m_resources->audio.playNamed("S_RICOCHET");
-                    for (const auto& effect : m_strikeEffects) {
-                        if (effect.strike == hit.strike) {
-                            m_resources->effects.redirect(effect.effect, hit.from,
-                                                          -hit.facing * row.speed);
-                            m_resources->effects.shortenLifetime(effect.effect, 1, 10);
-                        }
-                    }
-                    stoppedByPlayer = true;
-                    break;
-                }
-                if (player.effectGap <= 0) {
-                    constexpr f32 kAreaPush = 0.25f;
-                    Vec3 direction = hit.swept ? hit.facing : Vec3{toward.x, 0, toward.z};
-                    if (!hit.swept && across > 0) {
-                        direction *= kAreaPush / across;
-                    }
-                    u32 flags = row.damageType;
-                    if (!hit.swept && hit.damage < 5) {
-                        constexpr u32 kLightAreaMask = 0x170;
-                        constexpr u32 kNoHitEffect = 0x1000000;
-                        flags = (flags & ~kLightAreaMask) | kNoHitEffect;
-                    }
-                    targets.hurt(index, hit.damage, HurtKind::Blow, {flags, direction});
-                    if ((row.damageType & Damage::kGas) != 0) {
-                        player.effectGap = kShieldHarmEvery;
-                    } else if (hit.damage > 2) {
-                        f32 gap = hit.hitGap;
-                        if (hit.swept) {
-                            const bool passThrough = (row.damageType & powerup::kSuperShot) != 0;
-                            const std::string_view tree =
-                                row.hitEffect >= 0 && static_cast<usize>(row.hitEffect) <
-                                                          stats->moveEffects.size()
-                                    ? stats->moveEffects[static_cast<usize>(row.hitEffect)].tree
-                                    : std::string_view{};
-                            gap = passThrough ? 1.0f
-                                              : PlayerMissiles::hitGap(
-                                                    moveEffectsOf(source->actor, players), tree);
-                        }
-                        player.effectGap = gap;
-                    }
-                }
-                if (hit.swept && (row.damageType & powerup::kSuperShot) != 0 &&
-                    (row.damageType & powerup::kReflect) != 0 && row.hitEffect >= 0 &&
-                    hit.damage > 2) {
-                    presentStrikeHit(source->actor, row, player.actor.position(), players, false);
-                    source->damageType &= ~powerup::kSuperShot;
-                }
-                if (hit.swept && (row.damageType & powerup::kSuperShot) == 0) {
-                    presentStrikeHit(source->actor, row, player.actor.followPoint(), players);
-                    m_strikes.hitPlayer(hit.strike, false, hit.from);
-                    stoppedByPlayer = true;
-                    break;
-                }
-            }
-        }
-        if (stoppedByPlayer) {
-            continue;
-        }
-        targets.fixtures.shootScenery(hit.centre, hit.radius);
-        for (const MissileTarget& target : strikeTargets(targets)) {
-            MissileTarget contactTarget = target;
-            if (!hit.swept && target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase) {
-                // ProcessEffects' stationary swarm pass uses NormalVector2D;
-                // flying effects and item/node collision retain their height tests.
-                contactTarget.base.y = hit.centre.y;
-            }
-            if (!contactTarget.reachedBy(hit)) {
-                continue;
-            }
-            auto contact =
-                std::ranges::find(source->contacts, target.id, &StrikeSource::Contact::target);
-            if (contact != source->contacts.end() && contact->remaining > 0) {
-                continue;
-            }
-            // A pass-through wave must not deal its full damage every render frame.
-            constexpr u32 kPassThrough = 0x100000;
-            constexpr f32 kProjectileGap = 0.25f;
-            constexpr f32 kPassThroughExtraGap = 3.0f;
-            const f32 baseGap = hit.swept ? kProjectileGap : hit.hitGap;
-            const f32 gap =
-                hit.damage > 2
-                    ? baseGap + ((row.damageType & kPassThrough) != 0 ? kPassThroughExtraGap : 0.0f)
-                    : 0.0f;
-            if (contact == source->contacts.end()) {
-                source->contacts.push_back({target.id, gap});
-            } else {
-                contact->remaining = gap;
-            }
-            Vec3 effectPoint = target.base;
-            if (target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase) {
-                const s32 kind = targets.opponents.enemies().kindOf(target.id - kEnemyTargetBase);
-                if (kind >= 0 && kind < kEnemyKindCount) {
-                    // ProcessEffects starts the impact at OBJGRP.attn_pos, not
-                    // the collision cylinder's floor. Acid Raid's rain hangs
-                    // below its cloud and otherwise disappears inside the body.
-                    effectPoint.y += enemyKind(kind).attentionHeight;
-                }
-            }
-            strikeTarget(target, hit.damage, row.damageType, owner, players, targets);
-            presentStrikeHit(source->actor, row, effectPoint, players);
+        const auto contact =
+            std::ranges::find(source.contacts, target.id, &StrikeSource::Contact::target);
+        if (contact == source.contacts.end() || contact->remaining <= 0) {
+            result.push_back(target);
         }
     }
-    targets.fixtures.settleBlasts(players, targets.fixtureEvents);
+    return result;
+}
+
+void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRuntime> players,
+                                      const Targets& targets) {
+    const auto source = std::ranges::find(m_strikeSources, hit.strike, &StrikeSource::strike);
+    if (source == m_strikeSources.end() || source->actor >= players.size()) {
+        return;
+    }
+    const auto& owner = players[source->actor].actor;
+    const ClassStats* stats = m_resources->classes.stats(owner.save().character);
+    if (stats == nullptr || source->row < 0 ||
+        static_cast<usize>(source->row) >= stats->moveStrikes.size()) {
+        return;
+    }
+    MoveStrike row = stats->moveStrikes[static_cast<usize>(source->row)];
+    row.damageType = source->damageType;
+    bool stoppedByPlayer = false;
+    if (source->multiplayer == MultiplayerMode::Hurt && targets.hurt &&
+        (row.damageType & Damage::kMagic) == 0) {
+        for (usize index = 0; index < players.size(); ++index) {
+            auto& player = players[index];
+            if (player.actor.player() == hit.owner || player.life != PlayerLife::Standing ||
+                player.departed) {
+                continue;
+            }
+            const Vec3 toward = player.actor.position() - hit.centre;
+            const f32 across = std::hypot(toward.x, toward.z);
+            StrikeHit contact = hit;
+            constexpr f32 kNearShare = 0.3f;
+            constexpr f32 kNearCone = 0.85f;
+            if (!hit.swept && across < kNearShare * (hit.radius + player.actor.radius())) {
+                contact.arc *= kNearCone;
+            }
+            if (!contact.reaches(player.actor.position(), player.actor.radius(),
+                                 player.actor.height())) {
+                continue;
+            }
+            constexpr f32 kCoverFrom = 10.0f;
+            if (!hit.swept && across > kCoverFrom &&
+                playerAreaBlocked(hit.centre, player.actor.followPoint(), targets.fixtures,
+                                  m_resources->world)) {
+                continue;
+            }
+            constexpr u32 kReflectiveArmor = 0x01020000;
+            const u32 armor = PowerupEffects::of(player.actor.save().progress().inventory).armor;
+            if (hit.swept && (armor & kReflectiveArmor) != 0) {
+                m_strikes.hitPlayer(hit.strike, true, hit.from);
+                m_resources->audio.playNamed("S_RICOCHET");
+                for (const auto& effect : m_strikeEffects) {
+                    if (effect.strike == hit.strike) {
+                        m_resources->effects.redirect(effect.effect, hit.from,
+                                                      -hit.facing * row.speed);
+                        m_resources->effects.shortenLifetime(effect.effect, 1, 10);
+                    }
+                }
+                stoppedByPlayer = true;
+                break;
+            }
+            if (player.effectGap <= 0) {
+                constexpr f32 kAreaPush = 0.25f;
+                Vec3 direction = hit.swept ? hit.facing : Vec3{toward.x, 0, toward.z};
+                if (!hit.swept && across > 0) {
+                    direction *= kAreaPush / across;
+                }
+                u32 flags = row.damageType;
+                if (!hit.swept && hit.damage < 5) {
+                    constexpr u32 kLightAreaMask = 0x170;
+                    constexpr u32 kNoHitEffect = 0x1000000;
+                    flags = (flags & ~kLightAreaMask) | kNoHitEffect;
+                }
+                targets.hurt(index, hit.damage, HurtKind::Blow, {flags, direction});
+                if ((row.damageType & Damage::kGas) != 0) {
+                    player.effectGap = kShieldHarmEvery;
+                } else if (hit.damage > 2) {
+                    f32 gap = hit.hitGap;
+                    if (hit.swept) {
+                        const bool passThrough = (row.damageType & powerup::kSuperShot) != 0;
+                        const std::string_view tree =
+                            row.hitEffect >= 0 &&
+                                    static_cast<usize>(row.hitEffect) < stats->moveEffects.size()
+                                ? stats->moveEffects[static_cast<usize>(row.hitEffect)].tree
+                                : std::string_view{};
+                        gap = passThrough ? 1.0f
+                                          : PlayerMissiles::hitGap(
+                                                moveEffectsOf(source->actor, players), tree);
+                    }
+                    player.effectGap = gap;
+                }
+            }
+            if (hit.swept && (row.damageType & powerup::kSuperShot) != 0 &&
+                (row.damageType & powerup::kReflect) != 0 && row.hitEffect >= 0 && hit.damage > 2) {
+                presentStrikeHit(source->actor, row, player.actor.position(), players, false);
+                source->damageType &= ~powerup::kSuperShot;
+            }
+            if (hit.swept && (row.damageType & powerup::kSuperShot) == 0) {
+                presentStrikeHit(source->actor, row, player.actor.followPoint(), players);
+                m_strikes.hitPlayer(hit.strike, false, hit.from);
+                stoppedByPlayer = true;
+                break;
+            }
+        }
+    }
+    if (stoppedByPlayer) {
+        return;
+    }
+    targets.fixtures.shootScenery(hit.centre, hit.radius);
+    for (const MissileTarget& target : strikeContacts(hit, *source, targets)) {
+        auto contact =
+            std::ranges::find(source->contacts, target.id, &StrikeSource::Contact::target);
+        // Several native body nodes may share one target ID. Earlier nodes
+        // in this same batch can establish its cooldown.
+        if (contact != source->contacts.end() && contact->remaining > 0) {
+            continue;
+        }
+        // A pass-through wave must not deal its full damage every render frame.
+        constexpr u32 kPassThrough = 0x100000;
+        constexpr f32 kProjectileGap = 0.25f;
+        constexpr f32 kPassThroughExtraGap = 3.0f;
+        const f32 baseGap = hit.swept ? kProjectileGap : hit.hitGap;
+        const f32 gap =
+            hit.damage > 2
+                ? baseGap + ((row.damageType & kPassThrough) != 0 ? kPassThroughExtraGap : 0.0f)
+                : 0.0f;
+        if (contact == source->contacts.end()) {
+            source->contacts.push_back({target.id, gap});
+        } else {
+            contact->remaining = gap;
+        }
+        Vec3 effectPoint = target.base;
+        if (target.id >= kEnemyTargetBase && target.id < kGeneratorTargetBase) {
+            const s32 kind = targets.opponents.enemies().kindOf(target.id - kEnemyTargetBase);
+            if (kind >= 0 && kind < kEnemyKindCount) {
+                // ProcessEffects starts the impact at OBJGRP.attn_pos, not
+                // the collision cylinder's floor. Acid Raid's rain hangs
+                // below its cloud and otherwise disappears inside the body.
+                effectPoint.y += enemyKind(kind).attentionHeight;
+            }
+        }
+        strikeTarget(target, hit.damage, row.damageType, owner, players, targets);
+        presentStrikeHit(source->actor, row, effectPoint, players);
+    }
+}
+
+void PlayerAttacks::finishStrikes() {
     std::erase_if(m_strikeSources, [this](const StrikeSource& source) {
         return m_strikes.find(source.strike) == nullptr;
     });
@@ -1125,6 +1203,52 @@ void PlayerAttacks::updateTurbo(usize index, s32 ticks, f32 seconds,
     if (index >= players.size() || players[index].figure == nullptr) {
         return;
     }
+    const TurboMove::Events events{
+        .announce = [&help, index](s32 id) { help(id, index); },
+        .dim =
+            [this, index, players](f32 amount) {
+                // The striker blazes against the dark it brings (PlyrSfxDoDamage).
+                m_resources->dimmer.ask(amount);
+                players[index].glow.raise(BodyGlow::kStrike);
+            },
+        .identifiedVolley =
+            [this, index, players](const TurboMove::Volley& volley) {
+                const auto& actor = players[index].actor;
+                auto* figure = players[index].figure.get();
+                if (const auto weapon = m_resources->arsenal.weaponThrow(
+                        actor, figure->animator().attackSeconds())) {
+                    const auto emission = TurboEmission::volley(
+                        *weapon, volley.direction,
+                        PowerupEffects::of(actor.save().progress().inventory).weapon);
+                    std::optional<MissileRelease> release;
+                    if (const u32 identity = volley.emissionIdentity();
+                        identity != 0 &&
+                        PlayerAnimator::rollbackTurboAction(figure->animator().action())) {
+                        release = MissileRelease{actor.save().character,
+                                                 figure->animator().player().generation(), false, 0,
+                                                 identity};
+                    }
+                    m_resources->arsenal.launchWeapon(actor, figure, emission.weapon.direction,
+                                                      emission.weapon.scale, emission.spreads,
+                                                      emission.weapon.target, release);
+                }
+            },
+        .identifiedStrike =
+            [this, index, players](const TurboMove::Strike& strike) {
+                // Other native timelines (strong A and combo) keep their
+                // normal effects, but do not claim the B/C replay domain.
+                const auto action = players[index].figure->animator().action();
+                fireStrike(index, strike.row, players, std::nullopt,
+                           PlayerAnimator::rollbackTurboAction(action) ? std::optional{strike.slot}
+                                                                       : std::nullopt);
+            }};
+    stepTurbo(index, ticks, seconds, players, events,
+              [&](std::string_view voice) { cry(index, voice, players); });
+}
+
+void PlayerAttacks::stepTurbo(usize index, s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
+                              const TurboMove::Events& events,
+                              const std::function<void(std::string_view)>& cry) {
     TurboMeter& meter = players[index].turbo;
     const PlayerAnimator& body = players[index].figure->animator();
     TurboMove& move = players[index].move;
@@ -1132,60 +1256,22 @@ void PlayerAttacks::updateTurbo(usize index, s32 ticks, f32 seconds,
     if (body.turboBegan()) {
         if (const std::string_view voice = move.begin(body.action(), stats, meter);
             !voice.empty()) {
-            cry(index, voice, players);
+            cry(voice);
         }
     }
-    move.advance(
-        body.action(), body.player().frame(), players[index].actor.facing(), stats, meter,
-        {.announce = [&help, index](s32 id) { help(id, index); },
-         .dim =
-             [this, index, players](f32 amount) {
-                 // The striker blazes against the dark it brings (PlyrSfxDoDamage).
-                 m_resources->dimmer.ask(amount);
-                 players[index].glow.raise(BodyGlow::kStrike);
-             },
-         .identifiedVolley =
-             [this, index, players](const TurboMove::Volley& volley) {
-                 const auto& actor = players[index].actor;
-                 auto* figure = players[index].figure.get();
-                 if (const auto weapon = m_resources->arsenal.weaponThrow(
-                         actor, figure->animator().attackSeconds())) {
-                     const auto emission = TurboEmission::volley(
-                         *weapon, volley.direction,
-                         PowerupEffects::of(actor.save().progress().inventory).weapon);
-                     std::optional<MissileRelease> release;
-                     if (const u32 identity = volley.emissionIdentity();
-                         identity != 0 &&
-                         PlayerAnimator::rollbackTurboAction(figure->animator().action())) {
-                         release = MissileRelease{actor.save().character,
-                                                  figure->animator().player().generation(), false,
-                                                  0, identity};
-                     }
-                     m_resources->arsenal.launchWeapon(actor, figure, emission.weapon.direction,
-                                                       emission.weapon.scale, emission.spreads,
-                                                       emission.weapon.target, release);
-                 }
-             },
-         .identifiedStrike =
-             [this, index, players](const TurboMove::Strike& strike) {
-                 // Other native timelines (strong A and combo) keep their
-                 // normal effects, but do not claim the B/C replay domain.
-                 const auto action = players[index].figure->animator().action();
-                 fireStrike(index, strike.row, players, std::nullopt,
-                            PlayerAnimator::rollbackTurboAction(action) ? std::optional{strike.slot}
-                                                                        : std::nullopt);
-             }});
+    move.advance(body.action(), body.player().frame(), players[index].actor.facing(), stats, meter,
+                 events);
     if (body.action() == PlayerAnimator::Action::Shove) {
         meter.drain(seconds);
     } else if (players[index].life == PlayerLife::Standing && !body.turboing() &&
                meter.fill(seconds)) {
-        help(HelpMessages::kUseTurbo, index);
+        events.announce(HelpMessages::kUseTurbo);
     }
     // With two fifths of the meter, and less than all of it, the combo is suggested
     // (pmotion.c 1760; the scene waits for a party and a crowd).
     if (players[index].life == PlayerLife::Standing && !body.turboing() &&
         meter.held() >= TurboMeter::kStrongCost && meter.held() < TurboMeter::kFull) {
-        help(HelpMessages::kUseCombo, index);
+        events.announce(HelpMessages::kUseCombo);
     }
     meter.step(ticks);
 }
@@ -1913,6 +1999,22 @@ std::vector<MissileImpact> PlayerAttacks::advanceProjectileFlights(f32 seconds,
     if (!m_resources) {
         return {};
     }
+    stepProjectileFlights(seconds, players, targets);
+    // A weapon still flying brings down the SHOOTFALL scenery it passes (fn_8005EE18).
+    const PlayerMissiles& flying = m_resources->arsenal.missiles();
+    for (usize i = 0; i < flying.count(); ++i) {
+        const PlayerMissiles::Missile& missile = flying.missile(i);
+        targets.fixtures.shootScenery(missile.position,
+                                      missile.spec != nullptr ? missile.spec->radius : 1.0f);
+    }
+    return m_resources->arsenal.missiles().takeImpacts();
+}
+
+void PlayerAttacks::stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> players,
+                                          const Targets& targets) {
+    if (!m_resources) {
+        return;
+    }
     glowWeapons(players, targets.occupiedHand);
     std::vector<MissileTarget> missileTargets = strikeTargets(targets);
     const PlacedItems& lying = m_resources->world.placedItems();
@@ -1943,19 +2045,11 @@ std::vector<MissileImpact> PlayerAttacks::advanceProjectileFlights(f32 seconds,
     }
     m_resources->arsenal.missiles().update(seconds, &m_resources->world.collision(), missileTargets,
                                            missilePlayers);
-    // A weapon still flying brings down the SHOOTFALL scenery it passes (fn_8005EE18).
-    const PlayerMissiles& flying = m_resources->arsenal.missiles();
-    for (usize i = 0; i < flying.count(); ++i) {
-        const PlayerMissiles::Missile& missile = flying.missile(i);
-        targets.fixtures.shootScenery(missile.position,
-                                      missile.spec != nullptr ? missile.spec->radius : 1.0f);
-    }
-    return m_resources->arsenal.missiles().takeImpacts();
 }
 
-void PlayerAttacks::dispatchProjectileImpact(const MissileImpact& impact,
-                                             std::span<PlayerRuntime> players,
-                                             const Targets& targets) {
+void PlayerAttacks::dispatchProjectileImpact(
+    const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
+    const std::function<void(const MissileImpact&, f32)>& presentation) {
     if (!m_resources) {
         return;
     }
@@ -1973,7 +2067,11 @@ void PlayerAttacks::dispatchProjectileImpact(const MissileImpact& impact,
                                       glm::distance(player.actor.followPoint(), impact.position));
         }
     }
-    m_resources->arsenal.presentImpact(impact, playerDistance);
+    if (presentation) {
+        presentation(impact, playerDistance);
+    } else {
+        m_resources->arsenal.presentImpact(impact, playerDistance);
+    }
     if (impact.player >= 0) {
         const auto player = std::ranges::find_if(players, [&impact](const PlayerRuntime& p) {
             return p.actor.player() == impact.player;

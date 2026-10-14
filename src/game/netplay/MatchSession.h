@@ -120,6 +120,7 @@ public:
     bool inputReady() const;
     std::optional<InputTimeline::Frame> advance();
     bool publish(const CombatSnapshot& state);
+    bool publish(const CombatPacket::Prepared& state);
     u64 inputTick() const { return host() ? m_timeline.tick() : m_nextInput; }
     u64 tick() const { return m_timeline.tick(); }
     bool host() const { return m_local == 1; }
@@ -140,6 +141,7 @@ public:
     usize queuedControls() const { return m_controls.size(); }
 
 private:
+    bool canPublish(const MotionSnapshot& motion) const;
     struct ControlDelivery {
         PacketTransport::Connection connection;
         std::vector<u8> bytes;

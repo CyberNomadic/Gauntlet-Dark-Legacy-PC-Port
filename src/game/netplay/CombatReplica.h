@@ -41,6 +41,10 @@ public:
     packets(const CombatSnapshot& snapshot,
             SnapshotBlock::Compression compression = SnapshotBlock::Compression::Automatic,
             Recovery recovery = Recovery::None);
+    static std::optional<Packets>
+    packets(const CombatPacket::Prepared& snapshot,
+            SnapshotBlock::Compression compression = SnapshotBlock::Compression::Automatic,
+            Recovery recovery = Recovery::None);
     /** Only trusted reliable start/travel control may change epoch. */
     bool begin(PacketTransport::Connection host, u64 epoch);
     void clear();

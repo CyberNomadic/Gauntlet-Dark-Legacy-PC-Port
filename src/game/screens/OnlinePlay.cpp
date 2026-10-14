@@ -993,13 +993,19 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
     if (auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
         m_presentEffects = false;
         if (m_predictMovement) {
-            if (!m_combatReplay.present(*sample, presentation, frameBlend)) {
+            const bool native = m_combatReplay.present(*sample, presentation, frameBlend);
+            if (!native) {
                 m_prediction.present(*sample, frameBlend);
                 m_opponentReplay.present(*sample, presentation, frameBlend);
             }
-            m_projectilePrediction.present(*sample, frameBlend);
-            m_potionPrediction.present(*sample, frameBlend);
-            m_presentEffects = m_effectPrediction.present(*sample);
+            // A successful Stage picture already owns every projectile/effect
+            // cohort at the same native tick. Independent visual extrapolation
+            // would splice another age into that atomic picture.
+            if (!native || !m_combatReplay.staged()) {
+                m_projectilePrediction.present(*sample, frameBlend);
+                m_potionPrediction.present(*sample, frameBlend);
+                m_presentEffects = m_effectPrediction.present(*sample);
+            }
         }
         if (!m_replica.show(*sample, &presentation)) {
             if (const auto* view = m_replica.view()) {

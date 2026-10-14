@@ -1,5 +1,6 @@
 #include "game/world/FallingScenery.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string_view>
@@ -136,8 +137,7 @@ bool FallingScenery::within(const Piece& piece, const Vec3& position, f32 radius
 std::vector<FallingCue> FallingScenery::start(const Vec3& position, f32 radius, bool shot) {
     std::vector<FallingCue> cues;
     for (Piece& piece : m_pieces) {
-        if (piece.started || !piece.shown || (piece.subtype == kShootFall) != shot ||
-            !within(piece, position, radius)) {
+        if (!canStart(piece, position, radius, shot)) {
             continue;
         }
         piece.started = true;
@@ -149,6 +149,16 @@ std::vector<FallingCue> FallingScenery::start(const Vec3& position, f32 radius, 
 
 std::vector<FallingCue> FallingScenery::touch(const Vec3& position, f32 radius) {
     return start(position, radius, false);
+}
+
+bool FallingScenery::canStart(const Piece& piece, const Vec3& position, f32 radius, bool shot) {
+    return !piece.started && piece.shown && (piece.subtype == kShootFall) == shot &&
+           within(piece, position, radius);
+}
+
+bool FallingScenery::wouldShoot(const Vec3& position, f32 radius) const {
+    return std::ranges::any_of(
+        m_pieces, [&](const Piece& piece) { return canStart(piece, position, radius, true); });
 }
 
 std::vector<FallingCue> FallingScenery::shoot(const Vec3& position, f32 radius) {

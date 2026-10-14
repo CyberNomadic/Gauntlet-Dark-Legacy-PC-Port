@@ -8,6 +8,7 @@
 #include "game/players/CursorAim.h"
 #include "game/screens/CombatCapture.h"
 #include "game/screens/ReplicaView.h"
+#include "game/screens/StageParticlePresentation.h"
 
 namespace {
 using namespace gdl;
@@ -197,6 +198,31 @@ TEST_CASE("replica view stays blank until an entire trusted sample can be drawn"
     CHECK(view.fixtureCount() == captured->fixtures.size());
     const auto image = CombatPacket::encode(*view.shown());
     const auto textureCount = device.texturesCreated;
+    {
+        // A structurally valid pose from another tree must be refused before
+        // even the viewport geometry changes, not halfway through actor draw.
+        auto candidate = *captured;
+        ++candidate.motion.tick;
+        candidate.geometry->darken = 0.25f;
+        EnemyPresentation presentation;
+        presentation.epoch = candidate.motion.epoch;
+        presentation.tick = candidate.motion.tick;
+        presentation.shownGeometry = candidate.geometry;
+        TreePose pose;
+        player.figure->animator().evaluatePresentation(pose, 1);
+        const auto checkpoint = pose.checkpoint();
+        REQUIRE(checkpoint);
+        presentation.players[0] = EnemyPresentation::PlayerPose{
+            candidate.motion.players[0]->grant, candidate.motion.players[0]->continuity,
+            candidate.players[0]->life, candidate.players[0]->animation, *checkpoint};
+        presentation.players[0]->pose.tree = "OTHER_TREE";
+        REQUIRE(presentation.matches(candidate));
+        const auto darken = view.geometry().geometry().darken;
+        CHECK_FALSE(view.show(candidate, &presentation));
+        CHECK(view.geometry().geometry().darken == darken);
+        CHECK(CombatPacket::encode(*view.shown()) == image);
+        CHECK(device.texturesCreated == textureCount);
+    }
     CHECK_FALSE(view.bindCompanions(device, world.powerups(), &weapons));
     CHECK_FALSE(view.loadHud(device, root, nullptr));
     auto invalid = *captured;
@@ -339,6 +365,29 @@ TEST_CASE("replica view stays blank until an entire trusted sample can be drawn"
     CHECK(device.texturesCreated == textureCount);
     CHECK(enemies.count() == 0);
     CHECK(enemies.takeBlows().empty());
+    {
+        EffectTrees projectiles, effects;
+        auto lifetime = std::make_shared<const u8>(0);
+        EnemyPresentation presentation;
+        presentation.epoch = captured->motion.epoch;
+        presentation.tick = captured->motion.tick;
+        presentation.shownGeometry = captured->geometry;
+        presentation.particleTick = captured->motion.tick + 1;
+        presentation.particleBlend = 0.5f;
+        presentation.particles = StageParticlePresentation::capture(
+            presentation.epoch, presentation.particleTick, lifetime,
+            {world, projectiles, effects, nullptr, {}});
+        REQUIRE(presentation.particles);
+        REQUIRE(view.show(*captured, &presentation));
+        ++presentation.particleTick;
+        CHECK_FALSE(view.show(*captured, &presentation));
+        --presentation.particleTick;
+        lifetime.reset();
+        CHECK_FALSE(view.show(*captured, &presentation));
+        CHECK(CombatPacket::encode(*view.shown()) == image);
+        view.draw(device, projection, 1920, 1080, 0); // expired artwork is never dereferenced
+        REQUIRE(view.show(*captured)); // authoritative-only pictures drop the old sidecar
+    }
     auto resumed = context;
     resumed.epoch = captured->motion.epoch + 1;
     resumed.transition = MatchTransition::Resume;

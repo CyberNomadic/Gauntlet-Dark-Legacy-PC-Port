@@ -56,5 +56,11 @@ struct CombatantAssets {
               const CombatantDefinition& family, char realm,
               std::span<TextureSet* const> textureLenders = {});
     void clear();
+
+private:
+    friend class CombatantCheckpoint;
+    friend class CombatantProjectilesCheckpoint;
+    /** Reload/clear invalidates prepared borrowers even if allocator addresses repeat. */
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

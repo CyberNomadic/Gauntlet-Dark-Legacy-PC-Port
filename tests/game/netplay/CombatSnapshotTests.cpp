@@ -2,8 +2,10 @@
 #include <bit>
 #include <cmath>
 #include <string>
+#include <type_traits>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/CombatReplica.h"
@@ -218,10 +220,69 @@ OpponentFrame opponentFrame(const CombatSnapshot& source) {
     return frame;
 }
 
+TEST_CASE("prepared combat packets retain exact validated bytes and capture metadata",
+          "[netplay][combat-snapshot][prepared-publication]") {
+    static_assert(!std::is_default_constructible_v<CombatPacket::Prepared>);
+    static_assert(!std::is_copy_constructible_v<CombatPacket::Prepared>);
+    for (usize supplement = 0; supplement < 3; ++supplement) {
+        CAPTURE(supplement);
+        auto source = state(234, 3);
+        if (supplement == 1) {
+            source.opponents = opponentState();
+            source.opponentFrame = opponentFrame(source);
+        } else if (supplement == 2) {
+            test::combatSeed(source);
+        }
+        const auto bytes = encode(source);
+        const auto prepared = CombatPacket::prepare(source);
+        REQUIRE(prepared);
+        CHECK(std::ranges::equal(prepared->bytes(), bytes));
+        CHECK(MotionPacket::encode(prepared->motion()) == MotionPacket::encode(source.motion));
+        for (const auto compression :
+             {SnapshotBlock::Compression::None, SnapshotBlock::Compression::Automatic}) {
+            for (const auto recovery :
+                 {CombatReplica::Recovery::None, CombatReplica::Recovery::SingleLoss}) {
+                const auto expected = CombatReplica::packets(source, compression, recovery);
+                const auto actual = CombatReplica::packets(*prepared, compression, recovery);
+                REQUIRE(expected);
+                REQUIRE(actual);
+                CHECK(actual == expected);
+                CombatReplica receiver;
+                REQUIRE(receiver.begin(1, prepared->motion().epoch));
+                for (const auto& packet : *actual) {
+                    const auto admitted = receiver.receive(1, packet);
+                    REQUIRE((admitted == Admission::Pending || admitted == Admission::Committed ||
+                             admitted == Admission::Stale));
+                }
+                REQUIRE(receiver.latest());
+                CHECK(encode(*receiver.latest()) == bytes);
+            }
+        }
+        source.motion.epoch = 0;
+        source.motion.tick = 999;
+        source.motion.players[0].reset();
+        source.players[0].reset();
+        source.opponents.reset();
+        source.opponentFrame.reset();
+        source.combatState.reset();
+        source.combatFrame.reset();
+        CHECK_FALSE(CombatPacket::prepare(source));
+        CHECK(prepared->motion().epoch == 9);
+        CHECK(prepared->motion().tick == 234);
+        REQUIRE(prepared->motion().players[0]);
+        CHECK(prepared->motion().players[0]->grant == 1);
+        CHECK(std::ranges::equal(prepared->bytes(), bytes));
+    }
+    auto future = strikeEffectState();
+    future.projectiles.front().effectOrigin->tick = future.motion.tick + 1;
+    CHECK_FALSE(CombatPacket::prepare(future));
+}
+
 TEST_CASE("full native combat seeds share the exact opponent epoch tick and party envelope",
           "[netplay][combat-snapshot][combat-supplement]") {
     auto source = state(234, 0);
     test::combatSeed(source);
+    source.combatFrame->autoMelee = GENERATE(false, true);
     const auto bytes = encode(source);
     const auto decoded = CombatPacket::decode(bytes);
     REQUIRE(decoded);
@@ -230,6 +291,7 @@ TEST_CASE("full native combat seeds share the exact opponent epoch tick and part
     CHECK(decoded->combatState == source.combatState);
     CHECK(decoded->combatFrame->camera.position == source.combatFrame->camera.position);
     CHECK(decoded->combatFrame->damage.playSeconds == 13.25f);
+    CHECK(decoded->combatFrame->autoMelee == source.combatFrame->autoMelee);
     CHECK(encode(*decoded) == bytes);
     CHECK(CombatPacket::kMaxBytes == 1'570'903);
 
@@ -279,7 +341,7 @@ TEST_CASE("full native combat envelope rejects malformed lengths identities and 
               {envelope + 20, 1},
               {frame, 0},
               {frame + 4, 0x7FC00000},
-              {frame + 52, 16},
+              {frame + 52, 32},
               {frame + 60, 100},
               {frame + 64, 0x7F800000}}}) {
         CAPTURE(offset, value);
@@ -431,7 +493,7 @@ TEST_CASE("combat payload round trips every seat mask and maximum enemy roster",
         CHECK(bytes.size() <= CombatPacket::kMaxBytes);
         CHECK(bytes[0] == 'G');
         CHECK(bytes[3] == 'B');
-        CHECK(bytes[4] == 42);
+        CHECK(bytes[4] == 43);
         CHECK(bytes[6] == 128);
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
@@ -2672,23 +2734,28 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
     static_assert(kTypedGrowth % CombatPacket::kFixtureBytes == 0);
     next.fixtures.resize(CombatSnapshot::kMaxFixtures - kTypedGrowth / CombatPacket::kFixtureBytes);
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
+    const auto admittedBase = CombatPacket::prepare(next);
+    REQUIRE(admittedBase);
     // The optional complete island still competes for that same fixed budget.
     next.opponents = opponentState();
     next.opponentFrame = opponentFrame(next);
     REQUIRE(next.valid());
     CHECK_FALSE(CombatPacket::encode(next));
+    CHECK_FALSE(CombatPacket::prepare(next));
     CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
     next.opponents.reset();
     next.opponentFrame.reset();
     test::combatSeed(next);
     REQUIRE(next.valid());
     CHECK_FALSE(CombatPacket::encode(next));
+    CHECK_FALSE(CombatPacket::prepare(next));
     CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
     next.combatState.reset();
     next.combatFrame.reset();
     next.opponents.reset();
     next.opponentFrame.reset();
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
+    CHECK(std::ranges::equal(admittedBase->bytes(), encode(next)));
     auto chunks = packets(next);
     REQUIRE(chunks.size() == CombatReplica::kMaxChunks);
     REQUIRE(chunks.size() > 200);

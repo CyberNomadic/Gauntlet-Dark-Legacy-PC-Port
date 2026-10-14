@@ -55,9 +55,10 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
     std::optional<Vec3> target, const CombatRollbackCheckpoint::Resources& resources) {
     const auto& animator = figure.animator();
     const auto& save = actor.save();
+    const bool strong = animator.strongReleased();
     if (!arsenal.m_resources || actor.player() < 0 || actor.player() >= 4 || save.character < 0 ||
-        save.character > 16 || !animator.released() || animator.strongReleased() ||
-        !finite(direction) || glm::length(direction) < 1e-6f || (target && !finite(*target))) {
+        save.character > 16 || animator.released() == strong || !finite(direction) ||
+        glm::length(direction) < 1e-6f || (target && !finite(*target))) {
         return {};
     }
     const auto worn = PowerupEffects::of(save.progress().inventory);
@@ -68,7 +69,9 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
             EffectTrees::PoolCheckpoint::kMaxEffects + EffectTrees::PoolCheckpoint::kMaxBanks) {
         return {};
     }
-    auto prepared = arsenal.prepareWeapon(actor, figure, direction, 1, true, target);
+    // PlayScene::perform uses twice the size and harm for the native strong latch.
+    auto prepared =
+        arsenal.prepareWeapon(actor, figure, direction, strong ? 2.0f : 1.0f, true, target);
     if (!prepared || prepared->pojo || prepared->missiles.empty() ||
         prepared->missiles.size() > 5 || prepared->weapon.multiplayer != MultiplayerMode::Normal) {
         return {};
@@ -100,7 +103,7 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
             launch.streak.texture != physical->streak || launch.owner != actor.player() ||
             launch.riderArchive != nullptr || !launch.riderTree.empty() || launch.potion != 0 ||
             launch.potionRelease || !launch.release ||
-            launch.release->character != save.character || launch.release->strong ||
+            launch.release->character != save.character || launch.release->strong != strong ||
             launch.release->ordinal != ordinal || launch.release->emission != 0 ||
             launch.release->generation != animator.player().generation() ||
             launch.release->generation == 0 || !finite(launch.position) ||

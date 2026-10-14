@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 #include "game/screens/LevelOpponents.h"
@@ -43,10 +44,143 @@ bool ordinary(const OpponentState& state) {
                return missile.kind.slot != EnemyMissileKind::kDeathShot;
            });
 }
+
+// Floor owners are collision identities, not item or layout indices. Moving
+// riders additionally require the exact mutable transform in the joint stage.
+template <class Present>
+bool supports(const OrdinaryCombatCheckpoint::State& state, const Present& present) {
+    const auto& stage = *state.stage;
+    const auto moving = [&](s32 object) {
+        return std::ranges::any_of(stage.world.core.moving,
+                                   [&](const auto& body) { return body.object == object; });
+    };
+    const auto optionalFloor = [&](const auto& floor) {
+        return !floor || (present(floor->object) && moving(floor->object));
+    };
+    for (const auto& player : state.combat.players) {
+        if ((player.floor.object != -1 && !present(player.floor.object)) ||
+            (player.floor.placement && !moving(player.floor.object))) {
+            return false;
+        }
+    }
+    for (const auto& item : stage.world.pickups.items) {
+        if (!optionalFloor(item.floor)) {
+            return false;
+        }
+    }
+    for (const auto& chest : stage.fixtures.chests.chests) {
+        if (!optionalFloor(chest.floor)) {
+            return false;
+        }
+    }
+    const auto supported = [&](const auto& body) {
+        return body.support.object == -1 ||
+               (present(body.support.object) && moving(body.support.object));
+    };
+    if (!std::ranges::all_of(stage.fixtures.gates.gates, supported) ||
+        !std::ranges::all_of(stage.fixtures.barrels.barrels, supported) ||
+        !std::ranges::all_of(stage.fixtures.traps.traps, supported) ||
+        !std::ranges::all_of(stage.fixtures.scenery.props, supported)) {
+        return false;
+    }
+    for (const auto& enemy : state.opponents.enemies.enemies) {
+        if (!optionalFloor(enemy.floor)) {
+            return false;
+        }
+    }
+    for (const auto& slot : state.adapter.critters.actors) {
+        for (const auto& part : slot.parts) {
+            if (!optionalFloor(part.actor.floor)) {
+                return false;
+            }
+        }
+    }
+    if (stage.portals && !std::ranges::all_of(stage.portals->portals, [&](const auto& portal) {
+            return portal.support == -1 || (present(portal.support) && moving(portal.support));
+        })) {
+        return false;
+    }
+    const auto generator = [&](const auto& body) {
+        return body.support == -1 || (present(body.support) && moving(body.support));
+    };
+    return std::ranges::all_of(state.opponents.generators.roster, generator) &&
+           std::ranges::all_of(state.opponents.generators.generators, generator);
+}
+
+bool stageLinks(const OrdinaryCombatCheckpoint::State& state) {
+    if (!state.stage) {
+        return true;
+    }
+    const auto& stage = *state.stage;
+    if (!stage.world.valid() || !stage.fixtures.valid() ||
+        (stage.portals && !stage.portals->valid()) ||
+        (stage.camera && (!stage.camera->valid() || stage.camera->level != stage.world.level)) ||
+        !supports(state, [](s32 object) { return object >= 0; })) {
+        return false;
+    }
+    const auto pickup = [&](usize index) { return index < stage.world.pickups.items.size(); };
+    if (stage.portals) {
+        const auto partyIndex = [&](s32 index) {
+            return index >= 0 && static_cast<usize>(index) < state.combat.players.size();
+        };
+        if (!std::ranges::all_of(stage.portals->waiting, partyIndex) ||
+            !std::ranges::all_of(stage.portals->visitors,
+                                 [&](const auto& visitor) { return partyIndex(visitor.party); })) {
+            return false;
+        }
+    }
+    const auto slot = [&](s32 index) {
+        return index == -1 || std::ranges::any_of(state.combat.players, [&](const auto& player) {
+                   return player.player == index;
+               });
+    };
+    for (const auto& item : stage.world.pickups.items) {
+        if (!slot(item.opener)) {
+            return false;
+        }
+    }
+    // Containers/blasts address the ordered party, whereas pickup/attack owners
+    // address sparse controller slots. Destroyed/collected records remain valid.
+    for (const auto& chest : stage.fixtures.chests.chests) {
+        if ((chest.held != -1 && !pickup(static_cast<usize>(chest.held))) ||
+            (chest.opener != -1 &&
+             static_cast<usize>(chest.opener) >= state.combat.players.size())) {
+            return false;
+        }
+    }
+    for (const auto& blast : stage.fixtures.blasts) {
+        if (std::ranges::any_of(
+                blast.players, [&](usize index) { return index >= state.combat.players.size(); })) {
+            return false;
+        }
+    }
+    for (const auto& cloud : stage.fixtures.clouds) {
+        if (cloud.effect != 0 && state.combat.effects.nextId != 0 &&
+            cloud.effect >= state.combat.effects.nextId) {
+            return false;
+        }
+    }
+    const auto carried = [&](const auto& placement) {
+        return !placement.carried || pickup(*placement.carried);
+    };
+    if (!std::ranges::all_of(state.opponents.placements->roster, carried) ||
+        !std::ranges::all_of(state.adapter.statues.risen, carried)) {
+        return false;
+    }
+    for (const auto& statue : state.adapter.statues.roster) {
+        if (!carried(statue.placement)) {
+            return false;
+        }
+    }
+    const auto rock = [&](const auto& hit) { return hit.rock < stage.fixtures.rocks.rocks.size(); };
+    return std::ranges::all_of(state.opponents.missiles.rockHits, rock) &&
+           std::ranges::all_of(state.adapter.projectiles.rockHits, rock) &&
+           std::ranges::all_of(state.adapter.rockHits, rock);
+}
 } // namespace
 
 bool OrdinaryCombatCheckpoint::State::valid() const {
-    return OrdinaryCombatCheckpoint::valid(combat, opponents, adapter);
+    return OrdinaryCombatCheckpoint::valid(combat, opponents, adapter) && stageLinks(*this);
 }
 bool OrdinaryCombatCheckpoint::valid(const CombatRollbackCheckpoint::State& combat,
                                      const OpponentState& opponents,
@@ -68,6 +202,9 @@ bool OrdinaryCombatCheckpoint::valid(const CombatRollbackCheckpoint::State& comb
         return player >= 0 && player < 4 && (slots & (1U << player)) != 0;
     };
     const auto reference = [&](s32 player) { return player == -1 || present(player); };
+    if (!adapter.references(static_cast<u8>(slots), combat.effects)) {
+        return false;
+    }
     for (const auto& enemy : opponents.enemies.enemies) {
         if (enemy.state != Enemies::State::Inactive &&
             (!reference(enemy.target) || !reference(enemy.targetBefore) ||
@@ -134,6 +271,10 @@ struct OrdinaryCombatCheckpoint::Prepared::Data {
     std::optional<CombatRollbackCheckpoint::Prepared> combat;
     std::optional<OpponentSimulation::Prepared> pools;
     std::optional<OpponentCombatCheckpoint::Prepared> adapter;
+    std::optional<LevelWorldCheckpoint::Prepared> world;
+    std::optional<LevelFixturesCheckpoint::Prepared> fixtures;
+    std::optional<TowerCameraCheckpoint::Prepared> camera;
+    std::optional<ExitPortalsCheckpoint::Prepared> portals;
 };
 OrdinaryCombatCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data)
     : m_data(std::move(data)) {}
@@ -152,6 +293,10 @@ struct OrdinaryCombatCheckpoint::Rewind::Data {
     std::optional<EnemyMissiles::Prepared> missiles;
     std::optional<PlacedEnemies::Rewind> placements;
     std::optional<OpponentCombatCheckpoint::Prepared> adapter;
+    std::optional<LevelWorldCheckpoint::Prepared> world;
+    std::optional<LevelFixturesCheckpoint::Prepared> fixtures;
+    std::optional<TowerCameraCheckpoint::Prepared> camera;
+    std::optional<ExitPortalsCheckpoint::Prepared> portals;
 };
 OrdinaryCombatCheckpoint::Rewind::Rewind(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
 OrdinaryCombatCheckpoint::Rewind::Rewind(Rewind&&) noexcept = default;
@@ -161,11 +306,14 @@ OrdinaryCombatCheckpoint::Rewind::~Rewind() = default;
 
 OrdinaryCombatCheckpoint::OrdinaryCombatCheckpoint(
     CombatRollbackCheckpoint& combat, LevelOpponents& opponents,
-    std::span<const EnemyMissiles::Resource> missiles)
+    std::span<const EnemyMissiles::Resource> missiles, LevelWorldCheckpoint* world,
+    LevelFixturesCheckpoint* fixtures, TowerCameraCheckpoint* camera,
+    ExitPortalsCheckpoint* portals)
     : m_combat(combat), m_opponents(opponents),
       m_pools(opponents.m_generators, opponents.m_enemies, opponents.m_enemyMissiles,
               &opponents.m_placements),
-      m_adapter(opponents) {
+      m_adapter(opponents, combat.m_sharedEffects), m_world(world), m_fixtures(fixtures),
+      m_camera(camera), m_portals(portals) {
     if (missiles.size() <= EnemyMissiles::Checkpoint::kMaxResources) {
         m_missiles.assign(missiles.begin(), missiles.end());
         m_configurationValid = true;
@@ -173,11 +321,24 @@ OrdinaryCombatCheckpoint::OrdinaryCombatCheckpoint(
 }
 OrdinaryCombatCheckpoint::~OrdinaryCombatCheckpoint() = default;
 bool OrdinaryCombatCheckpoint::bindingsValid() const {
-    if (!m_configurationValid || m_generation == 0 || !m_opponents.m_resources) {
+    if (!m_configurationValid || m_generation == 0 ||
+        m_generation == std::numeric_limits<u64>::max() || !m_opponents.m_resources ||
+        (m_world != nullptr) != (m_fixtures != nullptr) || ((m_camera || m_portals) && !m_world)) {
         return false;
     }
     const auto& resources = *m_opponents.m_resources;
-    return m_combat.binds(resources.world, resources.weapons, resources.effects, resources.device);
+    return m_combat.binds(resources.world, resources.weapons, resources.effects,
+                          resources.device) &&
+           (!m_camera || (&m_camera->m_world == &resources.world && m_camera->bound())) &&
+           (!m_portals ||
+            m_portals->binds(resources.world.layout(), resources.world.items(),
+                             &resources.world.realmItems(), resources.world.collision())) &&
+           (!m_world || (m_world->binds(resources.world) &&
+                         m_fixtures->binds(resources.world, resources.weapons, resources.effects,
+                                           resources.device)));
+}
+bool OrdinaryCombatCheckpoint::stageBound() const {
+    return m_world && bindingsValid();
 }
 std::optional<OrdinaryCombatCheckpoint::State> OrdinaryCombatCheckpoint::checkpoint() const {
     if (!bindingsValid()) {
@@ -193,22 +354,88 @@ std::optional<OrdinaryCombatCheckpoint::State> OrdinaryCombatCheckpoint::checkpo
         return std::nullopt;
     }
     State result{std::move(*combat), std::move(*pools), std::move(*adapter)};
+    if (m_world) {
+        auto world = m_world->checkpoint();
+        auto fixtures = m_fixtures->checkpoint();
+        if (!world || !fixtures) {
+            return std::nullopt;
+        }
+        result.stage = Stage{std::move(*world), std::move(*fixtures)};
+        if (m_camera) {
+            result.stage->camera = m_camera->checkpoint();
+            if (!result.stage->camera) {
+                return std::nullopt;
+            }
+        }
+        if (m_portals) {
+            result.stage->portals = m_portals->checkpoint();
+            if (!result.stage->portals) {
+                return std::nullopt;
+            }
+        }
+    }
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
 std::optional<OrdinaryCombatCheckpoint::Prepared>
-OrdinaryCombatCheckpoint::prepareRestore(const State& state) const {
-    if (!bindingsValid() || !state.valid()) {
+OrdinaryCombatCheckpoint::prepareRestore(const State& state, RestoreIssue* issue) const {
+    if (issue) {
+        *issue = RestoreIssue::None;
+    }
+    const auto reject = [&](RestoreIssue why) -> std::optional<Prepared> {
+        if (issue) {
+            *issue = why;
+        }
         return std::nullopt;
+    };
+    if (!bindingsValid() || state.stage.has_value() != (m_world != nullptr) ||
+        (state.stage && state.stage->camera.has_value() != (m_camera != nullptr)) ||
+        (state.stage && state.stage->portals.has_value() != (m_portals != nullptr))) {
+        return reject(RestoreIssue::Bindings);
+    }
+    if (!state.valid()) {
+        return reject(RestoreIssue::State);
+    }
+    if (state.stage &&
+        !supports(state, [&](s32 object) { return m_world->hasCollisionObject(object); })) {
+        return reject(RestoreIssue::Supports);
     }
     auto data = std::make_unique<Prepared::Data>();
     data->owner = this;
     data->lifetime = m_lifetime;
     data->generation = m_generation;
     data->combat = m_combat.prepareRestore(state.combat);
+    if (!data->combat) {
+        return reject(RestoreIssue::Combat);
+    }
     data->pools = m_pools.prepareRestore(state.opponents, m_missiles);
+    if (!data->pools) {
+        return reject(RestoreIssue::Pools);
+    }
     data->adapter = m_adapter.prepareRestore(state.adapter, state.combat.effects);
-    if (!data->combat || !data->pools || !data->adapter) {
-        return std::nullopt;
+    if (!data->adapter) {
+        return reject(RestoreIssue::Adapter);
+    }
+    if (state.stage) {
+        data->world = m_world->prepareRestore(state.stage->world);
+        if (!data->world) {
+            return reject(RestoreIssue::World);
+        }
+        data->fixtures = m_fixtures->prepareRestore(state.stage->fixtures);
+        if (!data->fixtures) {
+            return reject(RestoreIssue::Fixtures);
+        }
+        if (m_portals) {
+            data->portals = m_portals->prepareRestore(*state.stage->portals);
+            if (!data->portals) {
+                return reject(RestoreIssue::Portals);
+            }
+        }
+        if (m_camera) {
+            data->camera = m_camera->prepareRestore(*state.stage->camera);
+            if (!data->camera) {
+                return reject(RestoreIssue::Camera);
+            }
+        }
     }
     return Prepared{std::move(data)};
 }
@@ -219,13 +446,30 @@ bool OrdinaryCombatCheckpoint::canCommit(const Prepared& prepared) const {
            prepared.m_data->pools && prepared.m_data->adapter &&
            m_combat.canCommit(*prepared.m_data->combat) &&
            m_pools.canCommit(*prepared.m_data->pools) &&
-           m_adapter.canCommit(*prepared.m_data->adapter);
+           m_adapter.canCommit(*prepared.m_data->adapter) &&
+           (!m_portals ||
+            (prepared.m_data->portals && m_portals->canCommit(*prepared.m_data->portals))) &&
+           (!m_camera ||
+            (prepared.m_data->camera && m_camera->canCommit(*prepared.m_data->camera))) &&
+           (!m_world || (prepared.m_data->world && prepared.m_data->fixtures &&
+                         m_world->canCommit(*prepared.m_data->world) &&
+                         m_fixtures->canCommit(*prepared.m_data->fixtures)));
 }
 bool OrdinaryCombatCheckpoint::commitRestore(Prepared&& prepared) {
     if (!canCommit(prepared)) {
         return false;
     }
     auto data = std::move(prepared.m_data);
+    if (m_portals && !m_portals->commitRestore(std::move(*data->portals))) {
+        std::terminate();
+    }
+    if (m_camera && !m_camera->commitRestore(std::move(*data->camera))) {
+        std::terminate();
+    }
+    if (m_world && (!m_world->commitRestore(std::move(*data->world)) ||
+                    !m_fixtures->commitRestore(std::move(*data->fixtures)))) {
+        std::terminate();
+    }
     // The incoming ordinary-only gate guarantees pool installation cannot
     // invalidate the adapter's unsupported-owner preflight. Shared effects are
     // restored just once, inside the player-combat child.
@@ -237,9 +481,18 @@ bool OrdinaryCombatCheckpoint::commitRestore(Prepared&& prepared) {
     ++m_generation;
     return true;
 }
-bool OrdinaryCombatCheckpoint::restore(const State& state) {
-    auto prepared = prepareRestore(state);
-    return prepared && commitRestore(std::move(*prepared));
+bool OrdinaryCombatCheckpoint::restore(const State& state, RestoreIssue* issue) {
+    auto prepared = prepareRestore(state, issue);
+    if (!prepared) {
+        return false;
+    }
+    if (!commitRestore(std::move(*prepared))) {
+        if (issue) {
+            *issue = RestoreIssue::Commit;
+        }
+        return false;
+    }
+    return true;
 }
 
 std::optional<OrdinaryCombatCheckpoint::Rewind> OrdinaryCombatCheckpoint::prepareRewind() const {
@@ -261,6 +514,25 @@ std::optional<OrdinaryCombatCheckpoint::Rewind> OrdinaryCombatCheckpoint::prepar
         m_opponents.m_enemyMissiles.prepareRestore(state->opponents.missiles, m_missiles);
     data->placements = m_opponents.m_placements.prepareRewind();
     data->adapter = m_adapter.prepareRestore(state->adapter, state->combat.effects);
+    if (state->stage) {
+        data->world = m_world->prepareRestore(state->stage->world);
+        data->fixtures = m_fixtures->prepareRestore(state->stage->fixtures);
+        if (m_portals) {
+            data->portals = m_portals->prepareRestore(*state->stage->portals);
+            if (!data->portals) {
+                return std::nullopt;
+            }
+        }
+        if (m_camera) {
+            data->camera = m_camera->prepareRestore(*state->stage->camera);
+            if (!data->camera) {
+                return std::nullopt;
+            }
+        }
+        if (!data->world || !data->fixtures) {
+            return std::nullopt;
+        }
+    }
     if (!data->combat || !data->generators || !data->enemies || !data->missiles ||
         !data->placements || !data->adapter) {
         return std::nullopt;
@@ -277,13 +549,27 @@ bool OrdinaryCombatCheckpoint::canRewind(const Rewind& rewind) const {
            m_opponents.m_enemies.canCommit(*data->enemies) &&
            m_opponents.m_enemyMissiles.canCommit(*data->missiles) &&
            m_opponents.m_placements.canRewind(*data->placements) &&
-           m_adapter.canCommit(*data->adapter);
+           m_adapter.canCommit(*data->adapter) &&
+           (!m_portals || (data->portals && m_portals->canCommit(*data->portals))) &&
+           (!m_camera || (data->camera && m_camera->canCommit(*data->camera))) &&
+           (!m_world || (data->world && data->fixtures && m_world->canCommit(*data->world) &&
+                         m_fixtures->canCommit(*data->fixtures)));
 }
 bool OrdinaryCombatCheckpoint::rewind(Rewind&& rewind) {
     if (!canRewind(rewind)) {
         return false;
     }
     auto data = std::move(rewind.m_data);
+    if (m_portals && !m_portals->commitRestore(std::move(*data->portals))) {
+        std::terminate();
+    }
+    if (m_camera && !m_camera->commitRestore(std::move(*data->camera))) {
+        std::terminate();
+    }
+    if (m_world && (!m_world->commitRestore(std::move(*data->world)) ||
+                    !m_fixtures->commitRestore(std::move(*data->fixtures)))) {
+        std::terminate();
+    }
     // Every owner passed the common preflight. No callbacks or gameplay may
     // interleave here. Only the combat child restores the shared effect pool.
     if (!m_combat.rewind(std::move(*data->combat)) ||

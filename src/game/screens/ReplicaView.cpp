@@ -10,6 +10,7 @@
 #include "game/players/CursorAim.h"
 #include "game/players/PlayerActor.h"
 #include "game/screens/LocalTurboEffectPrediction.h"
+#include "game/screens/StageParticlePresentation.h"
 
 namespace gdl::game {
 bool ReplicaView::begin(const MatchContext& context, const LevelWorld& world, Enemies& enemies,
@@ -47,6 +48,9 @@ bool ReplicaView::resume(const MatchContext& context) {
     return true;
 }
 void ReplicaView::clear() {
+    m_particles.reset();
+    m_particleTick = 0;
+    m_particleBlend = 0;
     m_presentedClip.reset();
     m_presentedPlayers.fill(std::nullopt);
     m_context = {};
@@ -172,7 +176,11 @@ bool ReplicaView::show(const CombatSnapshot& snapshot, const EnemyPresentation* 
     if (!snapshot.geometry || !rejection(snapshot).empty()) {
         return false;
     }
-    if (presentation != nullptr && !presentation->matches(snapshot)) {
+    if (presentation != nullptr &&
+        (!presentation->matches(snapshot) ||
+         !m_actors.acceptsPresentation(snapshot, *m_enemies, *presentation) ||
+         (presentation->particles &&
+          !presentation->particles->matches(snapshot.motion.epoch, presentation->particleTick)))) {
         return false;
     }
     const bool correctGround = presentation != nullptr && !presentation->enemies.empty() &&
@@ -245,6 +253,9 @@ bool ReplicaView::show(const CombatSnapshot& snapshot, const EnemyPresentation* 
         return false;
     }
     m_shown = snapshot;
+    m_particles = presentation != nullptr ? presentation->particles : nullptr;
+    m_particleTick = presentation != nullptr ? presentation->particleTick : 0;
+    m_particleBlend = presentation != nullptr ? presentation->particleBlend : 0;
     return true;
 }
 std::optional<Rect> ReplicaView::viewport(f32 width, f32 height) {
@@ -279,6 +290,14 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
         m_presentedPlayers[seat] = player ? std::optional{player->position} : std::nullopt;
     }
     const auto frame = CameraFrame::of(camera);
+    const bool nativeParticles = m_particles && m_particles->matches(motion.epoch, m_particleTick);
+    const auto drawParticles = [&](StageParticlePresentation::Phase phase) {
+        if (nativeParticles) {
+            m_particles->draw(phase, device, clip, frame, m_particleBlend);
+            m_particles->drawDecorations(phase, device, clip, m_world->lighting(), frame,
+                                         m_particleBlend);
+        }
+    };
     // Draw only host-controlled pickups; never tick the local world's item physics.
     // Advance only presentation textures, never triggers, AI or item physics.
     // Discrete cutouts need whole-frame updates too; fractional sampling alone
@@ -288,6 +307,8 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     m_textures.apply(m_geometry);
     const f32 textureOffset = m_shown->worldTextureFrame - static_cast<f32>(wholeFrame);
     m_geometry.drawOpaque(device, clip, frame, -1, textureOffset);
+    drawParticles(StageParticlePresentation::Phase::WorldScenery);
+    drawParticles(StageParticlePresentation::Phase::WorldFixtures);
     m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
                     TreeModel::Pass::Opaque);
     m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
@@ -298,6 +319,7 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
                        TreeModel::Pass::Opaque);
     m_fighters.draw(device, m_fighterResources, clip, m_world->lighting(), hitFlash, frozen,
                     TreeModel::Pass::DepthWriting);
+    drawParticles(StageParticlePresentation::Phase::SolidFixtures);
     if (video.display.ambientOcclusion) {
         AmbientOcclusion occlusion;
         occlusion.clipToView = camera.view() * glm::inverse(clip);
@@ -305,14 +327,19 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     }
     m_actors.drawShadows(device, clip, m_world->lighting(), camera.position);
     m_geometry.drawDeferred(device, clip, frame, -1, textureOffset);
-    m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
-                    TreeModel::Pass::Blended);
     m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
                    TreeModel::Pass::Blended);
+    drawParticles(StageParticlePresentation::Phase::Pickups);
+    drawParticles(StageParticlePresentation::Phase::World);
+    m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
+                    TreeModel::Pass::Blended);
+    drawParticles(StageParticlePresentation::Phase::Fixtures);
     m_actors.draw(device, *m_enemies, clip, m_world->lighting(), frame, textureFrame, hitFlash,
                   TreeModel::Pass::Effects);
     m_projectiles.draw(device, *m_resources, clip, m_world->fullLighting(), frame,
-                       TreeModel::Pass::Blended);
+                       TreeModel::Pass::Blended, !nativeParticles);
+    drawParticles(StageParticlePresentation::Phase::Projectiles);
+    drawParticles(StageParticlePresentation::Phase::Effects);
     m_fighters.draw(device, m_fighterResources, clip, m_world->lighting(), hitFlash, frozen,
                     TreeModel::Pass::Effects);
     if (effects != nullptr) {

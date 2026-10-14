@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <span>
 
 #include "engine/assets/WorldLayout.h"
@@ -40,6 +41,14 @@ struct CameraView {
  */
 class TowerCamera {
 public:
+    TowerCamera() = default;
+    /** Native camera values remain copyable, but a copied or replaced camera
+     * never inherits another owner's prepared-restore identity. */
+    TowerCamera(const TowerCamera& other);
+    TowerCamera& operator=(const TowerCamera& other);
+    TowerCamera(TowerCamera&& other);
+    TowerCamera& operator=(TowerCamera&& other);
+
     static constexpr s32 kRing = 9;         ///< frames the look-at point and distance average over
     static constexpr s32 kTurnSteps = 50;   ///< steps a turn to a new marker takes
     static constexpr f32 kStepRate = 30.0f; ///< steps per second
@@ -74,6 +83,8 @@ public:
     static f32 markerPitch(const WorldLocator& marker) { return marker.rotation.x; }
 
 private:
+    friend class TowerCameraCheckpoint;
+    void copyValues(const TowerCamera& other) noexcept;
     static Vec3 middleOf(std::span<const CameraSubject> subjects, const CameraRange& range);
     Vec3 projectedMiddleOf(std::span<const CameraSubject> subjects, const CameraRange& range) const;
     void chooseMarker(std::span<const WorldLocator> markers, const Vec3& near);
@@ -96,6 +107,8 @@ private:
     std::array<Vec3, kRing> m_ringPositions{};
     std::array<f32, kRing> m_ringDistances{};
     s32 m_ringIndex = 0;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

@@ -65,6 +65,20 @@ TEST_CASE("complete combat seeds stay only in latest authority never display his
     }
     receive(playback, first);
     receive(playback, last);
+    for (const f32 blend : {0.0f, 0.5f, 1.0f}) {
+        EnemyPresentation presentation;
+        const auto pair = CombatPlayback::samplePair(first, last, blend, &presentation);
+        REQUIRE(pair);
+        CHECK_FALSE(pair->opponents);
+        CHECK_FALSE(pair->opponentFrame);
+        CHECK_FALSE(pair->combatState);
+        CHECK_FALSE(pair->combatFrame);
+        CHECK(pair->valid());
+        CHECK(presentation.matches(*pair));
+        const auto expected = reference.sample(10 + static_cast<u64>(blend * 4));
+        REQUIRE(expected);
+        CHECK(CombatPacket::encode(*pair) == CombatPacket::encode(*expected));
+    }
     REQUIRE(playback.latest());
     CHECK(playback.latest()->combatState == last.combatState);
     REQUIRE(playback.latest()->combatFrame);
@@ -93,6 +107,24 @@ TEST_CASE("complete combat seeds stay only in latest authority never display his
     CHECK_FALSE(playback.latest()->combatState);
     CHECK_FALSE(playback.latest()->combatFrame);
 }
+TEST_CASE("explicit combat pair sampling rejects malformed or unordered intervals",
+          "[netplay][combat-playback][combat-pair]") {
+    const auto first = state(10);
+    auto last = state(14);
+    REQUIRE(CombatPlayback::samplePair(first, last, 0.5f));
+    for (const f32 invalid : {-0.1f, 1.1f, std::numeric_limits<f32>::quiet_NaN(),
+                              std::numeric_limits<f32>::infinity()}) {
+        CHECK_FALSE(CombatPlayback::samplePair(first, last, invalid));
+    }
+    CHECK_FALSE(CombatPlayback::samplePair(first, first, 0));
+    CHECK_FALSE(CombatPlayback::samplePair(last, first, 0.5f));
+    ++last.motion.epoch;
+    CHECK_FALSE(CombatPlayback::samplePair(first, last, 0.5f));
+    last = state(14);
+    last.enemies[0].instance = 0;
+    CHECK_FALSE(CombatPlayback::samplePair(first, last, 0.5f));
+}
+
 TEST_CASE("opponent replay seeds never enter delayed or interpolated display history",
           "[netplay][combat-playback][opponent-supplement]") {
     CombatPlayback playback;

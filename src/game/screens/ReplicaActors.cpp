@@ -22,6 +22,7 @@ bool ReplicaActors::begin(u64 epoch) {
         player.shown = false;
         player.continuity = 0;
         player.portalPhase.reset();
+        player.nativePose.reset();
         player.pose.bind(player.figure ? player.figure->actionTree() : nullptr);
     }
     return true;
@@ -124,6 +125,50 @@ bool ReplicaActors::companionsReady(const CombatSnapshot& snapshot) const {
 void ReplicaActors::loadPortalSkin(RenderDevice& device, TextureSet& weapons) {
     m_portalSkin.loadSkin(device, weapons);
 }
+std::optional<ReplicaActors::NativePoses>
+ReplicaActors::preparePresentation(const CombatSnapshot& snapshot, Enemies& resources,
+                                   const EnemyPresentation& presentation) const {
+    if (!presentation.matches(snapshot)) {
+        return std::nullopt;
+    }
+    NativePoses result;
+    for (usize seat = 0; seat < presentation.players.size(); ++seat) {
+        const auto& native = presentation.players[seat];
+        if (!native) {
+            continue;
+        }
+        const auto& player = m_players[seat];
+        const auto* tree = player.figure ? player.figure->actionTree() : nullptr;
+        TreePose pose;
+        if (player.grant != native->grant || native->life == ReplicaPlayerLife::InTower ||
+            !ReplicaPose::accepts(tree, native->animation) || !pose.restore(*tree, native->pose)) {
+            return std::nullopt;
+        }
+        result.players[seat] = std::move(pose);
+    }
+    result.enemies.reserve(presentation.enemies.size());
+    for (const auto& interval : presentation.enemies) {
+        if (!interval.nativePose) {
+            continue;
+        }
+        const auto& enemy = interval.to;
+        const Enemies::Appearance appearance{
+            static_cast<s32>(enemy.kind), static_cast<s32>(enemy.tier),
+            static_cast<s32>(enemy.variant), enemy.life == ReplicaEnemyLife::Asleep};
+        const auto* tree = resources.appearanceTree(appearance);
+        TreePose pose;
+        if (!ReplicaPose::accepts(tree, enemy.animation) ||
+            !pose.restore(*tree, *interval.nativePose)) {
+            return std::nullopt;
+        }
+        result.enemies.emplace_back(enemy.instance, std::move(pose));
+    }
+    return result;
+}
+bool ReplicaActors::acceptsPresentation(const CombatSnapshot& snapshot, Enemies& resources,
+                                        const EnemyPresentation& presentation) const {
+    return snapshot.valid() && preparePresentation(snapshot, resources, presentation).has_value();
+}
 bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
                          const EnemyPresentation* presentation,
                          std::span<const WorldCollision> presentationFloors) {
@@ -132,12 +177,18 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
         (presentation != nullptr && !presentation->matches(snapshot))) {
         return false;
     }
+    auto native = presentation != nullptr ? preparePresentation(snapshot, resources, *presentation)
+                                          : std::optional<NativePoses>{NativePoses{}};
+    if (!native) {
+        return false;
+    }
     m_tick = snapshot.motion.tick;
     for (usize seat = 0; seat < m_players.size(); ++seat) {
         auto& player = m_players[seat];
         const auto& state = snapshot.players[seat];
         const auto& motion = snapshot.motion.players[seat];
         player.shown = false;
+        player.nativePose.reset();
         player.companions = {};
         if (!state || !motion || !player.figure || player.grant != motion->grant ||
             state->life == ReplicaPlayerLife::InTower ||
@@ -154,6 +205,10 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
         player.shown = state->transitionPose && state->animation.transition < 1
                            ? player.pose.show(state->animation, *state->transitionPose)
                            : player.pose.show(state->animation);
+        player.nativePose = std::move(native->players[seat]);
+        if (player.nativePose) {
+            player.shown = true;
+        }
         player.action = static_cast<PlayerAnimator::Action>(state->animation.action);
         player.hitFlash = state->hitFlash;
         player.weaponHidden = state->weaponHidden;
@@ -184,6 +239,8 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
         const bool statue = state.kind == kDeathKind && enemy.appearance.asleep;
         enemy.shown = statue ? enemy.pose.rest() : enemy.pose.show(state.animation);
         enemy.animation = state.animation;
+        enemy.nativePose.reset();
+        enemy.nativeTextureFrame.reset();
         enemy.hitFlash = state.hitFlash;
         enemy.alpha = state.alpha;
         enemy.dying = state.life == ReplicaEnemyLife::Dying;
@@ -201,11 +258,32 @@ bool ReplicaActors::show(const CombatSnapshot& snapshot, Enemies& resources,
             if (interval != presentation->enemies.end() &&
                 interval->from.instance == state.instance &&
                 state.animation.action < kEnemyActionCount) {
-                shown = Enemies::supportedPresentation(
-                    &presentationFloors[2], interval->from.position, interval->to.position,
-                    presentation->blend, static_cast<EnemyAction>(state.animation.action),
-                    state.life == ReplicaEnemyLife::Active, presentationFloors.data(),
-                    &presentationFloors[1]);
+                if (interval->nativeBlend) {
+                    // Native swarm floor correction uses the current simulation
+                    // collision, not a fractional or preceding 60 Hz floor.
+                    shown = Enemies::supportedPresentation(
+                        &presentationFloors[1], interval->from.position, interval->to.position,
+                        *interval->nativeBlend, static_cast<EnemyAction>(state.animation.action),
+                        state.life == ReplicaEnemyLife::Active);
+                } else {
+                    shown = Enemies::supportedPresentation(
+                        &presentationFloors[2], interval->from.position, interval->to.position,
+                        presentation->blend, static_cast<EnemyAction>(state.animation.action),
+                        state.life == ReplicaEnemyLife::Active, presentationFloors.data(),
+                        &presentationFloors[1]);
+                }
+            }
+        }
+        if (presentation != nullptr) {
+            const auto interval =
+                std::ranges::lower_bound(presentation->enemies, state.instance, {},
+                                         [](const auto& row) { return row.from.instance; });
+            if (interval != presentation->enemies.end() &&
+                interval->from.instance == state.instance && interval->nativePose) {
+                const auto prepared = std::ranges::lower_bound(
+                    native->enemies, state.instance, {}, [](const auto& row) { return row.first; });
+                enemy.nativePose = std::move(prepared->second);
+                enemy.nativeTextureFrame = interval->nativeTextureFrame;
             }
         }
         enemy.placement = placement(shown, state.yaw, state.scale);
@@ -228,8 +306,9 @@ void ReplicaActors::draw(RenderDevice& device, Enemies& resources, const Mat4& c
             const auto& form = player.companions[1];
             if (!form || form->form != static_cast<u32>(PowerupCompanion::Kind::Pojo)) {
                 player.figure->drawPose(device, clip, player.placement, lighting,
-                                        player.pose.pose(), player.action, textureFrame, skin,
-                                        &camera, pass, player.weaponHidden, player.armEquipment);
+                                        player.nativePose ? *player.nativePose : player.pose.pose(),
+                                        player.action, textureFrame, skin, &camera, pass,
+                                        player.weaponHidden, player.armEquipment);
             }
             for (usize slot = 0; slot < player.companions.size(); ++slot) {
                 if (const auto& companion = player.companions[slot]) {
@@ -241,9 +320,11 @@ void ReplicaActors::draw(RenderDevice& device, Enemies& resources, const Mat4& c
     for (const auto& [instance, enemy] : m_enemies) {
         if (enemy.shown && enemy.alpha > 0) {
             resources.drawPose(device, clip, enemy.placement, lighting, enemy.appearance,
-                               enemy.pose.pose(), enemy.animation.sequence, enemy.animation.frame,
-                               textureFrame, enemy.hitFlash ? hitFlash : nullptr, &camera, pass,
-                               enemy.alpha, enemy.deathSkin, enemy.dying);
+                               enemy.nativePose ? *enemy.nativePose : enemy.pose.pose(),
+                               enemy.animation.sequence, enemy.animation.frame,
+                               enemy.nativeTextureFrame.value_or(textureFrame),
+                               enemy.hitFlash ? hitFlash : nullptr, &camera, pass, enemy.alpha,
+                               enemy.deathSkin, enemy.dying);
         }
     }
 }

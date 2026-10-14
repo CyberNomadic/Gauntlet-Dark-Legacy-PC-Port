@@ -68,6 +68,9 @@ public:
     const LocalMovementPrediction::Metrics& predictionMetrics() const {
         return m_prediction.metrics();
     }
+    const OnlineCombatReplay::Diagnostics& combatReplayDiagnostics() const {
+        return m_combatReplay.diagnostics();
+    }
     /** Diagnostic A/B control for local movement, action and projectile replay;
      * never changes host authority or input scheduling. */
     void setMovementPrediction(bool enabled) { m_predictMovement = enabled; }

@@ -44,14 +44,10 @@ bool picksUp(ItemKind kind) {
 
 } // namespace
 
-/** Takes what the party stands on: a crystal counts for everyone, towards its realm's gate,
- * up to what the gate wants; the taker's box gets the card, every box the count. */
-void PartyPickups::collect(RenderDevice& device, std::span<PlayerRuntime> players,
-                           const Services& services) {
-    LevelWorld& world = services.world;
-    Chests& chests = services.fixtures.chests();
-    std::vector<Collector> collectors;
-    collectors.reserve(players.size());
+std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> players,
+                                                const LevelWorld& world, const Chests& chests) {
+    std::vector<Collector> result;
+    result.reserve(players.size());
     for (const PlayerRuntime& runtime : players) {
         const PlayerActor& actor = runtime.actor;
         // Against an open chest, a character reaches what lies in it; the fallen reach nothing.
@@ -63,16 +59,45 @@ void PartyPickups::collect(RenderDevice& device, std::span<PlayerRuntime> player
             const s32 held = chests.chest(static_cast<usize>(chest)).held;
             from = world.placedItems().item(static_cast<usize>(held)).position;
         }
-        collectors.push_back(Collector{from, actor.reach(), actor.height() * 0.5f});
+        result.push_back(Collector{from, actor.reach(), actor.height() * 0.5f});
     }
-    const std::vector<Pickup> pickups = world.collect(
-        device, collectors, [&](const Pickup& pickup) { return take(pickup, players, services); });
+    return result;
+}
+
+bool PartyPickups::touchesPickup(std::span<const PlayerRuntime> players, const LevelWorld& world,
+                                 const Chests& chests) {
+    const auto visitors = collectors(players, world, chests);
+    const auto& items = world.placedItems();
+    for (usize index = 0; index < items.size(); ++index) {
+        const auto& item = items.item(index);
+        if (item.takeable() && std::ranges::any_of(visitors, [&](const auto& visitor) {
+                return item.touchedBy(visitor);
+            })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void PartyPickups::cleanupCollectedChests(const LevelWorld& world, Chests& chests) {
     for (usize chest = 0; chest < chests.size(); ++chest) {
         const s32 held = chests.chest(chest).held;
         if (held >= 0 && world.placedItems().item(static_cast<usize>(held)).taken) {
             chests.remove(chest);
         }
     }
+}
+
+/** Takes what the party stands on: a crystal counts for everyone, towards its realm's gate,
+ * up to what the gate wants; the taker's box gets the card, every box the count. */
+void PartyPickups::collect(RenderDevice& device, std::span<PlayerRuntime> players,
+                           const Services& services) {
+    LevelWorld& world = services.world;
+    Chests& chests = services.fixtures.chests();
+    const auto visitors = collectors(players, world, chests);
+    const std::vector<Pickup> pickups = world.collect(
+        device, visitors, [&](const Pickup& pickup) { return take(pickup, players, services); });
+    cleanupCollectedChests(world, chests);
     for (const Pickup& pickup : pickups) {
         if (pickup.realm <= 0) {
             continue; // handed over as it was judged

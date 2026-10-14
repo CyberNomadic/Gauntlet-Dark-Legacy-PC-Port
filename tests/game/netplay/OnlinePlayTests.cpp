@@ -28,19 +28,23 @@ struct RuntimePair {
     OnlinePlay guest;
 
     explicit RuntimePair(s32 classOffset = 0, bool pendingPromotion = false,
-                         bool pendingRelic = false) {
+                         bool pendingRelic = false, s32 startingLevel = 60) {
         REQUIRE(catalog.load(root));
         context.config = &config;
         REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
         context.strings = &strings;
         context.levels = &catalog;
         context.unpackedRoot = root;
-        const auto choice = [pendingPromotion, pendingRelic](s32 device, s32 character, s32 color) {
+        const auto choice = [pendingPromotion, pendingRelic,
+                             startingLevel](s32 device, s32 character, s32 color) {
             CharacterSave save;
             save.name = "ONLINE";
             save.character = character;
             save.color = color;
-            save.progress().experience = levelExperience(60);
+            save.progress().experience = levelExperience(startingLevel);
+            if (startingLevel == 1) {
+                save.autoAttack = false;
+            }
             save.progress().promotedLevel = pendingPromotion ? 20 : -1;
             if (pendingRelic) {
                 save.progress().relics.runes = save.progress().relics.pendingRunes = 1;
@@ -92,6 +96,85 @@ struct RuntimePair {
         REQUIRE(guest.phase() != OnlinePlay::Phase::Failed);
     }
 };
+
+TEST_CASE("native G1 transport supplies complete staged replay and an atomic guest picture",
+          "[netplay][online-play][assets][stage-combat-presentation]") {
+    RuntimePair pair{0, false, false, 1};
+    const auto level = pair.catalog.byName("G1");
+    REQUIRE(level);
+    pair.open(*level);
+    constexpr auto kStage = static_cast<usize>(OnlineCombatReplay::Domain::Stage);
+    u64 latestObserved = 0;
+    u64 stageSeeds = 0;
+    usize stageBytes = 0;
+    usize acknowledgedScrolls = 0;
+    for (s32 tick = 0; tick < 1200; ++tick) {
+        SessionInputs::Frame accept;
+        if (pair.host.hostScene()->scroll().active()) {
+            for (auto& input : accept) {
+                input.menu.select = true;
+            }
+            ++acknowledgedScrolls;
+        }
+        pair.step(accept, accept);
+        if (const auto* authority = pair.wire.guest.playback().latest();
+            authority != nullptr && authority->motion.tick > latestObserved) {
+            latestObserved = authority->motion.tick;
+            if (authority->combatState && authority->combatState->stage) {
+                ++stageSeeds;
+                stageBytes = authority->combatState->stage->size();
+            }
+        }
+        pair.draw();
+        const auto& stage = pair.guest.combatReplayDiagnostics().domains[kStage];
+        if (stage.passes >= 3 && stage.presents >= 3) {
+            break;
+        }
+    }
+    const auto& diagnostics = pair.guest.combatReplayDiagnostics();
+    const auto& stage = diagnostics.domains[kStage];
+    INFO("received Stage seeds=" << stageSeeds << " latest bytes=" << stageBytes);
+    INFO("scroll acknowledgement ticks="
+         << acknowledgedScrolls << " final active=" << pair.host.hostScene()->scroll().active()
+         << " native combat frame=" << pair.host.hostScene()->combatFrame().has_value());
+    for (usize domain = 0; domain < diagnostics.domains.size(); ++domain) {
+        const auto& counters = diagnostics.domains[domain];
+        WARN("domain=" << OnlineCombatReplay::kDomains[domain] << " updates=" << counters.updates
+                       << " passes=" << counters.passes << " presents=" << counters.presents);
+        for (usize reason = 0; reason < counters.reasons.size(); ++reason) {
+            if (counters.reasons[reason] != 0) {
+                WARN(OnlineCombatReplay::kRefusals[reason] << '=' << counters.reasons[reason]);
+            }
+        }
+        for (usize issue = 0; issue < OrdinaryCombatCheckpoint::kRestoreIssues.size(); ++issue) {
+            if (counters.seedIssues[issue] != 0) {
+                WARN("seed " << OrdinaryCombatCheckpoint::kRestoreIssues[issue] << '='
+                             << counters.seedIssues[issue]);
+            }
+        }
+        for (usize phase = 0; phase < OrdinaryCombatTick::kRefusals.size(); ++phase) {
+            if (counters.tickRefusals[phase] != 0) {
+                WARN("native " << OrdinaryCombatTick::kRefusals[phase] << '='
+                               << counters.tickRefusals[phase]);
+            }
+        }
+    }
+    REQUIRE(stageSeeds > 0);
+    REQUIRE(stage.decodeSuccesses > 0);
+    REQUIRE(stage.passes >= 3);
+    REQUIRE(stage.presents >= 3);
+    REQUIRE(pair.guest.shown());
+    const auto& shown = *pair.guest.shown();
+    CHECK_FALSE(shown.combatState);
+    CHECK_FALSE(shown.opponents);
+    REQUIRE(shown.geometry);
+    CHECK_FALSE(shown.fixtures.empty());
+    for (const auto& player : shown.players) {
+        REQUIRE(player);
+        CHECK_FALSE(player->movement.enabled);
+        CHECK_FALSE(player->rollbackInput);
+    }
+}
 
 TEST_CASE("native online updates submit new input and snapshots before returning",
           "[netplay][online-play][assets][latency]") {

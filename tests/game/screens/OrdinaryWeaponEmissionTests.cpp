@@ -20,6 +20,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 using Emission = OrdinaryWeaponEmission;
+constexpr s32 kSorceressClass = 6;
 
 TEST_CASE("ordinary emission refuses an unbound owner without fabricating a release",
           "[ordinary-weapon-emission]") {
@@ -105,17 +106,27 @@ struct Fixture {
         audio.close();
         sounds.stopAll();
     }
-    void release(f32 seconds) {
+    void release(f32 seconds, bool strong = false) {
         auto& figure = *player.figure;
         const bool rapid = (PowerupEffects::of(player.actor.save().progress().inventory).weapon &
                             powerup::kRapidFire) != 0;
         figure.setAttackSpeed(rapid, false);
         const s32 ticks = seconds > 0.02f ? 2 : 1;
-        for (s32 frame = 0; frame < 180 && !figure.animator().released(); ++frame) {
-            figure.animate(0, ticks, seconds, PlayerDeed::Attack);
+        const bool areaOnly = strong && player.actor.save().character == kSorceressClass;
+        for (s32 frame = 0;
+             frame < 180 &&
+             !(strong ? figure.animator().strongReleased() : figure.animator().released()) &&
+             !(areaOnly &&
+               figure.animator().action() == PlayerAnimator::Action::StrongThrowRecover);
+             ++frame) {
+            figure.animate(0, ticks, seconds,
+                           strong ? PlayerDeed::StrongAttack : PlayerDeed::Attack);
         }
-        REQUIRE(figure.animator().released());
-        REQUIRE_FALSE(figure.animator().strongReleased());
+        REQUIRE(figure.animator().released() == !strong);
+        REQUIRE(figure.animator().strongReleased() == (strong && !areaOnly));
+        if (areaOnly) {
+            REQUIRE(figure.animator().action() == PlayerAnimator::Action::StrongThrowRecover);
+        }
     }
     CombatRollbackCheckpoint::State state() const {
         const auto state = owner->checkpoint();
@@ -137,13 +148,25 @@ struct Fixture {
 
 TEST_CASE("prepared ordinary release retains native physical visual and sound descriptors",
           "[ordinary-weapon-emission][assets]") {
-    const s32 character = GENERATE(0, 2, 6);
+    const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
     const f32 seconds = GENERATE(1.0f / 60, 1.0f / 30);
     const u32 flags = GENERATE(0U, powerup::kRapidFire | powerup::kFiveWayShot);
+    const bool strong = GENERATE(false, true);
+    CAPTURE(character, seconds, flags, strong);
     Fixture fixture(character, flags);
-    fixture.release(seconds);
+    fixture.release(seconds, strong);
     const auto baseline = fixture.state();
     const auto target = character == 2 ? std::optional<Vec3>{{16, 6, 40}} : std::nullopt;
+    if (strong && character == kSorceressClass) {
+        // AnimAction deliberately omits her ordinary-weapon release. The native
+        // DAMG/SFXX timeline supplies the strong attack instead (tested separately).
+        const auto result = fixture.emit(target);
+        CHECK_FALSE(result.launched);
+        CHECK_FALSE(result.cue);
+        CHECK(fixture.state() == baseline);
+        CHECK(fixture.arsenal.missiles().count() == 0);
+        return;
+    }
     std::vector<SoundPlayer::Event> heard;
     const SoundPlayer::Capture capture(&fixture.sounds, [&](const auto& event) {
         if (event.kind == SoundPlayer::Event::Kind::Play) {
@@ -152,10 +175,15 @@ TEST_CASE("prepared ordinary release retains native physical visual and sound de
     });
     const u32 uploads = fixture.device.texturesCreated;
     fixture.arsenal.launchWeapon(fixture.player.actor, fixture.player.figure.get(),
-                                 fixture.player.actor.facing(), 1, true, target);
+                                 fixture.player.actor.facing(), strong ? 2.0f : 1.0f, true, target);
     const auto expected = fixture.flights();
     REQUIRE(expected.missiles.size() == (flags == 0 ? 1 : 5));
     REQUIRE(expected.history.size() == expected.missiles.size());
+    for (const auto& missile : expected.missiles) {
+        REQUIRE(missile.release);
+        CHECK(missile.release->strong == strong);
+        CHECK(missile.scale == (strong ? 2.0f : 1.0f));
+    }
     REQUIRE(heard.size() == 1);
     const auto nativeSound = heard.front();
     std::vector<PlayerMissiles::Checkpoint> continuation;
@@ -184,7 +212,7 @@ TEST_CASE("prepared ordinary release retains native physical visual and sound de
     }
     CHECK(fixture.flights() == expected);
     for (usize tick = 0; tick < continuation.size(); ++tick) {
-        CAPTURE(character, flags, seconds, tick);
+        CAPTURE(character, flags, seconds, strong, tick);
         fixture.arsenal.missiles().update(seconds, nullptr);
         CHECK(fixture.flights() == continuation[tick]);
     }

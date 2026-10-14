@@ -450,11 +450,20 @@ void LevelFixtures::advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks
  * touches it or blows up; a trap that is out hurts whoever is in it. */
 void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
                            const Events& events) {
+    updatePhase(ticks, seconds, players, &events);
+}
+
+LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
+                                                std::span<PlayerRuntime> players,
+                                                const Events* events) {
     if (!m_resources.has_value()) {
-        return;
+        return {Boundary::Unbound};
     }
     for (const Vec3& position : m_resources->world.takeWorldExplosions()) {
-        worldExplosion(position, players, events);
+        if (events == nullptr) {
+            return {Boundary::WorldExplosion};
+        }
+        worldExplosion(position, players, *events);
     }
     syncFloors();
     std::vector<Obstacle> boxes = m_chests.obstacles();
@@ -467,16 +476,24 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
     for (const usize spent : m_barrels.update(seconds)) {
         const Breakables::Barrel& barrel = m_barrels.barrel(spent);
         if (const auto near = nearestStanding(players, barrel.figure.position(), kBarrelWarning);
-            near.has_value() && events.help) {
-            events.help(barrel.kind == BreakableStrike::Kind::Exploding
-                            ? HelpMessages::kRedBarrels
-                            : HelpMessages::kGreenBarrels,
-                        *near);
+            near.has_value()) {
+            if (events == nullptr) {
+                return {Boundary::BarrelLesson, spent};
+            }
+            if (events->help) {
+                events->help(barrel.kind == BreakableStrike::Kind::Exploding
+                                 ? HelpMessages::kRedBarrels
+                                 : HelpMessages::kGreenBarrels,
+                             *near);
+            }
         }
     }
     // Trapped chests a blast set off go up now, one setting off the next in turn.
     for (const usize chest : std::exchange(m_doomedChests, {})) {
-        detonateChest(chest, std::nullopt, players, events);
+        if (events == nullptr) {
+            return {Boundary::DoomedChest, chest};
+        }
+        detonateChest(chest, std::nullopt, players, *events);
     }
     m_safeRocks.update(seconds);
     m_scenery.update(seconds);
@@ -503,7 +520,11 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
             position = actor.position();
         }
         // The rocks and leaves that give way to a body brushing them (fn_8005D730's case 10).
-        playFallingCues(m_resources->world.fallingScenery().touch(position, actor.radius()));
+        const auto falling = m_resources->world.fallingScenery().touch(position, actor.radius());
+        if (events == nullptr && !falling.empty()) {
+            return {Boundary::FallingScenery};
+        }
+        playFallingCues(falling);
         const PowerupEffects worn = PowerupEffects::of(actor.save().progress().inventory);
         const Vec3 step = observePlayer(player, position);
         visitors.push_back(ChestVisitor{position, actor.radius(),
@@ -521,6 +542,11 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         if (event.visitor >= players.size()) {
             continue;
         }
+        // Chests::update only changes its bound figure and value state. The
+        // dispatch below can place new item resources, so refusal precedes it.
+        if (events == nullptr) {
+            return {Boundary::Chest, event.chest};
+        }
         PlayerActor& actor = players[event.visitor].actor;
         switch (event.kind) {
         case ChestEvent::Kind::Unlocked:
@@ -531,8 +557,8 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
             if (m_chests.chest(event.chest).subtype == Chests::kTrappedChest) {
                 m_resources->audio.playNamed(kChestFuseSound, kChestFuseVolume);
             }
-            if (events.releaseEnemy && events.releaseEnemy(event.contents, event.position,
-                                                           m_chests.chest(event.chest).count)) {
+            if (events->releaseEnemy && events->releaseEnemy(event.contents, event.position,
+                                                             m_chests.chest(event.chest).count)) {
                 break;
             }
             if (event.contents >= 0 && m_resources->world.placeItemRecord(
@@ -545,7 +571,7 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
             break;
         case ChestEvent::Kind::Opened:
             if (event.explodes) {
-                detonateChest(event.chest, event.visitor, players, events);
+                detonateChest(event.chest, event.visitor, players, *events);
             } else if (m_chests.chest(event.chest).held < 0 &&
                        m_chests.chest(event.chest).subtype != Chests::kGoldChest) {
                 // Native item_update checks the live pickup link, not the authored
@@ -555,20 +581,25 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
             break;
         case ChestEvent::Kind::Collected:
             takeItem(actor.save(), ItemOffer{static_cast<s32>(ItemKind::Gold), event.gold});
-            events.card(actor.player(), "GOLD");
+            events->card(actor.player(), "GOLD");
             m_resources->audio.playNamed(kPickupSound);
-            if (event.gold >= 25 && events.help) {
-                events.help(17, event.visitor); // ItemTouch's COLLECTGOLD lesson
+            if (event.gold >= 25 && events->help) {
+                events->help(17, event.visitor); // ItemTouch's COLLECTGOLD lesson
             }
             break;
         case ChestEvent::Kind::Refused:
             // A silver chest's own hint is given once the key lesson has nothing to add.
-            if (!events.help(HelpMessages::kChestNeedsKey, event.visitor) &&
+            if (!events->help(HelpMessages::kChestNeedsKey, event.visitor) &&
                 m_chests.chest(event.chest).subtype == Chests::kRandomChest) {
-                events.help(HelpMessages::kRandomChest, event.visitor);
+                events->help(HelpMessages::kRandomChest, event.visitor);
             }
             break;
         }
+    }
+    // updateXray can bind a previously unseen preview before returning its cue.
+    // Do not enter that resource-creating path during a speculative transaction.
+    if (events == nullptr && std::ranges::any_of(visitors, &ChestVisitor::xray)) {
+        return {Boundary::Xray};
     }
     const usize reveals = m_chests.updateXray(m_resources->device, m_resources->world.items(),
                                               m_resources->world.powerups(), seconds, visitors,
@@ -581,17 +612,23 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         if (event.visitor >= players.size()) {
             continue;
         }
+        if (events == nullptr) {
+            return {Boundary::Gate, event.gate};
+        }
         if (event.kind == GateEvent::Kind::Unlocked) {
             players[event.visitor].actor.save().progress().inventory.spendKey();
             playGateSound(m_gates.gate(event.gate).subtype);
         } else if (event.kind == GateEvent::Kind::Refused) {
-            events.help(HelpMessages::kDoorNeedsKey, event.visitor);
+            events->help(HelpMessages::kDoorNeedsKey, event.visitor);
         }
     }
     for (const TrapHit& hit :
          m_traps.update(ticks, seconds, victims, PlayerPowerups::timeStopped(players))) {
         if (hit.victim >= players.size()) {
             continue;
+        }
+        if (events == nullptr) {
+            return {Boundary::Trap, hit.trap};
         }
         if (hit.subtype == kFireTrap) {
             playRealmSound(kFireTrapSound);
@@ -600,19 +637,35 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
         // tentacles knock down along their facing, whereas spikes carry their own flinch.
         const bool directed =
             (hit.impact.flags & (PlayerImpact::kKnockBack | PlayerImpact::kKnockDown)) != 0;
-        events.hurt(hit.victim, hit.damage, hit.pierces ? HurtKind::Pierce : HurtKind::Burn,
-                    directed, hit.impact);
+        events->hurt(hit.victim, hit.damage, hit.pierces ? HurtKind::Pierce : HurtKind::Burn,
+                     directed, hit.impact);
         // The forcefield zap belongs to accepted contact, not its light's activation.
         // Armor can absorb the damage without suppressing the contact sound.
         if (hit.subtype == kLightTrap && m_resources->world.ref().realmId == kCastleRealm) {
             m_resources->audio.playAt(kCastleLightTrapSound, players[hit.victim].actor.position(),
                                       0, kTrapHitVolume);
         }
-        events.help(HelpMessages::kTrapsHurt, hit.victim);
+        events->help(HelpMessages::kTrapsHurt, hit.victim);
     }
-    updateClouds(seconds, players, events);
-    advanceBlasts(seconds, players, events);
+    if (events == nullptr) {
+        for (const usize index : m_traps.wakes()) {
+            if (m_traps.trap(index).subtype == Traps::kBlades) {
+                return {Boundary::TrapWake, index};
+            }
+        }
+        if (!m_clouds.empty()) {
+            return {Boundary::Cloud};
+        }
+        advanceCloudGaps(players, seconds);
+        if (!m_blasts.empty()) {
+            return {Boundary::Blast};
+        }
+    } else {
+        updateClouds(seconds, players, *events);
+        advanceBlasts(seconds, players, *events);
+    }
     advanceHitSounds(players, ticks);
+    return {};
 }
 
 bool LevelFixtures::enchantChest(usize index, f32 power) {
@@ -1245,12 +1298,16 @@ void LevelFixtures::spoilFood(const Vec3& position, f32 radius, f32 damage,
     }
 }
 
-/** Gas hangs for a while and hurts whoever stands in it, every half second. */
-void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
-                                 const Events& events) {
+void LevelFixtures::advanceCloudGaps(std::span<PlayerRuntime> players, f32 seconds) {
     for (PlayerRuntime& runtime : players) {
         runtime.cloudGap = std::max(runtime.cloudGap - seconds, 0.0f);
     }
+}
+
+/** Gas hangs for a while and hurts whoever stands in it, every half second. */
+void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
+                                 const Events& events) {
+    advanceCloudGaps(players, seconds);
     for (GasCloud& cloud : m_clouds) {
         cloud.secondsLeft -= seconds;
         if (cloud.secondsLeft <= 0) {

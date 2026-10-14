@@ -32,6 +32,8 @@ f32 fadeAlpha(s32 since, s32 duration, bool fadeOut) {
 void TextureAnimator::bind(std::span<const TextureAnimationInfo> animations, TextureSet& textures,
                            RenderDevice& device, std::span<TextureSet* const> lenders) {
     clear();
+    m_authored = std::make_shared<const std::vector<TextureAnimationInfo>>(animations.begin(),
+                                                                           animations.end());
     m_entryOfInfo.assign(animations.size(), -1);
     for (usize i = 0; i < animations.size(); ++i) {
         const TextureAnimationInfo& animation = animations[i];
@@ -108,6 +110,7 @@ void TextureAnimator::bind(std::span<const TextureAnimationInfo> animations, Tex
 
 void TextureAnimator::clear() {
     m_entries.clear();
+    m_authored.reset();
     m_entryOfInfo.clear();
     m_frame = 0;
     m_remainder = 0.0f;

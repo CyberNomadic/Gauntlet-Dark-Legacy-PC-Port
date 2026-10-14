@@ -21,6 +21,7 @@ constexpr f32 kPushFrameRate = 30.0f; ///< knock-back decays once per game frame
 constexpr f32 kGravity = 100.0f;
 } // namespace
 void Combatant::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     m_children.clear();
     m_actor = Actor{};
     m_id = -1;

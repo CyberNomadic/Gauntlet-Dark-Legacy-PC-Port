@@ -15,6 +15,8 @@
 #include "game/netplay/AnimationCheckpoint.h"
 #include "game/netplay/PlayerHealthCheckpoint.h"
 #include "game/netplay/PlayerRuntimePacket.h"
+#include "game/netplay/RandomCheckpoint.h"
+#include "game/netplay/StageStatePacket.h"
 
 namespace gdl::game {
 namespace {
@@ -189,12 +191,53 @@ template <class T> constexpr usize recordLimit() {
     } else if constexpr (std::is_same_v<T, TreePose::Checkpoint::Node> ||
                          std::is_same_v<T, NodePose>) {
         return TreePose::Checkpoint::kMaxNodes;
-    } else if constexpr (std::is_same_v<T, OpponentCombatCheckpoint::State::DormantBank>) {
-        return OpponentCombatCheckpoint::State::kMaxDormantBanks;
+    } else if constexpr (std::is_same_v<T, CrittersCheckpoint::Bank> ||
+                         std::is_same_v<T, CombatantProjectilesCheckpoint::Catalog>) {
+        return CrittersCheckpoint::kMaxStocks;
+    } else if constexpr (std::is_same_v<T, CombatantCheckpoint::Part> ||
+                         std::is_same_v<T, CombatantCheckpoint::Attachment>) {
+        return CombatantCheckpoint::kMaxParts;
+    } else if constexpr (std::is_same_v<T, CombatantProjectilesCheckpoint::Flight>) {
+        return CombatantProjectilesCheckpoint::kMaxFlights;
     } else if constexpr (std::is_same_v<T, Particle>) {
         return ParticleDescriptor::kMostParticles;
     } else {
         return CombatStatePacket::kMaxRecords;
+    }
+}
+
+/** Only native move/pattern cooldowns use -infinity as a never-used sentinel.
+ * Preserve its exact bits without permitting other nonfinite scalar fields. */
+template <class A, class T> void cooldowns(A& a, T& values) {
+    u32 count = 0;
+    if constexpr (!A::reading) {
+        if (values.size() > CombatantCheckpoint::kMaxRows) {
+            throw FormatError("combatant cooldown limit");
+        }
+        count = static_cast<u32>(values.size());
+    }
+    a.number(count);
+    if (count > CombatantCheckpoint::kMaxRows || count > a.remaining() / 4 ||
+        count > CombatStatePacket::kMaxRecords - a.records) {
+        throw FormatError("combatant cooldown budget");
+    }
+    a.records += count;
+    if constexpr (A::reading) {
+        values.resize(count);
+    }
+    for (auto& value : values) {
+        u32 bits = 0;
+        if constexpr (!A::reading) {
+            bits = std::bit_cast<u32>(value);
+        }
+        a.number(bits);
+        const f32 decoded = std::bit_cast<f32>(bits);
+        if (!std::isfinite(decoded) && decoded != -std::numeric_limits<f32>::infinity()) {
+            throw FormatError("invalid combatant cooldown");
+        }
+        if constexpr (A::reading) {
+            value = decoded;
+        }
     }
 }
 
@@ -313,8 +356,37 @@ template <class A, class T> void field(A& a, T& v) {
         leaf<PlayerHealthCheckpoint>(a, v, PlayerHealthCheckpoint::kBytes);
     } else if constexpr (std::is_same_v<V, AnimationPlayer::Checkpoint>) {
         leaf<AnimationCheckpoint>(a, v, AnimationCheckpoint::kBytes);
+    } else if constexpr (std::is_same_v<V, Mt19937::Checkpoint>) {
+        leaf<RandomCheckpoint>(a, v, RandomCheckpoint::kBytes);
     } else if constexpr (std::is_same_v<V, CombatStatePacket::State>) {
         fields(a, v.combat, v.adapter);
+        bool present = v.stage.has_value();
+        a.number(present);
+        if (present) {
+            u32 length = 0;
+            if constexpr (!A::reading) {
+                if (!StageStatePacket::envelopeValid(*v.stage)) {
+                    throw FormatError("invalid stage checkpoint envelope");
+                }
+                length = static_cast<u32>(v.stage->size());
+            }
+            a.number(length);
+            if (length > a.remaining() || length > StageStatePacket::kMaxBytes ||
+                length < StageStatePacket::kHeaderBytes) {
+                throw FormatError("stage checkpoint byte limit");
+            }
+            if constexpr (A::reading) {
+                const auto bytes = a.raw(length);
+                if (!StageStatePacket::envelopeValid(bytes)) {
+                    throw FormatError("invalid stage checkpoint envelope");
+                }
+                v.stage.emplace(bytes.begin(), bytes.end());
+            } else {
+                a.raw(*v.stage);
+            }
+        } else if constexpr (A::reading) {
+            v.stage.reset();
+        }
     } else if constexpr (std::is_same_v<V, CombatRollbackCheckpoint::State>) {
         fields(a, v.players, v.health, v.levels, v.attacks, v.arsenal, v.effects);
     } else if constexpr (std::is_same_v<V, LevelWatch::Checkpoint>) {
@@ -323,11 +395,113 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.player, v.level);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State>) {
         fields(a, v.hitStreak, v.lessons, v.generatorRewards, v.rockHits, v.hearers, v.cueEffects,
-               v.shrink, v.bagSeed, v.statues, v.dormantBanks);
+               v.shrink, v.bagSeed, v.statues, v.critters, v.projectiles, v.critterExperienceOwed,
+               v.critterEffects, v.moveEffects, v.barrelRams);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::Reward>) {
         fields(a, v.player, v.experience, v.destroyed);
-    } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::DormantBank>) {
-        fields(a, v.kind, v.name, v.textures);
+    } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::FollowingEffect>) {
+        fields(a, v.effect, v.critter, v.ofBoss, v.offset, v.node, v.nodeOffset, v.rootAttachment,
+               v.pitchYaw, v.playerAttachment);
+    } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::MoveEffect>) {
+        fields(a, v.effect, v.critter, v.ofBoss);
+    } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::Ram>) {
+        fields(a, v.id, v.damage);
+    } else if constexpr (std::is_same_v<V, CrittersCheckpoint::State>) {
+        fields(a, v.scales, v.realm, v.gargoyleForm, v.lookouts, v.banks, v.actors, v.events);
+    } else if constexpr (std::is_same_v<V, CrittersCheckpoint::Bank>) {
+        fields(a, v.id, v.kind, v.name, v.tree, v.clock);
+    } else if constexpr (std::is_same_v<V, EnemyScales>) {
+        fields(a, v.health, v.speed, v.sight, v.damage, v.missileRate, v.missileAim, v.playerLevel,
+               v.bossEncounter, v.players);
+    } else if constexpr (std::is_same_v<V, LookoutRoute>) {
+        fields(a, v.points, v.next);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::State>) {
+        fields(a, v.parts, v.lookouts);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Part>) {
+        fields(a, v.actor, v.incarnation, v.id, v.collision, v.hazards, v.scales, v.realm,
+               v.fullHarm, v.arenaRandom, v.events);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Definition>) {
+        fields(a, v.resource, v.index);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Actor>) {
+        fields(a, v.state, v.hidden, v.forcedPattern, v.childrenIntact, v.smoothValid, v.definition,
+               v.parent, v.branch, v.health, v.burnGap, v.maxHealth, v.position, v.floor, v.yaw,
+               v.initialYaw, v.homePosition, v.initialRoot, v.push, v.target, v.targetDistance,
+               v.targetYaw, v.targets, v.playerDamage, v.move, v.moveTarget, v.pattern,
+               v.finishedSeconds, v.age);
+        cooldowns(a, v.moveTimes);
+        cooldowns(a, v.patternTimes);
+        fields(a, v.patternStep, v.struckThisMove, v.areas, v.arenaAnchors, v.arenaTargets,
+               v.patrolBound, v.lookout, v.sight, v.lastArenaTarget, v.hurtPending, v.hurtFlags,
+               v.hurtDirection, v.roarOwed, v.sinceHurt, v.flashTicks, v.skin, v.skinAge,
+               v.hitNodes, v.replacements, v.alpha, v.tint, v.scale, v.shrink, v.frozenTicks,
+               v.blindTicks, v.curbSeconds, v.held, v.roarWanted, v.moveEffect, v.moveDone,
+               v.soundsGiven, v.arenaCollected, v.shotFrame, v.attackTarget, v.stepTarget,
+               v.patrolAim, v.grabbed, v.grabMove, v.grabNode, v.grabOffset, v.player, v.pose,
+               v.smooth, v.presentation, v.attachments, v.gaze);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Floor>) {
+        fields(a, v.object, v.local);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Target>) {
+        fields(a, v.player, v.distance, v.score, v.inverseAnger, v.direction);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::PlayerDamage>) {
+        fields(a, v.dealt, v.received, v.dealtTime, v.receivedTime);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::HitNode>) {
+        fields(a, v.health, v.flashTicks, v.broken, v.heldPose);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Replacement>) {
+        fields(a, v.node, v.sourceNode, v.object);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Presentation>) {
+        fields(a, v.valid, v.state, v.generation, v.sequence, v.position, v.yaw, v.frame, v.pose);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Attachment>) {
+        fields(a, v.player, v.pose, v.world, v.previousFrame, v.previousGeneration);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Shot>) {
+        fields(a, v.definition, v.critter, v.damageIndex, v.origin, v.forward, v.target, v.rate,
+               v.scale, v.damageScale, v.birthLife, v.endVisual, v.realm);
+    } else if constexpr (std::is_same_v<V, CombatantCheckpoint::Events>) {
+        fields(a, v.cues, v.grabs, v.spews, v.shots, v.arena, v.tramples, v.rams, v.pushes, v.blows,
+               v.losses);
+    } else if constexpr (std::is_same_v<V, CombatCue>) {
+        fields(a, v.critter, v.tree, v.sound, v.attenuated, v.soundPosition, v.position, v.yaw,
+               v.scale, v.life, v.follows, v.shakes, v.arena, v.untilNextMove, v.stopMoveEffect,
+               v.rootAttachment, v.node, v.nodeOffset, v.pitchYaw, v.loop, v.placement,
+               v.playerAttachment);
+    } else if constexpr (std::is_same_v<V, CombatGrab>) {
+        fields(a, v.player, v.critter, v.attachment, v.velocity, v.damage);
+    } else if constexpr (std::is_same_v<V, CombatSpew>) {
+        fields(a, v.critter, v.origin, v.velocity, v.halfAngle);
+    } else if constexpr (std::is_same_v<V, CombatArenaActivation>) {
+        index(a, v.index);
+        field(a, v.delay);
+    } else if constexpr (std::is_same_v<V, CombatTrample>) {
+        fields(a, v.enemy, v.damage, v.position);
+    } else if constexpr (std::is_same_v<V, CombatantRam>) {
+        fields(a, v.id, v.damage);
+    } else if constexpr (std::is_same_v<V, CombatPush>) {
+        fields(a, v.player, v.velocity);
+    } else if constexpr (std::is_same_v<V, CombatBlow>) {
+        fields(a, v.player, v.critter, v.damage, v.direction, v.breath, v.gated, v.flags, v.origin,
+               v.area, v.repeatGap);
+    } else if constexpr (std::is_same_v<V, CombatLoss>) {
+        fields(a, v.critter, v.kind, v.form, v.player, v.experience, v.killed, v.drop, v.position);
+    } else if constexpr (std::is_same_v<V, CombatArenaTarget>) {
+        index(a, v.index);
+        fields(a, v.placement, v.active);
+    } else if constexpr (std::is_same_v<V, CritterArea>) {
+        fields(a, v.local, v.node, v.worldParent, v.velocity, v.displacement, v.radius, v.minDot,
+               v.damage, v.flags, v.secondsLeft, v.lifetime, v.expanding);
+    } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::State>) {
+        fields(a, v.catalog, v.flying, v.emittedEffects, v.hits, v.worldHits, v.rockHits,
+               v.generators, v.summons, v.random, v.ricochetIn);
+    } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::Catalog>) {
+        fields(a, v.id, v.kind, v.name, v.children);
+    } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::Flight>) {
+        fields(a, v.shot, v.archive, v.position, v.velocity, v.spin, v.rotation, v.effect,
+               v.morphed, v.stuck, v.planted, v.phaseSeconds, v.settled, v.impactRadius,
+               v.impactArea, v.leavesGenerator, v.summonsEnemies, v.contactSeconds, v.piercedPlayer,
+               v.reflected);
+    } else if constexpr (std::is_same_v<V, CombatantProjectileHit>) {
+        fields(a, v.player, v.damage, v.flags, v.direction, v.repeatGap, v.critter, v.ownerKind,
+               v.target, v.ricochet, v.position);
+    } else if constexpr (std::is_same_v<V, CombatantWorldHit>) {
+        fields(a, v.position, v.object, v.splash);
     } else if constexpr (std::is_same_v<V, RockHit>) {
         index(a, v.rock);
         field(a, v.damage);
@@ -400,7 +574,7 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, EffectTrees::PoolCheckpoint::Entry>) {
         fields(a, v.resource, v.id, v.instance, v.state, v.provenance, v.previousTransform,
                v.previousDirection, v.previousTree, v.previousGeneration, v.previousFrame,
-               v.presentationCaptured);
+               v.presentationCaptured, v.previousResource);
     } else if constexpr (std::is_same_v<V, EffectTrees::PoolCheckpoint::Bank>) {
         fields(a, v.resource, v.clock);
     } else if constexpr (std::is_same_v<V, EffectTrees::Provenance>) {
@@ -479,7 +653,8 @@ template <class A, class T> void field(A& a, T& v) {
 } // namespace
 
 bool CombatStatePacket::State::valid() const {
-    if (!combat.valid() || !adapter.valid()) {
+    if (!combat.valid() || !adapter.valid() ||
+        (stage && !StageStatePacket::envelopeValid(*stage))) {
         return false;
     }
     const auto owns = [&](s32 player) {
@@ -501,9 +676,11 @@ bool CombatStatePacket::State::valid() const {
             return false;
         }
     }
-    return std::ranges::all_of(adapter.cueEffects, [&](u32 handle) {
-        return combat.effects.nextId == 0 || handle < combat.effects.nextId;
-    });
+    u8 playerMask = 0;
+    for (const auto& player : combat.players) {
+        playerMask |= static_cast<u8>(1U << player.player);
+    }
+    return adapter.references(playerMask, combat.effects);
 }
 
 std::optional<std::vector<u8>> CombatStatePacket::encode(const State& state) {

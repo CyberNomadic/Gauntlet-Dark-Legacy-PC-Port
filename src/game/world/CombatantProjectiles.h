@@ -1,7 +1,7 @@
 #pragma once
 
 #include <functional>
-#include <random>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -9,6 +9,7 @@
 
 #include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
+#include "engine/math/Mt19937.h"
 #include "engine/world/WorldCollision.h"
 
 #include "game/enemies/CombatantKind.h"
@@ -44,6 +45,11 @@ struct CombatantWorldHit {
  * Capturing and attached-area attacks are separate from this path. */
 class CombatantProjectiles {
 public:
+    CombatantProjectiles() = default;
+    CombatantProjectiles(const CombatantProjectiles&) = delete;
+    CombatantProjectiles& operator=(const CombatantProjectiles&) = delete;
+    CombatantProjectiles(CombatantProjectiles&&) = delete;
+    CombatantProjectiles& operator=(CombatantProjectiles&&) = delete;
     using PlaySound = std::function<void(std::string_view)>;
     void launch(const CombatShot& shot, ItemArchive& archive, RenderDevice& device,
                 EffectTrees& effects, const PlaySound& sound,
@@ -64,6 +70,7 @@ public:
 
 private:
     friend class OpponentCombatCheckpoint;
+    friend class CombatantProjectilesCheckpoint;
     struct Flying {
         CombatShot shot;
         ItemArchive* archive = nullptr;
@@ -107,7 +114,9 @@ private:
     std::vector<RockHit> m_rockHits;
     std::vector<Mat4> m_generators;
     std::vector<Mat4> m_summons;
-    std::mt19937 m_random;
+    Mt19937 m_random;
     f32 m_ricochetIn = 0;
+    /** Clear or a successful checkpoint restore invalidates prepared borrowers. */
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

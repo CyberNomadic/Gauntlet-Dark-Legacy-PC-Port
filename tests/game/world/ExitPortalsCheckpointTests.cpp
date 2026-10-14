@@ -1,0 +1,241 @@
+#include <array>
+#include <limits>
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include "engine/world/SampleLevel.h"
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
+#include "game/world/ExitPortalsCheckpoint.h"
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+
+struct PortalFixture {
+    test::FakeRenderDevice device;
+    WorldLayout layout;
+    WorldCollision collision;
+    LevelCatalog catalog;
+    ItemArchive items;
+    ExitPortals portals;
+    ExitPortalsCheckpoint checkpoint{portals, layout, items};
+    std::vector<ClassProgress> progress{1};
+    TowerAccess access{progress};
+
+    explicit PortalFixture(std::string_view name, bool artwork = true) {
+        const auto directory = test::sampleLevel(name);
+        std::filesystem::create_directories(directory / "wdata");
+        writeTextFile(directory / "wdata/TOWN.json", R"({"realm":7,"prefix":"levelG",
+          "levels":[{"name":"G1","title":"Town"},{"name":"G2","title":"Farm"}]})");
+        writeTextFile(directory / "wdata/SECRET.json", R"({"realm":12,"prefix":"levelS",
+          "levels":[{"name":"S1","title":"Secret"}]})");
+        writeTextFile(directory / "world.json", R"({
+          "objects":[{"name":"FLOOR","position":[0,0,0],"flags":4102}],
+          "itemInfos":[{"type":9,"name":"EXIT_PORTAL","radius":3},
+                       {"type":9,"subtype":50,"name":"SECRET_ICON","radius":1}],
+          "itemInstances":[
+            {"info":0,"position":[0,0,0],"params":[0,0,0,0,103,49,0,0,0,0,0,0]},
+            {"info":1,"position":[20,0,0],"params":[0,0,0,0,83,49,0,0,0,0,0,0]},
+            {"info":0,"position":[-20,0,0],"params":[0,0,0,0,103,50,0,0,0,0,0,0]}]})");
+        writeTextFile(directory / "animations.json", R"({
+          "textureAnimations":[{"name":"STONE","texture":0,"source":1,"frames":2,"rate":1}],
+          "trees":[{"name":"EXIT_PORTAL",
+            "nodes":[{"name":"BODY","object":"WALL","parent":-1,"position":[0,0,0]}],
+            "sequences":[{"name":"IDLE","frames":4,"frameRate":30},
+              {"name":"READY","frames":4,"frameRate":30},
+              {"name":"ACTIVE1","frames":4,"frameRate":30},
+              {"name":"ACTIVE2","frames":4,"frameRate":30},
+              {"name":"ACTIVE3","frames":4,"frameRate":30}]},
+            {"name":"SECRET_ICON","nodes":[{"name":"ICON","object":"WALL","parent":-1,"position":[0,0,0]}],
+             "sequences":[{"name":"IDLE","frames":9,"frameRate":30}]}]})");
+        REQUIRE(layout.load(directory));
+        REQUIRE(catalog.load(directory));
+        if (artwork) {
+            REQUIRE(items.load(directory));
+        }
+        collision.build(
+            {CollisionTriangle{.vertices = {Vec3{-40, 0, -40}, Vec3{40, 0, 40}, Vec3{40, 0, -40}},
+                               .object = 0},
+             CollisionTriangle{.vertices = {Vec3{-40, 0, -40}, Vec3{-40, 0, 40}, Vec3{40, 0, 40}},
+                               .object = 0}});
+        collision.setMovingObjects(std::array<s32, 1>{0});
+        bind();
+    }
+    void bind() {
+        REQUIRE(portals.bind(device, layout, items, catalog, &collision, nullptr, &access));
+        REQUIRE(portals.size() == 3);
+        REQUIRE(checkpoint.bindResources());
+    }
+    ExitPortalsCheckpoint::State state() const {
+        auto state = checkpoint.checkpoint();
+        REQUIRE(state);
+        return std::move(*state);
+    }
+};
+
+TEST_CASE("portal checkpoint resumes native phases floor carry texture clocks and wait queues",
+          "[rollback][exit-portals-checkpoint]") {
+    const s32 rate = GENERATE(30, 60);
+    const bool artwork = GENERATE(false, true);
+    CAPTURE(rate, artwork);
+    PortalFixture host("portal-checkpoint-host", artwork),
+        guest("portal-checkpoint-guest", artwork);
+    const s32 ticks = 60 / rate;
+    const f32 seconds = 1.0f / static_cast<f32>(rate);
+    std::array party{PortalVisitor{{0, 0, 0}, 0.75f, 3, true},
+                     PortalVisitor{{10, 0, 10}, 0.75f, 1, true}};
+    for (s32 frame = 0; frame < rate; ++frame) {
+        host.portals.update(ticks, seconds, party);
+    }
+    host.portals.setAlpha("g1", 0.4f);
+    const auto baseline = host.state();
+    REQUIRE_FALSE(baseline.waiting.empty());
+    REQUIRE(baseline.visitors.size() == 1);
+    REQUIRE(baseline.visitors[0].ticks == ExitPortals::kIdleTicks);
+    REQUIRE(baseline.portals[0].action == ExitPortals::kWaiting);
+    REQUIRE(baseline.portals[2].shut);
+    if (artwork) {
+        REQUIRE(baseline.portals[0].player.playing);
+        REQUIRE(baseline.portals[1].icon.state.textures.frame > 0);
+    }
+    const auto textures = guest.device.texturesCreated;
+    const auto uploads = guest.device.textureUpdates;
+    REQUIRE(guest.checkpoint.restore(baseline));
+    CHECK(guest.state() == baseline);
+    CHECK(guest.portals.takeWaiting() == host.portals.takeWaiting());
+    bool departed = false;
+    for (s32 frame = 0; frame < rate * 2; ++frame) {
+        const f32 height = static_cast<f32>(frame) / static_cast<f32>(rate);
+        const auto transform = glm::translate(Mat4{1}, Vec3{0, height, 0});
+        host.collision.setObjectTransform(0, transform);
+        guest.collision.setObjectTransform(0, transform);
+        party[0].position.y = party[1].position.y = height;
+        party[1].position.x = party[1].position.z = 0;
+        const auto expected = host.portals.update(ticks, seconds, party);
+        const auto actual = guest.portals.update(ticks, seconds, party);
+        CHECK(actual == expected);
+        CHECK(guest.state() == host.state());
+        CHECK(guest.portals.takeWaiting() == host.portals.takeWaiting());
+        departed = departed || actual.has_value();
+    }
+    REQUIRE(departed);
+    CHECK(guest.device.texturesCreated == textures);
+    CHECK(guest.device.textureUpdates == uploads);
+    CHECK(guest.portals.portal(0).support == 0);
+    CHECK(guest.portals.portal(0).position.y > ExitPortals::kFloorLift);
+}
+
+TEST_CASE("portal restore preflights malformed state and fences stale binding and sibling plans",
+          "[rollback][exit-portals-checkpoint]") {
+    PortalFixture fixture("portal-checkpoint-atomic"), other("portal-checkpoint-other");
+    const auto original = fixture.state();
+    for (s32 mutation = 0; mutation < 8; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = original;
+        switch (mutation) {
+        case 0: invalid.portals[0].alpha = std::numeric_limits<f32>::quiet_NaN(); break;
+        case 1: invalid.portals[0].action = 5; break;
+        case 2: invalid.portals[0].player.sequence = 65535; break;
+        case 3: invalid.visitors = {{1, 6}, {1, 6}}; break;
+        case 4: invalid.waiting.push_back(4); break;
+        case 5: invalid.portals[0].source.instance.position.x += 1; break;
+        case 6: invalid.portals[1].icon.state.textures.remainder = 1; break;
+        case 7: invalid.portals[0].supportLocal[3].x += 1; break;
+        }
+        CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
+        CHECK(fixture.state() == original);
+    }
+    auto plan = fixture.checkpoint.prepareRestore(original);
+    auto sibling = fixture.checkpoint.prepareRestore(original);
+    REQUIRE(plan);
+    REQUIRE(sibling);
+    CHECK_FALSE(other.checkpoint.commitRestore(std::move(*plan)));
+    REQUIRE(fixture.checkpoint.canCommit(*plan));
+    fixture.portals.consume(0);
+    fixture.portals.setAlpha("g1", 0.2f);
+    REQUIRE(fixture.checkpoint.commitRestore(std::move(*plan)));
+    CHECK(fixture.state() == original);
+    CHECK_FALSE(fixture.checkpoint.canCommit(*plan));
+    CHECK_FALSE(fixture.checkpoint.canCommit(*sibling));
+    plan = fixture.checkpoint.prepareRestore(original);
+    REQUIRE(plan);
+    fixture.bind();
+    CHECK_FALSE(fixture.checkpoint.canCommit(*plan));
+    CHECK_FALSE(fixture.checkpoint.commitRestore(std::move(*plan)));
+    CHECK(fixture.state() == original);
+}
+
+TEST_CASE("secret portal checkpoint keeps the actual toucher and consumed icon without travel",
+          "[rollback][exit-portals-checkpoint]") {
+    PortalFixture fixture("portal-checkpoint-secret"), other("portal-checkpoint-secret-other");
+    const std::array touching{PortalVisitor{{20.5f, 0, 0}, 0.75f, 2, true}};
+    REQUIRE(fixture.portals.update(1, 1.0f / 60, touching) == 1);
+    fixture.portals.consume(1);
+    const auto state = fixture.state();
+    REQUIRE(state.portals[1].departurePosition == touching[0].position);
+    REQUIRE(state.portals[1].consumed);
+    const auto textures = other.device.texturesCreated;
+    REQUIRE(other.checkpoint.restore(state));
+    CHECK(other.state() == state);
+    CHECK(other.device.texturesCreated == textures);
+    CHECK_FALSE(other.portals.update(1, 1.0f / 60, touching));
+    CHECK(other.portals.portal(1).icon.checkpoint() == fixture.portals.portal(1).icon.checkpoint());
+}
+
+TEST_CASE("native tower portal restore retains open and EXIT_OFF resources independently",
+          "[rollback][exit-portals-checkpoint][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    WorldLayout layout;
+    LevelCatalog catalog;
+    ItemArchive hostItems, guestItems;
+    REQUIRE(layout.load(root / "LEVELS/LEVELL1"));
+    REQUIRE(catalog.load(root));
+    REQUIRE(hostItems.load(root / "ITEMS/LEVELL"));
+    REQUIRE(guestItems.load(root / "ITEMS/LEVELL"));
+    std::vector<ClassProgress> progress(1);
+    progress[0].levels.recordBeaten(7, 0);
+    const TowerAccess access{progress};
+    ExitPortals host, guest;
+    REQUIRE(host.bind(device, layout, hostItems, catalog, nullptr, nullptr, &access));
+    REQUIRE(guest.bind(device, layout, guestItems, catalog, nullptr, nullptr, &access));
+    ExitPortalsCheckpoint hostState{host, layout, hostItems}, guestState{guest, layout, guestItems};
+    REQUIRE(hostState.bindResources());
+    REQUIRE(guestState.bindResources());
+    std::optional<usize> open, closed;
+    for (usize index = 0; index < host.size(); ++index) {
+        const auto& portal = host.portal(index);
+        if (portal.model.bound() && !portal.secret) {
+            (portal.shut ? closed : open) = index;
+        }
+    }
+    REQUIRE(open);
+    REQUIRE(closed);
+    const std::array party{PortalVisitor{host.portal(*open).position, 0.75f, 2, true}};
+    for (s32 tick = 0; tick < 21; ++tick) {
+        host.update(1, 1.0f / 60, party);
+    }
+    host.setAlpha(host.portal(*closed).tag, 0.25f);
+    const auto seed = hostState.checkpoint();
+    REQUIRE(seed);
+    const auto textures = device.texturesCreated;
+    const auto uploads = device.textureUpdates;
+    REQUIRE(guestState.restore(*seed));
+    CHECK(guestState.checkpoint() == seed);
+    REQUIRE(guest.portal(*closed).model.bound());
+    CHECK(guest.portal(*closed).archive == &guestItems);
+    CHECK(guest.portal(*open).archive == &guestItems);
+    for (s32 tick = 0; tick < 180; ++tick) {
+        CAPTURE(tick);
+        CHECK(guest.update(1, 1.0f / 60, party) == host.update(1, 1.0f / 60, party));
+        CHECK(guestState.checkpoint() == hostState.checkpoint());
+        CHECK(guest.takeWaiting() == host.takeWaiting());
+    }
+    CHECK(device.texturesCreated == textures);
+    CHECK(device.textureUpdates == uploads);
+}
+} // namespace

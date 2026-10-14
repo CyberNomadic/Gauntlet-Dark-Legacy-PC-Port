@@ -179,6 +179,7 @@ public:
 
 private:
     friend class OpponentCombatCheckpoint;
+    friend class CombatantCheckpoint;
     static constexpr usize kPlayerSlots = 4;
     static constexpr f32 kAngerMemory = 15.0f;
     struct PlayerDamage {
@@ -418,5 +419,7 @@ private:
     bool m_fullHarm = false;
     std::vector<CombatLoss> m_losses;
     std::minstd_rand m_arenaRandom;
+    /** Actor lifetime/restore fence, independent of ordinary slot reuse. */
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

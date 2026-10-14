@@ -53,6 +53,15 @@ public:
 
     /** Takes what the party stands on (an open chest's contents from beside it). */
     void collect(RenderDevice& device, std::span<PlayerRuntime> players, const Services& services);
+    /** Exact native reach, including an opened container's held pickup anchor. */
+    static std::vector<Collector> collectors(std::span<const PlayerRuntime> players,
+                                             const LevelWorld& world, const Chests& chests);
+    /** Refusal preflight: a touch may produce help even when nothing can be taken.
+     * Does not judge pickups, spend inventory, or create collection artwork. */
+    static bool touchesPickup(std::span<const PlayerRuntime> players, const LevelWorld& world,
+                              const Chests& chests);
+    /** Native post-collection container cleanup, without pickup/audio callbacks. */
+    static void cleanupCollectedChests(const LevelWorld& world, Chests& chests);
 
     /** TowerCheckMessages acknowledges crystal sets collected here or before returning to
      * the tower. Pickups elsewhere retain their immediate notice. True if a scroll opened. */

@@ -147,7 +147,7 @@ struct Scene {
 
 TEST_CASE("native combat frame capture keeps the next phase clock and gameplay camera",
           "[netplay][play-replication][combat-supplement][assets]") {
-    Scene scene;
+    Scene scene("G1");
     CHECK_FALSE(scene.play.combatFrame());
     CHECK_FALSE(scene.play.combatState());
     ProjectileResources resources;
@@ -158,7 +158,7 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
     CHECK(before->camera.position == scene.play.camera().camera().position);
     CHECK(before->camera.yaw == scene.play.camera().camera().yaw);
     CHECK(before->attention == scene.play.camera().attention());
-    CHECK(before->damage.tower);
+    CHECK_FALSE(before->damage.tower);
     CHECK(before->ticks == 1);
     CHECK(before->seconds == 1.0f / 60);
     const auto firstActor = scene.play.actor(0)->checkpoint();
@@ -208,6 +208,41 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
         CHECK_FALSE(scene.play.combatFrame());
         CHECK_FALSE(scene.play.combatState());
     }
+}
+
+TEST_CASE("host publishes retained prepared full and opponent-only captures exactly",
+          "[netplay][play-replication][prepared-publication][assets]") {
+    const bool full = GENERATE(false, true);
+    CAPTURE(full);
+    Scene scene(full ? "G1" : "");
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindReplicationResources(resources, scene.pickups, scene.fixtures));
+    scene.settle();
+    Pair pair;
+    PlayReplication driver;
+    pair.prepare();
+    REQUIRE(driver.bind(scene.play, pair.host, scene.pickups, scene.fixtures));
+    pair.ready();
+    usize published = 0;
+    for (u64 tick = 0; tick < 7; ++tick) {
+        REQUIRE(driver.advance(pair.host, {}, resources) == Result::Advanced);
+        REQUIRE(driver.latest());
+        pair.pump();
+        if (tick % PlayReplication::kSnapshotStride != 0) {
+            continue;
+        }
+        const auto& captured = *driver.latest();
+        REQUIRE(captured.opponents);
+        REQUIRE(captured.opponentFrame);
+        CHECK(captured.combatState.has_value() == full);
+        CHECK(captured.combatFrame.has_value() == full);
+        REQUIRE(pair.guest.playback().latest());
+        CHECK(pair.guest.playback().latest()->motion.tick == tick);
+        CHECK(CombatPacket::encode(*pair.guest.playback().latest()) ==
+              CombatPacket::encode(captured));
+        ++published;
+    }
+    CHECK(published == 3);
 }
 
 TEST_CASE("remote scroll dismissal advances the host once and respects the native page hold",
@@ -299,8 +334,10 @@ TEST_CASE("remote scroll dismissal advances the host once and respects the nativ
     CHECK(crystalTicks > 0);
     REQUIRE(scene.play.intro() == PlayScene::Intro::Done);
     step({});
-    REQUIRE(scene.play.combatFrame());
-    REQUIRE(scene.play.combatState());
+    // Freely moving tower play can still start a congratulations/visit hold on
+    // the next tick. Until those scene clocks are captured it stays authoritative.
+    REQUIRE_FALSE(scene.play.combatFrame());
+    REQUIRE_FALSE(scene.play.combatState());
     REQUIRE(pair.guest.playback().latest());
     CHECK_FALSE(pair.guest.playback().latest()->hud->scroll);
 }

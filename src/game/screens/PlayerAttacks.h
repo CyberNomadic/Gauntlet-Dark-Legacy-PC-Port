@@ -159,6 +159,7 @@ private:
     friend class CombatRollbackCheckpoint;
     friend class OrdinaryCombatTick;
     friend class OrdinaryProjectilePhase;
+    friend class OrdinaryStrongPhase;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,
@@ -170,8 +171,13 @@ private:
      * checks the complete batch before invoking any impact-side world owner. */
     std::vector<MissileImpact>
     advanceProjectileFlights(f32 seconds, std::span<PlayerRuntime> players, const Targets& targets);
-    void dispatchProjectileImpact(const MissileImpact& impact, std::span<PlayerRuntime> players,
-                                  const Targets& targets);
+    /** Shared native flight phase before surviving-endpoint scenery/audio and
+     * impact-queue consumption. The caller owns any subsequent refusal/undo. */
+    void stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> players,
+                               const Targets& targets);
+    void dispatchProjectileImpact(
+        const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
+        const std::function<void(const MissileImpact&, f32)>& presentation = {});
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
                       std::span<PlayerRuntime> players, const Targets& targets);
     struct ItemArea {
@@ -250,8 +256,25 @@ private:
     void fireStrike(usize index, s32 strikeIndex, std::span<PlayerRuntime> players,
                     std::optional<Vec3> at = std::nullopt,
                     std::optional<usize> occurrence = std::nullopt);
+    struct StrikeEvents {
+        std::function<std::optional<u32>(ItemArchive&, std::string_view, const Vec3&,
+                                         const EffectTrees::Setting&)>
+            tree;
+        std::function<std::optional<u32>(ItemArchive&, const ParticleDescriptor&, u32)> particle;
+        std::function<void(usize, usize, std::string_view)> sound;
+        std::function<void()> shake;
+    };
+    std::optional<TurboEmission::Strike> prepareStrike(usize index, s32 row,
+                                                       std::span<PlayerRuntime> players,
+                                                       std::optional<Vec3> at = std::nullopt);
+    bool applyStrike(usize index, const TurboEmission::Strike& prepared,
+                     std::span<PlayerRuntime> players, std::optional<usize> occurrence,
+                     const StrikeEvents& events, std::optional<Vec3> at = std::nullopt);
     u32 startParticles(usize index, const TurboEmission::Particle& emission, u32 parent,
-                       std::span<PlayerRuntime> players);
+                       std::span<PlayerRuntime> players, const StrikeEvents& events);
+    void stepTurbo(usize index, s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
+                   const TurboMove::Events& events,
+                   const std::function<void(std::string_view)>& cry);
     void updateParticles(std::span<PlayerRuntime> players);
     void updateMoveAttachments(std::span<PlayerRuntime> players);
     /** Stationary effects parented to the caster by DoPlyrSfx, with their area carrier. */
@@ -311,6 +334,12 @@ private:
         u32 damageType = 0; ///< reflection can spend a launched strike's pass-through
     };
     std::vector<StrikeSource> m_strikeSources;
+    std::vector<StrikeHit> advanceStrikes(f32 seconds, std::span<PlayerRuntime> players);
+    std::vector<MissileTarget> strikeContacts(const StrikeHit& hit, const StrikeSource& source,
+                                              const Targets& targets) const;
+    void dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRuntime> players,
+                           const Targets& targets);
+    void finishStrikes();
     /** A potion's magic ringing a character: it goes about with them and harms what it
      * touches, every so often, until it is spent. */
     struct PotionShield {

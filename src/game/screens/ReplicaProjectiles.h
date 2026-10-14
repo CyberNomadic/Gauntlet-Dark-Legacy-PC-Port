@@ -115,7 +115,7 @@ public:
     bool show(const CombatSnapshot& snapshot, const ProjectileResources& resources);
     void draw(RenderDevice& device, ProjectileResources& resources, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera,
-              TreeModel::Pass pass = TreeModel::Pass::All) const;
+              TreeModel::Pass pass = TreeModel::Pass::All, bool drawParticles = true) const;
     usize count() const { return m_shots.size(); }
     const TreeParticles* particles(const ProjectileState& state) const;
 

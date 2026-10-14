@@ -18,6 +18,8 @@ public:
     void clear();
     std::span<const usize> controlledObjects() const { return m_controlled; }
     bool destroyed(s32 object) const;
+    /** Exact native ancestor flag/previous-explosion test, without changing state. */
+    bool wouldExplode(s32 object) const;
     bool explode(s32 object, const Vec3& position, WorldScene& scene, WorldCollision& collision);
     void update(std::span<const WorldAnimator::CycleEvent> events, WorldScene& scene,
                 WorldCollision& collision);

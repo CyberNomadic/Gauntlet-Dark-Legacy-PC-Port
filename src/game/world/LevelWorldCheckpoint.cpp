@@ -138,7 +138,7 @@ bool LevelWorldCheckpoint::bindResources(RenderDevice& device) {
         return false;
     }
     auto resources = std::make_shared<Resources>(m_owner);
-    if (!resources->core.bind(m_owner.m_textureAnimator) ||
+    if (!resources->core.bind(m_owner.m_textureAnimator, m_owner.m_layout) ||
         !resources->pickups.bindResources(device)) {
         return false;
     }
@@ -148,6 +148,12 @@ bool LevelWorldCheckpoint::bindResources(RenderDevice& device) {
         return false;
     }
     return true;
+}
+bool LevelWorldCheckpoint::binds(const LevelWorld& owner) const {
+    return &owner == &m_owner && bound();
+}
+bool LevelWorldCheckpoint::hasCollisionObject(s32 object) const {
+    return bound() && m_resources->core.hasCollisionObject(object);
 }
 std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() const {
     if (!bound()) {

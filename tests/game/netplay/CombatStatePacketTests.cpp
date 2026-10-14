@@ -281,7 +281,16 @@ void decorate(Packet::State& state) {
     adapter.cueEffects = {effectId};
     adapter.shrink = 0.5f;
     adapter.bagSeed = 0xFEDCBA98;
-    adapter.dormantBanks = {{CombatantKind::Golem, "GOLEM", {31, 0.25f, 0.5f}}};
+    adapter.critters.banks = {{1, CombatantKind::Golem, "GOLEM", "GOLEM", {31, 0.25f, 0.5f}}};
+    adapter.projectiles.catalog = {{1, CombatantKind::Golem, "GOLEM", {}}};
+    adapter.critterExperienceOwed[3] = 0.375f;
+    adapter.critterEffects.push_back(
+        {effectId, 0, false, {1, 2, 3}, "ROOT", {4, 5, 6}, true, {0.1f, 0.2f}, 3});
+    adapter.moveEffects.push_back({effectId, 0, false});
+    adapter.barrelRams.push_back({7, 3.5f});
+    adapter.critters.actors[0].parts[0].actor.moveTimes = {-std::numeric_limits<f32>::infinity(),
+                                                           -0.0f, 12.5f};
+    adapter.critters.actors[0].parts[0].actor.patternTimes = {0, 9.5f};
 
     CritterStatues::Placement placement;
     placement.kind = CombatantKind::Golem;
@@ -369,7 +378,7 @@ TEST_CASE("combat packet round trips complete nonempty native owners and adapter
     CHECK((*encoded)[1] == 'B');
     CHECK((*encoded)[2] == 'S');
     CHECK((*encoded)[3] == 'T');
-    CHECK((*encoded)[4] == 1);
+    CHECK((*encoded)[4] == 2);
     const auto decoded = Packet::decode(*encoded);
     REQUIRE(decoded);
     CHECK(*decoded == state);
@@ -480,7 +489,7 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
         bad.combat.effects.effects[0].state.setting.alpha = std::numeric_limits<f32>::quiet_NaN();
         break;
     case 8: bad.adapter.statues.statues[0].figure.pose.nodes[0].parent = 0; break;
-    case 9: bad.adapter.dormantBanks[0].name = "../GOLEM"; break;
+    case 9: bad.adapter.critters.banks[0].kind = CombatantKind::Boss; break;
     case 10:
         bad.combat.arsenal.missiles.missiles[0].wallSound = static_cast<MissileWallSound>(255);
         break;
@@ -495,7 +504,7 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
     case 13:
         bad.adapter.statues.statues[0].figure.position.x = std::numeric_limits<f32>::infinity();
         break;
-    case 14: bad.adapter.dormantBanks.push_back(bad.adapter.dormantBanks[0]); break;
+    case 14: bad.adapter.critters.banks.push_back(bad.adapter.critters.banks[0]); break;
     }
     CHECK_FALSE(Packet::encode(bad));
     CHECK(Packet::encode(baseline));
@@ -595,5 +604,52 @@ TEST_CASE("combat packet retains native exhausted identity counters",
     const auto bytes = Packet::encode(state);
     REQUIRE(bytes);
     CHECK(Packet::decode(*bytes) == state);
+}
+
+TEST_CASE("combat packet preserves native unused cooldown sentinels and portable critter RNG",
+          "[netplay][combat-state-packet]") {
+    auto state = emptyState();
+    auto& actor = state.adapter.critters.actors[0].parts[0].actor;
+    actor.moveTimes = {-std::numeric_limits<f32>::infinity(), -0.0f, 731.125f};
+    actor.patternTimes = {19.25f};
+    Mt19937 random{0x13572468};
+    for (s32 draw = 0; draw < 627; ++draw) {
+        (void)random();
+    }
+    state.adapter.projectiles.random = random.checkpoint();
+    REQUIRE(state.valid());
+    const auto bytes = Packet::encode(state);
+    REQUIRE(bytes);
+    const auto decoded = Packet::decode(*bytes);
+    REQUIRE(decoded);
+    CHECK(*decoded == state);
+    CHECK(std::bit_cast<u32>(decoded->adapter.critters.actors[0].parts[0].actor.moveTimes[1]) ==
+          0x80000000U);
+    CHECK(Packet::encode(*decoded) == bytes);
+    Mt19937 resumed;
+    REQUIRE(resumed.restore(decoded->adapter.projectiles.random));
+    for (s32 draw = 0; draw < 1000; ++draw) {
+        CHECK(resumed() == random());
+    }
+
+    std::vector<u8> pattern(16);
+    word(pattern, 0, 3);
+    word(pattern, 4, 0xFF800000);
+    word(pattern, 8, 0x80000000);
+    word(pattern, 12, std::bit_cast<u32>(731.125f));
+    const auto found = std::search(bytes->begin(), bytes->end(), pattern.begin(), pattern.end());
+    REQUIRE(found != bytes->end());
+    REQUIRE(std::search(found + 1, bytes->end(), pattern.begin(), pattern.end()) == bytes->end());
+    const usize offset = static_cast<usize>(found - bytes->begin());
+    for (const u32 bad : {0x7F800000U, 0x7FC00000U}) {
+        auto corrupt = *bytes;
+        word(corrupt, offset + 4, bad);
+        CHECK_FALSE(Packet::decode(corrupt));
+    }
+    auto corrupt = *bytes;
+    word(corrupt, offset, 0xFFFFFFFF);
+    CHECK_FALSE(Packet::decode(corrupt));
+    state.adapter.projectiles.random.words.fill(0);
+    CHECK_FALSE(Packet::encode(state));
 }
 } // namespace

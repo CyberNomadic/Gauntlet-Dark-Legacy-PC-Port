@@ -62,21 +62,10 @@ void ExitPortals::shut(RenderDevice& device, Portal& portal, ItemArchive& items,
               TowerAccess::kOffFigure, portal.tag);
 }
 
-bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                       const LevelCatalog& catalog, const WorldCollision* collision,
-                       ItemArchive* realmItems, const TowerAccess* access) {
-    clear();
-    m_collision = collision;
+std::vector<ExitPortals::Contact> ExitPortals::contacts(const WorldLayout& layout,
+                                                        const WorldCollision* collision) {
+    std::vector<Contact> result;
     const auto authored = itemSupportWorld(layout, collision);
-    ItemArchive& art = itemArchiveForTree(items, kFigure, realmItems);
-    const auto tree = art.loaded() ? art.trees.find(kFigure) : std::nullopt;
-    if (tree.has_value()) {
-        m_tree = &art.trees.tree(*tree);
-        for (usize i = 0; i < kSequences.size(); ++i) {
-            const auto sequence = m_tree->findSequence(kSequences[i]);
-            m_sequences[i] = sequence.has_value() ? static_cast<s32>(*sequence) : -1;
-        }
-    }
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     const std::vector<ItemInstance>& instances = layout.itemInstances();
     for (usize index = 0; index < instances.size(); ++index) {
@@ -86,13 +75,11 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
             continue;
         }
         const ItemInfo& info = infos[static_cast<usize>(instance.info)];
-        Portal portal;
+        Contact portal;
         portal.instance = static_cast<s32>(index);
         portal.secret = info.subtype == kSecretSubtype;
         portal.minPlayers = instance.minPlayers;
         portal.radius = info.radius;
-        portal.tag = tagOf(instance);
-        portal.destination = catalog.byTag(portal.tag);
         portal.position = instance.position;
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
             if (const auto floor =
@@ -115,6 +102,32 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
                 }
             }
         }
+        result.push_back(portal);
+    }
+    return result;
+}
+
+bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                       const LevelCatalog& catalog, const WorldCollision* collision,
+                       ItemArchive* realmItems, const TowerAccess* access) {
+    clear();
+    m_collision = collision;
+    ItemArchive& art = itemArchiveForTree(items, kFigure, realmItems);
+    const auto tree = art.loaded() ? art.trees.find(kFigure) : std::nullopt;
+    if (tree.has_value()) {
+        m_tree = &art.trees.tree(*tree);
+        for (usize i = 0; i < kSequences.size(); ++i) {
+            const auto sequence = m_tree->findSequence(kSequences[i]);
+            m_sequences[i] = sequence.has_value() ? static_cast<s32>(*sequence) : -1;
+        }
+    }
+    for (const auto& contact : contacts(layout, collision)) {
+        Portal portal;
+        static_cast<Contact&>(portal) = contact;
+        const auto& instance = layout.itemInstances()[static_cast<usize>(portal.instance)];
+        const auto& info = layout.itemInfos()[static_cast<usize>(instance.info)];
+        portal.tag = tagOf(instance);
+        portal.destination = catalog.byTag(portal.tag);
         if (portal.secret) {
             ItemArchive& iconArt = itemArchiveForTree(items, info.name, realmItems);
             portal.icon.place(device, iconArt, info.name, instance, collision);
@@ -144,6 +157,8 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
 }
 
 void ExitPortals::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     m_portals.clear();
     m_waiting.clear();
     m_visitors.clear();
@@ -160,13 +175,9 @@ void ExitPortals::syncFloors() {
         if (portal.support < 0) {
             continue;
         }
-        if (const auto transform = m_collision->objectTransform(portal.support)) {
-            // Collision may switch off while the floor moves; its children still ride it.
-            portal.transform = *transform * portal.supportLocal;
-            portal.position = Vec3{portal.transform[3]};
-            if (portal.secret) {
-                portal.icon.placeAt(portal.transform);
-            }
+        portal.sync(m_collision);
+        if (portal.secret) {
+            portal.icon.placeAt(portal.transform);
         }
     }
 }
@@ -210,8 +221,22 @@ void ExitPortals::advance(Portal& portal, s32 action) {
 }
 
 bool ExitPortals::standsOn(const Portal& portal, const PortalVisitor& visitor, f32 extra) {
-    const Vec3 away = visitor.position - portal.position;
-    const f32 reach = portal.radius + extra + visitor.radius;
+    return portal.touches(visitor, extra);
+}
+
+void ExitPortals::Contact::sync(const WorldCollision* collision) {
+    if (collision != nullptr && support >= 0) {
+        if (const auto current = collision->objectTransform(support)) {
+            // Collision may switch off while the floor moves; children still ride it.
+            transform = *current * supportLocal;
+            position = Vec3{transform[3]};
+        }
+    }
+}
+
+bool ExitPortals::Contact::touches(const PortalVisitor& visitor, f32 extra) const {
+    const Vec3 away = visitor.position - position;
+    const f32 reach = radius + extra + visitor.radius;
     return away.x * away.x + away.z * away.z <= reach * reach && std::abs(away.y) <= kReach;
 }
 

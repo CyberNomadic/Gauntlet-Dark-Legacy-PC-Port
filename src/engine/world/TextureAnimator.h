@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -121,6 +122,7 @@ public:
     void step(WorldScene& scene, u32 ticks = 1);
 
 private:
+    friend class WorldStateCheckpoint;
     struct Entry {
         u32 slot = 0;
         std::vector<const Texture*> frames; ///< the cycle's textures, when it cycles
@@ -136,6 +138,9 @@ private:
     static void show(const Entry& entry, WorldScene& scene);
 
     std::vector<Entry> m_entries;
+    // Immutable authored identities survive pointer resolution, including names
+    // and source slots needed to distinguish same-sized texture banks at restore.
+    std::shared_ptr<const std::vector<TextureAnimationInfo>> m_authored;
     std::vector<s32> m_entryOfInfo; ///< per animation bound, its entry or -1
     u32 m_frame = 0;
     f32 m_remainder = 0.0f;

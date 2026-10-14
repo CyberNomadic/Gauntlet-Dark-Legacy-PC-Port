@@ -50,6 +50,27 @@ public:
         std::function<bool(s32, const Vec3&, s32)> releaseEnemy;
         std::function<void(s32, const Vec3&)> shatterPotion;
     };
+    /** First scene-external boundary of a staged native update. Earlier local
+     * contacts/clocks may have advanced; the caller must rewind all participants. */
+    enum class Boundary {
+        InvalidStep,
+        Unbound,
+        WorldExplosion,
+        BarrelLesson,
+        DoomedChest,
+        FallingScenery,
+        Chest,
+        Xray,
+        Gate,
+        Trap,
+        TrapWake,
+        Cloud,
+        Blast
+    };
+    struct Phase {
+        std::optional<Boundary> refusal;
+        usize index = 0;
+    };
     void bind(const Resources& resources);
     void clear();
     void setPlayerCount(s32 count);
@@ -133,9 +154,13 @@ public:
 
 private:
     friend class OrdinaryCombatTick;
+    friend class OrdinaryFixturePhase;
     friend class LevelFixturesCheckpoint;
+    Phase updatePhase(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
+                      const Events* events);
     static Vec3 observePlayer(PlayerRuntime& player, const Vec3& position);
     static void advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks);
+    static void advanceCloudGaps(std::span<PlayerRuntime> players, f32 seconds);
     void syncChestContents();
     void updateClouds(f32 seconds, std::span<PlayerRuntime> players, const Events& events);
     /** A trapped chest goes up: its burst, its bang and a blast of fifty at the trap scale;

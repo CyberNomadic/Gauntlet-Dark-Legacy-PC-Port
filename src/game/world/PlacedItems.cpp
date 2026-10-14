@@ -862,6 +862,15 @@ void PlacedItems::update(f32 seconds) {
     }
 }
 
+const TextureAnimator* PlacedItems::textureAnimator(const ItemArchive* archive) const {
+    for (const auto& motion : m_motions) {
+        if (motion.archive == archive) {
+            return &motion.animator;
+        }
+    }
+    return nullptr;
+}
+
 f32 PlacedItems::textureFrame(const Item& item) const {
     for (const auto& motion : m_motions) {
         if (motion.archive == item.archive) {

@@ -230,7 +230,10 @@ std::optional<ChestsCheckpoint::State> ChestsCheckpoint::checkpoint() const {
                            : std::nullopt,
              source->collectedSeconds});
     }
-    return result.valid() ? std::optional{std::move(result)} : std::nullopt;
+    if (!result.valid()) {
+        return std::nullopt;
+    }
+    return result;
 }
 
 std::optional<ChestsCheckpoint::Prepared>

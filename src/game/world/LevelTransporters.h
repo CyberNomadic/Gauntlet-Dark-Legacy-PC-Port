@@ -21,7 +21,7 @@ namespace gdl::game {
 class LevelTransporters {
 public:
     static constexpr s32 kItemType = 11;
-    struct Pad {
+    struct Contact {
         s32 instance = -1;
         s32 id = 0;
         s32 destinationId = 0;
@@ -29,6 +29,10 @@ public:
         Vec3 position{0.0f};
         f32 radius = 0.0f;
         f32 height = 0.0f;
+        bool touches(const Vec3& feet, f32 bodyRadius, f32 bodyHeight) const;
+    };
+    static std::vector<Contact> contacts(const WorldLayout& layout, s32 players);
+    struct Pad : Contact {
         Mat4 transform{1.0f};
         mutable TreeModel model;
         TreePose pose;

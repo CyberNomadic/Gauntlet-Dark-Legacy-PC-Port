@@ -18,11 +18,14 @@ public:
     struct State {
         CombatRollbackCheckpoint::State combat;
         OpponentCombatCheckpoint::State adapter;
+        /** Catalog-bound opaque stage supplement. The receiver must decode it
+         * against its locally prebound stage before accepting a replay seed. */
+        std::optional<std::vector<u8>> stage;
         bool valid() const;
         bool operator==(const State&) const = default;
     };
 
-    static constexpr u32 kVersion = 1;
+    static constexpr u32 kVersion = 3;
     static constexpr usize kHeaderBytes = 16;
     static constexpr usize kMaxBytes = 512 * 1024;
     /** Shared budgets for these explicit fields. Complete participant leaves

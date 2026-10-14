@@ -221,6 +221,42 @@ TEST_CASE("loss cannot blend across teleports camera cuts respawns or empty seat
     CHECK(playback.sample(18)->players[2]->grant == 9);
 }
 
+TEST_CASE("explicit motion pairs share interpolation endpoints and reject invalid intervals",
+          "[netplay][snapshot][snapshot-pair]") {
+    SnapshotPlayback playback;
+    REQUIRE(playback.begin(1, 9));
+    auto first = state(10);
+    first.players[0]->yaw = 3.1f;
+    auto last = first;
+    last.tick = 14;
+    last.players[0]->position.x += 8;
+    last.players[0]->yaw = -3.1f;
+    last.players[1]->position.y = 20;
+    ++last.players[1]->continuity;
+    last.players[2].reset();
+    ++last.cameraContinuity;
+    last.camera.position.x += 10;
+    REQUIRE(playback.receive(1, encode(first)) == Admission::Accepted);
+    REQUIRE(playback.receive(1, encode(last)) == Admission::Accepted);
+    for (u64 offset = 0; offset <= 4; ++offset) {
+        const auto pair = SnapshotPlayback::samplePair(first, last, static_cast<f32>(offset) / 4);
+        REQUIRE(pair);
+        equalState(*pair, *playback.sample(10 + offset));
+    }
+    for (const f32 invalid : {-0.1f, 1.1f, std::numeric_limits<f32>::quiet_NaN(),
+                              std::numeric_limits<f32>::infinity()}) {
+        CHECK_FALSE(SnapshotPlayback::samplePair(first, last, invalid));
+    }
+    CHECK_FALSE(SnapshotPlayback::samplePair(first, first, 0));
+    CHECK_FALSE(SnapshotPlayback::samplePair(last, first, 0.5f));
+    ++last.epoch;
+    CHECK_FALSE(SnapshotPlayback::samplePair(first, last, 0.5f));
+    last = first;
+    ++last.tick;
+    last.players[0]->grant = 0;
+    CHECK_FALSE(SnapshotPlayback::samplePair(first, last, 0.5f));
+}
+
 TEST_CASE("snapshot history stays bounded and sampling retains high tick precision",
           "[netplay][snapshot]") {
     SnapshotPlayback playback;

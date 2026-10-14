@@ -5,6 +5,27 @@
 
 namespace gdl::game {
 namespace {
+std::unique_ptr<CombatSnapshot> displayCopy(const CombatSnapshot& snapshot) {
+    auto result = std::make_unique<CombatSnapshot>();
+    // Do not copy large native rollback pools only to discard them. A private
+    // cohort and delayed host history share this same drawing-only boundary.
+    result->motion = snapshot.motion;
+    result->worldTextureFrame = snapshot.worldTextureFrame;
+    result->musicArea = snapshot.musicArea;
+    result->musicLevel = snapshot.musicLevel;
+    result->players = snapshot.players;
+    result->enemies = snapshot.enemies;
+    result->projectiles = snapshot.projectiles;
+    result->pickups = snapshot.pickups;
+    result->fixtures = snapshot.fixtures;
+    result->fighters = snapshot.fighters;
+    result->geometry = snapshot.geometry;
+    result->hud = snapshot.hud;
+    result->worldMotion = snapshot.worldMotion;
+    result->worldMotionTicks = snapshot.worldMotionTicks;
+    return result;
+}
+
 CombatAnimation between(const CombatAnimation& from, const CombatAnimation& to, f32 t) {
     auto result = from;
     if (from.generation != 0 && from.generation == to.generation && from.action == to.action &&
@@ -63,7 +84,8 @@ Mat4 placementBetween(const Mat4& start, const Mat4& end, f32 t) {
 bool EnemyPresentation::matches(const CombatSnapshot& snapshot) const {
     if (epoch != snapshot.motion.epoch || tick != snapshot.motion.tick || !std::isfinite(blend) ||
         blend < 0 || blend > 1 || enemies.size() > CombatSnapshot::kMaxEnemies ||
-        shownGeometry.has_value() != snapshot.geometry.has_value()) {
+        shownGeometry.has_value() != snapshot.geometry.has_value() ||
+        (particles && (!std::isfinite(particleBlend) || particleBlend < 0 || particleBlend > 1))) {
         return false;
     }
     if (shownGeometry) {
@@ -82,10 +104,29 @@ bool EnemyPresentation::matches(const CombatSnapshot& snapshot) const {
             }
         }
     }
+    for (usize seat = 0; seat < players.size(); ++seat) {
+        const auto& pose = players[seat];
+        if (!pose) {
+            continue;
+        }
+        const auto& player = snapshot.players[seat];
+        const auto& motion = snapshot.motion.players[seat];
+        if (!player || !motion || pose->grant != motion->grant ||
+            pose->continuity != motion->continuity || pose->life != player->life ||
+            pose->animation.generation == 0 ||
+            pose->animation.action != player->animation.action ||
+            pose->animation.sequence != player->animation.sequence ||
+            pose->animation.generation != player->animation.generation ||
+            pose->animation.frame != player->animation.frame ||
+            pose->animation.transition != player->animation.transition || !pose->pose.valid()) {
+            return false;
+        }
+    }
     u64 previous = 0;
     for (const auto& interval : enemies) {
         const auto& from = interval.from;
         const auto& to = interval.to;
+        const f32 fraction = interval.nativeBlend.value_or(blend);
         const auto found = std::ranges::lower_bound(snapshot.enemies, from.instance, {},
                                                     &EnemyCombatState::instance);
         if (from.instance <= previous || found == snapshot.enemies.end() ||
@@ -94,9 +135,21 @@ bool EnemyPresentation::matches(const CombatSnapshot& snapshot) const {
             from.tier != found->tier || from.variant != to.variant ||
             from.variant != found->variant || from.life != to.life || from.life != found->life ||
             from.animation.action != to.animation.action ||
-            from.animation.action != found->animation.action ||
+            from.animation.action != found->animation.action || !std::isfinite(fraction) ||
+            fraction < 0 || fraction > 1 ||
+            interval.nativeBlend.has_value() != interval.nativePose.has_value() ||
+            interval.nativeBlend.has_value() != interval.nativeTextureFrame.has_value() ||
+            (interval.nativeBlend &&
+             (from.animation.generation == 0 ||
+              from.animation.generation != to.animation.generation ||
+              from.animation.generation != found->animation.generation ||
+              from.animation.sequence != to.animation.sequence ||
+              from.animation.sequence != found->animation.sequence)) ||
+            (interval.nativePose && !interval.nativePose->valid()) ||
+            (interval.nativeTextureFrame &&
+             (!std::isfinite(*interval.nativeTextureFrame) || *interval.nativeTextureFrame < 0)) ||
             glm::distance(from.position, to.position) > 32 ||
-            glm::mix(from.position, to.position, blend) != found->position) {
+            glm::mix(from.position, to.position, fraction) != found->position) {
             return false;
         }
         previous = from.instance;
@@ -182,194 +235,218 @@ std::optional<CombatSnapshot> CombatPlayback::sample(u64 tick, f32 fraction,
         const auto& lower = m_history[i - 1];
         const f32 t = static_cast<f32>((static_cast<f64>(tick - lower.motion.tick) + fraction) /
                                        static_cast<f64>(upper.motion.tick - lower.motion.tick));
-        auto shown = lower;
-        shown.motion = *motion;
-        if (upper.worldTextureFrame >= lower.worldTextureFrame) {
-            shown.worldTextureFrame =
-                std::lerp(lower.worldTextureFrame, upper.worldTextureFrame, t);
-        }
-        if (presentation != nullptr) {
-            presentation->blend = t;
-            presentation->fromGeometry = lower.geometry;
-            presentation->toGeometry = upper.geometry;
-        }
-        if (shown.geometry && upper.geometry && shown.geometry->layout == upper.geometry->layout &&
-            shown.geometry->objectCount == upper.geometry->objectCount) {
-            shown.geometry->darken = std::lerp(shown.geometry->darken, upper.geometry->darken, t);
-            for (auto& object : shown.geometry->objects) {
-                const auto found = std::ranges::lower_bound(upper.geometry->objects, object.index,
-                                                            {}, &SceneGeometry::Object::index);
-                if (found != upper.geometry->objects.end() && found->index == object.index &&
-                    found->continuity == object.continuity) {
-                    object.local = placementBetween(object.local, found->local, t);
-                    if (found->visible == object.visible) {
-                        object.alpha = std::lerp(object.alpha, found->alpha, t);
-                    }
-                }
-            }
-        }
-        for (usize seat = 0; seat < shown.players.size(); ++seat) {
-            const auto& from = lower.players[seat];
-            const auto& to = upper.players[seat];
-            const auto& start = lower.motion.players[seat];
-            const auto& end = upper.motion.players[seat];
-            if (from && to && start && end && from->life == to->life &&
-                start->grant == end->grant && start->continuity == end->continuity) {
-                auto& player = *shown.players[seat];
-                player.animation = between(from->animation, to->animation, t);
-                if (from->shadow && to->shadow &&
-                    glm::distance(from->shadow->ground, to->shadow->ground) <= 32) {
-                    player.shadow->ground = glm::mix(from->shadow->ground, to->shadow->ground, t);
-                    player.shadow->normal =
-                        glm::normalize(glm::mix(from->shadow->normal, to->shadow->normal, t));
-                    player.shadow->alpha = std::lerp(from->shadow->alpha, to->shadow->alpha, t);
-                }
-                if (from->portalPhase && to->portalPhase &&
-                    *to->portalPhase >= *from->portalPhase) {
-                    player.portalPhase = std::lerp(*from->portalPhase, *to->portalPhase, t);
-                }
-                for (usize slot = 0; slot < player.companions.size(); ++slot) {
-                    auto& current = player.companions[slot];
-                    const auto& next = to->companions[slot];
-                    if (!current || !next || current->form != next->form ||
-                        current->animation.generation != next->animation.generation ||
-                        current->animation.sequence != next->animation.sequence ||
-                        next->animation.frame < current->animation.frame ||
-                        glm::distance(Vec3{current->placement[3]}, Vec3{next->placement[3]}) > 32) {
-                        continue;
-                    }
-                    current->placement = placementBetween(current->placement, next->placement, t);
-                    current->animation = between(current->animation, next->animation, t);
-                    current->textureClock = std::lerp(current->textureClock, next->textureClock, t);
-                    current->alpha = std::lerp(current->alpha, next->alpha, t);
-                }
-            }
-            if (shown.players[seat] && shown.players[seat]->locomotion &&
-                shown.motion.players[seat] &&
-                shown.players[seat]->locomotion->origin != shown.motion.players[seat]->position) {
-                // Contact observations belong to exact completed host feet, not
-                // to a fractional drawing pose. Never renew the replay region
-                // by moving its origin along with interpolation.
-                shown.players[seat]->locomotion.reset();
-            }
-        }
-        // Discrete state and absent actors belong to the lower tick. Never show
-        // a birth early, blend a recycled slot, or interpolate health through death.
-        for (auto& enemy : shown.enemies) {
-            const auto found = std::ranges::lower_bound(upper.enemies, enemy.instance, {},
-                                                        &EnemyCombatState::instance);
-            if (found == upper.enemies.end() || found->instance != enemy.instance ||
-                found->life != enemy.life || found->kind != enemy.kind ||
-                found->tier != enemy.tier || found->variant != enemy.variant ||
-                glm::distance(enemy.position, found->position) > 32) {
-                continue;
-            }
-            if (presentation != nullptr && enemy.animation.action == found->animation.action) {
-                presentation->enemies.push_back({enemy, *found});
-            }
-            enemy.position = glm::mix(enemy.position, found->position, t);
-            enemy.yaw = std::remainder(
-                enemy.yaw + std::remainder(found->yaw - enemy.yaw, kTwoPi) * t, kTwoPi);
-            enemy.animation = between(enemy.animation, found->animation, t);
-            enemy.alpha = std::lerp(enemy.alpha, found->alpha, t);
-            enemy.scale = std::lerp(enemy.scale, found->scale, t);
-        }
-        for (auto& shot : shown.projectiles) {
-            const auto found =
-                std::ranges::lower_bound(upper.projectiles, shot.key(), {}, &ProjectileState::key);
-            if (found == upper.projectiles.end() || found->key() != shot.key() ||
-                found->resource != shot.resource || found->continuity != shot.continuity ||
-                found->flags != shot.flags ||
-                glm::distance(Vec3{shot.placement[3]}, Vec3{found->placement[3]}) > 32) {
-                continue;
-            }
-            shot.placement = placementBetween(shot.placement, found->placement, t);
-            if (glm::dot(shot.direction, found->direction) > 0) {
-                shot.direction = glm::mix(shot.direction, found->direction, t);
-            }
-            shot.age = std::lerp(shot.age, found->age, t);
-            shot.radius = std::lerp(shot.radius, found->radius, t);
-            shot.alpha = std::lerp(shot.alpha, found->alpha, t);
-            shot.textureFrame = std::lerp(shot.textureFrame, found->textureFrame, t);
-            shot.animation = between(shot.animation, found->animation, t);
-        }
-        for (auto& item : shown.pickups) {
-            const auto found =
-                std::ranges::lower_bound(upper.pickups, item.instance, {}, &PickupState::instance);
-            if (found == upper.pickups.end() || found->instance != item.instance ||
-                found->resource != item.resource || found->continuity != item.continuity ||
-                glm::distance(Vec3{item.placement[3]}, Vec3{found->placement[3]}) > 32) {
-                continue;
-            }
-            item.placement = placementBetween(item.placement, found->placement, t);
-            item.alpha = std::lerp(item.alpha, found->alpha, t);
-            item.textureFrame = std::lerp(item.textureFrame, found->textureFrame, t);
-            item.animation = between(item.animation, found->animation, t);
-        }
-        for (auto& fixture : shown.fixtures) {
-            const auto found =
-                std::ranges::lower_bound(upper.fixtures, fixture.key(), {}, &FixtureState::key);
-            if (found == upper.fixtures.end() || found->key() != fixture.key() ||
-                found->resource != fixture.resource || found->continuity != fixture.continuity ||
-                found->cameraFacing != fixture.cameraFacing ||
-                glm::distance(Vec3{fixture.placement[3]}, Vec3{found->placement[3]}) > 32) {
-                continue;
-            }
-            fixture.placement = placementBetween(fixture.placement, found->placement, t);
-            fixture.alpha = std::lerp(fixture.alpha, found->alpha, t);
-            fixture.textureClock = std::lerp(fixture.textureClock, found->textureClock, t);
-            if (fixture.pose.generation == found->pose.generation) {
-                if (fixture.meshSequence == found->meshSequence &&
-                    found->meshFrame >= fixture.meshFrame) {
-                    fixture.meshFrame = std::lerp(fixture.meshFrame, found->meshFrame, t);
-                }
-                if (fixture.textureSequence == found->textureSequence &&
-                    found->textureFrame >= fixture.textureFrame) {
-                    fixture.textureFrame = std::lerp(fixture.textureFrame, found->textureFrame, t);
-                }
-            }
-            fixture.pose = between(fixture.pose, found->pose, t);
-        }
-        for (auto& mesh : shown.fighters) {
-            // Attached billboards and meters were posed with the host camera.
-            // Never turn them toward a cut the shared camera has not reached yet.
-            if (lower.motion.cameraContinuity != upper.motion.cameraContinuity) {
-                continue;
-            }
-            const auto found =
-                std::ranges::lower_bound(upper.fighters, mesh.key(), {}, &FighterMeshState::key);
-            if (found == upper.fighters.end() || found->key() != mesh.key() ||
-                found->incarnation != mesh.incarnation || found->resource != mesh.resource ||
-                found->nodes.size() != mesh.nodes.size() ||
-                glm::distance(Vec3{mesh.placement[3]}, Vec3{found->placement[3]}) > 32) {
-                continue;
-            }
-            mesh.placement = placementBetween(mesh.placement, found->placement, t);
-            mesh.alpha = std::lerp(mesh.alpha, found->alpha, t);
-            mesh.textureClock = std::lerp(mesh.textureClock, found->textureClock, t);
-            const bool sameRoot =
-                mesh.nodes.empty() || mesh.nodes[0].generation == found->nodes[0].generation;
-            if (sameRoot && mesh.sequence == found->sequence && found->frame >= mesh.frame) {
-                mesh.frame = std::lerp(mesh.frame, found->frame, t);
-            }
-            for (usize n = 0; n < mesh.nodes.size(); ++n) {
-                auto& node = mesh.nodes[n];
-                const auto& next = found->nodes[n];
-                if (node.generation != next.generation || node.sequence != next.sequence ||
-                    next.frame < node.frame) {
-                    continue;
-                }
-                node.transform = placementBetween(node.transform, next.transform, t);
-                node.frame = std::lerp(node.frame, next.frame, t);
-                if (node.alpha > 0 && next.alpha > 0) {
-                    node.alpha = std::lerp(node.alpha, next.alpha, t);
-                }
-            }
-        }
-        stamp(shown);
-        return shown;
+        auto shown = samplePair(lower, upper, t, presentation);
+        return shown ? std::optional<CombatSnapshot>{std::move(*shown)} : std::nullopt;
     }
     stamp(m_history.back());
     return m_history.back();
+}
+
+std::unique_ptr<CombatSnapshot> CombatPlayback::samplePair(const CombatSnapshot& lower,
+                                                           const CombatSnapshot& upper, f32 t,
+                                                           EnemyPresentation* presentation) {
+    if (presentation != nullptr) {
+        *presentation = {};
+    }
+    const auto motion = SnapshotPlayback::samplePair(lower.motion, upper.motion, t);
+    if (!motion || !lower.valid() || !upper.valid()) {
+        return nullptr;
+    }
+    const auto stamp = [&](const CombatSnapshot& snapshot) {
+        if (presentation != nullptr) {
+            presentation->epoch = snapshot.motion.epoch;
+            presentation->tick = snapshot.motion.tick;
+            presentation->shownGeometry = snapshot.geometry;
+        }
+    };
+    if (t == 1) {
+        auto result = displayCopy(upper);
+        stamp(*result);
+        return result;
+    }
+    auto result = displayCopy(lower);
+    auto& shown = *result;
+    shown.motion = *motion;
+    if (upper.worldTextureFrame >= lower.worldTextureFrame) {
+        shown.worldTextureFrame = std::lerp(lower.worldTextureFrame, upper.worldTextureFrame, t);
+    }
+    if (presentation != nullptr) {
+        presentation->blend = t;
+        presentation->fromGeometry = lower.geometry;
+        presentation->toGeometry = upper.geometry;
+    }
+    if (shown.geometry && upper.geometry && shown.geometry->layout == upper.geometry->layout &&
+        shown.geometry->objectCount == upper.geometry->objectCount) {
+        shown.geometry->darken = std::lerp(shown.geometry->darken, upper.geometry->darken, t);
+        for (auto& object : shown.geometry->objects) {
+            const auto found = std::ranges::lower_bound(upper.geometry->objects, object.index, {},
+                                                        &SceneGeometry::Object::index);
+            if (found != upper.geometry->objects.end() && found->index == object.index &&
+                found->continuity == object.continuity) {
+                object.local = placementBetween(object.local, found->local, t);
+                if (found->visible == object.visible) {
+                    object.alpha = std::lerp(object.alpha, found->alpha, t);
+                }
+            }
+        }
+    }
+    for (usize seat = 0; seat < shown.players.size(); ++seat) {
+        const auto& from = lower.players[seat];
+        const auto& to = upper.players[seat];
+        const auto& start = lower.motion.players[seat];
+        const auto& end = upper.motion.players[seat];
+        if (from && to && start && end && from->life == to->life && start->grant == end->grant &&
+            start->continuity == end->continuity) {
+            auto& player = *shown.players[seat];
+            player.animation = between(from->animation, to->animation, t);
+            if (from->shadow && to->shadow &&
+                glm::distance(from->shadow->ground, to->shadow->ground) <= 32) {
+                player.shadow->ground = glm::mix(from->shadow->ground, to->shadow->ground, t);
+                player.shadow->normal =
+                    glm::normalize(glm::mix(from->shadow->normal, to->shadow->normal, t));
+                player.shadow->alpha = std::lerp(from->shadow->alpha, to->shadow->alpha, t);
+            }
+            if (from->portalPhase && to->portalPhase && *to->portalPhase >= *from->portalPhase) {
+                player.portalPhase = std::lerp(*from->portalPhase, *to->portalPhase, t);
+            }
+            for (usize slot = 0; slot < player.companions.size(); ++slot) {
+                auto& current = player.companions[slot];
+                const auto& next = to->companions[slot];
+                if (!current || !next || current->form != next->form ||
+                    current->animation.generation != next->animation.generation ||
+                    current->animation.sequence != next->animation.sequence ||
+                    next->animation.frame < current->animation.frame ||
+                    glm::distance(Vec3{current->placement[3]}, Vec3{next->placement[3]}) > 32) {
+                    continue;
+                }
+                current->placement = placementBetween(current->placement, next->placement, t);
+                current->animation = between(current->animation, next->animation, t);
+                current->textureClock = std::lerp(current->textureClock, next->textureClock, t);
+                current->alpha = std::lerp(current->alpha, next->alpha, t);
+            }
+        }
+        if (shown.players[seat] && shown.players[seat]->locomotion && shown.motion.players[seat] &&
+            shown.players[seat]->locomotion->origin != shown.motion.players[seat]->position) {
+            // Contact observations belong to exact completed host feet, not
+            // to a fractional drawing pose. Never renew the replay region
+            // by moving its origin along with interpolation.
+            shown.players[seat]->locomotion.reset();
+        }
+    }
+    // Discrete state and absent actors belong to the lower tick. Never show
+    // a birth early, blend a recycled slot, or interpolate health through death.
+    for (auto& enemy : shown.enemies) {
+        const auto found = std::ranges::lower_bound(upper.enemies, enemy.instance, {},
+                                                    &EnemyCombatState::instance);
+        if (found == upper.enemies.end() || found->instance != enemy.instance ||
+            found->life != enemy.life || found->kind != enemy.kind || found->tier != enemy.tier ||
+            found->variant != enemy.variant ||
+            glm::distance(enemy.position, found->position) > 32) {
+            continue;
+        }
+        if (presentation != nullptr && enemy.animation.action == found->animation.action) {
+            presentation->enemies.push_back({enemy, *found});
+        }
+        enemy.position = glm::mix(enemy.position, found->position, t);
+        enemy.yaw =
+            std::remainder(enemy.yaw + std::remainder(found->yaw - enemy.yaw, kTwoPi) * t, kTwoPi);
+        enemy.animation = between(enemy.animation, found->animation, t);
+        enemy.alpha = std::lerp(enemy.alpha, found->alpha, t);
+        enemy.scale = std::lerp(enemy.scale, found->scale, t);
+    }
+    for (auto& shot : shown.projectiles) {
+        const auto found =
+            std::ranges::lower_bound(upper.projectiles, shot.key(), {}, &ProjectileState::key);
+        if (found == upper.projectiles.end() || found->key() != shot.key() ||
+            found->resource != shot.resource || found->continuity != shot.continuity ||
+            found->flags != shot.flags ||
+            glm::distance(Vec3{shot.placement[3]}, Vec3{found->placement[3]}) > 32) {
+            continue;
+        }
+        shot.placement = placementBetween(shot.placement, found->placement, t);
+        if (glm::dot(shot.direction, found->direction) > 0) {
+            shot.direction = glm::mix(shot.direction, found->direction, t);
+        }
+        shot.age = std::lerp(shot.age, found->age, t);
+        shot.radius = std::lerp(shot.radius, found->radius, t);
+        shot.alpha = std::lerp(shot.alpha, found->alpha, t);
+        shot.textureFrame = std::lerp(shot.textureFrame, found->textureFrame, t);
+        shot.animation = between(shot.animation, found->animation, t);
+    }
+    for (auto& item : shown.pickups) {
+        const auto found =
+            std::ranges::lower_bound(upper.pickups, item.instance, {}, &PickupState::instance);
+        if (found == upper.pickups.end() || found->instance != item.instance ||
+            found->resource != item.resource || found->continuity != item.continuity ||
+            glm::distance(Vec3{item.placement[3]}, Vec3{found->placement[3]}) > 32) {
+            continue;
+        }
+        item.placement = placementBetween(item.placement, found->placement, t);
+        item.alpha = std::lerp(item.alpha, found->alpha, t);
+        item.textureFrame = std::lerp(item.textureFrame, found->textureFrame, t);
+        item.animation = between(item.animation, found->animation, t);
+    }
+    for (auto& fixture : shown.fixtures) {
+        const auto found =
+            std::ranges::lower_bound(upper.fixtures, fixture.key(), {}, &FixtureState::key);
+        if (found == upper.fixtures.end() || found->key() != fixture.key() ||
+            found->resource != fixture.resource || found->continuity != fixture.continuity ||
+            found->cameraFacing != fixture.cameraFacing ||
+            glm::distance(Vec3{fixture.placement[3]}, Vec3{found->placement[3]}) > 32) {
+            continue;
+        }
+        fixture.placement = placementBetween(fixture.placement, found->placement, t);
+        fixture.alpha = std::lerp(fixture.alpha, found->alpha, t);
+        fixture.textureClock = std::lerp(fixture.textureClock, found->textureClock, t);
+        if (fixture.pose.generation == found->pose.generation) {
+            if (fixture.meshSequence == found->meshSequence &&
+                found->meshFrame >= fixture.meshFrame) {
+                fixture.meshFrame = std::lerp(fixture.meshFrame, found->meshFrame, t);
+            }
+            if (fixture.textureSequence == found->textureSequence &&
+                found->textureFrame >= fixture.textureFrame) {
+                fixture.textureFrame = std::lerp(fixture.textureFrame, found->textureFrame, t);
+            }
+        }
+        fixture.pose = between(fixture.pose, found->pose, t);
+    }
+    for (auto& mesh : shown.fighters) {
+        // Attached billboards and meters were posed with the host camera.
+        // Never turn them toward a cut the shared camera has not reached yet.
+        if (lower.motion.cameraContinuity != upper.motion.cameraContinuity) {
+            continue;
+        }
+        const auto found =
+            std::ranges::lower_bound(upper.fighters, mesh.key(), {}, &FighterMeshState::key);
+        if (found == upper.fighters.end() || found->key() != mesh.key() ||
+            found->incarnation != mesh.incarnation || found->resource != mesh.resource ||
+            found->nodes.size() != mesh.nodes.size() ||
+            glm::distance(Vec3{mesh.placement[3]}, Vec3{found->placement[3]}) > 32) {
+            continue;
+        }
+        mesh.placement = placementBetween(mesh.placement, found->placement, t);
+        mesh.alpha = std::lerp(mesh.alpha, found->alpha, t);
+        mesh.textureClock = std::lerp(mesh.textureClock, found->textureClock, t);
+        const bool sameRoot =
+            mesh.nodes.empty() || mesh.nodes[0].generation == found->nodes[0].generation;
+        if (sameRoot && mesh.sequence == found->sequence && found->frame >= mesh.frame) {
+            mesh.frame = std::lerp(mesh.frame, found->frame, t);
+        }
+        for (usize n = 0; n < mesh.nodes.size(); ++n) {
+            auto& node = mesh.nodes[n];
+            const auto& next = found->nodes[n];
+            if (node.generation != next.generation || node.sequence != next.sequence ||
+                next.frame < node.frame) {
+                continue;
+            }
+            node.transform = placementBetween(node.transform, next.transform, t);
+            node.frame = std::lerp(node.frame, next.frame, t);
+            if (node.alpha > 0 && next.alpha > 0) {
+                node.alpha = std::lerp(node.alpha, next.alpha, t);
+            }
+        }
+    }
+    stamp(shown);
+    return result;
 }
 } // namespace gdl::game

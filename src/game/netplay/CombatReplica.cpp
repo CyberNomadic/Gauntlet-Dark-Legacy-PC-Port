@@ -38,11 +38,14 @@ static_assert(CombatReplica::kMaxPackets <= 65535);
 std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatSnapshot& snapshot,
                                                              SnapshotBlock::Compression compression,
                                                              Recovery recovery) {
-    const auto raw = CombatPacket::encode(snapshot);
-    if (!raw) {
-        return std::nullopt;
-    }
-    const auto payload = SnapshotBlock::encode(*raw, compression);
+    const auto prepared = CombatPacket::prepare(snapshot);
+    return prepared ? packets(*prepared, compression, recovery) : std::nullopt;
+}
+
+std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatPacket::Prepared& snapshot,
+                                                             SnapshotBlock::Compression compression,
+                                                             Recovery recovery) {
+    const auto payload = SnapshotBlock::encode(snapshot.bytes(), compression);
     if (!payload) {
         return std::nullopt;
     }
@@ -76,8 +79,8 @@ std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatSnapsho
         bytes.reserve(kHeaderBytes + chunk.size());
         word(bytes, kMagic);
         word(bytes, kVersion);
-        wide(bytes, snapshot.motion.epoch);
-        wide(bytes, snapshot.motion.tick);
+        wide(bytes, snapshot.motion().epoch);
+        wide(bytes, snapshot.motion().tick);
         word(bytes, static_cast<u32>(payload->size()));
         word(bytes, digest);
         word(bytes, static_cast<u32>(count) | (static_cast<u32>(index) << 16U));

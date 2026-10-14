@@ -1049,6 +1049,10 @@ struct StageDiagnostics {
     u64 motions = 0;
     u64 animations = 0;
     u64 opponentSeeds = 0;
+    u64 combatSeeds = 0;
+    u64 stageSeeds = 0;
+    u64 stageBytes = 0;
+    usize stageBytesMax = 0;
     usize peak = 0;
 
     void observe(const CombatSnapshot* state) {
@@ -1062,6 +1066,15 @@ struct StageDiagnostics {
         tick = state->motion.tick;
         ++observations;
         opponentSeeds += state->opponents && state->opponentFrame ? 1 : 0;
+        if (state->combatState && state->combatFrame) {
+            ++combatSeeds;
+            if (state->combatState->stage) {
+                ++stageSeeds;
+                const auto bytes = state->combatState->stage->size();
+                stageBytes += bytes;
+                stageBytesMax = std::max(stageBytesMax, bytes);
+            }
+        }
         usize active = 0;
         usize previousIndex = 0;
         for (const auto& enemy : state->enemies) {
@@ -1094,7 +1107,7 @@ struct StageDiagnostics {
             }
         }
     }
-    void append(nlohmann::json& report) const {
+    void append(nlohmann::json& report, bool host) const {
         report["stage_probe_schema"] = 1;
         report["stage_activity_scope"] = "authority-checkpoints";
         report["stage_authority_observations"] = observations;
@@ -1103,8 +1116,75 @@ struct StageDiagnostics {
         report["stage_enemy_animation_samples"] = animations;
         report["stage_enemy_peak"] = peak;
         report["stage_opponent_seed_observations"] = opponentSeeds;
+        report["combat_seeds"] = {
+            {"schema", 1},
+            {"scope", "distinct-authority-post-step-checkpoints"},
+            {"coverage", "latest-after-update-not-every-transport-snapshot"},
+            {"observation", host ? "host-captured" : "guest-received"},
+            {"observations", observations},
+            {"opponent", opponentSeeds},
+            {"combat", combatSeeds},
+            {"stage", stageSeeds},
+            {"stage_bytes_total", stageBytes},
+            {"stage_bytes_max", stageBytesMax},
+            {"capture_nanoseconds", nullptr},
+            {"encode_nanoseconds", nullptr},
+            {"timing_scope", "capture-and-encode-not-instrumented-no-duplicate-work"}};
     }
 };
+
+/** Read cumulative native counters once at each measurement boundary. Counting
+ * prefixes separately from accepted passes prevents a late refusal from being
+ * reported as usable Stage prediction. The local movement-only lane is not in
+ * these counters; legacy means a complete combat seed without Stage owners. */
+nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
+                            const OnlineCombatReplay::Diagnostics& after) {
+    u64 resets = 0;
+    const auto difference = [&](u64 first, u64 last) {
+        if (last < first) {
+            ++resets;
+            return u64{0};
+        }
+        return last - first;
+    };
+    nlohmann::json result{
+        {"schema", 1},
+        {"scope", "measurement-window-native-replay"},
+        {"legacy_scope", "complete-combat-without-stage-not-local-movement-prediction"}};
+    for (usize domain = 0; domain < OnlineCombatReplay::kDomains.size(); ++domain) {
+        const auto& first = before.domains[domain];
+        const auto& last = after.domains[domain];
+        auto& output = result[OnlineCombatReplay::kDomains[domain]];
+        output = {
+            {"updates", difference(first.updates, last.updates)},
+            {"passes", difference(first.passes, last.passes)},
+            {"refusals", difference(first.refusals, last.refusals)},
+            {"advanced_ticks", difference(first.advancedTicks, last.advancedTicks)},
+            {"invalid_ticks", difference(first.invalidTicks, last.invalidTicks)},
+            {"unsupported_ticks", difference(first.unsupportedTicks, last.unsupportedTicks)},
+            {"presents", difference(first.presents, last.presents)},
+            {"present_refusals", difference(first.presentRefusals, last.presentRefusals)},
+            {"decode_attempts", difference(first.decodeAttempts, last.decodeAttempts)},
+            {"decode_successes", difference(first.decodeSuccesses, last.decodeSuccesses)},
+            {"decode_failures", difference(first.decodeFailures, last.decodeFailures)},
+            {"decode_nanoseconds", difference(first.decodeNanoseconds, last.decodeNanoseconds)},
+            {"advance_nanoseconds", difference(first.advanceNanoseconds, last.advanceNanoseconds)}};
+        for (usize reason = 0; reason < OnlineCombatReplay::kRefusals.size(); ++reason) {
+            output["reasons"][OnlineCombatReplay::kRefusals[reason]] =
+                difference(first.reasons[reason], last.reasons[reason]);
+        }
+        for (usize issue = 0; issue < OrdinaryCombatCheckpoint::kRestoreIssues.size(); ++issue) {
+            output["seed_issues"][OrdinaryCombatCheckpoint::kRestoreIssues[issue]] =
+                difference(first.seedIssues[issue], last.seedIssues[issue]);
+        }
+        for (usize phase = 0; phase < OrdinaryCombatTick::kRefusals.size(); ++phase) {
+            output["native_refusals"][OrdinaryCombatTick::kRefusals[phase]] =
+                difference(first.tickRefusals[phase], last.tickRefusals[phase]);
+        }
+    }
+    result["counter_resets"] = resets;
+    return result;
+}
 
 void run(const Options& options, Clock::time_point processBegin) {
     const GameConfig config;
@@ -1185,6 +1265,7 @@ void run(const Options& options, Clock::time_point processBegin) {
     LatencyTelemetry::Distribution renderCost;
     LoopDiagnostics diagnostics;
     StageDiagnostics stage;
+    OnlineCombatReplay::Diagnostics replayBegin;
     u64 overruns = 0;
     s32 lastThrow = -1;
     const bool speedWorkload = options.workload == "speed-rapid-five";
@@ -1403,6 +1484,7 @@ void run(const Options& options, Clock::time_point processBegin) {
                     }
                     started = Clock::now();
                     measuredWire.reset();
+                    replayBegin = play.combatReplayDiagnostics();
                 }
             }
         }
@@ -1421,7 +1503,8 @@ void run(const Options& options, Clock::time_point processBegin) {
             report["stage"] = options.stage;
             report["loaded_stage"] = loadedLevel->isTower() ? "tower" : loadedLevel->name;
             report["scene_id"] = session.match().context().scene;
-            stage.append(report);
+            stage.append(report, options.host);
+            report["combat_replay"] = replayReport(replayBegin, play.combatReplayDiagnostics());
             if (!turboWorkload) {
                 throws.append(report);
             }

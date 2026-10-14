@@ -178,6 +178,54 @@ TEST_CASE("safe rock checkpoint restores are atomic and fenced by bindings and s
     REQUIRE(captured(fixture.owner).rocks.empty());
 }
 
+TEST_CASE("empty safe rock rosters retain their native animation binding",
+          "[safe-rocks-checkpoint][assets]") {
+    const auto directory = test::scratchDirectory("safe-rock-empty-animation-binding");
+    writeTextFile(
+        directory / "world.json",
+        R"({"objects":[{"name":"FLOOR","position":[0,0,0]}],"itemInfos":[],"itemInstances":[]})");
+    WorldLayout hostLayout;
+    WorldLayout guestLayout;
+    REQUIRE(hostLayout.load(directory));
+    REQUIRE(guestLayout.load(directory));
+    const auto archive = test::assetOrSkip("ITEMS/LEVELK5/objects.ngc").parent_path();
+    ItemArchive hostItems;
+    ItemArchive guestItems;
+    REQUIRE(hostItems.load(archive));
+    REQUIRE(guestItems.load(archive));
+    test::FakeRenderDevice hostDevice;
+    test::FakeRenderDevice guestDevice;
+    SafeRocks host;
+    SafeRocks guest;
+    CHECK_FALSE(host.bind(hostDevice, hostLayout, hostItems));
+    CHECK_FALSE(guest.bind(guestDevice, guestLayout, guestItems));
+    REQUIRE(host.size() == 0);
+    REQUIRE(guest.size() == 0);
+    SafeRocksCheckpoint hostOwner(host);
+    SafeRocksCheckpoint guestOwner(guest);
+    const auto unbound = captured(guestOwner);
+    CHECK_FALSE(unbound.animationItems);
+
+    // PlayScene performs this bind unconditionally after opening opponents,
+    // even for ordinary levels without arena cover or resolved texture clocks.
+    host.bindAnimations(hostDevice, hostItems);
+    host.update(0.075f);
+    const auto authority = captured(hostOwner);
+    REQUIRE(authority.animationItems);
+    REQUIRE(authority.rocks.empty());
+    REQUIRE(authority.animations.empty());
+    CHECK_FALSE(guestOwner.restore(authority));
+    CHECK(captured(guestOwner) == unbound);
+
+    guest.bindAnimations(guestDevice, guestItems);
+    const auto uploads = guestDevice.texturesCreated;
+    const auto updates = guestDevice.textureUpdates;
+    REQUIRE(guestOwner.restore(authority));
+    CHECK(captured(guestOwner) == authority);
+    CHECK(guestDevice.texturesCreated == uploads);
+    CHECK(guestDevice.textureUpdates == updates);
+}
+
 TEST_CASE("native arena cover checkpoints retain all authored tiers and stable resource addresses",
           "[safe-rocks-checkpoint][assets]") {
     const auto name = GENERATE("B6", "A5", "I5");

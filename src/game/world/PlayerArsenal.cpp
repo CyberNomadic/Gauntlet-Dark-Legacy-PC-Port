@@ -535,6 +535,41 @@ void PlayerArsenal::presentPotion(const PotionEmission::Burst& burst, bool castS
     }
 }
 
+PlayerArsenal::ImpactPresentation PlayerArsenal::impactPresentation(const MissileImpact& impact,
+                                                                    f32 playerDistance) const {
+    ImpactPresentation result;
+    result.position = impact.position;
+    if (!m_resources || impact.potion != 0 || impact.target >= 0) {
+        return result; // Target owners supply their own material/body feedback.
+    }
+    if (m_resources->weapons.loaded() && !impact.effect.empty()) {
+        result.archive = &m_resources->weapons;
+        result.tree = impact.effect;
+        result.setting.unlit = true;
+        result.setting.depthWrite = false;
+        if (impact.effect == "SPARKS") {
+            result.setting.tint.a = 96;
+        }
+    }
+    if (impact.liquid) {
+        result.cue = ImpactCue{"S_SPLASH", impact.position, playerDistance,
+                               LevelSoundscape::kSplashLevel / 255.0f};
+        return result;
+    }
+    std::string_view sound;
+    switch (impact.wallSound) {
+    case MissileWallSound::Level: sound = m_resources->wallHitSound; break;
+    case MissileWallSound::ThreeWay: sound = "S_3WAYAXE"; break;
+    case MissileWallSound::FiveWay: sound = "S_5WAYAXE"; break;
+    case MissileWallSound::Silent: break;
+    case MissileWallSound::Ricochet: sound = "S_RICOCHET"; break;
+    }
+    if (!sound.empty()) {
+        result.cue = ImpactCue{std::string{sound}, impact.position, std::nullopt, 1};
+    }
+    return result;
+}
+
 void PlayerArsenal::presentImpact(const MissileImpact& impact, f32 playerDistance) {
     if (!m_resources) {
         return;
@@ -547,30 +582,18 @@ void PlayerArsenal::presentImpact(const MissileImpact& impact, f32 playerDistanc
         }
         return;
     }
-    if (impact.target >= 0) {
-        return; // Target owners supply their own material/body feedback.
+    const auto emission = impactPresentation(impact, playerDistance);
+    if (emission.archive != nullptr) {
+        m_resources->effects.startSet(m_resources->device, *emission.archive, emission.tree,
+                                      emission.position, emission.setting);
     }
-    if (m_resources->weapons.loaded() && !impact.effect.empty()) {
-        EffectTrees::Setting setting;
-        setting.unlit = true;
-        setting.depthWrite = false;
-        if (impact.effect == "SPARKS") {
-            setting.tint.a = 96;
+    if (emission.cue) {
+        const auto& cue = *emission.cue;
+        if (cue.playerDistance) {
+            m_resources->audio.playAt(cue.name, cue.position, *cue.playerDistance, cue.volume);
+        } else {
+            m_resources->audio.playNamed(cue.name, cue.volume);
         }
-        m_resources->effects.startSet(m_resources->device, m_resources->weapons, impact.effect,
-                                      impact.position, setting);
-    }
-    if (impact.liquid) {
-        m_resources->audio.playAt("S_SPLASH", impact.position, playerDistance,
-                                  LevelSoundscape::kSplashLevel / 255.0f);
-        return;
-    }
-    switch (impact.wallSound) {
-    case MissileWallSound::Level: m_resources->audio.playNamed(m_resources->wallHitSound); break;
-    case MissileWallSound::ThreeWay: m_resources->audio.playNamed("S_3WAYAXE"); break;
-    case MissileWallSound::FiveWay: m_resources->audio.playNamed("S_5WAYAXE"); break;
-    case MissileWallSound::Silent: break;
-    case MissileWallSound::Ricochet: m_resources->audio.playNamed("S_RICOCHET"); break;
     }
 }
 

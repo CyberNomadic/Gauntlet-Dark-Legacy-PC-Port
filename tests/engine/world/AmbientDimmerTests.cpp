@@ -12,11 +12,13 @@ using Catch::Approx;
 TEST_CASE("the light falls fast while the dark is asked for and comes back slowly after",
           "[world][lighting]") {
     AmbientDimmer dimmer;
+    REQUIRE_FALSE(dimmer.active());
     REQUIRE(dimmer.offset() == 0.0f);
     REQUIRE(dimmer.applied(0.7f) == Approx(0.7f));
     // Asked for every frame, it falls a quarter a frame to what is asked and stays.
     const f32 frame = AmbientDimmer::kFrameSeconds;
     dimmer.ask(-0.6f);
+    REQUIRE(dimmer.active()); // A pending request is active before the first visible step.
     dimmer.update(frame);
     REQUIRE(dimmer.offset() == Approx(-0.25f));
     dimmer.ask(-0.6f);
@@ -38,16 +40,19 @@ TEST_CASE("the light falls fast while the dark is asked for and comes back slowl
     REQUIRE(rising < -0.4f);
     dimmer.update(1.0f);
     REQUIRE(dimmer.offset() == 0.0f);
+    REQUIRE_FALSE(dimmer.active());
     // A frame at sixty a second is half a step of it.
     dimmer.reset();
     dimmer.ask(-0.4f);
     dimmer.update(frame * 0.5f);
     REQUIRE(dimmer.offset() == 0.0f);
+    REQUIRE(dimmer.active());
     dimmer.ask(-0.4f);
     dimmer.update(frame * 0.5f);
     REQUIRE(dimmer.offset() == Approx(-0.25f));
     dimmer.reset();
     REQUIRE(dimmer.offset() == 0.0f);
+    REQUIRE_FALSE(dimmer.active());
 }
 
 } // namespace

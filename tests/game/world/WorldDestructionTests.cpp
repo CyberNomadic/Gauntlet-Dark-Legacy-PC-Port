@@ -93,6 +93,38 @@ TEST_CASE("world explosions follow parents, never the next root in the level lis
     CHECK(f.destruction.takeExplosions().empty());
 }
 
+TEST_CASE("explosion preflight shares native ancestor flags and spent-object semantics",
+          "[world-destruction][projectile-impact]") {
+    Fixture fixture;
+    const auto directory = test::sampleLevel("world-explosion-admission");
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"GROUP","position":[0,0,0],"flags":262144,"child":1,"next":4},
+      {"name":"WALL","position":[0,0,0],"next":2},
+      {"name":"WALL","position":[0,0,0],"flags":65536,"next":3},
+      {"name":"WALL","position":[0,0,0],"flags":131072},
+      {"name":"WALL","position":[0,0,0]}]})");
+    REQUIRE(fixture.layout.load(directory));
+    fixture.destruction.bind(fixture.layout);
+    REQUIRE(fixture.scene.build(fixture.layout, fixture.models, fixture.textures, fixture.device,
+                                {}, {}, fixture.destruction.controlledObjects()));
+    CHECK_FALSE(fixture.destruction.wouldExplode(-1));
+    CHECK_FALSE(fixture.destruction.wouldExplode(100));
+    CHECK(fixture.destruction.wouldExplode(0));
+    CHECK(fixture.destruction.wouldExplode(1));       // inherits explosive 0x40000
+    CHECK(fixture.destruction.wouldExplode(2));       // 0x40000 | 0x10000 is native cart 0x50000
+    CHECK_FALSE(fixture.destruction.wouldExplode(3)); // 0x60000 is neither accepted kind
+    CHECK_FALSE(fixture.destruction.wouldExplode(4));
+    CHECK(fixture.destruction.takeExplosions().empty());
+    CHECK_FALSE(fixture.destruction.destroyed(1));
+    REQUIRE(fixture.destruction.explode(1, {1, 2, 3}, fixture.scene, fixture.collision));
+    CHECK_FALSE(fixture.destruction.wouldExplode(1));
+    CHECK_FALSE(fixture.destruction.explode(1, {}, fixture.scene, fixture.collision));
+    // Native checks only the struck object's spent bit, not its parent's bit.
+    CHECK(fixture.destruction.wouldExplode(2));
+    REQUIRE(fixture.destruction.explode(2, {}, fixture.scene, fixture.collision));
+    CHECK(fixture.destruction.takeExplosions().size() == 2);
+}
+
 TEST_CASE("one-shot and paused animations never generate a cart endpoint explosion",
           "[world-destruction][animation]") {
     Fixture f;

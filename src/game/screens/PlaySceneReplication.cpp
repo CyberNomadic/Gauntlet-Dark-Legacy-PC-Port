@@ -30,12 +30,32 @@ std::optional<CombatStatePacket::State> PlayScene::combatState() {
     if (!combat) {
         return std::nullopt;
     }
-    OpponentCombatCheckpoint adapter{m_opponents};
+    OpponentCombatCheckpoint adapter{m_opponents, m_combatResources->resources().sharedEffects};
     auto opponents = adapter.checkpoint(combat->effects);
     if (!opponents) {
         return std::nullopt;
     }
     CombatStatePacket::State state{std::move(*combat), std::move(*opponents)};
+    if (m_combatWorld || m_combatFixtures) {
+        if (!m_combatWorld || !m_combatFixtures || !m_combatCamera || !m_combatPortals ||
+            !m_combatWorld->binds(*m_world) || !m_combatFixtures->binds(m_fixtures) ||
+            !m_combatPortals->binds(m_portals) || !m_combatCamera->binds(m_camera, *m_world)) {
+            return std::nullopt;
+        }
+        auto world = m_combatWorld->checkpoint();
+        auto fixtures = m_combatFixtures->checkpoint();
+        auto camera = m_combatCamera->checkpoint();
+        auto portals = m_combatPortals->checkpoint();
+        if (!world || !fixtures || !camera || !portals) {
+            return std::nullopt;
+        }
+        state.stage = StageStatePacket::encode(
+            {std::move(*world), std::move(*fixtures), std::move(*camera), std::move(*portals)},
+            m_combatStageCatalog);
+        if (!state.stage) {
+            return std::nullopt;
+        }
+    }
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
@@ -44,7 +64,12 @@ std::optional<OrdinaryCombatTick::Frame> PlayScene::combatFrame() const {
     // still advance opponents while holding PartyMotion, so neither opponent
     // clocks nor the camera alone establish a replayable boundary.
     if (!movementPredictable() || !m_opponentsAdvanced || m_world == nullptr ||
-        simulationTickRate() != 60 || PlayerPowerups::timeStopped(m_players)) {
+        simulationTickRate() != 60 || PlayerPowerups::timeStopped(m_players) || m_dimmer.active()) {
+        return std::nullopt;
+    }
+    // Pending tower notices/visits and secret-level deadlines can interrupt
+    // the next phase even while the current frame is freely moving.
+    if (m_world->isTower() || m_world->ref().isSecret()) {
         return std::nullopt;
     }
     OrdinaryCombatTick::Frame frame;
@@ -61,6 +86,7 @@ std::optional<OrdinaryCombatTick::Frame> PlayScene::combatFrame() const {
     frame.damage.realm = m_world->ref().realmId;
     // Capture is post-step; the next native phase adds its own seconds once.
     frame.damage.playSeconds = m_playSeconds;
+    frame.autoMelee = m_context.config != nullptr && m_context.config->combat.autoMelee;
     return frame.valid() ? std::optional{frame} : std::nullopt;
 }
 
@@ -119,10 +145,39 @@ bool PlayScene::bindReplicationResources(ProjectileResources& projectiles, Picku
     fixtures = std::move(nextFixtures);
     // Optional complete combat replay never loads or uploads resources while
     // capturing a tick. Unsupported artwork retains ordinary online playback.
+    m_combatFixtures.reset();
+    m_combatPortals.reset();
+    m_combatCamera.reset();
+    m_combatWorld.reset();
+    m_combatStageCatalog = {};
     auto combat = std::make_unique<CombatResources>();
     if (combat->bindStage(*m_device, *m_world, m_weapons, m_classes, m_players, m_arsenal,
                           m_opponents, m_effects)) {
         m_combatResources = std::move(combat);
+        auto world = std::make_unique<LevelWorldCheckpoint>(*m_world);
+        auto fixtureOwner = std::make_unique<LevelFixturesCheckpoint>(m_fixtures);
+        auto cameraOwner = std::make_unique<TowerCameraCheckpoint>(m_camera, *m_world);
+        auto portalOwner = std::make_unique<ExitPortalsCheckpoint>(
+            m_portals, m_world->layout(), m_world->items(), &m_world->realmItems());
+        if (world->bindResources(*m_device) && fixtureOwner->bindResources() &&
+            portalOwner->bindResources()) {
+            auto worldState = world->checkpoint();
+            auto fixtureState = fixtureOwner->checkpoint();
+            auto cameraState = cameraOwner->checkpoint();
+            auto portalState = portalOwner->checkpoint();
+            if (worldState && fixtureState && cameraState && portalState) {
+                auto catalog = StageStatePacket::Catalog::build(
+                    {std::move(*worldState), std::move(*fixtureState), std::move(*cameraState),
+                     std::move(*portalState)});
+                if (catalog) {
+                    m_combatStageCatalog = std::move(*catalog);
+                    m_combatWorld = std::move(world);
+                    m_combatFixtures = std::move(fixtureOwner);
+                    m_combatCamera = std::move(cameraOwner);
+                    m_combatPortals = std::move(portalOwner);
+                }
+            }
+        }
     } else {
         m_combatResources.reset();
     }

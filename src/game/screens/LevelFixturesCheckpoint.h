@@ -67,6 +67,9 @@ public:
     LevelFixturesCheckpoint& operator=(const LevelFixturesCheckpoint&) = delete;
     /** Explicit load-time prewarming; required even for an empty native roster. */
     bool bindResources();
+    bool binds(const LevelFixtures& owner) const;
+    bool binds(const LevelWorld& world, const ItemArchive& weapons, const EffectTrees& effects,
+               const RenderDevice& device) const;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

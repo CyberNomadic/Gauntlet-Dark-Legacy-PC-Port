@@ -117,6 +117,7 @@ public:
     /** Traps suppress emission in OFF without killing their live particle tails. */
     void gateParticlesOnSequence(bool enabled);
     const TreeParticles& particles() const { return m_particles; }
+    const TextureAnimator& textureAnimator() const { return m_textures; }
 
     bool hasFigure() const { return m_tree != nullptr; }
     s32 sequence() const { return m_index; }

@@ -41,6 +41,14 @@ add_executable(tests
     game/netplay/PlayerHealthCheckpointTests.cpp
     game/screens/OpponentCombatCheckpointTests.cpp
     game/screens/OrdinaryCombatCheckpointTests.cpp
+    game/screens/OrdinaryStageCheckpointTests.cpp
+    game/netplay/StageStatePacketTests.cpp
+    game/screens/OrdinaryFixturePhaseTests.cpp
+    game/screens/OrdinaryFloorSupportTests.cpp
+    game/screens/StageCombatPresentationTests.cpp
+    game/screens/StageParticlePresentationTests.cpp
+    game/screens/StageSnapshotSamplingTests.cpp
+    game/world/ExitPortalsCheckpointTests.cpp
     game/screens/OrdinaryCombatTickTests.cpp
     game/screens/CombatPredictionTests.cpp
     game/screens/CombatResourcesTests.cpp
@@ -56,8 +64,10 @@ add_executable(tests
     game/world/RotatorsCheckpointTests.cpp
     game/world/PlacedItemsCheckpointTests.cpp
     game/screens/OrdinaryWeaponEmissionTests.cpp
+    game/screens/OrdinaryStrongPhaseTests.cpp
     game/screens/LevelFixturesCheckpointTests.cpp
     game/world/LevelWorldCheckpointTests.cpp
+    game/world/TowerCameraCheckpointTests.cpp
     engine/world/WorldStateCheckpointTests.cpp
     engine/world/WorldCollapsedCollisionTests.cpp
     game/world/WorldDestructionCheckpointTests.cpp
@@ -338,6 +348,7 @@ add_executable(tests
     game/world/EffectTreesTests.cpp
     game/world/EffectCheckpointTests.cpp
     game/world/CombatantProjectilesTests.cpp
+    game/world/CombatantProjectilesCheckpointTests.cpp
     game/players/PlayerControlsTests.cpp
     game/players/PlayerActorTests.cpp
     game/players/PlayerCaptureTests.cpp
@@ -373,6 +384,8 @@ add_executable(tests
     game/enemies/GeneratorsTests.cpp
     game/enemies/CrittersTests.cpp
     game/enemies/CombatantTests.cpp
+    game/enemies/CombatantCheckpointTests.cpp
+    game/enemies/CrittersCheckpointTests.cpp
     game/enemies/ChimeraTests.cpp
     game/enemies/CombatantGazeTests.cpp
     game/enemies/CombatantGrabsTests.cpp
@@ -539,6 +552,17 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/PlayerHealthCheckpointTests.cpp
         game/screens/OpponentCombatCheckpointTests.cpp
         game/screens/OrdinaryCombatCheckpointTests.cpp
+        game/screens/OrdinaryStageCheckpointTests.cpp
+        game/netplay/StageStatePacketTests.cpp
+        game/screens/OrdinaryFixturePhaseTests.cpp
+        game/screens/OrdinaryFloorSupportTests.cpp
+        game/screens/StageCombatPresentationTests.cpp
+        game/screens/StageParticlePresentationTests.cpp
+        game/screens/StageSnapshotSamplingTests.cpp
+        game/enemies/CombatantCheckpointTests.cpp
+        game/enemies/CrittersCheckpointTests.cpp
+        game/world/CombatantProjectilesCheckpointTests.cpp
+        game/world/ExitPortalsCheckpointTests.cpp
         game/screens/OrdinaryCombatTickTests.cpp
         game/screens/CombatPredictionTests.cpp
         game/screens/CombatResourcesTests.cpp
@@ -554,8 +578,10 @@ if(GDL_ENABLE_NETPLAY)
         game/world/RotatorsCheckpointTests.cpp
         game/world/PlacedItemsCheckpointTests.cpp
         game/screens/OrdinaryWeaponEmissionTests.cpp
+        game/screens/OrdinaryStrongPhaseTests.cpp
         game/screens/LevelFixturesCheckpointTests.cpp
         game/world/LevelWorldCheckpointTests.cpp
+        game/world/TowerCameraCheckpointTests.cpp
         engine/world/WorldStateCheckpointTests.cpp
         engine/world/WorldCollapsedCollisionTests.cpp
         engine/world/WorldCollisionTests.cpp
@@ -599,6 +625,7 @@ if(GDL_ENABLE_NETPLAY)
         game/enemies/EnemyAnimatorCheckpointTests.cpp
         game/enemies/EnemiesCheckpointTests.cpp
         engine/math/Mt19937Tests.cpp
+        engine/world/AmbientDimmerTests.cpp
         game/enemies/GeneratorsCheckpointTests.cpp
         game/enemies/EnemyMissilesCheckpointTests.cpp
         game/enemies/PlacedEnemiesTests.cpp

@@ -61,11 +61,18 @@ public:
     /** A shot or a blow of `radius` at `position` (a missile in flight, a strike, a swing)
      * bringing down the pieces only those start, the same way. */
     std::vector<FallingCue> shoot(const Vec3& position, f32 radius);
+    /** Exact read-only admission for shoot(), including already-started and
+     * party-hidden pieces. Native missiles query surviving endpoints, not a sweep. */
+    bool wouldShoot(const Vec3& position, f32 radius) const;
     void update(f32 seconds);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 presentationAlpha = -1.0f) const;
     usize size() const { return m_pieces.size(); }
     const Piece& piece(usize index) const { return m_pieces.at(index); }
+    /** Native 30 Hz presentation clock, copied alongside the pieces when a
+     * retained picture must outlive a simulation rewind. */
+    f32 frameRemainder() const { return m_remainder; }
+    f32 updateSeconds() const { return m_updateSeconds; }
 
     /** The realm's sound for a rock or limb giving way (fn_8009D91C's table by the level's
      * realm letter, with its two level overrides); empty where the realm has none. */
@@ -76,6 +83,7 @@ public:
 private:
     friend class FallingSceneryCheckpoint;
     static bool within(const Piece& piece, const Vec3& position, f32 radius);
+    static bool canStart(const Piece& piece, const Vec3& position, f32 radius, bool shot);
     std::vector<FallingCue> start(const Vec3& position, f32 radius, bool shot);
 
     std::vector<Piece> m_pieces;

@@ -228,6 +228,29 @@ void EnemyAnimator::evaluatePresentation(TreePose& pose, f32 blend) const {
     }
 }
 
+EnemyAnimator::Presentation EnemyAnimator::presentation() const {
+    Presentation result;
+    evaluatePresentation(result.current, 1);
+    result.previous = m_presentationBefore;
+    result.currentFrame = m_player.presentationFrame();
+    result.previousFrame = m_frameBefore;
+    result.continuous = m_generationBefore == m_player.generation();
+    return result;
+}
+
+TreePose EnemyAnimator::Presentation::pose(f32 blend) const {
+    auto result = current;
+    if (continuous) {
+        result.blend(previous, std::clamp(blend, 0.0f, 1.0f), true);
+    }
+    return result;
+}
+
+f32 EnemyAnimator::Presentation::frame(f32 blend) const {
+    return continuous ? std::lerp(previousFrame, currentFrame, std::clamp(blend, 0.0f, 1.0f))
+                      : currentFrame;
+}
+
 EnemyAnimator::Decision EnemyAnimator::decide(Action next, bool contact) const {
     Decision d;
     d.action = next;

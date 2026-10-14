@@ -91,6 +91,7 @@ public:
     std::vector<RotatorCue> takeRotatorCues() { return std::exchange(m_rotatorCues, {}); }
     std::vector<Vec3> takeWorldExplosions() { return m_destruction.takeExplosions(); }
     bool hasWorldExplosions() const { return m_destruction.hasExplosions(); }
+    bool wouldExplodeObject(s32 object) const { return m_destruction.wouldExplode(object); }
     bool explodeObject(s32 object, const Vec3& position) {
         return m_destruction.explode(object, position, m_scene, m_collision);
     }
@@ -104,6 +105,7 @@ public:
     WorldMotion::State motion(bool pauseLoops = false) const;
     const TextureAnimator& textureAnimator() const { return m_textureAnimator; }
     const ParticleField& particles() const { return m_particles; }
+    bool particlesAdvanced() const { return m_particlesAdvanced; }
     /** The pickups the level places: the crystals Sumner keeps for a new party. */
     const PlacedItems& placedItems() const { return m_placedItems; }
     std::vector<PlacedItems::PerkChange> blessItems(RenderDevice& device, const Vec3& position,
@@ -282,6 +284,7 @@ public:
 
 private:
     friend class LevelWorldCheckpoint;
+    friend class TowerCameraCheckpoint;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
     std::optional<f32> presentedTextureFrameOffset(f32 alpha) const;

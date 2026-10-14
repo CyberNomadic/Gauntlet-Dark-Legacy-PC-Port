@@ -1383,6 +1383,51 @@ TEST_CASE("weapon wall impacts render once and use the level-selected sound",
     f.audio.close();
 }
 
+TEST_CASE("ordinary impact descriptors retain native artwork and cue priority without outputs",
+          "[player-arsenal][projectile-impact]") {
+    Fixture f;
+    REQUIRE(f.weapons.load(impactAssets() / "WEAPONS"));
+    f.arsenal.bind({f.device, f.classes, f.weapons, f.collision, f.effects, f.audio, nullptr,
+                    "S_WEAPONHITWOOD"});
+    const auto sound =
+        GENERATE(MissileWallSound::Level, MissileWallSound::ThreeWay, MissileWallSound::FiveWay,
+                 MissileWallSound::Silent, MissileWallSound::Ricochet);
+    const bool liquid = GENERATE(false, true);
+    const s32 target = GENERATE(-1, 1000, 7500);
+    MissileImpact impact{
+        .position = {4, 5, 6}, .target = target, .wallSound = sound, .liquid = liquid};
+    const auto uploads = f.device.texturesCreated;
+    const auto emission = f.arsenal.impactPresentation(impact, 17);
+    CHECK(f.effects.count() == 0);
+    CHECK(f.device.texturesCreated == uploads);
+    if (target >= 0) {
+        CHECK(emission.archive == nullptr);
+        CHECK_FALSE(emission.cue);
+        return;
+    }
+    REQUIRE(emission.archive == &f.weapons);
+    CHECK(emission.tree == "SPARKS");
+    CHECK(emission.position == impact.position);
+    CHECK(emission.setting.unlit);
+    CHECK_FALSE(emission.setting.depthWrite);
+    CHECK(emission.setting.tint.a == 96);
+    if (liquid) {
+        REQUIRE(emission.cue);
+        CHECK(emission.cue->name == "S_SPLASH");
+        CHECK(emission.cue->playerDistance == 17.0f);
+        CHECK(emission.cue->volume == LevelSoundscape::kSplashLevel / 255.0f);
+    } else if (sound == MissileWallSound::Silent) {
+        CHECK_FALSE(emission.cue);
+    } else {
+        REQUIRE(emission.cue);
+        constexpr std::array<std::string_view, 5> kNames{"S_WEAPONHITWOOD", "S_3WAYAXE",
+                                                         "S_5WAYAXE", "", "S_RICOCHET"};
+        CHECK(emission.cue->name == kNames[static_cast<usize>(sound)]);
+        CHECK_FALSE(emission.cue->playerDistance);
+        CHECK(emission.cue->volume == 1);
+    }
+}
+
 TEST_CASE("an obstructed muzzle still produces impact feedback without launching a weapon",
           "[game][world][player-arsenal][projectile-impact]") {
     const auto root = impactAssets();

@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -115,6 +116,24 @@ public:
     /** Keep short-lived cast effects attached without retaining a player address. */
     void followCaster(const PlayerActor& actor);
     void burstPotion(s32 kind, const Vec3& position, f32 power, bool castSound = true);
+    struct ImpactCue {
+        std::string name;
+        Vec3 position{0};
+        std::optional<f32> playerDistance; ///< absent for the native non-spatial wall cue
+        f32 volume = 1;
+        bool operator==(const ImpactCue&) const = default;
+    };
+    struct ImpactPresentation {
+        ItemArchive* archive = nullptr;
+        std::string_view tree;
+        Vec3 position{0};
+        EffectTrees::Setting setting;
+        std::optional<ImpactCue> cue;
+    };
+    /** Resolve ordinary weapon collision artwork/audio without loading, allocating
+     * effects, or playing anything. Potion bursts have their separate native path. */
+    ImpactPresentation impactPresentation(const MissileImpact& impact,
+                                          f32 playerDistance = 0) const;
     /** Present a collision once, without applying target damage or expiry effects. */
     void presentImpact(const MissileImpact& impact, f32 playerDistance = 0);
     f32 magicPowerOf(const PlayerActor& actor) const;
@@ -130,6 +149,7 @@ private:
     friend class CombatRollbackCheckpoint;
     friend class OrdinaryCombatTick;
     friend class OrdinaryWeaponEmission;
+    friend class OrdinaryProjectilePhase;
     MissileStreak weaponStreak(const PlayerActor& actor, const Texture* texture,
                                bool superShot = false) const;
     void bindWeaponAppearance(const PlayerActor& actor, PlayerFigure& figure,

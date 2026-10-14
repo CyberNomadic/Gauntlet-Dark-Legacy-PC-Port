@@ -28,6 +28,11 @@ public:
      * hold the nearest complete state. Metadata is that of the lower snapshot;
      * the interpolated result is for display, not transmission or simulation. */
     std::optional<MotionSnapshot> sample(u64 tick, f32 fraction = 0) const;
+    /** Same presentation interpolation for an explicitly supplied interval.
+     * Blend is in [0,1]; discrete births/cuts switch only at the upper endpoint.
+     * The inputs must be valid, ordered snapshots from the same epoch. */
+    static std::optional<MotionSnapshot> samplePair(const MotionSnapshot& lower,
+                                                    const MotionSnapshot& upper, f32 blend);
     const MotionSnapshot* latest() const;
     usize size() const { return m_history.size(); }
 

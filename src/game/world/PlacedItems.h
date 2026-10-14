@@ -162,6 +162,9 @@ public:
     /** Trusted presentation resources; archive order is part of the level's asset identity. */
     std::span<ItemArchive* const> archives() const { return m_archives; }
     f32 textureFrame(const Item& item) const;
+    /** Read-only native bank; copy it before retaining a render-only picture. */
+    const TextureAnimator* textureAnimator(const ItemArchive* archive) const;
+    bool particlesAdvanced() const { return m_burstsAdvanced; }
     /** Follow a container's animated socket without floor snapping. */
     void attach(usize index, const Mat4& transform, bool contained);
     /** Item number `index` is gone, as what lay in a chest blown apart is. */

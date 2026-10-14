@@ -50,6 +50,61 @@ const EffectTrees::PoolResource* findResource(std::span<const EffectTrees::PoolR
     const auto found = std::ranges::find(resources, id, &EffectTrees::PoolResource::id);
     return found == resources.end() ? nullptr : &*found;
 }
+bool sameBinding(const EffectTrees::Effect& effect, const EffectTrees::Effect& prototype) {
+    return prototype.archive == effect.archive && prototype.device == effect.device &&
+           prototype.lenders == effect.lenders && prototype.emitParticles == effect.emitParticles &&
+           prototype.missingObjectsAreEmpty == effect.missingObjectsAreEmpty;
+}
+bool birthParticles(const TreeParticles& particles) {
+    const auto state = particles.checkpoint();
+    if (!state.valid() || state.field.frameRemainder != 0 || state.field.lastAdvance != 0 ||
+        state.field.heatFrames != 0) {
+        return false;
+    }
+    for (usize index = 0; index < state.nodes.size(); ++index) {
+        const auto& entry = state.field.entries[index];
+        const auto& emitter = entry.emitter;
+        // TreeParticles::bind seeds node i with i+1. These bounded node IDs
+        // are below minstd_rand's modulus; no RNG draw precedes the first step.
+        const auto phase = emitter.descriptor.delay > 0 ? ParticleEmitter::Phase::Delay
+                                                        : ParticleEmitter::Phase::Emitting;
+        if (entry.worldObject != -1 || !emitter.particles.empty() || emitter.phase != phase ||
+            emitter.age != 0 || emitter.saved != 0 || !emitter.emitting ||
+            emitter.random != state.nodes[index].node + 1) {
+            return false;
+        }
+    }
+    return true;
+}
+const EffectTrees::PoolResource* treeResource(std::span<const EffectTrees::PoolResource> resources,
+                                              const EffectTrees::Effect& effect,
+                                              const TreeInfo* tree) {
+    const auto found = std::ranges::find_if(resources, [&](const auto& resource) {
+        return resource.prototype != nullptr && resource.prototype->tree == tree &&
+               tree != nullptr && resource.prototype->name == tree->name &&
+               sameBinding(effect, *resource.prototype);
+    });
+    return found == resources.end() ? nullptr : &*found;
+}
+const EffectTrees::PoolResource* morphResource(std::span<const EffectTrees::PoolResource> resources,
+                                               const EffectTrees::Effect& effect,
+                                               std::string_view name) {
+    if (effect.tree == nullptr || effect.device == nullptr || effect.archive == nullptr) {
+        return nullptr;
+    }
+    const auto index = effect.archive->trees.find(name);
+    if (!index) {
+        return nullptr;
+    }
+    const auto* resource = treeResource(resources, effect, &effect.archive->trees.tree(*index));
+    if (resource == nullptr ||
+        (!resource->prototype->model.bound() &&
+         resource->prototype->particles.field().size() == 0) ||
+        !birthParticles(resource->prototype->particles)) {
+        return nullptr;
+    }
+    return resource;
+}
 } // namespace
 
 EffectTrees::EffectTrees(EffectTrees&& other) noexcept {
@@ -89,10 +144,12 @@ bool EffectTrees::PoolCheckpoint::valid() const {
             !ids.insert(entry.id).second || !instances.insert(entry.instance).second ||
             (nextId != 0 && entry.id >= nextId) ||
             (nextInstance != 0 && entry.instance >= nextInstance) || !state.valid() ||
-            !state.setting.then.empty() || !affine(entry.previousTransform) ||
+            (!state.setting.then.empty() && !state.tree) || !affine(entry.previousTransform) ||
             (entry.previousDirection && !finite(*entry.previousDirection)) ||
             !finite(entry.previousFrame) || entry.previousFrame < 0 ||
             (entry.previousTree && !state.tree) ||
+            (entry.previousResource != 0 &&
+             (!entry.previousTree || entry.previousResource == entry.resource)) ||
             (entry.provenance && (entry.provenance->player < 0 || entry.provenance->player >= 4 ||
                                   entry.provenance->generation == 0))) {
             return false;
@@ -140,7 +197,8 @@ EffectTrees::checkpointPool(std::span<const PoolResource> resources) const {
     }
     for (const auto& effect : m_effects) {
         const auto state = checkpoint(effect->id);
-        if (!state || (effect->previousTree != nullptr && effect->previousTree != effect->tree)) {
+        if (!state ||
+            (!effect->then.empty() && morphResource(resources, *effect, effect->then) == nullptr)) {
             return std::nullopt;
         }
         const auto resource = std::ranges::find_if(resources, [&](const PoolResource& candidate) {
@@ -166,10 +224,19 @@ EffectTrees::checkpointPool(std::span<const PoolResource> resources) const {
         if (resource == resources.end()) {
             return std::nullopt;
         }
-        result.effects.push_back(
-            {resource->id, effect->id, effect->instance, *state, effect->provenance,
-             effect->previousTransform, effect->previousDirection, effect->previousTree != nullptr,
-             effect->previousGeneration, effect->previousFrame, effect->presentationCaptured});
+        u32 previousResource = 0;
+        if (effect->previousTree != nullptr && effect->previousTree != effect->tree) {
+            const auto* previous = treeResource(resources, *effect, effect->previousTree);
+            if (previous == nullptr) {
+                return std::nullopt;
+            }
+            previousResource = previous->id;
+        }
+        result.effects.push_back({resource->id, effect->id, effect->instance, *state,
+                                  effect->provenance, effect->previousTransform,
+                                  effect->previousDirection, effect->previousTree != nullptr,
+                                  effect->previousGeneration, effect->previousFrame,
+                                  effect->presentationCaptured, previousResource});
     }
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
@@ -210,6 +277,27 @@ EffectTrees::prepareRestorePool(const PoolCheckpoint& state,
         auto effect = std::make_unique<Effect>(*resource->prototype);
         effect->id = entry.id;
         effect->instance = entry.instance;
+        effect->morphPrototype.reset();
+        if (!entry.state.setting.then.empty()) {
+            const auto* future = morphResource(resources, *effect, entry.state.setting.then);
+            if (future == nullptr) {
+                return std::nullopt;
+            }
+            auto birth = std::make_shared<Effect>(*future->prototype);
+            birth->morphPrototype.reset();
+            effect->morphPrototype = std::move(birth);
+            effect->then = entry.state.setting.then;
+        }
+        const TreeInfo* previousTree = entry.previousTree ? effect->tree : nullptr;
+        if (entry.previousResource != 0) {
+            const auto* previous = findResource(resources, entry.previousResource);
+            if (previous == nullptr || previous->prototype == nullptr ||
+                previous->prototype->tree == nullptr || previous->prototype->tree == effect->tree ||
+                !sameBinding(*effect, *previous->prototype)) {
+                return std::nullopt;
+            }
+            previousTree = previous->prototype->tree;
+        }
         candidate.m_effects.push_back(std::move(effect));
         if (!candidate.restore(entry.id, entry.state)) {
             return std::nullopt;
@@ -218,7 +306,7 @@ EffectTrees::prepareRestorePool(const PoolCheckpoint& state,
         restored.provenance = entry.provenance;
         restored.previousTransform = entry.previousTransform;
         restored.previousDirection = entry.previousDirection;
-        restored.previousTree = entry.previousTree ? restored.tree : nullptr;
+        restored.previousTree = previousTree;
         restored.previousGeneration = entry.previousGeneration;
         restored.previousFrame = entry.previousFrame;
         restored.presentationCaptured = entry.presentationCaptured;

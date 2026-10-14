@@ -149,6 +149,14 @@ bool LevelFixturesCheckpoint::bindResources() {
     m_lifetime = std::make_shared<const u8>(0);
     return true;
 }
+bool LevelFixturesCheckpoint::binds(const LevelFixtures& owner) const {
+    return &owner == &m_owner && bound();
+}
+bool LevelFixturesCheckpoint::binds(const LevelWorld& world, const ItemArchive& weapons,
+                                    const EffectTrees& effects, const RenderDevice& device) const {
+    return bound() && m_resources->world == &world && m_resources->weapons == &weapons &&
+           m_resources->effects == &effects && m_resources->device == &device;
+}
 std::optional<LevelFixturesCheckpoint::State> LevelFixturesCheckpoint::checkpoint() const {
     if (!bound()) {
         return std::nullopt;
@@ -182,7 +190,10 @@ std::optional<LevelFixturesCheckpoint::State> LevelFixturesCheckpoint::checkpoin
                                 blast.players, blast.reached, blast.opponents, blast.playerReady,
                                 blast.opponentReady});
     }
-    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+    if (!state.valid()) {
+        return std::nullopt;
+    }
+    return state;
 }
 std::optional<LevelFixturesCheckpoint::Prepared>
 LevelFixturesCheckpoint::prepareRestore(const State& state) const {

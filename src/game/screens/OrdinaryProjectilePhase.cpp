@@ -5,6 +5,8 @@
 #include <cmath>
 #include <unordered_map>
 
+#include "game/screens/OrdinaryStrongPhase.h"
+
 namespace gdl::game {
 namespace {
 
@@ -19,8 +21,38 @@ bool ordinarySpec(const MissileSpec* spec) {
 
 template <class Impact> bool ordinaryImpact(const Impact& impact) {
     return impact.owner >= 0 && impact.owner < 4 && impact.potion == 0 && impact.potency == 0 &&
-           impact.player == -1 && impact.worldObject == -1 && !impact.liquid && !impact.stun &&
+           impact.player == -1 && !impact.stun &&
+           (impact.target == -1 || (impact.worldObject == -1 && !impact.liquid)) &&
            (impact.flags & ~PlayerMissiles::kPlainModifiers) == 0;
+}
+
+std::optional<EffectTrees::Prepared>
+impactResource(const PlayerArsenal::ImpactPresentation& emission,
+               std::span<const EffectTrees::PoolResource> resources,
+               std::span<TextureSet* const> lenders, const RenderDevice& device) {
+    const auto index = emission.archive->trees.find(emission.tree);
+    if (!index) {
+        return std::nullopt;
+    }
+    const auto* tree = &emission.archive->trees.tree(*index);
+    for (const auto& resource : resources) {
+        const auto* prototype = resource.prototype;
+        if (resource.id == 0 || resource.archive != emission.archive ||
+            resource.textures == nullptr || prototype == nullptr ||
+            !std::ranges::equal(resource.lenders, lenders) ||
+            !std::ranges::equal(prototype->lenders, lenders) ||
+            prototype->archive != emission.archive || prototype->tree != tree ||
+            prototype->device != &device || !prototype->emitParticles ||
+            prototype->missingObjectsAreEmpty || prototype->trails.size() != 0) {
+            continue;
+        }
+        EffectTrees::Prepared prepared{emission.archive,  tree,
+                                       &prototype->model, &prototype->particles,
+                                       resource.textures, resource.lenders};
+        prepared.device = prototype->device;
+        return prepared;
+    }
+    return std::nullopt;
 }
 
 bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
@@ -30,6 +62,13 @@ bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
 }
 
 } // namespace
+
+bool OrdinaryProjectilePhase::ordinaryTarget(s32 target) {
+    return target == -1 ||
+           (target >= PlayerAttacks::kEnemyTargetBase &&
+            target < PlayerAttacks::kGeneratorTargetBase) ||
+           (target >= PlayerAttacks::kItemStopBase && target < PlayerAttacks::kPotionTargetBase);
+}
 
 bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& state,
                                         std::span<const PlayerMissiles::Resource> resources,
@@ -74,8 +113,7 @@ bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& st
     }
     for (const auto& impact : state.missiles.impacts) {
         const auto resource = specs.find(impact.effectResource);
-        if (!ordinaryImpact(impact) || impact.target < PlayerAttacks::kEnemyTargetBase ||
-            impact.target >= PlayerAttacks::kGeneratorTargetBase ||
+        if (!ordinaryImpact(impact) || !ordinaryTarget(impact.target) ||
             (impact.effectResource != 0 &&
              (resource == specs.end() || !ordinarySpec(resource->second)))) {
             return false;
@@ -87,22 +125,43 @@ bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& st
     });
 }
 
+bool OrdinaryProjectilePhase::supportsEffect(const PlayerArsenal& arsenal,
+                                             const EffectTrees::PoolResource& resource) {
+    if (!arsenal.m_resources || resource.id == 0 ||
+        resource.archive != &arsenal.m_resources->weapons || resource.textures == nullptr ||
+        resource.prototype == nullptr || resource.prototype->archive != resource.archive ||
+        resource.prototype->tree == nullptr ||
+        resource.prototype->device != &arsenal.m_resources->device ||
+        !resource.prototype->emitParticles || resource.prototype->missingObjectsAreEmpty ||
+        resource.prototype->trails.size() != 0 ||
+        !std::ranges::equal(resource.prototype->lenders, resource.lenders) ||
+        !std::ranges::equal(resource.lenders, arsenal.m_resources->effects.textureLenders())) {
+        return false;
+    }
+    for (s32 character = 0; character <= 16; ++character) {
+        const auto tree = resource.archive->trees.find(MissileSpec::of(character).impactTree);
+        if (tree && resource.prototype->tree == &resource.archive->trees.tree(*tree)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 OrdinaryProjectilePhase::Result
 OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime> players,
                                  const PlayerAttacks::Targets& targets, f32 seconds,
                                  const CombatRollbackCheckpoint::Resources& resources) {
     if (!attacks.m_resources || targets.multiplayer != MultiplayerMode::Normal || players.empty() ||
-        players.size() > 4 || attacks.pendingGameplay() || !attacks.m_moveAttachments.empty() ||
-        !attacks.m_particleEffects.empty() || !attacks.m_strikeEffects.empty() ||
-        !attacks.m_strikeSources.empty()) {
+        players.size() > 4 || !OrdinaryStrongPhase::supported(attacks, players)) {
         return {};
     }
     auto& bound = *attacks.m_resources;
-    // Native surviving missiles call shootScenery before impact dispatch. That
-    // owner is not in this transaction, even when no current obstacle overlaps.
-    if (bound.world.fallingScenery().size() != 0 ||
-        (bound.multiplayer != nullptr && *bound.multiplayer != MultiplayerMode::Normal)) {
+    if (bound.multiplayer != nullptr && *bound.multiplayer != MultiplayerMode::Normal) {
         return {};
+    }
+    if (targets.fixtures.inertStops().size() >
+        static_cast<usize>(PlayerAttacks::kPotionTargetBase - PlayerAttacks::kItemStopBase)) {
+        return {}; // Native sequential stop IDs must not alias the next target family.
     }
     std::array<bool, 4> occupied{};
     for (const auto& player : players) {
@@ -125,30 +184,75 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
         })) {
         return {};
     }
-    const auto impacts = attacks.advanceProjectileFlights(seconds, players, targets);
+    attacks.stepProjectileFlights(seconds, players, targets);
+    // Native scenery contact happens only at surviving endpoints after all
+    // spatial flight substeps, never at a swept/intermediate position or the
+    // endpoint of a retired missile. Preflight the complete batch before its
+    // first external cue. A refused tick is restored by the enclosing owner.
+    auto& flying = bound.arsenal.missiles();
+    for (usize index = 0; index < flying.count(); ++index) {
+        const auto& missile = flying.missile(index);
+        if (bound.world.fallingScenery().wouldShoot(
+                missile.position, missile.spec != nullptr ? missile.spec->radius : 1.0f)) {
+            return {};
+        }
+    }
+    const auto impacts = flying.takeImpacts();
     if (impacts.size() > kMaxImpacts) {
         return {};
     }
     const auto& enemies = targets.opponents.enemies();
+    std::vector<std::optional<EffectTrees::Prepared>> presentation;
+    presentation.reserve(impacts.size());
     for (const auto& impact : impacts) {
-        if (!ordinaryImpact(impact) || impact.target < PlayerAttacks::kEnemyTargetBase ||
-            impact.target >= PlayerAttacks::kGeneratorTargetBase ||
-            !knownOwner(impact.owner, players)) {
+        if (!ordinaryImpact(impact) || !ordinaryTarget(impact.target) ||
+            !knownOwner(impact.owner, players) ||
+            bound.world.wouldExplodeObject(impact.worldObject)) {
             return {};
         }
-        const s32 id = impact.target - PlayerAttacks::kEnemyTargetBase;
-        const s32 kind = enemies.kindOf(id);
-        if (!enemies.observe(id) || kind < 0 || kind == kDeathKind || kind == kItKind ||
-            kind == kGarmBroodKind || enemies.algorithmOf(id) == kSuicideWay) {
-            return {};
+        if (impact.target >= PlayerAttacks::kEnemyTargetBase &&
+            impact.target < PlayerAttacks::kGeneratorTargetBase) {
+            const s32 id = impact.target - PlayerAttacks::kEnemyTargetBase;
+            const s32 kind = enemies.kindOf(id);
+            if (!enemies.observe(id) || kind < 0 || kind == kDeathKind || kind == kItKind ||
+                kind == kGarmBroodKind || enemies.algorithmOf(id) == kSuicideWay) {
+                return {};
+            }
         }
+        // Native missing artwork remains missing; an available native tree must
+        // have exactly its prebound archive/lender prototype before any damage.
+        const auto emission = bound.arsenal.impactPresentation(impact);
+        std::optional<EffectTrees::Prepared> prepared;
+        if (emission.archive != nullptr && emission.archive->trees.find(emission.tree)) {
+            prepared = impactResource(emission, resources.sharedEffects,
+                                      bound.effects.textureLenders(), bound.device);
+            if (!prepared) {
+                return {};
+            }
+        }
+        presentation.push_back(prepared);
     }
     // A later unsupported hit cannot leave an earlier enemy damaged. The whole
     // batch has passed, and ordinary target impacts produce only owned queues.
-    for (const auto& impact : impacts) {
-        attacks.dispatchProjectileImpact(impact, players, targets);
+    Result result{.advanced = true, .impacts = impacts.size()};
+    for (usize index = 0; index < impacts.size(); ++index) {
+        attacks.dispatchProjectileImpact(
+            impacts[index], players, targets, [&](const MissileImpact& impact, f32 distance) {
+                const auto emission = bound.arsenal.impactPresentation(impact, distance);
+                if (presentation[index] &&
+                    bound.effects.startPrepared(*presentation[index], emission.position,
+                                                emission.setting) == 0) {
+                    result.advanced = false;
+                }
+                if (emission.cue) {
+                    result.cues.push_back(*emission.cue);
+                }
+            });
+        if (!result.advanced) {
+            return {}; // The enclosing transaction owns the partial native pool undo.
+        }
     }
-    return {true, impacts.size()};
+    return result;
 }
 
 } // namespace gdl::game

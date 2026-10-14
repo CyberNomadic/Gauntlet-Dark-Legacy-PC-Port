@@ -7,6 +7,8 @@ Native G1 entrance, including ordinary enemy activity and payload cost:
   python scripts/netplay_latency.py --stage G1 --seconds 25 --fps 30 60
 Native mixed melee/throw response (a separate verdict, not a throw benchmark):
   python scripts/netplay_latency.py --stage G1 --attack-workload combat --seconds 25 --fps 30 60
+Require measured complete Stage replay, not only fast local movement prediction:
+  python scripts/netplay_latency.py --stage G1 --attack-workload combat --require-stage-replay --seconds 25
 Native Archer turbo volleys, including release-to-projectile submission:
   python scripts/netplay_latency.py --workload turbo-B --character 3 --require-volleys --seconds 25 --fps 30 60
 
@@ -219,6 +221,149 @@ def evaluate_stage(report, requested=None):
                            counts.get("stage_enemy_frames", 0) == 0 or
                            counts.get("stage_enemy_motion_samples", 0) == 0):
         failures.append("G1 run lacks moving native enemy observations")
+    return failures
+
+
+REPLAY_COUNTERS = ("updates", "passes", "refusals", "advanced_ticks", "invalid_ticks",
+                   "unsupported_ticks", "presents", "present_refusals", "decode_attempts",
+                   "decode_successes", "decode_failures", "decode_nanoseconds", "advance_nanoseconds")
+REPLAY_REFUSALS = ("unbound", "invalid_authority", "invalid_input", "input_history", "missing_seed",
+                   "held", "cutscene", "resync", "stale_authority", "seat_mismatch", "no_local_input",
+                   "divergent_horizon", "horizon", "stage_decode", "seed_restore", "input_gap",
+                   "picture", "native_invalid", "native_unsupported", "exception")
+
+
+def stage_replay_coverage(report):
+    """Count every native replay attempt, including missing seeds and legacy fallback.
+
+    Do not condition on successful decode or omit no-input/horizon refusals. A
+    high Stage-only ratio can hide that almost the whole run used another lane.
+    """
+    evidence = report.get("combat_replay")
+    if not isinstance(evidence, dict):
+        return None
+    updates = {}
+    for domain in ("unseeded", "legacy", "stage"):
+        values = evidence.get(domain)
+        if not isinstance(values, dict):
+            return None
+        for key in ("updates", "passes", "refusals", "presents"):
+            if type(values.get(key)) is not int or not 0 <= values[key] < 1 << 64:
+                return None
+        if values["updates"] != values["passes"] + values["refusals"]:
+            return None
+        updates[domain] = values["updates"]
+    total = sum(updates.values())
+    passed = evidence["stage"]["passes"]
+    return {
+        "scope": "stage-committed-passes-over-all-native-replay-updates",
+        "denominator": "all-domains-including-no-input-horizon-and-missing-seed-refusals",
+        "domain_updates": updates,
+        "updates": total,
+        "stage_passes": passed,
+        "fallback_updates": total - passed,
+        "stage_presents": evidence["stage"]["presents"],
+        "coverage": passed / total if total else None,
+        "stage_only_coverage": passed / updates["stage"] if updates["stage"] else None,
+    }
+
+
+def evaluate_stage_replay(report, required=False, minimum_coverage=0.95):
+    """Verify measured native-owner admission separately from local action latency.
+
+    Refused prefixes are expected for unsupported interactions. Their successfully
+    advanced ticks alone do not establish admission: a complete pass must reach
+    presentation. Strict coverage counts ALL native replay update attempts,
+    not only eligible or successfully decoded Stage inputs. Older reports remain
+    usable without the explicit requirement.
+    """
+    evidence, seeds = report.get("combat_replay"), report.get("combat_seeds")
+    if not required and evidence is None and seeds is None:
+        return []
+    failures = []
+    if not isinstance(evidence, dict) or not isinstance(seeds, dict):
+        return ["Missing native Stage replay diagnostics"]
+    if (type(evidence.get("schema")) is not int or evidence["schema"] != 1 or
+            evidence.get("scope") != "measurement-window-native-replay" or
+            type(evidence.get("counter_resets")) is not int or evidence["counter_resets"] != 0):
+        failures.append("Invalid or reset native replay measurement window")
+    role = report.get("role")
+    expected = "host-captured" if role == "host" else "guest-received"
+    if (role not in ("host", "guest") or type(seeds.get("schema")) is not int or seeds["schema"] != 1 or
+            seeds.get("scope") != "distinct-authority-post-step-checkpoints" or
+            seeds.get("observation") != expected):
+        failures.append("Invalid native combat seed observation scope")
+    counts = {}
+    for key in ("observations", "opponent", "combat", "stage", "stage_bytes_total", "stage_bytes_max"):
+        value = seeds.get(key)
+        if type(value) is not int or not 0 <= value < 1 << 64:
+            failures.append(f"No valid native seed counter for {key}")
+        else:
+            counts[key] = value
+    if len(counts) == 6:
+        if not counts["stage"] <= counts["combat"] <= counts["opponent"] <= counts["observations"]:
+            failures.append("Native combat seed counts are inconsistent")
+        maximum, total, count = counts["stage_bytes_max"], counts["stage_bytes_total"], counts["stage"]
+        if (maximum > 512 * 1024 or total < maximum or total > maximum * count or
+                total < count * 48 or (count == 0 and (maximum != 0 or total != 0)) or
+                (count > 0 and maximum < 48)):
+            failures.append("Native Stage payload byte counts are inconsistent")
+    buckets = {}
+    for domain in ("unseeded", "legacy", "stage"):
+        values = evidence.get(domain)
+        if not isinstance(values, dict):
+            failures.append(f"Missing native replay domain {domain}")
+            continue
+        valid = True
+        for key in REPLAY_COUNTERS:
+            value = values.get(key)
+            if type(value) is not int or not 0 <= value < 1 << 64:
+                failures.append(f"No valid {domain} replay counter for {key}")
+                valid = False
+        reasons = values.get("reasons")
+        if (not isinstance(reasons, dict) or set(reasons) != set(REPLAY_REFUSALS) or
+                any(type(value) is not int or not 0 <= value < 1 << 64 for value in reasons.values())):
+            failures.append(f"Invalid {domain} replay refusal reasons")
+            valid = False
+        if not valid:
+            continue
+        buckets[domain] = values
+        if (values["updates"] != values["passes"] + values["refusals"] or
+                sum(reasons.values()) != values["refusals"] or
+                values["advanced_ticks"] < values["passes"] or
+                values["invalid_ticks"] != reasons["native_invalid"] or
+                values["unsupported_ticks"] != reasons["native_unsupported"] or
+                values["decode_attempts"] != values["decode_successes"] + values["decode_failures"] or
+                values["decode_failures"] != reasons["stage_decode"]):
+            failures.append(f"Inconsistent {domain} replay outcome accounting")
+        if domain != "stage" and any(values[key] for key in
+                                      ("decode_attempts", "decode_successes", "decode_failures", "decode_nanoseconds")):
+            failures.append(f"Stage decode incorrectly attributed to {domain} replay")
+        if domain == "unseeded" and any(values[key] for key in ("passes", "advanced_ticks", "presents")):
+            failures.append("Unseeded native replay cannot advance or present")
+        if (role == "host" or report.get("prediction") is False) and any(values[key] for key in REPLAY_COUNTERS):
+            failures.append("Host or disabled prediction cannot report guest replay work")
+    if required:
+        if (type(minimum_coverage) not in (int, float) or not math.isfinite(minimum_coverage) or
+                not 0 < minimum_coverage <= 1):
+            failures.append("Invalid minimum Stage replay coverage; expected a ratio in (0, 1]")
+        stage = buckets.get("stage", {})
+        if role != "guest" or report.get("prediction") is not True:
+            failures.append("Stage replay admission requires a prediction-enabled guest")
+        if counts.get("stage", 0) == 0:
+            failures.append("No complete Stage seeds received during measurement")
+        for key in ("decode_successes", "passes", "advanced_ticks", "presents"):
+            if stage.get(key, 0) == 0:
+                failures.append(f"No measured Stage replay {key}")
+        coverage = stage_replay_coverage(report)
+        if coverage is None or coverage["coverage"] is None:
+            failures.append("No valid measured Stage replay coverage")
+        elif (type(minimum_coverage) in (int, float) and math.isfinite(minimum_coverage) and
+              0 < minimum_coverage <= 1 and coverage["coverage"] < minimum_coverage):
+            failures.append(
+                f"Stage replay committed-pass coverage {coverage['stage_passes']}/{coverage['updates']} "
+                f"({coverage['coverage']:.2%}) is below {minimum_coverage:.2%}; "
+                "all unseeded, legacy, no-input and horizon attempts count as fallback")
     return failures
 
 
@@ -551,6 +696,10 @@ def main(argv=None):
     parser.add_argument("--prediction", choices=("on", "off", "both"), default="both")
     parser.add_argument("--stage", choices=("tower", "G1"), default="tower",
                         help="Native stage; G1 uses its entrance and requires observed enemy movement")
+    parser.add_argument("--require-stage-replay", action="store_true",
+                        help="Prediction-on guests must receive, decode, advance and present complete Stage replay")
+    parser.add_argument("--min-stage-replay-coverage", type=float, default=0.95,
+                        help="With --require-stage-replay: Stage committed passes / all native replay updates (default: 0.95)")
     parser.add_argument("--workload", choices=("throw", "rapid-five", "speed-rapid-five", "turbo-B", "turbo-C", "shove"), default="throw",
                         help="Native input workload; meters/items are provisioned only by the host probe")
     parser.add_argument("--attack-workload", choices=("throw", "combat"), default="throw",
@@ -580,6 +729,10 @@ def main(argv=None):
         parser.error("Use separate host/guest runs for three or four players")
     if args.role == "pair" and args.invitation:
         parser.error("--invitation is only for separate-machine runs; pair mode owns its temporary file")
+    if args.require_stage_replay and (args.prediction == "off" or args.role == "host"):
+        parser.error("--require-stage-replay needs a prediction-on guest or paired run")
+    if not math.isfinite(args.min_stage_replay_coverage) or not 0 < args.min_stage_replay_coverage <= 1:
+        parser.error("Minimum Stage replay coverage must be a ratio in (0, 1]")
     if args.workload not in ("throw", "rapid-five", "speed-rapid-five") and args.seconds < 20:
         parser.error("Turbo workloads need at least twenty seconds")
     if args.element != "none" and args.workload not in ("throw", "rapid-five", "speed-rapid-five"):
@@ -609,6 +762,7 @@ def main(argv=None):
                 run = output / f"{label}{fps}fps-{prediction}"
                 run.mkdir()
                 with contextlib.ExitStack() as stack:
+                    authority = None
                     invitation = args.invitation.resolve() if args.invitation else run / "invitation.txt"
                     if args.role == "pair":
                         stack.callback(invitation.unlink, missing_ok=True)
@@ -619,6 +773,8 @@ def main(argv=None):
                         authority = read_report(host, host_report, 20)
                         failures.extend(f"{run.name}: Host {reason}"
                                         for reason in evaluate_stage(authority, args.stage))
+                        failures.extend(f"{run.name}: Host {reason}"
+                                        for reason in evaluate_stage_replay(authority))
                         if authority.get("scene_id") != report.get("scene_id"):
                             failures.append(f"{run.name}: Host and guest native scene IDs differ")
                         if (authority.get("workload", "throw") != args.workload or
@@ -635,12 +791,16 @@ def main(argv=None):
                         if args.role == "host":
                             failures.extend(f"{run.name}: Host {reason}"
                                             for reason in evaluate_stage(report, args.stage))
+                            failures.extend(f"{run.name}: Host {reason}"
+                                            for reason in evaluate_stage_replay(report))
                     if report["role"] == "guest":
                         budget = args.max_motion_ms if prediction == "on" else None
                         release_budget = args.max_release_ms if prediction == "on" else None
                         reasons = evaluate(report, budget, args.max_throw_ms, args.max_send_ms,
                                            release_budget, args.max_turbo_ms, args.attack_workload,
                                            args.max_attack_ms)
+                        required_stage = args.require_stage_replay and prediction == "on"
+                        reasons.extend(evaluate_stage_replay(report, required_stage, args.min_stage_replay_coverage))
                         if report.get("stage") != args.stage:
                             reasons.append("Guest report stage differs from requested stage")
                         if (report.get("workload", "throw") != args.workload or
@@ -653,6 +813,13 @@ def main(argv=None):
                                           "stage": report.get("stage"),
                                           "loaded_stage": report.get("loaded_stage"),
                                           "scene_id": report.get("scene_id"),
+                                          "stage_replay_required": required_stage,
+                                          "stage_replay_observed": not evaluate_stage_replay(report, True, args.min_stage_replay_coverage),
+                                          "stage_replay_minimum_coverage": args.min_stage_replay_coverage,
+                                          "stage_replay_coverage": stage_replay_coverage(report),
+                                          "combat_seeds": report.get("combat_seeds"),
+                                          "combat_replay": report.get("combat_replay"),
+                                          "host_combat_seeds": authority.get("combat_seeds") if authority else None,
                                           "stage_observations": {
                                               key: report.get(key) for key in
                                               ("stage_authority_observations", "stage_enemy_frames",

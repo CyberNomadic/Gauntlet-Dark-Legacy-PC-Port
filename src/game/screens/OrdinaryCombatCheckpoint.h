@@ -1,22 +1,61 @@
 #pragma once
 
+#include <array>
+#include <string_view>
+
 #include "game/screens/CombatRollbackCheckpoint.h"
+#include "game/screens/LevelFixturesCheckpoint.h"
 #include "game/screens/OpponentCombatCheckpoint.h"
 #include "game/screens/OpponentSimulation.h"
+#include "game/world/ExitPortalsCheckpoint.h"
+#include "game/world/LevelWorldCheckpoint.h"
+#include "game/world/TowerCameraCheckpoint.h"
 
 namespace gdl::game {
 
 /** Atomic value boundary for the ordinary combat owners in one bound level.
  * Includes all ordered party members, attack pools, ordinary opponents, native
- * pending damage/rewards/lessons, and their one shared effect pool. Fixtures,
- * world motion, pickups, audio, and scene/application outputs remain outside:
- * this is not a whole-scene checkpoint or permission for network prediction. */
+ * pending damage/rewards/lessons, and their one shared effect pool. Optional
+ * jointly bound stage owners add fixtures, world motion, triggers and pickups.
+ * Camera and portal continuations can join that boundary. Audio and application outputs remain
+ * outside: this is not a whole-scene checkpoint or permission for unrestricted network prediction.
+ */
 class OrdinaryCombatCheckpoint {
 public:
+    /** First rejected value/resource owner; diagnostic only, never relaxes admission. */
+    enum class RestoreIssue : usize {
+        None,
+        Resources,
+        Context,
+        State,
+        Bindings,
+        Supports,
+        Combat,
+        Pools,
+        Adapter,
+        World,
+        Fixtures,
+        Camera,
+        Portals,
+        Commit,
+        Count
+    };
+    static constexpr std::array<std::string_view, static_cast<usize>(RestoreIssue::Count)>
+        kRestoreIssues{"none",     "resources", "context", "state",   "bindings",
+                       "supports", "combat",    "pools",   "adapter", "world",
+                       "fixtures", "camera",    "portals", "commit"};
+    struct Stage {
+        LevelWorldCheckpoint::State world;
+        LevelFixturesCheckpoint::State fixtures;
+        std::optional<TowerCameraCheckpoint::State> camera;
+        std::optional<ExitPortalsCheckpoint::State> portals;
+        bool operator==(const Stage&) const = default;
+    };
     struct State {
         CombatRollbackCheckpoint::State combat;
         OpponentState opponents;
         OpponentCombatCheckpoint::State adapter;
+        std::optional<Stage> stage;
         bool valid() const;
         bool operator==(const State&) const = default;
     };
@@ -57,7 +96,11 @@ public:
      * same LevelOpponents owner; callers cannot accidentally pair two levels.
      * Resource records are copied, not their immutable model data. */
     OrdinaryCombatCheckpoint(CombatRollbackCheckpoint& combat, LevelOpponents& opponents,
-                             std::span<const EnemyMissiles::Resource> missiles = {});
+                             std::span<const EnemyMissiles::Resource> missiles = {},
+                             LevelWorldCheckpoint* world = nullptr,
+                             LevelFixturesCheckpoint* fixtures = nullptr,
+                             TowerCameraCheckpoint* camera = nullptr,
+                             ExitPortalsCheckpoint* portals = nullptr);
     ~OrdinaryCombatCheckpoint();
     OrdinaryCombatCheckpoint(const OrdinaryCombatCheckpoint&) = delete;
     OrdinaryCombatCheckpoint& operator=(const OrdinaryCombatCheckpoint&) = delete;
@@ -65,13 +108,14 @@ public:
     OrdinaryCombatCheckpoint& operator=(OrdinaryCombatCheckpoint&&) = delete;
 
     std::optional<State> checkpoint() const;
-    std::optional<Prepared> prepareRestore(const State& state) const;
+    bool stageBound() const;
+    std::optional<Prepared> prepareRestore(const State& state, RestoreIssue* issue = nullptr) const;
     bool canCommit(const Prepared& prepared) const;
     /** All child plans preflight before any live owner changes. The synchronous
      * commit allocates nothing and emits no callbacks. No native updates, owner
      * destruction or resource rebind may interleave prepare/preflight/commit. */
     bool commitRestore(Prepared&& prepared);
-    bool restore(const State& state);
+    bool restore(const State& state, RestoreIssue* issue = nullptr);
     /** Preallocates exact current-state undo across an ordinary native tick,
      * including placement watch/activation, pain RNG and progression changes.
      * Outputs remain caller-owned and buffered; unsupported external owners
@@ -89,6 +133,10 @@ private:
     OpponentSimulation m_pools;
     OpponentCombatCheckpoint m_adapter;
     std::vector<EnemyMissiles::Resource> m_missiles;
+    LevelWorldCheckpoint* m_world = nullptr;
+    LevelFixturesCheckpoint* m_fixtures = nullptr;
+    TowerCameraCheckpoint* m_camera = nullptr;
+    ExitPortalsCheckpoint* m_portals = nullptr;
     bool m_configurationValid = false;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
     u64 m_generation = 1;

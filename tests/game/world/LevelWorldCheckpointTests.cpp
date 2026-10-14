@@ -228,7 +228,7 @@ TEST_CASE("complete level preparation is atomic across malformed child owners",
     auto invalid = before;
     const s32 mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
     switch (mutation) {
-    case 0: invalid.core.moving.front().placed.front().vertices[0].x += 1; break;
+    case 0: invalid.core.moving.front().object = 9999; break;
     case 1: invalid.triggers.triggers.front().target = 300; break;
     case 2: invalid.destruction.objects.pop_back(); break;
     case 3: invalid.falling.pieces.front().gravityStep += 1; break;
@@ -383,10 +383,7 @@ TEST_CASE("native level checkpoint restores independently loaded world owners wi
             const auto moving = std::ranges::find(captured->core.moving, object,
                                                   &WorldStateCheckpoint::Moving::object);
             REQUIRE(moving != captured->core.moving.end());
-            REQUIRE_FALSE(moving->placed.empty());
-            for (const auto& triangle : moving->placed) {
-                CHECK(triangle.normal == Vec3{0});
-            }
+            CHECK(Mat3{moving->transform} == Mat3{0});
         }
     }
     REQUIRE(replay.restore(*captured));

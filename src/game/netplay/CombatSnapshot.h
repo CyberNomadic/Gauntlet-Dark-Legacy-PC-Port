@@ -361,6 +361,25 @@ struct CombatSnapshot {
  * chunks. Explicit scalar encoding; never memcpy game objects or save records. */
 class CombatPacket {
 public:
+    /** Immutable result of the complete encoder, including its byte budget and
+     * cross-owner validation. Publication can reuse this exact capture without
+     * pairing arbitrary bytes with later, mutable snapshot metadata. */
+    class Prepared {
+    public:
+        Prepared(Prepared&&) noexcept = default;
+        Prepared& operator=(Prepared&&) noexcept = default;
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+        const MotionSnapshot& motion() const { return m_motion; }
+        std::span<const u8> bytes() const { return m_bytes; }
+
+    private:
+        friend class CombatPacket;
+        Prepared(const MotionSnapshot& motion, std::vector<u8> bytes)
+            : m_motion(motion), m_bytes(std::move(bytes)) {}
+        MotionSnapshot m_motion;
+        std::vector<u8> m_bytes;
+    };
     static constexpr usize kHeaderBytes = 64;
     static constexpr usize kCompanionBytes = 84 + 4 + AnimationCheckpoint::kBytes;
     static constexpr usize kShadowBytes = 28;
@@ -402,6 +421,7 @@ public:
     // optional codecs. Typed contacts and complete opponent observations compete
     // for this space; an oversized combination is refused, never truncated.
     static constexpr usize kMaxBytes = 1'570'903;
+    static std::optional<Prepared> prepare(const CombatSnapshot& snapshot);
     static std::optional<std::vector<u8>> encode(const CombatSnapshot& snapshot);
     static std::optional<CombatSnapshot> decode(std::span<const u8> bytes);
 };

@@ -238,8 +238,11 @@ add_library(game STATIC
     enemies/CombatantBreath.cpp
     enemies/CombatantProjectile.cpp
     world/CombatantProjectiles.cpp
+    world/CombatantProjectilesCheckpoint.cpp
     enemies/Critters.cpp
     enemies/Combatant.cpp
+    enemies/CombatantCheckpoint.cpp
+    enemies/CrittersCheckpoint.cpp
     enemies/CombatantParts.cpp
     enemies/CombatantNodes.cpp
     enemies/CombatantGaze.cpp
@@ -291,6 +294,8 @@ add_library(game STATIC
     world/WorldDestructionCheckpoint.cpp
     world/TowerCamera.h
     world/TowerCamera.cpp
+    world/TowerCameraCheckpoint.cpp
+    world/ExitPortalsCheckpoint.cpp
     world/BossCamera.h
     world/BossCamera.cpp
     world/CameraShake.h
@@ -427,7 +432,14 @@ add_library(game STATIC
     screens/CombatResources.cpp
     screens/EnemyFeedbackEmission.cpp
     screens/OrdinaryProjectilePhase.cpp
+    screens/OrdinaryFixturePhase.cpp
+    screens/OrdinaryFloorSupport.cpp
+    screens/StageCombatPresentation.cpp
+    screens/StageParticlePresentation.cpp
+    screens/StageSnapshotSampling.cpp
+    netplay/StageStatePacket.cpp
     screens/OrdinaryWeaponEmission.cpp
+    screens/OrdinaryStrongPhase.cpp
     screens/LevelFixturesCheckpoint.cpp
     world/LevelWorldCheckpoint.cpp
     screens/PartyDamage.cpp

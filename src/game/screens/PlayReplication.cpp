@@ -77,43 +77,48 @@ PlayReplication::Result PlayReplication::fail() {
     return Result::Failed;
 }
 
-void PlayReplication::captureOpponents(CombatSnapshot& state) const {
+std::optional<CombatPacket::Prepared>
+PlayReplication::captureOpponents(CombatSnapshot& state) const {
     auto pools = OpponentResources::capture(m_scene->generators(), m_scene->enemies(),
                                             m_scene->enemyMissiles());
     if (!pools) {
-        return;
+        return std::nullopt;
     }
     pools->placements = m_scene->placedEnemies().checkpoint();
     if (!pools->placements) {
-        return;
+        return std::nullopt;
     }
     auto frame = m_scene->opponentFrame(static_cast<u32>(pools->enemies.scales.players));
     if (!frame) {
-        return;
+        return std::nullopt;
     }
     state.opponents = std::move(pools);
     state.opponentFrame = std::move(frame);
     // Existing snapshots retain their fixed raw budget. Optional simulation data
     // must never turn a valid presentation snapshot into a transport failure.
     // The caller only attempts this supplement on actual publication ticks.
-    if (!CombatPacket::encode(state)) {
+    auto opponents = CombatPacket::prepare(state);
+    if (!opponents) {
         state.opponents.reset();
         state.opponentFrame.reset();
-        return;
+        return std::nullopt;
     }
     auto combat = m_scene->combatState();
     auto combatFrame = m_scene->combatFrame();
     if (!combat || !combatFrame) {
-        return;
+        return opponents;
     }
     state.combatState = std::move(combat);
     state.combatFrame = std::move(combatFrame);
-    if (!CombatPacket::encode(state)) {
+    auto complete = CombatPacket::prepare(state);
+    if (!complete) {
         // A full combat seed is atomic. Retain the already-admitted ordinary
         // opponent/presentation fallback when resources or the budget refuse it.
         state.combatState.reset();
         state.combatFrame.reset();
+        return opponents;
     }
+    return complete;
 }
 
 std::optional<CombatSnapshot> PlayReplication::capture(u64 tick,
@@ -687,8 +692,8 @@ PlayReplication::Result PlayReplication::advance(MatchSession& match,
         return fail();
     }
     if (state->motion.tick % kSnapshotStride == 0 || outcome != PlayOutcome::Running) {
-        captureOpponents(*state);
-        if (!match.publish(*state)) {
+        const auto prepared = captureOpponents(*state);
+        if (!(prepared ? match.publish(*prepared) : match.publish(*state))) {
             return fail();
         }
     }

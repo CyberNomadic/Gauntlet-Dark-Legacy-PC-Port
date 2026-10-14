@@ -1,13 +1,49 @@
 #include "game/screens/OnlineCombatReplay.h"
 
 #include <algorithm>
+#include <bit>
+#include <chrono>
 #include <cmath>
 
 #include "game/netplay/InputTimeline.h"
 #include "game/screens/CombatCapture.h"
 #include "game/screens/SessionInputs.h"
+#include "game/screens/StageCombatPresentation.h"
+#include "game/screens/StageParticlePresentation.h"
 
 namespace gdl::game {
+namespace {
+bool sameInput(const InputCommand& first, const InputCommand& second) {
+    const auto real = [](f32 a, f32 b) { return std::bit_cast<u32>(a) == std::bit_cast<u32>(b); };
+    return first.epoch == second.epoch && first.tick == second.tick &&
+           first.grant == second.grant && first.seat == second.seat &&
+           real(first.direction.x, second.direction.x) &&
+           real(first.direction.y, second.direction.y) && real(first.magnitude, second.magnitude) &&
+           first.aimDirection.has_value() == second.aimDirection.has_value() &&
+           (!first.aimDirection || (real(first.aimDirection->x, second.aimDirection->x) &&
+                                    real(first.aimDirection->y, second.aimDirection->y) &&
+                                    real(first.aimDirection->z, second.aimDirection->z))) &&
+           first.heldButtons == second.heldButtons && first.pressedButtons == second.pressedButtons;
+}
+} // namespace
+OnlineCombatReplay::Domain OnlineCombatReplay::domainOf(const CombatSnapshot* state) {
+    if (state == nullptr || !state->combatState || !state->combatFrame || !state->opponents ||
+        !state->opponentFrame) {
+        return Domain::Unseeded;
+    }
+    return state->combatState->stage ? Domain::Stage : Domain::Legacy;
+}
+
+bool OnlineCombatReplay::refuse(Refusal reason) {
+    // Reuse no longer resets at entry. Every rejected admission must revoke the
+    // old picture as well as any newly advanced prefix, back to host authority.
+    discard();
+    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    ++counters.refusals;
+    ++counters.reasons[static_cast<usize>(reason)];
+    return false;
+}
+
 bool OnlineCombatReplay::begin(const MatchContext& context, u8 localPeer,
                                CombatPrediction& prediction) {
     clear();
@@ -35,19 +71,35 @@ void OnlineCombatReplay::discard() {
     }
     m_previous.reset();
     m_shown.reset();
+    m_previousParticles.reset();
+    m_shownParticles.reset();
+    m_executed.clear();
+    m_nextFrame.reset();
+    m_revision = 0;
 }
 void OnlineCombatReplay::clear() {
     discard();
     *this = OnlineCombatReplay{};
 }
 bool OnlineCombatReplay::active() const {
-    return m_prediction != nullptr && m_prediction->active() && m_shown != nullptr;
+    if (m_prediction == nullptr || !m_prediction->active() || !m_shown || !m_seed ||
+        m_revision != m_prediction->replayRevision() ||
+        m_shown->motion.tick != m_prediction->tick()) {
+        return false;
+    }
+    const auto lifetime = m_seedLifetime.lock();
+    return lifetime && lifetime == m_prediction->resourceLifetime().lock();
+}
+bool OnlineCombatReplay::staged() const {
+    return active() && m_seed && m_seed->stage.has_value();
 }
 u64 OnlineCombatReplay::tick() const {
     return active() ? m_prediction->tick() : 0;
 }
 
-std::unique_ptr<CombatSnapshot> OnlineCombatReplay::picture() const {
+std::unique_ptr<CombatSnapshot>
+OnlineCombatReplay::picture(std::shared_ptr<const StageParticlePresentation>& particles) const {
+    particles.reset();
     if (!m_authority || m_prediction == nullptr || !m_prediction->active() ||
         m_prediction->enemies() == nullptr) {
         return nullptr;
@@ -62,6 +114,14 @@ std::unique_ptr<CombatSnapshot> OnlineCombatReplay::picture() const {
         motion.players[seat]->position = player.actor.position();
         motion.players[seat]->yaw = std::remainder(player.actor.yaw(), kTwoPi);
     }
+    if (m_seed && m_seed->stage) {
+        auto result = m_prediction->stagePicture(*m_authority, motion, &particles);
+        if (!result || !particles || !particles->matches(motion.epoch, motion.tick)) {
+            particles.reset();
+            return nullptr;
+        }
+        return result;
+    }
     auto state = CombatCapture::capture(motion, m_prediction->players(), *m_prediction->enemies(),
                                         nullptr, m_prediction->world());
     return state ? std::make_unique<CombatSnapshot>(std::move(*state)) : nullptr;
@@ -69,12 +129,20 @@ std::unique_ptr<CombatSnapshot> OnlineCombatReplay::picture() const {
 
 bool OnlineCombatReplay::update(const CombatSnapshot* authority,
                                 std::span<const InputCommand> sent) {
+    const bool incoming = authority != nullptr && authority->motion.epoch == m_context.epoch &&
+                          (!m_authority || authority->motion.tick > m_authority->motion.tick);
+    m_domain = domainOf(incoming ? authority : m_authority.get());
+    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    ++counters.updates;
     try {
-        return updatePass(authority, sent);
+        const bool accepted = updatePass(authority, sent);
+        counters.passes += accepted ? 1 : 0;
+        return accepted;
     } catch (...) {
         // Presentation allocation or a refused native restore must never leave
         // a partly replayed party available to the next rendered frame.
         discard();
+        refuse(Refusal::Exception);
         throw;
     }
 }
@@ -82,15 +150,17 @@ bool OnlineCombatReplay::update(const CombatSnapshot* authority,
 bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
                                     std::span<const InputCommand> sent) {
     ++m_clock;
-    discard();
     if (m_prediction == nullptr) {
-        return false;
+        return refuse(Refusal::Unbound);
     }
     if (authority != nullptr && authority->motion.epoch == m_context.epoch &&
         (!m_authority || authority->motion.tick > m_authority->motion.tick)) {
+        discard();
         if (!authority->valid()) {
             m_authority.reset();
-            return false;
+            m_seed.reset();
+            m_seedLifetime.reset();
+            return refuse(Refusal::InvalidAuthority);
         }
         for (usize seat = 0; seat < m_context.owners.size(); ++seat) {
             const auto& body = authority->motion.players[seat];
@@ -105,25 +175,36 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         }
         m_history.resolve(authority->motion.epoch, authority->motion.tick);
         m_authority = std::make_unique<CombatSnapshot>(*authority);
+        m_seed.reset();
+        m_seedLifetime.reset();
         m_receivedAt = m_clock;
     }
     for (const auto& input : sent) {
         if (!input.valid() || input.epoch != m_context.epoch ||
             m_context.owners[input.seat] != m_local ||
             input.grant != m_context.grants[input.seat]) {
-            return false;
+            return refuse(Refusal::InvalidInput);
         }
         if ((!m_authority || input.tick > m_authority->motion.tick) &&
             !m_history.record(std::span{&input, 1}, m_clock)) {
-            return false;
+            return refuse(Refusal::InputHistory);
         }
     }
     if (!m_authority || !m_authority->opponents || !m_authority->opponentFrame ||
-        !m_authority->combatState || !m_authority->combatFrame ||
-        m_authority->opponentFrame->held || m_authority->opponentFrame->timeStopped ||
-        m_authority->combatFrame->damage.cutscene || m_history.resyncRequired() ||
-        m_clock - m_receivedAt > 30) {
-        return false;
+        !m_authority->combatState || !m_authority->combatFrame) {
+        return refuse(Refusal::MissingSeed);
+    }
+    if (m_authority->opponentFrame->held || m_authority->opponentFrame->timeStopped) {
+        return refuse(Refusal::Held);
+    }
+    if (m_authority->combatFrame->damage.cutscene) {
+        return refuse(Refusal::Cutscene);
+    }
+    if (m_history.resyncRequired()) {
+        return refuse(Refusal::Resync);
+    }
+    if (m_clock - m_receivedAt > 30) {
+        return refuse(Refusal::StaleAuthority);
     }
     const auto baseline = m_authority->motion.tick;
     std::array<std::span<const RollbackInputHistory::Entry>, InputCommand::kSeats> commands;
@@ -135,75 +216,165 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         if (!m_authority->players[seat] || !m_authority->motion.players[seat] ||
             m_authority->motion.players[seat]->grant != m_context.grants[seat] ||
             m_authority->players[seat]->portalPhase) {
-            return false;
+            return refuse(Refusal::SeatMismatch);
         }
         if (m_context.owners[seat] == m_local) {
             commands[seat] = m_history.replay(seat, m_authority->players[seat]->rollbackInput);
             if (commands[seat].empty()) {
-                return false;
+                return refuse(Refusal::NoLocalInput);
             }
             if (end != baseline && end != commands[seat].back().input.tick) {
-                return false;
+                return refuse(Refusal::DivergentHorizon);
             }
             end = commands[seat].back().input.tick;
         }
     }
     if (end == baseline || end - baseline > CombatPrediction::kMaxTicks) {
-        return false;
+        return refuse(Refusal::Horizon);
     }
-    const OrdinaryCombatCheckpoint::State seed{m_authority->combatState->combat,
-                                               *m_authority->opponents,
-                                               m_authority->combatState->adapter};
-    if (!m_prediction->begin(m_context.epoch, baseline, seed)) {
-        return false;
-    }
-    auto frame = *m_authority->combatFrame;
+    std::vector<Commands> effective;
+    effective.reserve(static_cast<usize>(end - baseline));
     for (u64 offset = 1; offset <= end - baseline; ++offset) {
         const auto tick = baseline + offset;
+        Commands inputs{};
+        for (usize seat = 0; seat < commands.size(); ++seat) {
+            if (m_context.owners[seat] == 0) {
+                continue;
+            }
+            if (m_context.owners[seat] == m_local) {
+                if (offset > commands[seat].size() ||
+                    commands[seat][offset - 1].input.tick != tick) {
+                    return refuse(Refusal::InputGap);
+                }
+                inputs[seat] = commands[seat][offset - 1].input;
+            } else {
+                inputs[seat] = InputTimeline::heldOrNeutral(
+                    m_authority->players[seat]->rollbackInput, m_context.epoch, tick,
+                    m_context.grants[seat], static_cast<u8>(seat));
+            }
+        }
+        effective.push_back(std::move(inputs));
+    }
+    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    const auto lifetime = m_prediction->resourceLifetime().lock();
+    if (!lifetime || m_seedLifetime.lock() != lifetime) {
+        discard();
+        m_seed.reset();
+        m_seedLifetime.reset();
+    }
+    if (!lifetime) {
+        return refuse(Refusal::SeedRestore);
+    }
+    if (!m_seed) {
+        auto seed = std::make_unique<OrdinaryCombatCheckpoint::State>();
+        seed->combat = m_authority->combatState->combat;
+        seed->opponents = *m_authority->opponents;
+        seed->adapter = m_authority->combatState->adapter;
+        if (m_authority->combatState->stage) {
+            const auto begin = std::chrono::steady_clock::now();
+            seed->stage = m_prediction->decodeStage(*m_authority->combatState->stage);
+            counters.decodeNanoseconds +=
+                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - begin)
+                                     .count());
+            ++counters.decodeAttempts;
+            if (!seed->stage) {
+                ++counters.decodeFailures;
+                return refuse(Refusal::StageDecode);
+            }
+            ++counters.decodeSuccesses;
+        }
+        m_seed = std::move(seed);
+        m_seedLifetime = lifetime;
+    }
+    const bool continuing =
+        active() && m_nextFrame && m_executed.size() <= effective.size() &&
+        baseline + m_executed.size() == m_prediction->tick() &&
+        std::equal(m_executed.begin(), m_executed.end(), effective.begin(),
+                   [](const Commands& first, const Commands& second) {
+                       return std::equal(first.begin(), first.end(), second.begin(), sameInput);
+                   });
+    if (!continuing) {
+        discard();
+        OrdinaryCombatCheckpoint::RestoreIssue seedIssue{};
+        if (!m_prediction->begin(m_context.epoch, baseline, *m_seed, &seedIssue)) {
+            ++counters.seedIssues[static_cast<usize>(seedIssue)];
+            return refuse(Refusal::SeedRestore);
+        }
+    } else if (m_executed.size() == effective.size()) {
+        // Preserve the complete previous/current pair and its native particle
+        // history. A repeated publication is not a simulation or render step.
+        return true;
+    }
+    auto frame = continuing ? *m_nextFrame : *m_authority->combatFrame;
+    for (usize index = m_executed.size(); index < effective.size(); ++index) {
+        const auto tick = baseline + index + 1;
         SessionInputs::Frame inputs{};
         for (usize seat = 0; seat < commands.size(); ++seat) {
             if (m_context.owners[seat] == 0) {
                 continue;
             }
-            InputCommand input;
-            if (m_context.owners[seat] == m_local) {
-                if (offset > commands[seat].size() ||
-                    commands[seat][offset - 1].input.tick != tick) {
-                    discard();
-                    return false;
-                }
-                input = commands[seat][offset - 1].input;
-            } else {
-                input = InputTimeline::heldOrNeutral(m_authority->players[seat]->rollbackInput,
-                                                     m_context.epoch, tick, m_context.grants[seat],
-                                                     static_cast<u8>(seat));
-            }
-            inputs[seat] = SessionInputs::playInput(input);
+            inputs[seat] = SessionInputs::playInput(effective[index][seat]);
         }
         if (tick == end) {
-            m_previous = picture();
+            m_previous = picture(m_previousParticles);
             if (!m_previous) {
                 discard();
-                return false;
+                return refuse(Refusal::Picture);
             }
         }
-        if (m_prediction->advance(tick, inputs, frame).status !=
-            OrdinaryCombatTick::Status::Advanced) {
+        const auto begin = std::chrono::steady_clock::now();
+        const auto result = m_prediction->advance(tick, inputs, frame);
+        counters.advanceNanoseconds +=
+            static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - begin)
+                                 .count());
+        if (result.status != OrdinaryCombatTick::Status::Advanced) {
             discard();
-            return false;
+            ++counters.tickRefusals[static_cast<usize>(result.refusal)];
+            if (result.status == OrdinaryCombatTick::Status::Invalid) {
+                ++counters.invalidTicks;
+                return refuse(Refusal::NativeInvalid);
+            }
+            ++counters.unsupportedTicks;
+            return refuse(Refusal::NativeUnsupported);
         }
+        ++counters.advancedTicks;
         frame.damage.playSeconds += frame.seconds;
     }
-    m_shown = picture();
+    m_shown = picture(m_shownParticles);
     if (!m_shown) {
         discard();
-        return false;
+        return refuse(Refusal::Picture);
     }
+    m_executed = std::move(effective);
+    m_nextFrame = frame;
+    m_revision = m_prediction->replayRevision();
     return true;
 }
 
 bool OnlineCombatReplay::present(CombatSnapshot& shown, EnemyPresentation& presentation,
-                                 f32 blend) const {
+                                 f32 blend) {
+    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    try {
+        const bool accepted = presentPass(shown, presentation, blend);
+        if (accepted) {
+            ++counters.presents;
+        } else {
+            ++counters.presentRefusals;
+        }
+        return accepted;
+    } catch (...) {
+        // CPU allocation failures cannot leave a usable partial native pass.
+        // Both presentation helpers stage output before committing it.
+        discard();
+        ++counters.presentRefusals;
+        throw;
+    }
+}
+
+bool OnlineCombatReplay::presentPass(CombatSnapshot& shown, EnemyPresentation& presentation,
+                                     f32 blend) const {
     if (!active() || !m_authority || !m_previous || shown.motion.epoch != m_context.epoch ||
         shown.motion.tick > m_authority->motion.tick || !presentation.matches(shown) ||
         shown.motion.cameraContinuity != m_authority->motion.cameraContinuity ||
@@ -233,6 +404,22 @@ bool OnlineCombatReplay::present(CombatSnapshot& shown, EnemyPresentation& prese
     }
     if (!local) {
         return false;
+    }
+    if (m_seed && m_seed->stage) {
+        if (!m_previousParticles || !m_shownParticles ||
+            !m_previousParticles->matches(m_previous->motion.epoch, m_previous->motion.tick) ||
+            !m_shownParticles->matches(m_shown->motion.epoch, m_shown->motion.tick) ||
+            !StageCombatPresentation::present(shown, presentation, *m_previous, *m_shown, blend,
+                                              m_shownParticles->swarm(),
+                                              m_shownParticles->party())) {
+            return false;
+        }
+        // The current exact native field already contains its own previous-step
+        // particle positions. Sampling another field would blend unrelated RNG.
+        presentation.particles = m_shownParticles;
+        presentation.particleTick = m_shown->motion.tick;
+        presentation.particleBlend = blend;
+        return true;
     }
     // Stage all allocating copies before changing either presentation owner.
     auto players = shown.players;

@@ -67,27 +67,39 @@ std::optional<MotionSnapshot> SnapshotPlayback::sample(u64 tick, f32 fraction) c
         // Subtract integer ticks first: sessions above 2^53 ticks remain precise.
         const f32 t = static_cast<f32>((static_cast<f64>(tick - lower.tick) + fraction) /
                                        static_cast<f64>(upper.tick - lower.tick));
-        MotionSnapshot shown = lower;
-        if (lower.cameraContinuity == upper.cameraContinuity) {
-            shown.camera.position = glm::mix(lower.camera.position, upper.camera.position, t);
-            shown.camera.pitch = angleBetween(lower.camera.pitch, upper.camera.pitch, t);
-            shown.camera.yaw = angleBetween(lower.camera.yaw, upper.camera.yaw, t);
-            shown.camera.roll = angleBetween(lower.camera.roll, upper.camera.roll, t);
-            shown.horizontalFov = glm::mix(lower.horizontalFov, upper.horizontalFov, t);
-            shown.aspect = glm::mix(lower.aspect, upper.aspect, t);
-        }
-        for (usize seat = 0; seat < shown.players.size(); ++seat) {
-            const auto& from = lower.players[seat];
-            const auto& to = upper.players[seat];
-            if (from && to && from->grant == to->grant && from->continuity == to->continuity) {
-                shown.players[seat] = SeatMotion{from->grant, from->continuity,
-                                                 glm::mix(from->position, to->position, t),
-                                                 angleBetween(from->yaw, to->yaw, t)};
-            }
-        }
-        return shown;
+        return samplePair(lower, upper, t);
     }
     return m_history.back();
+}
+
+std::optional<MotionSnapshot> SnapshotPlayback::samplePair(const MotionSnapshot& lower,
+                                                           const MotionSnapshot& upper, f32 t) {
+    if (!lower.valid() || !upper.valid() || lower.epoch != upper.epoch ||
+        lower.tick >= upper.tick || !std::isfinite(t) || t < 0 || t > 1) {
+        return std::nullopt;
+    }
+    if (t == 1) {
+        return upper;
+    }
+    MotionSnapshot shown = lower;
+    if (lower.cameraContinuity == upper.cameraContinuity) {
+        shown.camera.position = glm::mix(lower.camera.position, upper.camera.position, t);
+        shown.camera.pitch = angleBetween(lower.camera.pitch, upper.camera.pitch, t);
+        shown.camera.yaw = angleBetween(lower.camera.yaw, upper.camera.yaw, t);
+        shown.camera.roll = angleBetween(lower.camera.roll, upper.camera.roll, t);
+        shown.horizontalFov = glm::mix(lower.horizontalFov, upper.horizontalFov, t);
+        shown.aspect = glm::mix(lower.aspect, upper.aspect, t);
+    }
+    for (usize seat = 0; seat < shown.players.size(); ++seat) {
+        const auto& from = lower.players[seat];
+        const auto& to = upper.players[seat];
+        if (from && to && from->grant == to->grant && from->continuity == to->continuity) {
+            shown.players[seat] =
+                SeatMotion{from->grant, from->continuity, glm::mix(from->position, to->position, t),
+                           angleBetween(from->yaw, to->yaw, t)};
+        }
+    }
+    return shown;
 }
 
 } // namespace gdl::game

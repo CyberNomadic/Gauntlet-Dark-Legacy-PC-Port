@@ -179,6 +179,10 @@ public:
         bool presentationCaptured = false;
         mutable TreePose presentationPose; ///< visual-only sample, never emitter or contact input
         std::optional<Provenance> provenance;
+        /** Prevalidated future topology for a restored chain. Artwork remains
+         * borrowed from the immutable pool catalog; CPU birth state is owned.
+         * Native starts leave this empty and use their original bind path. */
+        std::shared_ptr<const Effect> morphPrototype;
         Mat4 transform() const;
         f32 opacity() const;
     };
@@ -210,6 +214,9 @@ public:
             u64 previousGeneration = 0;
             f32 previousFrame = 0;
             bool presentationCaptured = false;
+            /** Nonzero only when previousTree names a different catalog tree
+             * across this tick's native morph; zero retains same-tree policy. */
+            u32 previousResource = 0;
             bool operator==(const Entry&) const = default;
         };
         struct Bank {
@@ -239,8 +246,8 @@ public:
         explicit PreparedRestore(std::unique_ptr<Data> data);
         std::unique_ptr<Data> m_data;
     };
-    /** Complete resource-free pool snapshot. Morphing topology is explicitly
-     * refused; ordinary projectile trees, riders and retired tails are supported.
+    /** Complete resource-free pool snapshot. Pending morphs require prebound
+     * future topology in the same archive/lender bank; no restore-time loading.
      * Fallback lenders are trusted binding context, retained from this owner. */
     std::optional<PoolCheckpoint>
     checkpointPool(std::span<const PoolResource> resources = {}) const;
@@ -265,6 +272,8 @@ public:
     u32 startPrepared(const Prepared& prepared, const Vec3& position, const Setting& setting,
                       const Mat4& particleAttachment = Mat4{1},
                       std::optional<u32> particleSeed = std::nullopt);
+    /** A prebound standalone emitter with the native upcoming effect-ID seed. */
+    u32 startPreparedParticles(const Prepared& prepared, const Mat4& attachment);
     /** Retains a shared prebound clock even when no effect currently uses it. */
     bool prepareBank(const Prepared& prepared);
     /** Ends effect number `id` now. */
@@ -322,6 +331,10 @@ public:
     bool restoreTextureClock(const ItemArchive& archive, std::span<TextureSet* const> lenders,
                              const TextureAnimator::Checkpoint& state);
     f32 textureFrame(const Effect& effect) const;
+    /** Read-only native bank; copy it before retaining a render-only picture. */
+    const TextureAnimator* textureAnimator(const ItemArchive* archive,
+                                           std::span<TextureSet* const> lenders) const;
+    bool presentationAdvanced() const { return m_presentationAdvanced; }
     /** Fractional clock used by a future startSet with these explicit lenders, followed by
      * this pool's fallback lenders. Empty means that bank has never started;
      * querying does not bind artwork or create/advance a clock. */

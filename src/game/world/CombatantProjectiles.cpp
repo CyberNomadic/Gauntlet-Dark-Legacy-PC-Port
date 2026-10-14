@@ -162,7 +162,6 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
                   shot.data->name(), cue->tree);
         return;
     }
-    std::uniform_real_distribution<f32> spread{-1.0f, 1.0f};
     Flying flying;
     flying.shot = shot;
     // Unattached SFXX offsets are world-axis offsets, scaled by the creature.
@@ -193,12 +192,15 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
         }
         return;
     }
-    flying.velocity = CombatantProjectile::velocity(*damage, flying.shot, spread(m_random));
+    // Preserve the native Windows binary32 mapping and draw count explicitly,
+    // rather than depending on the host standard library's distribution.
+    const f32 spread = m_random.unitFloat24() * 2.0f - 1.0f;
+    flying.velocity = CombatantProjectile::velocity(*damage, flying.shot, spread);
     flying.rotation.y = std::atan2(flying.velocity.x, flying.velocity.z);
     if ((cue->flags & kSpin) != 0) {
         constexpr f32 kSpinRate = std::numbers::pi_v<f32> / 2.0f;
-        std::uniform_real_distribution<f32> spin{0.0f, kSpinRate};
-        flying.spin = Vec3{spin(m_random), 0.0f, spin(m_random)};
+        flying.spin =
+            Vec3{m_random.unitFloat24() * kSpinRate, 0.0f, m_random.unitFloat24() * kSpinRate};
     }
     flying.effect = show(flying, damage->sound, device, effects, sound, shot.birthLife);
     if (flying.effect != 0) {
@@ -624,6 +626,7 @@ void CombatantProjectiles::stickyContacts(Flying& flying, f32 seconds,
 }
 
 void CombatantProjectiles::clear(EffectTrees& effects) {
+    m_checkpointBinding = std::make_shared<const u8>(0);
     for (const u32 effect : m_emittedEffects) {
         effects.stop(effect);
     }

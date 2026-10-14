@@ -268,6 +268,16 @@ bool EffectTrees::restoreTextureClock(const ItemArchive& archive,
     return false;
 }
 
+const TextureAnimator* EffectTrees::textureAnimator(const ItemArchive* archive,
+                                                    std::span<TextureSet* const> lenders) const {
+    for (const auto& motion : m_motions) {
+        if (motion->archive == archive && std::ranges::equal(motion->lenders, lenders)) {
+            return &motion->animator;
+        }
+    }
+    return nullptr;
+}
+
 f32 EffectTrees::textureFrame(const Effect& effect) const {
     for (const auto& motion : m_motions) {
         if (motion->archive == effect.archive && motion->lenders == effect.lenders) {
@@ -330,6 +340,24 @@ bool EffectTrees::start(RenderDevice& device, ItemArchive& archive, std::string_
 }
 
 bool EffectTrees::bindVisuals(Effect& effect) {
+    if (effect.morphPrototype) {
+        // prepareRestorePool already authenticated and copied this future tree's
+        // native birth state. A replayed morph must not load/bind artwork in the
+        // middle of a speculative tick. Keep the native pose/clock branch below
+        // update() identical; only its resource construction uses the catalog.
+        const auto& prototype = *effect.morphPrototype;
+        if (prototype.tree != effect.tree) {
+            return false;
+        }
+        effect.model = prototype.model;
+        effect.model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
+        if (effect.emitParticles) {
+            effect.particles = prototype.particles;
+            effect.particles.setLocalScales(effect.pose.poses());
+            effect.particles.step(0, effect.transform(), effect.pose.matrices());
+        }
+        return effect.model.bound() || effect.particles.field().size() > 0;
+    }
     std::optional<TreeInfo> sparseTree;
     if (effect.missingObjectsAreEmpty) {
         // AtreeNodeInit -> MBOX_ReallyFindObject(create=1) substitutes AAANULLOBJ.
@@ -653,6 +681,13 @@ u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
     return id;
 }
 
+u32 EffectTrees::startPreparedParticles(const Prepared& prepared, const Mat4& attachment) {
+    if (prepared.tree != nullptr) {
+        return 0;
+    }
+    return startPrepared(prepared, Vec3{0}, Setting{}, attachment, m_nextId);
+}
+
 bool EffectTrees::prepareBank(const Prepared& prepared) {
     if (prepared.archive == nullptr || prepared.textures == nullptr) {
         return false;
@@ -786,12 +821,17 @@ void EffectTrees::update(f32 seconds) {
                 animationSeconds = std::max(seconds - beforeMorph, 0.0f);
                 effect->morphIn.reset();
             }
-            const auto next = effect->archive->trees.find(effect->then);
+            const TreeInfo* nextTree = nullptr;
+            if (effect->morphPrototype) {
+                nextTree = effect->morphPrototype->tree;
+            } else if (const auto next = effect->archive->trees.find(effect->then)) {
+                nextTree = &effect->archive->trees.tree(*next);
+            }
             const std::string name = std::move(effect->then);
             effect->then.clear();
             effect->repeats = true;
-            if (next.has_value() && effect->device != nullptr) {
-                const TreeInfo& tree = effect->archive->trees.tree(*next);
+            if (nextTree != nullptr && effect->device != nullptr) {
+                const TreeInfo& tree = *nextTree;
                 effect->tree = &tree;
                 effect->name = name;
                 if (tree.sequences.empty()) {

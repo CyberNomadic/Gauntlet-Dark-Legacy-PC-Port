@@ -65,6 +65,8 @@ public:
      * collection resources. No level or GPU resources are loaded by restore. */
     bool bindResources(RenderDevice& device);
     void clearResources();
+    bool binds(const LevelWorld& owner) const;
+    bool hasCollisionObject(s32 object) const;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

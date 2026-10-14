@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <memory>
+#include <span>
 
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/WorldAnimator.h"
@@ -19,10 +21,8 @@ public:
         bool operator==(const Resource&) const = default;
     };
     struct Placement {
-        Mat4 local{1}, initial{1}, previous{1};
-        s32 parent = -1, unit = -1;
+        Mat4 local{1}, previous{1};
         u32 continuity = 1;
-        bool moving = false;
         bool operator==(const Placement&) const = default;
     };
     struct Unit {
@@ -53,17 +53,8 @@ public:
         static Light capture(const WorldLighting& lighting);
         WorldLighting lighting() const;
     };
-    struct Triangle {
-        Vec3 normal{0};
-        std::array<Vec3, 3> vertices{};
-        s32 object = -1;
-        u32 flags = 0;
-        bool operator==(const Triangle&) const = default;
-    };
     struct Moving {
         s32 object = -1;
-        std::vector<Triangle> local, placed;
-        Vec3 minimum{0}, maximum{0};
         Mat4 transform{1};
         bool operator==(const Moving&) const = default;
     };
@@ -79,14 +70,14 @@ public:
         static constexpr usize kMaxAnimations = 2048;
         static constexpr usize kMaxEvents = 4096;
         u64 layout = 0;
-        std::vector<Resource> resources;
+        std::array<u8, 32> catalog{}; ///< SHA-256 of trusted, immutable bound topology
+        u32 resourceCount = 0;
         std::vector<Placement> placements;
         std::vector<Unit> units;
         std::vector<Slot> slots;
         Light light;
         f32 darken = 0;
         u32 textureFrame = 0;
-        std::vector<Triangle> triangles;
         std::vector<Moving> moving;
         std::vector<s32> hidden, contactOnly, blockedFloorExits;
         std::vector<WorldAnimator::Cursor> animations;
@@ -116,8 +107,12 @@ public:
     ~WorldStateCheckpoint();
     WorldStateCheckpoint(const WorldStateCheckpoint&) = delete;
     WorldStateCheckpoint& operator=(const WorldStateCheckpoint&) = delete;
-    bool bind(const TextureAnimator& textures);
+    bool bind(const TextureAnimator& textures, const WorldLayout& layout);
     void clear();
+    /** Trusted collision owners, not world-node indices: appended item surfaces
+     * may have ids greater than the number of layout objects. */
+    bool hasCollisionObject(s32 object) const;
+    std::span<const s32> collisionObjects() const;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

@@ -44,6 +44,8 @@ public:
 
     /** Starts every standing member's name showing again. */
     static void show(std::span<PlayerRuntime> players);
+    /** Value-only countdown, shared with speculative gameplay. */
+    static void advance(std::span<PlayerRuntime> players, s32 ticks);
     /** Runs the names down by `ticks`, unless play is `held`. */
     void step(std::span<PlayerRuntime> players, s32 ticks, bool held);
     void draw(Canvas& canvas, std::span<const PlayerRuntime> players, const Mat4& clip,

@@ -20,15 +20,9 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 }
 } // namespace
 
-void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                             s32 players, ItemArchive* realmItems) {
-    clear();
-    ItemArchive& art = itemArchiveForTree(items, "TRANS", realmItems);
-    const auto tree = art.trees.find("TRANS");
-    if (tree) {
-        m_tree = &art.trees.tree(*tree);
-        m_textures.bind(art.trees.textureAnimations(), art.textures, device);
-    }
+std::vector<LevelTransporters::Contact> LevelTransporters::contacts(const WorldLayout& layout,
+                                                                    s32 players) {
+    std::vector<Contact> result;
     const auto& infos = layout.itemInfos();
     const auto& instances = layout.itemInstances();
     for (usize i = 0; i < instances.size(); ++i) {
@@ -41,13 +35,39 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, It
         if (info.type != kItemType) {
             continue;
         }
-        Pad pad;
+        Contact pad;
         pad.instance = static_cast<s32>(i);
         pad.id = parameter(instance, 0);
         pad.destinationId = parameter(instance, 4);
         pad.position = instance.position;
         pad.radius = info.radius;
         pad.height = info.height;
+        result.push_back(pad);
+    }
+    for (usize i = 0; i < result.size(); ++i) {
+        for (usize j = 0; j < result.size(); ++j) {
+            if (i != j && result[j].id == result[i].destinationId) {
+                result[i].destination = j;
+                break;
+            }
+        }
+    }
+    return result;
+}
+
+void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+                             s32 players, ItemArchive* realmItems) {
+    clear();
+    ItemArchive& art = itemArchiveForTree(items, "TRANS", realmItems);
+    const auto tree = art.trees.find("TRANS");
+    if (tree) {
+        m_tree = &art.trees.tree(*tree);
+        m_textures.bind(art.trees.textureAnimations(), art.textures, device);
+    }
+    for (const auto& contact : contacts(layout, players)) {
+        Pad pad;
+        static_cast<Contact&>(pad) = contact;
+        const auto& instance = layout.itemInstances()[static_cast<usize>(pad.instance)];
         // TRANS includes a floor-level textured skirt. Keep the ordinary fixture
         // clearance on its artwork, without raising the contact or landing anchor.
         pad.transform =
@@ -60,14 +80,7 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, It
         }
         m_pads.push_back(std::move(pad));
     }
-    for (usize i = 0; i < m_pads.size(); ++i) {
-        auto& pad = m_pads[i];
-        for (usize j = 0; j < m_pads.size(); ++j) {
-            if (i != j && m_pads[j].id == pad.destinationId) {
-                pad.destination = j;
-                break;
-            }
-        }
+    for (const auto& pad : m_pads) {
         if (!pad.destination) {
             log::warn("Transporter {}: missing destination {}", pad.id, pad.destinationId);
         }
@@ -126,14 +139,18 @@ void LevelTransporters::draw(RenderDevice& device, const Mat4& clip, const World
 std::optional<usize> LevelTransporters::contact(const Vec3& feet, f32 radius, f32 height) const {
     for (usize i = 0; i < m_pads.size(); ++i) {
         const auto& pad = m_pads[i];
-        const Vec3 away = feet - pad.position;
-        const f32 reach = radius + pad.radius;
-        if (away.x * away.x + away.z * away.z < reach * reach &&
-            feet.y <= pad.position.y + pad.height && feet.y + height >= pad.position.y) {
+        if (pad.touches(feet, radius, height)) {
             return i;
         }
     }
     return std::nullopt;
+}
+
+bool LevelTransporters::Contact::touches(const Vec3& feet, f32 bodyRadius, f32 bodyHeight) const {
+    const Vec3 away = feet - position;
+    const f32 reach = bodyRadius + radius;
+    return away.x * away.x + away.z * away.z < reach * reach && feet.y <= position.y + height &&
+           feet.y + bodyHeight >= position.y;
 }
 
 bool LevelTransporters::visible(const Vec3& position, f32 radius, const WorldCamera& camera,
