@@ -5,10 +5,10 @@
 namespace gdl::game {
 
 bool OpponentState::valid() const {
-    if (!generators.valid() || !enemies.valid() || !missiles.valid() ||
-        (placements && !placements->valid())) {
-        return false;
-    }
+    return generators.valid() && enemies.valid() && missiles.valid() &&
+           (!placements || placements->valid()) && validAggregate();
+}
+bool OpponentState::validAggregate() const {
     const auto hasGenerator = [this](s32 id) {
         return id >= 0 && static_cast<usize>(id) < generators.generators.size();
     };

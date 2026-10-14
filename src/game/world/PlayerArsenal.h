@@ -154,6 +154,9 @@ private:
                                bool superShot = false) const;
     void bindWeaponAppearance(const PlayerActor& actor, PlayerFigure& figure,
                               PreparedWeapon& prepared, const MissileStreak& streak) const;
+    /** Native ordinary fans share the first muzzle; later flight directions
+     * never add separate launch-time wall queries. Caller has a bound owner. */
+    Vec3 weaponMuzzle(const MissileLaunch& first) const;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
     void loadPotionModels();

@@ -208,6 +208,9 @@ public:
      * Quest pickups are protected; shattered potions request an ownerless magic wave. */
     std::vector<BlastChange> blast(RenderDevice& device, const Vec3& position, f32 radius,
                                    f32 damage, bool destroysPickups = true);
+    /** The offer made to the first touching collector for this item. Refusing
+     * that offer never retries another collector in the same collection step. */
+    std::optional<Pickup> pickupFor(usize index, std::span<const Collector> collectors) const;
     /** Takes whatever the collectors touch and starts its burst; the pickups are returned
      * for the game to hand out. With a `judge`, each touched item is its to take, take part
      * of or leave; only those it took from are returned. */
@@ -291,7 +294,7 @@ private:
     void applyTextureMotion();
 
     std::vector<ItemArchive*> m_archives;
-    AssetScope m_scope; ///< the same archives, searched in order for figures and bursts
+    AssetScope m_scope;            ///< the same archives, searched in order for figures and bursts
     std::vector<ItemInfo> m_infos; ///< the level's item records, for dropping more
     /** Builds the figure of an item named `name`; false when no archive holds it. */
     bool makeFigure(RenderDevice& device, Item& item);

@@ -30,6 +30,7 @@ TEST_CASE("ordinary emission refuses an unbound owner without fabricating a rele
     actor.spawn(2, {}, nullptr, {}, 0);
     const auto save = actor.save();
     const auto result = Emission::advance(arsenal, actor, figure, {0, 0, 1}, {}, {});
+    CHECK_FALSE(result.accepted);
     CHECK_FALSE(result.launched);
     CHECK_FALSE(result.cue);
     CHECK(arsenal.missiles().count() == 0);
@@ -57,7 +58,7 @@ struct Fixture {
     std::unique_ptr<PlayerRuntimeCheckpoint> runtime;
     std::unique_ptr<CombatRollbackCheckpoint> owner;
 
-    explicit Fixture(s32 character = 0, u32 flags = 0, s32 seat = 3) {
+    explicit Fixture(s32 character = 0, u32 flags = 0, s32 seat = 3, bool impactArt = false) {
         REQUIRE(classes.load(root / "PDATA"));
         REQUIRE(weapons.load(root / "WEAPONS"));
         audio.open(root, &sounds, nullptr);
@@ -77,7 +78,8 @@ struct Fixture {
         player.entrySave = save;
         player.figure = PlayerFigure::load(device, root, save, false);
         REQUIRE(player.figure);
-        arsenal.bind({device, classes, weapons, world.collision(), effects, audio, &sounds, {}});
+        arsenal.bind({device, classes, weapons, world.collision(), effects, audio, &sounds,
+                      impactArt ? "S_WEAPONHITWOOD" : ""});
         attacks.bind({device, classes, world, weapons, effects, audio, &sounds, arsenal, dimmer});
         auto& figure = *player.figure;
         auto* archive = figure.missileArchive();
@@ -86,7 +88,10 @@ struct Fixture {
         const auto streakIndex = weapons.textures.find("WEP_STREAK");
         REQUIRE(streakIndex);
         const auto* streak = &weapons.textures.texture(device, *streakIndex);
-        const std::array banks{CombatResources::Bank{1, archive, {&weapons.textures}}};
+        std::vector banks{CombatResources::Bank{1, archive, {&weapons.textures}}};
+        if (impactArt) {
+            banks.push_back({2, &weapons, {}});
+        }
         const std::array missiles{
             PlayerMissiles::Resource{1, &MissileSpec::of(character), &figure.missile(), streak}};
         REQUIRE(catalog.bind(device, banks, missiles));
@@ -144,6 +149,31 @@ struct Fixture {
         return Emission::advance(arsenal, player.actor, *player.figure, player.actor.facing(),
                                  target, catalog.resources());
     }
+    Vec3 blockMuzzle(bool strong) {
+        const auto prepared = arsenal.prepareWeapon(
+            player.actor, *player.figure, player.actor.facing(), strong ? 2.0f : 1.0f, true);
+        REQUIRE(prepared);
+        REQUIRE_FALSE(prepared->missiles.empty());
+        const auto& first = prepared->missiles.front();
+        for (const auto& member : prepared->missiles) {
+            // A clear first muzzle with a blocked side muzzle is impossible:
+            // only direction/velocity differ, not the native launch position.
+            CHECK(member.position == first.position);
+            CHECK(member.spec == first.spec);
+        }
+        const auto muzzle = first.position;
+        auto& collision = const_cast<WorldCollision&>(world.collision());
+        collision.build(
+            {{{1, 0, 0},
+              {muzzle + Vec3{0, -20, -20}, muzzle + Vec3{0, 20, -20}, muzzle + Vec3{0, 0, 20}},
+              1,
+              2}});
+        const auto radius = first.spec->radius;
+        const auto clear = collision.resolveWalls(muzzle, radius, muzzle.y - radius * 0.5f,
+                                                  muzzle.y + radius * 0.5f);
+        REQUIRE(glm::distance(clear, muzzle) > 1e-4f);
+        return clear;
+    }
 };
 
 TEST_CASE("prepared ordinary release retains native physical visual and sound descriptors",
@@ -161,6 +191,7 @@ TEST_CASE("prepared ordinary release retains native physical visual and sound de
         // AnimAction deliberately omits her ordinary-weapon release. The native
         // DAMG/SFXX timeline supplies the strong attack instead (tested separately).
         const auto result = fixture.emit(target);
+        CHECK_FALSE(result.accepted);
         CHECK_FALSE(result.launched);
         CHECK_FALSE(result.cue);
         CHECK(fixture.state() == baseline);
@@ -194,6 +225,7 @@ TEST_CASE("prepared ordinary release retains native physical visual and sound de
     REQUIRE(fixture.owner->restore(baseline));
     heard.clear();
     const auto actual = fixture.emit(target);
+    REQUIRE(actual.accepted);
     REQUIRE(actual.launched);
     REQUIRE(actual.cue);
     CHECK(heard.empty());
@@ -264,6 +296,7 @@ TEST_CASE("ordinary launch preflight refuses missing bindings and malformed targ
     const auto result =
         Emission::advance(fixture.arsenal, fixture.player.actor, *fixture.player.figure,
                           fixture.player.actor.facing(), target, resources);
+    CHECK_FALSE(result.accepted);
     CHECK_FALSE(result.launched);
     CHECK_FALSE(result.cue);
     CHECK(fixture.state() == baseline);
@@ -271,34 +304,95 @@ TEST_CASE("ordinary launch preflight refuses missing bindings and malformed targ
     CHECK(fixture.device.texturesCreated == uploads);
 }
 
-TEST_CASE("blocked native muzzle refuses before world impact art and audio",
+TEST_CASE("blocked ordinary muzzle reproduces native sparks without flights or release cues",
           "[ordinary-weapon-emission][assets]") {
-    Fixture fixture;
-    fixture.release(1.0f / 60);
-    const auto release = fixture.arsenal.prepareWeapon(fixture.player.actor, *fixture.player.figure,
-                                                       fixture.player.actor.facing(), 1, true);
-    REQUIRE(release);
-    REQUIRE_FALSE(release->missiles.empty());
-    const auto muzzle = release->missiles.front().position;
-    auto& collision = const_cast<WorldCollision&>(fixture.world.collision());
-    const CollisionTriangle wall{
-        {1, 0, 0},
-        {muzzle + Vec3{0, -20, -20}, muzzle + Vec3{0, 20, -20}, muzzle + Vec3{0, 0, 20}},
-        1,
-        2}; // Native wall-query bit; zero describes nonblocking decoration.
-    collision.build({wall});
-    const auto radius = release->missiles.front().spec->radius;
-    REQUIRE(glm::distance(collision.resolveWalls(muzzle, radius, muzzle.y - radius * 0.5f,
-                                                 muzzle.y + radius * 0.5f),
-                          muzzle) > 1e-4f);
+    const s32 character = GENERATE(0, 2, 7);
+    const f32 seconds = GENERATE(1.0f / 60, 1.0f / 30);
+    const u32 flags = GENERATE(0U, powerup::kThreeWayShot, powerup::kFiveWayShot);
+    const bool strong = GENERATE(false, true);
+    CAPTURE(character, seconds, flags, strong);
+    Fixture fixture(character, flags, 3, true);
+    fixture.release(seconds, strong);
+    const auto clear = fixture.blockMuzzle(strong);
     const auto baseline = fixture.state();
     const auto uploads = fixture.device.texturesCreated;
     std::vector<SoundPlayer::Event> audio;
     const SoundPlayer::Capture capture(&fixture.sounds,
                                        [&](const auto& event) { audio.push_back(event); });
+    u32 releaseCues = 0;
+    const PlayerArsenal::SoundCapture weaponCapture(&fixture.arsenal,
+                                                    [&](const auto&) { ++releaseCues; });
+    fixture.arsenal.launchWeapon(fixture.player.actor, fixture.player.figure.get(),
+                                 fixture.player.actor.facing(), strong ? 2.0f : 1.0f, true);
+    const auto expected = fixture.state();
+    REQUIRE(expected.effects.effects.size() == 1);
+    REQUIRE(fixture.effects.count() == 1);
+    REQUIRE(fixture.effects.effect(0).tree);
+    CHECK(fixture.effects.effect(0).tree->name == "SPARKS");
+    CHECK(fixture.effects.effect(0).position == clear);
+    CHECK(expected.arsenal == baseline.arsenal);
+    CHECK(releaseCues == 0);
+    std::vector<EffectTrees::PoolCheckpoint> continuation;
+    for (s32 tick = 0; tick < 12; ++tick) {
+        fixture.effects.update(seconds);
+        continuation.push_back(fixture.state().effects);
+    }
+    REQUIRE(fixture.owner->restore(baseline));
+    audio.clear();
     const auto result = fixture.emit();
+    REQUIRE(result.accepted);
     CHECK_FALSE(result.launched);
     CHECK_FALSE(result.cue);
+    REQUIRE(result.impact);
+    CHECK(result.impact->name == "S_WEAPONHITWOOD");
+    CHECK(result.impact->position == clear);
+    CHECK_FALSE(result.impact->playerDistance);
+    CHECK(result.impact->volume == 1);
+    CHECK(fixture.state() == expected);
+    CHECK(fixture.flights().history.empty());
+    CHECK(fixture.flights().missiles.empty());
+    for (usize tick = 0; tick < continuation.size(); ++tick) {
+        fixture.effects.update(seconds);
+        CHECK(fixture.state().effects == continuation[tick]);
+    }
+    CHECK(releaseCues == 0);
+    CHECK(audio.empty());
+    CHECK(fixture.device.texturesCreated == uploads);
+}
+
+TEST_CASE("blocked muzzle refuses unavailable prepared art or exhausted pool without outputs",
+          "[ordinary-weapon-emission][assets]") {
+    const s32 variant = GENERATE(0, 1, 2);
+    Fixture fixture(0, powerup::kFiveWayShot, 3, true);
+    fixture.release(1.0f / 60);
+    fixture.blockMuzzle(false);
+    auto resources = fixture.catalog.resources();
+    std::vector<EffectTrees::PoolResource> shared(resources.sharedEffects.begin(),
+                                                  resources.sharedEffects.end());
+    if (variant == 0) {
+        shared.clear();
+    } else if (variant == 1) {
+        for (auto& resource : shared) {
+            resource.id = 0;
+        }
+    }
+    resources.sharedEffects = shared;
+    auto baseline = fixture.state();
+    if (variant == 2) {
+        baseline.effects.nextId = 0; // Native exhausted allocation namespace.
+        REQUIRE(fixture.owner->restore(baseline));
+    }
+    const auto uploads = fixture.device.texturesCreated;
+    std::vector<SoundPlayer::Event> audio;
+    const SoundPlayer::Capture capture(&fixture.sounds,
+                                       [&](const auto& event) { audio.push_back(event); });
+    const auto result =
+        Emission::advance(fixture.arsenal, fixture.player.actor, *fixture.player.figure,
+                          fixture.player.actor.facing(), {}, resources);
+    CHECK_FALSE(result.accepted);
+    CHECK_FALSE(result.launched);
+    CHECK_FALSE(result.cue);
+    CHECK_FALSE(result.impact);
     CHECK(fixture.state() == baseline);
     CHECK(audio.empty());
     CHECK(fixture.device.texturesCreated == uploads);
@@ -320,6 +414,7 @@ TEST_CASE("a late spread refusal is rewound by the complete caller-owned combat 
     const SoundPlayer::Capture capture(&fixture.sounds,
                                        [&](const auto& event) { audio.push_back(event); });
     const auto result = fixture.emit();
+    CHECK_FALSE(result.accepted);
     CHECK_FALSE(result.launched);
     CHECK_FALSE(result.cue);
     REQUIRE(fixture.arsenal.missiles().count() == 1);
@@ -335,6 +430,7 @@ TEST_CASE("normal emissions retain native nonsequential player ownership",
     Fixture fixture(6, 0, seat);
     fixture.release(1.0f / 60);
     const auto result = fixture.emit();
+    REQUIRE(result.accepted);
     REQUIRE(result.launched);
     REQUIRE(result.cue);
     CHECK(result.cue->owner == seat);
@@ -353,6 +449,7 @@ TEST_CASE("ordinary release refuses incompatible weapon modes without spending i
     const auto baseline = fixture.state();
     const auto uploads = fixture.device.texturesCreated;
     const auto result = fixture.emit();
+    CHECK_FALSE(result.accepted);
     CHECK_FALSE(result.launched);
     CHECK_FALSE(result.cue);
     CHECK(fixture.state() == baseline);

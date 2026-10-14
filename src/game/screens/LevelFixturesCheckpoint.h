@@ -46,6 +46,10 @@ public:
         f32 difficultyGain = 1;
         bool valid() const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class LevelFixturesCheckpoint;
+        bool validAggregate() const;
     };
     class Prepared {
     public:

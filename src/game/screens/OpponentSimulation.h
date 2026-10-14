@@ -102,7 +102,16 @@ public:
      * This deliberately does not relax speculate's no-interaction contract. */
     Result stageCombat(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {},
                        const std::function<bool()>& afterEnemies = {});
-    static bool combatSupported(const Checkpoint& state, const Frame& frame);
+    struct PlacementObservation {
+        std::optional<ViewVolume> view;
+        Vec3 attention{0};
+        bool valid() const;
+    };
+    /** A prospective native watch observation can be checked without changing
+     * the preceding checkpoint. It overrides only placement activation, not
+     * any pool state, pending event or other admission requirement. */
+    static bool combatSupported(const Checkpoint& state, const Frame& frame,
+                                const PlacementObservation* observation = nullptr);
 
 private:
     std::vector<MissileStop> advance(const Frame& frame, const EnemyMissiles::SceneryBlast& scenery,

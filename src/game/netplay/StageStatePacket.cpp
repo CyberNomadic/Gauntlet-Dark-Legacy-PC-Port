@@ -11,6 +11,7 @@
 
 #include <lz4.h>
 
+#include "engine/codec/BytePlanes.h"
 #include "engine/io/ByteReader.h"
 #include "engine/io/Sha256.h"
 
@@ -20,12 +21,29 @@ namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("STST");
 constexpr usize kCatalogWalkBytes = 16 * 1024 * 1024;
-constexpr u32 kRaw = 0, kLz4 = 1;
+constexpr u32 kRaw = 0, kLz4 = 1, kLz4BytePlanes = 2;
 constexpr usize kCompressionMinimum = 1024;
 static_assert(StageStatePacket::kMaxDecodedBytes <
               static_cast<usize>(std::numeric_limits<s32>::max()));
+std::vector<u8> compress(std::span<const u8> bytes) {
+    const auto size = static_cast<s32>(bytes.size());
+    // The destination is itself wire-bounded: an incompressible stage cannot
+    // allocate an arbitrarily large encoded candidate.
+    const auto capacity =
+        static_cast<s32>(std::min(static_cast<usize>(LZ4_compressBound(size)),
+                                  StageStatePacket::kMaxBytes - StageStatePacket::kHeaderBytes));
+    std::vector<u8> compressed(static_cast<usize>(capacity));
+    // LZ4 char pointers describe byte buffers, not reinterpreted objects.
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
+    const s32 written =
+        LZ4_compress_default(reinterpret_cast<const char*>(bytes.data()),
+                             reinterpret_cast<char*>(compressed.data()), size, capacity);
+    // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
+    compressed.resize(written > 0 && written < size ? static_cast<usize>(written) : 0);
+    return compressed;
+}
 struct GeometryCatalog {
-    std::array<u8, 32> fingerprint{}, core{};
+    std::array<u8, 32> fingerprint{}, core{}, transporters{};
     LevelRef level;
     std::vector<std::vector<ItemCollisionTriangle>> items;
     std::vector<std::vector<CollisionTriangle>> walls;
@@ -187,6 +205,20 @@ template <class A, class T, class F> void sequence(A& a, T& value, F entry) {
 template <class A, class T> void indices(A& a, T& value) {
     sequence(a, value, [](auto& archive, auto& item) { index(archive, item); });
 }
+template <class A, class T> void optionalIndex(A& a, T& value) {
+    bool present = value.has_value();
+    a.number(present);
+    if constexpr (A::reading) {
+        if (present) {
+            value.emplace();
+        } else {
+            value.reset();
+        }
+    }
+    if (present) {
+        index(a, *value);
+    }
+}
 template <class A, class T> void indexTimers(A& a, T& value) {
     sequence(a, value, [](auto& archive, auto& item) {
         index(archive, item.first);
@@ -280,6 +312,8 @@ template <class T> constexpr usize recordLimit() {
         return TowerCameraCheckpoint::State::kMaxMarkers;
     } else if constexpr (std::is_same_v<T, ExitPortalsCheckpoint::Portal>) {
         return ExitPortalsCheckpoint::State::kMaxPortals;
+    } else if constexpr (std::is_same_v<T, LevelTransportersCheckpoint::Pad>) {
+        return LevelTransportersCheckpoint::State::kMaxPads;
     } else if constexpr (std::is_same_v<T, ExitPortalsCheckpoint::Visitor>) {
         return 4;
     } else if constexpr (std::is_same_v<T, TreePose::Checkpoint::Node> ||
@@ -310,6 +344,7 @@ template <class T> constexpr usize minimumBytes() {
                          std::is_same_v<T, DestructibleWallsCheckpoint::Wall> ||
                          std::is_same_v<T, FallingSceneryCheckpoint::Piece> ||
                          std::is_same_v<T, RotatorsCheckpoint::Rotator> ||
+                         std::is_same_v<T, LevelTransportersCheckpoint::Pad> ||
                          std::is_same_v<T, SafeRocksCheckpoint::Rock>) {
         return 128;
     } else if constexpr (std::is_same_v<T, Particle>) {
@@ -440,7 +475,15 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (IsPair<V>::value) {
         fields(a, v.first, v.second);
     } else if constexpr (std::is_same_v<V, StageStatePacket::State>) {
-        fields(a, v.world, v.fixtures, v.camera, v.portals);
+        fields(a, v.world, v.fixtures, v.camera, v.portals, v.transporters);
+    } else if constexpr (std::is_same_v<V, LevelTransportersCheckpoint::State>) {
+        fields(a, v.catalog, v.tree, v.players, v.collision, v.pads, v.textures,
+               v.presentationAdvanced);
+    } else if constexpr (std::is_same_v<V, LevelTransportersCheckpoint::Pad>) {
+        fields(a, v.source, v.id, v.destinationId);
+        optionalIndex(a, v.destination);
+        fields(a, v.position, v.radius, v.height, v.transform, v.support, v.supportLocal,
+               v.anchorLocal, v.model, v.pose, v.animation, v.previousFrame, v.previousGeneration);
     } else if constexpr (std::is_same_v<V, ExitPortalsCheckpoint::State>) {
         fields(a, v.portals, v.tree, v.sequences, v.waiting, v.visitors, v.collision);
     } else if constexpr (std::is_same_v<V, ExitPortalsCheckpoint::Portal>) {
@@ -711,10 +754,44 @@ template <class A, class T> void field(A& a, T& v) {
 bool stageValid(const StageStatePacket::State& state) {
     return state.world.valid() && state.fixtures.valid() &&
            (!state.camera || (state.camera->valid() && state.camera->level == state.world.level)) &&
-           (!state.portals || state.portals->valid());
+           (!state.portals || state.portals->valid()) &&
+           (!state.transporters || state.transporters->valid());
+}
+// Bind pad resources and ordered authored links, but not their live placement,
+// pose or clocks. Historical native support lag remains an exact mutable value.
+std::optional<std::array<u8, 32>>
+transporterIdentity(const std::optional<LevelTransportersCheckpoint::State>& state,
+                    const GeometryCatalog& catalog) {
+    try {
+        Writer identity(&catalog);
+        identity.limit = StageStatePacket::kMaxDecodedBytes;
+        identity.number(state.has_value());
+        if (state) {
+            if (state->pads.size() > LevelTransportersCheckpoint::State::kMaxPads) {
+                return std::nullopt;
+            }
+            fields(identity, state->catalog, state->tree, state->players, state->collision);
+            identity.number(static_cast<u32>(state->pads.size()));
+            for (const auto& pad : state->pads) {
+                fields(identity, pad.source, pad.id, pad.destinationId);
+                optionalIndex(identity, pad.destination);
+                fields(identity, pad.radius, pad.height, pad.support, pad.supportLocal,
+                       pad.anchorLocal, pad.model);
+            }
+        }
+        Sha256 hash;
+        hash.update(identity.bytes);
+        return hash.finish();
+    } catch (const FormatError&) {
+        return std::nullopt;
+    }
 }
 bool matches(const StageStatePacket::State& state, const GeometryCatalog& catalog) {
-    return state.world.core.catalog == catalog.core && state.world.level == catalog.level;
+    if (state.world.core.catalog != catalog.core || state.world.level != catalog.level) {
+        return false;
+    }
+    const auto identity = transporterIdentity(state.transporters, catalog);
+    return identity && *identity == catalog.transporters;
 }
 void hashRows(Sha256& hash, const auto& rows) {
     Writer count;
@@ -744,8 +821,14 @@ std::optional<StageStatePacket::Catalog> StageStatePacket::Catalog::build(const 
         }
         data->core = trusted.world.core.catalog;
         data->level = trusted.world.level;
+        const auto transporters = transporterIdentity(trusted.transporters, *data);
+        if (!transporters) {
+            return std::nullopt;
+        }
+        data->transporters = *transporters;
         Sha256 hash;
         hash.update(data->core);
+        hash.update(data->transporters);
         Writer identity;
         field(identity, data->level);
         hash.update(identity.bytes);
@@ -768,7 +851,8 @@ bool StageStatePacket::envelopeValid(std::span<const u8> bytes) {
         const usize payload = bytes.size() - kHeaderBytes;
         return magic == kMagic && version == kVersion && length == bytes.size() && reserved == 0 &&
                decoded > 0 && decoded <= kMaxDecodedBytes &&
-               ((codec == kRaw && payload == decoded) || (codec == kLz4 && payload < decoded));
+               ((codec == kRaw && payload == decoded) ||
+                ((codec == kLz4 || codec == kLz4BytePlanes) && payload < decoded));
     } catch (const FormatError&) {
         return false;
     }
@@ -776,7 +860,8 @@ bool StageStatePacket::envelopeValid(std::span<const u8> bytes) {
 std::optional<std::vector<u8>> StageStatePacket::encode(const State& state, const Catalog& catalog,
                                                         Encoding encoding) {
     if (!catalog.valid() || !matches(state, *catalog.m_data) ||
-        (encoding != Encoding::Automatic && encoding != Encoding::Raw)) {
+        (encoding != Encoding::Automatic && encoding != Encoding::Raw &&
+         encoding != Encoding::Plain && encoding != Encoding::Fast)) {
         return std::nullopt;
     }
     try {
@@ -787,20 +872,21 @@ std::optional<std::vector<u8>> StageStatePacket::encode(const State& state, cons
             return std::nullopt;
         }
         std::vector<u8> compressed;
-        if (encoding == Encoding::Automatic && body.bytes.size() >= kCompressionMinimum) {
-            const auto size = static_cast<s32>(body.bytes.size());
-            // The destination is itself wire-bounded: an incompressible stage
-            // cannot allocate an arbitrarily large encoded candidate.
-            const auto capacity = static_cast<s32>(
-                std::min(static_cast<usize>(LZ4_compressBound(size)), kMaxBytes - kHeaderBytes));
-            compressed.resize(static_cast<usize>(capacity));
-            // LZ4 char pointers describe byte buffers, not reinterpreted objects.
-            // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
-            const s32 written =
-                LZ4_compress_default(reinterpret_cast<const char*>(body.bytes.data()),
-                                     reinterpret_cast<char*>(compressed.data()), size, capacity);
-            // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
-            compressed.resize(written > 0 && written < size ? static_cast<usize>(written) : 0);
+        u32 codec = kRaw;
+        if (encoding != Encoding::Raw && body.bytes.size() >= kCompressionMinimum) {
+            compressed = compress(body.bytes);
+            if (!compressed.empty()) {
+                codec = kLz4;
+            }
+            const usize plainSize = compressed.empty() ? body.bytes.size() : compressed.size();
+            if (encoding == Encoding::Automatic ||
+                (encoding == Encoding::Fast && plainSize > kMaxBytes - kHeaderBytes)) {
+                auto planar = compress(BytePlanes::encode(body.bytes));
+                if (!planar.empty() && (compressed.empty() || planar.size() < compressed.size())) {
+                    compressed = std::move(planar);
+                    codec = kLz4BytePlanes;
+                }
+            }
         }
         const auto payload =
             compressed.empty() ? std::span<const u8>{body.bytes} : std::span<const u8>{compressed};
@@ -811,7 +897,7 @@ std::optional<std::vector<u8>> StageStatePacket::encode(const State& state, cons
         writer.word(kMagic);
         writer.word(kVersion);
         writer.word(static_cast<u32>(kHeaderBytes + payload.size()));
-        writer.word(compressed.empty() ? kRaw : kLz4);
+        writer.word(codec);
         writer.word(static_cast<u32>(body.bytes.size()));
         writer.word(0);
         writer.raw(catalog.fingerprint());
@@ -855,7 +941,7 @@ std::optional<StageStatePacket::State> StageStatePacket::decode(std::span<const 
         const u32 decoded = header.readU32();
         auto payload = bytes.subspan(kHeaderBytes);
         std::vector<u8> unpacked;
-        if (codec == kLz4) {
+        if (codec == kLz4 || codec == kLz4BytePlanes) {
             // The complete envelope and trusted fingerprint are checked before
             // this bounded allocation. Nested budgets still apply after decode.
             unpacked.resize(decoded);
@@ -867,6 +953,9 @@ std::optional<StageStatePacket::State> StageStatePacket::decode(std::span<const 
             // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
             if (written != static_cast<s32>(decoded)) {
                 return std::nullopt;
+            }
+            if (codec == kLz4BytePlanes) {
+                unpacked = BytePlanes::decode(unpacked);
             }
             payload = unpacked;
         }

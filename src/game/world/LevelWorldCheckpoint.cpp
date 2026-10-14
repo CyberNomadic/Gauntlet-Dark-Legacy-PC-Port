@@ -15,17 +15,20 @@ bool text(const std::string& value, usize limit) {
 } // namespace
 
 bool LevelWorldCheckpoint::State::valid() const {
+    return core.valid() && triggers.valid() && destruction.valid() && falling.valid() &&
+           walls.valid() && pickups.valid() && rotators.valid() && validAggregate();
+}
+
+bool LevelWorldCheckpoint::State::validAggregate() const {
     if (!text(level.realm, 64) || !text(level.name, 64) || !text(level.title, 256) ||
         !text(level.directory, 512) || !text(level.items, 512) || !text(level.ownItems, 512) ||
         level.realmId < -1 || level.realmId > 255 || level.index < 0 || level.index > 65535 ||
-        !core.valid() || !triggers.valid() || !destruction.valid() || !falling.valid() ||
-        !walls.valid() || !pickups.valid() || !rotators.valid() || !textures.valid() ||
-        !particles.valid() || particleSources.size() != particles.entries.size() ||
-        !lighting.valid() || !litNow.valid() || playerCount < -1 || playerCount > 4 ||
-        !scalar(frameRemainder) || frameRemainder < 0 || frameRemainder >= 1 ||
-        !scalar(textureAdvance) || textureAdvance < 0 || textureAdvance > 450 ||
-        !scalar(ambientOffset) || cues.size() > kMaxCues ||
-        destruction.objects.size() != core.placements.size() ||
+        !textures.valid() || !particles.valid() ||
+        particleSources.size() != particles.entries.size() || !lighting.valid() ||
+        !litNow.valid() || playerCount < -1 || playerCount > 4 || !scalar(frameRemainder) ||
+        frameRemainder < 0 || frameRemainder >= 1 || !scalar(textureAdvance) ||
+        textureAdvance < 0 || textureAdvance > 450 || !scalar(ambientOffset) ||
+        cues.size() > kMaxCues || destruction.objects.size() != core.placements.size() ||
         triggers.parents.size() != core.placements.size() ||
         (playerCount >= 0 &&
          (triggers.playerCount != playerCount || pickups.players != playerCount))) {
@@ -198,7 +201,9 @@ std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() co
     state.textureAdvance = m_owner.m_textureAdvance;
     state.ambientOffset = m_owner.m_ambientOffset;
     state.particlesAdvanced = m_owner.m_particlesAdvanced;
-    if (!state.valid()) {
+    // Each optional child capture above already validated its complete value.
+    // Raw clocks/particles and every cross-child relation still belong here.
+    if (!state.validAggregate()) {
         return std::nullopt;
     }
     return state;

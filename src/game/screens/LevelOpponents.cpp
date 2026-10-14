@@ -1305,8 +1305,14 @@ void LevelOpponents::blast(const Vec3& position, f32 radius, f32 damage, std::ve
 
 void LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
                                      std::span<const PlayerRuntime> players) {
+    (void)strikeGenerator(id, power, byPlayer, players, {});
+}
+
+bool LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
+                                     std::span<const PlayerRuntime> players,
+                                     const GeneratorPublisher& publish) {
     if (!m_resources.has_value()) {
-        return;
+        return true;
     }
     const LevelInfo* level = m_resources->world.level();
     if (byPlayer >= 0 && level != nullptr) {
@@ -1320,29 +1326,31 @@ void LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
     }
     const auto event = m_generators.strike(id, power, byPlayer);
     if (!event.has_value()) {
-        return;
+        return true;
     }
     ItemArchive* archive =
         event->kind < 0 ? &m_resources->world.items() : m_enemies.archive(event->kind);
-    if (event->stateChanged && archive != nullptr) {
-        const std::string_view tree = event->destroyed ? "GENDIE" : "GENHIT";
-        if (archive->trees.find(tree).has_value()) {
-            const u32 effect = m_resources->effects.startSet(m_resources->device, *archive, tree,
-                                                             event->position, {});
-            m_resources->effects.placeAt(effect, event->placement);
-            if (effect != 0) {
-                m_cueEffects.push_back(effect);
-            }
+    const auto emission = GeneratorFeedbackEmission::resolve(
+        *event, archive, level, m_resources->world.ref().realmId, m_resources->world.ref().name);
+    u32 effect = 0;
+    if (publish) {
+        const auto emitted = publish(emission);
+        if (!emitted) {
+            return false;
+        }
+        effect = *emitted;
+    } else {
+        if (emission.archive != nullptr) {
+            effect = m_resources->effects.startSet(m_resources->device, *emission.archive,
+                                                   emission.tree, emission.position, {});
+            m_resources->effects.placeAt(effect, emission.placement);
         }
     }
-    const std::string& levelName = m_resources->world.ref().name;
-    if (!event->destroyed || level == nullptr || level->bossType < 0) {
-        const std::string suffix =
-            m_resources->world.ref().realmId == 10 && event->kind == 24
-                ? "WAR"
-                : std::string(1, levelName.empty() ? 'G' : levelName.front());
-        m_resources->audio.playNamed(
-            std::format("{}{}", event->destroyed ? "S_GENKILL" : "S_GENDAM", suffix));
+    if (effect != 0) {
+        m_cueEffects.push_back(effect);
+    }
+    if (!publish && !emission.sound.empty()) {
+        m_resources->audio.playNamed(emission.sound);
     }
     if (byPlayer >= 0) {
         m_generatorRewards.push_back(
@@ -1354,6 +1362,7 @@ void LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
             m_hitStreak[static_cast<usize>(byPlayer)] = 0;
         }
     }
+    return true;
 }
 
 /** Plays what one of the great ones (the boss with `ofBoss`) has set off: its tree from its

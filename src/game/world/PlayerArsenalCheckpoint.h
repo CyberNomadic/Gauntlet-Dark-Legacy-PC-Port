@@ -20,6 +20,10 @@ public:
         PlayerMissiles::Checkpoint missiles;
         bool valid() const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class PlayerArsenalCheckpoint;
+        bool validAggregate() const;
     };
     class Prepared {
     public:

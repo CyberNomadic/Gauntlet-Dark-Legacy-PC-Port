@@ -60,6 +60,11 @@ public:
      * Does not judge pickups, spend inventory, or create collection artwork. */
     static bool touchesPickup(std::span<const PlayerRuntime> players, const LevelWorld& world,
                               const Chests& chests);
+    /** True only when every native first-collector offer leaves the item and
+     * party unchanged, including help suppressed by existing repeat histories.
+     * No live inventory, HUD, audio or collection artwork is touched. */
+    static bool collectionUnchanged(std::span<const PlayerRuntime> players, const LevelWorld& world,
+                                    const Chests& chests, const ClassDataSet& classes);
     /** Native post-collection container cleanup, without pickup/audio callbacks. */
     static void cleanupCollectedChests(const LevelWorld& world, Chests& chests);
 

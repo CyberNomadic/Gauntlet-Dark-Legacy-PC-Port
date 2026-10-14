@@ -20,6 +20,15 @@ class StageParticlePresentation;
 class OnlineCombatReplay {
 public:
     enum class Domain : usize { Unseeded, Legacy, Stage, Count };
+    enum class PresentRefusal : usize {
+        Inactive,
+        Snapshot,
+        Roster,
+        ParticleInterval,
+        StageSampling,
+        Exception,
+        Count
+    };
     enum class Refusal : usize {
         Unbound,
         InvalidAuthority,
@@ -45,6 +54,9 @@ public:
     };
     static constexpr std::array<std::string_view, static_cast<usize>(Domain::Count)> kDomains{
         "unseeded", "legacy", "stage"};
+    static constexpr std::array<std::string_view, static_cast<usize>(PresentRefusal::Count)>
+        kPresentRefusals{"inactive",          "snapshot",       "roster",
+                         "particle_interval", "stage_sampling", "exception"};
     static constexpr std::array<std::string_view, static_cast<usize>(Refusal::Count)> kRefusals{
         "unbound",
         "invalid_authority",
@@ -104,11 +116,21 @@ public:
         Timing captureCost;
         Timing prepareCost;
         Timing postconditionCost;
+        std::array<Timing, static_cast<usize>(OrdinaryCombatCheckpoint::CaptureOwner::Count)>
+            postconditionOwners{};
         Timing pictureCost;
         std::array<u64, static_cast<usize>(Refusal::Count)> reasons{};
+        // Rendering also asks after a refused update. Inactive fallback is not
+        // a failure to sample an accepted private picture.
+        std::array<u64, static_cast<usize>(PresentRefusal::Count)> presentReasons{};
         std::array<u64, static_cast<usize>(OrdinaryCombatCheckpoint::RestoreIssue::Count)>
             seedIssues{};
         std::array<u64, static_cast<usize>(OrdinaryCombatTick::Refusal::Count)> tickRefusals{};
+        std::array<u64, static_cast<usize>(OrdinaryCombatTick::PartyRefusal::Count)>
+            partyRefusals{};
+        std::array<u64, OrdinaryCombatTick::kActionCount> refusedActions{};
+        std::array<u64, static_cast<usize>(OrdinaryCombatTick::TargetFamily::Count)>
+            refusedTargets{};
         bool operator==(const Counters&) const = default;
     };
     struct Diagnostics {
@@ -122,12 +144,13 @@ public:
     bool staged() const;
     bool present(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend);
     u64 tick() const;
-    const Diagnostics& diagnostics() const { return m_diagnostics; }
+    const Diagnostics& diagnostics() const { return *m_diagnostics; }
 
 private:
     static Domain domainOf(const CombatSnapshot* state);
     bool refuse(Refusal reason);
-    bool presentPass(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend) const;
+    bool presentPass(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend,
+                     PresentRefusal& refusal) const;
     void discard();
     bool updatePass(const CombatSnapshot* authority, std::span<const InputCommand> sent);
     std::unique_ptr<CombatSnapshot>
@@ -156,6 +179,7 @@ private:
     u64 m_clock = 0;
     u64 m_receivedAt = 0;
     Domain m_domain = Domain::Unseeded;
-    mutable Diagnostics m_diagnostics;
+    // Diagnostic detail must not grow the session's stack footprint.
+    std::unique_ptr<Diagnostics> m_diagnostics = std::make_unique<Diagnostics>();
 };
 } // namespace gdl::game

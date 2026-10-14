@@ -115,6 +115,45 @@ TEST_CASE("fixture aggregate preflights every child and invalidates stale siblin
     CHECK(fixture.owner.checkpoint() == state);
 }
 
+TEST_CASE("fixture capture and full validation agree without trusting incoming child states",
+          "[rollback][level-fixtures-checkpoint][checkpoint-capture-validation]") {
+    Fixture fixture;
+    fixture.fixtures.blast({0, 0, 0}, 12, 30, fixture.players, fixture.events);
+    const auto baseline = fixture.owner.checkpoint();
+    REQUIRE(baseline);
+    REQUIRE(baseline->valid());
+    LevelFixturesCheckpoint independent{fixture.fixtures};
+    REQUIRE(independent.bindResources());
+    CHECK(independent.checkpoint() == baseline);
+    for (s32 mutation = 0; mutation < 7; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = *baseline;
+        switch (mutation) {
+        case 0:
+            invalid.chests.chests.emplace_back().refusalLeft =
+                std::numeric_limits<f32>::quiet_NaN();
+            break;
+        case 1:
+            invalid.gates.gates.emplace_back().refusalLeft = std::numeric_limits<f32>::quiet_NaN();
+            break;
+        case 2: invalid.traps.random = 0; break;
+        case 3: invalid.barrels.barrels.emplace_back(); break;
+        case 4: invalid.rocks.rocks.emplace_back(); break;
+        case 5: invalid.scenery.props.emplace_back(); break;
+        case 6:
+            invalid.rubble.pieces.push_back(
+                {static_cast<u32>(invalid.rubble.resources.size()), Mat4{1}});
+            break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.owner.prepareRestore(invalid));
+        CHECK(fixture.owner.checkpoint() == baseline);
+    }
+    const auto emitted = fixture.hits.size();
+    CHECK(independent.checkpoint() == fixture.owner.checkpoint());
+    CHECK(fixture.hits.size() == emitted);
+}
+
 TEST_CASE(
     "fixture cooldown validation accepts unordered bounded ledgers and rejects bad references",
     "[rollback][level-fixtures-checkpoint][fixture-timers]") {

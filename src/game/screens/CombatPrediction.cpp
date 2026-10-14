@@ -31,6 +31,7 @@ struct CombatPrediction::Data {
     PlayerAttacks attacks;
     LevelFixtures fixtures;
     ExitPortals portals;
+    LevelTransporters transporters;
     LevelCatalog levelsCatalog;
     LevelOpponents opponents;
     PlayerHealth health;
@@ -52,11 +53,15 @@ struct CombatPrediction::Data {
     TowerCamera camera;
     std::unique_ptr<TowerCameraCheckpoint> stageCamera;
     std::unique_ptr<ExitPortalsCheckpoint> stagePortals;
+    std::unique_ptr<LevelTransportersCheckpoint> stageTransporters;
     std::unique_ptr<OrdinaryCombatCheckpoint> staged;
     std::unique_ptr<OrdinaryCombatTick> stagedRunner;
     StageStatePacket::Catalog stageCatalog;
     std::unique_ptr<OrdinaryCombatCheckpoint::State> authority;
     std::optional<OrdinaryCombatCheckpoint::Rewind> baselineUndo;
+    OrdinaryCombatTick::Boundary boundary;
+    u64 boundaryTick = 0;
+    u64 boundaryRevision = 0;
     MatchContext context;
     u64 baseline = 0;
     u64 tick = 0;
@@ -70,10 +75,12 @@ struct CombatPrediction::Data {
 
     ~Data() {
         lifetime.reset(); // Invalidate borrowed particle artwork before any owner releases it.
+        boundary = {};
         baselineUndo.reset();
         stagedRunner.reset();
         staged.reset();
         stagePortals.reset();
+        stageTransporters.reset();
         stageCamera.reset();
         stageFixtures.reset();
         stageWorld.reset();
@@ -85,6 +92,7 @@ struct CombatPrediction::Data {
         arsenal.clear();
         fixtures.clear();
         portals.clear();
+        transporters.clear();
         effects.clear();
         resources.clear();
         opponents.close();
@@ -130,6 +138,7 @@ struct CombatPrediction::Data {
         fixtures.bind({device, world, weapons, effects, audio, gain});
         fixtures.setPlayerCount(count);
         portals.bind(device, world.layout(), world.itemScope(), levelsCatalog, &world.collision());
+        transporters.bind(device, world.layout(), world.itemScope(), count, &world.collision());
         opponents.open({device, world, weapons, effects, audio, root, gain, true}, party);
         // Match the native scene's borrowed animation resources, including levels
         // with no safe rocks. Checkpoints retain this binding independently of
@@ -201,26 +210,29 @@ struct CombatPrediction::Data {
         auto nextCamera = std::make_unique<TowerCameraCheckpoint>(camera, world);
         auto nextPortals = std::make_unique<ExitPortalsCheckpoint>(
             portals, world.layout(), world.items(), &world.realmItems());
+        auto nextTransporters = std::make_unique<LevelTransportersCheckpoint>(transporters);
         if (nextWorld->bindResources(device) && nextFixtures->bindResources() &&
-            nextPortals->bindResources()) {
+            nextPortals->bindResources() && nextTransporters->bindResources()) {
             auto worldState = nextWorld->checkpoint();
             auto fixtureState = nextFixtures->checkpoint();
             auto cameraState = nextCamera->checkpoint();
             auto portalState = nextPortals->checkpoint();
-            if (worldState && fixtureState && cameraState && portalState) {
+            auto transporterState = nextTransporters->checkpoint();
+            if (worldState && fixtureState && cameraState && portalState && transporterState) {
                 auto catalog = StageStatePacket::Catalog::build(
                     {std::move(*worldState), std::move(*fixtureState), std::move(*cameraState),
-                     std::move(*portalState)});
+                     std::move(*portalState), std::move(*transporterState)});
                 if (catalog) {
                     stageCatalog = std::move(*catalog);
                     stageWorld = std::move(nextWorld);
                     stageFixtures = std::move(nextFixtures);
                     stageCamera = std::move(nextCamera);
                     stagePortals = std::move(nextPortals);
+                    stageTransporters = std::move(nextTransporters);
                     staged = std::make_unique<OrdinaryCombatCheckpoint>(
                         *combat, opponents, OpponentResources::missiles(opponents.enemies()),
                         stageWorld.get(), stageFixtures.get(), stageCamera.get(),
-                        stagePortals.get());
+                        stagePortals.get(), stageTransporters.get());
                     stagedRunner = std::make_unique<OrdinaryCombatTick>(*staged, classes, fixtures);
                 }
             }
@@ -234,6 +246,8 @@ struct CombatPrediction::Data {
         }
         active = false;
         ++replayRevision;
+        boundary = {};
+        boundaryTick = boundaryRevision = 0;
         if (baselineUndo) {
             // The admitted runner cannot replace resources or external owners.
             // Failure to undo here is an ownership bug, never partial success.
@@ -359,6 +373,12 @@ OrdinaryCombatTick::Result CombatPrediction::advance(u64 tick, std::span<const P
     }
     auto& data = *m_data;
     try {
+        if ((data.boundary.state &&
+             (data.boundaryTick != data.tick || data.boundaryRevision != data.replayRevision)) ||
+            (!data.boundary.state && data.tick != data.baseline)) {
+            data.resetReplay();
+            return {};
+        }
         std::optional<u64> prepareNanoseconds;
         if (!data.baselineUndo) {
             // Keep one preallocated undo until this authority interval ends,
@@ -378,7 +398,8 @@ OrdinaryCombatTick::Result CombatPrediction::advance(u64 tick, std::span<const P
             }
         }
         auto* runner = data.stageSelected ? data.stagedRunner.get() : data.runner.get();
-        auto result = runner->stepUnderRewind(data.party, inputs, frame, *data.baselineUndo);
+        auto result =
+            runner->stepUnderRewind(data.party, inputs, frame, *data.baselineUndo, data.boundary);
         result.timings.prepareNanoseconds = prepareNanoseconds;
         if (result.status != OrdinaryCombatTick::Status::Advanced) {
             data.resetReplay();
@@ -386,6 +407,8 @@ OrdinaryCombatTick::Result CombatPrediction::advance(u64 tick, std::span<const P
         }
         data.tick = tick;
         ++data.replayRevision;
+        data.boundaryTick = data.tick;
+        data.boundaryRevision = data.replayRevision;
         return result;
     } catch (...) {
         data.resetReplay();
@@ -474,7 +497,7 @@ CombatPrediction::stagePicture(const CombatSnapshot& authority, const MotionSnap
          {data.fixtures.chests(), data.fixtures.gates(), data.world.triggers(),
           data.opponents.generators(), data.fixtures.barrels(), data.fixtures.traps(),
           data.fixtures.safeRocks(), data.fixtures.rubble(), &data.opponents.statues(),
-          &data.portals},
+          &data.portals, &data.transporters},
          data.opponents.critters(),
          data.opponents.bosses()},
         {data.projectilePictures, data.pickupPictures, data.fixturePictures, data.fighterPictures},

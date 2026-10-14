@@ -46,6 +46,8 @@ struct Fixture {
     LevelWatch levels;
     LevelWorldCheckpoint worldOwner{world};
     LevelFixturesCheckpoint fixturesOwner{fixtures};
+    LevelTransporters transporters;
+    LevelTransportersCheckpoint transporterOwner{transporters};
     std::array<std::unique_ptr<PlayerRuntimeCheckpoint>, 2> runtimes;
     std::array<PlayerRuntimeCheckpoint*, 2> ordered{};
     std::array<PlayerMissiles::Resource, 1> missileResources{
@@ -54,7 +56,7 @@ struct Fixture {
     std::unique_ptr<Boundary> boundary;
     std::vector<std::string> outputs;
 
-    explicit Fixture(std::string_view tag) {
+    explicit Fixture(std::string_view tag, bool pads = false) {
         // These are native archives and authored trees, not fabricated checkpoint
         // rows. The gas cloud's first tree really morphs into its looping tree.
         std::string trees = R"({"trees":[)";
@@ -80,11 +82,14 @@ struct Fixture {
             {"type":2,"subtype":46,"name":"CHEST","radius":1,"height":2,"activeType":16},
             {"type":1,"subtype":1,"name":"COIN","radius":1,"height":2,"value":200},
             {"type":10,"subtype":41,"name":"ROCK","radius":2,"height":6,"hitPoints":40},
-            {"type":10,"subtype":45,"name":"BARPOI","radius":1,"height":2,"hitPoints":10}],
+            {"type":10,"subtype":45,"name":"BARPOI","radius":1,"height":2,"hitPoints":10},
+            {"type":11,"name":"TRANS","radius":1,"height":2}],
           "itemInstances":[
             {"info":0,"position":[0,0,0],"params":[1,0,0,0,1,0,0,0,0,0,0,0]},
             {"info":2,"position":[30,0,0],"params":[0,0,3,0,0,0,0,0,0,0,0,0]},
-            {"info":3,"position":[50,0,0]}]})");
+            {"info":3,"position":[50,0,0]},
+            {"info":4,"position":[10,0,0],"params":[10,0,0,0,20,0,0,0]},
+            {"info":4,"position":[0,0,1],"params":[20,0,0,0,10,0,0,0]}]})");
         writeTextFile(directory / "animations.json", R"({"trees":[
           {"name":"CHEST","nodes":[
             {"name":"ROOT","object":"WALL","parent":-1,"position":[0,0,0]},
@@ -98,7 +103,10 @@ struct Fixture {
           {"name":"BARPOI","nodes":[{"name":"ROOT","object":"WALL","parent":-1,"position":[0,0,0]}],
            "sequences":[{"name":"OFF","frames":2,"frameRate":30},
              {"name":"BREAK","frames":8,"frameRate":30},
-             {"name":"OPEN","frames":0}]}]})");
+             {"name":"OPEN","frames":0}]},
+          {"name":"TRANS","nodes":[{"name":"ROOT","object":"WALL","parent":-1,
+              "position":[0,0,0]}],"sequences":[{"name":"ACTIVE","frames":4,"frameRate":30,
+              "tracks":[{"node":0,"flags":16,"frames":[0,3],"values":[0,2]}]}]}]})");
         writeTextFile(directory / "collision.json", R"({"objects":[
           {"object":0,"normals":[0,1,0],"vertices":[-3,0,-3,3,0,-3,0,0,3]},
           {"object":1,"normals":[0,1,0],"vertices":[-5,0,-5,5,0,-5,0,0,5]}]})");
@@ -151,6 +159,11 @@ struct Fixture {
         REQUIRE(fixtures.barrels().size() == 1);
         REQUIRE(worldOwner.bindResources(device));
         REQUIRE(fixturesOwner.bindResources());
+        if (pads) {
+            transporters.bind(device, world.layout(), world.itemScope(), 2, &world.collision());
+            REQUIRE(transporters.size() == 2);
+            REQUIRE(transporterOwner.bindResources());
+        }
         for (usize index = 0; index < players.size(); ++index) {
             runtimes[index] =
                 std::make_unique<PlayerRuntimeCheckpoint>(players[index], classes.stats(0));
@@ -159,9 +172,9 @@ struct Fixture {
         combat = std::make_unique<CombatRollbackCheckpoint>(
             ordered, health, levels, attacks, arsenal, effects,
             CombatRollbackCheckpoint::Resources{missileResources, {}, resources});
-        boundary = std::make_unique<Boundary>(*combat, opponents,
-                                              std::span<const EnemyMissiles::Resource>{},
-                                              &worldOwner, &fixturesOwner);
+        boundary = std::make_unique<Boundary>(
+            *combat, opponents, std::span<const EnemyMissiles::Resource>{}, &worldOwner,
+            &fixturesOwner, nullptr, nullptr, pads ? &transporterOwner : nullptr);
     }
     ~Fixture() {
         boundary.reset();
@@ -218,7 +231,10 @@ struct Fixture {
     void step(f32 seconds) {
         world.capturePresentation();
         fixtures.capturePresentation();
+        transporters.capturePresentation();
         world.update(seconds);
+        transporters.syncFloors(world.collision());
+        transporters.animate(seconds);
         for (auto& player : players) {
             FloorRiding::carry(player, world.collision());
         }
@@ -472,5 +488,126 @@ TEST_CASE("stage transaction rejects unmatched owner pairs and fences child rest
     CHECK_FALSE(fixture.boundary->rewind(std::move(*rewind)));
     CHECK(fixture.state() == before);
     CHECK(other.state() == foreignBefore);
+}
+
+TEST_CASE("stage transaction includes exact transporter clocks and historical carried placement",
+          "[rollback][ordinary-stage-checkpoint][transporter-stage-checkpoint]") {
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    const auto owner = std::make_unique<Fixture>("ordinary-stage-pads", true);
+    auto& fixture = *owner;
+    for (s32 tick = 0; tick < 9; ++tick) {
+        fixture.step(seconds);
+    }
+    // Native world motion can precede the next pad sync (including scripted
+    // holds). The checkpoint must preserve this historical placement exactly.
+    const auto padState = fixture.transporterOwner.checkpoint();
+    REQUIRE(padState);
+    const auto pad = padState->pads[0];
+    REQUIRE(pad.support == 0);
+    fixture.world.update(seconds);
+    const auto before = fixture.state();
+    REQUIRE(before.stage->transporters);
+    CHECK(before.stage->transporters->pads[0].transform == pad.transform);
+    REQUIRE(fixture.world.collision().objectTransform(pad.support));
+    CHECK(before.stage->transporters->pads[0].transform !=
+          *fixture.world.collision().objectTransform(pad.support) * pad.supportLocal);
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    auto rewind = fixture.boundary->prepareRewind();
+    REQUIRE(rewind);
+    fixture.step(seconds);
+    const auto after = fixture.state();
+    CHECK(after.stage->transporters != before.stage->transporters);
+    REQUIRE(fixture.boundary->canRewind(*rewind));
+    REQUIRE(fixture.boundary->rewind(std::move(*rewind)));
+    CHECK(fixture.state() == before);
+    fixture.step(seconds);
+    CHECK(fixture.state() == after);
+    REQUIRE(fixture.boundary->restore(before));
+    CHECK(fixture.state() == before);
+    fixture.step(seconds);
+    CHECK(fixture.state() == after);
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+}
+
+TEST_CASE(
+    "transporter stage refuses mismatched participants resources links and stale plans atomically",
+    "[rollback][ordinary-stage-checkpoint][transporter-stage-checkpoint]") {
+    const auto owner = std::make_unique<Fixture>("ordinary-stage-pad-validation", true);
+    const auto otherOwner = std::make_unique<Fixture>("ordinary-stage-pad-foreign", true);
+    auto& fixture = *owner;
+    auto& other = *otherOwner;
+    const auto before = fixture.state();
+    const auto foreign = other.state();
+    for (const s32 binding : {0, 1}) {
+        CAPTURE(binding);
+        Boundary invalid{*fixture.combat,
+                         fixture.opponents,
+                         {},
+                         binding == 0 ? nullptr : &fixture.worldOwner,
+                         binding == 0 ? nullptr : &fixture.fixturesOwner,
+                         nullptr,
+                         nullptr,
+                         binding == 0 ? &fixture.transporterOwner : &other.transporterOwner};
+        CHECK_FALSE(invalid.checkpoint());
+        CHECK_FALSE(invalid.prepareRestore(before));
+        CHECK(fixture.state() == before);
+        CHECK(other.state() == foreign);
+    }
+    Boundary absent{
+        *fixture.combat, fixture.opponents, {}, &fixture.worldOwner, &fixture.fixturesOwner};
+    CHECK_FALSE(absent.prepareRestore(before));
+    for (const s32 mutation : {0, 1, 2, 3, 4}) {
+        CAPTURE(mutation);
+        auto invalid = before;
+        invalid.combat.players[0].save.gold += 17;
+        auto issue = Boundary::RestoreIssue::None;
+        if (mutation == 0) {
+            invalid.stage->transporters.reset();
+        } else if (mutation == 1) {
+            invalid.stage->transporters->catalog[0] ^= 1;
+        } else if (mutation == 2) {
+            invalid.stage->transporters->pads[0].support = 12345;
+        } else if (mutation == 3) {
+            invalid.stage->transporters->pads[0].destination = 0;
+        } else {
+            // Structurally coherent fake support still is not part of this
+            // trusted world's collision-owner catalog.
+            invalid.stage->transporters->pads[0].support = 12345;
+            invalid.stage->world.core.moving.push_back({12345, Mat4{1}});
+            REQUIRE(invalid.valid());
+        }
+        CHECK_FALSE(fixture.boundary->restore(invalid, &issue));
+        CHECK(issue == (mutation == 0   ? Boundary::RestoreIssue::Bindings
+                        : mutation == 1 ? Boundary::RestoreIssue::Transporters
+                        : mutation == 4 ? Boundary::RestoreIssue::Supports
+                                        : Boundary::RestoreIssue::State));
+        CHECK(fixture.state() == before);
+    }
+    auto planned = fixture.boundary->prepareRestore(before);
+    auto rewind = fixture.boundary->prepareRewind();
+    REQUIRE(planned);
+    REQUIRE(rewind);
+    REQUIRE(fixture.transporterOwner.restore(*before.stage->transporters));
+    CHECK_FALSE(fixture.boundary->canCommit(*planned));
+    CHECK_FALSE(fixture.boundary->commitRestore(std::move(*planned)));
+    CHECK_FALSE(fixture.boundary->canRewind(*rewind));
+    CHECK_FALSE(fixture.boundary->rewind(std::move(*rewind)));
+    CHECK(fixture.state() == before);
+
+    planned = fixture.boundary->prepareRestore(before);
+    rewind = fixture.boundary->prepareRewind();
+    REQUIRE(planned);
+    REQUIRE(rewind);
+    fixture.transporters.clear();
+    CHECK_FALSE(fixture.boundary->commitRestore(std::move(*planned)));
+    CHECK_FALSE(fixture.boundary->rewind(std::move(*rewind)));
+    // The deliberately cleared pad owner cannot be recaptured. Every other
+    // participant must still retain its complete preflight state.
+    CHECK(fixture.combat->checkpoint() == before.combat);
+    CHECK(fixture.worldOwner.checkpoint() == before.stage->world);
+    CHECK(fixture.fixturesOwner.checkpoint() == before.stage->fixtures);
+    CHECK(other.state() == foreign);
 }
 } // namespace

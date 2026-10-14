@@ -18,6 +18,7 @@ std::unique_ptr<CombatSnapshot> displayCopy(const CombatSnapshot& snapshot) {
     result->projectiles = snapshot.projectiles;
     result->pickups = snapshot.pickups;
     result->fixtures = snapshot.fixtures;
+    result->transporters = snapshot.transporters;
     result->fighters = snapshot.fighters;
     result->geometry = snapshot.geometry;
     result->hud = snapshot.hud;
@@ -185,20 +186,7 @@ CombatReplica::Admission CombatPlayback::receive(PacketTransport::Connection sen
                 // must never retain a complete opponent checkpoint that could
                 // be mistaken for state at that interpolated time. Do not deep
                 // copy the large native pools just to discard them here.
-                m_history.push_back({.motion = snapshot->motion,
-                                     .worldTextureFrame = snapshot->worldTextureFrame,
-                                     .musicArea = snapshot->musicArea,
-                                     .musicLevel = snapshot->musicLevel,
-                                     .players = snapshot->players,
-                                     .enemies = snapshot->enemies,
-                                     .projectiles = snapshot->projectiles,
-                                     .pickups = snapshot->pickups,
-                                     .fixtures = snapshot->fixtures,
-                                     .fighters = snapshot->fighters,
-                                     .geometry = snapshot->geometry,
-                                     .hud = snapshot->hud,
-                                     .worldMotion = snapshot->worldMotion,
-                                     .worldMotionTicks = snapshot->worldMotionTicks});
+                m_history.push_back(std::move(*displayCopy(*snapshot)));
                 if (m_history.size() > SnapshotPlayback::kHistory) {
                     m_history.pop_front();
                 }
@@ -409,6 +397,26 @@ std::unique_ptr<CombatSnapshot> CombatPlayback::samplePair(const CombatSnapshot&
             }
         }
         fixture.pose = between(fixture.pose, found->pose, t);
+    }
+    for (auto& pad : shown.transporters) {
+        const auto found = std::ranges::lower_bound(upper.transporters, pad.instance, {},
+                                                    &TransporterState::instance);
+        if (found == upper.transporters.end() || found->instance != pad.instance ||
+            found->resource != pad.resource || found->generation != pad.generation ||
+            found->sequence != pad.sequence || found->playing != pad.playing ||
+            found->frame < pad.frame || found->textureClock < pad.textureClock) {
+            continue;
+        }
+        // Keep the selected snapshot's current carried transform: native TRANS
+        // draw does not interpolate its floor attachment. A held endpoint must
+        // not interpolate backwards into the last active animation interval.
+        pad.frame = found->advanced ? std::lerp(pad.frame, found->frame, t) : found->frame;
+        pad.textureClock = found->advanced ? std::lerp(pad.textureClock, found->textureClock, t)
+                                           : found->textureClock;
+        // The transported sample is already evaluated, not a new native interval.
+        pad.previousFrame = pad.frame;
+        pad.previousTextureClock = pad.textureClock;
+        pad.advanced = false;
     }
     for (auto& mesh : shown.fighters) {
         // Attached billboards and meters were posed with the host camera.

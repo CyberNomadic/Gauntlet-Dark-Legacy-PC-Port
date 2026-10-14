@@ -79,6 +79,10 @@ public:
         bool dormant() const;
         bool references(u8 playerMask, const EffectTrees::PoolCheckpoint& effects) const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class OpponentCombatCheckpoint;
+        bool validAggregate() const;
     };
 
     class Prepared {
@@ -121,10 +125,12 @@ public:
     bool restore(const State& state, const EffectTrees::PoolCheckpoint& effects);
 
 private:
+    struct CaptureResources;
     static bool unused(const Combatant& actor);
     bool supported() const;
     LevelOpponents& m_owner;
     std::vector<EffectTrees::PoolResource> m_effectResources;
+    mutable std::unique_ptr<CaptureResources> m_captureResources;
     u64 m_generation = 0;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
 };

@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/codec/BytePlanes.h"
+
 #include "game/netplay/CombatReplica.h"
 
 namespace {
@@ -23,6 +25,25 @@ CombatSnapshot geometry(usize count) {
             {static_cast<u32>(i), 1, glm::translate(Mat4{1}, Vec3{static_cast<f32>(i), 5, 7})});
     }
     return state;
+}
+
+TEST_CASE("shared byte planes preserve exact byte positions bits and every partial word",
+          "[netplay][snapshot-compression][byte-planes]") {
+    const std::vector<u8> scalar{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+    const std::vector<u8> planar{0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11, 12, 13, 14};
+    CHECK(BytePlanes::encode(scalar) == planar);
+    CHECK(BytePlanes::decode(planar) == scalar);
+    // Empty/short buffers, every byte value, and arbitrary scalar payloads are
+    // legal here; semantic finite-value checks belong to the packet codec.
+    std::mt19937 random(53);
+    for (usize size = 0; size <= 1027; ++size) {
+        std::vector<u8> bytes(size);
+        for (usize index = 0; index < size; ++index) {
+            bytes[index] = size < 260 ? static_cast<u8>(index) : static_cast<u8>(random());
+        }
+        CHECK(BytePlanes::decode(BytePlanes::encode(bytes)) == bytes);
+        CHECK(BytePlanes::encode(BytePlanes::decode(bytes)) == bytes);
+    }
 }
 
 TEST_CASE("snapshot compression is exact and self-contained at every supported size",

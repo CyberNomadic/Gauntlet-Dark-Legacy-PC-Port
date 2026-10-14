@@ -151,6 +151,10 @@ std::string_view ReplicaView::resourceRejection(const CombatSnapshot& snapshot) 
                              [&](const auto& item) { return m_fixtureResources->accepts(item); })) {
         return "fixture resources";
     }
+    if (!std::ranges::all_of(snapshot.transporters,
+                             [&](const auto& pad) { return m_fixtureResources->accepts(pad); })) {
+        return "transporter resources";
+    }
     if (!std::ranges::all_of(snapshot.fighters,
                              [&](const auto& mesh) { return m_fighterResources.accepts(mesh); })) {
         return "fighter resources";
@@ -309,6 +313,7 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     m_geometry.drawOpaque(device, clip, frame, -1, textureOffset);
     drawParticles(StageParticlePresentation::Phase::WorldScenery);
     drawParticles(StageParticlePresentation::Phase::WorldFixtures);
+    m_fixtures.drawTransporters(device, *m_fixtureResources, clip, m_world->lighting());
     m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
                     TreeModel::Pass::Opaque);
     m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,

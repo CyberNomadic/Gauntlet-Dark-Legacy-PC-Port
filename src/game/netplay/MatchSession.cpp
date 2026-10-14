@@ -187,6 +187,7 @@ void MatchSession::discardGameplay() {
     m_adaptiveLead = 0;
     m_feedbackInput = {};
     m_leadFeedbackFloor = 0;
+    resetLeadRecovery();
     m_sampleClock = 0;
     m_sentInputs.clear();
     m_audio.clear();
@@ -196,7 +197,13 @@ void MatchSession::discardGameplay() {
     m_pendingPress = {};
     m_input.clear();
     m_states = {};
+    m_receipt.reset();
     m_published.reset();
+}
+void MatchSession::resetLeadRecovery() {
+    m_healthyLeadSince.reset();
+    m_healthyLeadSamples = 0;
+    m_healthyLeadMargin = 0;
 }
 bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party,
                            const ShopSetup* shop, bool challengeWon) {
@@ -420,6 +427,17 @@ void MatchSession::disconnected(PacketTransport::Connection connection) {
     stop(MatchStop::Disconnected, host());
 }
 void MatchSession::update(f64 seconds) {
+    if (host() && m_phase == Phase::Running && std::isfinite(seconds) && seconds > 0) {
+        for (auto& delivery : m_states) {
+            for (auto& batch : delivery.batches) {
+                if (!batch.packets) {
+                    batch.remaining -= std::min(seconds, kPublicationTimeout);
+                }
+            }
+            std::erase_if(delivery.batches,
+                          [](const auto& batch) { return !batch.packets && batch.remaining <= 0; });
+        }
+    }
     if (m_phase == Phase::Loading && std::isfinite(seconds) && seconds > 0) {
         m_loadingSeconds += seconds;
         if (m_loadingSeconds >= kLoadTimeout) {
@@ -600,6 +618,10 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         return Admission::Stale;
     }
     if (host()) {
+        if (CombatReplica::recognizesReceipt(bytes)) {
+            const auto message = CombatReplica::decodeReceipt(bytes);
+            return message ? receipt(peer, *message) : Admission::Invalid;
+        }
         const auto commands = InputPacket::decode(bytes);
         if (!commands) {
             return Admission::Invalid;
@@ -624,20 +646,35 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         }
         return Admission::Accepted;
     }
+    if (CombatReplica::recognizesReceipt(bytes)) {
+        return Admission::WrongPeer;
+    }
     const auto admission = m_playback.receive(connection, bytes);
     switch (admission) {
     case CombatReplica::Admission::Committed:
+        m_receipt = m_playback.receipt();
         if (const auto* state = m_playback.latest()) {
             m_latency.checkpoint(*state);
+            bool allFresh = true;
+            std::optional<s32> margin;
+            std::optional<s32> raisedLead;
             for (usize seat = 0; seat < state->players.size(); ++seat) {
-                if (m_context.owners[seat] != m_local || !state->players[seat]) {
+                if (m_context.owners[seat] != m_local) {
+                    continue;
+                }
+                if (!state->players[seat]) {
+                    allFresh = false;
                     continue;
                 }
                 const auto& feedback = state->players[seat]->movement;
                 if (feedback.receivedInput <= m_feedbackInput[seat]) {
+                    allFresh = false;
                     continue;
                 }
                 m_feedbackInput[seat] = feedback.receivedInput;
+                allFresh = allFresh && feedback.receivedInput > m_leadFeedbackFloor;
+                margin =
+                    margin ? std::min(*margin, feedback.arrivalMargin) : feedback.arrivalMargin;
                 if (feedback.arrivalMargin < 2 && feedback.receivedInput > m_leadFeedbackFloor) {
                     // Measure actual admission deadlines, not an assumed LAN RTT. Wait
                     // for commands sampled after this adjustment before adjusting again.
@@ -652,8 +689,38 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
                                           2 + static_cast<s32>(std::min<u64>(
                                                   kMaxInputLead, m_sampleClock - sent->sampled)));
                     }
-                    m_adaptiveLead = static_cast<u8>(std::min<s32>(kMaxInputLead, needed));
+                    raisedLead = raisedLead ? std::max(*raisedLead, needed) : needed;
+                }
+            }
+            if (raisedLead) {
+                // Evaluate every local seat against the same adjustment floor.
+                // A second seat's worse margin must not depend on seat order.
+                m_adaptiveLead = static_cast<u8>(std::min<s32>(kMaxInputLead, *raisedLead));
+                m_leadFeedbackFloor = m_nextInput;
+            }
+            // A temporary stall must not permanently leave commands half a
+            // second ahead. Recover only from fresh admission evidence for all
+            // local seats, retaining three ticks of the worst measured margin.
+            // Command timestamps never move backwards: inputReady coalesces
+            // edges until the host catches up with any already-sent lead.
+            if (raisedLead || !allFresh || (margin && *margin < 4)) {
+                resetLeadRecovery();
+            } else if (allFresh && margin && inputLead() > m_context.inputLead) {
+                if (!m_healthyLeadSince) {
+                    m_healthyLeadSince = state->motion.tick;
+                    m_healthyLeadMargin = *margin;
+                } else {
+                    m_healthyLeadMargin = std::min(m_healthyLeadMargin, *margin);
+                }
+                ++m_healthyLeadSamples;
+                if (state->motion.tick - *m_healthyLeadSince >= m_context.tickRate &&
+                    m_healthyLeadSamples >= 8) {
+                    const s32 reduction =
+                        std::min({3, m_healthyLeadMargin - 3,
+                                  static_cast<s32>(inputLead() - m_context.inputLead)});
+                    m_adaptiveLead = static_cast<u8>(inputLead() - reduction);
                     m_leadFeedbackFloor = m_nextInput;
+                    resetLeadRecovery();
                 }
             }
         }
@@ -709,7 +776,14 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
     }
     std::vector<InputCommand> pending(frame.begin(), frame.end());
     for (auto& command : pending) {
-        command.pressedButtons |= m_pendingPress[command.seat];
+        const u32 pressed = m_pendingPress[command.seat];
+        command.pressedButtons |= pressed;
+        // Native PartyMotion starts an ordinary attack from its held level,
+        // not attackPressed alone. Preserve one coalesced tap across sampling
+        // backpressure without replaying stale held inputs or movement.
+        if ((pressed & static_cast<u32>(CommandPress::Attack)) != 0) {
+            command.heldButtons |= static_cast<u32>(CommandHeld::Attack);
+        }
     }
     if (!m_history.record(pending)) {
         return false;
@@ -744,10 +818,48 @@ std::optional<InputTimeline::Frame> MatchSession::advance() {
     }
     return m_timeline.advance();
 }
-bool MatchSession::canPublish(const MotionSnapshot& motion) const {
+MatchSession::Admission MatchSession::receipt(u8 peer, const CombatReplica::Receipt& message) {
+    if (message.epoch != m_context.epoch) {
+        return Admission::Stale;
+    }
+    auto& batches = m_states[peer].batches;
+    const auto found = std::ranges::find_if(
+        batches, [&](const auto& batch) { return batch.identity.tick == message.tick; });
+    if (found == batches.end()) {
+        return m_published && message.tick <= *m_published ? Admission::Stale : Admission::Invalid;
+    }
+    if (found->identity != message || found->next == 0) {
+        return Admission::Invalid;
+    }
+    // A committed newer full snapshot supersedes older assemblies too. Never
+    // truncate a started batch: a receipt can precede its final repair packets.
+    for (auto& batch : batches) {
+        if (batch.identity.tick <= message.tick) {
+            batch.acknowledged = true;
+        }
+    }
+    std::erase_if(batches, [](const auto& batch) { return batch.acknowledged && !batch.packets; });
+    return Admission::Accepted;
+}
+bool MatchSession::publicationReady() const {
     if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
-        m_timeline.tick() == 0 || motion.epoch != m_context.epoch ||
-        motion.tick != m_timeline.tick() - 1 || (m_published && motion.tick <= *m_published)) {
+        m_timeline.tick() == 0 || (m_published && m_timeline.tick() - 1 <= *m_published)) {
+        return false;
+    }
+    bool remote = false;
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        if (m_links[peer] != 0) {
+            remote = true;
+            if (m_states[peer].ready()) {
+                return true;
+            }
+        }
+    }
+    return !remote;
+}
+bool MatchSession::canPublish(const MotionSnapshot& motion) const {
+    if (!publicationReady() || motion.epoch != m_context.epoch ||
+        motion.tick != m_timeline.tick() - 1) {
         return false;
     }
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
@@ -770,22 +882,21 @@ bool MatchSession::publish(const CombatPacket::Prepared& state) {
     if (!canPublish(state.motion())) {
         return false;
     }
-    const auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::Automatic,
-                                                CombatReplica::Recovery::SingleLoss);
+    CombatReplica::Receipt identity;
+    auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::Automatic,
+                                          CombatReplica::Recovery::SingleLoss, &identity);
     if (!packets) {
         return false;
     }
-    const auto& encoded = *packets;
+    const auto encoded = std::make_shared<const CombatReplica::Packets>(std::move(*packets));
     for (u8 peer = 1; peer <= 4; ++peer) {
         if (m_links[peer] != 0) {
             auto& delivery = m_states[peer];
-            if (delivery.next > 0 && delivery.next < delivery.packets.size()) {
-                // Finish the fragments already in flight. Replacing a partly sent
-                // checkpoint every capture can starve the receiver forever under
-                // congestion. Keep only one newer replacement, never a FIFO.
-                delivery.latest = encoded;
-            } else {
-                delivery = {encoded, 0, {}};
+            if (delivery.ready()) {
+                if (!delivery.batches.empty() && delivery.batches.back().next == 0) {
+                    delivery.batches.pop_back();
+                }
+                delivery.batches.push_back({encoded, identity});
             }
         }
     }
@@ -852,6 +963,27 @@ void MatchSession::flush(PacketTransport& transport) {
     if (m_phase != Phase::Running) {
         return;
     }
+    if (!host() && !m_input.empty()) {
+        const auto result =
+            transport.send(m_links[1], m_input, PacketTransport::Delivery::Unreliable);
+        if (result == PacketTransport::SendResult::Sent) {
+            m_latency.sent(m_history.commands());
+            m_input.clear();
+        } else if (result != PacketTransport::SendResult::Congested) {
+            stop(MatchStop::TransportFailure, false);
+            return;
+        }
+    }
+    if (!host() && m_receipt) {
+        const auto bytes = CombatReplica::encodeReceipt(*m_receipt);
+        const auto result = transport.send(m_links[1], *bytes, PacketTransport::Delivery::Reliable);
+        if (result == PacketTransport::SendResult::Sent) {
+            m_receipt.reset();
+        } else if (result != PacketTransport::SendResult::Congested) {
+            stop(MatchStop::TransportFailure, false);
+            return;
+        }
+    }
     if (m_audio.failed()) {
         stop(MatchStop::TransportFailure, true);
         return;
@@ -882,38 +1014,39 @@ void MatchSession::flush(PacketTransport& transport) {
         }
         m_feedback.sent();
     }
-    if (!host() && !m_input.empty()) {
-        const auto result =
-            transport.send(m_links[1], m_input, PacketTransport::Delivery::Unreliable);
-        if (result == PacketTransport::SendResult::Sent) {
-            m_latency.sent(m_history.commands());
-            m_input.clear();
-        } else if (result != PacketTransport::SendResult::Congested) {
-            stop(MatchStop::TransportFailure, false);
-        }
-    }
     for (u8 peer = 1; host() && peer <= 4; ++peer) {
         auto& state = m_states[peer];
-        while (true) {
-            if (state.next == state.packets.size()) {
-                if (state.latest.empty()) {
+        usize budget = kPublicationBurst;
+        for (auto& batch : state.batches) {
+            if (!batch.packets) {
+                continue;
+            }
+            while (budget > 0 && batch.next < batch.packets->size()) {
+                const auto result = transport.send(m_links[peer], (*batch.packets)[batch.next],
+                                                   PacketTransport::Delivery::Unreliable);
+                if (result == PacketTransport::SendResult::Congested) {
+                    budget = 0;
                     break;
                 }
-                state.packets = std::move(state.latest);
-                state.latest.clear();
-                state.next = 0;
+                if (result != PacketTransport::SendResult::Sent) {
+                    disconnected(m_links[peer]);
+                    return;
+                }
+                ++batch.next;
+                --budget;
             }
-            const auto result = transport.send(m_links[peer], state.packets[state.next],
-                                               PacketTransport::Delivery::Unreliable);
-            if (result == PacketTransport::SendResult::Congested) {
+            if (batch.next == batch.packets->size()) {
+                // Keep only the bounded identity/timeout after transmission, not
+                // megabytes of already-sent chunks. Timers never extend repairs.
+                batch.packets.reset();
+                batch.remaining = kPublicationTimeout;
+            }
+            if (budget == 0) {
                 break;
             }
-            if (result != PacketTransport::SendResult::Sent) {
-                disconnected(m_links[peer]);
-                return;
-            }
-            ++state.next;
         }
+        std::erase_if(state.batches,
+                      [](const auto& batch) { return batch.acknowledged && !batch.packets; });
     }
 }
 } // namespace gdl::game

@@ -155,6 +155,9 @@ private:
                    boundsMin.z <= maxZ;
         }
         void place(const Mat4& world);
+        /** Transform borrowed local triangles into an equally sized, initialized
+         * placed cache. Does not retain the source or change its metadata. */
+        void place(const Mat4& world, std::span<const CollisionTriangle> source);
     };
 
     void index();

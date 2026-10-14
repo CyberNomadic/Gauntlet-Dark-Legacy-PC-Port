@@ -50,6 +50,13 @@ struct HelpReader {
     std::vector<s32>* heard = nullptr; ///< since the character was loaded; kept sorted
 };
 
+/** Read-only history for deciding whether posting could change help state. */
+struct HelpHistory {
+    s32 player = 0;
+    const std::vector<s32>* seen = nullptr;
+    const std::vector<s32>* heard = nullptr;
+};
+
 /**
  * The help messages the original teaches the game with: a small scroll over a character's
  * head with a line or two and the narrator saying it, each shown until every character in
@@ -130,6 +137,10 @@ public:
     static constexpr u8 kScrollAlpha = 128;
 
     static const HelpMessageSpec* specOf(s32 id);
+    /** Native repeat policy only, without text, priority or pause suppression.
+     * False proves posting is a no-op; true need not mean a message will show.
+     * Histories have the same sorted-list contract as HelpReader. */
+    static bool wanted(s32 id, s32 player, std::span<const HelpHistory> party);
     static bool gameplayTip(s32 id);
     enum class VoiceLead : u8 { None, PlayerName, PlayerHas };
     /** sounds_evt.c::fn_8009CB44 uses names on more announcements in multiplayer. */

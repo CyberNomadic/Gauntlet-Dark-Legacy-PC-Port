@@ -107,7 +107,8 @@ StageCombatPresentation::capture(const CombatSnapshot& authority, const MotionSn
                             [](const auto& shot) { return external(shot.source); }) ||
         (sources.fixtures.portals == nullptr &&
          std::ranges::any_of(authority.fixtures,
-                             [](const auto& fixture) { return portal(fixture.source); }))) {
+                             [](const auto& fixture) { return portal(fixture.source); })) ||
+        (sources.fixtures.transporters == nullptr && !authority.transporters.empty())) {
         return nullptr;
     }
     auto captured =
@@ -143,6 +144,17 @@ StageCombatPresentation::capture(const CombatSnapshot& authority, const MotionSn
             std::ranges::lower_bound(result->fixtures, fixture.key(), {}, &FixtureState::key);
         if (found == result->fixtures.end() || found->key() != fixture.key() ||
             found->resource != fixture.resource || found->continuity != fixture.continuity) {
+            return nullptr;
+        }
+    }
+    // Pads are authored once for this party and do not disappear during travel.
+    // An absent/unbound private owner is not whole-stage artwork coverage.
+    if (result->transporters.size() != authority.transporters.size()) {
+        return nullptr;
+    }
+    for (usize index = 0; index < authority.transporters.size(); ++index) {
+        if (result->transporters[index].instance != authority.transporters[index].instance ||
+            result->transporters[index].resource != authority.transporters[index].resource) {
             return nullptr;
         }
     }

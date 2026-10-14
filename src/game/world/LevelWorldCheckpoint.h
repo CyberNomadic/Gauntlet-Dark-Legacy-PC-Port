@@ -42,6 +42,10 @@ public:
         bool particlesAdvanced = false;
         bool valid() const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class LevelWorldCheckpoint;
+        bool validAggregate() const;
     };
     class Prepared {
     public:

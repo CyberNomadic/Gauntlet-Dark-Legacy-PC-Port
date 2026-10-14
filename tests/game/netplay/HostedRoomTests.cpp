@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "game/netplay/CombatReplica.h"
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/OnlineSession.h"
 
@@ -68,8 +70,9 @@ struct Pair {
 } // namespace
 TEST_CASE("peers missing replay capabilities cannot join even with the same build name",
           "[netplay][hosted-room]") {
-    for (const u8 oldProtocol : {u8{1}, u8{13}, u8{14}, u8{15}, u8{16}, u8{17}, u8{18}, u8{19},
-                                 u8{20}, u8{21}, u8{22}, u8{23}}) {
+    for (const u8 oldProtocol :
+         {u8{1}, u8{13}, u8{14}, u8{15}, u8{16}, u8{17}, u8{18}, u8{19}, u8{20}, u8{21}, u8{22},
+          u8{23}, u8{24}, u8{25}, u8{26}, u8{27}, u8{28}, u8{29}, u8{30}}) {
         Pair pair;
         pair.guest.update(0);
         bool rewrote = false;
@@ -85,6 +88,45 @@ TEST_CASE("peers missing replay capabilities cannot join even with the same buil
         REQUIRE(pair.host.room());
         CHECK(pair.host.room()->members.size() == 1);
     }
+}
+
+TEST_CASE("hosted combat data and repair packets fit a single provider fragment",
+          "[netplay][hosted-room][snapshot-repair]") {
+    Pair pair;
+    pair.pump();
+    REQUIRE(pair.host.ready());
+    REQUIRE(pair.guest.ready());
+    pair.pump();
+    REQUIRE(pair.host.start());
+    pair.pump();
+    REQUIRE(pair.host.phase() == OnlineSession::Phase::Active);
+    REQUIRE(pair.b.incoming.empty());
+
+    CombatSnapshot state;
+    state.motion.epoch = 1;
+    state.motion.cameraContinuity = 1;
+    state.geometry = SceneGeometry{1, 100, 0, {}};
+    for (u32 index = 0; index < 100; ++index) {
+        state.geometry->objects.push_back(
+            {index, 1, glm::translate(Mat4{1}, Vec3{static_cast<f32>(index), 5, 7})});
+    }
+    const auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::None,
+                                                CombatReplica::Recovery::SingleLoss);
+    REQUIRE(packets);
+    REQUIRE(packets->size() > 4);
+    usize maximum = 0;
+    for (const auto& packet : *packets) {
+        REQUIRE(pair.hostRoom.transport().send(7, packet, PacketTransport::Delivery::Unreliable) ==
+                PacketTransport::SendResult::Sent);
+        REQUIRE(pair.b.incoming.size() == 1);
+        const auto& wrapped = pair.b.incoming.front().bytes;
+        CHECK(wrapped.size() == packet.size() + 1);
+        CHECK(std::equal(packet.begin(), packet.end(), wrapped.begin() + 1));
+        CHECK(wrapped.size() <= 1000); // Iroh's application-fragment payload, before its header.
+        maximum = std::max(maximum, wrapped.size());
+        pair.b.incoming.clear();
+    }
+    CHECK(maximum == 997);
 }
 
 TEST_CASE("self hosted admission starts existing online gameplay without a room server",

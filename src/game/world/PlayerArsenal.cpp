@@ -293,6 +293,12 @@ PlayerArsenal::WeaponCue PlayerArsenal::weaponCue(u32 weapon, const PlayerFigure
     return {.call = figure.throwSound()};
 }
 
+Vec3 PlayerArsenal::weaponMuzzle(const MissileLaunch& first) const {
+    const f32 radius = first.spec->radius;
+    return m_resources->collision.resolveWalls(
+        first.position, radius, first.position.y - radius * 0.5f, first.position.y + radius * 0.5f);
+}
+
 void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
                                  const Vec3& direction, f32 scale, bool spreads,
                                  std::optional<Vec3> target,
@@ -309,10 +315,7 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
     bindWeaponAppearance(actor, figure, *prepared, weaponStreak(actor));
     const auto& launch = prepared->missiles.front();
     // An obstructed muzzle still produces a world impact, without a flying weapon.
-    const f32 radius = launch.spec->radius;
-    const Vec3 clear = m_resources->collision.resolveWalls(launch.position, radius,
-                                                           launch.position.y - radius * 0.5f,
-                                                           launch.position.y + radius * 0.5f);
+    const Vec3 clear = weaponMuzzle(launch);
     if (glm::distance(clear, launch.position) > 1e-4f) {
         presentImpact({.position = clear, .owner = launch.owner});
         return;

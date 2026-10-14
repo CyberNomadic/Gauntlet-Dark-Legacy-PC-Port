@@ -35,6 +35,10 @@ public:
         CombatantCheckpoint::Events events;
         bool valid() const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class CrittersCheckpoint;
+        bool validAggregate() const;
     };
     class Prepared {
     public:
@@ -68,6 +72,7 @@ public:
     bool restore(const State&);
 
 private:
+    friend class OpponentCombatCheckpoint;
     bool bound() const;
     bool matches(const State&) const;
     Critters& m_owner;

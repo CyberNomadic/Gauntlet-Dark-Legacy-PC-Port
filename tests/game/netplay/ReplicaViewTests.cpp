@@ -282,6 +282,15 @@ TEST_CASE("replica view stays blank until an entire trusted sample can be drawn"
     CHECK_FALSE(view.show(invalid));
     CHECK(view.fixtureCount() == captured->fixtures.size());
     invalid = *captured;
+    TransporterState pad;
+    pad.instance = 1;
+    pad.resource = 65535;
+    invalid.transporters.push_back(pad);
+    REQUIRE(invalid.valid());
+    CHECK(view.rejection(invalid) == "transporter resources");
+    CHECK_FALSE(view.show(invalid));
+    CHECK(CombatPacket::encode(*view.shown()) == image);
+    invalid = *captured;
     FighterMeshState fighter;
     fighter.incarnation = fighter.part = fighter.resource = 1;
     invalid.fighters.push_back(fighter);

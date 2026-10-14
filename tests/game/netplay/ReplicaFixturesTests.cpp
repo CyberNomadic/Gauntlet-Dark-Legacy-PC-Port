@@ -1,16 +1,20 @@
 #include <algorithm>
+#include <memory>
 #include <set>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/io/File.h"
+#include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/netplay/CombatPlayback.h"
 #include "game/screens/ReplicaFixtures.h"
+#include "game/screens/StageSnapshotSampling.h"
 #include "game/world/LevelCatalog.h"
 #include "game/world/LevelWorld.h"
 
@@ -145,6 +149,194 @@ struct Fixture {
     }
 };
 
+struct TransporterFixture {
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    std::unique_ptr<LevelWorld> native;
+    WorldLayout layout;
+    WorldCollision collision;
+    LevelTransporters pads;
+    Chests chests;
+    LockedGates gates;
+    LevelTriggers switches;
+    Generators generators;
+    Breakables barrels;
+    Traps traps;
+    SafeRocks rocks;
+    Rubble rubble;
+    FixtureResources resources;
+
+    explicit TransporterFixture(bool real) {
+        const auto directory = test::sampleLevel("replica-transporter");
+        writeTextFile(directory / "world.json", R"({
+          "objects":[{"name":"FLOOR","position":[0,0,0],"flags":4102}],
+          "itemInfos":[{"type":11,"name":"TRANS","radius":1.6,"height":2}],
+          "itemInstances":[
+            {"info":0,"position":[2,0,3],"params":[10,0,0,0,20,0,0,0]},
+            {"info":0,"position":[-4,0,5],"params":[20,0,0,0,10,0,0,0]},
+            {"info":0,"minPlayers":2,"position":[8,0,8],"params":[20,0,0,0,10,0,0,0]}]})");
+        writeTextFile(directory / "animations.json", R"({
+          "textureAnimations":[{"name":"STONE","texture":0,"source":1,"frames":2,"rate":1}],
+          "trees":[{"name":"TRANS",
+            "nodes":[{"name":"BODY","object":"WALL","parent":-1,"position":[0,0,0]}],
+            "sequences":[{"name":"ACTIVE","frames":4,"frameRate":30,
+              "tracks":[{"node":0,"flags":16,"frames":[0,3],"values":[0,2]}]}]}]})");
+        REQUIRE(layout.load(directory));
+        ItemArchive* art = &archive;
+        if (real) {
+            const auto root = test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2")
+                                  .parent_path()
+                                  .parent_path()
+                                  .parent_path();
+            LevelCatalog catalog;
+            REQUIRE(catalog.load(root));
+            const auto level = catalog.byName("A1");
+            REQUIRE(level);
+            native = std::make_unique<LevelWorld>();
+            REQUIRE(native->load(device, root, *level));
+            art = native->itemScope().archiveForTree("TRANS");
+            REQUIRE(art);
+        } else {
+            REQUIRE(archive.load(directory));
+        }
+        collision.build(
+            {CollisionTriangle{.vertices = {Vec3{-40, 0, -40}, Vec3{40, 0, 40}, Vec3{40, 0, -40}},
+                               .object = 0},
+             CollisionTriangle{.vertices = {Vec3{-40, 0, -40}, Vec3{-40, 0, 40}, Vec3{40, 0, 40}},
+                               .object = 0}});
+        collision.setMovingObjects(std::array<s32, 1>{0});
+        pads.bind(device, layout, AssetScope(*art), 1, &collision);
+        REQUIRE(pads.size() == 2);
+        REQUIRE(pads.pad(0).support == 0);
+        REQUIRE(resources.bind(device, std::array{art}, generators, rocks));
+    }
+    std::unique_ptr<CombatSnapshot> capture(u64 tick) const {
+        auto result = std::make_unique<CombatSnapshot>(blank(tick));
+        REQUIRE(FixtureCapture::append(*result, resources,
+                                       {chests, gates, switches, generators, barrels, traps, rocks,
+                                        rubble, nullptr, nullptr, &pads}));
+        REQUIRE(result->transporters.size() == pads.size());
+        REQUIRE(result->fixtures.empty());
+        return result;
+    }
+};
+
+void transporterDrawing(bool native, s32 rate) {
+    auto fixture = std::make_unique<TransporterFixture>(native);
+    auto& f = *fixture;
+    const f32 seconds = 1.0f / static_cast<f32>(rate);
+    f.pads.animate(0.007f);
+    const auto textures = f.device.texturesCreated;
+    const auto uploads = f.device.textureUpdates;
+    const auto initialGeneration = f.pads.pad(0).animation.generation();
+    bool held = false;
+    for (u64 tick = 0; tick < 40; ++tick) {
+        CAPTURE(native, rate, tick);
+        const auto before = f.capture(tick);
+        f.pads.capturePresentation();
+        const bool frozen = tick == 4 || tick == 5;
+        if (tick != 4) {
+            f.pads.animate(frozen ? 0.0f : seconds);
+        }
+        const Mat4 carrier =
+            glm::rotate(glm::translate(Mat4{1}, Vec3{1, static_cast<f32>(tick) * 0.25f, 2}),
+                        static_cast<f32>(tick) * 0.125f, Vec3{0, 1, 0});
+        f.collision.setSolid(0, tick % 2 == 0);
+        f.collision.setObjectTransform(0, carrier);
+        f.pads.syncFloors(f.collision);
+        const auto current = f.capture(tick + 1);
+        const auto bytes = CombatPacket::encode(*current);
+        REQUIRE(bytes);
+        const auto transported = CombatPacket::decode(*bytes);
+        REQUIRE(transported);
+        CHECK(transported->transporters == current->transporters);
+        if (frozen) {
+            held = true;
+            CHECK(current->transporters[0].frame == before->transporters[0].frame);
+            CHECK(current->transporters[0].textureClock == before->transporters[0].textureClock);
+        }
+        for (const f32 alpha : {0.0f, 0.25f, 0.75f, 1.0f}) {
+            CAPTURE(alpha);
+            const auto sampled = StageSnapshotSampling::sample(*before, *transported, alpha);
+            REQUIRE(sampled);
+            for (usize index = 0; index < sampled->transporters.size(); ++index) {
+                CHECK(sampled->transporters[index].placement == f.pads.pad(index).transform);
+                CHECK(f.resources.accepts(sampled->transporters[index]));
+                if (frozen) {
+                    CHECK(sampled->transporters[index].frame == current->transporters[index].frame);
+                    CHECK(sampled->transporters[index].textureClock ==
+                          current->transporters[index].textureClock);
+                }
+            }
+            f.device.draws.clear();
+            f.pads.draw(f.device, Mat4{1}, {}, alpha);
+            const auto expected = f.device.draws;
+            ReplicaFixtures replica;
+            REQUIRE(replica.begin(1));
+            REQUIRE(replica.show(*sampled, f.resources));
+            REQUIRE(replica.transporterCount() == f.pads.size());
+            f.device.draws.clear();
+            replica.draw(f.device, f.resources, Mat4{1}, {}, {}, TreeModel::Pass::Opaque);
+            replica.draw(f.device, f.resources, Mat4{1}, {}, {}, TreeModel::Pass::Blended);
+            CHECK(f.device.draws.empty()); // no second submission from either fixture pass
+            replica.drawTransporters(f.device, f.resources, Mat4{1}, {});
+            sameGeometry(f.device.draws, expected);
+        }
+        CHECK(CombatPacket::encode(*f.capture(tick + 1)) == bytes);
+    }
+    REQUIRE(held);
+    if (!native) {
+        CHECK(f.pads.pad(0).animation.generation() > initialGeneration);
+    }
+    CHECK(f.device.texturesCreated == textures);
+    CHECK(f.device.textureUpdates == uploads);
+}
+
+TEST_CASE("transporter replicas reproduce native floor carriage loop cuts and held draw clocks",
+          "[netplay][replica-fixtures][transporter-presentation]") {
+    transporterDrawing(false, GENERATE(30, 60));
+}
+
+TEST_CASE("retail TRANS replicas preserve native materials and fractional held presentation",
+          "[netplay][replica-fixtures][transporter-presentation][assets]") {
+    transporterDrawing(true, GENERATE(30, 60));
+}
+
+TEST_CASE("transporter resource refusal is atomic and full snapshots remove missing pads",
+          "[netplay][replica-fixtures][transporter-presentation]") {
+    auto fixture = std::make_unique<TransporterFixture>(false);
+    auto& f = *fixture;
+    const auto good = f.capture(10);
+    ReplicaFixtures replica;
+    REQUIRE(replica.begin(1));
+    REQUIRE(replica.show(*good, f.resources));
+    for (s32 fault = 0; fault < 4; ++fault) {
+        auto invalid = std::make_unique<CombatSnapshot>(*good);
+        auto& pad = invalid->transporters.front();
+        switch (fault) {
+        case 0: pad.resource = 65535; break;
+        case 1: pad.sequence = 65535; break;
+        case 2: pad.frame = pad.previousFrame = 500; break;
+        default:
+            pad.playing = pad.continuous = false;
+            pad.generation = 0;
+            break;
+        }
+        REQUIRE(invalid->valid());
+        CHECK_FALSE(replica.show(*invalid, f.resources));
+        CHECK(replica.transporterCount() == good->transporters.size());
+    }
+    auto missing = std::make_unique<CombatSnapshot>(*good);
+    missing->motion.tick += 1;
+    missing->transporters.pop_back();
+    REQUIRE(replica.show(*missing, f.resources));
+    CHECK(replica.transporterCount() == 1);
+    missing->motion.epoch = 2;
+    CHECK_FALSE(replica.show(*missing, f.resources));
+    REQUIRE(replica.begin(2));
+    CHECK(replica.transporterCount() == 0);
+}
+
 TEST_CASE("fixture snapshots retain a chest's final opening pose independently of its empty state",
           "[netplay][replica-fixtures]") {
     Fixture f;
@@ -233,6 +425,114 @@ TEST_CASE("fixture snapshots respect switch visibility party gates and resource 
     REQUIRE(gate != open.fixtures.end());
     CHECK(gate->meshSequence == 2);
     CHECK(gate->pose.sequence == 1);
+}
+
+TEST_CASE("native stage fixture sampling respects zero-length state clocks and authored poses",
+          "[netplay][replica-fixtures][stage-native-roster][fixture-clock-boundary][assets]") {
+    const bool native = GENERATE(false, true);
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    CAPTURE(native, seconds);
+    auto fixture = std::make_unique<Fixture>(native);
+    REQUIRE(fixture->chests.size() == 1);
+    const auto* open = fixture->chests.chest(0).figure.sequenceInfo(Chests::kOpen);
+    REQUIRE(open);
+    REQUIRE(open->frames == 0);
+    // Retail LEVELG CHEST.OPEN has LID and NULL1 tracks despite having no
+    // frames. It selects its authored pose; only the synthetic trackless OPEN
+    // retains ACTIVE's hierarchy generation while changing the mesh cursor.
+    REQUIRE(open->tracks.empty() == !native);
+    const std::array party{ChestVisitor{{0, 0, 0}, 1, 1}};
+    REQUIRE_FALSE(fixture->chests.update(seconds, party).empty());
+    // The synthetic native sequence is very short; seed a real fractional
+    // ACTIVE frame so its next 30/60 Hz step crosses the empty-state boundary.
+    fixture->chests.update(0.005f, {});
+    auto previous = std::make_unique<CombatSnapshot>(fixture->capture(0));
+    bool boundary = false;
+    for (u64 tick = 1; tick <= 240; ++tick) {
+        fixture->chests.capturePresentation();
+        fixture->chests.update(seconds, {});
+        auto current = std::make_unique<CombatSnapshot>(fixture->capture(tick));
+        const auto& before = previous->fixtures.front();
+        const auto& after = current->fixtures.front();
+        REQUIRE(before.source == FixtureSource::Chest);
+        REQUIRE(after.source == FixtureSource::Chest);
+        REQUIRE(fixture->resources.accepts(after));
+        if (before.meshSequence != after.meshSequence) {
+            REQUIRE(before.pose.generation != 0);
+            REQUIRE((before.pose.generation == after.pose.generation) == !native);
+            REQUIRE((after.pose.sequence == after.meshSequence) == native);
+            REQUIRE(fixture->chests.chest(0).state == Chests::kOpen);
+            REQUIRE(after.meshFrame == 0);
+            REQUIRE(before.meshFrame > after.meshFrame);
+            const auto camera = CameraFrame::at({20, 20, -30});
+            const auto uploads = fixture->device.texturesCreated;
+            for (const f32 blend : {0.0f, 0.125f, 0.5f, 0.999f, 1.0f}) {
+                CAPTURE(tick, blend, before.meshSequence, before.meshFrame, after.meshSequence,
+                        after.meshFrame, after.pose.generation);
+                const auto sampled = StageSnapshotSampling::sample(*previous, *current, blend);
+                REQUIRE(sampled);
+                const auto& chest = sampled->fixtures.front();
+                CHECK(chest.pose.sequence == after.pose.sequence);
+                CHECK(chest.pose.generation == after.pose.generation);
+                CHECK(chest.pose.frame == after.pose.frame);
+                CHECK(chest.meshSequence == after.meshSequence);
+                CHECK(chest.meshFrame == after.meshFrame);
+                CHECK(chest.textureSequence == after.textureSequence);
+                CHECK(chest.textureFrame == after.textureFrame);
+                REQUIRE(fixture->resources.accepts(chest));
+                fixture->device.draws.clear();
+                fixture->chests.draw(fixture->device, Mat4{1}, {}, &camera, blend);
+                const auto expected = fixture->device.draws;
+                fixture->device.draws.clear();
+                fixture->resources.draw(fixture->device, chest, Mat4{1}, {}, camera,
+                                        TreeModel::Pass::All);
+                sameGeometry(fixture->device.draws, expected);
+
+                // Transported playback keeps its previous-roster policy, and
+                // remains a valid fallback; this fix changes only native sampling.
+                const auto delayed = CombatPlayback::samplePair(*previous, *current, blend);
+                REQUIRE(delayed);
+                REQUIRE(fixture->resources.accepts(delayed->fixtures.front()));
+            }
+            CHECK(fixture->device.texturesCreated == uploads);
+            boundary = true;
+            break;
+        }
+        previous = std::move(current);
+    }
+    REQUIRE(boundary);
+}
+
+TEST_CASE("native fixture sampling never pairs an old texture frame with a new sequence",
+          "[netplay][replica-fixtures][stage-native-roster][fixture-clock-boundary]") {
+    Fixture fixture;
+    auto previous = std::make_unique<CombatSnapshot>(blank(1));
+    auto current = std::make_unique<CombatSnapshot>(blank(2));
+    const auto captured = fixture.capture();
+    REQUIRE_FALSE(captured.fixtures.empty());
+    auto item = captured.fixtures.front();
+    item.pose = {0, 1, 3, 4, 1};
+    item.meshSequence = item.textureSequence = 1;
+    item.meshFrame = item.textureFrame = 4;
+    REQUIRE(fixture.resources.accepts(item));
+    previous->fixtures.push_back(item);
+    // Texture selection is an independent authored cursor, not the retained
+    // hierarchy pose generation. Both endpoints are valid against this tree.
+    item.textureSequence = 2;
+    item.textureFrame = 0;
+    REQUIRE(fixture.resources.accepts(item));
+    current->fixtures.push_back(item);
+    for (const f32 blend : {0.0f, 0.25f, 0.5f, 0.999f, 1.0f}) {
+        const auto sampled = StageSnapshotSampling::sample(*previous, *current, blend);
+        REQUIRE(sampled);
+        const auto& shown = sampled->fixtures.front();
+        CHECK(shown.pose.sequence == item.pose.sequence);
+        CHECK(shown.pose.generation == item.pose.generation);
+        CHECK(shown.pose.frame == item.pose.frame);
+        CHECK(shown.textureSequence == 2);
+        CHECK(shown.textureFrame == 0);
+        REQUIRE(fixture.resources.accepts(shown));
+    }
 }
 
 TEST_CASE("fixture capture carries chests gates and X-Ray previews on the host floor",
@@ -436,7 +736,10 @@ TEST_CASE("fixture capacity rejects overflow without replacing the last complete
 }
 
 TEST_CASE("native light-trap replicas preserve transparent shutdown frames through repeated rests",
-          "[netplay][replica-fixtures][assets]") {
+          "[netplay][replica-fixtures][fixture-clock-boundary][assets]") {
+    const s32 fps = GENERATE(30, 60);
+    const f32 seconds = 1.0f / static_cast<f32>(fps);
+    CAPTURE(fps);
     const auto root = test::assetOrSkip("ITEMS/LEVELA/ANIM.PS2").parent_path().parent_path();
     for (const auto* realm : {"LEVELA", "LEVELC"}) {
         test::FakeRenderDevice device;
@@ -465,7 +768,9 @@ TEST_CASE("native light-trap replicas preserve transparent shutdown frames throu
             REQUIRE(resources.bind(device, std::array{&items}, generators, rocks));
             const auto camera = CameraFrame::at({20, 20, -30});
             usize rests = 0;
-            for (u64 tick = 0; tick < 210; ++tick) {
+            usize emptyBoundaries = 0;
+            std::unique_ptr<CombatSnapshot> previous;
+            for (u64 tick = 0; tick < static_cast<u64>(7 * fps); ++tick) {
                 auto state = blank(tick);
                 REQUIRE(FixtureCapture::append(
                     state, resources,
@@ -478,10 +783,46 @@ TEST_CASE("native light-trap replicas preserve transparent shutdown frames throu
                 resources.draw(device, state.fixtures[0], Mat4{1}, {}, camera,
                                TreeModel::Pass::All);
                 sameGeometry(device.draws, expected);
+                const auto& current = state.fixtures.front();
+                if (previous &&
+                    previous->fixtures.front().pose.generation == current.pose.generation &&
+                    previous->fixtures.front().meshSequence != current.meshSequence) {
+                    REQUIRE(current.pose.generation != 0);
+                    REQUIRE(current.pose.sequence != current.meshSequence);
+                    REQUIRE(current.meshFrame == 0);
+                    REQUIRE(previous->fixtures.front().meshFrame > current.meshFrame);
+                    ++emptyBoundaries;
+                    for (const f32 blend : {0.0f, 0.5f, 0.999f, 1.0f}) {
+                        CAPTURE(tick, blend, current.meshSequence, current.meshFrame);
+                        const auto sampled = StageSnapshotSampling::sample(*previous, state, blend);
+                        REQUIRE(sampled);
+                        const auto& shown = sampled->fixtures.front();
+                        CHECK(shown.pose.sequence == current.pose.sequence);
+                        CHECK(shown.pose.generation == current.pose.generation);
+                        CHECK(shown.pose.frame == current.pose.frame);
+                        CHECK(shown.meshSequence == current.meshSequence);
+                        CHECK(shown.meshFrame == current.meshFrame);
+                        CHECK(shown.textureSequence == current.textureSequence);
+                        CHECK(shown.textureFrame == current.textureFrame);
+                        REQUIRE(resources.accepts(shown));
+                        device.draws.clear();
+                        traps.draw(device, Mat4{1}, {}, &camera, TreeModel::Pass::All, blend);
+                        const auto native = device.draws;
+                        device.draws.clear();
+                        resources.draw(device, shown, Mat4{1}, {}, camera, TreeModel::Pass::All);
+                        sameGeometry(device.draws, native);
+                        const auto delayed = CombatPlayback::samplePair(*previous, state, blend);
+                        REQUIRE(delayed);
+                        REQUIRE(resources.accepts(delayed->fixtures.front()));
+                    }
+                }
+                previous = std::make_unique<CombatSnapshot>(std::move(state));
                 rests += traps.trap(0).action == 0 ? 1 : 0;
-                traps.update(2, 1.0f / 30, {});
+                traps.capturePresentation();
+                traps.update(60 / fps, seconds, {});
             }
             CHECK(rests >= 3);
+            CHECK(emptyBoundaries >= 1);
         }
     }
 }

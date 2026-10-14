@@ -6,6 +6,8 @@
 #include <memory>
 
 #include "game/combat/Damage.h"
+#include "game/screens/HelpMessages.h"
+#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PlayerRuntimeCheckpoint.h"
 
 namespace gdl::game {
@@ -214,7 +216,11 @@ PartyDamage::Result PartyDamage::stageBlows(std::span<const EnemyBlow> blows,
                         result.outputs.push_back(
                             {OutputKind::Named, slot, std::string{name}, wait});
                     },
-                .learnBlock = [&] { learns = true; },
+                .learnBlock =
+                    [&] {
+                        learns |= !PartyHelpAdmission::suppressedForPlayer(
+                            HelpMessages::kLearnBlock, slot, players);
+                    },
                 .vibrate =
                     [&](s32 frames) {
                         result.outputs.push_back({OutputKind::Rumble, slot, {}, 0, frames});

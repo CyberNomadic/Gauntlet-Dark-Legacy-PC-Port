@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,11 @@ namespace gdl::game {
 /** Paired TRANS items move individual players within a level, not through its exits. */
 class LevelTransporters {
 public:
+    LevelTransporters() = default;
+    LevelTransporters(const LevelTransporters&) = delete;
+    LevelTransporters& operator=(const LevelTransporters&) = delete;
+    LevelTransporters(LevelTransporters&&) = delete;
+    LevelTransporters& operator=(LevelTransporters&&) = delete;
     static constexpr s32 kItemType = 11;
     struct Contact {
         s32 instance = -1;
@@ -48,6 +54,20 @@ public:
         f32 previousFrame = 0;
         u64 previousGeneration = 0;
     };
+    /** Read-only draw anchors. Transforms use the current carried floor pose;
+     * only the animation and shared texture clock interpolate. */
+    struct Presentation {
+        const ItemArchive* archive = nullptr;
+        const TreeInfo* tree = nullptr;
+        u32 instance = 0;
+        Mat4 placement{1};
+        u32 sequence = 0;
+        u64 generation = 0;
+        f32 frame = 0, previousFrame = 0;
+        f32 textureClock = 0, previousTextureClock = 0;
+        bool playing = false, continuous = false, advanced = false;
+    };
+    std::optional<Presentation> presentation(usize index) const;
 
     /** The scope's archives must outlive the pads; the first holding TRANS supplies them. A
      * pad on a moving floor is carried by it (AddItemSub parents it to the floor's node). */
@@ -74,10 +94,17 @@ public:
     static std::string_view soundForRealm(s32 realm);
 
 private:
+    friend class LevelTransportersCheckpoint;
     std::vector<Pad> m_pads;
     const TreeInfo* m_tree = nullptr;
     TextureAnimator m_textures;
     bool m_presentationAdvanced = false;
+    const WorldLayout* m_layout = nullptr;
+    ItemArchive* m_archive = nullptr;
+    const WorldCollision* m_collision = nullptr;
+    s32 m_players = 1;
+    std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    u64 m_checkpointGeneration = 0;
 };
 
 } // namespace gdl::game

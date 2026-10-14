@@ -29,15 +29,20 @@ std::vector<s32> playerSlots(std::span<const PlayerRuntimeCheckpoint::State> pla
 } // namespace
 
 bool CombatRollbackCheckpoint::State::valid() const {
-    if (players.size() > 4 || !health.valid() || !levels.valid() || !attacks.valid() ||
-        !arsenal.valid() || !effects.valid() || attacks.actors.size() != players.size()) {
+    return players.size() <= 4 && attacks.valid() && arsenal.valid() && effects.valid() &&
+           std::ranges::all_of(players, [](const auto& player) { return player.valid(); }) &&
+           validAggregate();
+}
+
+bool CombatRollbackCheckpoint::State::validAggregate() const {
+    if (players.size() > 4 || !health.valid() || !levels.valid() ||
+        attacks.actors.size() != players.size()) {
         return false;
     }
     u32 occupied = 0;
     for (usize index = 0; index < players.size(); ++index) {
         const auto& player = players[index];
-        if (!player.valid() || player.player < 0 || player.player >= 4 ||
-            (occupied & (1U << player.player)) != 0 ||
+        if (player.player < 0 || player.player >= 4 || (occupied & (1U << player.player)) != 0 ||
             attacks.actors[index] !=
                 PlayerAttacksCheckpoint::Actor{player.player, player.save.character}) {
             return false;
@@ -193,7 +198,9 @@ std::optional<CombatRollbackCheckpoint::State> CombatRollbackCheckpoint::checkpo
     state.attacks = std::move(*attacks);
     state.arsenal = std::move(*arsenal);
     state.effects = std::move(*effects);
-    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+    // Optional children are validated by their capture APIs. Health/level
+    // values and all party ownership links are checked by the aggregate.
+    return state.validAggregate() ? std::optional{std::move(state)} : std::nullopt;
 }
 
 std::optional<CombatRollbackCheckpoint::Prepared>

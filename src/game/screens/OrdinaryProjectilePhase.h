@@ -7,8 +7,8 @@ namespace gdl::game {
 /** The native player-projectile phase inside an already prepared ordinary-combat
  * transaction. This is not a world checkpoint: the caller must undo the complete
  * tick when advance refuses, including the missile queue it has consumed.
- * Accepted swarm hits retain their native loss/feedback queues for the NEXT
- * opponent phase. Native world-hit effects use trusted prebound resources; sound
+ * Accepted swarm/generator hits retain their native loss/feedback/reward queues for the NEXT
+ * opponent phase. Native world and generator hit effects use trusted prebound resources; sound
  * requests are buffered. No reward, sound, lesson, or external callback is dispatched. */
 class OrdinaryProjectilePhase {
 public:
@@ -46,7 +46,17 @@ public:
                           const CombatRollbackCheckpoint::Resources& resources);
 
 private:
+    friend class OrdinaryWeaponEmission;
+    friend class OrdinaryCombatTick;
+    static std::optional<EffectTrees::Prepared>
+    impactResource(const PlayerArsenal::ImpactPresentation& emission,
+                   std::span<const EffectTrees::PoolResource> resources,
+                   std::span<TextureSet* const> lenders, const RenderDevice& device);
     static bool ordinaryTarget(s32 target);
+    static bool ordinaryGenerator(const Generators& generators, s32 slot);
+    static std::optional<u32> generatorPresentation(
+        const GeneratorFeedbackEmission& emission, EffectTrees& effects, const RenderDevice& device,
+        std::span<const EffectTrees::PoolResource> resources, std::vector<Cue>& cues);
 };
 
 } // namespace gdl::game

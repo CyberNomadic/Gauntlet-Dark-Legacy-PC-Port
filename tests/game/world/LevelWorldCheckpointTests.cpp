@@ -2,6 +2,7 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
@@ -16,6 +17,7 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+static_assert(std::is_aggregate_v<LevelWorldCheckpoint::State>);
 
 // Supplies the same two native textures in deliberately opposite address order.
 // The real ParticleField batching sort still runs; no checkpoint row is shuffled
@@ -129,6 +131,8 @@ struct Fixture {
     LevelWorldCheckpoint::State state() const {
         auto result = owner.checkpoint();
         REQUIRE(result);
+        REQUIRE(
+            result->valid()); // Independent public recursive validation of every native capture.
         return std::move(*result);
     }
     void step(s32 tick, f32 seconds) {
@@ -331,6 +335,54 @@ TEST_CASE("level particle checkpoints use authored markers across opposite textu
         replay.update(1.0f / 60);
         CHECK(replica.checkpoint() == authority.checkpoint());
     }
+}
+
+TEST_CASE("world capture validation remains complete for raw values and nested children",
+          "[rollback][level-world-checkpoint][checkpoint-capture-validation]") {
+    Fixture fixture("level-world-capture-validation");
+    const auto before = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    for (s32 mutation = 0; mutation < 11; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = before;
+        switch (mutation) {
+        case 0: invalid.core.placements.front().local[0][0] = nan; break;
+        case 1: invalid.triggers.parents.front() = 999999; break;
+        case 2: invalid.destruction.objects.front().position.x = nan; break;
+        case 3: invalid.falling.remainder = nan; break;
+        case 4: invalid.walls.walls.front().flash = nan; break;
+        case 5: invalid.pickups.items.front().position.x = nan; break;
+        case 6: invalid.rotators.rotators.front().speed = nan; break;
+        case 7: invalid.textures.remainder = nan; break;
+        case 8: invalid.particles.entries.front().emitter.saved = nan; break;
+        case 9: invalid.ambientOffset = nan; break;
+        case 10: invalid.playerCount = 2; break; // Individually valid children, invalid relation.
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.owner.prepareRestore(invalid));
+        CHECK(fixture.state() == before);
+    }
+
+    // Fault injection into a live child must still fail its capture before the
+    // parent's capture-only cross-link checks can accept anything.
+    auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
+    const auto flash = std::exchange(wall.flash, nan);
+    CHECK_FALSE(fixture.owner.checkpoint());
+    wall.flash = flash;
+    CHECK(fixture.state() == before);
+
+    fixture.world.setAmbientOffset(nan); // Raw aggregate state has no optional child validator.
+    CHECK_FALSE(fixture.owner.checkpoint());
+    REQUIRE(fixture.owner.restore(before));
+    CHECK(fixture.state() == before);
+    auto stale = fixture.owner.prepareRestore(before);
+    REQUIRE(stale);
+    fixture.owner.clearResources();
+    CHECK_FALSE(fixture.owner.checkpoint());
+    CHECK_FALSE(fixture.owner.canCommit(*stale));
+    REQUIRE(fixture.owner.bindResources(fixture.device));
+    CHECK_FALSE(fixture.owner.canCommit(*stale));
+    CHECK(fixture.state() == before);
 }
 
 TEST_CASE("complete level plans refuse foreign owners sibling restores and child clears",

@@ -214,6 +214,7 @@ TEST_CASE("opponent bundle restores nothing if any one checkpoint or preparation
     } else {
         invalid.missiles.shrink = std::numeric_limits<f32>::quiet_NaN();
     }
+    CHECK_FALSE(invalid.valid());
     CHECK_FALSE(island.simulation.prepareRestore(invalid, island.resources));
     CHECK_FALSE(island.simulation.restore(invalid, island.resources));
     CHECK(island.simulation.checkpoint(island.resources) == current);
@@ -261,6 +262,14 @@ TEST_CASE("opponent bundle validates cross-pool generator references without rej
     CHECK_FALSE(island.simulation.restore(invalid, island.resources));
     CHECK(island.simulation.checkpoint(island.resources) == initial);
 
+    // Individually valid native owners must not make an invalid cross-pool
+    // reference acceptable on the optimized local-capture path either.
+    REQUIRE(island.enemies.restore(invalid.enemies));
+    CHECK_FALSE(island.simulation.checkpoint(island.resources));
+    CHECK(island.enemies.checkpoint() == invalid.enemies);
+    REQUIRE(island.enemies.restore(initial->enemies));
+    CHECK(island.simulation.checkpoint(island.resources) == initial);
+
     invalid = *initial;
     invalid.enemies.generatorEvents.push_back({1, EnemyGeneratorEvent::Kind::Detached});
     REQUIRE(invalid.enemies.valid());
@@ -283,6 +292,28 @@ TEST_CASE("opponent bundle validates cross-pool generator references without rej
     REQUIRE(island.simulation.restore(*initial, island.resources));
     REQUIRE(island.simulation.restore(*orphan, island.resources));
     CHECK(island.simulation.checkpoint(island.resources) == orphan);
+}
+
+TEST_CASE("opponent capture equals independently validated native children after each phase",
+          "[rollback][opponent-simulation][checkpoint-capture-validation][assets]") {
+    Island island(true);
+    island.spawn({0, 0, 15});
+    for (s32 tick = 0; tick < 12; ++tick) {
+        CAPTURE(tick);
+        island.simulation.advance(island.frame());
+        const auto generators = island.generators.checkpoint();
+        const auto enemies = island.enemies.checkpoint();
+        const auto missiles = island.missiles.checkpoint(island.resources);
+        REQUIRE(generators);
+        REQUIRE(enemies);
+        REQUIRE(missiles);
+        const OpponentState expected{*generators, *enemies, *missiles};
+        REQUIRE(expected.valid());
+        const auto captured = island.simulation.checkpoint(island.resources);
+        REQUIRE(captured);
+        CHECK(captured->valid());
+        CHECK(*captured == expected);
+    }
 }
 
 TEST_CASE("opponent transaction preserves the exhausted native missile identity sentinel",

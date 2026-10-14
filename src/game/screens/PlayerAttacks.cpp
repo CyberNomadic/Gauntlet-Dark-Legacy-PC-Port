@@ -1869,8 +1869,13 @@ MeleeSense PlayerAttacks::senseOf(const PlayerActor& actor, bool held,
 }
 
 void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const Targets& targets) {
+    (void)melee(index, players, targets, {});
+}
+
+bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const Targets& targets,
+                          const LevelOpponents::GeneratorPublisher& generators) {
     if (!m_resources || index >= players.size() || players[index].figure == nullptr) {
-        return;
+        return true;
     }
     const PlayerActor& actor = players[index].actor;
     const PlayerAnimator& animator = players[index].figure->animator();
@@ -1883,7 +1888,7 @@ void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
     // The swing's sweep brings down the SHOOTFALL scenery within it (combat.c's item query).
     targets.fixtures.shootScenery(actor.position(), actor.reach() + kStepReach);
     if (!selected) {
-        return;
+        return true;
     }
     const MissileTarget* target = &selected->body;
     f32 damage = meleeDamageOf(index, players);
@@ -1918,16 +1923,16 @@ void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
             targets.hurt(static_cast<usize>(id - kPlayerTargetBase), damage, HurtKind::Burn,
                          {flags, glm::normalize(direction)});
         }
-        return;
+        return true;
     }
     if (id >= kStatueTargetBase) {
         // fn_8005C1DC handles placed-enemy items separately from switches:
         // the blow sets their wake flag, without damaging the future creature.
         targets.opponents.wakeStatue(static_cast<usize>(id - kStatueTargetBase));
-        return;
+        return true;
     }
     if (strikeSwitch(id, flags)) {
-        return;
+        return true;
     }
     f32 credit = 0.0f;
     if (id >= kWallTargetBase) {
@@ -1954,8 +1959,10 @@ void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         players[index].streak.record(!standing || !critters.alive(critter) ||
                                      critters.dying(critter));
     } else if (id >= kGeneratorTargetBase) {
-        targets.opponents.strikeGenerator(id - kGeneratorTargetBase, damage, actor.player(),
-                                          players);
+        if (!targets.opponents.strikeGenerator(id - kGeneratorTargetBase, damage, actor.player(),
+                                               players, generators)) {
+            return false;
+        }
     } else if (id >= kEnemyTargetBase) {
         const s32 enemy = id - kEnemyTargetBase;
         const Enemies& enemies = targets.opponents.enemies();
@@ -1975,6 +1982,7 @@ void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         targets.meleeHit(actor.player());
     }
     healHit(actor.player(), flags, credit, point, players, targets);
+    return true;
 }
 
 void PlayerAttacks::glowWeapons(std::span<PlayerRuntime> players, s32 occupiedHand) {
@@ -2077,11 +2085,12 @@ void PlayerAttacks::stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> 
                                            missilePlayers);
 }
 
-void PlayerAttacks::dispatchProjectileImpact(
+bool PlayerAttacks::dispatchProjectileImpact(
     const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
-    const std::function<void(const MissileImpact&, f32)>& presentation) {
+    const std::function<void(const MissileImpact&, f32)>& presentation,
+    const LevelOpponents::GeneratorPublisher& generators) {
     if (!m_resources) {
-        return;
+        return true;
     }
     if (impact.worldObject >= 0) {
         if (m_resources->world.explodeObject(impact.worldObject, impact.position)) {
@@ -2115,25 +2124,25 @@ void PlayerAttacks::dispatchProjectileImpact(
                 player->effectGap = impact.playerHitGap;
             }
         }
-        return;
+        return true;
     }
     if (impact.potion != 0) {
         beginPotion(impact);
-        return;
+        return true;
     }
     if (impact.target >= kStatueTargetBase) {
         targets.opponents.wakeStatue(static_cast<usize>(impact.target - kStatueTargetBase));
-        return;
+        return true;
     }
     if (impact.target >= kPotionTargetBase) {
         shootPotion(impact, players, targets);
-        return;
+        return true;
     }
     if (impact.target >= kItemStopBase) {
-        return;
+        return true;
     }
     if (strikeSwitch(impact.target, impact.flags)) {
-        return;
+        return true;
     }
     f32 credit = 0.0f;
     if (impact.target >= kWallTargetBase) {
@@ -2171,8 +2180,10 @@ void PlayerAttacks::dispatchProjectileImpact(
                                                  impact.flags, direction, impact.owner,
                                                  impact.position, false, players, impact.node);
     } else if (impact.target >= kGeneratorTargetBase) {
-        targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
-                                          impact.owner, players);
+        if (!targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
+                                               impact.owner, players, generators)) {
+            return false;
+        }
     } else if (impact.target >= kEnemyTargetBase) {
         // The hit travels the way the weapon flew: out from whoever threw it.
         Vec3 direction{0.0f, 0.0f, 1.0f};
@@ -2192,6 +2203,7 @@ void PlayerAttacks::dispatchProjectileImpact(
         targets.fixtures.settleBlasts(players, targets.fixtureEvents);
     }
     healHit(impact.owner, impact.flags, credit, impact.position, players, targets);
+    return true;
 }
 
 /** A thrown weapon breaks a bottle lying about (fn_8005C1DC, PlayerDamagedItem): its own magic

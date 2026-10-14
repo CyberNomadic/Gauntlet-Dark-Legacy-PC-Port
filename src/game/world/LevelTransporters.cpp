@@ -77,9 +77,13 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
                              const AssetScope& scope, s32 players,
                              const WorldCollision* collision) {
     clear();
+    m_layout = &layout;
+    m_collision = collision;
+    m_players = players;
     ItemArchive* art = scope.archiveForTree("TRANS");
     const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
+        m_archive = art;
         m_tree = &art->trees.tree(*tree);
         m_textures.bind(art->trees.textureAnimations(), art->textures, device);
     }
@@ -120,10 +124,16 @@ void LevelTransporters::Contact::sync(const WorldCollision& collision) {
 }
 
 void LevelTransporters::clear() {
+    m_checkpointBinding = std::make_shared<const u8>(0);
+    m_checkpointGeneration = 0;
     m_pads.clear();
     m_tree = nullptr;
     m_textures.clear();
     m_presentationAdvanced = false;
+    m_layout = nullptr;
+    m_archive = nullptr;
+    m_collision = nullptr;
+    m_players = 1;
 }
 
 void LevelTransporters::animate(f32 seconds) {
@@ -165,6 +175,33 @@ void LevelTransporters::draw(RenderDevice& device, const Mat4& clip, const World
             pad.model.draw(device, clip, pad.transform, lighting, pose->matrices());
         }
     }
+}
+
+std::optional<LevelTransporters::Presentation> LevelTransporters::presentation(usize index) const {
+    if (index >= m_pads.size() || m_tree == nullptr || !m_pads[index].model.bound()) {
+        return std::nullopt;
+    }
+    const auto& pad = m_pads[index];
+    Presentation result;
+    result.archive = m_archive;
+    result.tree = m_tree;
+    result.instance = static_cast<u32>(pad.instance) + 1;
+    result.placement = pad.transform;
+    result.playing = pad.animation.playing();
+    if (result.playing) {
+        result.sequence = pad.animation.sequence();
+        result.generation = pad.animation.generation();
+        result.frame = pad.animation.presentationFrame();
+        result.continuous = pad.previousGeneration == result.generation;
+        result.previousFrame = result.continuous ? pad.previousFrame : result.frame;
+    }
+    result.advanced = m_presentationAdvanced;
+    result.textureClock =
+        static_cast<f32>(m_textures.frame()) + m_textures.presentationOffset(1).value_or(0);
+    result.previousTextureClock = result.advanced ? static_cast<f32>(m_textures.frame()) +
+                                                        m_textures.presentationOffset(0).value_or(0)
+                                                  : result.textureClock;
+    return result;
 }
 
 std::optional<usize> LevelTransporters::contact(const Vec3& feet, f32 radius, f32 height) const {

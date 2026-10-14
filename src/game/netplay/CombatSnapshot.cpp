@@ -15,7 +15,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 45;
+constexpr u32 kVersion = 46;
 constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
 constexpr u32 kCombatReplay = kOpponentReplay << 1U;
 void word(std::vector<u8>& bytes, u32 value) {
@@ -223,6 +223,29 @@ bool FixtureState::valid() const {
            bounded(alpha, 0, 1);
 }
 
+bool TransporterState::valid() const {
+    return instance != 0 && resource != 0 && resource <= 65535 && placementValid(placement) &&
+           sequence <= 65535 && bounded(frame, 0, 1'000'000) &&
+           bounded(previousFrame, 0, 1'000'000) && bounded(textureClock, 0, 1'000'000'000.0f) &&
+           bounded(previousTextureClock, 0, textureClock) &&
+           (playing ? generation != 0
+                    : (sequence == 0 && generation == 0 && frame == 0 && previousFrame == 0 &&
+                       !continuous)) &&
+           (continuous ? previousFrame <= frame : previousFrame == frame) &&
+           (advanced || previousTextureClock == textureClock);
+}
+
+void TransporterState::sample(f32 alpha) {
+    if (!advanced) {
+        return;
+    }
+    const f32 blend = std::clamp(alpha, 0.0f, 1.0f);
+    if (playing && continuous) {
+        frame = std::lerp(previousFrame, frame, blend);
+    }
+    textureClock = std::lerp(previousTextureClock, textureClock, blend);
+}
+
 bool CompanionState::valid(usize slot) const {
     return slot < 2 && form >= 1 && form <= (slot == 0 ? 2U : 7U) && placementValid(placement) &&
            animation.valid() && animation.generation != 0 && animation.action == 0 &&
@@ -255,9 +278,9 @@ bool CombatSnapshot::valid() const {
     if (!motion.valid() || !bounded(worldTextureFrame, 0, 1'000'000'000.0f) || musicArea < -1 ||
         musicArea > 7 || musicLevel > 255 || enemies.size() > kMaxEnemies ||
         projectiles.size() > kMaxProjectiles || pickups.size() > kMaxPickups ||
-        fixtures.size() > kMaxFixtures || (geometry && !geometry->valid()) ||
-        !FighterPacket::valid(fighters) || (hud && !hud->valid()) ||
-        opponents.has_value() != opponentFrame.has_value() ||
+        fixtures.size() > kMaxFixtures || transporters.size() > kMaxTransporters ||
+        (geometry && !geometry->valid()) || !FighterPacket::valid(fighters) ||
+        (hud && !hud->valid()) || opponents.has_value() != opponentFrame.has_value() ||
         (opponents &&
          (!opponents->valid() || !opponentFrame->valid() ||
           opponentFrame->initialPlayers != static_cast<u32>(opponents->enemies.scales.players) ||
@@ -500,6 +523,12 @@ bool CombatSnapshot::valid() const {
             return false;
         }
     }
+    for (usize i = 0; i < transporters.size(); ++i) {
+        if (!transporters[i].valid() ||
+            (i > 0 && transporters[i - 1].instance >= transporters[i].instance)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -676,8 +705,8 @@ std::optional<CombatPacket::Prepared> CombatPacket::prepare(const CombatSnapshot
         kHeaderBytes + motion->size() + playerCount * kPlayerBytes +
         snapshot.enemies.size() * kEnemyBytes + snapshot.projectiles.size() * kProjectileBytes +
         snapshot.pickups.size() * kPickupBytes + snapshot.fixtures.size() * kFixtureBytes +
-        geometryBytes + fighterBytes + hud->size() + melee.size() + turbo.size() +
-        platformBytes->size() + replay.size();
+        snapshot.transporters.size() * kTransporterBytes + geometryBytes + fighterBytes +
+        hud->size() + melee.size() + turbo.size() + platformBytes->size() + replay.size();
     if (requiredBytes > kMaxBytes) {
         return std::nullopt;
     }
@@ -698,6 +727,7 @@ std::optional<CombatPacket::Prepared> CombatPacket::prepare(const CombatSnapshot
     word(bytes, static_cast<u32>(turbo.size()));
     word(bytes, static_cast<u32>(platformBytes->size()));
     word(bytes, static_cast<u32>(replay.size()));
+    word(bytes, static_cast<u32>(snapshot.transporters.size()));
     bytes.insert(bytes.end(), motion->begin(), motion->end());
     for (const auto& player : snapshot.players) {
         if (player) {
@@ -979,6 +1009,23 @@ std::optional<CombatPacket::Prepared> CombatPacket::prepare(const CombatSnapshot
         real(bytes, fixture.alpha);
         word(bytes, fixture.cameraFacing ? 1 : 0);
     }
+    for (const auto& pad : snapshot.transporters) {
+        word(bytes, pad.instance);
+        word(bytes, pad.resource);
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 3; ++row) {
+                real(bytes, pad.placement[column][row]);
+            }
+        }
+        word(bytes, pad.sequence);
+        wide(bytes, pad.generation);
+        real(bytes, pad.frame);
+        real(bytes, pad.previousFrame);
+        real(bytes, pad.textureClock);
+        real(bytes, pad.previousTextureClock);
+        word(bytes,
+             (pad.playing ? 1U : 0U) | (pad.continuous ? 2U : 0U) | (pad.advanced ? 4U : 0U));
+    }
     if (snapshot.geometry) {
         const auto& geometry = *snapshot.geometry;
         wide(bytes, geometry.layout);
@@ -1010,12 +1057,17 @@ std::optional<CombatPacket::Prepared> CombatPacket::prepare(const CombatSnapshot
 }
 
 std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
+    auto result = decodeOwned(bytes);
+    return result ? std::optional{std::move(*result)} : std::nullopt;
+}
+
+std::unique_ptr<CombatSnapshot> CombatPacket::decodeOwned(std::span<const u8> bytes) {
     if (bytes.size() < kHeaderBytes || bytes.size() > kMaxBytes) {
-        return std::nullopt;
+        return nullptr;
     }
     ByteReader reader(bytes);
     if (reader.readU32() != kMagic || reader.readU16() != kVersion) {
-        return std::nullopt;
+        return nullptr;
     }
     const usize enemies = reader.readU16();
     const usize motionBytes = reader.readU32();
@@ -1032,12 +1084,14 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
     const usize turboBytes = reader.readU32();
     const usize platformBytes = reader.readU32();
     const usize replayBytes = reader.readU32();
+    const usize transporters = reader.readU32();
     if (enemies > CombatSnapshot::kMaxEnemies || projectiles > CombatSnapshot::kMaxProjectiles ||
         pickups > CombatSnapshot::kMaxPickups || fixtures > CombatSnapshot::kMaxFixtures ||
-        motionBytes > reader.remaining() || fighterBytes > FighterPacket::kMaxBytes ||
-        hudBytes > HudPacket::kMaxBytes || meleeBytes > kMeleeBytes ||
-        (meleeBytes != 0 && meleeBytes < 4) || turboBytes > kTurboBytes ||
-        (turboBytes != 0 && turboBytes < 4) || platformBytes > PlatformCheckpoint::kMaxBytes ||
+        transporters > CombatSnapshot::kMaxTransporters || motionBytes > reader.remaining() ||
+        fighterBytes > FighterPacket::kMaxBytes || hudBytes > HudPacket::kMaxBytes ||
+        meleeBytes > kMeleeBytes || (meleeBytes != 0 && meleeBytes < 4) ||
+        turboBytes > kTurboBytes || (turboBytes != 0 && turboBytes < 4) ||
+        platformBytes > PlatformCheckpoint::kMaxBytes ||
         (platformBytes != 0 && platformBytes < PlatformCheckpoint::kHeaderBytes) ||
         replayBytes > kReplayBytes + kOpponentHeaderBytes + OpponentCheckpoint::kMaxBytes +
                           OpponentFrameCodec::kMaxBytes + kCombatHeaderBytes +
@@ -1046,28 +1100,29 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         (geometryBytes != 0 && (geometryBytes < kGeometryHeaderBytes ||
                                 geometryBytes > kGeometryHeaderBytes + SceneGeometry::kMaxStates *
                                                                            kGeometryObjectBytes))) {
-        return std::nullopt;
+        return nullptr;
     }
     const auto motion = MotionPacket::decode(bytes.subspan(kHeaderBytes, motionBytes));
     if (!motion) {
-        return std::nullopt;
+        return nullptr;
     }
-    CombatSnapshot result;
-    result.motion = *motion;
-    result.worldTextureFrame = worldTextureFrame;
-    result.musicArea = musicArea;
-    result.musicLevel = musicLevel;
     usize players = 0;
     for (const auto& player : motion->players) {
         players += player ? 1 : 0;
     }
     if (bytes.size() != kHeaderBytes + motionBytes + players * kPlayerBytes +
                             enemies * kEnemyBytes + projectiles * kProjectileBytes +
-                            pickups * kPickupBytes + fixtures * kFixtureBytes + geometryBytes +
-                            fighterBytes + hudBytes + meleeBytes + turboBytes + platformBytes +
-                            replayBytes) {
-        return std::nullopt;
+                            pickups * kPickupBytes + fixtures * kFixtureBytes +
+                            transporters * kTransporterBytes + geometryBytes + fighterBytes +
+                            hudBytes + meleeBytes + turboBytes + platformBytes + replayBytes) {
+        return nullptr;
     }
+    auto owned = std::make_unique<CombatSnapshot>();
+    auto& result = *owned;
+    result.motion = *motion;
+    result.worldTextureFrame = worldTextureFrame;
+    result.musicArea = musicArea;
+    result.musicLevel = musicLevel;
     ByteReader data(bytes.subspan(kHeaderBytes + motionBytes));
     for (usize seat = 0; seat < result.players.size(); ++seat) {
         if (motion->players[seat]) {
@@ -1075,7 +1130,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             player.health = real(data);
             const u32 flags = data.readU32();
             if ((flags & ~8191U) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             player.life = static_cast<ReplicaPlayerLife>(flags & 3U);
             player.hitFlash = (flags & 4U) != 0;
@@ -1087,7 +1142,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             if ((flags & 16U) != 0) {
                 player.portalPhase = portalPhase;
             } else if (portalPhase != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             for (auto& companion : player.companions) {
                 CompanionState value;
@@ -1095,7 +1150,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 if (value.form == 0) {
                     for (usize wordIndex = 1; wordIndex < kCompanionBytes / 4; ++wordIndex) {
                         if (data.readU32() != 0) {
-                            return std::nullopt;
+                            return nullptr;
                         }
                     }
                     continue;
@@ -1111,15 +1166,15 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 const u32 seeded = data.readU32();
                 const auto seed = data.readBytes(AnimationCheckpoint::kBytes);
                 if (seeded > 1) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 if (seeded != 0) {
                     value.rollback = AnimationCheckpoint::decode(seed);
                     if (!value.rollback) {
-                        return std::nullopt;
+                        return nullptr;
                     }
                 } else if (std::ranges::any_of(seed, [](u8 byte) { return byte != 0; })) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 companion = value;
             }
@@ -1132,14 +1187,14 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             } else {
                 for (usize i = 0; i < kShadowBytes / 4; ++i) {
                     if (data.readU32() != 0) {
-                        return std::nullopt;
+                        return nullptr;
                     }
                 }
             }
             auto& movement = player.movement;
             const u32 movementFlags = data.readU32();
             if ((movementFlags & ~31U) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             movement.enabled = (movementFlags & 1U) != 0;
             movement.cameraLimited = (movementFlags & 2U) != 0;
@@ -1159,20 +1214,20 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             if ((flags & 64U) != 0) {
                 player.rollback = PlayerActionCheckpoint::decode(checkpoint);
                 if (!player.rollback) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             } else if (std::ranges::any_of(checkpoint, [](u8 value) { return value != 0; })) {
-                return std::nullopt;
+                return nullptr;
             }
             const auto inputBytes = data.readBytes(kRollbackInputBytes);
             if ((flags & 128U) != 0) {
                 const auto input = InputPacket::decode(inputBytes);
                 if (!input || input->size() != 1) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 player.rollbackInput = input->front();
             } else if (std::ranges::any_of(inputBytes, [](u8 value) { return value != 0; })) {
-                return std::nullopt;
+                return nullptr;
             }
             if ((flags & 256U) != 0) {
                 PlayerWeaponState value;
@@ -1194,13 +1249,13 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 const u32 riderTextureBits = data.readU32();
                 const f32 riderTextureFrame = std::bit_cast<f32>(riderTextureBits);
                 if (shots != 1 && shots != 3 && shots != 5) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 value.shots = static_cast<u8>(shots);
                 if (targeted > 7 || ((targeted & 1U) == 0 && target != Vec3{0}) ||
                     ((targeted & 2U) == 0 && textureFrame != 0) ||
                     ((targeted & 4U) == 0 && riderTextureBits != 0)) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 if ((targeted & 1U) != 0) {
                     value.target = target;
@@ -1215,7 +1270,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             } else {
                 for (usize i = 0; i < kWeaponBytes / 4; ++i) {
                     if (data.readU32() != 0) {
-                        return std::nullopt;
+                        return nullptr;
                     }
                 }
             }
@@ -1226,17 +1281,17 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 ByteReader tail(impulse.last(8));
                 const u32 reaction = tail.readU32();
                 if (!player.knockback || reaction > static_cast<u32>(PlayerDeed::ComboThrown)) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 player.reaction = static_cast<PlayerDeed>(reaction);
                 player.knockbackTicks = tail.readU32();
             } else if (std::ranges::any_of(impulse, [](u8 value) { return value != 0; })) {
-                return std::nullopt;
+                return nullptr;
             }
             PlayerWeaponModifiers modifiers{data.readU32(), data.readU32()};
             const u32 effects = data.readU32();
             if ((effects & ~(1U | powerup::kShields)) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             modifiers.speed = (effects & 1U) != 0;
             modifiers.shields = effects & powerup::kShields;
@@ -1247,7 +1302,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             } else if (modifiers.flags != 0 || modifiers.ticks != 0 || modifiers.speed ||
                        modifiers.shields != 0 || std::bit_cast<u32>(modifiers.fireSeconds) != 0 ||
                        std::bit_cast<u32>(modifiers.inventoryStep) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             player.armEquipment = data.readU32();
             result.players[seat] = player;
@@ -1262,7 +1317,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         enemy.variant = data.readU32();
         const u32 flags = data.readU32();
         if ((flags & ~7U) != 0) {
-            return std::nullopt;
+            return nullptr;
         }
         enemy.life = static_cast<ReplicaEnemyLife>(flags & 3U);
         enemy.hitFlash = (flags & 4U) != 0;
@@ -1284,7 +1339,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         ProjectileState shot;
         const u32 source = data.readU32();
         if (source > static_cast<u32>(ProjectileSource::PlayerRider)) {
-            return std::nullopt;
+            return nullptr;
         }
         shot.source = static_cast<ProjectileSource>(source);
         shot.instance = wide(data);
@@ -1317,7 +1372,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             value.origin.grant = data.readU32();
             const u32 identity = data.readU32();
             if ((identity & ~(771U | (7U << 16U))) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             value.origin.seat = static_cast<u8>(identity & 3U);
             value.origin.strong = (identity & 256U) != 0;
@@ -1335,18 +1390,18 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         } else if (rollback == 0) {
             for (usize j = 1; j < kShotRollbackBytes / 4; ++j) {
                 if (data.readU32() != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
         } else {
-            return std::nullopt;
+            return nullptr;
         }
         const u32 particles = data.readU32();
         if ((particles & 1U) != 0 && (particles & ~31U) == 0 && (particles & 18U) != 18U) {
             ProjectileState::Particles value;
             const u32 kind = data.readU32();
             if ((kind & ~2047U) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             value.character = kind & 255U;
             value.potion = static_cast<u8>((kind >> 8U) & 7U);
@@ -1370,7 +1425,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 origin.grant = data.readU32();
                 const u32 identity = data.readU32();
                 if ((identity & ~(259U | (7U << 16U))) != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 origin.seat = static_cast<u8>(identity & 3U);
                 origin.strong = (identity & 256U) != 0;
@@ -1385,7 +1440,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 origin.grant = data.readU32();
                 const u32 identity = data.readU32();
                 if ((identity & ~259U) != 0 || data.readU32() != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
                 origin.seat = static_cast<u8>(identity & 3U);
                 origin.kind = static_cast<PotionIdentity::Kind>((identity >> 8U) & 1U);
@@ -1393,7 +1448,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             } else {
                 for (usize j = 0; j < 9; ++j) {
                     if (data.readU32() != 0) {
-                        return std::nullopt;
+                        return nullptr;
                     }
                 }
             }
@@ -1401,11 +1456,11 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         } else if (particles == 0) {
             for (usize j = 1; j < kParticleBytes / 4; ++j) {
                 if (data.readU32() != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
         } else {
-            return std::nullopt;
+            return nullptr;
         }
         const u32 effect = data.readU32();
         if (effect == 1) {
@@ -1416,7 +1471,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             origin.grant = data.readU32();
             const u32 coordinates = data.readU32();
             if ((coordinates & ~(3U | (127U << 8U) | (127U << 16U))) != 0) {
-                return std::nullopt;
+                return nullptr;
             }
             origin.seat = static_cast<u8>(coordinates & 3U);
             origin.occurrence = static_cast<u16>((coordinates >> 8U) & 127U);
@@ -1425,11 +1480,11 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         } else if (effect == 0) {
             for (usize j = 1; j < kEffectOriginBytes / 4; ++j) {
                 if (data.readU32() != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
         } else {
-            return std::nullopt;
+            return nullptr;
         }
         const u32 potion = data.readU32();
         if (potion == 1 || potion == 3) {
@@ -1442,7 +1497,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             const u32 identity = data.readU32();
             const u32 kind = data.readU32();
             if ((identity & ~(3U | (1U << 8U))) != 0 || kind < 1 || kind > 4) {
-                return std::nullopt;
+                return nullptr;
             }
             value.origin.seat = static_cast<u8>(identity & 3U);
             value.origin.kind = static_cast<PotionIdentity::Kind>((identity >> 8U) & 1U);
@@ -1457,11 +1512,11 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         } else if (potion == 0) {
             for (usize j = 1; j < kPotionRollbackBytes / 4; ++j) {
                 if (data.readU32() != 0) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
         } else {
-            return std::nullopt;
+            return nullptr;
         }
         result.projectiles.push_back(shot);
     }
@@ -1486,7 +1541,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         FixtureState fixture;
         const auto source = data.readU32();
         if (source > static_cast<u32>(FixtureSource::SecretPortal)) {
-            return std::nullopt;
+            return nullptr;
         }
         fixture.source = static_cast<FixtureSource>(source);
         fixture.instance = wide(data);
@@ -1506,10 +1561,35 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         fixture.alpha = real(data);
         const auto flags = data.readU32();
         if (flags > 1) {
-            return std::nullopt;
+            return nullptr;
         }
         fixture.cameraFacing = flags != 0;
         result.fixtures.push_back(fixture);
+    }
+    result.transporters.reserve(transporters);
+    for (usize i = 0; i < transporters; ++i) {
+        TransporterState pad;
+        pad.instance = data.readU32();
+        pad.resource = data.readU32();
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 3; ++row) {
+                pad.placement[column][row] = real(data);
+            }
+        }
+        pad.sequence = data.readU32();
+        pad.generation = wide(data);
+        pad.frame = real(data);
+        pad.previousFrame = real(data);
+        pad.textureClock = real(data);
+        pad.previousTextureClock = real(data);
+        const u32 flags = data.readU32();
+        if ((flags & ~7U) != 0) {
+            return nullptr;
+        }
+        pad.playing = (flags & 1U) != 0;
+        pad.continuous = (flags & 2U) != 0;
+        pad.advanced = (flags & 4U) != 0;
+        result.transporters.push_back(pad);
     }
     if (geometryBytes != 0) {
         SceneGeometry geometry;
@@ -1519,7 +1599,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         geometry.darken = real(data);
         if (count > SceneGeometry::kMaxStates ||
             geometryBytes != kGeometryHeaderBytes + count * kGeometryObjectBytes) {
-            return std::nullopt;
+            return nullptr;
         }
         geometry.objects.reserve(count);
         for (usize i = 0; i < count; ++i) {
@@ -1534,7 +1614,7 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             object.alpha = real(data);
             const u32 visible = data.readU32();
             if (visible > 1) {
-                return std::nullopt;
+                return nullptr;
             }
             object.visible = visible != 0;
             geometry.objects.push_back(object);
@@ -1544,75 +1624,75 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
     if (fighterBytes != 0) {
         auto fighters = FighterPacket::decode(data.readBytes(fighterBytes));
         if (!fighters || fighters->empty()) {
-            return std::nullopt;
+            return nullptr;
         }
         result.fighters = std::move(*fighters);
     }
     if (hudBytes != 0) {
         result.hud = HudPacket::decode(data.readBytes(hudBytes));
         if (!result.hud) {
-            return std::nullopt;
+            return nullptr;
         }
     }
     if (meleeBytes != 0) {
         ByteReader melee(data.readBytes(meleeBytes));
         const u32 mask = melee.readU32();
         if (mask == 0 || mask >= (1U << InputCommand::kSeats)) {
-            return std::nullopt;
+            return nullptr;
         }
         for (usize seat = 0; seat < result.players.size(); ++seat) {
             if ((mask & (1U << seat)) == 0) {
                 continue;
             }
             if (!result.players[seat] || melee.remaining() < 4) {
-                return std::nullopt;
+                return nullptr;
             }
             const usize size = melee.readU32();
             if (size > melee.remaining()) {
-                return std::nullopt;
+                return nullptr;
             }
             auto checkpoint = PlayerMeleeCheckpoint::decode(melee.readBytes(size));
             if (!checkpoint ||
                 checkpoint->selection.feet != result.motion.players[seat]->position) {
-                return std::nullopt;
+                return nullptr;
             }
             result.players[seat]->melee = std::move(checkpoint);
         }
         if (!melee.atEnd()) {
-            return std::nullopt;
+            return nullptr;
         }
     }
     if (turboBytes != 0) {
         ByteReader turbo(data.readBytes(turboBytes));
         const u32 mask = turbo.readU32();
         if (mask == 0 || mask >= (1U << InputCommand::kSeats)) {
-            return std::nullopt;
+            return nullptr;
         }
         for (usize seat = 0; seat < result.players.size(); ++seat) {
             if ((mask & (1U << seat)) == 0) {
                 continue;
             }
             if (!result.players[seat] || turbo.remaining() < 8) {
-                return std::nullopt;
+                return nullptr;
             }
             const usize timelineBytes = turbo.readU32();
             const usize regionBytes = turbo.readU32();
             if (timelineBytes > PlayerTurboCheckpoint::kMaxBytes ||
                 regionBytes > PlayerMeleeCheckpoint::kMaxBytes ||
                 timelineBytes + regionBytes > turbo.remaining()) {
-                return std::nullopt;
+                return nullptr;
             }
             auto timeline = PlayerTurboCheckpoint::decode(turbo.readBytes(timelineBytes));
             auto region = PlayerMeleeCheckpoint::decode(turbo.readBytes(regionBytes));
             if (!timeline || !region ||
                 region->selection.feet != result.motion.players[seat]->position) {
-                return std::nullopt;
+                return nullptr;
             }
             result.players[seat]->turbo = std::move(timeline);
             result.players[seat]->turboGeometry = std::move(region);
         }
         if (!turbo.atEnd()) {
-            return std::nullopt;
+            return nullptr;
         }
     }
     if (platformBytes != 0) {
@@ -1621,11 +1701,11 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
             (!platform->motion && std::ranges::none_of(platform->floors, [](const auto& floor) {
                 return floor.has_value();
             }))) {
-            return std::nullopt;
+            return nullptr;
         }
         for (usize seat = 0; seat < platform->floors.size(); ++seat) {
             if (!result.players[seat] && platform->floors[seat]) {
-                return std::nullopt;
+                return nullptr;
             }
             if (result.players[seat]) {
                 result.players[seat]->floor = platform->floors[seat];
@@ -1638,14 +1718,14 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
         ByteReader replay(data.readBytes(replayBytes));
         const u32 mask = replay.readU32();
         if (mask == 0 || (mask & ~(15U | kOpponentReplay | kCombatReplay)) != 0) {
-            return std::nullopt;
+            return nullptr;
         }
         for (usize seat = 0; seat < result.players.size(); ++seat) {
             if ((mask & (1U << seat)) == 0) {
                 continue;
             }
             if (!result.players[seat] || replay.remaining() < 16) {
-                return std::nullopt;
+                return nullptr;
             }
             const usize contacts = replay.readU32();
             const usize pose = replay.readU32();
@@ -1657,37 +1737,37 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 potion > PlayerPotionCheckpoint::kMaxBytes ||
                 contacts + pose + effects + potion == 0 ||
                 contacts + pose + effects + potion > replay.remaining()) {
-                return std::nullopt;
+                return nullptr;
             }
             auto& player = *result.players[seat];
             if (contacts != 0) {
                 player.locomotion = PlayerLocomotionCheckpoint::decode(replay.readBytes(contacts));
                 if (!player.locomotion) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
             if (pose != 0) {
                 player.transitionPose = PlayerPoseCheckpoint::decode(replay.readBytes(pose));
                 if (!player.transitionPose) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
             if (effects != 0) {
                 player.turboEffects = TurboEffectCheckpoint::decode(replay.readBytes(effects));
                 if (!player.turboEffects) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
             if (potion != 0) {
                 player.potion = PlayerPotionCheckpoint::decode(replay.readBytes(potion));
                 if (!player.potion) {
-                    return std::nullopt;
+                    return nullptr;
                 }
             }
         }
         if ((mask & kOpponentReplay) != 0) {
             if (replay.remaining() < kOpponentHeaderBytes) {
-                return std::nullopt;
+                return nullptr;
             }
             const usize size = replay.readU32();
             const usize frameSize = replay.readU32();
@@ -1698,17 +1778,17 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 frameSize > OpponentFrameCodec::kMaxBytes || size > replay.remaining() ||
                 frameSize > replay.remaining() - size || epoch != result.motion.epoch ||
                 tick != result.motion.tick) {
-                return std::nullopt;
+                return nullptr;
             }
             result.opponents = OpponentCheckpoint::decode(replay.readBytes(size));
             result.opponentFrame = OpponentFrameCodec::decode(replay.readBytes(frameSize));
             if (!result.opponents || !result.opponentFrame) {
-                return std::nullopt;
+                return nullptr;
             }
         }
         if ((mask & kCombatReplay) != 0) {
             if ((mask & kOpponentReplay) == 0 || replay.remaining() < kCombatHeaderBytes) {
-                return std::nullopt;
+                return nullptr;
             }
             const usize size = replay.readU32();
             const usize frameSize = replay.readU32();
@@ -1718,20 +1798,20 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                 frameSize != kCombatFrameBytes || size > replay.remaining() ||
                 frameSize > replay.remaining() - size || epoch != result.motion.epoch ||
                 tick != result.motion.tick) {
-                return std::nullopt;
+                return nullptr;
             }
             result.combatState = CombatStatePacket::decode(replay.readBytes(size));
             result.combatFrame = combatFrame(replay);
             if (!result.combatState || !result.combatFrame) {
-                return std::nullopt;
+                return nullptr;
             }
         }
         if (!replay.atEnd()) {
-            return std::nullopt;
+            return nullptr;
         }
     }
     if (!data.atEnd()) {
-        return std::nullopt;
+        return nullptr;
     }
     if (std::ranges::any_of(result.projectiles, [&](const auto& shot) {
             return (shot.rollback && shot.rollback->origin.tick > result.motion.tick) ||
@@ -1741,9 +1821,12 @@ std::optional<CombatSnapshot> CombatPacket::decode(std::span<const u8> bytes) {
                    (shot.potionReleaseOrigin() &&
                     shot.potionReleaseOrigin()->tick > result.motion.tick);
         })) {
-        return std::nullopt;
+        return nullptr;
     }
-    return result.valid() ? std::optional{std::move(result)} : std::nullopt;
+    if (!result.valid()) {
+        return nullptr;
+    }
+    return owned;
 }
 
 } // namespace gdl::game

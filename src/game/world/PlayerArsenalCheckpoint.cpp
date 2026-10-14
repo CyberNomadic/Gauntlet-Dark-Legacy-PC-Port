@@ -1,10 +1,14 @@
 #include "game/world/PlayerArsenalCheckpoint.h"
 
 #include <unordered_set>
+#include <utility>
 
 namespace gdl::game {
 bool PlayerArsenalCheckpoint::State::valid() const {
-    if (nextPotionKind < 1 || nextPotionKind > 4 || casts.size() > kMaxCasts || !missiles.valid() ||
+    return validAggregate() && missiles.valid();
+}
+bool PlayerArsenalCheckpoint::State::validAggregate() const {
+    if (nextPotionKind < 1 || nextPotionKind > 4 || casts.size() > kMaxCasts ||
         (bound != missiles.visualsBound) || (!bound && !casts.empty())) {
         return false;
     }
@@ -38,18 +42,19 @@ PlayerArsenalCheckpoint::capture(const PlayerArsenal& owner,
     if (owner.m_castEffects.size() > State::kMaxCasts) {
         return std::nullopt;
     }
-    const auto missiles = owner.m_missiles.checkpoint(resources, missileEffects);
+    auto missiles = owner.m_missiles.checkpoint(resources, missileEffects);
     if (!missiles) {
         return std::nullopt;
     }
     State result;
     result.bound = owner.m_resources.has_value();
     result.nextPotionKind = owner.m_nextPotionKind;
-    result.missiles = *missiles;
+    result.missiles = std::move(*missiles);
     for (const auto& cast : owner.m_castEffects) {
         result.casts.push_back({cast.owner, cast.effect});
     }
-    return result.valid() ? std::optional{std::move(result)} : std::nullopt;
+    // The missile owner has already validated the complete captured pool.
+    return result.validAggregate() ? std::optional{std::move(result)} : std::nullopt;
 }
 std::optional<PlayerArsenalCheckpoint::Prepared>
 PlayerArsenalCheckpoint::prepare(PlayerArsenal& owner, const State& state,

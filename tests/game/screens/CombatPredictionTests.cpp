@@ -244,8 +244,11 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK(replay.diagnostics().domains[domain].attemptedTicks == 13);
         CHECK(replay.diagnostics().domains[domain].maximumTicksPerPass == 3);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
-        CHECK(replay.diagnostics().domains[domain].captureCost.count == 13);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 1);
         CHECK(replay.diagnostics().domains[domain].postconditionCost.count == 13);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count +
+                  replay.diagnostics().domains[domain].postconditionCost.count ==
+              14); // N accepted ticks retain exactly N+1 native boundary captures.
         verifyFullReplay(sent, 113);
         const auto incremental = checkpoint(guest);
         REQUIRE(incremental);
@@ -271,6 +274,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 26);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 2);
         CHECK(matches(guest, *incremental));
         shown = std::make_unique<CombatSnapshot>(*received);
         presentation = {};
@@ -287,6 +291,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK_FALSE(replay.active());
         CHECK(matches(guest, *seed));
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 2);
 
         // A received frame can fill a concealed gap inside the executed prefix.
         REQUIRE(replay.begin(context, 2, guest));
@@ -294,6 +299,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(received.get(), sent));
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 6);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 1);
         auto gap = commandAt(102); // currently identical to native concealment
         REQUIRE(replay.update(nullptr, std::span{&gap, 1}));
         sent.push_back(gap);
@@ -305,12 +311,14 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         sent.push_back(gap);
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 12);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 2);
         verifyFullReplay(sent, 106);
         gap = commandAt(114); // crosses the six-tick held-input expiration
         REQUIRE(replay.update(nullptr, std::span{&gap, 1}));
         sent.push_back(gap);
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 20);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 2);
         verifyFullReplay(sent, 114);
 
         // Early admission failures used to be cleaned up by entry-time reset.
@@ -472,6 +480,25 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
                   .tickRefusals[static_cast<usize>(OrdinaryCombatTick::Refusal::Environment)] == 1);
         CHECK(replay.diagnostics().domains[domain].reasons[static_cast<usize>(
                   OnlineCombatReplay::Refusal::NativeUnsupported)] == 1);
+        // The renderer still asks after a rejected native step. This is an
+        // inactive fallback, not a failure to sample the last accepted Stage.
+        const auto beforeFallback = CombatPacket::encode(*directDisplay);
+        REQUIRE(beforeFallback);
+        const auto retainedParticles = presentation.particles;
+        const auto refusedPresents = replay.diagnostics().domains[domain].presentRefusals;
+        const auto acceptedPresents = replay.diagnostics().domains[domain].presents;
+        CHECK_FALSE(replay.present(*directDisplay, presentation, 0.5f));
+        CHECK(static_cast<bool>(CombatPacket::encode(*directDisplay) == beforeFallback));
+        CHECK(presentation.particles == retainedParticles);
+        const auto& presentCounters = replay.diagnostics().domains[domain];
+        CHECK(presentCounters.presentRefusals == refusedPresents + 1);
+        CHECK(presentCounters.presents == acceptedPresents);
+        CHECK(presentCounters.presentReasons[static_cast<usize>(
+                  OnlineCombatReplay::PresentRefusal::Inactive)] == 1);
+        CHECK(presentCounters.presentReasons[static_cast<usize>(
+                  OnlineCombatReplay::PresentRefusal::ParticleInterval)] == 0);
+        CHECK(presentCounters.presentReasons[static_cast<usize>(
+                  OnlineCombatReplay::PresentRefusal::StageSampling)] == 0);
         replay.clear();
         CHECK(replay.diagnostics() == OnlineCombatReplay::Diagnostics{});
         command.tick = 101;
@@ -533,11 +560,19 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
     input[3].move.magnitude = 1;
     for (u64 tick = 101; tick <= 110; ++tick) {
         frame.damage.playSeconds = static_cast<f32>(tick - 100) * frame.seconds;
-        REQUIRE(host.advance(tick, input, frame).status == OrdinaryCombatTick::Status::Advanced);
+        // The reference starts a fresh interval from its complete live boundary
+        // EVERY tick. It cannot share the guest's reused before-State path.
+        const auto nativeBefore = checkpoint(host);
+        REQUIRE(nativeBefore);
+        REQUIRE(host.begin(context.epoch, tick - 1, *nativeBefore));
+        const auto native = host.advance(tick, input, frame);
+        REQUIRE(native.status == OrdinaryCombatTick::Status::Advanced);
+        CHECK(native.timings.captureNanoseconds.has_value());
+        CHECK(native.timings.prepareNanoseconds.has_value());
         const auto advanced = guest.advance(tick, input, frame);
         REQUIRE(advanced.status == OrdinaryCombatTick::Status::Advanced);
         CHECK(advanced.timings.prepareNanoseconds.has_value() == (tick == 101));
-        CHECK(advanced.timings.captureNanoseconds.has_value());
+        CHECK(advanced.timings.captureNanoseconds.has_value() == (tick == 101));
         CHECK(advanced.timings.postconditionNanoseconds.has_value());
         CHECK(matches(guest, host));
     }
@@ -554,6 +589,55 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
     REQUIRE(guest.begin(context.epoch, 110, *predicted));
     CHECK_FALSE(guest.begin(context.epoch, 109, *seed));
     CHECK(matches(guest, *predicted));
+    {
+        // Exercise recovery only after the tick-100 continuation tests above:
+        // clearing a coordinator must not lower its native owner's authority floor.
+        OnlineCombatReplay replay;
+        REQUIRE(replay.begin(context, 2, guest));
+        const auto domain = static_cast<usize>(includeStage ? OnlineCombatReplay::Domain::Stage
+                                                            : OnlineCombatReplay::Domain::Legacy);
+        auto corrected = std::make_unique<CombatSnapshot>(*received);
+        corrected->motion.tick = 110;
+        REQUIRE(corrected->valid());
+        InputCommand command;
+        command.epoch = context.epoch;
+        command.tick = 111;
+        command.grant = context.grants[3];
+        command.seat = 3;
+        command.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
+        CHECK_FALSE(replay.update(corrected.get(), std::span{&command, 1}));
+        CHECK_FALSE(replay.active());
+        auto display = std::make_unique<CombatSnapshot>(*corrected);
+        EnemyPresentation presentation;
+        presentation.epoch = context.epoch;
+        presentation.tick = display->motion.tick;
+        presentation.shownGeometry = display->geometry;
+        CHECK_FALSE(replay.present(*display, presentation, 0.5f));
+        CHECK(replay.diagnostics().domains[domain].presentReasons[static_cast<usize>(
+                  OnlineCombatReplay::PresentRefusal::Inactive)] == 1);
+
+        // A later valid correction starts a new interval without erasing the
+        // inactive request. Fractional Stage sampling resumes with that interval.
+        ++corrected->motion.tick;
+        ++command.tick;
+        command.pressedButtons = 0;
+        REQUIRE(corrected->valid());
+        REQUIRE(replay.update(corrected.get(), std::span{&command, 1}));
+        display = std::make_unique<CombatSnapshot>(*corrected);
+        presentation = {};
+        presentation.epoch = context.epoch;
+        presentation.tick = display->motion.tick;
+        presentation.shownGeometry = display->geometry;
+        REQUIRE(replay.present(*display, presentation, 0.5f));
+        CHECK(display->valid());
+        CHECK(replay.diagnostics().domains[domain].presents == 1);
+        CHECK(replay.diagnostics().domains[domain].presentRefusals == 1);
+        if (includeStage) {
+            REQUIRE(presentation.particles);
+            CHECK(presentation.particles->matches(context.epoch, command.tick));
+            CHECK(presentation.particleBlend == 0.5f);
+        }
+    }
     CHECK(device.texturesCreated == textures);
     CHECK(device.textureUpdates == updates);
     CHECK_FALSE(guest.open(device, root, level, context, profiles, 1));
@@ -569,12 +653,22 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
     if (includeStage) {
         // The native owner is selected from the incoming domain, not whichever
         // checkpoint happened to run previously. Neither path reloads resources.
+        const std::array<PlayInput, 4> neutral{};
+        REQUIRE(guest.advance(2, neutral, frame).status == OrdinaryCombatTick::Status::Advanced);
         auto legacy = std::make_unique<NativeState>(*predicted);
         legacy->stage.reset();
         REQUIRE(guest.begin(resumed.epoch, 2, *legacy));
         CHECK(matches(guest, *legacy));
+        const auto legacyStep = guest.advance(3, neutral, frame);
+        REQUIRE(legacyStep.status == OrdinaryCombatTick::Status::Advanced);
+        CHECK(legacyStep.timings.captureNanoseconds.has_value());
+        CHECK(legacyStep.timings.prepareNanoseconds.has_value());
         REQUIRE(guest.begin(resumed.epoch, 3, *predicted));
         CHECK(matches(guest, *predicted));
+        const auto stageStep = guest.advance(4, neutral, frame);
+        REQUIRE(stageStep.status == OrdinaryCombatTick::Status::Advanced);
+        CHECK(stageStep.timings.captureNanoseconds.has_value());
+        CHECK(stageStep.timings.prepareNanoseconds.has_value());
         auto malformed = std::make_unique<NativeState>(*predicted);
         malformed->stage->world.core.catalog[0] ^= 1;
         CHECK_FALSE(guest.begin(resumed.epoch, 4, *malformed));
@@ -612,6 +706,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         const auto retainedParticles = presentation.particles;
         REQUIRE(retainedParticles->matches(context.epoch, 101));
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 1);
         const auto oldLifetime = guest.resourceLifetime();
         guest.clear();
         CHECK(oldLifetime.expired());
@@ -623,6 +718,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 2);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 2);
         CHECK(matches(guest, *firstPicture));
         auto corrected = std::make_unique<CombatSnapshot>(*received);
         ++corrected->motion.tick;
@@ -631,6 +727,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(corrected.get(), std::span{&command, 1}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 3);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 3);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 3);
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 3);
         ++corrected->motion.tick;
@@ -642,6 +739,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK(replay.diagnostics().domains[domain].decodeFailures == 1);
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 4);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 3);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 3);
         replay.clear();
         REQUIRE(replay.begin(context, 2, guest));
         command.tick = 101;
@@ -657,6 +755,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
                   OrdinaryCombatCheckpoint::RestoreIssue::Context)] == 1);
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 1);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 0);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 0);
         replay.clear();
         REQUIRE(replay.begin(context, 2, guest));
         (*corrected->combatState->stage)[16] ^= 1;
@@ -665,6 +764,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(corrected.get(), std::span{&command, 1}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 1);
         CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 1);
         CHECK(matches(guest, *firstPicture));
     }
 }
@@ -763,7 +863,7 @@ TEST_CASE("private combat loading preserves native level and ordered party owner
 TEST_CASE("private combat retains and restores complete native stage state across owners",
           "[rollback][combat-prediction][combat-stage-prediction][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
-    const auto name = GENERATE("L1", "G1");
+    const auto name = GENERATE("L1", "G1", "A1");
     CAPTURE(name);
     test::FakeRenderDevice device;
     LevelCatalog catalog;
@@ -791,6 +891,14 @@ TEST_CASE("private combat retains and restores complete native stage state acros
     auto seed = checkpoint(host, true);
     REQUIRE(seed);
     REQUIRE(seed->stage);
+    REQUIRE(seed->stage->transporters);
+    CHECK(seed->stage->transporters->players == 2);
+    CHECK(
+        seed->stage->transporters->pads.size() ==
+        LevelTransporters::contacts(host.world()->layout(), 2, &host.world()->collision()).size());
+    if (std::string_view(name) == "A1") {
+        REQUIRE_FALSE(seed->stage->transporters->pads.empty());
+    }
     REQUIRE_FALSE(seed->stage->world.core.placements.empty());
     REQUIRE(seed->stage->world.core.placements.size() == host.world()->layout().objects().size());
     CHECK(seed->stage->world.pickups.items.size() == host.world()->placedItems().size());
@@ -811,6 +919,14 @@ TEST_CASE("private combat retains and restores complete native stage state acros
     auto changed = std::make_unique<NativeState>(*seed);
     changed->stage->world.core.catalog[0] ^= 1;
     REQUIRE_FALSE(guest.begin(context.epoch, 101, *changed));
+    CHECK(matches(guest, *seed));
+    *changed = *seed;
+    changed->stage->transporters.reset();
+    CHECK_FALSE(guest.begin(context.epoch, 101, *changed));
+    CHECK(matches(guest, *seed));
+    *changed = *seed;
+    changed->stage->transporters->catalog[0] ^= 1;
+    CHECK_FALSE(guest.begin(context.epoch, 101, *changed));
     CHECK(matches(guest, *seed));
     CHECK(device.texturesCreated == textures);
     CHECK(device.textureUpdates == updates);

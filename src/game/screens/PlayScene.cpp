@@ -269,6 +269,7 @@ void PlayScene::close() {
     m_sumner.clear();
     m_combatPortals.reset();
     m_portals.clear();
+    m_combatTransporters.reset();
     m_transporters.clear();
     m_switchCutscene.clear();
     m_combatFixtures.reset();

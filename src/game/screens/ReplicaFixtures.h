@@ -6,6 +6,7 @@
 #include "game/world/Breakables.h"
 #include "game/world/Chests.h"
 #include "game/world/ExitPortals.h"
+#include "game/world/LevelTransporters.h"
 #include "game/world/LevelTriggers.h"
 #include "game/world/LockedGates.h"
 #include "game/world/Rubble.h"
@@ -26,7 +27,11 @@ public:
     u32 rockId(usize index, s32 tier) const;
     u32 objectId(const ItemArchive* archive, std::string_view object) const;
     u32 portalId(const ExitPortals::Portal& portal) const;
+    u32 transporterId(const LevelTransporters::Presentation& pad) const;
     bool accepts(const FixtureState& fixture) const;
+    bool accepts(const TransporterState& pad) const;
+    void drawTransporter(RenderDevice& device, const TransporterState& pad, const Mat4& clip,
+                         const WorldLighting& lighting);
     void draw(RenderDevice& device, const FixtureState& fixture, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera, TreeModel::Pass pass);
 
@@ -57,6 +62,7 @@ public:
         const Rubble& rubble;
         const CritterStatues* statues = nullptr;
         const ExitPortals* portals = nullptr;
+        const LevelTransporters* transporters = nullptr;
     };
     /** Atomic, read-only mesh capture. No unlocking, AI, spawning or animation
      * events; missing visible resources reject instead of silently dropping art. */
@@ -74,11 +80,17 @@ public:
     void draw(RenderDevice& device, FixtureResources& resources, const Mat4& clip,
               const WorldLighting& lighting, const CameraFrame& camera,
               TreeModel::Pass pass = TreeModel::Pass::All) const;
+    /** Native pads submit both material classes together, once before fixture
+     * passes. They must not appear in both the opaque and blended loops. */
+    void drawTransporters(RenderDevice& device, FixtureResources& resources, const Mat4& clip,
+                          const WorldLighting& lighting) const;
     usize count() const { return m_fixtures.size(); }
+    usize transporterCount() const { return m_transporters.size(); }
 
 private:
     u64 m_epoch = 0;
     std::optional<u64> m_tick;
     std::vector<FixtureState> m_fixtures;
+    std::vector<TransporterState> m_transporters;
 };
 } // namespace gdl::game

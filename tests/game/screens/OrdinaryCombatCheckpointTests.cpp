@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -79,6 +80,7 @@ struct Fixture {
     Boundary::State state() const {
         const auto captured = boundary.checkpoint();
         REQUIRE(captured);
+        REQUIRE(captured->valid());
         return *captured;
     }
     LevelOpponents::Events events() {
@@ -143,6 +145,28 @@ struct Fixture {
         native.effects.update(seconds);
     }
 };
+
+TEST_CASE("checkpoint timing observes a single native capture without changing its state",
+          "[netplay][ordinary-combat-checkpoint][checkpoint-timing]") {
+    Fixture fixture;
+    const auto baseline = fixture.state();
+    Boundary::CaptureTimings timing;
+    timing.fill(123);
+    const auto measured = fixture.boundary.checkpoint(&timing);
+    REQUIRE(measured);
+    CHECK(static_cast<bool>(*measured == baseline));
+    CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Bindings)]);
+    CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Combat)]);
+    CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Pools)]);
+    CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Adapter)]);
+    CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Links)]);
+    CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::World)]);
+    CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Fixtures)]);
+    CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Camera)]);
+    CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Portals)]);
+    CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Transporters)]);
+    CHECK(static_cast<bool>(fixture.state() == baseline));
+}
 
 TEST_CASE("ordinary combat transaction rewinds native timed hits losses and deferred rewards",
           "[ordinary-combat-checkpoint]") {
@@ -280,6 +304,37 @@ TEST_CASE("ordinary combat transaction preflights late trusted resource and rost
         CHECK_FALSE(fixture.boundary.restore(target));
         CHECK(fixture.state() == baseline);
     }
+}
+
+TEST_CASE("ordinary capture still validates every child and live cross-owner reference",
+          "[ordinary-combat-checkpoint][checkpoint-capture-validation]") {
+    Fixture fixture;
+    const auto before = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    for (s32 mutation = 0; mutation < 5; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = before;
+        switch (mutation) {
+        case 0: invalid.combat.players[0].actor.position.x = nan; break;
+        case 1: invalid.opponents.missiles.shrink = nan; break;
+        case 2: invalid.opponents.enemies.random.words.fill(0); break;
+        case 3: invalid.adapter.shrink = nan; break;
+        case 4: invalid.adapter.generatorRewards.push_back({0, 10, false}); break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.boundary.prepareRestore(invalid));
+        CHECK(fixture.state() == before);
+    }
+    // A valid independently restored pool can still reference a player absent
+    // from this transaction. Capture must retain its cross-owner refusal.
+    auto& enemies = fixture.native.opponents.enemies();
+    auto foreign = before.opponents.enemies;
+    foreign.enemies[fixture.enemy].target = 0;
+    REQUIRE(foreign.valid());
+    REQUIRE(enemies.restore(foreign));
+    CHECK_FALSE(fixture.boundary.checkpoint());
+    REQUIRE(enemies.restore(before.opponents.enemies));
+    CHECK(fixture.state() == before);
 }
 
 TEST_CASE("ordinary combat refuses retained blast cooldowns for uncaptured combatants",

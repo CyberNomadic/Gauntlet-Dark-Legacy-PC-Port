@@ -6,6 +6,9 @@
 
 #include "engine/platform/Input.h"
 
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
+#include "game/players/ClassData.h"
 #include "game/screens/MatchInputs.h"
 #include "game/screens/PartyMotion.h"
 #include "game/world/CameraMovementLimit.h"
@@ -911,6 +914,219 @@ TEST_CASE("pending guest presses are atomic and cannot leak across pause or trav
     }
 }
 
+TEST_CASE("sampling backpressure preserves one ordinary attack tap per seat without stale levels",
+          "[netplay][match-session][input-pacing][queued-attack]") {
+    const usize local = GENERATE(0U, 1U);
+    Room room({1, 2, 1, 2});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    const usize seat = local == 0 ? 1 : 3;
+    for (s32 round = 0; round < 2; ++round) {
+        CAPTURE(local, round);
+        for (u32 step = 0; step < 100 && guest.inputReady(); ++step) {
+            REQUIRE(MatchInputs::sample(guest, {}));
+            room.pump();
+        }
+        REQUIRE_FALSE(guest.inputReady());
+        const u64 pendingTick = guest.inputTick();
+        for (u32 step = 0; step < 120; ++step) {
+            SessionInputs::Frame input{};
+            if (step == 10 || step == 70) {
+                // Multiple discrete edges still coalesce once; their stale
+                // movement, aim and unrelated held levels must not return.
+                auto& tap = input[local];
+                tap.attack = tap.attackPressed = true;
+                tap.strongAttack = tap.combo = tap.throwPotion = true;
+                tap.move = {{1, 0}, 1};
+                tap.aimDirection = Vec3{1, 0, 0};
+            }
+            REQUIRE(MatchInputs::sample(guest, input));
+            CHECK(guest.sampledInputs().empty());
+        }
+        std::array<u32, 4> sampled{};
+        std::array<u32, 4> received{};
+        for (u32 step = 0; step < 80; ++step) {
+            REQUIRE(MatchInputs::sample(guest, {}));
+            for (const auto& command : guest.sampledInputs()) {
+                if (command.pressed(CommandPress::Attack)) {
+                    ++sampled[command.seat];
+                    CHECK(command.tick == pendingTick);
+                    CHECK(command.seat == seat);
+                    CHECK(command.heldButtons == static_cast<u32>(CommandHeld::Attack));
+                    CHECK(command.pressedButtons == static_cast<u32>(CommandPress::Attack));
+                    CHECK(command.magnitude == 0);
+                    CHECK_FALSE(command.aimDirection);
+                } else {
+                    CHECK(command.heldButtons == 0);
+                }
+            }
+            room.pump();
+            const auto frame = host.advance();
+            REQUIRE(frame);
+            for (usize index = 0; index < frame->size(); ++index) {
+                const auto& command = (*frame)[index];
+                if (command.pressed(CommandPress::Attack)) {
+                    ++received[index];
+                    CHECK(index == seat);
+                    CHECK(command.tick == pendingTick);
+                    CHECK(command.held(CommandHeld::Attack));
+                } else {
+                    CHECK_FALSE(command.held(CommandHeld::Attack));
+                }
+                CHECK_FALSE(command.held(CommandHeld::StrongAttack));
+                CHECK_FALSE(command.held(CommandHeld::Combo));
+                CHECK_FALSE(command.held(CommandHeld::ThrowPotion));
+            }
+            REQUIRE(host.publish(snapshot(host)));
+            room.pump();
+        }
+        std::array<u32, 4> expected{};
+        expected[seat] = 1;
+        CHECK(sampled == expected);
+        CHECK(received == expected);
+    }
+}
+
+TEST_CASE("queued attack edges cannot survive reset or poison an invalid frame",
+          "[netplay][match-session][input-pacing][queued-attack]") {
+    Room room({1, 2, 1, 2});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    while (guest.inputReady()) {
+        REQUIRE(MatchInputs::sample(guest, {}));
+        room.pump();
+    }
+    SessionInputs::Frame input{};
+    input[0].attack = input[0].attackPressed = true;
+    REQUIRE(MatchInputs::sample(guest, input));
+    bool kept = false;
+    SECTION("pause resume discards the old epoch tap") {
+        REQUIRE(host.requestPause());
+        room.pump();
+        room.ready(MatchTransition::Resume);
+    }
+    SECTION("travel discards the old epoch tap") {
+        room.ready(MatchTransition::Travel, 8);
+    }
+    SECTION("a trailing invalid grant cannot poison another seat") {
+        // Seat 1's valid earlier tap remains. The invalid batch must not add
+        // its valid-leading seat 3 tap before rejecting the trailing grant.
+        input = {};
+        input[1].attack = input[1].attackPressed = true;
+        auto commands = MatchInputs::commands(guest, input);
+        REQUIRE(commands.size() == 2);
+        std::ranges::reverse(commands);
+        ++commands.back().grant;
+        CHECK_FALSE(guest.sample(commands));
+        CHECK(guest.sampledInputs().empty());
+        kept = true;
+    }
+    std::array<u32, 4> presses{};
+    for (u32 tick = 0; tick < 80; ++tick) {
+        REQUIRE(MatchInputs::sample(guest, {}));
+        room.pump();
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        for (usize index = 0; index < frame->size(); ++index) {
+            const auto& command = (*frame)[index];
+            if (command.pressed(CommandPress::Attack)) {
+                ++presses[index];
+                CHECK(command.held(CommandHeld::Attack));
+            } else {
+                CHECK_FALSE(command.held(CommandHeld::Attack));
+            }
+        }
+        REQUIRE(host.publish(snapshot(host)));
+        room.pump();
+    }
+    CHECK(presses == std::array<u32, 4>{0, kept ? 1U : 0U, 0, 0});
+}
+
+TEST_CASE("ready input sampling leaves the caller's attack levels unchanged",
+          "[netplay][match-session][input-pacing][queued-attack]") {
+    const bool held = GENERATE(false, true);
+    const bool pressed = GENERATE(false, true);
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& guest = room.sessions[2];
+    SessionInputs::Frame input{};
+    input[0].attack = held;
+    input[0].attackPressed = pressed;
+    REQUIRE(guest.inputReady());
+    REQUIRE(MatchInputs::sample(guest, input));
+    REQUIRE(guest.sampledInputs().size() == 1);
+    CHECK(guest.sampledInputs().front().held(CommandHeld::Attack) == held);
+    CHECK(guest.sampledInputs().front().pressed(CommandPress::Attack) == pressed);
+}
+
+TEST_CASE("one backpressured guest tap reaches native PartyMotion and releases exactly once",
+          "[netplay][match-session][input-pacing][queued-attack][assets]") {
+    const auto root = test::assetOrSkip("PDATA/WAR.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    ClassDataSet classes;
+    REQUIRE(classes.load(root / "PDATA"));
+    REQUIRE(classes.stats(0));
+    CharacterSave save;
+    save.name = "TEST";
+    save.autoAttack = false;
+    save.progress().health = 1000;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(3, save, classes.stats(0), {}, 0);
+    players[0].figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(players[0].figure);
+    WorldCollision collision;
+    collision.build({{{0, 1, 0}, {{{-100, 0, -100}, {100, 0, -100}, {100, 0, 100}}}, -1, 4},
+                     {{0, 1, 0}, {{{-100, 0, -100}, {100, 0, 100}, {-100, 0, 100}}}, -1, 4}});
+    u32 attackDeeds = 0;
+    u32 releases = 0;
+    PartyMotion::Events events;
+    events.perform = [&](usize index, PartyMotion::Action action) {
+        CHECK(index == 0);
+        REQUIRE(action == PartyMotion::Action::ThrowWeapon);
+        ++releases;
+    };
+    events.select = [](usize, const SelectorInput&, s32) {};
+    events.advanceTurbo = [](usize, s32, f32) {};
+    events.attackDeed = [&](usize index, bool strong, bool moved, const Vec3&) {
+        CHECK(index == 0);
+        CHECK_FALSE(strong);
+        CHECK_FALSE(moved);
+        ++attackDeeds;
+        return PlayerDeed::Attack;
+    };
+    Room room({1, 0, 0, 2});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    while (guest.inputReady()) {
+        REQUIRE(MatchInputs::sample(guest, {}));
+        room.pump();
+    }
+    SessionInputs::Frame tap{};
+    tap[0].attack = tap[0].attackPressed = true;
+    REQUIRE(MatchInputs::sample(guest, tap));
+    CHECK(guest.sampledInputs().empty());
+    const auto uploads = device.texturesCreated;
+    bool observedThrow = false;
+    for (u32 tick = 0; tick < 120; ++tick) {
+        REQUIRE(MatchInputs::sample(guest, {}));
+        room.pump();
+        const auto frame = MatchInputs::advance(host);
+        REQUIRE(frame);
+        PartyMotion::step(players, *frame, false, 0, 1, 1.0f / 60, collision, events);
+        observedThrow |= players[0].figure->animator().action() == PlayerAnimator::Action::Throw;
+        REQUIRE(host.publish(snapshot(host)));
+        room.pump();
+    }
+    CHECK(attackDeeds == 1);
+    CHECK(observedThrow);
+    CHECK(releases == 1);
+    CHECK(PlayerAnimator::locomotion(players[0].figure->animator().action()));
+    CHECK(device.texturesCreated == uploads);
+}
+
 TEST_CASE("guest clock skew stays bounded during a long running match",
           "[netplay][match-session][input-pacing]") {
     Room room({1, 2, 0, 0});
@@ -1131,12 +1347,19 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
             REQUIRE((admission == Admission::Accepted || admission == Admission::Stale));
         }
         wire.sent.clear();
+        guest.flush(room.wires[2]);
+        for (const auto& packet : room.wires[2].sent) {
+            CHECK(host.receive(1, packet.bytes) == Admission::Accepted);
+        }
+        room.wires[2].sent.clear();
     };
     // Only one fragment fits per capture interval: replacing unfinished batches
     // here used to send first fragments forever without one complete checkpoint.
     for (usize tick = 0; tick < packets->size() * 2 + 5; ++tick) {
         REQUIRE(host.advance());
-        REQUIRE(publish(dense()));
+        if (host.publicationReady()) {
+            REQUIRE(publish(dense()));
+        }
         wire.budget = 1;
         drain();
     }
@@ -1148,7 +1371,9 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
     wire.budget = 0;
     for (usize tick = 0; tick < 200; ++tick) {
         REQUIRE(host.advance());
-        REQUIRE(publish(dense()));
+        if (host.publicationReady()) {
+            REQUIRE(publish(dense()));
+        }
         drain();
     }
     wire.budget = std::numeric_limits<usize>::max();
@@ -1161,6 +1386,236 @@ TEST_CASE("a congested partial snapshot completes while newer captures coalesce"
     REQUIRE(guest.playback().latest());
     CHECK(guest.playback().latest()->motion.tick > before);
     CHECK(CombatPacket::encode(*guest.playback().latest()) == CombatPacket::encode(dense()));
+}
+
+TEST_CASE("completed snapshot receipts bound traffic independently for each peer",
+          "[netplay][match-session][snapshot-receipts]") {
+    auto storage = std::make_unique<Room>(MatchOwners{1, 2, 3, 0});
+    auto& room = *storage;
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& fast = room.sessions[2];
+    std::vector<Wire::Packet> slow;
+    usize fastPublications = 0;
+    for (u64 tick = 0; tick < 20; ++tick) {
+        REQUIRE(host.advance());
+        REQUIRE(host.publicationReady());
+        REQUIRE(host.publish(snapshot(host)));
+        CHECK_FALSE(host.publicationReady()); // No second publication of this tick.
+        host.flush(room.wires[1]);
+        bool sentFast = false;
+        bool sentSlow = false;
+        for (const auto& packet : room.wires[1].sent) {
+            if (packet.connection == 1) {
+                sentFast = true;
+                const auto accepted = fast.receive(99, packet.bytes);
+                REQUIRE((accepted == Admission::Accepted || accepted == Admission::Stale));
+            } else {
+                sentSlow = true;
+                slow.push_back(packet);
+            }
+        }
+        room.wires[1].sent.clear();
+        CHECK(sentFast);
+        CHECK(sentSlow == (tick < MatchSession::kPublicationWindow));
+        fast.flush(room.wires[2]);
+        REQUIRE(room.wires[2].sent.size() == 1);
+        const auto& receipt = room.wires[2].sent.front();
+        CHECK(receipt.delivery == PacketTransport::Delivery::Reliable);
+        REQUIRE(CombatReplica::decodeReceipt(receipt.bytes));
+        REQUIRE(host.receive(1, receipt.bytes) == Admission::Accepted);
+        CHECK(host.receive(1, receipt.bytes) == Admission::Stale);
+        room.wires[2].sent.clear();
+        ++fastPublications;
+    }
+    CHECK(fastPublications == 20);
+    auto& delayed = room.sessions[3];
+    for (const auto& packet : slow) {
+        const auto accepted = delayed.receive(99, packet.bytes);
+        REQUIRE((accepted == Admission::Accepted || accepted == Admission::Stale));
+    }
+    delayed.flush(room.wires[3]);
+    REQUIRE(room.wires[3].sent.size() == 1); // Latest completion subsumes the first.
+    REQUIRE(host.receive(2, room.wires[3].sent.front().bytes) == Admission::Accepted);
+    room.wires[3].sent.clear();
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    room.pump();
+    REQUIRE(delayed.playback().latest());
+    CHECK(delayed.playback().latest()->motion.tick == host.tick() - 1);
+}
+
+TEST_CASE("missing snapshot chunks or receipts recover only with a newer timed publication",
+          "[netplay][match-session][snapshot-receipts]") {
+    const bool lostReceipt = GENERATE(false, true);
+    auto storage = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    auto& room = *storage;
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    for (usize i = 0; i < MatchSession::kPublicationWindow; ++i) {
+        REQUIRE(host.advance());
+        REQUIRE(host.publish(snapshot(host)));
+        host.flush(room.wires[1]);
+        if (lostReceipt) {
+            for (const auto& packet : room.wires[1].sent) {
+                const auto accepted = guest.receive(99, packet.bytes);
+                REQUIRE((accepted == Admission::Accepted || accepted == Admission::Stale));
+            }
+            guest.flush(room.wires[2]);
+            REQUIRE(room.wires[2].sent.size() == 1);
+            room.wires[2].sent.clear(); // Lost feedback must not permanently close the window.
+        }
+        room.wires[1].sent.clear(); // Or lose the complete unreliable batch.
+    }
+    REQUIRE(host.advance());
+    CHECK_FALSE(host.publicationReady());
+    CHECK_FALSE(host.publish(snapshot(host)));
+    for (const f64 seconds :
+         {-1.0, 0.0, std::numeric_limits<f64>::infinity(), std::numeric_limits<f64>::quiet_NaN()}) {
+        host.update(seconds);
+        CHECK_FALSE(host.publicationReady());
+    }
+    host.update(MatchSession::kPublicationTimeout - 0.125);
+    CHECK_FALSE(host.publicationReady());
+    host.flush(room.wires[1]);
+    CHECK(room.wires[1].sent.empty()); // No retransmission of either old tick.
+    host.update(0.125);
+    REQUIRE(host.publicationReady());
+    REQUIRE(host.publish(snapshot(host)));
+    CHECK_FALSE(host.publicationReady());
+    CHECK_FALSE(host.publish(snapshot(host)));
+    room.pump();
+    REQUIRE(guest.playback().latest());
+    CHECK(guest.playback().latest()->motion.tick == host.tick() - 1);
+}
+
+TEST_CASE("snapshot receipts authenticate the peer epoch digest and begun publication",
+          "[netplay][match-session][snapshot-receipts]") {
+    auto storage = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    auto& room = *storage;
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    CombatReplica::Receipt identity;
+    REQUIRE(host.advance());
+    REQUIRE(CombatReplica::packets(snapshot(host), SnapshotBlock::Compression::Automatic,
+                                   CombatReplica::Recovery::SingleLoss, &identity));
+    REQUIRE(host.publish(snapshot(host)));
+    const auto bytes = CombatReplica::encodeReceipt(identity);
+    REQUIRE(bytes);
+    CHECK(host.receive(99, *bytes) == Admission::WrongPeer);
+    CHECK(guest.receive(99, *bytes) == Admission::WrongPeer);
+    CHECK(host.receive(1, *bytes) == Admission::Invalid); // Not sent yet.
+    host.flush(room.wires[1]);
+    for (usize fault = 0; fault < 3; ++fault) {
+        auto forged = identity;
+        if (fault == 0) {
+            ++forged.epoch;
+        } else if (fault == 1) {
+            ++forged.tick;
+        } else {
+            ++forged.checksum;
+        }
+        const auto bad = CombatReplica::encodeReceipt(forged);
+        REQUIRE(bad);
+        CHECK(host.receive(1, *bad) == (fault == 0 ? Admission::Stale : Admission::Invalid));
+    }
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    host.flush(room.wires[1]);
+    REQUIRE(host.advance());
+    CHECK_FALSE(host.publicationReady());
+    REQUIRE(host.receive(1, *bytes) == Admission::Accepted);
+    CHECK(host.publicationReady());
+    CHECK(host.receive(1, *bytes) == Admission::Stale);
+    REQUIRE(host.requestPause());
+    CHECK_FALSE(host.publicationReady());
+    CHECK(host.receive(1, *bytes) == Admission::Stale);
+    room.pump();
+    room.ready(MatchTransition::Resume);
+    REQUIRE(host.advance());
+    CHECK(host.publicationReady());
+    CHECK(host.receive(1, *bytes) == Admission::Stale);
+    host.disconnected(1);
+    CHECK_FALSE(host.publicationReady());
+    CHECK(host.receive(1, *bytes) == Admission::WrongPeer);
+}
+
+TEST_CASE("snapshot bursts finish their repair tail after an early completion receipt",
+          "[netplay][match-session][snapshot-receipts]") {
+    auto storage = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    auto& room = *storage;
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    auto& wire = room.wires[1];
+    REQUIRE(host.advance());
+    auto source = std::make_unique<CombatSnapshot>(snapshot(host));
+    source->geometry = SceneGeometry{1, static_cast<u32>(SceneGeometry::kMaxStates), 0, {}};
+    u32 random = 17;
+    for (u32 index = 0; index < SceneGeometry::kMaxStates; ++index) {
+        Mat4 matrix{1};
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 3; ++row) {
+                random = random * 1664525U + 1013904223U;
+                matrix[column][row] = static_cast<f32>(random >> 8U) / 65536.0f;
+            }
+        }
+        source->geometry->objects.push_back({index, 1, matrix, 1, true});
+    }
+    const auto expected = CombatReplica::packets(*source, SnapshotBlock::Compression::Automatic,
+                                                 CombatReplica::Recovery::SingleLoss);
+    REQUIRE(expected);
+    REQUIRE(expected->size() > MatchSession::kPublicationBurst);
+    REQUIRE(host.publish(*source));
+    host.flush(wire);
+    REQUIRE(wire.sent.size() == MatchSession::kPublicationBurst);
+    usize received = 0;
+    const auto consume = [&] {
+        for (const auto& packet : wire.sent) {
+            REQUIRE(received < expected->size());
+            CHECK(packet.bytes == (*expected)[received]);
+            const auto accepted = guest.receive(99, packet.bytes);
+            REQUIRE((accepted == Admission::Accepted || accepted == Admission::Stale));
+            ++received;
+        }
+        wire.sent.clear();
+    };
+    consume();
+    host.update(1000); // An unfinished batch cannot expire or be replaced.
+    while (!guest.playback().latest()) {
+        REQUIRE(received < expected->size());
+        wire.budget = 1;
+        host.flush(wire);
+        REQUIRE(wire.sent.size() == 1);
+        consume();
+    }
+    REQUIRE(received < expected->size()); // Data committed, repair tail not yet sent.
+    REQUIRE(MatchInputs::sample(guest, {}));
+    room.wires[2].budget = 1;
+    guest.flush(room.wires[2]);
+    REQUIRE(room.wires[2].sent.size() == 1);
+    CHECK(InputPacket::decode(room.wires[2].sent.front().bytes)); // Input gets the first slot.
+    room.wires[2].sent.clear();
+    room.wires[2].budget = 1;
+    guest.flush(room.wires[2]);
+    REQUIRE(room.wires[2].sent.size() == 1);
+    CHECK(CombatReplica::recognizesReceipt(room.wires[2].sent.front().bytes));
+    REQUIRE(host.receive(1, room.wires[2].sent.front().bytes) == Admission::Accepted);
+    room.wires[2].sent.clear();
+    wire.budget = std::numeric_limits<usize>::max();
+    while (received < expected->size()) {
+        host.flush(wire);
+        REQUIRE_FALSE(wire.sent.empty());
+        CHECK(wire.sent.size() <= MatchSession::kPublicationBurst);
+        consume();
+    }
+    host.flush(wire);
+    CHECK(wire.sent.empty());
+    CHECK_FALSE(host.publish(*source));
+    REQUIRE(host.advance());
+    CHECK(host.publicationReady());
 }
 
 TEST_CASE("load timeout aborts even before the prepare message reaches a guest",
@@ -1333,6 +1788,8 @@ TEST_CASE("input scheduling adapts to delayed lossy links without repeating late
     u32 lateAtWarmup = 0;
     usize actions = 0;
     for (u64 tick = 0; tick < 900; ++tick) {
+        host.update(1.0 / 60);
+        guest.update(1.0 / 60);
         std::ranges::stable_sort(pending, {}, &Delayed::due);
         for (const auto& packet : pending) {
             if (packet.due > tick) {
@@ -1350,7 +1807,7 @@ TEST_CASE("input scheduling adapts to delayed lossy links without repeating late
         const auto frame = host.advance();
         REQUIRE(frame);
         actions += (*frame)[1].pressed(CommandPress::UsePotion) ? 1U : 0U;
-        if (tick % 3 == 0) {
+        if (tick % 3 == 0 && host.publicationReady()) {
             auto state = snapshot(host);
             const auto& diagnostics = host.inputDiagnostics(1);
             state.players[1]->movement.receivedInput = diagnostics.received.value_or(0);
@@ -1404,6 +1861,133 @@ TEST_CASE("new scenes seed their first input deadline from measured path RTT",
     room.ready(MatchTransition::Travel, 8);
     CHECK(guest.inputLead() == 3);
     CHECK(guest.inputTick() == 3);
+}
+
+TEST_CASE("healthy delivery recovers inflated input lead without rewinding commands or losing taps",
+          "[netplay][latency][match-session][lead-recovery]") {
+    const bool twoLocalSeats = GENERATE(false, true);
+    Room room(twoLocalSeats ? MatchOwners{1, 2, 2, 0} : MatchOwners{1, 2, 0, 0});
+    room.wires[2].stats = PacketTransport::Statistics{600};
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(guest.inputLead() == 30);
+    std::array<u64, 4> lastInput{};
+    std::array<usize, 4> actions{};
+    usize reductions = 0;
+    u8 previousLead = guest.inputLead();
+    for (u64 tick = 0; tick < 1200; ++tick) {
+        host.update(1.0 / 60);
+        guest.update(1.0 / 60);
+        SessionInputs::Frame local;
+        for (auto& seat : local) {
+            seat.usePotion = tick < 1100 && tick % 40 == 0;
+        }
+        REQUIRE(MatchInputs::sample(guest, local));
+        for (const auto& command : guest.sampledInputs()) {
+            CHECK(command.tick > lastInput[command.seat]);
+            lastInput[command.seat] = command.tick;
+        }
+        room.pump();
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        for (usize seat = 1; seat < frame->size(); ++seat) {
+            actions[seat] += (*frame)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        }
+        if (tick % 3 == 0) {
+            auto state = snapshot(host);
+            for (usize seat = 1; seat < state.players.size(); ++seat) {
+                if (!state.players[seat]) {
+                    continue;
+                }
+                const auto& feedback = host.inputDiagnostics(seat);
+                state.players[seat]->movement.receivedInput = feedback.received.value_or(0);
+                state.players[seat]->movement.arrivalMargin = feedback.arrivalMargin;
+                state.players[seat]->movement.lateInputs = feedback.late;
+            }
+            REQUIRE(host.publish(state));
+            room.pump();
+        }
+        if (guest.inputLead() < previousLead) {
+            CHECK(previousLead - guest.inputLead() <= 3);
+            ++reductions;
+        }
+        previousLead = guest.inputLead();
+        if (tick < 60) {
+            CHECK(guest.inputLead() == 30);
+        }
+    }
+    CHECK(reductions >= 9);
+    CHECK(guest.inputLead() == guest.context().inputLead);
+    for (usize seat = 1; seat <= (twoLocalSeats ? 2U : 1U); ++seat) {
+        CHECK(host.inputDiagnostics(seat).late == 0);
+        CHECK(actions[seat] == 28);
+    }
+}
+
+TEST_CASE("lead recovery requires fresh safe feedback from every local seat",
+          "[netplay][latency][match-session][lead-recovery]") {
+    const s32 obstruction = GENERATE(0, 1, 2, 3);
+    Room room({1, 2, 2, 0});
+    room.wires[2].stats = PacketTransport::Statistics{600};
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    for (u64 tick = 0; tick < 240; ++tick) {
+        REQUIRE(host.advance());
+        if (tick % 3 == 0) {
+            auto state = snapshot(host);
+            for (usize seat = 1; seat <= 2; ++seat) {
+                state.players[seat]->movement.receivedInput = tick + 30;
+                state.players[seat]->movement.arrivalMargin = 30;
+            }
+            // One healthy seat cannot mask a second seat's stalled or marginal
+            // delivery. These are bounded authenticated host diagnostics.
+            if (obstruction == 0) {
+                state.players[2]->movement.receivedInput = 1;
+            } else if (obstruction == 1) {
+                state.players[2]->movement.arrivalMargin = 3;
+            } else if (obstruction == 2) {
+                state.players[2].reset();
+                state.motion.players[2].reset();
+            } else if (tick >= 21 && tick < 210) {
+                // Seven healthy samples, a long stale interval, then fresh
+                // feedback must start a new recovery window, not finish it.
+                state.players[2]->movement.receivedInput = 48;
+            }
+            if (obstruction == 2) {
+                // A sparse valid packet can arrive from the authenticated host
+                // even though its current publisher enforces a complete roster.
+                const auto packets = CombatReplica::packets(state);
+                REQUIRE(packets);
+                for (const auto& packet : *packets) {
+                    REQUIRE(guest.receive(99, packet) == Admission::Accepted);
+                }
+            } else {
+                REQUIRE(host.publish(state));
+                room.pump();
+            }
+        }
+        CHECK(guest.inputLead() == 30);
+    }
+}
+
+TEST_CASE("input lead increases use the worst local seat independent of seat order",
+          "[netplay][latency][match-session][lead-recovery]") {
+    const bool reversed = GENERATE(false, true);
+    Room room({1, 2, 2, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(host.advance());
+    auto state = snapshot(host);
+    state.players[1]->movement.receivedInput = 1;
+    state.players[2]->movement.receivedInput = 1;
+    state.players[1]->movement.arrivalMargin = reversed ? -7 : 0;
+    state.players[2]->movement.arrivalMargin = reversed ? 0 : -7;
+    REQUIRE(host.publish(state));
+    room.pump();
+    CHECK(guest.inputLead() == 12);
 }
 
 TEST_CASE("clean links do not impose a six-tick input floor on guests",

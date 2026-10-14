@@ -11,6 +11,7 @@
 #include "game/players/NameCheats.h"
 #include "game/players/PowerupEffects.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PickupHud.h"
 
 namespace gdl::game {
@@ -44,6 +45,37 @@ bool picksUp(ItemKind kind) {
     return kind == ItemKind::Gold || kind == ItemKind::Keys || kind == ItemKind::Food ||
            kind == ItemKind::Potion ||
            (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup);
+}
+
+ItemTaking judgePickup(CharacterSave& save, const Pickup& pickup, const LevelWorld& world,
+                       const ClassDataSet& classes, bool autoActivateItems) {
+    const ClassStats* stats = classes.stats(save.character);
+    const bool activate =
+        autoActivateItems &&
+        (!world.ref().isSecret() || powerupAllowedInChallenge(pickup.subtype, pickup.flags));
+    auto taking =
+        takeItem(save, ItemOffer{pickup.subtype, pickup.amount, pickup.flags, pickup.strength},
+                 stats != nullptr ? stats->powerupTime : 1.0f, activate);
+    if (pickup.subtype == static_cast<s32>(ItemKind::Gold) && world.ref().isSecret() &&
+        taking.outcome == ItemTaking::Outcome::GoldFull) {
+        // A challenge coin is still an objective when the wallet cannot accept gold.
+        // Keep both the capped wallet and its lifetime gold total unchanged.
+        taking = {.outcome = ItemTaking::Outcome::Taken,
+                  .count = pickup.amount,
+                  .card = kSecretCoinCard,
+                  .sound = {}};
+    }
+    return taking;
+}
+
+std::optional<s32> refusalHelp(ItemTaking::Outcome outcome) {
+    switch (outcome) {
+    case ItemTaking::Outcome::KeysFull: return HelpMessages::kKeysFull;
+    case ItemTaking::Outcome::PotionsFull: return HelpMessages::kPotionsFull;
+    case ItemTaking::Outcome::HealthFull: return HelpMessages::kHealthFull;
+    case ItemTaking::Outcome::AlreadyHeld: return HelpMessages::kAlreadyHaveRune;
+    default: return std::nullopt;
+    }
 }
 
 } // namespace
@@ -81,6 +113,41 @@ bool PartyPickups::touchesPickup(std::span<const PlayerRuntime> players, const L
         }
     }
     return false;
+}
+
+bool PartyPickups::collectionUnchanged(std::span<const PlayerRuntime> players,
+                                       const LevelWorld& world, const Chests& chests,
+                                       const ClassDataSet& classes) {
+    const auto visitors = collectors(players, world, chests);
+    const auto& items = world.placedItems();
+    for (usize index = 0; index < items.size(); ++index) {
+        const auto pickup = items.pickupFor(index, visitors);
+        if (!pickup) {
+            continue;
+        }
+        // Crystals use the separate shared-party path. Powerups always produce
+        // pickup feedback, even when their inventory write changes nothing;
+        // their selector auto-activation policy is not part of this domain.
+        const auto kind = static_cast<ItemKind>(pickup->subtype);
+        if (pickup->realm > 0 ||
+            (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup)) {
+            return false;
+        }
+        const auto& saved = players[pickup->collector].actor.save();
+        if (saved.character < 0 || static_cast<usize>(saved.character) >= saved.classes.size()) {
+            return false;
+        }
+        auto candidate = saved;
+        const auto taking = judgePickup(candidate, *pickup, world, classes, false);
+        if (taking.took()) {
+            return false;
+        }
+        if (const auto help = refusalHelp(taking.outcome);
+            help && !PartyHelpAdmission::suppressed(*help, pickup->collector, players)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void PartyPickups::cleanupCollectedChests(const LevelWorld& world, Chests& chests) {
@@ -161,28 +228,11 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     const auto help = [&](s32 id) { return services.help && services.help(id, pickup.collector); };
     const bool secretCoin =
         pickup.subtype == static_cast<s32>(ItemKind::Gold) && world.ref().isSecret();
-    const ClassStats* stats = services.classes.stats(actor.save().character);
-    const bool activate =
-        services.autoActivateItems &&
-        (!world.ref().isSecret() || powerupAllowedInChallenge(pickup.subtype, pickup.flags));
-    ItemTaking taking = takeItem(
-        actor.save(), ItemOffer{pickup.subtype, pickup.amount, pickup.flags, pickup.strength},
-        stats != nullptr ? stats->powerupTime : 1.0f, activate);
-    if (secretCoin && taking.outcome == ItemTaking::Outcome::GoldFull) {
-        // A challenge coin is still an objective when the wallet cannot accept gold.
-        // Keep both the capped wallet and its lifetime gold total unchanged.
-        taking = {.outcome = ItemTaking::Outcome::Taken,
-                  .count = pickup.amount,
-                  .card = kSecretCoinCard,
-                  .sound = {}};
-    }
+    const auto taking =
+        judgePickup(actor.save(), pickup, world, services.classes, services.autoActivateItems);
     if (!taking.took()) {
-        switch (taking.outcome) {
-        case ItemTaking::Outcome::KeysFull: help(HelpMessages::kKeysFull); break;
-        case ItemTaking::Outcome::PotionsFull: help(HelpMessages::kPotionsFull); break;
-        case ItemTaking::Outcome::HealthFull: help(HelpMessages::kHealthFull); break;
-        case ItemTaking::Outcome::AlreadyHeld: help(HelpMessages::kAlreadyHaveRune); break;
-        default: break;
+        if (const auto id = refusalHelp(taking.outcome)) {
+            help(*id);
         }
         return std::nullopt;
     }

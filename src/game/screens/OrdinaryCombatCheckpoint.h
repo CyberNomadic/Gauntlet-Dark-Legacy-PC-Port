@@ -8,6 +8,7 @@
 #include "game/screens/OpponentCombatCheckpoint.h"
 #include "game/screens/OpponentSimulation.h"
 #include "game/world/ExitPortalsCheckpoint.h"
+#include "game/world/LevelTransportersCheckpoint.h"
 #include "game/world/LevelWorldCheckpoint.h"
 #include "game/world/TowerCameraCheckpoint.h"
 
@@ -17,8 +18,9 @@ namespace gdl::game {
  * Includes all ordered party members, attack pools, ordinary opponents, native
  * pending damage/rewards/lessons, and their one shared effect pool. Optional
  * jointly bound stage owners add fixtures, world motion, triggers and pickups.
- * Camera and portal continuations can join that boundary. Audio and application outputs remain
- * outside: this is not a whole-scene checkpoint or permission for unrestricted network prediction.
+ * Camera, portal and transporter-pad continuations can join that boundary. Audio and application
+ * outputs remain outside: this is not a whole-scene checkpoint or permission for unrestricted
+ * network prediction.
  */
 class OrdinaryCombatCheckpoint {
 public:
@@ -37,18 +39,20 @@ public:
         Fixtures,
         Camera,
         Portals,
+        Transporters,
         Commit,
         Count
     };
     static constexpr std::array<std::string_view, static_cast<usize>(RestoreIssue::Count)>
-        kRestoreIssues{"none",     "resources", "context", "state",   "bindings",
-                       "supports", "combat",    "pools",   "adapter", "world",
-                       "fixtures", "camera",    "portals", "commit"};
+        kRestoreIssues{"none",     "resources", "context", "state",        "bindings",
+                       "supports", "combat",    "pools",   "adapter",      "world",
+                       "fixtures", "camera",    "portals", "transporters", "commit"};
     struct Stage {
         LevelWorldCheckpoint::State world;
         LevelFixturesCheckpoint::State fixtures;
         std::optional<TowerCameraCheckpoint::State> camera;
         std::optional<ExitPortalsCheckpoint::State> portals;
+        std::optional<LevelTransportersCheckpoint::State> transporters;
         bool operator==(const Stage&) const = default;
     };
     struct State {
@@ -100,14 +104,33 @@ public:
                              LevelWorldCheckpoint* world = nullptr,
                              LevelFixturesCheckpoint* fixtures = nullptr,
                              TowerCameraCheckpoint* camera = nullptr,
-                             ExitPortalsCheckpoint* portals = nullptr);
+                             ExitPortalsCheckpoint* portals = nullptr,
+                             LevelTransportersCheckpoint* transporters = nullptr);
     ~OrdinaryCombatCheckpoint();
     OrdinaryCombatCheckpoint(const OrdinaryCombatCheckpoint&) = delete;
     OrdinaryCombatCheckpoint& operator=(const OrdinaryCombatCheckpoint&) = delete;
     OrdinaryCombatCheckpoint(OrdinaryCombatCheckpoint&&) = delete;
     OrdinaryCombatCheckpoint& operator=(OrdinaryCombatCheckpoint&&) = delete;
 
-    std::optional<State> checkpoint() const;
+    enum class CaptureOwner : usize {
+        Bindings,
+        Combat,
+        Pools,
+        Adapter,
+        World,
+        Fixtures,
+        Camera,
+        Portals,
+        Transporters,
+        Links,
+        Count
+    };
+    static constexpr std::array<std::string_view, static_cast<usize>(CaptureOwner::Count)>
+        kCaptureOwners{"bindings", "combat", "pools",   "adapter",      "world",
+                       "fixtures", "camera", "portals", "transporters", "links"};
+    using CaptureTimings = std::array<std::optional<u64>, static_cast<usize>(CaptureOwner::Count)>;
+    /** Optional CPU timing of the actual captures; never recaptures for diagnostics. */
+    std::optional<State> checkpoint(CaptureTimings* timings = nullptr) const;
     bool stageBound() const;
     std::optional<Prepared> prepareRestore(const State& state, RestoreIssue* issue = nullptr) const;
     bool canCommit(const Prepared& prepared) const;
@@ -137,6 +160,7 @@ private:
     LevelFixturesCheckpoint* m_fixtures = nullptr;
     TowerCameraCheckpoint* m_camera = nullptr;
     ExitPortalsCheckpoint* m_portals = nullptr;
+    LevelTransportersCheckpoint* m_transporters = nullptr;
     bool m_configurationValid = false;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
     u64 m_generation = 1;

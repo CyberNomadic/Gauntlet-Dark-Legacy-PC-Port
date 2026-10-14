@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -9,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/io/File.h"
 #include "engine/world/SampleLevel.h"
 
@@ -17,6 +19,7 @@
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/CombatResources.h"
+#include "game/screens/EnemyFeedbackEmission.h"
 #include "game/screens/FloorRiding.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentResources.h"
@@ -86,6 +89,7 @@ struct Fixture {
     ClassDataSet classes;
     LevelWorld world;
     ExitPortals portals;
+    LevelTransporters transporters;
     // Block gameplay is compared independently of the intentionally deferred
     // BLOCKFX output. No model is substituted for an unavailable visual owner.
     ItemArchive weapons;
@@ -108,6 +112,7 @@ struct Fixture {
     TowerCamera camera;
     std::unique_ptr<TowerCameraCheckpoint> cameraState;
     std::unique_ptr<ExitPortalsCheckpoint> portalState;
+    std::unique_ptr<LevelTransportersCheckpoint> transporterState;
     std::unique_ptr<CombatRollbackCheckpoint> combat;
     std::unique_ptr<Boundary> boundary;
     std::unique_ptr<Tick> runner;
@@ -115,11 +120,14 @@ struct Fixture {
     std::vector<Tick::Footstep> footsteps;
     std::vector<s32> meleeHits;
     std::vector<std::pair<s32, MissileRelease>> releases;
+    std::function<bool(s32, usize)> help;
+    WorldLayout generatorLayout;
     bool stage = false;
 
     explicit Fixture(bool explosive = false, bool statue = false, bool melee = false,
                      s32 firstClass = 0, bool ranged = false, bool stageG1 = false,
-                     MovingStage moving = MovingStage::None)
+                     MovingStage moving = MovingStage::None, bool impactCue = false,
+                     bool generators = false)
         : stage(stageG1 || moving != MovingStage::None) {
         REQUIRE(classes.load(root / "PDATA"));
         if (melee || stage) {
@@ -138,6 +146,7 @@ struct Fixture {
             }
             world.setPlayerCount(2);
             portals.bind(device, world.layout(), world.itemScope(), catalog, &world.collision());
+            transporters.bind(device, world.layout(), world.itemScope(), 2, &world.collision());
         }
         if (explosive) {
             const auto directory = test::sampleLevel("ordinary-combat-pending-world-explosion");
@@ -174,16 +183,8 @@ struct Fixture {
             floor.build({{{0, 1, 0}, {{{-200, 0, -200}, {200, 0, -200}, {200, 0, 200}}}, -1, 14},
                          {{0, 1, 0}, {{{-200, 0, -200}, {200, 0, 200}, {-200, 0, 200}}}, -1, 14}});
         }
-        arsenal.bind({device,
-                      classes,
-                      weapons,
-                      world.collision(),
-                      effects,
-                      audio,
-                      nullptr,
-                      {},
-                      false,
-                      false});
+        arsenal.bind({device, classes, weapons, world.collision(), effects, audio, nullptr,
+                      impactCue ? "S_WEAPONHITWOOD" : "", false, false});
         attacks.bind({device, classes, world, weapons, effects, audio, nullptr, arsenal, dimmer});
         fixtures.bind({device, world, weapons, effects, audio});
         fixtures.setPlayerCount(2);
@@ -242,14 +243,34 @@ struct Fixture {
             enemies.open(device, root, &world.collision(), 8,
                          {.health = ranged ? 0.05f : 1.0f, .players = 2}, 79);
             REQUIRE(enemies.loadKind(kGruntKind));
-            for (const auto& player : players) {
-                REQUIRE(enemies.spawn(
-                    {.kind = kGruntKind,
-                     .tier = 3,
-                     .position = player.actor.position() + Vec3{0, 0, ranged ? 15.0f : 3.0f},
-                     .placed = true},
-                    {}));
+            if (!generators) {
+                for (const auto& player : players) {
+                    REQUIRE(enemies.spawn(
+                        {.kind = kGruntKind,
+                         .tier = 3,
+                         .position = player.actor.position() + Vec3{0, 0, ranged ? 15.0f : 3.0f},
+                         .placed = true},
+                        {}));
+                }
             }
+        }
+        if (generators) {
+            const auto directory = test::scratchDirectory("ordinary-generator-contact");
+            // An authored negative quota keeps these isolated contact fixtures
+            // from breeding. Actual G1 brood/quota continuation is tested below.
+            writeTextFile(directory / "world.json", R"({
+              "objects":[{"name":"GROUND","position":[0,0,0]}],
+              "itemInfos":[{"type":3,"name":"GRU","radius":1,"height":5,
+                             "collisionType":1,"hitPoints":1}],
+              "itemInstances":[
+                {"info":0,"minPlayers":1,"position":[-12,0,3],
+                 "params":[3,0,7,0,255,255,1,0,0,0,0,0]},
+                {"info":0,"minPlayers":1,"position":[12,0,3],
+                 "params":[3,0,7,0,255,255,1,0,0,0,0,0]}]})");
+            REQUIRE(generatorLayout.load(directory));
+            REQUIRE(opponents.generators().bind(device, generatorLayout, enemies,
+                                                &world.collision(), {}, 2));
+            REQUIRE(opponents.generators().count() == 2);
         }
         missileResources = OpponentResources::missiles(enemies);
         if (melee || stage) {
@@ -274,15 +295,18 @@ struct Fixture {
             portalState = std::make_unique<ExitPortalsCheckpoint>(
                 portals, world.layout(), world.items(), &world.realmItems());
             REQUIRE(portalState->bindResources());
+            transporterState = std::make_unique<LevelTransportersCheckpoint>(transporters);
+            REQUIRE(transporterState->bindResources());
         }
-        boundary =
-            std::make_unique<Boundary>(*combat, opponents, missileResources, worldState.get(),
-                                       fixtureState.get(), cameraState.get(), portalState.get());
+        boundary = std::make_unique<Boundary>(
+            *combat, opponents, missileResources, worldState.get(), fixtureState.get(),
+            cameraState.get(), portalState.get(), transporterState.get());
         runner = std::make_unique<Tick>(*boundary, classes, fixtures);
     }
     ~Fixture() {
         runner.reset();
         boundary.reset();
+        transporterState.reset();
         portalState.reset();
         combat.reset();
         fixtureState.reset();
@@ -404,6 +428,7 @@ struct Fixture {
             effects.capturePresentation();
             world.capturePresentation();
             fixtures.capturePresentation();
+            transporters.capturePresentation();
             PartyNames names;
             names.step(players, frame.ticks, false);
             REQUIRE(PlayerPowerups::update(players, frame.seconds, PlayerPowerups::Clock::Level)
@@ -414,10 +439,12 @@ struct Fixture {
             }
             world.update(frame.seconds, false);
             opponents.syncFloors();
+            transporters.syncFloors(world.collision());
             world.revealCrystals(frame.seconds);
             for (auto& player : players) {
                 player.transport.observeContact(false);
             }
+            transporters.animate(frame.seconds);
         }
         const PlayerAttacks::Targets targets{
             .opponents = opponents,
@@ -447,6 +474,15 @@ struct Fixture {
                             releases.emplace_back(actor.player(),
                                                   *arsenal.missiles().missile(before).release);
                         }
+                        return;
+                    }
+                    if (action == PartyMotion::Action::FamiliarShot) {
+                        auto& player = players[index];
+                        arsenal.launchFamiliar(
+                            player.actor, player.figure.get(),
+                            player.cursorAiming
+                                ? std::nullopt
+                                : attacks.aim(player.actor, player.actor.facing(), targets));
                         return;
                     }
                     REQUIRE((action == PartyMotion::Action::FirstFoot ||
@@ -543,12 +579,18 @@ struct Fixture {
                                              experienceLevel(player.actor.save().experience())));
             }
         };
-        events.help = [](s32, usize) {
+        events.help = [&](s32 id, usize index) {
+            if (help) {
+                return help(id, index);
+            }
             FAIL_CHECK("unexpected opponent lesson");
             return false;
         };
         events.award = [&](s32 player, s32 experience, bool killed) {
             PartyRecords::award(players, player, experience, killed, world.level());
+        };
+        events.destroyedGenerator = [&](s32 player) {
+            PartyRecords::destroyedGenerator(players, player);
         };
         opponents.update(frame.ticks, frame.seconds, players, fixtures.obstacles(), events,
                          fixtures.missileStops(), fixtures.critterObstacles());
@@ -558,8 +600,19 @@ struct Fixture {
         attacks.updateArmour(frame.seconds, players, targets);
         effects.update(frame.seconds);
         if (stage) {
-            REQUIRE_FALSE(PartyPickups::touchesPickup(players, world, fixtures.chests()));
-            PartyPickups::cleanupCollectedChests(world, fixtures.chests());
+            PartyPickups pickups;
+            PartyHud hud;
+            pickups.collect(device, players,
+                            {.world = world,
+                             .fixtures = fixtures,
+                             .hud = hud,
+                             .audio = audio,
+                             .classes = classes,
+                             .help = [](s32, usize) {
+                                 FAIL_CHECK("unexpected native pickup lesson");
+                                 return false;
+                             }});
+            REQUIRE(hud.pickups().cards().empty());
             std::vector<TriggerVisitor> visitors;
             for (usize index = 0; index < players.size(); ++index) {
                 const auto& actor = players[index].actor;
@@ -579,6 +632,7 @@ struct Fixture {
             world.updateTriggers(frame.seconds, visitors);
             fixtures.syncFloors();
             opponents.syncFloors();
+            transporters.syncFloors(world.collision());
             REQUIRE(world.takeRotatorCues().empty());
             std::vector<PortalVisitor> portalVisitors;
             for (usize index = 0; index < players.size(); ++index) {
@@ -629,6 +683,8 @@ TEST_CASE("ordinary combat runner matches native complete party and enemy phases
         // Standalone callers retain per-tick atomic undo even though the
         // private network owner can retain one over an authority interval.
         CHECK(result.timings.prepareNanoseconds.has_value());
+        CHECK(result.timings.captureNanoseconds.has_value());
+        CHECK(result.timings.postconditionNanoseconds.has_value());
         CHECK(fixture.state() == expected);
         CHECK(result.damage == outputs);
         CHECK(result.footsteps == footsteps);
@@ -654,6 +710,131 @@ TEST_CASE("ordinary combat runner matches native complete party and enemy phases
     CHECK(walked);
     CHECK(stepped);
     CHECK(fixture.device.texturesCreated == uploads);
+}
+
+TEST_CASE("ordinary combat preserves native party shoves pushed recovery and late refusal undo",
+          "[ordinary-combat-tick][ordinary-pushed][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture = std::make_unique<Fixture>();
+    auto& first = fixture->players[0].actor;
+    auto& second = fixture->players[1].actor;
+    const f32 separation = first.radius() + second.radius() + 0.01f;
+    first.place({0, 0, -40});
+    second.place({separation, 0, -40});
+    const auto uploads = fixture->device.texturesCreated;
+    std::unique_ptr<Boundary::State> pushed;
+    bool queuedShove = false;
+    bool recovered = false;
+    for (s32 step = 0; step < 90; ++step) {
+        CAPTURE(ticks, step);
+        std::array<PlayInput, 4> input{};
+        // Use real ordered party collision, not a fabricated pushed flag or
+        // animation checkpoint. The receiver retains its own input slot (1).
+        if (step * ticks < 20) {
+            input[3].move = {Vec2{1, 0}, 1};
+        }
+        auto frame = Fixture::frame(step, ticks);
+        frame.attention = {0, 0, -40};
+        frame.camera.position += frame.attention;
+        auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        auto expected = std::make_unique<Boundary::State>(fixture->state());
+        const auto outputs = fixture->outputs;
+        const auto footsteps = fixture->footsteps;
+        queuedShove |= fixture->players[1].knockback.pushed();
+        const bool receiving =
+            fixture->players[1].figure->animator().action() == PlayerAnimator::Action::Pushed;
+        if (receiving && !pushed) {
+            pushed = std::make_unique<Boundary::State>(*expected);
+        }
+        recovered |= pushed && step * ticks > 40 && !receiving &&
+                     PlayerAnimator::locomotion(fixture->players[1].figure->animator().action());
+        REQUIRE(fixture->boundary->restore(*before));
+        const auto result = fixture->runner->step(fixture->players, input, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        INFO(Tick::kPartyRefusals[static_cast<usize>(result.partyRefusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK_FALSE(result.refusedAction);
+        CHECK(result.refusedTarget == Tick::TargetFamily::None);
+        CHECK(fixture->state() == *expected);
+        CHECK(result.damage == outputs);
+        CHECK(result.footsteps == footsteps);
+        CHECK(result.throws.empty());
+        CHECK(result.strong.empty());
+    }
+    REQUIRE(queuedShove);
+    REQUIRE(pushed);
+    REQUIRE(recovered);
+
+    // A later native damage refusal must still undo the accepted Pushed motion
+    // and every other party/pool owner. Obtain a real queued power blow first.
+    REQUIRE(fixture->boundary->restore(*pushed));
+    fixture->awaitNativePowerBlow();
+    for (auto& player : fixture->players) {
+        player.actor.save().progress().health = 1;
+    }
+    auto before = std::make_unique<Boundary::State>(fixture->state());
+    auto frame = Fixture::frame(90, ticks);
+    frame.attention = {0, 0, -40};
+    frame.camera.position += frame.attention;
+    fixture->native({}, frame);
+    REQUIRE(std::ranges::any_of(
+        fixture->players, [](const auto& player) { return player.life == PlayerLife::Dying; }));
+    REQUIRE(fixture->boundary->restore(*before));
+    const auto result = fixture->runner->step(fixture->players, {}, frame);
+    REQUIRE(result.status == Tick::Status::Unsupported);
+    CHECK(result.refusal == Tick::Refusal::Damage);
+    CHECK(result.subjects.empty());
+    CHECK(result.damage.empty());
+    CHECK(result.footsteps.empty());
+    CHECK(result.throws.empty());
+    CHECK(fixture->state() == *before);
+    CHECK(fixture->device.texturesCreated == uploads);
+}
+
+TEST_CASE("ordinary combat reports the actual refused native power action without admitting it",
+          "[ordinary-combat-tick][ordinary-party-refusal][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture = std::make_unique<Fixture>(false, false, true);
+    bool refusedPower = false;
+    for (s32 step = 0; step < 120; ++step) {
+        CAPTURE(ticks, step);
+        std::array<PlayInput, 4> input{};
+        input[3].attack = input[3].attackPressed = step == 0;
+        input[3].strongAttack = step > 0;
+        const auto frame = Fixture::frame(step, ticks);
+        auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        const auto nativeAction = fixture->players[0].figure->animator().action();
+        using Action = PlayerAnimator::Action;
+        const bool power = nativeAction == Action::PowerClose || nativeAction == Action::PowerLow ||
+                           nativeAction == Action::PowerMed || nativeAction == Action::Spin;
+        auto expected = power ? nullptr : std::make_unique<Boundary::State>(fixture->state());
+        REQUIRE(fixture->boundary->restore(*before));
+        const auto result = fixture->runner->step(fixture->players, input, frame);
+        if (power) {
+            REQUIRE(result.status == Tick::Status::Unsupported);
+            CHECK(result.refusal == Tick::Refusal::PartyMotion);
+            CHECK(result.partyRefusal == Tick::PartyRefusal::TurboAction);
+            REQUIRE(result.refusedAction);
+            CHECK(*result.refusedAction == nativeAction);
+            CHECK(static_cast<usize>(*result.refusedAction) < Tick::kActionCount);
+            CHECK(result.refusedTarget == Tick::TargetFamily::None);
+            CHECK(result.damage.empty());
+            CHECK(result.throws.empty());
+            CHECK(result.strong.empty());
+            CHECK(fixture->state() == *before);
+            refusedPower = true;
+            break;
+        }
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK_FALSE(result.refusedAction);
+        CHECK(result.refusedTarget == Tick::TargetFamily::None);
+        REQUIRE(expected);
+        CHECK(fixture->state() == *expected);
+    }
+    REQUIRE(refusedPower);
 }
 
 TEST_CASE("stage combat advances the unfiltered native G1 entrance",
@@ -812,13 +993,14 @@ TEST_CASE("stage combat refuses a carried transporter at its current native cont
               &fixture->world.collision());
     REQUIRE(pads.size() == 2);
     REQUIRE(pads.pad(0).support == 0);
+    REQUIRE(fixture->transporters.size() == pads.size());
     const auto authored = pads.pad(0).position;
     const auto uploads = fixture->device.texturesCreated;
     bool advanced = false, refused = false;
     for (s32 step = 0; step < 180; ++step) {
         CAPTURE(ticks, step);
         const auto frame = Fixture::frame(step, ticks);
-        const auto before = fixture->state();
+        const auto before = std::make_unique<Boundary::State>(fixture->state());
         // Observe the actual native pad after the world phase, then rewind that
         // whole phase before asking the transactional runner to execute it.
         fixture->world.update(frame.seconds, false);
@@ -828,7 +1010,15 @@ TEST_CASE("stage combat refuses a carried transporter at its current native cont
                 .contact(player.actor.position(), player.actor.radius(), player.actor.height())
                 .has_value();
         });
-        REQUIRE(fixture->boundary->restore(before));
+        REQUIRE(fixture->boundary->restore(*before));
+        std::unique_ptr<Boundary::State> expected;
+        if (!touched) {
+            fixture->native({}, frame);
+            expected = std::make_unique<Boundary::State>(fixture->state());
+            REQUIRE(expected->stage);
+            REQUIRE(expected->stage->transporters);
+            REQUIRE(fixture->boundary->restore(*before));
+        }
         const auto result = fixture->runner->step(fixture->players, {}, frame);
         INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
         if (touched) {
@@ -838,11 +1028,13 @@ TEST_CASE("stage combat refuses a carried transporter at its current native cont
             CHECK(result.subjects.empty());
             CHECK(result.damage.empty());
             CHECK(result.throws.empty());
-            CHECK(fixture->state() == before);
+            CHECK(fixture->state() == *before);
             refused = true;
             break;
         }
         REQUIRE(result.status == Tick::Status::Advanced);
+        REQUIRE(expected);
+        CHECK(fixture->state() == *expected);
         advanced = true;
     }
     CHECK(advanced);
@@ -1081,6 +1273,128 @@ TEST_CASE("ordinary stationary and strafing throws replay native release flight 
     CHECK(fixture.device.texturesCreated == uploads);
 }
 
+TEST_CASE("whole ordinary ticks retain blocked muzzle impacts and undo failed prepared sparks",
+          "[ordinary-combat-tick][ordinary-blocked-muzzle][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    const s32 mode = GENERATE(0, 1, 2); // normal, strong, exhausted shared effect pool
+    const bool strong = mode == 1;
+    auto fixture =
+        std::make_unique<Fixture>(false, false, true, 0, true, false, MovingStage::None, true);
+    auto& player = fixture->players[0];
+    const auto prepared = fixture->arsenal.prepareWeapon(player.actor, *player.figure,
+                                                         Vec3{0, 0, 1}, strong ? 2.0f : 1.0f, true);
+    REQUIRE(prepared);
+    REQUIRE_FALSE(prepared->missiles.empty());
+    const auto muzzle = prepared->missiles.front().position;
+    const auto radius = prepared->missiles.front().spec->radius;
+    auto& collision = const_cast<WorldCollision&>(fixture->world.collision());
+    // The wall crosses the shared muzzle, not the player's feet. Preserve the
+    // native floor and run real input/movement/aim before the release callback.
+    collision.build({{{0, 1, 0}, {{{-200, 0, -200}, {200, 0, -200}, {200, 0, 200}}}, -1, 14},
+                     {{0, 1, 0}, {{{-200, 0, -200}, {200, 0, 200}, {-200, 0, 200}}}, -1, 14},
+                     {{0, 0, -1},
+                      {muzzle + Vec3{-5, -20, 0}, muzzle + Vec3{-5, 20, 0}, muzzle + Vec3{5, 0, 0}},
+                      -1,
+                      2}});
+    const auto clear =
+        collision.resolveWalls(muzzle, radius, muzzle.y - radius * .5f, muzzle.y + radius * .5f);
+    REQUIRE(glm::distance(clear, muzzle) > 1e-4f);
+    const auto uploads = fixture->device.texturesCreated;
+    bool blocked = false;
+    s32 tail = 0;
+    for (s32 step = 0; step < 120 && tail < 3; ++step) {
+        CAPTURE(ticks, mode, step);
+        std::array<PlayInput, 4> input{};
+        input[3].aimDirection = Vec3{0, 0, 1};
+        input[3].attack = !blocked && !strong;
+        input[3].attackPressed = step == 0 && !strong;
+        input[3].strongAttack = step == 0 && strong;
+        const auto frame = Fixture::frame(step, ticks);
+        auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        const bool released = strong ? player.figure->animator().strongReleased()
+                                     : player.figure->animator().released();
+        const auto expected = std::make_unique<Boundary::State>(fixture->state());
+        REQUIRE(fixture->releases.empty());
+        REQUIRE(fixture->boundary->restore(*before));
+        if (mode == 2 && released) {
+            before->combat.effects.nextId = 0;
+            REQUIRE(fixture->boundary->restore(*before));
+        }
+        const auto result = fixture->runner->step(fixture->players, input, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        INFO(Tick::kPartyRefusals[static_cast<usize>(result.partyRefusal)]);
+        if (mode == 2 && released) {
+            REQUIRE(result.status == Tick::Status::Unsupported);
+            CHECK(result.refusal == Tick::Refusal::PartyMotion);
+            CHECK(result.partyRefusal == Tick::PartyRefusal::WeaponEmission);
+            CHECK(fixture->state() == *before);
+            CHECK(result.impacts.empty());
+            CHECK(result.throws.empty());
+            CHECK(result.strong.empty());
+            CHECK(result.damage.empty());
+            CHECK(result.footsteps.empty());
+            blocked = true;
+            break;
+        }
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(result.partyRefusal == Tick::PartyRefusal::None);
+        CHECK(fixture->state() == *expected);
+        CHECK(result.throws.empty());
+        CHECK(fixture->arsenal.missiles().count() == 0);
+        if (released) {
+            REQUIRE(result.impacts.size() == 1);
+            CHECK(result.impacts.front().name == "S_WEAPONHITWOOD");
+            CHECK(result.impacts.front().position == clear);
+            bool sparks = false;
+            for (usize index = 0; index < fixture->effects.count(); ++index) {
+                const auto* tree = fixture->effects.effect(index).tree;
+                sparks |= tree != nullptr && tree->name == "SPARKS";
+            }
+            CHECK(sparks);
+            blocked = true;
+        } else {
+            CHECK(result.impacts.empty());
+        }
+        if (blocked) {
+            ++tail;
+        }
+    }
+    REQUIRE(blocked);
+    CHECK(fixture->device.texturesCreated == uploads);
+}
+
+TEST_CASE("expired Phoenix pending release remains the native no-shooter no-op",
+          "[ordinary-combat-tick][ordinary-familiar-noop][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture = std::make_unique<Fixture>(false, false, true, 0, true);
+    auto before = std::make_unique<Boundary::State>(fixture->state());
+    REQUIRE(before->combat.players[0].figure);
+    // A queued familiar release survives until the next Figure::animate even
+    // when the inventory powerup expires in the preceding powerup phase.
+    before->combat.players[0].figure->familiarPending = true;
+    REQUIRE(fixture->boundary->restore(*before));
+    const auto& player = fixture->players[0];
+    REQUIRE(player.figure->familiarTier() == 0);
+    REQUIRE((PowerupEffects::of(player.actor.save().progress().inventory).special &
+             powerup::kPhoenix) == 0);
+    const auto uploads = fixture->device.texturesCreated;
+    const std::array<PlayInput, 4> input{};
+    const auto frame = Fixture::frame(0, ticks);
+    fixture->native(input, frame);
+    REQUIRE(player.figure->familiarReleased());
+    const auto expected = std::make_unique<Boundary::State>(fixture->state());
+    REQUIRE(fixture->boundary->restore(*before));
+    const auto result = fixture->runner->step(fixture->players, input, frame);
+    REQUIRE(result.status == Tick::Status::Advanced);
+    CHECK(result.partyRefusal == Tick::PartyRefusal::None);
+    CHECK(fixture->state() == *expected);
+    CHECK(result.throws.empty());
+    CHECK(result.impacts.empty());
+    CHECK(fixture->arsenal.missiles().count() == 0);
+    CHECK(fixture->device.texturesCreated == uploads);
+}
+
 TEST_CASE("native strong throw timelines replay complete party damage effects and continuation",
           "[ordinary-combat-tick][ordinary-strong-phase][assets]") {
     const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
@@ -1175,6 +1489,250 @@ TEST_CASE("ordinary melee rewinds a hit when its authored feedback cannot be pre
     FAIL("native ordinary melee never hit its adjacent grunt");
 }
 
+TEST_CASE("ordinary generator contacts retain native sparse-party reward phase and effects",
+          "[ordinary-combat-tick][ordinary-generator][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    // The two flight cases use native ordinary/strong weapon preparation. The
+    // free-A area strikes are a separate target domain, not a guessed substitute.
+    const s32 mode = GENERATE(0, 1, 2);
+    auto fixture = std::make_unique<Fixture>(false, false, true, 0, false, false, MovingStage::None,
+                                             false, true);
+    const std::array initialExperience{fixture->players[0].actor.save().experience(),
+                                       fixture->players[1].actor.save().experience()};
+    if (mode != 0) {
+        for (usize index = 0; index < fixture->players.size(); ++index) {
+            auto& player = fixture->players[index];
+            player.actor.place(player.actor.position() - Vec3{0, 0, 12});
+            const auto target = fixture->opponents.generators().target(static_cast<s32>(index), 0);
+            REQUIRE(target.acquisition);
+            fixture->arsenal.launchWeapon(player.actor, player.figure.get(), player.actor.facing(),
+                                          mode == 2 ? 2.0f : 1.0f, false,
+                                          target.acquisition->point);
+        }
+        REQUIRE(fixture->arsenal.missiles().count() == fixture->players.size());
+    }
+    const auto uploads = fixture->device.texturesCreated;
+    const auto updates = fixture->device.textureUpdates;
+    u32 damaged = 0;
+    u32 cues = 0;
+    bool deferredRewards = false;
+    for (s32 tick = 0; tick < 90; ++tick) {
+        CAPTURE(ticks, mode, tick);
+        std::array<PlayInput, 4> input{};
+        if (mode == 0) {
+            for (usize index = 0; index < fixture->players.size(); ++index) {
+                if (fixture->opponents.generators().standing(static_cast<s32>(index))) {
+                    auto& command =
+                        input[static_cast<usize>(fixture->players[index].actor.player())];
+                    command.attack = true;
+                    command.attackPressed = tick == 0;
+                }
+            }
+        }
+        const auto frame = Fixture::frame(tick, ticks);
+        const auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        const auto expected = std::make_unique<Boundary::State>(fixture->state());
+        const auto outputs = fixture->outputs;
+        const auto footsteps = fixture->footsteps;
+        REQUIRE(fixture->meleeHits.empty()); // A generator never earns a melee-enemy credit.
+        for (usize index = 0; index < fixture->players.size(); ++index) {
+            const auto& old = before->opponents.generators.generators[index];
+            const auto& now = expected->opponents.generators.generators[index];
+            if (now.health < old.health) {
+                damaged |= 1U << static_cast<u32>(index);
+                REQUIRE(now.state == 0);
+                REQUIRE_FALSE(now.box.solid);
+                REQUIRE_FALSE(expected->combat.effects.effects.empty());
+                if (mode == 0) {
+                    CHECK(expected->adapter.generatorRewards.empty());
+                    CHECK(expected->combat.players[index].save.experience() >
+                          initialExperience[index]);
+                } else {
+                    CHECK_FALSE(expected->adapter.generatorRewards.empty());
+                    CHECK(expected->combat.players[index].save.experience() ==
+                          initialExperience[index]);
+                    deferredRewards = true;
+                }
+            }
+        }
+        REQUIRE(fixture->boundary->restore(*before));
+        const auto result = fixture->runner->step(fixture->players, input, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        INFO(Tick::kPartyRefusals[static_cast<usize>(result.partyRefusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(fixture->state() == *expected);
+        CHECK(result.damage == outputs);
+        CHECK(result.footsteps == footsteps);
+        CHECK(result.meleeHits.empty());
+        for (const auto& cue : result.impacts) {
+            if (cue.name == "S_GENKILLT") {
+                CHECK_FALSE(cue.playerDistance);
+                CHECK(cue.volume == 1);
+                ++cues;
+            }
+        }
+        if (damaged == 3 && expected->adapter.generatorRewards.empty()) {
+            break;
+        }
+    }
+    CHECK(damaged == 3);
+    CHECK(cues == 2);
+    CHECK(deferredRewards == (mode != 0));
+    for (usize index = 0; index < fixture->players.size(); ++index) {
+        const auto& player = fixture->players[index];
+        CHECK(player.actor.save().experience() > initialExperience[index]);
+        CHECK(player.actor.save().progress().lifetime.generatorsDestroyed == 1);
+        CHECK(player.actor.save().progress().lifetime.enemiesKilled == 0);
+        CHECK(player.levelKills == 0);
+    }
+    CHECK(fixture->device.texturesCreated == uploads);
+    CHECK(fixture->device.textureUpdates == updates);
+}
+
+TEST_CASE("ordinary generator emission failure rewinds damage rewards and all native owners",
+          "[ordinary-combat-tick][ordinary-generator][assets]") {
+    const bool exhausted = GENERATE(false, true);
+    auto fixture = std::make_unique<Fixture>(false, false, true, 0, false, false, MovingStage::None,
+                                             false, true);
+    std::array<PlayInput, 4> input{};
+    input[3].attack = true;
+    for (s32 tick = 0; tick < 180; ++tick) {
+        input[3].attackPressed = tick == 0;
+        const auto frame = Fixture::frame(tick, 1);
+        auto before = std::make_unique<Boundary::State>(fixture->state());
+        fixture->native(input, frame);
+        if (fixture->opponents.generators().standing(0)) {
+            continue;
+        }
+        REQUIRE(fixture->effects.count() > 0);
+        REQUIRE(before->combat.effects.effects.empty());
+        if (exhausted) {
+            before->combat.effects.nextId = 0;
+        }
+        REQUIRE(fixture->boundary->restore(*before));
+        auto nativeResources = fixture->resources.resources();
+        if (!exhausted) {
+            nativeResources.sharedEffects = {};
+        }
+        CombatRollbackCheckpoint combat(fixture->ordered, fixture->health, fixture->levels,
+                                        fixture->attacks, fixture->arsenal, fixture->effects,
+                                        nativeResources);
+        Boundary boundary(combat, fixture->opponents, fixture->missileResources);
+        Tick runner(boundary, fixture->classes, fixture->fixtures);
+        const auto uploads = fixture->device.texturesCreated;
+        const auto result = runner.step(fixture->players, input, frame);
+        CHECK(result.status == Tick::Status::Unsupported);
+        CHECK(result.refusal == Tick::Refusal::PartyMotion);
+        CHECK(result.partyRefusal == Tick::PartyRefusal::GeneratorEmission);
+        CHECK(result.damage.empty());
+        CHECK(result.impacts.empty());
+        CHECK(result.feedback.empty());
+        CHECK(fixture->state() == *before);
+        CHECK(fixture->device.texturesCreated == uploads);
+        return;
+    }
+    FAIL("native ordinary swing never destroyed its adjacent generator");
+}
+
+TEST_CASE("native G1 generator transitions restore prepared debris quotas and detached brood",
+          "[ordinary-generator][generator-native-phase][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture = std::make_unique<Fixture>(false, false, true, 0, false, true);
+    auto& opponents = fixture->opponents;
+    auto& generators = opponents.generators();
+    auto& enemies = opponents.enemies();
+    REQUIRE(generators.count() > 0);
+    // Exercise the unfiltered authored roster and native generate-single RNG,
+    // not a manufactured offspring or an edited quota/countdown checkpoint.
+    generators.setView(std::nullopt);
+    for (s32 step = 0; step < 8; ++step) {
+        generators.update(ticks, enemies, LevelOpponents::enemyViews(fixture->players),
+                          fixture->fixtures.obstacles());
+    }
+    s32 generator = -1;
+    for (const auto& body : enemies.targets()) {
+        const s32 parent = enemies.generatorOf(body.id);
+        if (parent >= 0 && generators.stateOf(parent) > 1) {
+            auto* archive = enemies.archive(generators.kindOf(parent));
+            if (archive != nullptr && archive->trees.find("GENHIT") &&
+                archive->trees.find("GENDIE")) {
+                generator = parent;
+                break;
+            }
+        }
+    }
+    REQUIRE(generator >= 0);
+    REQUIRE(generators.bredOf(generator) > 0);
+    const auto initial = std::make_unique<Boundary::State>(fixture->state());
+    const auto& source = initial->opponents.generators.generators[static_cast<usize>(generator)];
+    REQUIRE(source.threshold > 1);
+    const auto* level = fixture->world.level();
+    REQUIRE(level);
+    const f32 scale = LevelOpponents::generatorPowerScale(
+        experienceLevel(fixture->players[0].actor.save().experience()), level->tuning.playerLevel);
+    REQUIRE(scale > 0);
+    const auto uploads = fixture->device.texturesCreated;
+    const auto textureUpdates = fixture->device.textureUpdates;
+    for (const s32 transition : {0, 1, 2}) {
+        CAPTURE(ticks, generator, transition);
+        REQUIRE(fixture->boundary->restore(*initial));
+        const f32 damage = transition == 0   ? 1.0f
+                           : transition == 1 ? source.threshold + 1.0f
+                                             : source.health + 1.0f;
+        const f32 power = (damage + source.armor) / scale;
+        opponents.strikeGenerator(generator, power, 3, fixture->players);
+        fixture->effects.update(static_cast<f32>(ticks) / 60);
+        const auto expected = std::make_unique<Boundary::State>(fixture->state());
+        const auto& damaged =
+            expected->opponents.generators.generators[static_cast<usize>(generator)];
+        REQUIRE(damaged.health < source.health);
+        if (transition == 0) {
+            CHECK(damaged.state == source.state);
+            CHECK(expected->combat.effects.effects.empty());
+        } else {
+            CHECK(damaged.state < source.state);
+            REQUIRE_FALSE(expected->combat.effects.effects.empty());
+            if (transition == 1) {
+                REQUIRE(damaged.state > 0);
+                CHECK(damaged.most == source.most * 2);
+            } else {
+                CHECK(damaged.state == 0);
+                CHECK_FALSE(damaged.box.solid);
+                CHECK(std::ranges::none_of(
+                    expected->opponents.enemies.enemies,
+                    [&](const auto& enemy) { return enemy.generator == generator; }));
+            }
+        }
+        REQUIRE(fixture->boundary->restore(*initial));
+        std::vector<std::string> sounds;
+        REQUIRE(opponents.strikeGenerator(
+            generator, power, 3, fixture->players,
+            [&](const GeneratorFeedbackEmission& emission) -> std::optional<u32> {
+                u32 id = 0;
+                if (emission.archive != nullptr) {
+                    const auto prepared =
+                        emission.prepare(fixture->resources.resources().sharedEffects,
+                                         fixture->effects.textureLenders(), fixture->device);
+                    REQUIRE(prepared);
+                    id = fixture->effects.startPrepared(*prepared, emission.position, {});
+                    REQUIRE(id != 0);
+                    fixture->effects.placeAt(id, emission.placement);
+                }
+                sounds.push_back(emission.sound);
+                return id;
+            }));
+        fixture->effects.update(static_cast<f32>(ticks) / 60);
+        CHECK(sounds == std::vector<std::string>{transition == 2 ? "S_GENKILLG" : "S_GENDAMG"});
+        CHECK(fixture->state() == *expected);
+        const auto pending = std::make_unique<Boundary::State>(fixture->state());
+        REQUIRE(pending->adapter.generatorRewards.size() == 1);
+        CHECK(pending->adapter.generatorRewards.front().player == 3);
+        CHECK(fixture->device.texturesCreated == uploads);
+        CHECK(fixture->device.textureUpdates == textureUpdates);
+    }
+}
+
 TEST_CASE("ordinary melee preserves queued native feedback and refuses promotions",
           "[ordinary-combat-tick][ordinary-melee][assets]") {
     Fixture fixture(false, false, true);
@@ -1211,6 +1769,60 @@ TEST_CASE("ordinary melee preserves queued native feedback and refuses promotion
         CHECK(fixture.state() == expected);
     }
     CHECK(fixture.device.texturesCreated == uploads);
+}
+
+TEST_CASE("ordinary combat drains only already satisfied native ordered lesson queues",
+          "[ordinary-combat-tick][help-admission][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    const bool known = GENERATE(false, true);
+    auto fixture = std::make_unique<Fixture>();
+    fixture->players[0].actor.save().helpSeen = {HelpMessages::kDestroyGenerators};
+    if (known) {
+        fixture->players[1].actor.save().helpSeen = {HelpMessages::kDestroyGenerators};
+    }
+    auto before = std::make_unique<Boundary::State>(fixture->state());
+    // An exact host correction can carry several pending requests, including
+    // repeated hits. Delivery retains input-slot routing and native queue order.
+    before->adapter.lessons = {{HelpMessages::kDestroyGenerators, 3},
+                               {HelpMessages::kDestroyGenerators, 1},
+                               {HelpMessages::kDestroyGenerators, 3}};
+    REQUIRE(fixture->boundary->restore(*before));
+    MessageTable strings;
+    REQUIRE(strings.load(fixture->root / "TEXT/english.rom"));
+    HelpMessages help;
+    help.setTexts(&strings);
+    std::vector<usize> delivery;
+    fixture->help = [&](s32 id, usize index) {
+        delivery.push_back(index);
+        std::array<HelpReader, 2> readers;
+        for (usize player = 0; player < readers.size(); ++player) {
+            auto& runtime = fixture->players[player];
+            REQUIRE(runtime.life == PlayerLife::Standing);
+            readers[player] = {runtime.actor.player(), &runtime.actor.save().helpSeen,
+                               &runtime.helpHeard};
+        }
+        return help.post(id, fixture->players[index].actor.player(), readers) != nullptr;
+    };
+    const std::array<PlayInput, 4> input{};
+    const auto frame = Fixture::frame(0, ticks);
+    fixture->native(input, frame);
+    auto expected = std::make_unique<Boundary::State>(fixture->state());
+    CHECK((delivery == std::vector<usize>{0, 1, 0}));
+    REQUIRE(expected->adapter.lessons.empty());
+    CHECK(help.showing() == !known);
+    REQUIRE(fixture->boundary->restore(*before));
+    const auto result = fixture->runner->step(fixture->players, input, frame);
+    INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+    if (known) {
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(fixture->state() == *expected);
+    } else {
+        REQUIRE(result.status == Tick::Status::Unsupported);
+        CHECK(result.damage.empty());
+        CHECK(result.feedback.empty());
+        CHECK(fixture->state() == *before);
+    }
+    CHECK(delivery.size() == 3); // private replay never invokes the live HUD callback
 }
 
 TEST_CASE("ordinary combat runner rewinds a late second-player lethal blow",
@@ -1397,5 +2009,67 @@ TEST_CASE("ordinary combat runner refuses prospective special placements before 
     CHECK(fixture.state() == before);
     CHECK(fixture.opponents.critters().count() == 0);
     CHECK(fixture.device.texturesCreated == uploads);
+}
+
+TEST_CASE("stage combat preserves native capped gold contacts and undoes a later real pickup",
+          "[ordinary-combat-tick][ordinary-stage-tick][pickup-admission][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture = std::make_unique<Fixture>(false, false, false, 0, false, true);
+    for (auto& player : fixture->players) {
+        player.actor.save().gold = 99999;
+    }
+    const auto& records = fixture->world.layout().itemInfos();
+    const auto record = std::ranges::find_if(records, [](const auto& info) {
+        // The first gold definition is COIN_GOLD, a challenge asset not in G1's
+        // bound archives. Use the ordinary treasure that native G1 actually has.
+        return info.type == ItemInfo::kPowerup && info.subtype == ItemInfo::kGold &&
+               info.value > 0 && info.name == "TREAS_GOLD";
+    });
+    REQUIRE(record != records.end());
+    // PlacedItems borrows level items then POWERUPS. itemScope() is the
+    // different level/realm scope used by fixtures and excludes POWERUPS.
+    const AssetScope pickupScope(fixture->world.items(), &fixture->world.powerups());
+    const auto tree = pickupScope.findTree(record->name);
+    REQUIRE(tree);
+    REQUIRE(fixture->world.placeItem(fixture->device, record->name,
+                                     fixture->players[0].actor.position()));
+    const usize item = fixture->world.placedItems().size() - 1;
+    REQUIRE(fixture->world.placedItems().item(item).archive == tree->archive);
+    REQUIRE(fixture->world.placedItems().item(item).figure ==
+            &tree->archive->trees.tree(tree->index));
+    REQUIRE(
+        PartyPickups::touchesPickup(fixture->players, fixture->world, fixture->fixtures.chests()));
+    REQUIRE(PartyPickups::collectionUnchanged(fixture->players, fixture->world,
+                                              fixture->fixtures.chests(), fixture->classes));
+    const auto textures = fixture->device.texturesCreated;
+    const auto uploads = fixture->device.textureUpdates;
+    for (s32 tick = 0; tick < 6; ++tick) {
+        const auto before = fixture->state();
+        const auto frame = Fixture::frame(tick, ticks);
+        fixture->native({}, frame);
+        const auto expected = fixture->state();
+        REQUIRE(fixture->boundary->restore(before));
+        const auto result = fixture->runner->step(fixture->players, {}, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(fixture->state() == expected);
+        CHECK(result.damage == fixture->outputs);
+        CHECK(result.footsteps == fixture->footsteps);
+        CHECK_FALSE(fixture->world.placedItems().item(item).taken);
+    }
+    fixture->players[0].actor.save().gold = 0;
+    REQUIRE_FALSE(PartyPickups::collectionUnchanged(fixture->players, fixture->world,
+                                                    fixture->fixtures.chests(), fixture->classes));
+    const auto before = fixture->state();
+    const auto result = fixture->runner->step(fixture->players, {}, Fixture::frame(6, ticks));
+    CHECK(result.status == Tick::Status::Unsupported);
+    CHECK(result.refusal == Tick::Refusal::Pickups);
+    CHECK(result.subjects.empty());
+    CHECK(result.damage.empty());
+    CHECK(result.throws.empty());
+    CHECK(result.feedback.empty());
+    CHECK(fixture->state() == before);
+    CHECK(fixture->device.texturesCreated == textures);
+    CHECK(fixture->device.textureUpdates == uploads);
 }
 } // namespace

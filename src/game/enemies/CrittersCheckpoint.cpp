@@ -17,8 +17,12 @@ bool bankIdentity(const CrittersCheckpoint::Bank& a, const CrittersCheckpoint::B
 }
 } // namespace
 bool CrittersCheckpoint::State::valid() const {
+    return events.valid() && std::ranges::all_of(actors, &CombatantCheckpoint::State::valid) &&
+           validAggregate();
+}
+bool CrittersCheckpoint::State::validAggregate() const {
     if (banks.size() > kMaxStocks || realm < 'A' || realm > 'Z' ||
-        !fixture_checkpoint::name(gargoyleForm) || !events.valid() || !events.arena.empty() ||
+        !fixture_checkpoint::name(gargoyleForm) || !events.arena.empty() ||
         !events.tramples.empty()) {
         return false;
     }
@@ -34,8 +38,7 @@ bool CrittersCheckpoint::State::valid() const {
     }
     for (usize index = 0; index < actors.size(); ++index) {
         const auto& actor = actors[index];
-        if (!actor.valid() || actor.lookouts != std::optional{lookouts} ||
-            actor.parts.size() != 1 ||
+        if (actor.lookouts != std::optional{lookouts} || actor.parts.size() != 1 ||
             (actor.parts[0].id != static_cast<s32>(index) &&
              (actor.parts[0].actor.definition.resource != 0 || actor.parts[0].id != -1)) ||
             actor.parts[0].actor.definition.resource > banks.size()) {
@@ -145,7 +148,9 @@ std::optional<CrittersCheckpoint::State> CrittersCheckpoint::checkpoint() const 
         return std::nullopt;
     }
     out.events = std::move(*events);
-    return out.valid() ? std::optional{std::move(out)} : std::nullopt;
+    // Actor and event captures above already performed their full validation.
+    // Bank clocks, tuning and every slot/resource relationship remain checked.
+    return out.validAggregate() ? std::optional{std::move(out)} : std::nullopt;
 }
 std::optional<CrittersCheckpoint::Prepared>
 CrittersCheckpoint::prepareRestore(const State& state) const {

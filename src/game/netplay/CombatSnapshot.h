@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <utility>
 
 #include "engine/world/SceneGeometry.h"
@@ -313,6 +314,23 @@ struct FixtureState {
     bool valid() const;
 };
 
+/** Native TRANS pads draw once with all materials, using the current carried
+ * transform. Their own previous/current clocks also preserve held-frame draws
+ * without requiring an earlier network snapshot. No travel state is inferred. */
+struct TransporterState {
+    u32 instance = 0;
+    u32 resource = 0;
+    Mat4 placement{1};
+    u32 sequence = 0;
+    u64 generation = 0;
+    f32 frame = 0, previousFrame = 0;
+    f32 textureClock = 0, previousTextureClock = 0;
+    bool playing = false, continuous = false, advanced = false;
+    bool valid() const;
+    void sample(f32 alpha);
+    bool operator==(const TransporterState&) const = default;
+};
+
 /** Atomic host checkpoint, including its motion/camera tick. Absence removes an
  * entity; a changed instance is a spawn, never a resurrection of a recycled slot.
  * This slice covers player health/actions, ordinary enemies and fighter meshes.
@@ -328,16 +346,18 @@ struct CombatSnapshot {
     static constexpr usize kMaxProjectiles = 1024;
     static constexpr usize kMaxPickups = 384;
     static constexpr usize kMaxFixtures = 1024;
+    static constexpr usize kMaxTransporters = 1024;
     MotionSnapshot motion;
     f32 worldTextureFrame = 0; ///< host texture clock, held during cutscenes that freeze it
     s32 musicArea = -1;
     u32 musicLevel = 255;
     std::array<std::optional<PlayerCombatState>, InputCommand::kSeats> players;
-    std::vector<EnemyCombatState> enemies;    // strictly increasing instance IDs
-    std::vector<ProjectileState> projectiles; // strictly increasing source/instance pairs
-    std::vector<PickupState> pickups;         // strictly increasing instance IDs
-    std::vector<FixtureState> fixtures;       // strictly increasing source/instance pairs
-    std::vector<FighterMeshState> fighters;   // strictly increasing actor/part pairs
+    std::vector<EnemyCombatState> enemies;      // strictly increasing instance IDs
+    std::vector<ProjectileState> projectiles;   // strictly increasing source/instance pairs
+    std::vector<PickupState> pickups;           // strictly increasing instance IDs
+    std::vector<FixtureState> fixtures;         // strictly increasing source/instance pairs
+    std::vector<TransporterState> transporters; // strictly increasing authored instance IDs
+    std::vector<FighterMeshState> fighters;     // strictly increasing actor/part pairs
     std::optional<SceneGeometry> geometry;
     std::optional<HudSnapshot> hud;
     std::optional<WorldMotion::State> worldMotion;
@@ -380,7 +400,7 @@ public:
         MotionSnapshot m_motion;
         std::vector<u8> m_bytes;
     };
-    static constexpr usize kHeaderBytes = 64;
+    static constexpr usize kHeaderBytes = 68;
     static constexpr usize kCompanionBytes = 84 + 4 + AnimationCheckpoint::kBytes;
     static constexpr usize kShadowBytes = 28;
     static constexpr usize kMovementBytes = 52;
@@ -403,6 +423,7 @@ public:
         148 + kShotRollbackBytes + kParticleBytes + kEffectOriginBytes + kPotionRollbackBytes;
     static constexpr usize kPickupBytes = 96;
     static constexpr usize kFixtureBytes = 120;
+    static constexpr usize kTransporterBytes = 88;
     static constexpr usize kGeometryHeaderBytes = 20;
     static constexpr usize kGeometryObjectBytes = 64;
     static constexpr usize kMeleeBytes =
@@ -424,6 +445,9 @@ public:
     static std::optional<Prepared> prepare(const CombatSnapshot& snapshot);
     static std::optional<std::vector<u8>> encode(const CombatSnapshot& snapshot);
     static std::optional<CombatSnapshot> decode(std::span<const u8> bytes);
+    /** Complete-receive boundary: allocate only after fixed framing/length checks,
+     * avoiding full snapshot temporaries on the fragment-handling stack. */
+    static std::unique_ptr<CombatSnapshot> decodeOwned(std::span<const u8> bytes);
 };
 
 } // namespace gdl::game

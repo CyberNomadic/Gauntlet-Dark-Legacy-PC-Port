@@ -18,6 +18,10 @@ struct OpponentState {
     std::optional<PlacedEnemies::Checkpoint> placements = std::nullopt;
     bool valid() const;
     bool operator==(const OpponentState&) const = default;
+
+private:
+    friend class OpponentSimulation;
+    bool validAggregate() const;
 };
 
 } // namespace gdl::game

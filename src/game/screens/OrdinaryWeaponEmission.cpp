@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "game/screens/OrdinaryProjectilePhase.h"
+
 namespace gdl::game {
 namespace {
 bool finite(f32 value) {
@@ -76,6 +78,29 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
         prepared->missiles.size() > 5 || prepared->weapon.multiplayer != MultiplayerMode::Normal) {
         return {};
     }
+    const auto& first = prepared->missiles.front();
+    if (first.spec != &MissileSpec::of(save.character) || !finite(first.position)) {
+        return {};
+    }
+    const Vec3 clear = arsenal.weaponMuzzle(first);
+    if (!finite(clear)) {
+        return {};
+    }
+    if (glm::distance(clear, first.position) > 1e-4f) {
+        // Native launchWeapon supplies only these two fields: SPARKS and the
+        // level wall cue, never class/fan impact art or per-projectile provenance.
+        const auto impact = arsenal.impactPresentation({.position = clear, .owner = first.owner});
+        if (impact.archive != nullptr && impact.archive->trees.find(impact.tree)) {
+            const auto effect = OrdinaryProjectilePhase::impactResource(
+                impact, resources.sharedEffects, arsenal.m_resources->effects.textureLenders(),
+                arsenal.m_resources->device);
+            if (!effect || arsenal.m_resources->effects.startPrepared(*effect, impact.position,
+                                                                      impact.setting) == 0) {
+                return {};
+            }
+        }
+        return {.accepted = true, .impact = impact.cue};
+    }
     const PlayerMissiles::Resource* physical = nullptr;
     for (const auto& resource : resources.missiles) {
         if (resource.spec == &MissileSpec::of(save.character) &&
@@ -112,14 +137,6 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
             (launch.velocity && !finite(*launch.velocity))) {
             return {};
         }
-        const Vec3 clear = arsenal.m_resources->collision.resolveWalls(
-            launch.position, launch.spec->radius, launch.position.y - launch.spec->radius * 0.5f,
-            launch.position.y + launch.spec->radius * 0.5f);
-        if (!finite(clear) || glm::distance(clear, launch.position) > 1e-4f) {
-            // The live blocked-muzzle path immediately emits an untargeted
-            // world impact. It must be refused before those external outputs.
-            return {};
-        }
         auto body = bodyResource(launch, resources.missileEffects,
                                  arsenal.missiles().visuals().textureLenders());
         if (!body) {
@@ -134,7 +151,7 @@ OrdinaryWeaponEmission::Result OrdinaryWeaponEmission::advance(
             return {};
         }
     }
-    return {.launched = true, .cue = cue};
+    return {.accepted = true, .launched = true, .cue = cue};
 }
 
 } // namespace gdl::game

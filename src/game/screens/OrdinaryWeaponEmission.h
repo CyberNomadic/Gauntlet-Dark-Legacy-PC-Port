@@ -19,13 +19,18 @@ public:
         bool operator==(const Cue&) const = default;
     };
     struct Result {
+        bool accepted = false; ///< a blocked native muzzle succeeds without launching
         bool launched = false;
         std::optional<Cue> cue;
+        std::optional<PlayerArsenal::ImpactCue> impact;
     };
 
     /** Call only at a native normal/strong release latch, after PartyMotion has
      * updated the figure. Resources are immutable authenticated local bindings.
-     * Every fan member and its muzzle are checked before starting any missile.
+     * Native launch-time collision queries only the shared first muzzle. A
+     * blocked muzzle creates its prepared SPARKS and one buffered impact cue,
+     * with no flight, release identity or throw cue. Every actual fan member's
+     * metadata/resources are checked before starting the first clear missile.
      * A later pool refusal can still leave private flights/effects: the caller
      * MUST rewind the enclosing combat transaction, and publish no outputs.
      * A successful result contains one cue for the entire fan, not one per shot.

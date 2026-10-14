@@ -401,16 +401,25 @@ struct WorldStateCheckpoint::Prepared::Data {
         WorldScene::Slot* target = nullptr;
         const Texture* frame = nullptr;
         std::vector<const Texture*> cycle;
+        f32 cyclePosition = 0, cycleSpeed = 0;
+        Vec2 offset{0}, scrollPhase{0}, scrollVelocity{0};
     };
     const WorldStateCheckpoint* wrapper = nullptr;
     std::shared_ptr<const u8> lifetime;
     std::shared_ptr<const Catalog> catalog;
     u64 generation = 0;
-    State state;
+    // Own each commit value once. Catalog ids, invariant slot flags and the
+    // incoming light/event representations have already been validated.
+    std::vector<Placement> placements;
+    std::vector<Unit> units;
+    std::vector<s32> hidden, contactOnly, blockedFloorExits;
+    std::vector<WorldAnimator::Cursor> animations;
     std::vector<Slot> slots;
     std::vector<WorldCollision::MovingObject> moving;
     std::vector<WorldAnimator::CycleEvent> events;
     WorldLighting lighting;
+    f32 darken = 0;
+    u32 textureFrame = 0;
 };
 
 WorldStateCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
@@ -824,8 +833,15 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
     data->lifetime = m_lifetime;
     data->catalog = m_catalog;
     data->generation = m_generation;
-    data->state = state;
+    data->placements = state.placements;
+    data->units = state.units;
+    data->hidden = state.hidden;
+    data->contactOnly = state.contactOnly;
+    data->blockedFloorExits = state.blockedFloorExits;
+    data->animations = state.animations;
     data->lighting = state.light.lighting();
+    data->darken = state.darken;
+    data->textureFrame = state.textureFrame;
     data->slots.reserve(state.slots.size());
     for (usize i = 0; i < state.slots.size(); ++i) {
         const auto& saved = state.slots[i];
@@ -837,8 +853,14 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
             saved.thermal != local.thermal) {
             return std::nullopt;
         }
-        Prepared::Data::Slot slot{
-            &local, saved.frame ? m_catalog->pointers[*saved.frame] : nullptr, {}};
+        Prepared::Data::Slot slot{&local,
+                                  saved.frame ? m_catalog->pointers[*saved.frame] : nullptr,
+                                  {},
+                                  saved.cyclePosition,
+                                  saved.cycleSpeed,
+                                  saved.offset,
+                                  saved.scrollPhase,
+                                  saved.scrollVelocity};
         slot.cycle.reserve(saved.cycle.size());
         for (const auto id : saved.cycle) {
             slot.cycle.push_back(m_catalog->pointers[id]);
@@ -852,16 +874,17 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
         if (saved.object != local.object) {
             return std::nullopt;
         }
-        auto staged = local;
-        staged.place(saved.transform);
+        WorldCollision::MovingObject staged;
+        staged.object = local.object;
+        // Metadata is immutable; allocate the derived cache once and borrow
+        // its already-bound local vertices only while running the native loop.
+        staged.placed = local.local;
+        staged.place(saved.transform, local.local);
         usize triangleCount = 0;
         if (!validTriangles(staged.placed, triangleCount) || !vector(staged.boundsMin) ||
             !vector(staged.boundsMax)) {
             return std::nullopt;
         }
-        // The preparation owns only newly derived caches; immutable triangle
-        // inputs remain with the already-bound collision owner.
-        std::vector<CollisionTriangle>{}.swap(staged.local);
         data->moving.push_back(std::move(staged));
     }
     data->events.reserve(state.cycles.size());
@@ -885,23 +908,21 @@ bool WorldStateCheckpoint::commitRestore(Prepared&& prepared) {
         return false;
     }
     auto data = std::move(prepared.m_data);
-    const auto& state = data->state;
-    for (usize i = 0; i < state.placements.size(); ++i) {
+    for (usize i = 0; i < data->placements.size(); ++i) {
         auto& local = m_scene.m_placements[i];
-        const auto& saved = state.placements[i];
+        const auto& saved = data->placements[i];
         local.local = saved.local;
         local.previous = saved.previous;
         local.continuity = saved.continuity;
     }
-    for (usize i = 0; i < state.units.size(); ++i) {
-        m_scene.m_units[i].alpha = state.units[i].alpha;
-        m_scene.m_units[i].visible = state.units[i].visible;
+    for (usize i = 0; i < data->units.size(); ++i) {
+        m_scene.m_units[i].alpha = data->units[i].alpha;
+        m_scene.m_units[i].visible = data->units[i].visible;
     }
-    for (usize i = 0; i < data->slots.size(); ++i) {
-        auto& local = *data->slots[i].target;
-        const auto& saved = state.slots[i];
-        local.frame = data->slots[i].frame;
-        local.cycle.swap(data->slots[i].cycle);
+    for (auto& saved : data->slots) {
+        auto& local = *saved.target;
+        local.frame = saved.frame;
+        local.cycle.swap(saved.cycle);
         local.cyclePosition = saved.cyclePosition;
         local.cycleSpeed = saved.cycleSpeed;
         local.offset = saved.offset;
@@ -909,8 +930,8 @@ bool WorldStateCheckpoint::commitRestore(Prepared&& prepared) {
         local.scrollVelocity = saved.scrollVelocity;
     }
     std::swap(m_scene.m_lighting, data->lighting);
-    m_scene.m_darken = state.darken;
-    m_scene.m_textureFrame = state.textureFrame;
+    m_scene.m_darken = data->darken;
+    m_scene.m_textureFrame = data->textureFrame;
     std::fill(m_scene.m_worldValid.begin(), m_scene.m_worldValid.end(), u8{0});
     std::fill(m_scene.m_presentedValid.begin(), m_scene.m_presentedValid.end(), u8{0});
     for (usize i = 0; i < data->moving.size(); ++i) {
@@ -921,12 +942,12 @@ bool WorldStateCheckpoint::commitRestore(Prepared&& prepared) {
         local.boundsMax = saved.boundsMax;
         local.placed.swap(saved.placed);
     }
-    m_collision.m_hidden.swap(data->state.hidden);
-    m_collision.m_contactOnly.swap(data->state.contactOnly);
-    m_collision.m_blockedFloorExits.swap(data->state.blockedFloorExits);
-    for (usize i = 0; i < state.animations.size(); ++i) {
+    m_collision.m_hidden.swap(data->hidden);
+    m_collision.m_contactOnly.swap(data->contactOnly);
+    m_collision.m_blockedFloorExits.swap(data->blockedFloorExits);
+    for (usize i = 0; i < data->animations.size(); ++i) {
         auto& track = m_animator.m_tracks[i];
-        const auto& saved = state.animations[i];
+        const auto& saved = data->animations[i];
         track.frame = saved.frame;
         track.reverse = saved.reverse;
         track.once = saved.once;

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 
 #include <catch2/catch_test_macros.hpp>
@@ -15,6 +16,7 @@
 #include "game/netplay/CombatReplica.h"
 #include "game/netplay/OnlinePair.h"
 #include "game/players/ItemPickup.h"
+#include "game/screens/CombatPrediction.h"
 #include "game/screens/FloorRiding.h"
 #include "game/screens/MatchInputs.h"
 #include "game/screens/PlayReplication.h"
@@ -52,9 +54,10 @@ struct Pair {
         REQUIRE(host.open(1, kOwners, clients));
         REQUIRE(guest.open(2, kOwners, server));
     }
-    void send(MatchSession& from, MatchSession& to, PacketTransport::Connection sender,
-              bool duplicate = false) {
+    usize send(MatchSession& from, MatchSession& to, PacketTransport::Connection sender,
+               bool duplicate = false) {
         from.flush(wire);
+        const usize count = wire.packets.size();
         for (const auto& bytes : wire.packets) {
             const auto result = to.receive(sender, bytes);
             REQUIRE((result == MatchSession::Admission::Accepted ||
@@ -66,11 +69,23 @@ struct Pair {
             }
         }
         wire.packets.clear();
+        return count;
     }
     void pump() {
-        send(host, guest, 99);
-        send(guest, host, 1);
-        send(host, guest, 99);
+        // This lossless scene harness drains the bounded publication bursts,
+        // including completion receipts, without advancing simulation time.
+        constexpr usize kRounds =
+            MatchSession::kPublicationWindow *
+                (CombatReplica::kMaxPackets / MatchSession::kPublicationBurst + 1) +
+            4;
+        for (usize round = 0; round < kRounds; ++round) {
+            const usize outgoing = send(host, guest, 99);
+            const usize incoming = send(guest, host, 1);
+            if (outgoing == 0 && incoming == 0) {
+                return;
+            }
+        }
+        FAIL("lossless publication drain exceeded its bounded window");
     }
     void prepare(MatchTransition transition = MatchTransition::Start) {
         REQUIRE(host.prepare(1, transition));
@@ -150,6 +165,10 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
     Scene scene("G1");
     CHECK_FALSE(scene.play.combatFrame());
     CHECK_FALSE(scene.play.combatState());
+    CHECK(scene.play.combatCaptureCosts().total.count == 1);
+    CHECK(scene.play.combatCaptureCosts().capture.count == 0);
+    CHECK(scene.play.combatCaptureCosts().encode.count == 0);
+    CHECK(scene.play.combatCaptureCosts().accepted == 0);
     ProjectileResources resources;
     REQUIRE(scene.play.bindReplicationResources(resources, scene.pickups, scene.fixtures));
     scene.settle();
@@ -164,6 +183,7 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
     const auto firstActor = scene.play.actor(0)->checkpoint();
     const auto secondActor = scene.play.actor(1)->checkpoint();
     const auto uploads = scene.device.texturesCreated;
+    const auto costsBefore = scene.play.combatCaptureCosts();
     const auto seed = scene.play.combatState();
     REQUIRE(seed);
     CHECK(scene.play.actor(0)->checkpoint() == firstActor);
@@ -172,6 +192,13 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
     CHECK(seed->combat.players[0].actor == firstActor);
     CHECK(seed->combat.players[1].actor == secondActor);
     CHECK(scene.play.combatState() == seed);
+    const auto& costsAfter = scene.play.combatCaptureCosts();
+    CHECK(costsAfter.total.count == costsBefore.total.count + 2);
+    CHECK(costsAfter.capture.count == costsBefore.capture.count + 2);
+    CHECK(costsAfter.encode.count == costsBefore.encode.count + 2);
+    CHECK(costsAfter.accepted == costsBefore.accepted + 2);
+    CHECK(costsAfter.total.nanoseconds >=
+          costsAfter.capture.nanoseconds + costsAfter.encode.nanoseconds);
     CHECK(scene.device.texturesCreated == uploads);
     const auto repeated = scene.play.combatFrame();
     REQUIRE(repeated);
@@ -208,6 +235,49 @@ TEST_CASE("native combat frame capture keeps the next phase clock and gameplay c
         CHECK_FALSE(scene.play.combatFrame());
         CHECK_FALSE(scene.play.combatState());
     }
+}
+
+TEST_CASE("live scene transporter seeds resolve against independently loaded private stage owners",
+          "[netplay][play-replication][host-private-stage][assets]") {
+    const auto name = GENERATE("G1", "A1");
+    CAPTURE(name);
+    auto ownedScene = std::make_unique<Scene>(name);
+    auto& scene = *ownedScene;
+    ProjectileResources resources;
+    REQUIRE(scene.play.bindReplicationResources(resources, scene.pickups, scene.fixtures));
+    scene.settle();
+    const auto seed = scene.play.combatState();
+    REQUIRE(seed);
+    REQUIRE(seed->stage);
+    MatchContext context;
+    context.epoch = 4;
+    context.scene = 1;
+    context.tickRate = 60;
+    context.owners = {1, 2, 0, 0};
+    context.grants = {1, 1, 0, 0};
+    PartyBootstrap::Party profiles;
+    for (const auto& runtime : scene.play.participants()) {
+        auto save = runtime.actor.save();
+        save.name = "TEST";
+        profiles[static_cast<usize>(runtime.actor.player())] = CharacterProfile::capture(save);
+        REQUIRE(profiles[static_cast<usize>(runtime.actor.player())]);
+    }
+    CombatPrediction guest;
+    const auto level = scene.catalog.byName(name);
+    REQUIRE(level);
+    REQUIRE(guest.open(scene.device, scene.root, *level, context, profiles, 1));
+    const auto textures = scene.device.texturesCreated;
+    const auto updates = scene.device.textureUpdates;
+    const auto stage = guest.decodeStage(*seed->stage);
+    REQUIRE(stage);
+    REQUIRE(stage->transporters);
+    CHECK(stage->transporters->players == 2);
+    CHECK(stage->transporters->pads.size() == scene.play.transporters().size());
+    if (std::string_view(name) == "A1") {
+        REQUIRE_FALSE(stage->transporters->pads.empty());
+    }
+    CHECK(scene.device.texturesCreated == textures);
+    CHECK(scene.device.textureUpdates == updates);
 }
 
 TEST_CASE("host publishes retained prepared full and opponent-only captures exactly",
@@ -355,7 +425,10 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
         REQUIRE(profile);
         profiles[seat] = *profile;
     }
-    test::OnlinePair pair(profiles);
+    // Keep the independent host/client owners off the test stack, as they are
+    // in OnlinePlay. Packet decoding needs stack space for bounded value states.
+    const auto pairOwner = std::make_unique<test::OnlinePair>(profiles);
+    auto& pair = *pairOwner;
     REQUIRE(pair.hostSession.party());
     REQUIRE(pair.guestSession.party());
     std::vector<PartyMember> members;
@@ -364,9 +437,12 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
             members.push_back({static_cast<s32>(seat), profile->gameplayCopy()});
         }
     }
-    Scene scene({}, false, false, false, members);
+    const auto sceneOwner = std::make_unique<Scene>(std::string_view{}, false, false, false,
+                                                    std::span<const PartyMember>{members});
+    auto& scene = *sceneOwner;
     scene.settle();
-    PlayReplication driver;
+    const auto driverOwner = std::make_unique<PlayReplication>();
+    auto& driver = *driverOwner;
     ProjectileResources resources;
     REQUIRE(scene.play.bindSceneProjectiles(resources));
     pair.prepare();
@@ -386,9 +462,11 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
     pair.pump();
 
     // Independent client resources: no PlayScene exists on this side.
-    LevelWorld clientWorld;
+    const auto clientWorldOwner = std::make_unique<LevelWorld>();
+    auto& clientWorld = *clientWorldOwner;
     REQUIRE(clientWorld.load(scene.device, scene.root));
-    Enemies clientEnemies;
+    const auto clientEnemiesOwner = std::make_unique<Enemies>();
+    auto& clientEnemies = *clientEnemiesOwner;
     clientEnemies.open(scene.device, scene.root, nullptr, 4, {}, 1);
     ProjectileResources clientProjectiles;
     PickupResources clientPickups;
@@ -402,7 +480,8 @@ TEST_CASE("real scene ticks only on the host after the load barrier and holds ac
         fixtureArchives.push_back(&clientWorld.realmItems());
     }
     REQUIRE(clientFixtures.bind(scene.device, fixtureArchives, clientGenerators, clientRocks));
-    ReplicaView client;
+    const auto clientOwner = std::make_unique<ReplicaView>();
+    auto& client = *clientOwner;
     REQUIRE(client.begin(pair.guest.context(), clientWorld, clientEnemies, clientProjectiles,
                          clientPickups, clientFixtures));
     std::array<PlayerFigure*, InputCommand::kSeats> clientFigures{};

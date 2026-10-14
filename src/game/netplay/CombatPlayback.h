@@ -63,6 +63,7 @@ public:
                                                       const CombatSnapshot& upper, f32 blend,
                                                       EnemyPresentation* presentation = nullptr);
     const CombatSnapshot* latest() const { return m_receiver.latest(); }
+    const std::optional<CombatReplica::Receipt>& receipt() const { return m_receiver.receipt(); }
     usize size() const { return m_history.size(); }
 
 private:

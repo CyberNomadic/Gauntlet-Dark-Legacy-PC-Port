@@ -21,12 +21,12 @@ bool finite(const Vec3& value) {
 bool ordinary(s32 kind) {
     return kind >= 0 && kind < kSwarmKindCount && kind != kGarmBroodKind;
 }
-bool references(const OpponentCombatCheckpoint::State& state,
-                const EffectTrees::PoolCheckpoint& effects) {
+bool effectReferences(const OpponentCombatCheckpoint::State& state,
+                      const EffectTrees::PoolCheckpoint& effects) {
     // Expired cues legitimately remain until followCritterEffects. Retain them,
     // but never admit an identifier the shared pool has not issued.
     const auto issued = [&](u32 effect) { return effects.nextId == 0 || effect < effects.nextId; };
-    return effects.valid() && std::ranges::all_of(state.cueEffects, issued) &&
+    return std::ranges::all_of(state.cueEffects, issued) &&
            std::ranges::all_of(state.critterEffects,
                                [&](const auto& effect) { return issued(effect.effect); }) &&
            std::ranges::all_of(state.moveEffects,
@@ -44,13 +44,15 @@ OpponentCombatCheckpoint::State::State() {
 }
 
 bool OpponentCombatCheckpoint::State::valid() const {
+    return statues.valid() && critters.valid() && projectiles.valid() && validAggregate();
+}
+bool OpponentCombatCheckpoint::State::validAggregate() const {
     if (lessons.size() > kMaxRecords || generatorRewards.size() > kMaxRecords ||
         rockHits.size() > kMaxRecords || cueEffects.size() > kMaxRecords || hearers.size() > 4 ||
         !finite(shrink) || shrink <= 0 || shrink > 1 ||
-        std::ranges::any_of(hitStreak, [](s32 value) { return value < 0; }) || !statues.valid() ||
-        !critters.valid() || !projectiles.valid() || critterEffects.size() > kMaxRecords ||
-        moveEffects.size() > kMaxRecords || barrelRams.size() > kMaxRecords ||
-        projectiles.catalog.size() != critters.banks.size()) {
+        std::ranges::any_of(hitStreak, [](s32 value) { return value < 0; }) ||
+        critterEffects.size() > kMaxRecords || moveEffects.size() > kMaxRecords ||
+        barrelRams.size() > kMaxRecords || projectiles.catalog.size() != critters.banks.size()) {
         return false;
     }
     for (usize index = 0; index < projectiles.catalog.size(); ++index) {
@@ -238,6 +240,19 @@ struct OpponentCombatCheckpoint::Prepared::Data {
     std::vector<CombatantRam> barrelRams;
 };
 
+struct OpponentCombatCheckpoint::CaptureResources {
+    u64 binding;
+    EffectTrees* effects;
+    CrittersCheckpoint critters;
+    CombatantProjectilesCheckpoint projectiles;
+
+    CaptureResources(u64 generation, Critters& population, CombatantProjectiles& missiles,
+                     EffectTrees& sharedEffects,
+                     std::span<const EffectTrees::PoolResource> resources)
+        : binding(generation), effects(&sharedEffects), critters(population),
+          projectiles(missiles, sharedEffects, critters.resources(), resources) {}
+};
+
 OpponentCombatCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data)
     : m_data(std::move(data)) {}
 OpponentCombatCheckpoint::Prepared::Prepared(Prepared&&) noexcept = default;
@@ -255,6 +270,39 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     if (!supported()) {
         return std::nullopt;
     }
+    const auto bindCapture = [&] {
+        auto resources = std::make_unique<CaptureResources>(
+            m_owner.m_bindingGeneration, m_owner.m_critters, m_owner.m_combatantProjectiles,
+            m_owner.m_resources->effects, m_effectResources);
+        if (!resources->critters.bound()) {
+            return false;
+        }
+        m_captureResources = std::move(resources);
+        return true;
+    };
+    // The catalog is immutable during ordinary updates. Test the population's
+    // binding before dereferencing any cached stock after close/reopen or loads.
+    if ((!m_captureResources || m_captureResources->binding != m_owner.m_bindingGeneration ||
+         m_captureResources->effects != &m_owner.m_resources->effects ||
+         !m_captureResources->critters.bound()) &&
+        !bindCapture()) {
+        return std::nullopt;
+    }
+    auto critters = m_captureResources->critters.checkpoint();
+    if (!critters) {
+        // An independently reloaded stock can retain its address while changing
+        // its resource token. Rebind once, preserving the fresh-wrapper capture
+        // contract; malformed live values still fail the same full leaf checks.
+        if (!bindCapture()) {
+            return std::nullopt;
+        }
+        critters = m_captureResources->critters.checkpoint();
+    }
+    auto projectiles = m_captureResources->projectiles.checkpoint(effects);
+    auto statues = m_owner.m_statues.checkpoint();
+    if (!statues || !critters || !projectiles) {
+        return std::nullopt;
+    }
     State state;
     state.hitStreak = m_owner.m_hitStreak;
     state.lessons = m_owner.m_lessons;
@@ -267,16 +315,6 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     state.cueEffects = m_owner.m_cueEffects;
     state.shrink = m_owner.m_shrink;
     state.bagSeed = m_owner.m_bagSeed;
-    auto statues = m_owner.m_statues.checkpoint();
-    CrittersCheckpoint critterOwner{m_owner.m_critters};
-    auto critters = critterOwner.checkpoint();
-    CombatantProjectilesCheckpoint projectileOwner{m_owner.m_combatantProjectiles,
-                                                   m_owner.m_resources->effects,
-                                                   critterOwner.resources(), m_effectResources};
-    auto projectiles = projectileOwner.checkpoint(effects);
-    if (!statues || !critters || !projectiles) {
-        return std::nullopt;
-    }
     state.statues = std::move(*statues);
     state.critters = std::move(*critters);
     state.projectiles = std::move(*projectiles);
@@ -292,15 +330,18 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     for (const auto& ram : m_owner.m_barrelRams) {
         state.barrelRams.push_back({ram.id, ram.damage});
     }
-    return state.valid() && references(state, effects) ? std::optional{std::move(state)}
-                                                       : std::nullopt;
+    // All children, including the supplied shared effects, were validated by
+    // their captures. Preserve the adapter's scalars and cross-owner references.
+    return state.validAggregate() && effectReferences(state, effects)
+               ? std::optional{std::move(state)}
+               : std::nullopt;
 }
 
 std::optional<OpponentCombatCheckpoint::Prepared>
 OpponentCombatCheckpoint::prepareRestore(const State& state,
                                          const EffectTrees::PoolCheckpoint& effects) const {
     if (!supported() || m_generation == std::numeric_limits<u64>::max() || !state.valid() ||
-        !references(state, effects)) {
+        !effects.valid() || !effectReferences(state, effects)) {
         return std::nullopt;
     }
     auto data = std::make_unique<Prepared::Data>();

@@ -24,7 +24,8 @@ public:
         WrongEpoch,
         Invalid
     };
-    static constexpr usize kChunkBytes = 1024;
+    // Header plus the hosted-room envelope fits one 1000-byte provider fragment.
+    static constexpr usize kChunkBytes = 960;
     static constexpr usize kHeaderBytes = 36;
     static constexpr usize kPendingSnapshots = 3;
     static constexpr usize kMaxChunks = (SnapshotBlock::kMaxBytes + kChunkBytes - 1) / kChunkBytes;
@@ -33,6 +34,16 @@ public:
         kMaxChunks + (kMaxChunks + kRepairGroup - 1) / kRepairGroup;
     enum class Recovery : u8 { None, SingleLoss };
     using Packets = std::vector<std::vector<u8>>;
+    struct Receipt {
+        u64 epoch = 0;
+        u64 tick = 0;
+        u32 checksum = 0;
+        bool operator==(const Receipt&) const = default;
+    };
+    static constexpr usize kReceiptBytes = 32;
+    static bool recognizesReceipt(std::span<const u8> bytes);
+    static std::optional<std::vector<u8>> encodeReceipt(const Receipt& receipt);
+    static std::optional<Receipt> decodeReceipt(std::span<const u8> bytes);
 
     /** SingleLoss adds one XOR repair packet per four data chunks (except one-chunk
      * checkpoints). Any one missing chunk in each group can be reconstructed. Raw
@@ -40,16 +51,18 @@ public:
     static std::optional<Packets>
     packets(const CombatSnapshot& snapshot,
             SnapshotBlock::Compression compression = SnapshotBlock::Compression::Automatic,
-            Recovery recovery = Recovery::None);
+            Recovery recovery = Recovery::None, Receipt* publication = nullptr);
     static std::optional<Packets>
     packets(const CombatPacket::Prepared& snapshot,
             SnapshotBlock::Compression compression = SnapshotBlock::Compression::Automatic,
-            Recovery recovery = Recovery::None);
+            Recovery recovery = Recovery::None, Receipt* publication = nullptr);
     /** Only trusted reliable start/travel control may change epoch. */
     bool begin(PacketTransport::Connection host, u64 epoch);
     void clear();
     Admission receive(PacketTransport::Connection sender, std::span<const u8> bytes);
     const CombatSnapshot* latest() const { return m_latest ? &*m_latest : nullptr; }
+    /** Available only after complete checksum, decompression and snapshot validation. */
+    const std::optional<Receipt>& receipt() const { return m_receipt; }
     usize pending() const { return m_pending.size(); }
 
 private:
@@ -63,6 +76,7 @@ private:
     u64 m_epoch = 0;
     std::map<u64, Assembly> m_pending;
     std::optional<CombatSnapshot> m_latest;
+    std::optional<Receipt> m_receipt;
 };
 
 } // namespace gdl::game

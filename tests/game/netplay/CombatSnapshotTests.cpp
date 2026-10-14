@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <string>
 #include <type_traits>
 
@@ -234,6 +236,12 @@ TEST_CASE("prepared combat packets retain exact validated bytes and capture meta
             test::combatSeed(source);
         }
         const auto bytes = encode(source);
+        const auto owned = CombatPacket::decodeOwned(bytes);
+        REQUIRE(owned);
+        CHECK(CombatPacket::encode(*owned) == bytes);
+        const auto value = CombatPacket::decode(bytes);
+        REQUIRE(value);
+        CHECK(CombatPacket::encode(*value) == CombatPacket::encode(*owned));
         const auto prepared = CombatPacket::prepare(source);
         REQUIRE(prepared);
         CHECK(std::ranges::equal(prepared->bytes(), bytes));
@@ -493,7 +501,7 @@ TEST_CASE("combat payload round trips every seat mask and maximum enemy roster",
         CHECK(bytes.size() <= CombatPacket::kMaxBytes);
         CHECK(bytes[0] == 'G');
         CHECK(bytes[3] == 'B');
-        CHECK(bytes[4] == 43);
+        CHECK(bytes[4] == 46);
         CHECK(bytes[6] == 128);
         const auto decoded = CombatPacket::decode(bytes);
         REQUIRE(decoded);
@@ -2594,6 +2602,83 @@ TEST_CASE("fixture codecs preserve independent cursors and reject malformed visi
     CHECK_FALSE(CombatPacket::encode(invalid));
 }
 
+TEST_CASE("transporter records preserve native draw anchors within the fixed packet budget",
+          "[netplay][combat-snapshot][transporter-presentation]") {
+    auto source = std::make_unique<CombatSnapshot>(state(3, 0));
+    TransporterState pad;
+    pad.instance = 3;
+    pad.resource = 7;
+    pad.placement[3] = Vec4{2, 4, -6, 1};
+    pad.sequence = 1;
+    pad.generation = 9;
+    pad.frame = 3.75f;
+    pad.previousFrame = 3.25f;
+    pad.textureClock = 14.75f;
+    pad.previousTextureClock = 14.25f;
+    pad.playing = pad.continuous = pad.advanced = true;
+    source->transporters.push_back(pad);
+    auto held = pad;
+    held.instance = 8;
+    held.advanced = false;
+    held.previousTextureClock = held.textureClock;
+    source->transporters.push_back(held);
+    const auto bytes = encode(*source);
+    const auto decoded = CombatPacket::decode(bytes);
+    REQUIRE(decoded);
+    CHECK(decoded->transporters == source->transporters);
+    CHECK(encode(*decoded) == bytes);
+    constexpr usize kPads =
+        CombatPacket::kHeaderBytes + MotionPacket::kMaxBytes + 4 * CombatPacket::kPlayerBytes;
+    CHECK(bytes.size() == kPads + 2 * CombatPacket::kTransporterBytes);
+    CHECK(CombatPacket::kFixtureBytes == 120);
+    CHECK(CombatPacket::kTransporterBytes == 88);
+    CHECK(CombatPacket::kMaxBytes == 1'570'903);
+    for (const auto [offset, value] : std::array<std::pair<usize, u32>, 12>{
+             {{4, 45},
+              {64, static_cast<u32>(CombatSnapshot::kMaxTransporters + 1)},
+              {kPads, 0},
+              {kPads + 4, 0},
+              {kPads + 4, 65536},
+              {kPads + 56, 65536},
+              {kPads + 60, 0},
+              {kPads + 72, std::bit_cast<u32>(4.0f)},
+              {kPads + 80, std::bit_cast<u32>(15.0f)},
+              {kPads + 84, 8},
+              {kPads + 84, 4},
+              {kPads + CombatPacket::kTransporterBytes, 3}}}) {
+        CAPTURE(offset, value);
+        auto corrupt = bytes;
+        writeWord(corrupt, offset, value);
+        CHECK_FALSE(CombatPacket::decode(corrupt));
+    }
+    for (const usize offset : {8U, 52U, 68U, 72U, 76U, 80U}) {
+        for (const u32 bits : {0x7FC00000U, 0x7F800000U, 0xFF800000U}) {
+            auto corrupt = bytes;
+            writeWord(corrupt, kPads + offset, bits);
+            CHECK_FALSE(CombatPacket::decode(corrupt));
+        }
+    }
+    for (usize end = kPads; end < bytes.size(); ++end) {
+        CHECK_FALSE(CombatPacket::decode(std::span(bytes).first(end)));
+    }
+    auto extra = bytes;
+    extra.push_back(0);
+    CHECK_FALSE(CombatPacket::decode(extra));
+    source->transporters.clear();
+    for (usize index = 0; index < CombatSnapshot::kMaxTransporters; ++index) {
+        pad.instance = static_cast<u32>(index + 1);
+        source->transporters.push_back(pad);
+    }
+    REQUIRE(source->valid());
+    const auto full = CombatPacket::decode(encode(*source));
+    REQUIRE(full);
+    CHECK(full->transporters == source->transporters);
+    pad.instance += 1;
+    source->transporters.push_back(pad);
+    CHECK_FALSE(source->valid());
+    CHECK_FALSE(CombatPacket::encode(*source));
+}
+
 TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
           "[netplay][combat-snapshot]") {
     CombatReplica replica;
@@ -2718,7 +2803,8 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
     // Combined component maxima now exceed the fixed schema-39 packet budget;
     // neither encoding nor compression is allowed to silently prune that state.
     CHECK(CombatPacket::kMaxBytes == 1'570'903);
-    CHECK(CombatReplica::kMaxChunks == 1535);
+    CHECK(CombatReplica::kMaxChunks == 1637);
+    CHECK(CombatReplica::kMaxPackets == 2047);
     REQUIRE(next.valid());
     CHECK_FALSE(CombatPacket::encode(next));
     CHECK_FALSE(CombatReplica::packets(next, SnapshotBlock::Compression::Automatic));
@@ -2733,6 +2819,11 @@ TEST_CASE("combat chunks commit atomically despite reordering and duplicates",
          PlayerLocomotionState::kMaxGenerators);
     static_assert(kTypedGrowth % CombatPacket::kFixtureBytes == 0);
     next.fixtures.resize(CombatSnapshot::kMaxFixtures - kTypedGrowth / CombatPacket::kFixtureBytes);
+    // Schema 46 adds a four-byte transporter count without increasing the
+    // packet budget. Shorten the shared tree name by four encoded bytes (both
+    // pose values must still match) to retain this fixture's exact maximum.
+    next.players[0]->transitionPose->current.tree.resize(TreePose::Checkpoint::kMaxName - 4);
+    next.players[0]->transitionPose->previous.tree.resize(TreePose::Checkpoint::kMaxName - 4);
     CHECK(encode(next).size() == CombatPacket::kMaxBytes);
     const auto admittedBase = CombatPacket::prepare(next);
     REQUIRE(admittedBase);
@@ -3506,6 +3597,50 @@ TEST_CASE("geometry codecs reject malformed lengths indices flags and matrices",
     CHECK_FALSE(CombatPacket::encode(invalid));
 }
 
+TEST_CASE("owned combat decoding retains strict framing and independent validated results",
+          "[netplay][combat-snapshot][owned-combat-decode]") {
+    auto source = std::make_unique<CombatSnapshot>(state(9, 1));
+    test::combatSeed(*source);
+    const auto original = encode(*source);
+    auto bytes = original;
+    auto owned = CombatPacket::decodeOwned(bytes);
+    REQUIRE(owned);
+    REQUIRE(owned->combatState);
+    std::fill(bytes.begin(), bytes.end(), u8{0});
+    source.reset();
+    CHECK(CombatPacket::encode(*owned) == original);
+    for (usize length = 0; length < CombatPacket::kHeaderBytes; ++length) {
+        CHECK_FALSE(CombatPacket::decodeOwned(std::span(original).first(length)));
+    }
+    for (const usize length : {CombatPacket::kHeaderBytes, original.size() - 1}) {
+        CHECK_FALSE(CombatPacket::decodeOwned(std::span(original).first(length)));
+    }
+    bytes = original;
+    bytes.push_back(0);
+    CHECK_FALSE(CombatPacket::decodeOwned(bytes));
+    bytes.resize(CombatPacket::kMaxBytes + 1);
+    CHECK_FALSE(CombatPacket::decodeOwned(bytes));
+    for (const usize offset : {0U, 4U, 8U, 12U, 16U, 20U, 24U, 28U, 32U, 48U, 52U, 56U, 60U, 64U}) {
+        bytes = original;
+        writeWord(bytes, offset, std::numeric_limits<u32>::max());
+        CHECK_FALSE(CombatPacket::decodeOwned(bytes));
+        CHECK_FALSE(CombatPacket::decode(bytes));
+    }
+    // Valid complete framing followed by a late scalar-validation refusal must
+    // leave both earlier owned output and the next decoder invocation untouched.
+    bytes = original;
+    writeWord(bytes, 36, 0x7FC00000U); // Nonfinite world texture clock.
+    CHECK_FALSE(CombatPacket::decodeOwned(bytes));
+    CHECK_FALSE(CombatPacket::decode(bytes));
+    CHECK(CombatPacket::encode(*owned) == original);
+    const auto next = CombatPacket::decodeOwned(original);
+    REQUIRE(next);
+    CHECK(next.get() != owned.get());
+    CHECK(CombatPacket::encode(*next) == original);
+    owned->players[0]->health = 1;
+    CHECK(next->players[0]->health != 1);
+}
+
 TEST_CASE("lost combat fragments cannot resurrect a removed or recycled enemy",
           "[netplay][combat-snapshot]") {
     CombatReplica replica;
@@ -3533,6 +3668,60 @@ TEST_CASE("lost combat fragments cannot resurrect a removed or recycled enemy",
     CHECK(replica.latest()->players[0]->health == 0);
 }
 
+TEST_CASE("combat completion receipts require a fully validated publication",
+          "[netplay][combat-snapshot][snapshot-receipts]") {
+    const auto source = state(7);
+    CombatReplica::Receipt identity;
+    const auto chunks = CombatReplica::packets(source, SnapshotBlock::Compression::None,
+                                               CombatReplica::Recovery::None, &identity);
+    REQUIRE(chunks);
+    REQUIRE(chunks->size() > 1);
+    CombatReplica receiver;
+    REQUIRE(receiver.begin(1, source.motion.epoch));
+    CHECK_FALSE(receiver.receipt());
+    for (usize i = 0; i < chunks->size(); ++i) {
+        REQUIRE(receiver.receive(1, (*chunks)[i]) ==
+                (i + 1 == chunks->size() ? Admission::Committed : Admission::Pending));
+        CHECK(receiver.receipt().has_value() == (i + 1 == chunks->size()));
+    }
+    CHECK(receiver.receipt() == identity);
+    const auto encoded = CombatReplica::encodeReceipt(identity);
+    REQUIRE(encoded);
+    CHECK(encoded->size() == CombatReplica::kReceiptBytes);
+    CHECK(CombatReplica::recognizesReceipt(*encoded));
+    CHECK(CombatReplica::decodeReceipt(*encoded) == identity);
+    for (usize size = 0; size < encoded->size(); ++size) {
+        CHECK_FALSE(CombatReplica::decodeReceipt(std::span(*encoded).first(size)));
+    }
+    auto malformed = *encoded;
+    malformed.push_back(0);
+    CHECK_FALSE(CombatReplica::decodeReceipt(malformed));
+    for (const usize offset : {0U, 4U, 5U, 6U, 7U, 28U, 29U, 30U, 31U}) {
+        malformed = *encoded;
+        malformed[offset] ^= 2;
+        CHECK_FALSE(CombatReplica::decodeReceipt(malformed));
+    }
+    malformed = *encoded;
+    std::fill(malformed.begin() + 8, malformed.begin() + 16, u8{0});
+    CHECK_FALSE(CombatReplica::decodeReceipt(malformed));
+    auto invalid = identity;
+    invalid.epoch = 0;
+    CHECK_FALSE(CombatReplica::encodeReceipt(invalid));
+    CHECK(receiver.receive(1, chunks->front()) == Admission::Stale);
+    CHECK(receiver.receipt() == identity);
+    REQUIRE(receiver.begin(1, source.motion.epoch + 1));
+    CHECK_FALSE(receiver.receipt());
+    receiver.clear();
+    REQUIRE(receiver.begin(1, source.motion.epoch));
+    auto corrupt = *chunks;
+    corrupt.front().back() ^= 1;
+    for (usize i = 0; i < corrupt.size(); ++i) {
+        CHECK(receiver.receive(1, corrupt[i]) ==
+              (i + 1 == corrupt.size() ? Admission::Invalid : Admission::Pending));
+    }
+    CHECK_FALSE(receiver.receipt());
+}
+
 TEST_CASE("combat fragment validation and host epochs bound partial state",
           "[netplay][combat-snapshot]") {
     CombatReplica replica;
@@ -3542,6 +3731,9 @@ TEST_CASE("combat fragment validation and host epochs bound partial state",
     CHECK_FALSE(replica.begin(1, 0));
     REQUIRE(replica.begin(1, 9));
     CHECK(replica.receive(2, chunks[0]) == Admission::WrongHost);
+    auto oldVersion = chunks[0];
+    oldVersion[4] = 4;
+    CHECK(replica.receive(1, oldVersion) == Admission::Invalid);
     for (usize size = 0; size < chunks[0].size(); ++size) {
         CHECK(replica.receive(1, std::span(chunks[0]).first(size)) == Admission::Invalid);
     }

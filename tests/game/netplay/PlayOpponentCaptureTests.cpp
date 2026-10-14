@@ -1,9 +1,12 @@
 #include <array>
+#include <memory>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/netplay/CombatReplica.h"
 #include "game/netplay/OnlinePair.h"
 #include "game/screens/OpponentResources.h"
 #include "game/screens/PlayReplication.h"
@@ -67,6 +70,132 @@ struct Scene {
         REQUIRE_FALSE(play.spawning());
     }
 };
+
+struct PublicationWire final : PacketTransport {
+    CombatReplica::Packets packets;
+    SendResult send(Connection /*connection*/, std::span<const u8> bytes,
+                    Delivery delivery) override {
+        REQUIRE(delivery == Delivery::Unreliable);
+        packets.emplace_back(bytes.begin(), bytes.end());
+        return SendResult::Sent;
+    }
+    std::vector<Event> poll() override { return {}; }
+    std::optional<Statistics> statistics(Connection /*connection*/) const override { return {}; }
+    void close(Connection /*connection*/) override {}
+};
+
+TEST_CASE("lazy opponent fallback preserves eager selection and exact published packets",
+          "[netplay][play-opponent-capture][prepared-publication][lazy-opponent-capture][assets]") {
+    enum class Mode { Complete, Tower, Arrival, RefusedComplete };
+    const auto mode = GENERATE(Mode::Complete, Mode::Tower, Mode::Arrival, Mode::RefusedComplete);
+    CAPTURE(mode);
+    // Keep the native scene and full snapshot owners off the Windows test stack.
+    auto scene = std::make_unique<Scene>(mode != Mode::Tower);
+    if (mode != Mode::Arrival) {
+        scene->settle();
+    }
+    if (mode == Mode::RefusedComplete) {
+        // A valid native pool can be outside the ordinary-combat domain. Its
+        // presentation/opponent checkpoint remains encodable; the full joint
+        // seed must be refused by public cross-owner validation, not truncated.
+        auto swarm = scene->play.enemies().checkpoint();
+        REQUIRE(swarm);
+        swarm->scales.bossEncounter = true;
+        REQUIRE(swarm->valid());
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): fixture owns the native pool
+        REQUIRE(const_cast<Enemies&>(scene->play.enemies()).restore(*swarm));
+    }
+    auto pair = std::make_unique<test::OnlinePair>();
+    pair->prepare();
+    auto replication = std::make_unique<PlayReplication>();
+    REQUIRE(replication->bind(scene->play, pair->host, scene->pickups, scene->fixtures));
+    pair->ready();
+    REQUIRE(replication->advance(pair->host, {}, scene->projectiles) ==
+            PlayReplication::Result::Advanced);
+    const auto* selected = replication->latest();
+    REQUIRE(selected);
+    REQUIRE(selected->motion.tick == 0);
+    REQUIRE(selected->opponents);
+    REQUIRE(selected->opponentFrame);
+    CHECK(selected->combatState.has_value() == (mode == Mode::Complete));
+    CHECK(selected->combatFrame.has_value() == selected->combatState.has_value());
+
+    // Independently repeat the previous eager selection policy at the same
+    // post-step boundary, using real captures and the public complete encoder.
+    const auto textures = scene->device.texturesCreated;
+    const auto updates = scene->device.textureUpdates;
+    auto reference = std::make_unique<CombatSnapshot>(*selected);
+    reference->combatState.reset();
+    reference->combatFrame.reset();
+    reference->opponents = OpponentResources::capture(
+        scene->play.generators(), scene->play.enemies(), scene->play.enemyMissiles());
+    REQUIRE(reference->opponents);
+    reference->opponents->placements = scene->play.placedEnemies().checkpoint();
+    REQUIRE(reference->opponents->placements);
+    reference->opponentFrame = scene->play.opponentFrame(2);
+    REQUIRE(reference->opponentFrame);
+    auto eager = CombatPacket::prepare(*reference);
+    REQUIRE(eager);
+    reference->combatState = scene->play.combatState();
+    reference->combatFrame = scene->play.combatFrame();
+    if (mode == Mode::Complete || mode == Mode::RefusedComplete) {
+        REQUIRE(reference->combatState);
+        REQUIRE(reference->combatFrame);
+        auto complete = CombatPacket::prepare(*reference);
+        if (mode == Mode::Complete) {
+            REQUIRE(complete);
+            eager = std::move(complete);
+        } else {
+            REQUIRE(reference->combatState->valid());
+            CHECK_FALSE(complete);
+            reference->combatState.reset();
+            reference->combatFrame.reset();
+        }
+    } else {
+        CHECK_FALSE(reference->combatState);
+        CHECK_FALSE(reference->combatFrame);
+    }
+    const auto selectedBytes = CombatPacket::encode(*selected);
+    REQUIRE(selectedBytes);
+    CHECK(static_cast<bool>(*selectedBytes ==
+                            std::vector<u8>{eager->bytes().begin(), eager->bytes().end()}));
+    CHECK(scene->device.texturesCreated == textures);
+    CHECK(scene->device.textureUpdates == updates);
+    const auto after = OpponentResources::capture(scene->play.generators(), scene->play.enemies(),
+                                                  scene->play.enemyMissiles());
+    REQUIRE(after);
+    CHECK(after->enemies == reference->opponents->enemies);
+
+    PublicationWire wire;
+    const auto expected = CombatReplica::packets(*eager, SnapshotBlock::Compression::Automatic,
+                                                 CombatReplica::Recovery::SingleLoss);
+    REQUIRE(expected);
+    REQUIRE_FALSE(expected->empty());
+    // Publication is intentionally paced across flushes. Drain this one batch
+    // within its exact burst budget, without advancing time or publishing again.
+    const usize flushes =
+        (expected->size() + MatchSession::kPublicationBurst - 1) / MatchSession::kPublicationBurst;
+    for (usize flush = 0; flush < flushes; ++flush) {
+        const usize before = wire.packets.size();
+        pair->host.flush(wire);
+        REQUIRE(wire.packets.size() > before);
+        CHECK(wire.packets.size() - before <= MatchSession::kPublicationBurst);
+    }
+    CHECK(wire.packets.size() == expected->size());
+    CHECK(static_cast<bool>(wire.packets == *expected));
+    pair->host.flush(wire);
+    // Once drained, another flush does not resend the prepared frame.
+    CHECK(static_cast<bool>(wire.packets == *expected));
+    for (const auto& packet : wire.packets) {
+        const auto admitted = pair->guest.receive(99, packet);
+        REQUIRE((admitted == MatchSession::Admission::Accepted ||
+                 admitted == MatchSession::Admission::Stale));
+    }
+    const auto* received = pair->guest.playback().latest();
+    REQUIRE(received);
+    CHECK(static_cast<bool>(CombatPacket::encode(*received) == selectedBytes));
+    CHECK_FALSE(replication->failed());
+}
 
 TEST_CASE("host opponent context captures native player order and original tuning without mutation",
           "[netplay][opponent-frame][play-opponent-capture][assets]") {

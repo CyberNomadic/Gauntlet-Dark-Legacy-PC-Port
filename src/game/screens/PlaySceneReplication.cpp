@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <chrono>
+
 #include "game/screens/PlayScene.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/screens/ReplicaFixtures.h"
@@ -6,10 +9,36 @@
 #include "game/screens/StageResources.h"
 
 namespace gdl::game {
+namespace {
+class MeasureCapture {
+public:
+    explicit MeasureCapture(PlayScene::CombatCaptureCosts::Cost& cost)
+        : m_cost(&cost), m_begin(std::chrono::steady_clock::now()) {}
+    ~MeasureCapture() { finish(); }
+    void finish() {
+        if (m_cost == nullptr) {
+            return;
+        }
+        const auto elapsed = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                  std::chrono::steady_clock::now() - m_begin)
+                                                  .count());
+        ++m_cost->count;
+        m_cost->nanoseconds += elapsed;
+        m_cost->maximumNanoseconds = std::max(m_cost->maximumNanoseconds, elapsed);
+        m_cost = nullptr;
+    }
+
+private:
+    PlayScene::CombatCaptureCosts::Cost* m_cost;
+    std::chrono::steady_clock::time_point m_begin;
+};
+} // namespace
 std::optional<CombatStatePacket::State> PlayScene::combatState() {
+    const MeasureCapture totalCost(m_combatCaptureCosts.total);
     if (!combatFrame() || !m_combatResources || !m_combatResources->matches(m_players)) {
         return std::nullopt;
     }
+    MeasureCapture captureCost(m_combatCaptureCosts.capture);
     std::vector<std::unique_ptr<PlayerRuntimeCheckpoint>> owners;
     std::vector<PlayerRuntimeCheckpoint*> players;
     owners.reserve(m_players.size());
@@ -38,6 +67,7 @@ std::optional<CombatStatePacket::State> PlayScene::combatState() {
     CombatStatePacket::State state{std::move(*combat), std::move(*opponents)};
     if (m_combatWorld || m_combatFixtures) {
         if (!m_combatWorld || !m_combatFixtures || !m_combatCamera || !m_combatPortals ||
+            !m_combatTransporters || !m_combatTransporters->binds(m_transporters) ||
             !m_combatWorld->binds(*m_world) || !m_combatFixtures->binds(m_fixtures) ||
             !m_combatPortals->binds(m_portals) || !m_combatCamera->binds(m_camera, *m_world)) {
             return std::nullopt;
@@ -46,17 +76,26 @@ std::optional<CombatStatePacket::State> PlayScene::combatState() {
         auto fixtures = m_combatFixtures->checkpoint();
         auto camera = m_combatCamera->checkpoint();
         auto portals = m_combatPortals->checkpoint();
-        if (!world || !fixtures || !camera || !portals) {
+        auto transporters = m_combatTransporters->checkpoint();
+        if (!world || !fixtures || !camera || !portals || !transporters) {
             return std::nullopt;
         }
-        state.stage = StageStatePacket::encode(
-            {std::move(*world), std::move(*fixtures), std::move(*camera), std::move(*portals)},
-            m_combatStageCatalog);
+        captureCost.finish();
+        const MeasureCapture encodeCost(m_combatCaptureCosts.encode);
+        state.stage =
+            StageStatePacket::encode({std::move(*world), std::move(*fixtures), std::move(*camera),
+                                      std::move(*portals), std::move(*transporters)},
+                                     m_combatStageCatalog);
         if (!state.stage) {
             return std::nullopt;
         }
     }
-    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+    captureCost.finish();
+    if (!state.valid()) {
+        return std::nullopt;
+    }
+    ++m_combatCaptureCosts.accepted;
+    return state;
 }
 
 std::optional<OrdinaryCombatTick::Frame> PlayScene::combatFrame() const {
@@ -147,6 +186,7 @@ bool PlayScene::bindReplicationResources(ProjectileResources& projectiles, Picku
     // capturing a tick. Unsupported artwork retains ordinary online playback.
     m_combatFixtures.reset();
     m_combatPortals.reset();
+    m_combatTransporters.reset();
     m_combatCamera.reset();
     m_combatWorld.reset();
     m_combatStageCatalog = {};
@@ -159,22 +199,25 @@ bool PlayScene::bindReplicationResources(ProjectileResources& projectiles, Picku
         auto cameraOwner = std::make_unique<TowerCameraCheckpoint>(m_camera, *m_world);
         auto portalOwner = std::make_unique<ExitPortalsCheckpoint>(
             m_portals, m_world->layout(), m_world->items(), &m_world->realmItems());
+        auto transporterOwner = std::make_unique<LevelTransportersCheckpoint>(m_transporters);
         if (world->bindResources(*m_device) && fixtureOwner->bindResources() &&
-            portalOwner->bindResources()) {
+            portalOwner->bindResources() && transporterOwner->bindResources()) {
             auto worldState = world->checkpoint();
             auto fixtureState = fixtureOwner->checkpoint();
             auto cameraState = cameraOwner->checkpoint();
             auto portalState = portalOwner->checkpoint();
-            if (worldState && fixtureState && cameraState && portalState) {
+            auto transporterState = transporterOwner->checkpoint();
+            if (worldState && fixtureState && cameraState && portalState && transporterState) {
                 auto catalog = StageStatePacket::Catalog::build(
                     {std::move(*worldState), std::move(*fixtureState), std::move(*cameraState),
-                     std::move(*portalState)});
+                     std::move(*portalState), std::move(*transporterState)});
                 if (catalog) {
                     m_combatStageCatalog = std::move(*catalog);
                     m_combatWorld = std::move(world);
                     m_combatFixtures = std::move(fixtureOwner);
                     m_combatCamera = std::move(cameraOwner);
                     m_combatPortals = std::move(portalOwner);
+                    m_combatTransporters = std::move(transporterOwner);
                 }
             }
         }

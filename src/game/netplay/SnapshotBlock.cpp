@@ -4,6 +4,7 @@
 
 #include <lz4.h>
 
+#include "engine/codec/BytePlanes.h"
 #include "engine/io/ByteReader.h"
 
 namespace gdl::game {
@@ -32,25 +33,6 @@ std::vector<u8> compress(std::span<const u8> bytes) {
     return packed;
 }
 
-// Scalars use explicit 32-bit little-endian encoding. Group corresponding bytes
-// before compression so float exponents, zero high bytes and nearby IDs form
-// runs, instead of each low mantissa byte breaking them. This is a permutation,
-// not quantization: all bits (including any trailing partial word) round-trip.
-std::vector<u8> planes(std::span<const u8> bytes, bool reverse) {
-    const usize words = bytes.size() / 4;
-    std::vector<u8> output(bytes.size());
-    for (usize lane = 0; lane < 4; ++lane) {
-        for (usize i = 0; i < words; ++i) {
-            const usize scalar = i * 4 + lane;
-            const usize planar = lane * words + i;
-            output[reverse ? scalar : planar] = bytes[reverse ? planar : scalar];
-        }
-    }
-    for (usize i = words * 4; i < bytes.size(); ++i) {
-        output[i] = bytes[i];
-    }
-    return output;
-}
 } // namespace
 
 std::optional<std::vector<u8>> SnapshotBlock::encode(std::span<const u8> bytes,
@@ -66,7 +48,7 @@ std::optional<std::vector<u8>> SnapshotBlock::encode(std::span<const u8> bytes,
             mode |= kLz4;
         }
         if (bytes.size() >= 1024) {
-            auto planar = compress(planes(bytes, false));
+            auto planar = compress(BytePlanes::encode(bytes));
             if (!planar.empty() && (packed.empty() || planar.size() < packed.size())) {
                 packed = std::move(planar);
                 mode = kVersion | kLz4 | kBytePlanes;
@@ -117,6 +99,6 @@ std::optional<std::vector<u8>> SnapshotBlock::decode(std::span<const u8> bytes) 
     if (written != static_cast<s32>(size)) {
         return std::nullopt;
     }
-    return (mode & kBytePlanes) != 0 ? planes(unpacked, true) : std::move(unpacked);
+    return (mode & kBytePlanes) != 0 ? BytePlanes::decode(unpacked) : std::move(unpacked);
 }
 } // namespace gdl::game

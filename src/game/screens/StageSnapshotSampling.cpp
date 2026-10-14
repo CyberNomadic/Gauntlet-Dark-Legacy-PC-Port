@@ -65,10 +65,10 @@ StageSnapshotSampling::captureParty(std::span<const PlayerRuntime> players) {
         }
         Player value;
         value.life = runtime.life == PlayerLife::Dying ? ReplicaPlayerLife::Dying
-                                                      : ReplicaPlayerLife::Standing;
+                                                       : ReplicaPlayerLife::Standing;
         const auto& animation = animator.player();
         value.animation = {static_cast<u32>(animator.action()), animation.sequence(),
-                            animation.generation(), animation.frame(), animation.transition()};
+                           animation.generation(), animation.frame(), animation.transition()};
         // These endpoints already include native stance-source blending and
         // generation cuts. In particular, alpha zero still retains the last
         // transitioning pose after the current update finishes its transition.
@@ -265,15 +265,29 @@ StageSnapshotSampling::sample(const CombatSnapshot& previous, const CombatSnapsh
         if (posedFixture(fixture.source)) {
             fixture.placement = sampled->placement;
             fixture.textureClock = sampled->textureClock;
-            if (continuous(from->pose, fixture.pose)) {
+            // ItemFigure retains the previous pose on an empty native state,
+            // but switches object/texture sequences independently. Its held
+            // pose draws the current endpoint, not the preceding blend.
+            if (continuous(from->pose, fixture.pose) &&
+                fixture.pose.sequence == fixture.meshSequence) {
                 fixture.pose = sampled->pose;
-                fixture.meshFrame = sampled->meshFrame;
-                fixture.textureFrame = sampled->textureFrame;
+                if (fixture.meshSequence == sampled->meshSequence) {
+                    fixture.meshFrame = sampled->meshFrame;
+                }
+                if (fixture.textureSequence == sampled->textureSequence) {
+                    fixture.textureFrame = sampled->textureFrame;
+                }
             }
         } else if (fixture.source == FixtureSource::Rock ||
                    fixture.source == FixtureSource::Generator) {
             fixture.textureClock = sampled->textureClock;
         }
+    }
+    // Native pads keep the current carried transform even at alpha zero. Their
+    // captured anchors are the actual preceding tick (not an older wire sample),
+    // and a held clock forces the current pose for every rendering alpha.
+    for (auto& pad : result->transporters) {
+        pad.sample(blend);
     }
     for (auto& fighter : result->fighters) {
         const auto* from = find(previous.fighters, fighter.key(), &FighterMeshState::key);

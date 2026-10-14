@@ -1,5 +1,6 @@
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -38,6 +39,67 @@ void receive(CombatPlayback& playback, const CombatSnapshot& state) {
                                                            : CombatReplica::Admission::Pending));
     }
 }
+TEST_CASE("delayed transporter playback retains carried transforms and never crosses held or reset "
+          "clocks",
+          "[netplay][combat-playback][transporter-presentation]") {
+    auto first = std::make_unique<CombatSnapshot>(state(10));
+    TransporterState pad;
+    pad.instance = pad.resource = 1;
+    pad.generation = 3;
+    pad.frame = 2;
+    pad.previousFrame = 1;
+    pad.textureClock = 20;
+    pad.previousTextureClock = 19.5f;
+    pad.playing = pad.continuous = pad.advanced = true;
+    first->transporters.push_back(pad);
+    auto last = std::make_unique<CombatSnapshot>(*first);
+    last->motion.tick = 14;
+    auto& end = last->transporters.front();
+    end.placement[3].y = 7;
+    end.frame = 4;
+    end.previousFrame = 3.5f;
+    end.textureClock = 22;
+    end.previousTextureClock = 21.5f;
+    CombatPlayback playback;
+    REQUIRE(playback.begin(1, 1));
+    receive(playback, *first);
+    receive(playback, *last);
+    auto displayed = playback.sample(12);
+    REQUIRE(displayed);
+    REQUIRE(displayed->transporters.size() == 1);
+    CHECK(displayed->transporters[0].placement == pad.placement);
+    CHECK(displayed->transporters[0].frame == 3);
+    CHECK(displayed->transporters[0].textureClock == 21);
+    CHECK_FALSE(displayed->transporters[0].advanced);
+    CHECK(displayed->valid());
+    REQUIRE(playback.latest());
+    CHECK(playback.latest()->transporters == last->transporters);
+    const auto endpoint = playback.sample(14);
+    REQUIRE(endpoint);
+    CHECK(endpoint->transporters == last->transporters);
+
+    end.advanced = false;
+    end.previousTextureClock = end.textureClock;
+    auto held = CombatPlayback::samplePair(*first, *last, 0.25f);
+    REQUIRE(held);
+    CHECK(held->transporters[0].frame == end.frame);
+    CHECK(held->transporters[0].textureClock == end.textureClock);
+    CHECK(held->transporters[0].placement == pad.placement);
+    end.generation += 1;
+    end.frame = end.previousFrame = 0;
+    end.continuous = false;
+    const auto reset = CombatPlayback::samplePair(*first, *last, 0.5f);
+    REQUIRE(reset);
+    CHECK(reset->transporters == first->transporters);
+    last->transporters.clear();
+    const auto prior = CombatPlayback::samplePair(*first, *last, 0.5f);
+    const auto removed = CombatPlayback::samplePair(*first, *last, 1);
+    REQUIRE(prior);
+    REQUIRE(removed);
+    CHECK(prior->transporters == first->transporters);
+    CHECK(removed->transporters.empty());
+}
+
 TEST_CASE("complete combat seeds stay only in latest authority never display history",
           "[netplay][combat-playback][combat-supplement]") {
     CombatPlayback playback;

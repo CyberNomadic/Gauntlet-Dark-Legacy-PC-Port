@@ -58,12 +58,15 @@ TEST_CASE(
     Critters native;
     CrittersCheckpoint owner(native);
     const auto baseline = capture(owner);
+    REQUIRE(baseline.valid());
     auto bad = baseline;
     bad.actors.back().parts.front().arenaRandom = 0;
+    CHECK_FALSE(bad.valid());
     CHECK_FALSE(owner.restore(bad));
     CHECK(capture(owner) == baseline);
     bad = baseline;
     bad.events.blows.push_back({0, 0, std::numeric_limits<f32>::quiet_NaN()});
+    CHECK_FALSE(bad.valid());
     CHECK_FALSE(owner.restore(bad));
     CHECK(capture(owner) == baseline);
     auto first = owner.prepareRestore(baseline);
@@ -78,6 +81,39 @@ TEST_CASE(
     native.close();
     CHECK_FALSE(owner.canCommit(*stale));
     CHECK_FALSE(owner.checkpoint());
+}
+
+TEST_CASE("critter capture retains exact actor links and validates incoming bank and slot data",
+          "[critters-checkpoint][checkpoint-capture-validation][assets]") {
+    auto fixture = std::make_unique<Population>();
+    fixture->spawn();
+    const auto players = views();
+    for (s32 tick = 0; tick < 12; ++tick) {
+        fixture->critters.update(1, 1.0f / 60, players);
+        const auto captured = capture(*fixture->checkpoint);
+        CrittersCheckpoint independent{fixture->critters};
+        REQUIRE(captured.valid());
+        CHECK(capture(independent) == captured);
+    }
+    const auto baseline = capture(*fixture->checkpoint);
+    for (s32 mutation = 0; mutation < 5; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = baseline;
+        switch (mutation) {
+        case 0: invalid.actors.back().parts.front().arenaRandom = 0; break;
+        case 1: invalid.actors.front().parts.front().id = 1; break;
+        case 2:
+            invalid.banks.front().clock.remainder = std::numeric_limits<f32>::quiet_NaN();
+            break;
+        case 3:
+            invalid.events.blows.push_back({0, 0, std::numeric_limits<f32>::quiet_NaN()});
+            break;
+        case 4: invalid.actors.front().lookouts.reset(); break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture->checkpoint->prepareRestore(invalid));
+        CHECK(capture(*fixture->checkpoint) == baseline);
+    }
 }
 
 TEST_CASE("native mixed critter pools resume every slot queue and shared texture bank",

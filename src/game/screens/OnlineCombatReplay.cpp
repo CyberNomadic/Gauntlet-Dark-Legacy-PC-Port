@@ -58,7 +58,7 @@ bool OnlineCombatReplay::refuse(Refusal reason) {
     // Reuse no longer resets at entry. Every rejected admission must revoke the
     // old picture as well as any newly advanced prefix, back to host authority.
     discard();
-    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    auto& counters = m_diagnostics->domains[static_cast<usize>(m_domain)];
     ++counters.refusals;
     ++counters.reasons[static_cast<usize>(reason)];
     return false;
@@ -120,7 +120,7 @@ u64 OnlineCombatReplay::tick() const {
 std::unique_ptr<CombatSnapshot>
 OnlineCombatReplay::picture(std::shared_ptr<const StageParticlePresentation>& particles) const {
     const MeasureReplayCost measured{
-        m_diagnostics.domains[static_cast<usize>(m_domain)].pictureCost};
+        m_diagnostics->domains[static_cast<usize>(m_domain)].pictureCost};
     particles.reset();
     if (!m_authority || m_prediction == nullptr || !m_prediction->active() ||
         m_prediction->enemies() == nullptr) {
@@ -154,7 +154,7 @@ bool OnlineCombatReplay::update(const CombatSnapshot* authority,
     const bool incoming = authority != nullptr && authority->motion.epoch == m_context.epoch &&
                           (!m_authority || authority->motion.tick > m_authority->motion.tick);
     m_domain = domainOf(incoming ? authority : m_authority.get());
-    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    auto& counters = m_diagnostics->domains[static_cast<usize>(m_domain)];
     ++counters.updates;
     const MeasureReplayCost measured{counters.passCost};
     const auto attemptsBefore = counters.attemptedTicks;
@@ -285,7 +285,7 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         }
         effective.push_back(std::move(inputs));
     }
-    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    auto& counters = m_diagnostics->domains[static_cast<usize>(m_domain)];
     const auto lifetime = m_prediction->resourceLifetime().lock();
     if (!lifetime || m_seedLifetime.lock() != lifetime) {
         discard();
@@ -373,9 +373,24 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         if (result.timings.postconditionNanoseconds) {
             counters.postconditionCost.add(*result.timings.postconditionNanoseconds);
         }
+        for (usize owner = 0; owner < counters.postconditionOwners.size(); ++owner) {
+            if (result.timings.postconditionOwners[owner]) {
+                counters.postconditionOwners[owner].add(*result.timings.postconditionOwners[owner]);
+            }
+        }
         if (result.status != OrdinaryCombatTick::Status::Advanced) {
             discard();
             ++counters.tickRefusals[static_cast<usize>(result.refusal)];
+            if (result.refusal == OrdinaryCombatTick::Refusal::PartyMotion) {
+                ++counters.partyRefusals[static_cast<usize>(result.partyRefusal)];
+            }
+            if (result.refusedAction) {
+                const auto action = static_cast<usize>(*result.refusedAction);
+                if (action < counters.refusedActions.size()) {
+                    ++counters.refusedActions[action];
+                }
+            }
+            ++counters.refusedTargets[static_cast<usize>(result.refusedTarget)];
             if (result.status == OrdinaryCombatTick::Status::Invalid) {
                 ++counters.invalidTicks;
                 return refuse(Refusal::NativeInvalid);
@@ -399,13 +414,15 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
 
 bool OnlineCombatReplay::present(CombatSnapshot& shown, EnemyPresentation& presentation,
                                  f32 blend) {
-    auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
+    auto& counters = m_diagnostics->domains[static_cast<usize>(m_domain)];
     try {
-        const bool accepted = presentPass(shown, presentation, blend);
+        auto refusal = PresentRefusal::Inactive;
+        const bool accepted = presentPass(shown, presentation, blend, refusal);
         if (accepted) {
             ++counters.presents;
         } else {
             ++counters.presentRefusals;
+            ++counters.presentReasons[static_cast<usize>(refusal)];
         }
         return accepted;
     } catch (...) {
@@ -413,20 +430,27 @@ bool OnlineCombatReplay::present(CombatSnapshot& shown, EnemyPresentation& prese
         // Both presentation helpers stage output before committing it.
         discard();
         ++counters.presentRefusals;
+        ++counters.presentReasons[static_cast<usize>(PresentRefusal::Exception)];
         throw;
     }
 }
 
 bool OnlineCombatReplay::presentPass(CombatSnapshot& shown, EnemyPresentation& presentation,
-                                     f32 blend) const {
-    if (!active() || !m_authority || !m_previous || shown.motion.epoch != m_context.epoch ||
-        shown.motion.tick > m_authority->motion.tick || !presentation.matches(shown) ||
+                                     f32 blend, PresentRefusal& refusal) const {
+    refusal = PresentRefusal::Inactive;
+    if (!active() || !m_authority || !m_previous) {
+        return false;
+    }
+    refusal = PresentRefusal::Snapshot;
+    if (shown.motion.epoch != m_context.epoch || shown.motion.tick > m_authority->motion.tick ||
+        !presentation.matches(shown) ||
         shown.motion.cameraContinuity != m_authority->motion.cameraContinuity ||
         !std::isfinite(blend)) {
         return false;
     }
     // A correction is a whole-party boundary. Do not publish newer enemies
     // against an older/replaced local player or across a camera/portal cut.
+    refusal = PresentRefusal::Roster;
     bool local = false;
     for (usize seat = 0; seat < m_context.owners.size(); ++seat) {
         const bool occupied = m_context.owners[seat] != 0;
@@ -450,10 +474,14 @@ bool OnlineCombatReplay::presentPass(CombatSnapshot& shown, EnemyPresentation& p
         return false;
     }
     if (m_seed && m_seed->stage) {
+        refusal = PresentRefusal::ParticleInterval;
         if (!m_previousParticles || !m_shownParticles ||
             !m_previousParticles->matches(m_previous->motion.epoch, m_previous->motion.tick) ||
-            !m_shownParticles->matches(m_shown->motion.epoch, m_shown->motion.tick) ||
-            !StageCombatPresentation::present(shown, presentation, *m_previous, *m_shown, blend,
+            !m_shownParticles->matches(m_shown->motion.epoch, m_shown->motion.tick)) {
+            return false;
+        }
+        refusal = PresentRefusal::StageSampling;
+        if (!StageCombatPresentation::present(shown, presentation, *m_previous, *m_shown, blend,
                                               m_shownParticles->swarm(),
                                               m_shownParticles->party())) {
             return false;

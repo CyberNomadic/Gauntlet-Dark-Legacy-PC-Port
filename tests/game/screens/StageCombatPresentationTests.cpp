@@ -81,6 +81,7 @@ struct CaptureFixture {
     Traps traps;
     SafeRocks rocks;
     Rubble rubble;
+    LevelTransporters transporters;
     Critters critters;
     Bosses bosses;
     std::array<PlayerRuntime, 2> party;
@@ -89,16 +90,33 @@ struct CaptureFixture {
     FixtureResources fixtures;
     FighterResources fighters;
 
-    CaptureFixture() {
+    explicit CaptureFixture(bool pads = false) {
         const auto root = test::sampleLevel("stage-combat-presentation");
         writeTextFile(root / "world.json", R"({"objects":[
             {"name":"FLOOR","position":[0,0,0]}]})");
         writeTextFile(root / "animations.json", R"({"trees":[{"name":"SHOT",
             "nodes":[{"name":"ROOT","object":"WALL","parent":-1,"position":[0,0,0]}],
             "sequences":[]}]})");
+        if (pads) {
+            writeTextFile(root / "world.json", R"({"objects":[
+                {"name":"FLOOR","position":[0,0,0]}],
+                "itemInfos":[{"type":11,"name":"TRANS","radius":1,"height":2}],
+                "itemInstances":[{"info":0,"position":[20,0,0],"params":[1,0,0,0,2,0,0,0]},
+                                 {"info":0,"position":[30,0,0],"params":[2,0,0,0,1,0,0,0]}]})");
+            writeTextFile(root / "animations.json", R"({"trees":[
+                {"name":"SHOT","nodes":[{"name":"ROOT","object":"WALL","parent":-1,
+                  "position":[0,0,0]}],"sequences":[]},
+                {"name":"TRANS","nodes":[{"name":"ROOT","object":"WALL","parent":-1,
+                  "position":[0,0,0]}],"sequences":[{"name":"ACTIVE","frames":20,"rate":30}]}]})");
+        }
         REQUIRE(world.load(device, root, {.name = "TEST", .directory = "."}));
         REQUIRE(archive.load(root));
         REQUIRE(model.bind(archive.trees.tree(0), archive.models, archive.textures, device));
+        if (pads) {
+            transporters.bind(device, world.layout(), AssetScope(archive), 2, &world.collision());
+            REQUIRE(transporters.size() == 2);
+            REQUIRE(fixtures.bind(device, std::array{&archive}, generators, rocks));
+        }
         constexpr std::array kSeats{0, 2};
         for (usize i = 0; i < party.size(); ++i) {
             party[i].actor.spawn(kSeats[i], {}, nullptr, {static_cast<f32>(i) * 5, 0, 0}, 0);
@@ -122,7 +140,8 @@ struct CaptureFixture {
                 playerMissiles,
                 enemyMissiles,
                 effects,
-                {chests, gates, world.triggers(), generators, barrels, traps, rocks, rubble},
+                {chests, gates, world.triggers(), generators, barrels, traps, rocks, rubble,
+                 nullptr, nullptr, &transporters},
                 critters,
                 bosses};
     }
@@ -174,6 +193,34 @@ TEST_CASE("stage capture resolves native source pointers without allocating rend
     CHECK(fixture->device.texturesCreated == textures);
     CHECK(fixture->device.textureUpdates == updates);
     CHECK(fixture->party[1].actor.save().health() == 1000);
+}
+
+TEST_CASE("stage capture requires complete private transporter ownership and trusted artwork",
+          "[netplay][stage-presentation][transporter-presentation]") {
+    auto fixture = std::make_unique<CaptureFixture>(true);
+    auto authority = std::make_unique<CombatSnapshot>(fixture->authority());
+    REQUIRE(FixtureCapture::append(*authority, fixture->fixtures, fixture->sources().fixtures));
+    REQUIRE(authority->transporters.size() == 2);
+    const auto textures = fixture->device.texturesCreated;
+    fixture->transporters.animate(1.0f / 60);
+    const auto current = StageCombatPresentation::capture(*authority, fixture->motion(11),
+                                                          fixture->sources(), fixture->resources());
+    REQUIRE(current);
+    REQUIRE(current->transporters.size() == 2);
+    CHECK(current->transporters[0].frame > authority->transporters[0].frame);
+    CHECK(current->transporters[0].textureClock > authority->transporters[0].textureClock);
+    auto incomplete = fixture->sources();
+    incomplete.fixtures.transporters = nullptr;
+    CHECK_FALSE(StageCombatPresentation::capture(*authority, fixture->motion(11), incomplete,
+                                                 fixture->resources()));
+    LevelTransporters unbound;
+    incomplete.fixtures.transporters = &unbound;
+    CHECK_FALSE(StageCombatPresentation::capture(*authority, fixture->motion(11), incomplete,
+                                                 fixture->resources()));
+    authority->transporters.back().resource += 1;
+    CHECK_FALSE(StageCombatPresentation::capture(*authority, fixture->motion(11),
+                                                 fixture->sources(), fixture->resources()));
+    CHECK(fixture->device.texturesCreated == textures);
 }
 
 TEST_CASE("stage capture refuses missing portal and external presentation ownership",
@@ -412,7 +459,7 @@ TEST_CASE("native G1 stage capture includes its portals fixtures pickups and all
         motion.players[static_cast<usize>(player.actor.player())] =
             SeatMotion{1, 1, player.actor.position(), player.actor.yaw()};
     }
-    const auto authority =
+    auto authority =
         CombatCapture::capture(motion, play->participants(), play->enemies(), nullptr, &world);
     REQUIRE(authority);
     const StageCombatPresentation::Sources sources{
@@ -423,10 +470,12 @@ TEST_CASE("native G1 stage capture includes its portals fixtures pickups and all
         play->enemyMissiles(),
         play->effects(),
         {play->chests(), play->gates(), world.triggers(), play->generators(), play->barrels(),
-         play->traps(), play->safeRocks(), play->rubble(), &play->statues(), &play->portals()},
+         play->traps(), play->safeRocks(), play->rubble(), &play->statues(), &play->portals(),
+         &play->transporters()},
         play->critters(),
         play->bosses()};
     const auto textures = device.texturesCreated;
+    REQUIRE(FixtureCapture::append(*authority, fixtures, sources.fixtures));
     const auto captured = StageCombatPresentation::capture(
         *authority, motion, sources, {projectiles, pickups, fixtures, fighters});
     REQUIRE(captured);

@@ -17,6 +17,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 using Boundary = CombatRollbackCheckpoint;
+static_assert(std::is_aggregate_v<Boundary::State>);
 
 struct SmallFixture {
     ClassStats stats;
@@ -48,6 +49,7 @@ struct SmallFixture {
     Boundary::State state() const {
         auto result = owner->checkpoint();
         REQUIRE(result);
+        REQUIRE(result->valid());
         return *result;
     }
 };
@@ -95,6 +97,7 @@ struct NativeFixture {
     Boundary::State state() const {
         auto result = owner.checkpoint();
         REQUIRE(result);
+        REQUIRE(result->valid());
         return *result;
     }
     void step(s32 tick, f32 seconds) {
@@ -220,6 +223,36 @@ TEST_CASE("combat transaction keeps native party order and validates complete ow
                    fixture.effects, {});
     CHECK_FALSE(wrong.checkpoint());
     CHECK_FALSE(wrong.prepareRestore(target));
+}
+
+TEST_CASE("combat captures retain child validation and native participant links",
+          "[rollback][combat-rollback-checkpoint][checkpoint-capture-validation]") {
+    SmallFixture fixture;
+    const auto before = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    for (s32 mutation = 0; mutation < 6; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = before;
+        switch (mutation) {
+        case 0: invalid.players[0].actor.position.x = nan; break;
+        case 1: invalid.health.words.fill(0); break;
+        case 2: invalid.arsenal.missiles.ricochetIn = nan; break;
+        case 3: invalid.effects.banks.push_back({1, {0, nan}}); break;
+        case 4: invalid.levels.marks.front().player = 0; break;
+        case 5: invalid.attacks.actors.front().player = 0; break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.owner->prepareRestore(invalid));
+        CHECK(fixture.state() == before);
+    }
+    fixture.players[0].actor.place({nan, 0, 0});
+    CHECK_FALSE(fixture.owner->checkpoint());
+    fixture.players[0].actor.place(before.players[0].actor.position);
+    CHECK(fixture.state() == before);
+    fixture.levels.observe(0, 1); // Valid leaf, but the participant is outside this transaction.
+    CHECK_FALSE(fixture.owner->checkpoint());
+    fixture.levels.forget(0);
+    CHECK(fixture.state() == before);
 }
 
 TEST_CASE("combat prepared restoration refuses stale participants before changing any owner",

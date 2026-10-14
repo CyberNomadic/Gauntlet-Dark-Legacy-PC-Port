@@ -97,28 +97,27 @@ PlayReplication::captureOpponents(CombatSnapshot& state) const {
     // Existing snapshots retain their fixed raw budget. Optional simulation data
     // must never turn a valid presentation snapshot into a transport failure.
     // The caller only attempts this supplement on actual publication ticks.
+    auto combat = m_scene->combatState();
+    auto combatFrame = m_scene->combatFrame();
+    if (combat && combatFrame) {
+        state.combatState = std::move(combat);
+        state.combatFrame = std::move(combatFrame);
+        if (auto complete = CombatPacket::prepare(state)) {
+            return complete;
+        }
+        // A full combat seed is atomic. Refusing it must not leave either half
+        // attached to the ordinary opponent/presentation fallback.
+        state.combatState.reset();
+        state.combatFrame.reset();
+    }
+    // The complete encoder already validates all ordinary fields and includes
+    // their bytes. Encode the smaller fallback only when it is actually needed.
     auto opponents = CombatPacket::prepare(state);
     if (!opponents) {
         state.opponents.reset();
         state.opponentFrame.reset();
-        return std::nullopt;
     }
-    auto combat = m_scene->combatState();
-    auto combatFrame = m_scene->combatFrame();
-    if (!combat || !combatFrame) {
-        return opponents;
-    }
-    state.combatState = std::move(combat);
-    state.combatFrame = std::move(combatFrame);
-    auto complete = CombatPacket::prepare(state);
-    if (!complete) {
-        // A full combat seed is atomic. Retain the already-admitted ordinary
-        // opponent/presentation fallback when resources or the budget refuse it.
-        state.combatState.reset();
-        state.combatFrame.reset();
-        return opponents;
-    }
-    return complete;
+    return opponents;
 }
 
 std::optional<CombatSnapshot> PlayReplication::capture(u64 tick,
@@ -357,7 +356,7 @@ std::optional<CombatSnapshot> PlayReplication::capture(u64 tick,
                                 {m_scene->chests(), m_scene->gates(), world->triggers(),
                                  m_scene->generators(), m_scene->barrels(), m_scene->traps(),
                                  m_scene->safeRocks(), m_scene->rubble(), &m_scene->statues(),
-                                 &m_scene->portals()})) {
+                                 &m_scene->portals(), &m_scene->transporters()})) {
         return std::nullopt;
     }
     captureWeapons(*state, resources);
@@ -691,7 +690,8 @@ PlayReplication::Result PlayReplication::advance(MatchSession& match,
     if (!state) {
         return fail();
     }
-    if (state->motion.tick % kSnapshotStride == 0 || outcome != PlayOutcome::Running) {
+    if ((state->motion.tick % kSnapshotStride == 0 || outcome != PlayOutcome::Running) &&
+        match.publicationReady()) {
         const auto prepared = captureOpponents(*state);
         if (!(prepared ? match.publish(*prepared) : match.publish(*state))) {
             return fail();

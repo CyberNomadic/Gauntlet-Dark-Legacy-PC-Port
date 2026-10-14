@@ -38,10 +38,13 @@ bool timers(const std::vector<std::pair<T, f32>>& values, const std::vector<T>& 
 }
 } // namespace
 bool LevelFixturesCheckpoint::State::valid() const {
-    if (!chests.valid() || !gates.valid() || !traps.valid() || !barrels.valid() || !rocks.valid() ||
-        !scenery.valid() || !rubble.valid() || clouds.size() > kMaxHazards ||
-        blasts.size() > kMaxHazards || doomedChests.size() > chests.chests.size() ||
-        !scalar(difficultyGain) || difficultyGain < 0 || !unique(doomedChests)) {
+    return chests.valid() && gates.valid() && traps.valid() && barrels.valid() && rocks.valid() &&
+           scenery.valid() && rubble.valid() && validAggregate();
+}
+bool LevelFixturesCheckpoint::State::validAggregate() const {
+    if (clouds.size() > kMaxHazards || blasts.size() > kMaxHazards ||
+        doomedChests.size() > chests.chests.size() || !scalar(difficultyGain) ||
+        difficultyGain < 0 || !unique(doomedChests)) {
         return false;
     }
     for (const auto index : doomedChests) {
@@ -190,7 +193,9 @@ std::optional<LevelFixturesCheckpoint::State> LevelFixturesCheckpoint::checkpoin
                                 blast.players, blast.reached, blast.opponents, blast.playerReady,
                                 blast.opponentReady});
     }
-    if (!state.valid()) {
+    // Each child capture already validated its complete value. The delayed
+    // hazards and all cross-child references still require their own checks.
+    if (!state.validAggregate()) {
         return std::nullopt;
     }
     return state;

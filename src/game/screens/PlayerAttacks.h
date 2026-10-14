@@ -142,6 +142,10 @@ public:
     static constexpr f32 kLowEnemy = 4.0f; ///< the height under which an enemy is short
     static constexpr f32 kLowThing = 3.5f; ///< and anything else
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
+    /** The same native contact, with generator presentation supplied by a
+     * transaction-local publisher. A refusal requires complete caller undo. */
+    bool melee(usize index, std::span<PlayerRuntime> players, const Targets& targets,
+               const LevelOpponents::GeneratorPublisher& generators);
     const MoveStrikes& strikes() const { return m_strikes; }
     usize shieldCount() const { return m_shields.size(); }
     /** Persistent outgoing damage not owned by ordinary-opponent replay. A
@@ -175,9 +179,10 @@ private:
      * impact-queue consumption. The caller owns any subsequent refusal/undo. */
     void stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> players,
                                const Targets& targets);
-    void dispatchProjectileImpact(
+    bool dispatchProjectileImpact(
         const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
-        const std::function<void(const MissileImpact&, f32)>& presentation = {});
+        const std::function<void(const MissileImpact&, f32)>& presentation = {},
+        const LevelOpponents::GeneratorPublisher& generators = {});
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
                       std::span<PlayerRuntime> players, const Targets& targets);
     struct ItemArea {

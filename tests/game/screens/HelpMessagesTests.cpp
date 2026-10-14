@@ -15,7 +15,9 @@
 #include "game/players/PickupVoices.h"
 #include "game/players/PowerupEffects.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PartyPickups.h"
+#include "game/screens/PlayerRuntime.h"
 
 namespace {
 
@@ -80,6 +82,79 @@ TEST_CASE("the help messages are the original's, with the narrator's lines", "[g
     REQUIRE(HelpMessages::specOf(999) == nullptr);
     REQUIRE(HelpMessages::inkOf(1) == Color::rgba(0, 0, 0x1F));
     REQUIRE(HelpMessages::inkOf(7) == HelpMessages::inkOf(-1));
+}
+
+TEST_CASE("read only help admission shares every native repeat policy", "[help][help-admission]") {
+    MessageTable strings;
+    loadStrings("help-repeat-admission", strings);
+    std::array<std::vector<s32>, 2> seen;
+    std::array<std::vector<s32>, 2> heard;
+    const std::array readers{HelpReader{3, &seen[0], &heard[0]},
+                             HelpReader{1, &seen[1], &heard[1]}};
+    const std::array histories{HelpHistory{3, &seen[0], &heard[0]},
+                               HelpHistory{1, &seen[1], &heard[1]}};
+    const auto compare = [&](s32 id, s32 player, bool expected) {
+        CAPTURE(id, player, expected);
+        HelpMessages help;
+        help.setTexts(&strings);
+        const auto beforeSeen = seen;
+        const auto beforeHeard = heard;
+        CHECK(HelpMessages::wanted(id, player, histories) == expected);
+        CHECK((help.post(id, player, readers) != nullptr) == expected);
+        if (!expected) {
+            CHECK(seen == beforeSeen);
+            CHECK(heard == beforeHeard);
+            CHECK_FALSE(help.look());
+            CHECK(help.lines().empty());
+        }
+    };
+    compare(HelpMessages::kDoorNeedsKey, 3, true);
+    compare(HelpMessages::kDoorNeedsKey, 1, false);
+    seen[1].clear();
+    compare(HelpMessages::kDoorNeedsKey, 3, true); // one unseen standing reader
+    compare(HelpMessages::kHealthFull, 3, true);
+    compare(HelpMessages::kHealthFull, 3, false);
+    compare(HelpMessages::kHealthFull, 1, true); // per-player, not the named vector index
+    seen[0] = {HelpMessages::kFirstTurboName};
+    seen[1] = seen[0];
+    heard[0].clear();
+    heard[1].clear();
+    compare(HelpMessages::kFirstTurboName, 3, true); // saved history is not session history
+    heard[0].clear();
+    compare(HelpMessages::kFirstTurboName, 3, false); // any reader's heard bit suppresses
+    compare(HelpMessages::kNowPojo, 3, true);
+    compare(HelpMessages::kNowPojo, 3, true);
+    compare(56, 3, false);
+    compare(999, 1, false);
+    const std::array absent{HelpHistory{3}};
+    CHECK(HelpMessages::wanted(HelpMessages::kDoorNeedsKey, 3, absent));
+    CHECK(HelpMessages::wanted(HelpMessages::kFirstTurboName, 3, absent));
+    CHECK_FALSE(HelpMessages::wanted(HelpMessages::kHealthFull, 1, absent));
+}
+
+TEST_CASE("party help admission maps sparse native slots and standing readers exactly",
+          "[help][help-admission]") {
+    std::array<PlayerRuntime, 2> party;
+    party[0].actor.spawn(3, {}, nullptr, Vec3{0}, 0);
+    party[1].actor.spawn(1, {}, nullptr, Vec3{0}, 0);
+    party[0].actor.save().helpSeen = {HelpMessages::kLearnBlock};
+    CHECK(PartyHelpAdmission::suppressed(HelpMessages::kLearnBlock, 0, party));
+    CHECK_FALSE(PartyHelpAdmission::suppressed(HelpMessages::kLearnBlock, 1, party));
+    CHECK(PartyHelpAdmission::suppressedForPlayer(HelpMessages::kLearnBlock, 3, party));
+    CHECK_FALSE(PartyHelpAdmission::suppressedForPlayer(HelpMessages::kLearnBlock, 1, party));
+    CHECK(PartyHelpAdmission::suppressedForPlayer(HelpMessages::kLearnBlock, 2, party));
+    CHECK(PartyHelpAdmission::suppressed(HelpMessages::kNowPojo, 2, party));
+    party[0].actor.save().helpSeen = {HelpMessages::kDestroyGenerators};
+    CHECK_FALSE(PartyHelpAdmission::suppressed(HelpMessages::kDestroyGenerators, 0, party));
+    party[1].departed = true; // PartyHud filters life, not this independent flag.
+    CHECK_FALSE(PartyHelpAdmission::suppressed(HelpMessages::kDestroyGenerators, 0, party));
+    party[1].life = PlayerLife::InTower;
+    CHECK(PartyHelpAdmission::suppressed(HelpMessages::kDestroyGenerators, 0, party));
+    CHECK_FALSE(PartyHelpAdmission::suppressed(HelpMessages::kNowPojo, 0, party));
+    party[0].helpHeard = {HelpMessages::kFirstTurboName};
+    CHECK(PartyHelpAdmission::suppressed(HelpMessages::kFirstTurboName, 0, party));
+    party[0].life = PlayerLife::Dying;
+    CHECK_FALSE(PartyHelpAdmission::suppressed(HelpMessages::kFirstTurboName, 0, party));
 }
 
 TEST_CASE("pickup announcements bypass the tutorial delay but retain priority and seen gates",

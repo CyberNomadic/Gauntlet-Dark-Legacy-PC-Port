@@ -7,6 +7,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <lz4.h>
 
+#include "engine/codec/BytePlanes.h"
 #include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
@@ -44,16 +45,21 @@ void rawLengths(std::vector<u8>& bytes) {
 }
 // Repack deliberately altered raw fields to exercise the same nested validators
 // behind decompression, not merely a malformed compression header.
-std::vector<u8> pack(const std::vector<u8>& bytes) {
+std::vector<u8> pack(const std::vector<u8>& bytes, bool planar = false) {
     REQUIRE(word(bytes, 12) == 0);
     REQUIRE(bytes.size() > Packet::kHeaderBytes);
     const auto size = static_cast<s32>(bytes.size() - Packet::kHeaderBytes);
+    auto payload = std::span<const u8>{bytes}.subspan(Packet::kHeaderBytes);
+    const auto planes = planar ? BytePlanes::encode(payload) : std::vector<u8>{};
+    if (planar) {
+        payload = planes;
+    }
     std::vector<u8> result(Packet::kHeaderBytes + static_cast<usize>(LZ4_compressBound(size)));
     std::copy_n(bytes.begin(), Packet::kHeaderBytes, result.begin());
     // LZ4 char pointers address byte buffers only.
     // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
     const s32 written =
-        LZ4_compress_default(reinterpret_cast<const char*>(bytes.data() + Packet::kHeaderBytes),
+        LZ4_compress_default(reinterpret_cast<const char*>(payload.data()),
                              reinterpret_cast<char*>(result.data() + Packet::kHeaderBytes), size,
                              static_cast<s32>(result.size() - Packet::kHeaderBytes));
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -61,13 +67,63 @@ std::vector<u8> pack(const std::vector<u8>& bytes) {
     REQUIRE(written < size);
     result.resize(Packet::kHeaderBytes + static_cast<usize>(written));
     word(result, 8, static_cast<u32>(result.size()));
-    word(result, 12, 1);
+    word(result, 12, planar ? 2 : 1);
     return result;
 }
 Packet::State emptyState() {
     Packet::State result;
     REQUIRE(result.world.valid());
     REQUIRE(result.fixtures.valid());
+    return result;
+}
+LevelTransportersCheckpoint::State transporterState() {
+    LevelTransportersCheckpoint::State result;
+    result.catalog[7] = 31;
+    result.tree = "TRANS";
+    result.players = 2;
+    result.collision = true;
+    TreeSequenceInfo sequence;
+    sequence.name = "ACTIVE";
+    sequence.frames = 4;
+    sequence.frameRate = 30;
+    AnimationPlayer animation;
+    animation.start(sequence, 0);
+    animation.advance(1.0f / 60, true);
+    const auto previous = animation.presentationFrame();
+    const auto generation = animation.generation();
+    animation.advance(1.0f / 60, true);
+    TextureAnimator textures;
+    textures.advance(1.0f / 60);
+    result.textures = textures.checkpoint();
+    result.presentationAdvanced = true;
+    for (usize index = 0; index < 2; ++index) {
+        LevelTransportersCheckpoint::Pad pad;
+        pad.source.index = index + 3;
+        pad.source.info.type = LevelTransporters::kItemType;
+        pad.source.info.name = "TRANS";
+        pad.source.info.radius = pad.radius = 1.25f;
+        pad.source.info.height = pad.height = 2.5f;
+        pad.source.instance.info = 0;
+        pad.source.instance.name = index == 0 ? "PAD_WIRE_A" : "PAD_WIRE_B";
+        pad.source.instance.minPlayers = 1;
+        pad.id = index == 0 ? 10 : 20;
+        pad.destinationId = index == 0 ? 20 : 10;
+        pad.source.instance.params[0] = static_cast<u8>(pad.id);
+        pad.source.instance.params[4] = static_cast<u8>(pad.destinationId);
+        pad.destination = 1 - index;
+        pad.position = {1, 2, 3};
+        pad.transform[3] = {pad.position, 1};
+        pad.support = 17;
+        pad.supportLocal[3].x = 4;
+        pad.anchorLocal = {2, 3, 4};
+        pad.model = true;
+        pad.pose = TreePose::Checkpoint{"TRANS", {{"ROOT", -1, {0, 0, 0}}}, {NodePose{}}};
+        pad.animation = animation.checkpoint();
+        pad.previousFrame = previous;
+        pad.previousGeneration = generation;
+        result.pads.push_back(std::move(pad));
+    }
+    REQUIRE(result.valid());
     return result;
 }
 Packet::State populatedState() {
@@ -278,16 +334,16 @@ TEST_CASE("stage packet preserves optional native camera history and validates i
     REQUIRE(bytes);
     CHECK(Packet::decode(*bytes, *catalog) == state);
     auto invalid = *bytes;
-    word(invalid, absent->size() - 8, 2); // Optional camera presence must be canonical.
+    word(invalid, absent->size() - 12, 2); // Optional camera presence must be canonical.
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *bytes;
-    word(invalid, absent->size() + 28, TowerCameraCheckpoint::State::kMaxMarkers + 1);
+    word(invalid, absent->size() + 24, TowerCameraCheckpoint::State::kMaxMarkers + 1);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *bytes;
-    word(invalid, invalid.size() - 8, TowerCamera::kRing);
+    word(invalid, invalid.size() - 12, TowerCamera::kRing);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *bytes;
-    word(invalid, invalid.size() - 12, 0x7fc00000U);
+    word(invalid, invalid.size() - 16, 0x7fc00000U);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     auto foreign = state;
     foreign.camera->level.name = "OTHER";
@@ -328,15 +384,15 @@ TEST_CASE("stage decoder refuses truncated malformed headers counts booleans and
     word(invalid, kPlacementsCount, 0xffffffffU);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *encoded;
-    word(invalid, invalid.size() - 12, 0x7fc00000U); // Difficulty before absent camera/portals.
+    word(invalid, invalid.size() - 16, 0x7fc00000U); // Difficulty before three absent owners.
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *encoded;
-    word(invalid, invalid.size() - 12, 0x7f800000U);
+    word(invalid, invalid.size() - 16, 0x7f800000U);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *encoded;
     // Empty scenery layout bool followed by two rubble counts, cloud/blast/
-    // doomed counts, difficulty and absent camera/portals, each one word.
-    word(invalid, invalid.size() - 36, 2);
+    // doomed counts, difficulty and three absent owners, each one word.
+    word(invalid, invalid.size() - 40, 2);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *encoded;
     invalid.push_back(0);
@@ -397,7 +453,7 @@ TEST_CASE("stage packet preserves complete portal queues and rejects malformed p
     absent.portals.reset();
     const auto without = raw(absent, *catalog);
     REQUIRE(without);
-    const usize presence = without->size() - 4;
+    const usize presence = without->size() - 8;
     auto invalid = *bytes;
     word(invalid, presence, 2);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
@@ -405,7 +461,7 @@ TEST_CASE("stage packet preserves complete portal queues and rejects malformed p
     word(invalid, presence + 4, ExitPortalsCheckpoint::State::kMaxPortals + 1);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *bytes;
-    word(invalid, invalid.size() - 4, 2); // Collision binding boolean.
+    word(invalid, invalid.size() - 8, 2); // Collision binding boolean.
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     for (const auto change : {0, 1, 2, 3, 4, 5}) {
         auto malformed = state;
@@ -455,6 +511,103 @@ TEST_CASE("stage corruption never bypasses canonical field or catalog validation
     CHECK_FALSE(Packet::encode(invalid, *catalog));
 }
 
+TEST_CASE("stage packet preserves complete transporter clocks and authenticates their catalog",
+          "[rollback][stage-state-packet][stage-transporter-packet]") {
+    auto state = emptyState();
+    const auto absentCatalog = Packet::Catalog::build(state);
+    REQUIRE(absentCatalog);
+    const auto absent = raw(state, *absentCatalog);
+    REQUIRE(absent);
+    const usize presence = absent->size() - 4;
+    state.transporters = transporterState();
+    const auto catalog = Packet::Catalog::build(state);
+    REQUIRE(catalog);
+    const auto encoded = raw(state, *catalog);
+    REQUIRE(encoded);
+    REQUIRE(word(*encoded, presence) == 1);
+    CHECK(Packet::decode(*encoded, *catalog) == state);
+    CHECK(Packet::decode(pack(*encoded), *catalog) == state);
+    CHECK(Packet::decode(pack(*encoded, true), *catalog) == state);
+    CHECK_FALSE(Packet::decode(*encoded, *absentCatalog));
+    CHECK_FALSE(Packet::encode(state, *absentCatalog));
+
+    auto advanced = state;
+    auto& pad = advanced.transporters->pads[0];
+    pad.position.y += 2;
+    pad.transform[3].y += 2;
+    pad.pose->poses[0].position.x = 0.75f;
+    // Immutable identity is independent of all current/historical pose and clocks.
+    advanced.transporters->textures.frame += 3;
+    const auto advancedCatalog = Packet::Catalog::build(advanced);
+    REQUIRE(advancedCatalog);
+    CHECK(advancedCatalog->fingerprint() == catalog->fingerprint());
+    const auto advancedBytes = raw(advanced, *catalog);
+    REQUIRE(advancedBytes);
+    CHECK(Packet::decode(*advancedBytes, *catalog) == advanced);
+
+    for (const s32 mutation : {0, 1, 2, 3, 4}) {
+        CAPTURE(mutation);
+        auto foreign = state;
+        if (mutation == 0) {
+            foreign.transporters.reset();
+        } else if (mutation == 1) {
+            foreign.transporters->catalog[0] ^= 1;
+        } else if (mutation == 2) {
+            foreign.transporters->players = 3;
+        } else if (mutation == 3) {
+            foreign.transporters->pads[0].source.info.radius += 1;
+            foreign.transporters->pads[0].radius += 1;
+        } else {
+            foreign.transporters->pads[0].source.instance.params[4] = 99;
+            foreign.transporters->pads[0].destinationId = 99;
+            foreign.transporters->pads[0].destination.reset();
+        }
+        const auto foreignCatalog = Packet::Catalog::build(foreign);
+        REQUIRE(foreignCatalog);
+        CHECK(foreignCatalog->fingerprint() != catalog->fingerprint());
+        CHECK_FALSE(Packet::encode(foreign, *catalog));
+        CHECK_FALSE(Packet::decode(*encoded, *foreignCatalog));
+    }
+
+    const usize padCount = presence + 4 + 32 * 4 + 4 + state.transporters->tree.size() + 8;
+    REQUIRE(word(*encoded, padCount) == 2);
+    for (const auto [offset, value] :
+         {std::pair{presence, u32{2}}, std::pair{presence + 4, u32{256}},
+          std::pair{padCount, static_cast<u32>(LevelTransportersCheckpoint::State::kMaxPads + 1)},
+          std::pair{encoded->size() - 4, u32{2}}, std::pair{encoded->size() - 12, u32{0x7fc00000U}},
+          std::pair{encoded->size() - 28, u32{0x7f800000U}},
+          std::pair{encoded->size() - 20, u32{1}}}) {
+        auto invalid = *encoded;
+        word(invalid, offset, value);
+        CHECK_FALSE(Packet::decode(invalid, *catalog));
+    }
+    const std::string marker = "PAD_WIRE_A";
+    const auto found = std::search(encoded->begin(), encoded->end(), marker.begin(), marker.end());
+    REQUIRE(found != encoded->end());
+    const usize destination =
+        static_cast<usize>(found - encoded->begin()) + marker.size() + 12 + 12 + 12 * 4 + 4 + 4 + 4;
+    REQUIRE(word(*encoded, destination) == 1); // Optional native usize presence.
+    REQUIRE(word(*encoded, destination + 4) == 1);
+    REQUIRE(word(*encoded, destination + 8) == 0); // Explicit 64-bit index high word.
+    for (const auto [offset, value] :
+         {std::pair{destination, u32{2}}, std::pair{destination + 4, u32{0}},
+          std::pair{destination + 8, u32{1}}}) {
+        auto invalid = *encoded;
+        word(invalid, offset, value);
+        CHECK_FALSE(Packet::decode(invalid, *catalog));
+    }
+    for (usize length = presence; length < encoded->size(); ++length) {
+        auto truncated = *encoded;
+        truncated.resize(length);
+        rawLengths(truncated);
+        CHECK_FALSE(Packet::decode(truncated, *catalog));
+    }
+    auto oversized = state;
+    oversized.transporters->pads.resize(LevelTransportersCheckpoint::State::kMaxPads + 1);
+    CHECK_FALSE(Packet::Catalog::build(oversized));
+    CHECK_FALSE(Packet::encode(oversized, *catalog));
+}
+
 TEST_CASE("lossless stage compression retains every owner beyond the raw wire budget",
           "[rollback][stage-state-packet]") {
     auto state = emptyState();
@@ -480,7 +633,7 @@ TEST_CASE("lossless stage compression retains every owner beyond the raw wire bu
     CHECK_FALSE(raw(state, *catalog));
     const auto bytes = Packet::encode(state, *catalog);
     REQUIRE(bytes);
-    CHECK(word(*bytes, 12) == 1);
+    CHECK((word(*bytes, 12) == 1 || word(*bytes, 12) == 2));
     CHECK(bytes->size() < Packet::kMaxBytes);
     CHECK(Packet::encodedSize(state, *catalog) == bytes->size());
     CHECK(Packet::decode(*bytes, *catalog) == state);
@@ -492,18 +645,20 @@ TEST_CASE("lossless stage compression retains every owner beyond the raw wire bu
 
 TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing compressed bytes",
           "[rollback][stage-state-packet][stage-compression]") {
+    const bool planar = GENERATE(false, true);
     const auto state = populatedState();
     const auto catalog = Packet::Catalog::build(state);
     REQUIRE(catalog);
     const auto original = raw(state, *catalog);
     REQUIRE(original);
-    const auto encoded = Packet::encode(state, *catalog);
-    REQUIRE(encoded);
-    REQUIRE(word(*encoded, 12) == 1);
+    const auto encoded = std::optional{pack(*original, planar)};
+    REQUIRE(word(*encoded, 12) == (planar ? 2U : 1U));
     REQUIRE(encoded->size() < original->size());
     CHECK(Packet::decode(*encoded, *catalog) == state);
     CHECK(Packet::decodedSize(state, *catalog) == original->size() - Packet::kHeaderBytes);
-    CHECK(Packet::encodedSize(state, *catalog) == encoded->size());
+    const auto automatic = Packet::encodedSize(state, *catalog);
+    REQUIRE(automatic);
+    CHECK(*automatic <= encoded->size());
 
     for (usize length = 0; length < encoded->size(); ++length) {
         auto invalid = *encoded;
@@ -515,7 +670,7 @@ TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing c
     }
     for (const auto [offset, value] :
          {std::pair{usize{0}, u32{0}}, std::pair{usize{4}, Packet::kVersion - 1},
-          std::pair{usize{8}, u32{0}}, std::pair{usize{12}, u32{2}},
+          std::pair{usize{8}, u32{0}}, std::pair{usize{12}, u32{3}},
           std::pair{usize{12}, u32{0xffffffffU}}, std::pair{usize{16}, u32{0}},
           std::pair{usize{16}, static_cast<u32>(Packet::kMaxDecodedBytes + 1)},
           std::pair{usize{16}, u32{0xffffffffU}}, std::pair{usize{20}, u32{1}}}) {
@@ -555,14 +710,14 @@ TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing c
 
     auto hostile = *original;
     word(hostile, Packet::kHeaderBytes, static_cast<u32>(Packet::kMaxString + 1));
-    CHECK_FALSE(Packet::decode(pack(hostile), *catalog));
+    CHECK_FALSE(Packet::decode(pack(hostile, planar), *catalog));
     hostile = *original;
-    word(hostile, hostile.size() - 12, 0x7fc00000U);
-    CHECK_FALSE(Packet::decode(pack(hostile), *catalog));
+    word(hostile, hostile.size() - 16, 0x7fc00000U);
+    CHECK_FALSE(Packet::decode(pack(hostile, planar), *catalog));
     hostile = *original;
     hostile.push_back(0);
     rawLengths(hostile);
-    CHECK_FALSE(Packet::decode(pack(hostile), *catalog));
+    CHECK_FALSE(Packet::decode(pack(hostile, planar), *catalog));
     const auto empty = emptyState();
     const auto emptyCatalog = Packet::Catalog::build(empty);
     REQUIRE(emptyCatalog);
@@ -571,8 +726,99 @@ TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing c
     hostile = *emptyBytes;
     constexpr usize kPlacementsCount = Packet::kHeaderBytes + 32 + 8 + 32 * 4 + 4;
     word(hostile, kPlacementsCount, static_cast<u32>(Packet::kMaxRecords + 1));
-    CHECK_FALSE(Packet::decode(pack(hostile), *emptyCatalog));
+    CHECK_FALSE(Packet::decode(pack(hostile, planar), *emptyCatalog));
     CHECK_FALSE(Packet::encode(state, *catalog, static_cast<Packet::Encoding>(255)));
+}
+
+TEST_CASE(
+    "stage encoding selects the smallest lossless candidate across scalar bits and byte tails",
+    "[rollback][stage-state-packet][stage-compression][byte-planes]") {
+    for (usize tail = 0; tail < 4; ++tail) {
+        CAPTURE(tail);
+        auto state = emptyState();
+        constexpr usize kCount = 512;
+        state.world.core.placements.resize(kCount);
+        state.world.destruction.objects.resize(kCount);
+        state.world.destruction.destroyed.resize(kCount);
+        state.world.triggers.parents.resize(kCount, -1);
+        state.world.destruction.objects[0].name.assign(tail, 'x');
+        u32 bits = 1;
+        for (auto& placement : state.world.core.placements) {
+            for (s32 column = 0; column < 4; ++column) {
+                for (s32 row = 0; row < 3; ++row) {
+                    placement.local[column][row] = std::bit_cast<f32>(0x3f800000U | bits++);
+                    placement.previous[column][row] = std::bit_cast<f32>(0x40000000U | bits++);
+                }
+            }
+        }
+        state.world.core.placements[0].local[0].y = -0.0f;
+        state.world.core.placements[1].previous[1].z = std::bit_cast<f32>(u32{1});
+        state.world.core.placements[2].previous[2].x = std::bit_cast<f32>(u32{0x80000001U});
+        REQUIRE(state.world.valid());
+        const auto catalog = Packet::Catalog::build(state);
+        REQUIRE(catalog);
+        const auto original = raw(state, *catalog);
+        const auto plain = Packet::encode(state, *catalog, Packet::Encoding::Plain);
+        const auto automatic = Packet::encode(state, *catalog, Packet::Encoding::Automatic);
+        const auto fast = Packet::encode(state, *catalog);
+        REQUIRE(original);
+        REQUIRE(plain);
+        REQUIRE(automatic);
+        REQUIRE(fast);
+        CHECK(fast == plain);
+        CHECK((original->size() - Packet::kHeaderBytes) % 4 == tail);
+        const auto planar = pack(*original, true);
+        CHECK(automatic->size() == std::min({original->size(), plain->size(), planar.size()}));
+        REQUIRE(planar.size() < plain->size());
+        CHECK(word(*automatic, 12) == 2);
+        CHECK(word(*plain, 12) == 1);
+        for (const auto& bytes : {*original, *plain, *automatic, *fast, planar}) {
+            const auto restored = Packet::decode(bytes, *catalog);
+            REQUIRE(restored);
+            CHECK(raw(*restored, *catalog) == original); // Includes signed zero and subnormals.
+        }
+        auto invalid = *original;
+        word(invalid, 12, 2); // No uncompressed byte-plane mode is defined.
+        CHECK_FALSE(Packet::envelopeValid(invalid));
+        CHECK_FALSE(Packet::decode(invalid, *catalog));
+        invalid = planar;
+        word(invalid, 12, 1); // Valid LZ4 is not enough: the decoded fields must also validate.
+        CHECK_FALSE(Packet::decode(invalid, *catalog));
+    }
+}
+
+TEST_CASE("fast stage encoding tries byte planes only when needed to retain wire admission",
+          "[rollback][stage-state-packet][stage-compression][fast-stage-compression]") {
+    auto state = emptyState();
+    constexpr usize kCount = 8000;
+    state.world.core.placements.resize(kCount);
+    state.world.destruction.objects.resize(kCount);
+    state.world.destruction.destroyed.resize(kCount);
+    state.world.triggers.parents.resize(kCount, -1);
+    u32 bits = 1;
+    for (auto& placement : state.world.core.placements) {
+        for (s32 column = 0; column < 4; ++column) {
+            for (s32 row = 0; row < 3; ++row) {
+                placement.local[column][row] = std::bit_cast<f32>(0x3f800000U | bits++);
+                placement.previous[column][row] = std::bit_cast<f32>(0x40000000U | bits++);
+            }
+        }
+    }
+    REQUIRE(state.world.valid());
+    const auto catalog = Packet::Catalog::build(state);
+    REQUIRE(catalog);
+    const auto decodedSize = Packet::decodedSize(state, *catalog);
+    REQUIRE(decodedSize);
+    CHECK(*decodedSize > Packet::kMaxBytes);
+    CHECK(*decodedSize <= Packet::kMaxDecodedBytes);
+    REQUIRE_FALSE(Packet::encode(state, *catalog, Packet::Encoding::Plain));
+    const auto fast = Packet::encode(state, *catalog);
+    const auto automatic = Packet::encode(state, *catalog, Packet::Encoding::Automatic);
+    REQUIRE(fast);
+    CHECK(fast == automatic);
+    CHECK(word(*fast, 12) == 2);
+    CHECK(fast->size() <= Packet::kMaxBytes);
+    CHECK(Packet::decode(*fast, *catalog) == state);
 }
 
 TEST_CASE("small stage bodies remain raw and incompressible complete states retain the wire cap",
@@ -585,6 +831,7 @@ TEST_CASE("small stage bodies remain raw and incompressible complete states reta
     REQUIRE(small->size() - Packet::kHeaderBytes < 1024);
     CHECK(word(*small, 12) == 0);
     CHECK(small == raw(state, *catalog));
+    CHECK(small == Packet::encode(state, *catalog, Packet::Encoding::Plain));
     CHECK(Packet::decode(*small, *catalog) == state);
     auto invalid = *small;
     word(invalid, 16, word(invalid, 16) + 1);
@@ -753,6 +1000,8 @@ struct NativeStage {
     LevelCatalog levels;
     ExitPortals portals;
     std::unique_ptr<ExitPortalsCheckpoint> portalOwner;
+    LevelTransporters transporters;
+    LevelTransportersCheckpoint transporterOwner{transporters};
     NativeStage(const std::filesystem::path& root, const LevelRef& level, bool native) {
         REQUIRE(world.load(device, root, level));
         world.setPlayerCount(1);
@@ -763,6 +1012,8 @@ struct NativeStage {
         fixtures.setPlayerCount(1);
         REQUIRE(worldOwner.bindResources(device));
         REQUIRE(fixtureOwner.bindResources());
+        transporters.bind(device, world.layout(), world.itemScope(), 1, &world.collision());
+        REQUIRE(transporterOwner.bindResources());
         if (native) {
             REQUIRE(levels.load(root));
             portals.bind(device, world.layout(), world.itemScope(), levels, &world.collision());
@@ -777,6 +1028,8 @@ struct NativeStage {
         REQUIRE(worldState);
         REQUIRE(fixtureState);
         Packet::State result{*worldState, *fixtureState};
+        result.transporters = transporterOwner.checkpoint();
+        REQUIRE(result.transporters);
         if (portalOwner) {
             result.portals = portalOwner->checkpoint();
             REQUIRE(result.portals);
@@ -785,8 +1038,12 @@ struct NativeStage {
     }
     void step(f32 seconds) {
         world.capturePresentation();
+        transporters.capturePresentation();
         world.update(seconds);
+        transporters.syncFloors(world.collision());
+        transporters.animate(seconds);
         world.updateTriggers(seconds, {});
+        transporters.syncFloors(world.collision());
         if (portalOwner) {
             portals.animate(seconds);
         }
@@ -817,12 +1074,17 @@ TEST_CASE("stage packet restores independently bound native motion and particle 
     const auto textures = second.device.texturesCreated;
     auto world = second.worldOwner.prepareRestore(restored->world);
     auto fixtures = second.fixtureOwner.prepareRestore(restored->fixtures);
+    REQUIRE(restored->transporters);
+    auto transporters = second.transporterOwner.prepareRestore(*restored->transporters);
     REQUIRE(world);
     REQUIRE(fixtures);
+    REQUIRE(transporters);
     REQUIRE(second.worldOwner.canCommit(*world));
     REQUIRE(second.fixtureOwner.canCommit(*fixtures));
+    REQUIRE(second.transporterOwner.canCommit(*transporters));
     REQUIRE(second.worldOwner.commitRestore(std::move(*world)));
     REQUIRE(second.fixtureOwner.commitRestore(std::move(*fixtures)));
+    REQUIRE(second.transporterOwner.commitRestore(std::move(*transporters)));
     CHECK(second.state() == current);
     for (s32 tick = 0; tick < 20; ++tick) {
         first.step(seconds);
@@ -851,17 +1113,102 @@ TEST_CASE("native stage wire reports honest G1 Tower and L1 size within the fixe
     const auto state = native.state();
     const auto decodedSize = Packet::decodedSize(state, *catalog);
     REQUIRE(decodedSize);
+    const auto plainBegin = std::chrono::steady_clock::now();
+    const auto plain = Packet::encode(state, *catalog, Packet::Encoding::Plain);
+    const f64 plainMilliseconds =
+        std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - plainBegin)
+            .count();
+    REQUIRE(plain);
     const auto begin = std::chrono::steady_clock::now();
     const auto bytes = Packet::encode(state, *catalog);
     const f64 milliseconds =
         std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - begin).count();
     REQUIRE(bytes);
     WARN("stage-wire " << name << " wire_bytes=" << bytes->size()
+                       << " plain_wire_bytes=" << plain->size() << " codec=" << word(*bytes, 12)
                        << " decoded_body_bytes=" << *decodedSize << " budget=" << Packet::kMaxBytes
-                       << " encode_ms=" << milliseconds
+                       << " encode_ms=" << milliseconds << " plain_encode_ms=" << plainMilliseconds
                        << " placements=" << state.world.core.placements.size());
+    CHECK(bytes->size() <= plain->size());
     CHECK(bytes->size() <= Packet::kMaxBytes);
     CHECK(Packet::encodedSize(state, *catalog) == bytes->size());
     CHECK(Packet::decode(*bytes, *catalog) == state);
+    CHECK(Packet::decode(*plain, *catalog) == state);
+}
+
+TEST_CASE("stage wire resumes native carried transporter loops from independent trusted assets",
+          "[rollback][stage-state-packet][stage-transporter-packet]") {
+    const s32 rate = GENERATE(30, 60);
+    const auto root = test::sampleLevel("stage-packet-transporter-continuation");
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"FLOOR","position":[0,0,0],"flags":4102}],
+      "animations":[{"object":0,"frames":120,"state":257,"start":0,
+        "track":{"flags":32,"frames":[0,119],"values":[0,6]}}],
+      "itemInfos":[{"type":11,"name":"TRANS","radius":1,"height":2}],
+      "itemInstances":[
+        {"info":0,"position":[0,0,0],"params":[10,0,0,0,20,0,0,0]},
+        {"info":0,"position":[1,0,0],"params":[20,0,0,0,10,0,0,0]}]})");
+    writeTextFile(root / "animations.json", R"({
+      "textureAnimations":[{"name":"STONE","texture":0,"source":1,"frames":2,"rate":1}],
+      "trees":[{"name":"TRANS","nodes":[
+        {"name":"ROOT","object":"WALL","parent":-1,"position":[0,0,0]}],
+        "sequences":[{"name":"ACTIVE","frames":4,"frameRate":30,
+          "tracks":[{"node":0,"flags":16,"frames":[0,3],"values":[0,2]}]}]}]})");
+    writeTextFile(root / "collision.json", R"({"objects":[{"object":0,"normals":[0,1,0],
+      "vertices":[-4,0,-4,0,0,4,4,0,-4]}]})");
+    const LevelRef level{"TEST", 0, "TEST", "", "", "", "", 0};
+    NativeStage native(root, level, false), replay(root, level, false);
+    REQUIRE(native.transporters.size() == 2);
+    const auto initial = native.state();
+    REQUIRE(initial.transporters);
+    REQUIRE(initial.transporters->pads[0].support == 0);
+    REQUIRE(initial.transporters->pads[0].model);
+    const auto catalog = Packet::Catalog::build(initial);
+    const auto replayCatalog = Packet::Catalog::build(replay.state());
+    REQUIRE(catalog);
+    REQUIRE(replayCatalog);
+    CHECK(catalog->fingerprint() == replayCatalog->fingerprint());
+    const f32 seconds = 1.0f / static_cast<f32>(rate);
+    for (s32 tick = 0; tick < 13; ++tick) {
+        native.step(seconds);
+    }
+    native.transporters.animate(0.007f); // Fractional native clock must not be rounded.
+    native.world.update(seconds);        // Legitimate historical placement before pad sync.
+    const auto current = native.state();
+    REQUIRE(native.world.collision().objectTransform(0));
+    CHECK(current.transporters->pads[0].transform !=
+          *native.world.collision().objectTransform(0) *
+              current.transporters->pads[0].supportLocal);
+    const auto encoded = Packet::encode(current, *catalog);
+    REQUIRE(encoded);
+    const auto decoded = Packet::decode(*encoded, *replayCatalog);
+    REQUIRE(decoded);
+    REQUIRE(decoded->transporters);
+    const auto uploads = replay.device.textureUpdates;
+    const auto textures = replay.device.texturesCreated;
+    auto world = replay.worldOwner.prepareRestore(decoded->world);
+    auto fixtures = replay.fixtureOwner.prepareRestore(decoded->fixtures);
+    auto pads = replay.transporterOwner.prepareRestore(*decoded->transporters);
+    REQUIRE(world);
+    REQUIRE(fixtures);
+    REQUIRE(pads);
+    REQUIRE(replay.worldOwner.canCommit(*world));
+    REQUIRE(replay.fixtureOwner.canCommit(*fixtures));
+    REQUIRE(replay.transporterOwner.canCommit(*pads));
+    REQUIRE(replay.worldOwner.commitRestore(std::move(*world)));
+    REQUIRE(replay.fixtureOwner.commitRestore(std::move(*fixtures)));
+    REQUIRE(replay.transporterOwner.commitRestore(std::move(*pads)));
+    CHECK(replay.state() == current);
+    for (s32 tick = 0; tick < rate; ++tick) {
+        CAPTURE(tick, rate);
+        native.step(seconds);
+        replay.step(seconds);
+        CHECK(replay.state() == native.state());
+    }
+    native.transporters.capturePresentation();
+    replay.transporters.capturePresentation();
+    CHECK(replay.state() == native.state());
+    CHECK(replay.device.textureUpdates == uploads);
+    CHECK(replay.device.texturesCreated == textures);
 }
 } // namespace

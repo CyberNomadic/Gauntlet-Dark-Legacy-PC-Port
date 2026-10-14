@@ -332,11 +332,16 @@ void WorldCollision::append(std::span<const CollisionTriangle> triangles) {
 }
 
 void WorldCollision::MovingObject::place(const Mat4& world) {
+    place(world, local);
+}
+
+void WorldCollision::MovingObject::place(const Mat4& world,
+                                         std::span<const CollisionTriangle> source) {
     this->world = world;
     const Mat3 rotation{world};
     bool first = true;
-    for (usize i = 0; i < local.size(); ++i) {
-        const CollisionTriangle& from = local[i];
+    for (usize i = 0; i < source.size(); ++i) {
+        const CollisionTriangle& from = source[i];
         CollisionTriangle& to = placed[i];
         const Vec3 normal = rotation * from.normal;
         // Authored explosion planes (for example L1's L1CFXP_EXPLODE) shrink to

@@ -477,4 +477,149 @@ TEST_CASE("world capture and preparation still validate derived moving triangles
     REQUIRE(fixture.checkpoint.restore(baseline));
     CHECK(fixture.state() == baseline);
 }
+
+TEST_CASE("prepared world commits own every value after the incoming state is destroyed",
+          "[world][world-state-checkpoint]") {
+    Fixture source("world-core-prepared-values-source");
+    Fixture target("world-core-prepared-values-target");
+    source.step(3.0f / 30, 3);
+    source.collision.setContactOnly(1000, true);
+    source.collision.setFloorExitBlocked(1000, true);
+    const auto expected = source.state();
+    REQUIRE_FALSE(expected.cycles.empty());
+    REQUIRE_FALSE(expected.light.points.empty());
+    REQUIRE(
+        std::ranges::any_of(expected.slots, [](const auto& slot) { return !slot.cycle.empty(); }));
+    const auto before = target.state();
+    const auto uploads = target.device.texturesCreated;
+    std::optional<WorldStateCheckpoint::Prepared> pending;
+    {
+        auto incoming = expected;
+        pending = target.checkpoint.prepareRestore(incoming);
+        REQUIRE(pending);
+        CHECK(target.state() == before);
+        // Mutate existing storage, then release every vector before committing.
+        // Both aliasing that storage and retaining a reference to the State fail.
+        incoming.placements.front().local[3].x += 123;
+        incoming.units.front().alpha = 0;
+        incoming.slots.front().scrollVelocity = {7, 8};
+        for (auto& slot : incoming.slots) {
+            std::ranges::fill(slot.cycle, incoming.resourceCount);
+        }
+        incoming.light.points.front().radius = 900;
+        incoming.moving.front().transform[3].x += 456;
+        incoming.animations.front().frame = 0;
+        incoming.cycles.front().wrapped = !incoming.cycles.front().wrapped;
+        incoming = {};
+    }
+    target.step(1.0f / 30, 11);
+    CHECK(target.state() != before);
+    REQUIRE(target.checkpoint.canCommit(*pending));
+    REQUIRE(target.checkpoint.commitRestore(std::move(*pending)));
+    CHECK(target.state() == expected);
+    CHECK(target.device.texturesCreated == uploads);
+    CHECK_FALSE(target.checkpoint.canCommit(*pending));
+    sameDraw(source, target, 0.5f);
+}
+
+TEST_CASE("prepared moving caches match native floor ray and cylinder queries after rewind",
+          "[world][world-state-checkpoint][world-collapsed-collision]") {
+    Fixture native("world-core-borrowed-native");
+    Fixture replay("world-core-borrowed-replay");
+    for (auto* fixture : {&native, &replay}) {
+        fixture->collision.build(
+            {{{0, 1, 0}, {Vec3{-2, 0, -2}, Vec3{2, 0, -2}, Vec3{0, 0, 2}}, 8, 4}});
+        // Appended item collision retains its own non-layout object identity.
+        const std::array appended{
+            CollisionTriangle{{0, 0, 1}, {Vec3{-2, -2, 0}, Vec3{2, -2, 0}, Vec3{0, 2, 0}}, 1000, 2},
+            CollisionTriangle{
+                {0, 1, 0}, {Vec3{48, -3, -2}, Vec3{52, -3, -2}, Vec3{50, -3, 2}}, 2000, 4}};
+        fixture->collision.append(appended);
+        fixture->collision.setMovingObjects(std::array<s32, 2>{8, 1000});
+        REQUIRE(fixture->checkpoint.bind(fixture->textureClock, fixture->layout));
+        CHECK(fixture->checkpoint.hasCollisionObject(1000));
+        CHECK(fixture->checkpoint.hasCollisionObject(2000));
+    }
+    const auto initial = native.state();
+    const Mat4 placed = glm::translate(Mat4{1}, Vec3{7, 3, 9}) *
+                        glm::rotate(Mat4{1}, 0.4f, Vec3{0, 1, 0}) *
+                        glm::scale(Mat4{1}, Vec3{1.5f, 0.75f, 2});
+    const Mat4 collapsed = glm::translate(Mat4{1}, Vec3{7, 3, 9}) * glm::scale(Mat4{1}, Vec3{0});
+    const std::array transforms{Mat4{1}, placed, collapsed, placed, Mat4{1}};
+    const auto uploads = replay.device.texturesCreated;
+    for (usize step = 0; step < transforms.size(); ++step) {
+        CAPTURE(step);
+        const auto& transform = transforms[step];
+        for (const s32 object : {8, 1000}) {
+            native.collision.setObjectTransform(object, transform);
+        }
+        const auto saved = native.state();
+        auto pending = replay.checkpoint.prepareRestore(saved);
+        REQUIRE(pending);
+        // A native update after preparation may replace the old derived cache;
+        // it cannot change the saved cache or the borrowed immutable locals.
+        for (const s32 object : {8, 1000}) {
+            replay.collision.setObjectTransform(object, glm::translate(Mat4{1}, Vec3{-7, 6, -9}));
+        }
+        REQUIRE(replay.checkpoint.commitRestore(std::move(*pending)));
+        CHECK(replay.state() == saved);
+        CHECK(saved.catalog == initial.catalog);
+        CHECK(replay.collision.triangleCount() == 3);
+        CHECK(replay.device.texturesCreated == uploads);
+
+        const Vec3 centre{transform[3]};
+        const bool collapsedNow = step == 2;
+        const Vec3 normal =
+            collapsedNow ? Vec3{0, 0, 1} : glm::normalize(Mat3{transform} * Vec3{0, 0, 1});
+        const auto nativeFloor = native.collision.floorAt(centre, 1, 1);
+        const auto replayFloor = replay.collision.floorAt(centre, 1, 1);
+        REQUIRE(replayFloor.has_value() == nativeFloor.has_value());
+        CHECK(nativeFloor.has_value() == !collapsedNow);
+        if (nativeFloor) {
+            CHECK(nativeFloor->object == 8);
+            CHECK(nativeFloor->objectFlags == 4);
+            CHECK(glm::abs(nativeFloor->y - centre.y) < 0.00001f);
+            CHECK(replayFloor->object == nativeFloor->object);
+            CHECK(replayFloor->objectFlags == nativeFloor->objectFlags);
+            CHECK(replayFloor->normal == nativeFloor->normal);
+            CHECK(replayFloor->y == nativeFloor->y);
+        }
+        const Vec3 from = centre + normal;
+        const Vec3 to = centre - normal;
+        const auto nativeRay = native.collision.pickSurface(from, to);
+        CHECK(nativeRay.has_value() == !collapsedNow);
+        CHECK(replay.collision.pickSurface(from, to) == nativeRay);
+        CHECK(native.collision.wallBetween(from, to) == !collapsedNow);
+        CHECK(replay.collision.wallBetween(from, to) == !collapsedNow);
+        CHECK(native.collision.wallBetween(from, to, 0.25f) == !collapsedNow);
+        CHECK(replay.collision.wallBetween(from, to, 0.25f) == !collapsedNow);
+        const Vec3 body = centre + normal * 0.1f;
+        const auto nativeContacts =
+            native.collision.surfaceContacts(body, 0.5f, centre.y - 0.5f, centre.y + 0.5f);
+        const auto replayContacts =
+            replay.collision.surfaceContacts(body, 0.5f, centre.y - 0.5f, centre.y + 0.5f);
+        CHECK(std::ranges::any_of(nativeContacts, [](const auto& contact) {
+                  return contact.object == 1000;
+              }) == !collapsedNow);
+        REQUIRE(replayContacts.size() == nativeContacts.size());
+        for (usize contact = 0; contact < nativeContacts.size(); ++contact) {
+            CHECK(replayContacts[contact].object == nativeContacts[contact].object);
+            CHECK(replayContacts[contact].point == nativeContacts[contact].point);
+        }
+        const auto nativeResolved =
+            native.collision.resolveWalls(body, 0.5f, centre.y - 0.5f, centre.y + 0.5f);
+        CHECK((nativeResolved != body) == !collapsedNow);
+        CHECK(replay.collision.resolveWalls(body, 0.5f, centre.y - 0.5f, centre.y + 0.5f) ==
+              nativeResolved);
+        CHECK(replay.collision.sweepWalls(from, to, 0.5f, centre.y - 0.5f, centre.y + 0.5f) ==
+              native.collision.sweepWalls(from, to, 0.5f, centre.y - 0.5f, centre.y + 0.5f));
+    }
+    // The static appended floor and the original local triangles survive every
+    // prepared swap, including the zero-scale interval and subsequent expansion.
+    const auto floor = replay.collision.floorAt({50, -3, 0}, 1, 1);
+    REQUIRE(floor);
+    CHECK(floor->object == 2000);
+    CHECK(floor->objectFlags == 4);
+    CHECK(replay.state() == initial);
+}
 } // namespace

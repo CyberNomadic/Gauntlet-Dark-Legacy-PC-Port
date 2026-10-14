@@ -10,6 +10,25 @@
 
 namespace gdl::game {
 struct EnemyBirth;
+struct GeneratorEvent;
+
+/** Native generator feedback follows the damaging state transition, but precedes
+ * rewards and brood detachment. Missing native artwork is intentional; a present
+ * tree must use its exact prebound archive and lender context during replay. */
+struct GeneratorFeedbackEmission {
+    std::string sound;
+    ItemArchive* archive = nullptr;
+    std::string_view tree;
+    Vec3 position{0};
+    Mat4 placement{1};
+
+    static GeneratorFeedbackEmission resolve(const GeneratorEvent& event, ItemArchive* archive,
+                                             const LevelInfo* level, s32 realm,
+                                             std::string_view levelName);
+    std::optional<EffectTrees::Prepared>
+    prepare(std::span<const EffectTrees::PoolResource> resources,
+            std::span<TextureSet* const> lenders, const RenderDevice& device) const;
+};
 
 /** Native GENFX birth artwork. The roster is indexed by swarm kind; absent
  * loaded archives remain null. No sound, damage or resource load is implied. */

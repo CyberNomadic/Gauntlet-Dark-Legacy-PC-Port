@@ -588,34 +588,45 @@ bool PlacedItems::goldLeft() const {
     });
 }
 
+std::optional<Pickup> PlacedItems::pickupFor(usize index,
+                                             std::span<const Collector> collectors) const {
+    if (index >= m_items.size() || !m_items[index].takeable()) {
+        return std::nullopt;
+    }
+    const Item& item = m_items[index];
+    usize taker = collectors.size();
+    for (usize c = 0; c < collectors.size() && taker == collectors.size(); ++c) {
+        if (item.touchedBy(collectors[c])) {
+            taker = c;
+        }
+    }
+    if (taker == collectors.size()) {
+        return std::nullopt;
+    }
+    Pickup pickup;
+    pickup.item = index;
+    pickup.collector = taker;
+    pickup.subtype = item.subtype;
+    pickup.realm = item.realm();
+    pickup.amount = item.value;
+    pickup.flags = item.flags;
+    pickup.strength = item.strength;
+    pickup.position = item.position;
+    pickup.opener = item.opener;
+    return pickup;
+}
+
 std::vector<Pickup> PlacedItems::collect(RenderDevice& device,
                                          std::span<const Collector> collectors,
                                          const PickupJudge& judge) {
     std::vector<Pickup> pickups;
     for (usize i = 0; i < m_items.size(); ++i) {
+        const auto offered = pickupFor(i, collectors);
+        if (!offered) {
+            continue;
+        }
         Item& item = m_items[i];
-        if (!item.takeable()) {
-            continue;
-        }
-        usize taker = collectors.size();
-        for (usize c = 0; c < collectors.size() && taker == collectors.size(); ++c) {
-            if (item.touchedBy(collectors[c])) {
-                taker = c;
-            }
-        }
-        if (taker == collectors.size()) {
-            continue;
-        }
-        Pickup pickup;
-        pickup.item = i;
-        pickup.collector = taker;
-        pickup.subtype = item.subtype;
-        pickup.realm = item.realm();
-        pickup.amount = item.value;
-        pickup.flags = item.flags;
-        pickup.strength = item.strength;
-        pickup.position = item.position;
-        pickup.opener = item.opener;
+        const Pickup& pickup = *offered;
         if (judge) {
             const std::optional<s32> left = judge(pickup);
             if (!left.has_value()) {

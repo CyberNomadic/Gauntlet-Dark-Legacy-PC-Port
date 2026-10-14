@@ -342,6 +342,7 @@ public:
                                     std::span<TextureSet* const> textureLenders = {}) const;
 
 private:
+    static Checkpoint captureEffect(const Effect& effect);
     static void initializeTree(Effect& effect, const Setting& setting);
     static void initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
                                     const Texture& texture, u32 textureSlot, const Mat4& attachment,

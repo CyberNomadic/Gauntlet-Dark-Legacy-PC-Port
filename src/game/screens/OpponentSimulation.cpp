@@ -44,9 +44,12 @@ bool supportedWay(s32 way) {
     }
 }
 
-bool unsupportedMinds(const OpponentSimulation::Checkpoint& state) {
+bool unsupportedMinds(const OpponentSimulation::Checkpoint& state,
+                      const OpponentSimulation::PlacementObservation* observation = nullptr) {
     if (state.placements) {
-        const auto upcoming = state.placements->activations();
+        const auto upcoming =
+            observation ? state.placements->activations(observation->view, observation->attention)
+                        : state.placements->activations();
         if (!upcoming || std::ranges::any_of(*upcoming, [](const auto& row) {
                 return row.kind < 0 || row.kind >= kSwarmKindCount || row.kind == kGarmBroodKind ||
                        row.spawn.kind != row.kind || row.carried ||
@@ -201,7 +204,9 @@ OpponentSimulation::checkpoint(std::span<const EnemyMissiles::Resource> resource
             return std::nullopt;
         }
     }
-    return result.valid() ? std::optional{std::move(result)} : std::nullopt;
+    // Successful leaf captures are fully validated; retain every cross-pool
+    // generator reference without repeating their internal roster scans.
+    return result.validAggregate() ? std::optional{std::move(result)} : std::nullopt;
 }
 
 std::optional<OpponentSimulation::Prepared>
@@ -395,12 +400,18 @@ OpponentSimulation::speculate(const Frame& frame,
     return after ? Result::Interaction : Result::Invalid;
 }
 
-bool OpponentSimulation::combatSupported(const Checkpoint& state, const Frame& frame) {
-    return state.valid() && validFrame(frame) && frame.critters.empty() && frame.bosses.empty() &&
+bool OpponentSimulation::PlacementObservation::valid() const {
+    return PlacedEnemies::Checkpoint{{}, {}, view, attention}.valid();
+}
+
+bool OpponentSimulation::combatSupported(const Checkpoint& state, const Frame& frame,
+                                         const PlacementObservation* observation) {
+    return (!observation || observation->valid()) && state.valid() && validFrame(frame) &&
+           frame.critters.empty() && frame.bosses.empty() &&
            std::ranges::all_of(frame.players,
                                [](const auto& player) { return ordinary(player); }) &&
            ordinary(state.enemies) && state.missiles.bursts.empty() &&
-           !pendingInteraction(state, true) && !unsupportedMinds(state);
+           !pendingInteraction(state, true) && !unsupportedMinds(state, observation);
 }
 
 OpponentSimulation::Result

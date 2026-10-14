@@ -72,7 +72,8 @@ public:
      * play. Refusal restores every participant and the party-wide pain RNG;
      * outputs are returned only after acceptance. The caller must separately
      * restore the opponent queues and any preceding motion if it rejects the
-     * encompassing tick. Help/ward/lethal interactions are not implemented here.
+     * encompassing tick. New help, ward and lethal interactions are not implemented here;
+     * a lesson already suppressed by native history does not need a HUD mutation.
      * Uses already-bound class/figure resources; never loads or uploads them. */
     static Result replayBlows(std::span<const EnemyBlow> blows, std::span<PlayerRuntime> players,
                               PlayerHealth& health, const ClassDataSet& classes,

@@ -288,6 +288,7 @@ add_library(game STATIC
     world/ExitPortals.cpp
     world/LevelTransporters.h
     world/LevelTransporters.cpp
+    world/LevelTransportersCheckpoint.cpp
     world/LevelWorld.h
     world/LevelWorld.cpp
     world/WorldDestruction.cpp
@@ -443,6 +444,7 @@ add_library(game STATIC
     screens/LevelFixturesCheckpoint.cpp
     world/LevelWorldCheckpoint.cpp
     screens/PartyDamage.cpp
+    screens/PartyHelpAdmission.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp
     players/HeadGem.cpp

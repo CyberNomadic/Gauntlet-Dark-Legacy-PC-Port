@@ -165,6 +165,28 @@ constexpr std::string_view kNamesSlot = "%s %s";
 constexpr std::array<Color, 4> kInks{Color::rgba(0x1F, 0x1F, 0x00), Color::rgba(0x00, 0x00, 0x1F),
                                      Color::rgba(0x1F, 0x00, 0x00), Color::rgba(0x00, 0x1F, 0x00)};
 
+template <class Reader>
+bool historyWanted(const HelpMessageSpec& spec, s32 player, std::span<const Reader> party) {
+    const auto sawIt = [&](const Reader& reader) {
+        return reader.seen != nullptr && std::ranges::binary_search(*reader.seen, spec.id);
+    };
+    const auto heardIt = [&](const Reader& reader) {
+        return reader.heard != nullptr && std::ranges::binary_search(*reader.heard, spec.id);
+    };
+    // Told once: a player's own message until that player has seen it, a lesson until
+    // everyone playing has, a session's until anyone playing has heard it since loading.
+    if (spec.repeat == HelpRepeat::Always) {
+        return true;
+    }
+    if (spec.repeat == HelpRepeat::OncePerSession) {
+        return std::ranges::none_of(party, heardIt);
+    }
+    return std::ranges::any_of(party, [&](const Reader& reader) {
+        return (spec.repeat != HelpRepeat::OncePerPlayer || reader.player == player) &&
+               !sawIt(reader);
+    });
+}
+
 } // namespace
 
 const HelpMessageSpec* HelpMessages::specOf(s32 id) {
@@ -172,6 +194,11 @@ const HelpMessageSpec* HelpMessages::specOf(s32 id) {
     // NOLINTNEXTLINE(readability-qualified-auto)
     const auto found = std::ranges::find(kSpecs, id, &HelpMessageSpec::id);
     return found != kSpecs.end() ? &*found : nullptr;
+}
+
+bool HelpMessages::wanted(s32 id, s32 player, std::span<const HelpHistory> party) {
+    const auto* spec = specOf(id);
+    return spec != nullptr && historyWanted(*spec, player, party);
 }
 
 Color HelpMessages::inkOf(s32 player) {
@@ -262,24 +289,10 @@ const HelpMessageSpec* HelpMessages::post(s32 id, s32 player, std::span<const He
     if ((showing() && m_priority >= spec->priority) || (lesson && m_pauseLeft > 0)) {
         return nullptr;
     }
-    const auto sawIt = [id](const HelpReader& reader) {
-        return reader.seen != nullptr && std::ranges::binary_search(*reader.seen, id);
-    };
-    const auto heardIt = [id](const HelpReader& reader) {
-        return reader.heard != nullptr && std::ranges::binary_search(*reader.heard, id);
-    };
     const auto concerns = [&](const HelpReader& reader) {
         return spec->repeat != HelpRepeat::OncePerPlayer || reader.player == player;
     };
-    // Told once: a player's own message until that player has seen it, a lesson until
-    // everyone playing has, a session's until anyone playing has heard it since loading.
-    bool wanted = spec->repeat == HelpRepeat::Always;
-    if (spec->repeat == HelpRepeat::OncePerSession) {
-        wanted = std::ranges::none_of(party, heardIt);
-    } else if (!wanted) {
-        wanted = std::ranges::any_of(
-            party, [&](const HelpReader& reader) { return concerns(reader) && !sawIt(reader); });
-    }
+    const bool wanted = historyWanted(*spec, player, party);
     const auto message = m_strings->find(spec->text);
     if (!wanted || !message.has_value()) {
         return nullptr;

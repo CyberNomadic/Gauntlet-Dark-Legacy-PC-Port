@@ -5,6 +5,7 @@
 #include <cmath>
 #include <unordered_map>
 
+#include "game/screens/EnemyFeedbackEmission.h"
 #include "game/screens/OrdinaryStrongPhase.h"
 
 namespace gdl::game {
@@ -26,10 +27,19 @@ template <class Impact> bool ordinaryImpact(const Impact& impact) {
            (impact.flags & ~PlayerMissiles::kPlainModifiers) == 0;
 }
 
+bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
+    return std::ranges::any_of(players, [owner](const auto& player) {
+        return !player.departed && player.actor.player() == owner;
+    });
+}
+
+} // namespace
+
 std::optional<EffectTrees::Prepared>
-impactResource(const PlayerArsenal::ImpactPresentation& emission,
-               std::span<const EffectTrees::PoolResource> resources,
-               std::span<TextureSet* const> lenders, const RenderDevice& device) {
+OrdinaryProjectilePhase::impactResource(const PlayerArsenal::ImpactPresentation& emission,
+                                        std::span<const EffectTrees::PoolResource> resources,
+                                        std::span<TextureSet* const> lenders,
+                                        const RenderDevice& device) {
     const auto index = emission.archive->trees.find(emission.tree);
     if (!index) {
         return std::nullopt;
@@ -55,19 +65,43 @@ impactResource(const PlayerArsenal::ImpactPresentation& emission,
     return std::nullopt;
 }
 
-bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
-    return std::ranges::any_of(players, [owner](const auto& player) {
-        return !player.departed && player.actor.player() == owner;
-    });
-}
-
-} // namespace
-
 bool OrdinaryProjectilePhase::ordinaryTarget(s32 target) {
     return target == -1 ||
            (target >= PlayerAttacks::kEnemyTargetBase &&
-            target < PlayerAttacks::kGeneratorTargetBase) ||
+            target < PlayerAttacks::kCritterTargetBase) ||
            (target >= PlayerAttacks::kItemStopBase && target < PlayerAttacks::kPotionTargetBase);
+}
+
+bool OrdinaryProjectilePhase::ordinaryGenerator(const Generators& generators, s32 slot) {
+    if (slot < 0 || static_cast<usize>(slot) >= generators.count() ||
+        generators.count() > static_cast<usize>(PlayerAttacks::kCritterTargetBase -
+                                                PlayerAttacks::kGeneratorTargetBase)) {
+        return false;
+    }
+    const s32 kind = generators.kindOf(slot);
+    return kind >= 0 && kind < kSwarmKindCount && kind != kDeathKind && kind != kItKind &&
+           kind != kGarmBroodKind;
+}
+
+std::optional<u32> OrdinaryProjectilePhase::generatorPresentation(
+    const GeneratorFeedbackEmission& emission, EffectTrees& effects, const RenderDevice& device,
+    std::span<const EffectTrees::PoolResource> resources, std::vector<Cue>& cues) {
+    u32 effect = 0;
+    if (emission.archive != nullptr) {
+        const auto prepared = emission.prepare(resources, effects.textureLenders(), device);
+        if (!prepared) {
+            return std::nullopt;
+        }
+        effect = effects.startPrepared(*prepared, emission.position, {});
+        if (effect == 0) {
+            return std::nullopt;
+        }
+        effects.placeAt(effect, emission.placement);
+    }
+    if (!emission.sound.empty()) {
+        cues.push_back({emission.sound, emission.position, std::nullopt, 1});
+    }
+    return effect;
 }
 
 bool OrdinaryProjectilePhase::supported(const PlayerArsenalCheckpoint::State& state,
@@ -160,7 +194,10 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
         return {};
     }
     if (targets.fixtures.inertStops().size() >
-        static_cast<usize>(PlayerAttacks::kPotionTargetBase - PlayerAttacks::kItemStopBase)) {
+            static_cast<usize>(PlayerAttacks::kPotionTargetBase - PlayerAttacks::kItemStopBase) ||
+        targets.opponents.generators().count() >
+            static_cast<usize>(PlayerAttacks::kCritterTargetBase -
+                               PlayerAttacks::kGeneratorTargetBase)) {
         return {}; // Native sequential stop IDs must not alias the next target family.
     }
     std::array<bool, 4> occupied{};
@@ -218,6 +255,11 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
                 kind == kGarmBroodKind || enemies.algorithmOf(id) == kSuicideWay) {
                 return {};
             }
+        } else if (impact.target >= PlayerAttacks::kGeneratorTargetBase &&
+                   impact.target < PlayerAttacks::kCritterTargetBase &&
+                   !ordinaryGenerator(targets.opponents.generators(),
+                                      impact.target - PlayerAttacks::kGeneratorTargetBase)) {
+            return {};
         }
         // Native missing artwork remains missing; an available native tree must
         // have exactly its prebound archive/lender prototype before any damage.
@@ -232,12 +274,14 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
         }
         presentation.push_back(prepared);
     }
-    // A later unsupported hit cannot leave an earlier enemy damaged. The whole
-    // batch has passed, and ordinary target impacts produce only owned queues.
+    // Target admission covers the whole batch. Generator state-dependent art is
+    // prepared at its native damage point; failure there requires the caller's
+    // whole-tick undo, including earlier impacts and the consumed flight queue.
     Result result{.advanced = true, .impacts = impacts.size()};
     for (usize index = 0; index < impacts.size(); ++index) {
-        attacks.dispatchProjectileImpact(
-            impacts[index], players, targets, [&](const MissileImpact& impact, f32 distance) {
+        const bool dispatched = attacks.dispatchProjectileImpact(
+            impacts[index], players, targets,
+            [&](const MissileImpact& impact, f32 distance) {
                 const auto emission = bound.arsenal.impactPresentation(impact, distance);
                 if (presentation[index] &&
                     bound.effects.startPrepared(*presentation[index], emission.position,
@@ -247,8 +291,12 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
                 if (emission.cue) {
                     result.cues.push_back(*emission.cue);
                 }
+            },
+            [&](const GeneratorFeedbackEmission& emission) {
+                return generatorPresentation(emission, bound.effects, bound.device,
+                                             resources.sharedEffects, result.cues);
             });
-        if (!result.advanced) {
+        if (!dispatched || !result.advanced) {
             return {}; // The enclosing transaction owns the partial native pool undo.
         }
     }

@@ -1,4 +1,5 @@
 #include <limits>
+#include <type_traits>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -10,6 +11,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 using Boundary = PlayerArsenalCheckpoint;
+static_assert(std::is_aggregate_v<Boundary::State>);
 
 TEST_CASE("arsenal checkpoint restores the shared unspecified-potion stream without spending again",
           "[player-arsenal-checkpoint]") {
@@ -103,6 +105,10 @@ TEST_CASE("arsenal restoration includes live native potion flights queues and ch
     missiles.update(0.13f, nullptr, {});
     const auto saved = Boundary::capture(fixture.arsenal, resources);
     REQUIRE(saved);
+    CHECK(saved->valid());
+    const auto direct = missiles.checkpoint(resources);
+    REQUIRE(direct);
+    CHECK(saved->missiles == *direct);
     REQUIRE(saved->missiles.missiles.size() == 1);
     const auto visual = fixture.effectState();
     const auto paid = actor.save().progress().inventory;
@@ -115,6 +121,7 @@ TEST_CASE("arsenal restoration includes live native potion flights queues and ch
     };
     for (s32 tick = 0; tick < 130; ++tick) {
         expected.push_back(step(tick));
+        CHECK(expected.back().valid());
     }
     REQUIRE(Boundary::restore(fixture.arsenal, *saved, fixture.slots, visual, resources));
     for (s32 tick = 0; tick < 130; ++tick) {
@@ -125,6 +132,36 @@ TEST_CASE("arsenal restoration includes live native potion flights queues and ch
     REQUIRE(prepared);
     missiles.clear();
     CHECK_FALSE(Boundary::canCommit(fixture.arsenal, *prepared));
+}
+
+TEST_CASE("arsenal capture refuses malformed live missile state and an unresolved catalog",
+          "[player-arsenal-checkpoint][checkpoint-capture-validation]") {
+    test::AttackCheckpointFixture fixture(false);
+    auto& actor = fixture.players[0].actor;
+    actor.save().progress().inventory.addPotions(1, 1);
+    fixture.arsenal.throwPotion(actor, 18, 49);
+    auto& missiles = fixture.arsenal.missiles();
+    REQUIRE(missiles.count() == 1);
+    const auto& shot = missiles.missile(0);
+    const std::array resources{
+        PlayerMissiles::Resource{7, shot.spec, shot.model, shot.streak.texture}};
+    const auto before = Boundary::capture(fixture.arsenal, resources);
+    REQUIRE(before);
+    REQUIRE(before->valid());
+    CHECK_FALSE(Boundary::capture(fixture.arsenal));
+    auto invalid = *before;
+    invalid.missiles.ricochetIn = std::numeric_limits<f32>::quiet_NaN();
+    CHECK_FALSE(invalid.valid());
+    CHECK_FALSE(Boundary::prepare(fixture.arsenal, invalid, fixture.slots, fixture.effectState(),
+                                  resources));
+    // Keep the native identity/resource tuple intact while corrupting one
+    // scalar, so the child value validator (not missing artwork) rejects it.
+    auto& live = const_cast<PlayerMissiles::Missile&>(shot);
+    const auto savedDamage = live.damage;
+    live.damage = std::numeric_limits<f32>::quiet_NaN();
+    CHECK_FALSE(Boundary::capture(fixture.arsenal, resources));
+    live.damage = savedDamage;
+    CHECK(Boundary::capture(fixture.arsenal, resources) == before);
 }
 
 TEST_CASE("arsenal preparation validates identities and state before atomic single-owner commit",

@@ -196,9 +196,8 @@ EffectTrees::checkpointPool(std::span<const PoolResource> resources) const {
         result.banks.push_back({resource->id, motion->animator.checkpoint()});
     }
     for (const auto& effect : m_effects) {
-        const auto state = checkpoint(effect->id);
-        if (!state ||
-            (!effect->then.empty() && morphResource(resources, *effect, effect->then) == nullptr)) {
+        auto state = captureEffect(*effect);
+        if (!effect->then.empty() && morphResource(resources, *effect, effect->then) == nullptr) {
             return std::nullopt;
         }
         const auto resource = std::ranges::find_if(resources, [&](const PoolResource& candidate) {
@@ -209,8 +208,8 @@ EffectTrees::checkpointPool(std::span<const PoolResource> resources) const {
                 prototype->emitParticles != effect->emitParticles ||
                 prototype->missingObjectsAreEmpty != effect->missingObjectsAreEmpty ||
                 prototype->particleTextureSlot != effect->particleTextureSlot ||
-                !prototype->trails.canRestore(state->trails) ||
-                !prototype->particles.canRestore(state->particles)) {
+                !prototype->trails.canRestore(state.trails) ||
+                !prototype->particles.canRestore(state.particles)) {
                 return false;
             }
             for (usize index = 0; index < effect->trails.size(); ++index) {
@@ -232,7 +231,7 @@ EffectTrees::checkpointPool(std::span<const PoolResource> resources) const {
             }
             previousResource = previous->id;
         }
-        result.effects.push_back({resource->id, effect->id, effect->instance, *state,
+        result.effects.push_back({resource->id, effect->id, effect->instance, std::move(state),
                                   effect->provenance, effect->previousTransform,
                                   effect->previousDirection, effect->previousTree != nullptr,
                                   effect->previousGeneration, effect->previousFrame,

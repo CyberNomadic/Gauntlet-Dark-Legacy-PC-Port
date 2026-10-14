@@ -2,10 +2,36 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 
 #include "game/enemies/Enemies.h"
+#include "game/enemies/Generators.h"
 
 namespace gdl::game {
+
+GeneratorFeedbackEmission GeneratorFeedbackEmission::resolve(const GeneratorEvent& event,
+                                                             ItemArchive* archive,
+                                                             const LevelInfo* level, s32 realm,
+                                                             std::string_view levelName) {
+    GeneratorFeedbackEmission result;
+    result.position = event.position;
+    result.placement = event.placement;
+    if (event.stateChanged && archive != nullptr) {
+        const std::string_view tree = event.destroyed ? "GENDIE" : "GENHIT";
+        if (archive->trees.find(tree)) {
+            result.archive = archive;
+            result.tree = tree;
+        }
+    }
+    if (!event.destroyed || level == nullptr || level->bossType < 0) {
+        const std::string suffix =
+            realm == 10 && event.kind == 24
+                ? "WAR"
+                : std::string(1, levelName.empty() ? 'G' : levelName.front());
+        result.sound = std::format("{}{}", event.destroyed ? "S_GENKILL" : "S_GENDAM", suffix);
+    }
+    return result;
+}
 
 EnemyFeedbackEmission EnemyFeedbackEmission::resolve(const EnemyFeedback& feedback,
                                                      ItemArchive* enemyArchive,
@@ -53,8 +79,9 @@ prepareEffect(ItemArchive* archive, std::string_view tree,
     const auto* nativeTree = &archive->trees.tree(*index);
     for (const auto& resource : resources) {
         const auto* prototype = resource.prototype;
-        if (resource.archive != archive || resource.textures == nullptr || prototype == nullptr ||
-            !std::ranges::equal(resource.lenders, lenders) || prototype->archive != archive ||
+        if (resource.id == 0 || resource.archive != archive || resource.textures == nullptr ||
+            prototype == nullptr || !std::ranges::equal(resource.lenders, lenders) ||
+            !std::ranges::equal(prototype->lenders, lenders) || prototype->archive != archive ||
             prototype->tree != nativeTree || !prototype->emitParticles ||
             prototype->missingObjectsAreEmpty || prototype->trails.size() != 0) {
             continue;
@@ -73,6 +100,17 @@ std::optional<EffectTrees::Prepared>
 EnemyFeedbackEmission::prepare(std::span<const EffectTrees::PoolResource> resources,
                                std::span<TextureSet* const> lenders) const {
     return prepareEffect(archive, tree, resources, lenders);
+}
+
+std::optional<EffectTrees::Prepared>
+GeneratorFeedbackEmission::prepare(std::span<const EffectTrees::PoolResource> resources,
+                                   std::span<TextureSet* const> lenders,
+                                   const RenderDevice& device) const {
+    auto prepared = prepareEffect(archive, tree, resources, lenders);
+    if (!prepared || prepared->device != &device) {
+        return std::nullopt;
+    }
+    return prepared;
 }
 
 EnemyBirthEmission EnemyBirthEmission::resolve(const EnemyBirth& birth,

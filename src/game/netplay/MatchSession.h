@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 
 #include "game/netplay/AudioSync.h"
 #include "game/netplay/CombatPlayback.h"
@@ -61,8 +62,8 @@ public:
 /** Simulation-thread match lifecycle and packet routing, independent of HTTP/UI/assets.
  * open() takes only an authenticated frozen room roster. The host prepares a scene;
  * each machine explicitly confirms it has loaded before any simulation may advance.
- * Reliable control is retained on congestion. Unreliable output retains one started
- * checkpoint plus the latest replacement/input redundancy; no growing backlog.
+ * Reliable control is retained on congestion. Completed-checkpoint receipts bound
+ * each peer's independent publication window; unsent captures coalesce in place.
  * No host migration, mid-match joins or save writes.
  * The scene adapter must call advance() before stepping gameplay; clients never get a frame. */
 class MatchSession {
@@ -73,6 +74,9 @@ public:
     // Peers keep pumping transport throughout; an absent viewer still times out.
     static constexpr f64 kLoadTimeout = 120;
     static constexpr usize kControlBudget = 16;
+    static constexpr usize kPublicationWindow = 2;
+    static constexpr usize kPublicationBurst = 64;
+    static constexpr f64 kPublicationTimeout = 1;
     // Two 20 Hz snapshot intervals of slack beyond the negotiated input lead.
     // A quiet/stalled host must never let client input numbering run away.
     static constexpr u64 kInputSlack = 6;
@@ -119,6 +123,9 @@ public:
     std::span<const InputCommand> sampledInputs() const { return m_sampled; }
     bool inputReady() const;
     std::optional<InputTimeline::Frame> advance();
+    /** Check before expensive capture/encoding. Full peers skip publications;
+     * one ready peer is sufficient. Timeout credit comes only from update(). */
+    bool publicationReady() const;
     bool publish(const CombatSnapshot& state);
     bool publish(const CombatPacket::Prepared& state);
     u64 inputTick() const { return host() ? m_timeline.tick() : m_nextInput; }
@@ -146,10 +153,18 @@ private:
         PacketTransport::Connection connection;
         std::vector<u8> bytes;
     };
-    struct StateDelivery {
-        CombatReplica::Packets packets;
+    struct StateBatch {
+        std::shared_ptr<const CombatReplica::Packets> packets;
+        CombatReplica::Receipt identity;
         usize next = 0;
-        CombatReplica::Packets latest;
+        f64 remaining = kPublicationTimeout;
+        bool acknowledged = false;
+    };
+    struct StateDelivery {
+        std::deque<StateBatch> batches;
+        bool ready() const {
+            return batches.size() < kPublicationWindow || batches.back().next == 0;
+        }
     };
     u8 peerOf(PacketTransport::Connection connection) const;
     bool queue(u8 peer, MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0);
@@ -159,6 +174,8 @@ private:
     void discardGameplay();
     Admission control(u8 peer, const MatchControl& message);
     Admission checkpoint(u8 peer, const PartyCheckpoint& message);
+    Admission receipt(u8 peer, const CombatReplica::Receipt& message);
+    void resetLeadRecovery();
 
     Phase m_phase = Phase::Offline;
     MatchStop m_stop = MatchStop::None;
@@ -180,6 +197,9 @@ private:
     u64 m_nextInput = 0;
     u8 m_adaptiveLead = 0;
     u64 m_leadFeedbackFloor = 0;
+    std::optional<u64> m_healthyLeadSince;
+    u32 m_healthyLeadSamples = 0;
+    s32 m_healthyLeadMargin = 0;
     u64 m_sampleClock = 0;
     struct SentInput {
         u64 tick;
@@ -193,6 +213,7 @@ private:
     std::deque<ControlDelivery> m_controls;
     std::vector<u8> m_input;
     std::array<StateDelivery, 5> m_states;
+    std::optional<CombatReplica::Receipt> m_receipt;
     LatencyTelemetry m_latency;
     LatencyTelemetry::Time m_statisticsAt;
 };

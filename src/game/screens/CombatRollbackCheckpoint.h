@@ -33,6 +33,10 @@ public:
         EffectTrees::PoolCheckpoint effects;
         bool valid() const;
         bool operator==(const State&) const = default;
+
+    private:
+        friend class CombatRollbackCheckpoint;
+        bool validAggregate() const;
     };
     class Prepared {
     public:

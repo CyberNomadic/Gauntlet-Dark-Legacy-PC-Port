@@ -146,6 +146,102 @@ TEST_CASE("effect pool preparation rejects malformed state and has exact single 
     CHECK(pool.checkpointPool(fixture.resources) == saved);
 }
 
+TEST_CASE("direct pool capture preserves ordered sparse identities and complete native particles",
+          "[effect-pool-checkpoint][checkpoint-capture-validation]") {
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    test::ProjectileCheckpointFixture fixture;
+    EffectTrees native, replay;
+    std::array<u32, 48> ids{};
+    for (usize index = 0; index < ids.size(); ++index) {
+        EffectTrees::Setting setting;
+        setting.persistent = true;
+        setting.scale = 0.5f + static_cast<f32>(index) / 32;
+        setting.velocity = {static_cast<f32>(index) / 8, 1, -2};
+        setting.alpha = 0.25f + static_cast<f32>(index) / 96;
+        ids[index] = native.startSet(fixture.device, fixture.archive, "FLIGHT",
+                                     {static_cast<f32>(index), 2, 3}, setting);
+        REQUIRE(ids[index] != 0);
+        REQUIRE(native.tag(ids[index], {2, 71, static_cast<u16>(index), 0}));
+    }
+    for (usize index = 0; index < ids.size(); index += 7) {
+        native.stop(ids[index]);
+        CHECK_FALSE(native.checkpoint(ids[index]));
+    }
+    native.capturePresentation();
+    native.update(0.117f);
+    for (usize index = 1; index < ids.size(); index += 5) {
+        native.finish(ids[index]);
+    }
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    const auto saved = native.checkpointPool(fixture.resources);
+    REQUIRE(saved);
+    REQUIRE(saved->valid());
+    REQUIRE(saved->effects.size() == native.count());
+    REQUIRE(saved->effects.size() > 32);
+    usize particles = 0;
+    for (usize index = 0; index < native.count(); ++index) {
+        const auto& live = native.effect(index);
+        const auto individual = native.checkpoint(live.id);
+        REQUIRE(individual);
+        const auto& captured = saved->effects[index];
+        CHECK(captured.state == *individual);
+        CHECK(captured.id == live.id);
+        CHECK(captured.instance == live.instance);
+        CHECK(captured.provenance == live.provenance);
+        CHECK(captured.previousTransform == live.previousTransform);
+        particles += live.particles.field().particleCount();
+    }
+    REQUIRE(particles > 0);
+    REQUIRE(replay.restorePool(*saved, fixture.resources));
+    CHECK(replay.checkpointPool(fixture.resources) == saved);
+    for (s32 tick = 0; tick < 8; ++tick) {
+        native.capturePresentation();
+        replay.capturePresentation();
+        native.update(seconds);
+        replay.update(seconds);
+        const auto current = native.checkpointPool(fixture.resources);
+        REQUIRE(current);
+        CHECK(current->valid());
+        CHECK(replay.checkpointPool(fixture.resources) == current);
+    }
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+}
+
+TEST_CASE("direct effect capture still rejects malformed live state and mismatched resources",
+          "[effect-pool-checkpoint][checkpoint-capture-validation]") {
+    test::ProjectileCheckpointFixture fixture;
+    EffectTrees pool;
+    const auto id = pool.startSet(fixture.device, fixture.archive, "FLIGHT", {}, {});
+    REQUIRE(id != 0);
+    const auto before = pool.checkpointPool(fixture.resources);
+    REQUIRE(before);
+    REQUIRE(before->valid());
+    auto& live = const_cast<EffectTrees::Effect&>(pool.effect(0));
+    const auto lived = std::exchange(live.lived, std::numeric_limits<f32>::quiet_NaN());
+    const auto individual = pool.checkpoint(id);
+    REQUIRE(individual);
+    CHECK_FALSE(individual->valid());
+    CHECK_FALSE(pool.checkpointPool(fixture.resources));
+    live.lived = lived;
+    CHECK(pool.checkpointPool(fixture.resources) == before);
+    auto prototype = fixture.prototypes.effect(0);
+    auto resources = fixture.resources;
+    resources[0].prototype = &prototype;
+    prototype.emitParticles = false;
+    CHECK_FALSE(pool.checkpointPool(resources));
+    CHECK_FALSE(pool.prepareRestorePool(*before, resources));
+    CHECK(pool.checkpointPool(fixture.resources) == before);
+    auto pending = pool.prepareRestorePool(*before, fixture.resources);
+    REQUIRE(pending);
+    pool.clear();
+    CHECK_FALSE(pool.canCommit(*pending));
+    CHECK_FALSE(pool.commitRestore(std::move(*pending)));
+    REQUIRE(pool.restorePool(*before, fixture.resources));
+    CHECK(pool.checkpointPool(fixture.resources) == before);
+}
+
 TEST_CASE("standalone emitter pool resumes exact RNG and attached trail topology",
           "[effect-pool-checkpoint]") {
     test::ProjectileCheckpointFixture fixture;

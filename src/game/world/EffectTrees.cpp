@@ -100,48 +100,51 @@ bool EffectTrees::Checkpoint::valid() const {
 
 std::optional<EffectTrees::Checkpoint> EffectTrees::checkpoint(u32 id) const {
     for (const auto& effect : m_effects) {
-        if (effect->id != id) {
-            continue;
+        if (effect->id == id) {
+            return captureEffect(*effect);
         }
-        Checkpoint state;
-        state.name = effect->name;
-        state.tree = effect->tree != nullptr;
-        state.continuity = effect->continuity;
-        auto& s = state.setting;
-        s.scale = effect->scale;
-        s.stretch = effect->stretch;
-        s.fadeSeconds = effect->fadeSeconds;
-        s.yaw = effect->yaw;
-        s.velocity = effect->velocity;
-        s.seconds = effect->secondsLeft;
-        s.loop = effect->repeats;
-        s.persistent = effect->persistent;
-        s.emitParticles = effect->emitParticles;
-        s.missingObjectsAreEmpty = effect->missingObjectsAreEmpty;
-        s.additive = effect->additive;
-        s.then = effect->then;
-        s.morphIn = effect->morphIn;
-        s.holdForMorph = effect->holdForMorph;
-        s.shrinks = effect->shrinks;
-        s.unlit = effect->unlit;
-        s.depthWrite = effect->depthWrite;
-        s.tint = effect->tint;
-        s.alpha = effect->alpha;
-        s.playbackRate = effect->playbackRate;
-        s.light = effect->light;
-        state.position = effect->position;
-        state.timed = effect->timed;
-        state.retiring = effect->retiring;
-        state.lived = effect->lived;
-        state.animation = effect->player.checkpoint();
-        state.trails = effect->trails.checkpoint();
-        state.particles = effect->particles.checkpoint();
-        state.attachment = effect->attachment;
-        state.flightDirection = effect->flightDirection;
-        state.particleTextureSlot = effect->particleTextureSlot;
-        return state;
     }
     return std::nullopt;
+}
+
+EffectTrees::Checkpoint EffectTrees::captureEffect(const Effect& effect) {
+    Checkpoint state;
+    state.name = effect.name;
+    state.tree = effect.tree != nullptr;
+    state.continuity = effect.continuity;
+    auto& s = state.setting;
+    s.scale = effect.scale;
+    s.stretch = effect.stretch;
+    s.fadeSeconds = effect.fadeSeconds;
+    s.yaw = effect.yaw;
+    s.velocity = effect.velocity;
+    s.seconds = effect.secondsLeft;
+    s.loop = effect.repeats;
+    s.persistent = effect.persistent;
+    s.emitParticles = effect.emitParticles;
+    s.missingObjectsAreEmpty = effect.missingObjectsAreEmpty;
+    s.additive = effect.additive;
+    s.then = effect.then;
+    s.morphIn = effect.morphIn;
+    s.holdForMorph = effect.holdForMorph;
+    s.shrinks = effect.shrinks;
+    s.unlit = effect.unlit;
+    s.depthWrite = effect.depthWrite;
+    s.tint = effect.tint;
+    s.alpha = effect.alpha;
+    s.playbackRate = effect.playbackRate;
+    s.light = effect.light;
+    state.position = effect.position;
+    state.timed = effect.timed;
+    state.retiring = effect.retiring;
+    state.lived = effect.lived;
+    state.animation = effect.player.checkpoint();
+    state.trails = effect.trails.checkpoint();
+    state.particles = effect.particles.checkpoint();
+    state.attachment = effect.attachment;
+    state.flightDirection = effect.flightDirection;
+    state.particleTextureSlot = effect.particleTextureSlot;
+    return state;
 }
 
 bool EffectTrees::restore(u32 id, const Checkpoint& state) {

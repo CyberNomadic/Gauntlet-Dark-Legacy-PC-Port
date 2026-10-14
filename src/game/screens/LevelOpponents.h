@@ -25,6 +25,7 @@
 namespace gdl::game {
 struct EnemyFeedbackEmission;
 struct EnemyBirthEmission;
+struct GeneratorFeedbackEmission;
 /** Level enemy population, damage/reward routing and following combat cues.
  * Owns enemy archives, missiles, generators and the boss meter. Borrowed level services
  * must outlive close(). Phase hooks synchronously interleave scene-level rites,
@@ -115,6 +116,12 @@ public:
                       s32 node = -1);
     void strikeGenerator(s32 id, f32 power, s32 byPlayer,
                          std::span<const PlayerRuntime> players = {});
+    using GeneratorPublisher = std::function<std::optional<u32>(const GeneratorFeedbackEmission&)>;
+    /** Shared native damage/reward path with a prepared-art publisher. False
+     * requires the caller's complete combat rewind: the generator was already
+     * struck, but rewards and brood detachment have not yet been committed. */
+    bool strikeGenerator(s32 id, f32 power, s32 byPlayer, std::span<const PlayerRuntime> players,
+                         const GeneratorPublisher& publish);
     /** A blast of `damage` over `radius` reaching what it has not yet (`reached`, its ids:
      * enemies, generators from 1000, critters from 2000, the boss 3000). */
     void blast(const Vec3& position, f32 radius, f32 damage, std::vector<s32>& reached,

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "engine/core/Log.h"
+
 namespace gdl::game {
 bool FixtureResources::bind(RenderDevice& device, std::span<ItemArchive* const> archives,
                             const Generators& generators, const SafeRocks& rocks,
@@ -102,9 +104,67 @@ u32 FixtureResources::portalId(const ExitPortals::Portal& portal) const {
     }
     return 0;
 }
-bool FixtureResources::accepts(const FixtureState& fixture) const {
-    if (!fixture.valid() || fixture.resource > m_entries.size()) {
+u32 FixtureResources::transporterId(const LevelTransporters::Presentation& pad) const {
+    for (usize index = 0; index < m_entries.size(); ++index) {
+        const auto& entry = m_entries[index];
+        if (entry.archive == pad.archive && entry.tree == pad.tree) {
+            return static_cast<u32>(index + 1);
+        }
+    }
+    return 0;
+}
+bool FixtureResources::accepts(const TransporterState& pad) const {
+    if (!pad.valid() || pad.resource > m_entries.size()) {
         return false;
+    }
+    const auto& entry = m_entries[pad.resource - 1];
+    if (!entry.model.bound() || entry.tree->name != "TRANS") {
+        return false;
+    }
+    if (!pad.playing) {
+        // No ACTIVE sequence means native rest-pose art; a packet cannot turn
+        // another authored animation into a stopped TRANS model.
+        return !entry.tree->findSequence("ACTIVE");
+    }
+    const auto active = entry.tree->findSequence("ACTIVE");
+    return active && *active == pad.sequence && pad.sequence < entry.tree->sequences.size() &&
+           pad.frame <=
+               static_cast<f32>(std::max(0, entry.tree->sequences[pad.sequence].frames - 1)) &&
+           pad.previousFrame <=
+               static_cast<f32>(std::max(0, entry.tree->sequences[pad.sequence].frames - 1));
+}
+void FixtureResources::drawTransporter(RenderDevice& device, const TransporterState& pad,
+                                       const Mat4& clip, const WorldLighting& lighting) {
+    if (!accepts(pad)) {
+        return;
+    }
+    auto& entry = m_entries[pad.resource - 1];
+    TreePose pose;
+    if (pad.playing) {
+        pose.evaluate(*entry.tree, pad.sequence, pad.frame, false, true);
+    } else {
+        pose.rest(*entry.tree);
+    }
+    entry.model.setPresentationFrame(pad.sequence, pad.frame);
+    entry.textures.apply(entry.model, *entry.tree, pad.sequence, pad.frame,
+                         pad.textureClock - static_cast<f32>(entry.textures.frame()));
+    entry.model.draw(device, clip, pad.placement, lighting, pose.matrices());
+}
+bool FixtureResources::accepts(const FixtureState& fixture) const {
+    const auto refuse = [&](std::string_view reason, const Entry* entry = nullptr) {
+        log::warn("Fixture rejected: {} source={} instance={} resource={} tree={} "
+                  "pose={}/{}/{} mesh={}/{} texture={}/{}",
+                  reason, static_cast<u32>(fixture.source), fixture.instance, fixture.resource,
+                  entry != nullptr ? entry->tree->name : std::string_view{}, fixture.pose.sequence,
+                  fixture.pose.frame, fixture.pose.generation, fixture.meshSequence,
+                  fixture.meshFrame, fixture.textureSequence, fixture.textureFrame);
+        return false;
+    };
+    if (!fixture.valid()) {
+        return refuse("state");
+    }
+    if (fixture.resource > m_entries.size()) {
+        return refuse("resource");
     }
     const auto& entry = m_entries[fixture.resource - 1];
     const auto cursor = [&](u32 sequence, f32 frame) {
@@ -114,10 +174,19 @@ bool FixtureResources::accepts(const FixtureState& fixture) const {
                          frame <= static_cast<f32>(
                                       std::max(0, entry.tree->sequences[sequence].frames - 1));
     };
-    return entry.model.bound() &&
-           (fixture.pose.generation == 0 || cursor(fixture.pose.sequence, fixture.pose.frame)) &&
-           cursor(fixture.meshSequence, fixture.meshFrame) &&
-           cursor(fixture.textureSequence, fixture.textureFrame);
+    if (!entry.model.bound()) {
+        return refuse("unbound model", &entry);
+    }
+    if (fixture.pose.generation != 0 && !cursor(fixture.pose.sequence, fixture.pose.frame)) {
+        return refuse("pose cursor", &entry);
+    }
+    if (!cursor(fixture.meshSequence, fixture.meshFrame)) {
+        return refuse("mesh cursor", &entry);
+    }
+    if (!cursor(fixture.textureSequence, fixture.textureFrame)) {
+        return refuse("texture cursor", &entry);
+    }
+    return true;
 }
 u32 FixtureResources::rockId(usize index, s32 tier) const {
     for (usize i = 0; i < m_entries.size(); ++i) {
@@ -163,7 +232,7 @@ void FixtureResources::draw(RenderDevice& device, const FixtureState& fixture, c
 bool FixtureCapture::append(CombatSnapshot& snapshot, const FixtureResources& resources,
                             const Sources& sources) {
     const auto& [chests, gates, switches, generators, barrels, traps, rocks, rubble, statues,
-                 portals] = sources;
+                 portals, transporters] = sources;
     std::vector<FixtureState> visible;
     const auto add = [&](const FixtureState& state) {
         if (visible.size() >= CombatSnapshot::kMaxFixtures || !resources.accepts(state)) {
@@ -311,8 +380,38 @@ bool FixtureCapture::append(CombatSnapshot& snapshot, const FixtureResources& re
         }
     }
     std::ranges::sort(visible, {}, &FixtureState::key);
+    std::vector<TransporterState> pads;
+    if (transporters != nullptr) {
+        if (transporters->size() > CombatSnapshot::kMaxTransporters) {
+            return false;
+        }
+        for (usize index = 0; index < transporters->size(); ++index) {
+            const auto view = transporters->presentation(index);
+            if (!view) {
+                continue; // native pads without bound art do not draw either
+            }
+            TransporterState pad;
+            pad.instance = view->instance;
+            pad.resource = resources.transporterId(*view);
+            pad.placement = view->placement;
+            pad.sequence = view->sequence;
+            pad.generation = view->generation;
+            pad.frame = view->frame;
+            pad.previousFrame = view->previousFrame;
+            pad.textureClock = view->textureClock;
+            pad.previousTextureClock = view->previousTextureClock;
+            pad.playing = view->playing;
+            pad.continuous = view->continuous;
+            pad.advanced = view->advanced;
+            if (!resources.accepts(pad)) {
+                return false;
+            }
+            pads.push_back(pad);
+        }
+    }
     auto candidate = snapshot;
     candidate.fixtures = std::move(visible);
+    candidate.transporters = std::move(pads);
     if (!candidate.valid()) {
         return false;
     }
@@ -326,22 +425,27 @@ bool ReplicaFixtures::begin(u64 epoch) {
     m_epoch = epoch;
     m_tick.reset();
     m_fixtures.clear();
+    m_transporters.clear();
     return true;
 }
 void ReplicaFixtures::clear() {
     m_epoch = 0;
     m_tick.reset();
     m_fixtures.clear();
+    m_transporters.clear();
 }
 bool ReplicaFixtures::show(const CombatSnapshot& snapshot, const FixtureResources& resources) {
     if (m_epoch == 0 || snapshot.motion.epoch != m_epoch || !snapshot.valid() ||
         (m_tick && snapshot.motion.tick < *m_tick) ||
         !std::ranges::all_of(snapshot.fixtures,
+                             [&](const auto& state) { return resources.accepts(state); }) ||
+        !std::ranges::all_of(snapshot.transporters,
                              [&](const auto& state) { return resources.accepts(state); })) {
         return false;
     }
     m_tick = snapshot.motion.tick;
     m_fixtures = snapshot.fixtures;
+    m_transporters = snapshot.transporters;
     return true;
 }
 void ReplicaFixtures::draw(RenderDevice& device, FixtureResources& resources, const Mat4& clip,
@@ -349,6 +453,12 @@ void ReplicaFixtures::draw(RenderDevice& device, FixtureResources& resources, co
                            TreeModel::Pass pass) const {
     for (const auto& fixture : m_fixtures) {
         resources.draw(device, fixture, clip, lighting, camera, pass);
+    }
+}
+void ReplicaFixtures::drawTransporters(RenderDevice& device, FixtureResources& resources,
+                                       const Mat4& clip, const WorldLighting& lighting) const {
+    for (const auto& pad : m_transporters) {
+        resources.drawTransporter(device, pad, clip, lighting);
     }
 }
 } // namespace gdl::game

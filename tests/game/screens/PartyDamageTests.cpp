@@ -9,6 +9,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/screens/HelpMessages.h"
 #include "game/screens/PartyDamage.h"
 #include "game/screens/PartyMotion.h"
 #include "game/screens/PlayerAttacks.h"
@@ -311,6 +312,90 @@ TEST_CASE("late rejected blows atomically undo earlier players RNG and discarded
     CHECK(fixture.outputs.empty());
     CHECK(fixture.effects.count() == 0);
     CHECK(fixture.device.texturesCreated == uploads);
+}
+
+TEST_CASE("ordinary knockback retains native damage and reaction without requesting guard lessons",
+          "[rollback][party-damage][help-admission][assets]") {
+    const bool known = GENERATE(false, true);
+    Fixture fixture;
+    if (known) {
+        fixture.players[0].actor.save().helpSeen = {HelpMessages::kLearnBlock};
+    }
+    const auto before = fixture.state();
+    const auto random = fixture.health.checkpoint();
+    const std::array blows{EnemyBlow{.player = 3,
+                                     .kind = kGruntKind,
+                                     .damage = 70,
+                                     .flags = PlayerImpact::kKnockBack,
+                                     .direction = {0, 0, 1}}};
+    const PartyDamage::Context context{.playSeconds = 75};
+    fixture.native(blows, context);
+    // Native learning requires a heavy impact; ordinary swarm knock-back is
+    // deliberately not a heavy flag, regardless of the damage amount.
+    REQUIRE(fixture.lessons == 0);
+    const auto expected = fixture.state();
+    const auto expectedRandom = fixture.health.checkpoint();
+    const auto outputs = fixture.outputs;
+    REQUIRE(expected[0].save.health() < before[0].save.health());
+    REQUIRE(expected[0].reaction != PlayerDeed::None);
+    for (usize index = 0; index < fixture.players.size(); ++index) {
+        CHECK(expected[index].save.helpSeen == before[index].save.helpSeen);
+        CHECK(expected[index].helpHeard == before[index].helpHeard);
+    }
+    fixture.tick(0);
+    const auto following = fixture.state();
+    fixture.restore(before, random);
+    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
+                                                 fixture.classes, {}, context);
+    REQUIRE(replay.status == PartyDamage::Status::Applied);
+    CHECK(replay.outputs == outputs);
+    CHECK(fixture.state() == expected);
+    CHECK(fixture.health.checkpoint() == expectedRandom);
+    fixture.tick(0);
+    CHECK(fixture.state() == following);
+    CHECK(fixture.lessons == 0);
+}
+
+TEST_CASE("native heavy guard lessons do not admit unsupported knockdowns even when already known",
+          "[rollback][party-damage][help-admission][assets]") {
+    const bool known = GENERATE(false, true);
+    Fixture fixture;
+    if (known) {
+        fixture.players[0].actor.save().helpSeen = {HelpMessages::kLearnBlock};
+    }
+    const auto before = fixture.state();
+    const auto random = fixture.health.checkpoint();
+    const std::array blows{EnemyBlow{.player = 3,
+                                     .kind = kGruntKind,
+                                     .damage = 70,
+                                     .flags = PlayerImpact::kKnockDown,
+                                     .direction = {0, 0, 1}}};
+    const PartyDamage::Context context{.playSeconds = 75};
+    fixture.native(blows, context);
+    REQUIRE(fixture.lessons == 1);
+    REQUIRE(fixture.players[0].actor.save().health() < before[0].save.health());
+    REQUIRE(fixture.players[0].reaction != PlayerDeed::None);
+    MessageTable strings;
+    REQUIRE(strings.load(fixture.root / "TEXT/english.rom"));
+    HelpMessages help;
+    help.setTexts(&strings);
+    std::array<HelpReader, 2> readers;
+    for (usize index = 0; index < readers.size(); ++index) {
+        auto& player = fixture.players[index];
+        readers[index] = {player.actor.player(), &player.actor.save().helpSeen, &player.helpHeard};
+    }
+    CHECK((help.post(HelpMessages::kLearnBlock, 3, readers) == nullptr) == known);
+    CHECK(help.showing() == !known);
+    fixture.restore(before, random);
+    fixture.outputs.clear();
+    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
+                                                 fixture.classes, {}, context);
+    REQUIRE(replay.status == PartyDamage::Status::Unsupported);
+    CHECK(replay.outputs.empty());
+    CHECK(fixture.state() == before);
+    CHECK(fixture.health.checkpoint() == random);
+    CHECK(fixture.outputs.empty());
+    CHECK(fixture.lessons == 1);
 }
 
 TEST_CASE("caller owned damage staging leaves outer prepared runtime undo valid",

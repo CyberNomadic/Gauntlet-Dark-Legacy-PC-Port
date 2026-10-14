@@ -222,6 +222,70 @@ TEST_CASE("opponent admission does not discard pending gameplay outputs",
     CHECK(state == before);
 }
 
+TEST_CASE("combat admission probes prospective placement observation without mutating its seed",
+          "[rollback][opponent-admission][opponent-placements]") {
+    auto state = ordinaryState();
+    PlacedEnemies::Placement row;
+    row.kind = kDeathKind;
+    row.spawn.kind = kDeathKind;
+    row.spawn.algorithm = kChaseWay;
+    row.spawn.position = {0, 0, 100};
+    row.viewRadius = 1;
+    state.placements = PlacedEnemies::Checkpoint{{row}, {0}, ViewVolume{}, row.spawn.position};
+    REQUIRE(state.valid());
+    REQUIRE_FALSE(OpponentSimulation::combatSupported(state, {}));
+    const auto original = state;
+    OpponentSimulation::PlacementObservation observation{ViewVolume{}, {}};
+    REQUIRE(observation.valid());
+    CHECK(OpponentSimulation::combatSupported(state, {}, &observation));
+    CHECK(state == original);
+
+    // Match the old native probe (a copied checkpoint followed by watch), in
+    // both directions and with the no-view FreeSlotOnly activation behavior.
+    for (const bool seen : {false, true}) {
+        observation.attention = seen ? row.spawn.position : Vec3{0};
+        auto observed = state;
+        observed.placements->view = observation.view;
+        observed.placements->attention = observation.attention;
+        CHECK(OpponentSimulation::combatSupported(state, {}, &observation) ==
+              OpponentSimulation::combatSupported(observed, {}));
+        CHECK(OpponentSimulation::combatSupported(state, {}, &observation) == !seen);
+        CHECK(state == original);
+    }
+    observation.attention = row.spawn.position;
+    observation.view->forward = {0, 0, -1};
+    CHECK(OpponentSimulation::combatSupported(state, {}, &observation));
+    CHECK(state == original);
+    observation.view.reset();
+    observation.attention = {};
+    CHECK_FALSE(OpponentSimulation::combatSupported(state, {}, &observation));
+    CHECK(state == original);
+
+    // An observation override must never suppress a different unsafe owner.
+    observation.view = ViewVolume{};
+    state.enemies.enemies.front().algorithm = kLungeWay;
+    REQUIRE(state.valid());
+    CHECK_FALSE(OpponentSimulation::combatSupported(state, {}, &observation));
+}
+
+TEST_CASE("combat admission validates prospective observations even without placements",
+          "[rollback][opponent-admission][opponent-placements]") {
+    const auto state = ordinaryState();
+    OpponentSimulation::PlacementObservation observation{ViewVolume{}, {}};
+    SECTION("nonfinite attention") {
+        observation.attention.x = std::numeric_limits<f32>::infinity();
+    }
+    SECTION("nonfinite view") {
+        observation.view->forward.z = std::numeric_limits<f32>::quiet_NaN();
+    }
+    SECTION("out-of-domain view") {
+        observation.view->sinX = 2;
+    }
+    REQUIRE_FALSE(observation.valid());
+    CHECK_FALSE(OpponentSimulation::combatSupported(state, {}, &observation));
+    CHECK(OpponentSimulation::combatSupported(state, {}));
+}
+
 TEST_CASE("complete combat admission retains ordinary rewards and feedback without draining them",
           "[rollback][opponent-admission][ordinary-melee]") {
     auto state = ordinaryState();

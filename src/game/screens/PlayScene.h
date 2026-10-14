@@ -66,6 +66,7 @@
 #include "game/world/ExitPortals.h"
 #include "game/world/LevelSoundscape.h"
 #include "game/world/LevelTransporters.h"
+#include "game/world/LevelTransportersCheckpoint.h"
 #include "game/world/LevelWorld.h"
 #include "game/world/PlayerArsenal.h"
 #include "game/world/PlayerFigure.h"
@@ -171,6 +172,20 @@ public:
     /** Complete native owners at the current post-step boundary. Unknown artwork
      * bindings refuse the supplement; no retained effect clocks are discarded. */
     std::optional<CombatStatePacket::State> combatState();
+    /** Local-only profiling of existing capture calls, never part of a seed or
+     * simulation state. Cumulative for this scene object's lifetime. */
+    struct CombatCaptureCosts {
+        struct Cost {
+            u64 count = 0;
+            u64 nanoseconds = 0;
+            u64 maximumNanoseconds = 0;
+        };
+        Cost total;
+        Cost capture;
+        Cost encode;
+        u64 accepted = 0;
+    };
+    const CombatCaptureCosts& combatCaptureCosts() const { return m_combatCaptureCosts; }
     /** Exact gameplay (not shaken display) camera and next-step damage context. */
     std::optional<OrdinaryCombatTick::Frame> combatFrame() const;
     const LevelWorld* world() const { return m_world; }
@@ -486,7 +501,9 @@ private:
     std::unique_ptr<LevelFixturesCheckpoint> m_combatFixtures;
     std::unique_ptr<TowerCameraCheckpoint> m_combatCamera;
     std::unique_ptr<ExitPortalsCheckpoint> m_combatPortals;
+    std::unique_ptr<LevelTransportersCheckpoint> m_combatTransporters;
     StageStatePacket::Catalog m_combatStageCatalog;
+    CombatCaptureCosts m_combatCaptureCosts;
     PlayerArsenal m_arsenal;
     ExitPortals m_portals;
     LevelTransporters m_transporters;

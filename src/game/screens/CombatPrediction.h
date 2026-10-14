@@ -37,6 +37,7 @@ public:
     bool begin(u64 epoch, u64 tick, const OrdinaryCombatCheckpoint::State& authority,
                OrdinaryCombatCheckpoint::RestoreIssue* issue = nullptr);
     /** The first advance prepares one baseline undo. Later advances retain it,
+     * reusing the last exact native postcondition as their admission image,
      * never restoring a child independently or publishing irreversible outputs. */
     OrdinaryCombatTick::Result advance(u64 tick, std::span<const PlayInput> inputs,
                                        const OrdinaryCombatTick::Frame& frame);

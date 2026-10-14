@@ -7,7 +7,8 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLC");
-constexpr u16 kVersion = 4;
+constexpr u32 kReceiptMagic = fourcc("GDLK");
+constexpr u16 kVersion = 5;
 // Frame consistency only, not authentication (provided by the host connection).
 // Prevents merging fragments from two accidentally different captures of one tick.
 u32 checksum(std::span<const u8> bytes) {
@@ -35,16 +36,50 @@ static_assert(CombatReplica::kHeaderBytes + CombatReplica::kChunkBytes <=
 static_assert(CombatReplica::kMaxPackets <= 65535);
 } // namespace
 
+bool CombatReplica::recognizesReceipt(std::span<const u8> bytes) {
+    return bytes.size() >= 4 && ByteReader(bytes).readU32() == kReceiptMagic;
+}
+std::optional<std::vector<u8>> CombatReplica::encodeReceipt(const Receipt& receipt) {
+    if (receipt.epoch == 0) {
+        return std::nullopt;
+    }
+    std::vector<u8> bytes;
+    bytes.reserve(kReceiptBytes);
+    word(bytes, kReceiptMagic);
+    word(bytes, 1);
+    wide(bytes, receipt.epoch);
+    wide(bytes, receipt.tick);
+    word(bytes, receipt.checksum);
+    word(bytes, 0);
+    return bytes;
+}
+std::optional<CombatReplica::Receipt> CombatReplica::decodeReceipt(std::span<const u8> bytes) {
+    if (bytes.size() != kReceiptBytes) {
+        return std::nullopt;
+    }
+    ByteReader reader(bytes);
+    if (reader.readU32() != kReceiptMagic || reader.readU32() != 1) {
+        return std::nullopt;
+    }
+    const Receipt receipt{wide(reader), wide(reader), reader.readU32()};
+    if (receipt.epoch == 0 || reader.readU32() != 0) {
+        return std::nullopt;
+    }
+    return receipt;
+}
+
 std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatSnapshot& snapshot,
                                                              SnapshotBlock::Compression compression,
-                                                             Recovery recovery) {
+                                                             Recovery recovery,
+                                                             Receipt* publication) {
     const auto prepared = CombatPacket::prepare(snapshot);
-    return prepared ? packets(*prepared, compression, recovery) : std::nullopt;
+    return prepared ? packets(*prepared, compression, recovery, publication) : std::nullopt;
 }
 
 std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatPacket::Prepared& snapshot,
                                                              SnapshotBlock::Compression compression,
-                                                             Recovery recovery) {
+                                                             Recovery recovery,
+                                                             Receipt* publication) {
     const auto payload = SnapshotBlock::encode(snapshot.bytes(), compression);
     if (!payload) {
         return std::nullopt;
@@ -87,6 +122,9 @@ std::optional<CombatReplica::Packets> CombatReplica::packets(const CombatPacket:
         bytes.insert(bytes.end(), chunk.begin(), chunk.end());
         packets.push_back(std::move(bytes));
     }
+    if (publication != nullptr) {
+        *publication = {snapshot.motion().epoch, snapshot.motion().tick, digest};
+    }
     return packets;
 }
 
@@ -104,6 +142,7 @@ void CombatReplica::clear() {
     m_epoch = 0;
     m_pending.clear();
     m_latest.reset();
+    m_receipt.reset();
 }
 
 CombatReplica::Admission CombatReplica::receive(PacketTransport::Connection sender,
@@ -208,11 +247,12 @@ CombatReplica::Admission CombatReplica::receive(PacketTransport::Connection send
         return Admission::Invalid;
     }
     const auto raw = SnapshotBlock::decode(joined);
-    auto decoded = raw ? CombatPacket::decode(*raw) : std::nullopt;
+    auto decoded = raw ? CombatPacket::decodeOwned(*raw) : nullptr;
     if (!decoded || decoded->motion.epoch != epoch || decoded->motion.tick != tick) {
         return Admission::Invalid;
     }
     m_latest = std::move(*decoded);
+    m_receipt = Receipt{epoch, tick, digest};
     std::erase_if(m_pending, [tick](const auto& row) { return row.first <= tick; });
     return Admission::Committed;
 }

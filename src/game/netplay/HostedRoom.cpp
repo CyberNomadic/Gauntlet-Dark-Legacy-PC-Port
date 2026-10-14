@@ -11,7 +11,7 @@ namespace gdl::game {
 namespace {
 // Match checkpoint capabilities at admission, including development builds that
 // share a semver but cannot safely consume one another's replay envelopes.
-constexpr u8 kProtocol = 28;
+constexpr u8 kProtocol = 31;
 constexpr usize kPending = 16;
 enum class Kind : u8 { Game, Join, Roster, Ready, Reject };
 std::vector<u8> packet(Kind kind) {

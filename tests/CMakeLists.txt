@@ -49,6 +49,7 @@ add_executable(tests
     game/screens/StageParticlePresentationTests.cpp
     game/screens/StageSnapshotSamplingTests.cpp
     game/world/ExitPortalsCheckpointTests.cpp
+    game/world/LevelTransportersCheckpointTests.cpp
     game/screens/OrdinaryCombatTickTests.cpp
     game/screens/CombatPredictionTests.cpp
     game/screens/CombatResourcesTests.cpp
@@ -452,6 +453,7 @@ add_executable(tests
     game/screens/TriggerCuesTests.cpp
     game/screens/TowerWelcomeTests.cpp
     game/screens/PartyPickupsTests.cpp
+    game/screens/PartyPickupAdmissionTests.cpp
     game/screens/LevelFixturesTests.cpp
     game/screens/LevelOpponentsTests.cpp
     game/screens/PlayerHealthTests.cpp
@@ -568,6 +570,7 @@ if(GDL_ENABLE_NETPLAY)
         game/enemies/CrittersCheckpointTests.cpp
         game/world/CombatantProjectilesCheckpointTests.cpp
         game/world/ExitPortalsCheckpointTests.cpp
+        game/world/LevelTransportersCheckpointTests.cpp
         game/screens/OrdinaryCombatTickTests.cpp
         game/screens/CombatPredictionTests.cpp
         game/screens/CombatResourcesTests.cpp
@@ -596,6 +599,8 @@ if(GDL_ENABLE_NETPLAY)
         game/screens/OrdinaryProjectilePhaseTests.cpp
         game/world/LevelTriggersCheckpointTests.cpp
         game/screens/PartyDamageTests.cpp
+        game/screens/HelpMessagesTests.cpp
+        game/screens/PartyPickupAdmissionTests.cpp
         game/world/PlayerArsenalCheckpointTests.cpp
         game/world/MoveStrikesCheckpointTests.cpp
         game/netplay/PlatformCheckpointTests.cpp
@@ -667,6 +672,7 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/OnlineRunTests.cpp
         game/screens/TitleSceneTests.cpp
         game/netplay/ReplicaViewTests.cpp game/netplay/ReplicaActorsTests.cpp
+        game/netplay/ReplicaFixturesTests.cpp
         game/netplay/CombatCaptureTests.cpp game/netplay/CombatSnapshotTests.cpp
         game/netplay/CombatPlaybackTests.cpp game/netplay/InputCommandTests.cpp
         game/netplay/InputTimelineTests.cpp game/netplay/SessionInputsTests.cpp

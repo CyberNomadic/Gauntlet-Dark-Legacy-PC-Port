@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -152,6 +153,90 @@ TEST_CASE("ordinary adapter plans survive population correction but not close or
                            fixture.players);
     CHECK_FALSE(fixture.adapter.commitRestore(std::move(*prepared)));
     CHECK(fixture.state().hitStreak == std::array<s32, 4>{});
+}
+
+TEST_CASE("adapter cached capture matches fresh owners across clocks catalogs and rebinding",
+          "[opponent-combat-checkpoint][checkpoint-capture-validation][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GOLEM.WAD").parent_path().parent_path();
+    auto fixture = std::make_unique<AdapterFixture>();
+    auto& critters = fixture->opponents.critters();
+    critters.open(fixture->device, root, nullptr, {}, 'G');
+    REQUIRE(critters.archiveFor(CombatantKind::Golem));
+    const auto effects = fixture->visual();
+    const auto compare = [&] {
+        const auto uploads = fixture->device.texturesCreated;
+        const auto captured = fixture->adapter.checkpoint(effects);
+        REQUIRE(captured);
+        REQUIRE(captured->valid());
+        OpponentCombatCheckpoint fresh{fixture->opponents};
+        CHECK(fresh.checkpoint(effects) == captured);
+        CrittersCheckpoint independent{critters};
+        CHECK(independent.checkpoint() == captured->critters);
+        CHECK(fixture->opponents.statues().checkpoint() == captured->statues);
+        CHECK(fixture->device.texturesCreated == uploads);
+        return *captured;
+    };
+    const auto initial = compare();
+    REQUIRE(initial.critters.banks.size() == 1);
+    for (s32 tick = 0; tick < 12; ++tick) {
+        critters.update(1, 1.0f / 60, {});
+        compare();
+    }
+    // No actors or effects borrow this dormant bank. Reloading it in place
+    // changes its resource token without changing the population's stock address.
+    const auto stocks = critters.resources();
+    REQUIRE(stocks.size() == 1);
+    const auto definition = stocks.front()->definition;
+    REQUIRE(stocks.front()->load(fixture->device, root, definition, 'G'));
+    compare();
+    auto stale = fixture->adapter.prepareRestore(initial, effects);
+    REQUIRE(stale);
+    REQUIRE(critters.archiveFor(CombatantKind::General));
+    CHECK_FALSE(fixture->adapter.canCommit(*stale));
+    CHECK(compare().critters.banks.size() == 2);
+
+    // Native route replacement and population close/reopen must invalidate the
+    // cached bindings, not return an old roster or dereference released stocks.
+    critters.setLookouts({{{1, 0, 2}}, {65535}});
+    CHECK(compare().critters.lookouts.points.size() == 1);
+    critters.close();
+    CHECK(compare().critters.banks.empty());
+    critters.open(fixture->device, root, nullptr, {}, 'G');
+    REQUIRE(critters.archiveFor(CombatantKind::Golem));
+    const auto rebound = compare();
+    REQUIRE(fixture->adapter.restore(rebound, effects));
+    CHECK(compare() == rebound);
+    CHECK(fixture->device.draws.empty());
+}
+
+TEST_CASE("adapter local capture keeps public child and supplied effect validation complete",
+          "[opponent-combat-checkpoint][checkpoint-capture-validation]") {
+    auto fixture = std::make_unique<AdapterFixture>();
+    const auto baseline = fixture->state();
+    const auto effects = fixture->visual();
+    REQUIRE(baseline.valid());
+    for (s32 mutation = 0; mutation < 4; ++mutation) {
+        CAPTURE(mutation);
+        auto invalid = baseline;
+        switch (mutation) {
+        case 0:
+            invalid.statues.contactGridInverseWidth = std::numeric_limits<f32>::quiet_NaN();
+            break;
+        case 1: invalid.critters.actors.back().parts.front().arenaRandom = 0; break;
+        case 2: invalid.projectiles.ricochetIn = std::numeric_limits<f32>::quiet_NaN(); break;
+        case 3: invalid.shrink = std::numeric_limits<f32>::quiet_NaN(); break;
+        }
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture->adapter.prepareRestore(invalid, effects));
+        CHECK(fixture->adapter.checkpoint(effects) == baseline);
+    }
+    auto invalidEffects = effects;
+    REQUIRE(invalidEffects.effects.empty());
+    invalidEffects.banks.push_back({0, {}});
+    REQUIRE_FALSE(invalidEffects.valid());
+    CHECK_FALSE(fixture->adapter.checkpoint(invalidEffects));
+    CHECK_FALSE(fixture->adapter.prepareRestore(baseline, invalidEffects));
+    CHECK(fixture->adapter.checkpoint(effects) == baseline);
 }
 
 TEST_CASE("native hit streak and generator rewards replay in their original settlement order",

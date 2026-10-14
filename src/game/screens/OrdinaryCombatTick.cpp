@@ -15,6 +15,7 @@
 #include "game/screens/OrdinaryFloorSupport.h"
 #include "game/screens/OrdinaryProjectilePhase.h"
 #include "game/screens/PartyFigures.h"
+#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PartyNames.h"
 #include "game/screens/PartyPickups.h"
 #include "game/screens/PartyRecords.h"
@@ -36,7 +37,8 @@ bool ordinaryAction(PlayerAnimator::Action action) {
                        action != Action::PowerMedRecover && action != Action::PowerLow &&
                        action != Action::PowerLowRecover;
     return PlayerAnimator::locomotion(action) || PlayerAnimator::rollbackReactionAction(action) ||
-           melee || (action >= Action::Throw && action <= Action::ThrowMovingRecover) ||
+           action == Action::Pushed || melee ||
+           (action >= Action::Throw && action <= Action::ThrowMovingRecover) ||
            (action >= Action::StrafeShootForward1 && action <= Action::StrafeShootRight2) ||
            action == Action::StrongThrow || action == Action::StrongThrowRecover ||
            action == PlayerAnimator::Action::DefendRaise ||
@@ -111,6 +113,46 @@ private:
     std::optional<OrdinaryCombatCheckpoint::Rewind> m_rewind;
 };
 } // namespace
+
+OrdinaryCombatTick::TargetFamily OrdinaryCombatTick::targetFamily(s32 target) {
+    if (target < 0) {
+        return TargetFamily::Unknown;
+    }
+    if (target >= PlayerAttacks::kPlayerTargetBase) {
+        return TargetFamily::Player;
+    }
+    if (target >= PlayerAttacks::kStatueTargetBase) {
+        return TargetFamily::Statue;
+    }
+    if (target >= PlayerAttacks::kChestTargetBase) {
+        return TargetFamily::Chest;
+    }
+    if (target >= PlayerAttacks::kPotionTargetBase) {
+        return TargetFamily::Potion;
+    }
+    if (target >= PlayerAttacks::kItemStopBase) {
+        return TargetFamily::InertStop;
+    }
+    if (target >= PlayerAttacks::kSwitchTargetBase) {
+        return TargetFamily::Switch;
+    }
+    if (target >= PlayerAttacks::kWallTargetBase) {
+        return TargetFamily::Wall;
+    }
+    if (target >= PlayerAttacks::kSafeRockTargetBase) {
+        return TargetFamily::SafeRock;
+    }
+    if (target >= PlayerAttacks::kBossTargetBase) {
+        return TargetFamily::Boss;
+    }
+    if (target >= PlayerAttacks::kCritterTargetBase) {
+        return TargetFamily::Critter;
+    }
+    if (target >= PlayerAttacks::kGeneratorTargetBase) {
+        return TargetFamily::Generator;
+    }
+    return target >= PlayerAttacks::kEnemyTargetBase ? TargetFamily::Swarm : TargetFamily::Barrel;
+}
 
 OrdinaryCombatTick::OrdinaryCombatTick(OrdinaryCombatCheckpoint& checkpoint,
                                        const ClassDataSet& classes, LevelFixtures& fixtures)
@@ -190,6 +232,14 @@ bool OrdinaryCombatTick::environment() const {
 bool OrdinaryCombatTick::travelContact(std::span<const PlayerRuntime> party, bool portals) const {
     const auto& world = m_checkpoint.m_opponents.m_resources->world;
     if (!portals) {
+        if (m_checkpoint.m_transporters != nullptr) {
+            const auto& transporters = m_checkpoint.m_transporters->m_owner;
+            return std::ranges::any_of(party, [&](const auto& runtime) {
+                const auto& actor = runtime.actor;
+                return transporters.contact(actor.position(), actor.radius(), actor.height())
+                    .has_value();
+            });
+        }
         return std::ranges::any_of(m_transports, [&](auto pad) {
             pad.sync(world.collision());
             return std::ranges::any_of(party, [&](const auto& runtime) {
@@ -219,10 +269,14 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
     if (!OrdinaryStrongPhase::supported(m_checkpoint.m_combat.m_attacks, party) ||
         !OrdinaryProjectilePhase::supported(state.combat.arsenal, m_checkpoint.m_combat.m_missiles,
                                             seconds) ||
-        !quiet(state.opponents) || !state.adapter.dormant() || !state.adapter.lessons.empty() ||
-        !state.adapter.generatorRewards.empty() || !state.adapter.rockHits.empty() ||
-        state.adapter.shrink != 1 || state.opponents.enemies.shrink != 1 ||
-        state.opponents.missiles.shrink != 1 ||
+        !quiet(state.opponents) || !state.adapter.dormant() ||
+        std::ranges::any_of(state.adapter.lessons,
+                            [&](const auto& lesson) {
+                                return !PartyHelpAdmission::suppressedForPlayer(
+                                    lesson.first, lesson.second, party);
+                            }) ||
+        !state.adapter.rockHits.empty() || state.adapter.shrink != 1 ||
+        state.opponents.enemies.shrink != 1 || state.opponents.missiles.shrink != 1 ||
         std::ranges::any_of(state.combat.effects.effects, [&](const auto& effect) {
             if (std::ranges::find(state.adapter.cueEffects, effect.id) !=
                 state.adapter.cueEffects.end()) {
@@ -298,31 +352,33 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
                                                     std::span<const PlayInput> inputs,
                                                     const Frame& suppliedFrame) {
     Timings timings;
-    auto result = stepTimed(party, inputs, suppliedFrame, timings, nullptr);
+    auto result = stepTimed(party, inputs, suppliedFrame, timings, nullptr, nullptr);
     result.timings = timings;
     return result;
 }
 
-OrdinaryCombatTick::Result
-OrdinaryCombatTick::stepUnderRewind(std::span<PlayerRuntime> party,
-                                    std::span<const PlayInput> inputs, const Frame& frame,
-                                    const OrdinaryCombatCheckpoint::Rewind& rewind) {
+OrdinaryCombatTick::Result OrdinaryCombatTick::stepUnderRewind(
+    std::span<PlayerRuntime> party, std::span<const PlayInput> inputs, const Frame& frame,
+    const OrdinaryCombatCheckpoint::Rewind& rewind, Boundary& boundary) {
     Timings timings;
-    auto result = stepTimed(party, inputs, frame, timings, &rewind);
+    auto result = stepTimed(party, inputs, frame, timings, &rewind, &boundary);
     result.timings = timings;
     return result;
 }
 
-OrdinaryCombatTick::Result
-OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const PlayInput> inputs,
-                              const Frame& suppliedFrame, Timings& timings,
-                              const OrdinaryCombatCheckpoint::Rewind* intervalUndo) {
+OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
+    std::span<PlayerRuntime> party, std::span<const PlayInput> inputs, const Frame& suppliedFrame,
+    Timings& timings, const OrdinaryCombatCheckpoint::Rewind* intervalUndo, Boundary* boundary) {
     using Clock = std::chrono::steady_clock;
     const auto elapsed = [](Clock::time_point begin) {
         return static_cast<u64>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count());
     };
     if (intervalUndo && !m_checkpoint.canRewind(*intervalUndo)) {
+        return {};
+    }
+    if (boundary && (!intervalUndo || (boundary->state && (boundary->owner != this ||
+                                                           boundary->rewind != intervalUndo)))) {
         return {};
     }
     Frame frame = suppliedFrame;
@@ -341,9 +397,20 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
         std::ranges::any_of(inputs, [](const auto& input) { return !ordinaryInput(input); })) {
         return {Status::Unsupported, Refusal::Environment};
     }
+    const bool capture = boundary == nullptr || !boundary->state;
     const auto captureBegin = Clock::now();
-    auto before = m_checkpoint.checkpoint();
-    timings.captureNanoseconds = elapsed(captureBegin);
+    const auto capturedBefore = capture ? m_checkpoint.checkpoint() : std::nullopt;
+    if (capture) {
+        timings.captureNanoseconds = elapsed(captureBegin);
+    }
+    const OrdinaryCombatCheckpoint::State* before = nullptr;
+    if (capture) {
+        if (capturedBefore) {
+            before = &*capturedBefore;
+        }
+    } else {
+        before = boundary->state.get();
+    }
     if (!before) {
         return {};
     }
@@ -374,15 +441,14 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
     if (!dormantStatues()) {
         return {Status::Unsupported, Refusal::Statues};
     }
-    // This local checkpoint is only an admission probe. Native watch below
-    // installs this frame's observation before activating placements; the
-    // previous frame's view must not veto an otherwise dormant special.
-    before->opponents.placements->view = view;
-    before->opponents.placements->attention = frame.attention;
+    // Native watch below installs this frame's observation before activating
+    // placements. Probe it without mutating the immutable preceding boundary.
+    const OpponentSimulation::PlacementObservation observation{view, frame.attention};
     const auto initialViews = LevelOpponents::enemyViews(party);
     if (!OpponentSimulation::combatSupported(
             before->opponents,
-            {.ticks = frame.ticks, .seconds = frame.seconds, .players = initialViews})) {
+            {.ticks = frame.ticks, .seconds = frame.seconds, .players = initialViews},
+            &observation)) {
         return {Status::Unsupported, Refusal::OpponentAdmission};
     }
     std::optional<Undo> undo;
@@ -401,12 +467,28 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
     const auto& collision = world.collision();
     Result result;
     bool refused = false;
+    PartyRefusal partyRefusal = PartyRefusal::None;
+    std::optional<PlayerAnimator::Action> refusedAction;
+    TargetFamily refusedTarget = TargetFamily::None;
+    const auto refuseParty = [&](PartyRefusal reason,
+                                 std::optional<PlayerAnimator::Action> action = std::nullopt,
+                                 TargetFamily target = TargetFamily::None) {
+        refused = true;
+        if (partyRefusal == PartyRefusal::None) {
+            partyRefusal = reason;
+            refusedAction = action;
+            refusedTarget = target;
+        }
+    };
     const bool staged = m_checkpoint.stageBound();
     if (staged) {
         PartyFigures::snapshot(party);
         combat.m_effects.capturePresentation();
         world.capturePresentation();
         m_fixtures.capturePresentation();
+        if (m_checkpoint.m_transporters != nullptr) {
+            m_checkpoint.m_transporters->m_owner.capturePresentation();
+        }
         PartyNames::advance(party, frame.ticks);
         // These native clocks can change even when the current equipment mask
         // is empty (an item just expired or a melee streak is awaiting praise).
@@ -428,6 +510,9 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
         // the native value-only world phases before transporter/player motion.
         world.update(frame.seconds, false);
         opponents.syncFloors();
+        if (m_checkpoint.m_transporters != nullptr) {
+            m_checkpoint.m_transporters->m_owner.syncFloors(collision);
+        }
         world.revealCrystals(frame.seconds);
         if (travelContact(party, false) || std::ranges::any_of(party, [&](const auto& player) {
                 return !OrdinaryFloorSupport::accepts(
@@ -437,6 +522,9 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
         }
         for (auto& player : party) {
             player.transport.observeContact(false);
+        }
+        if (m_checkpoint.m_transporters != nullptr) {
+            m_checkpoint.m_transporters->m_owner.animate(frame.seconds);
         }
     }
     const PlayerAttacks::Targets targets{
@@ -467,20 +555,34 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
                                        .shoot(player.actor.position(),
                                               player.actor.reach() + PlayerAttacks::kStepReach)
                                        .empty()) {
-                        refused = true;
+                        refuseParty(PartyRefusal::MeleeScenery);
                         return;
                     }
                     // Check the exact native winning contact, after resolved
                     // movement/aim. A nearby ordinary enemy must not hide a
-                    // selected generator, statue, player or other world item.
+                    // selected special generator, statue, player or other world item.
                     const auto target = combat.m_attacks.meleeTarget(
                         player.actor, targets, player.meleeFacing.value_or(player.actor.facing()),
                         player.actor.reach() + PlayerAttacks::kStepReach);
                     if (target && (target->body.id < PlayerAttacks::kEnemyTargetBase ||
-                                   target->body.id >= PlayerAttacks::kGeneratorTargetBase)) {
-                        refused = true;
+                                   target->body.id >= PlayerAttacks::kCritterTargetBase ||
+                                   (target->body.id >= PlayerAttacks::kGeneratorTargetBase &&
+                                    !OrdinaryProjectilePhase::ordinaryGenerator(
+                                        opponents.generators(),
+                                        target->body.id - PlayerAttacks::kGeneratorTargetBase)))) {
+                        refuseParty(PartyRefusal::MeleeTarget, player.figure->animator().action(),
+                                    targetFamily(target->body.id));
                     } else if (!refused) {
-                        combat.m_attacks.melee(index, party, targets);
+                        if (!combat.m_attacks.melee(
+                                index, party, targets,
+                                [&](const GeneratorFeedbackEmission& emission) {
+                                    return OrdinaryProjectilePhase::generatorPresentation(
+                                        emission, combat.m_effects,
+                                        combat.m_attacks.m_resources->device,
+                                        combat.m_sharedEffects, result.impacts);
+                                })) {
+                            refuseParty(PartyRefusal::GeneratorEmission);
+                        }
                     }
                 } else if ((action == PartyMotion::Action::ThrowWeapon ||
                             action == PartyMotion::Action::StrongThrow) &&
@@ -493,29 +595,50 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
                     const auto emission = OrdinaryWeaponEmission::advance(
                         combat.m_arsenal, actor, *player.figure, actor.facing(), target,
                         {combat.m_missiles, combat.m_missileEffects, combat.m_sharedEffects});
-                    if (!emission.launched) {
-                        refused = true;
-                    } else if (emission.cue) {
-                        result.throws.push_back(*emission.cue);
+                    if (!emission.accepted) {
+                        refuseParty(PartyRefusal::WeaponEmission);
+                    } else {
+                        if (emission.cue) {
+                            result.throws.push_back(*emission.cue);
+                        }
+                        if (emission.impact) {
+                            result.impacts.push_back(*emission.impact);
+                        }
                     }
+                } else if (action == PartyMotion::Action::FamiliarShot) {
+                    const auto& player = party[index];
+                    const auto worn = PowerupEffects::of(player.actor.save().progress().inventory);
+                    // A just-expired Phoenix can leave the previous tick's
+                    // familiarPending latch. Native launchFamiliar returns
+                    // before any work when neither actual shooter remains.
+                    if ((worn.special & powerup::kPhoenix) != 0 ||
+                        (player.figure->familiarTier() > 0 &&
+                         player.figure->familiarMissile().bound())) {
+                        refuseParty(PartyRefusal::FamiliarShot);
+                    }
+                } else if (action == PartyMotion::Action::NoPotion) {
+                    // This posts real help/narration, never an empty callback.
+                    refuseParty(PartyRefusal::NoPotion);
                 } else {
-                    refused = true;
+                    refuseParty(PartyRefusal::UnsupportedAction);
                 }
             },
         .select =
             [&](usize, const SelectorInput& selector, s32) {
                 // A neutral selector has no gameplay work. HUD selection clocks are
                 // outside this phase; nonneutral commands were rejected before it.
-                refused |= selector.up || selector.down || selector.left || selector.right;
+                if (selector.up || selector.down || selector.left || selector.right) {
+                    refuseParty(PartyRefusal::Selector);
+                }
             },
         .advanceTurbo =
             [&](usize index, s32 ticks, f32 seconds) {
                 const auto action = party[index].figure->animator().action();
                 if (!ordinaryAction(action)) {
-                    refused = true;
+                    refuseParty(PartyRefusal::TurboAction, action);
                     return;
                 }
-                const auto help = [&](s32 id, usize) {
+                const auto help = [&](s32 id, usize namedPlayer) {
                     // PlayScene filters meter lessons before PartyHud looks up
                     // the retail message. Unknown free-A IDs really do nothing.
                     const bool crowd = opponents.enemies().inView() >= 15;
@@ -523,21 +646,27 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
                         (id == HelpMessages::kUseTurbo && !crowd)) {
                         return true;
                     }
-                    return HelpMessages::specOf(id) == nullptr;
+                    const bool supported = PartyHelpAdmission::suppressed(id, namedPlayer, party);
+                    if (!supported) {
+                        refuseParty(PartyRefusal::TurboLesson);
+                    }
+                    return supported;
                 };
                 if (action == PlayerAnimator::Action::StrongThrow ||
                     action == PlayerAnimator::Action::StrongThrowRecover) {
                     auto emitted = OrdinaryStrongPhase::advance(
                         combat.m_attacks, index, ticks, seconds, party,
                         {combat.m_missiles, combat.m_missileEffects, combat.m_sharedEffects}, help);
-                    refused |= !emitted.advanced;
+                    if (!emitted.advanced) {
+                        refuseParty(PartyRefusal::TurboEmission);
+                    }
                     result.strong.insert(result.strong.end(),
                                          std::make_move_iterator(emitted.cues.begin()),
                                          std::make_move_iterator(emitted.cues.end()));
                 } else {
                     combat.m_attacks.updateTurbo(
                         index, ticks, seconds, party,
-                        [&](s32 id, usize actor) { refused |= !help(id, actor); });
+                        [&](s32 id, usize actor) { (void)help(id, actor); });
                 }
             },
         .aim =
@@ -579,11 +708,21 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
             }};
     result.subjects = PartyMotion::step(party, inputs, false, frame.camera.yaw, frame.ticks,
                                         frame.seconds, collision, events);
-    if (refused || !dormantStatues() || std::ranges::any_of(party, [&](const auto& player) {
+    if (!refused && !dormantStatues()) {
+        refuseParty(PartyRefusal::Statue);
+    }
+    if (!refused && std::ranges::any_of(party, [&](const auto& player) {
             return !OrdinaryFloorSupport::accepts(
                 player, collision, OrdinaryFloorSupport::Phase::AfterLanding, staged);
         })) {
-        return {Status::Unsupported, Refusal::PartyMotion};
+        refuseParty(PartyRefusal::FloorSupport);
+    }
+    if (refused) {
+        return {.status = Status::Unsupported,
+                .refusal = Refusal::PartyMotion,
+                .partyRefusal = partyRefusal,
+                .refusedAction = refusedAction,
+                .refusedTarget = refusedTarget};
     }
     PartyRecords::advanceTime(party, frame.seconds);
     if (staged) {
@@ -671,12 +810,20 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
     // Native melee lands before the opponent phase; its feedback and experience
     // are delivered here, after incoming blows and the level observation. Later
     // projectile impacts retain their queues until the next opponent phase.
-    if (!opponents.m_lessons.empty()) {
+    if (std::ranges::any_of(opponents.m_lessons, [&](const auto& lesson) {
+            return !PartyHelpAdmission::suppressedForPlayer(lesson.first, lesson.second, party);
+        })) {
         return {Status::Unsupported, Refusal::Lessons};
     }
-    const LevelOpponents::Events rewards{.award = [&](s32 player, s32 experience, bool killed) {
-        PartyRecords::award(party, player, experience, killed, level);
-    }};
+    // Drain the native queue in order only after proving every routed HUD call
+    // is suppressed by its repeat policy. No new lesson is silently discarded.
+    opponents.deliverLessons(party, {.help = [](s32, usize) { return false; }});
+    const LevelOpponents::Events rewards{
+        .award =
+            [&](s32 player, s32 experience, bool killed) {
+                PartyRecords::award(party, player, experience, killed, level);
+            },
+        .destroyedGenerator = [&](s32 player) { PartyRecords::destroyedGenerator(party, player); }};
     if (!opponents.awardEnemyLosses(
             rewards, [&](const EnemyFeedbackEmission& emission) -> std::optional<u32> {
                 u32 effect = 0;
@@ -720,7 +867,8 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
     if (!projectiles.advanced) {
         return {Status::Unsupported, Refusal::Projectiles};
     }
-    result.impacts = std::move(projectiles.cues);
+    result.impacts.insert(result.impacts.end(), std::make_move_iterator(projectiles.cues.begin()),
+                          std::make_move_iterator(projectiles.cues.end()));
     combat.m_attacks.updatePotions(frame.seconds, party, targets);
     combat.m_attacks.updateItems(frame.seconds, party, targets);
     if (!OrdinaryStrongPhase::stepStrikes(combat.m_attacks, frame.seconds, party, targets)) {
@@ -730,13 +878,16 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
     combat.m_attacks.updateArmour(frame.seconds, party, targets);
     combat.m_effects.update(frame.seconds);
     if (staged) {
-        if (PartyPickups::touchesPickup(party, world, m_fixtures.chests())) {
+        if (!PartyPickups::collectionUnchanged(party, world, m_fixtures.chests(), m_classes)) {
             return {Status::Unsupported, Refusal::Pickups};
         }
         PartyPickups::cleanupCollectedChests(world, m_fixtures.chests());
         world.updateTriggers(frame.seconds, triggerVisitors(party, collision));
         m_fixtures.syncFloors();
         opponents.syncFloors();
+        if (m_checkpoint.m_transporters != nullptr) {
+            m_checkpoint.m_transporters->m_owner.syncFloors(collision);
+        }
         // Inspect before any narration, sound, camera, statue wake or travel
         // dispatch. Removing queued rotator cues is covered by the stage undo.
         if (triggerOutputs(world) || !world.takeRotatorCues().empty() ||
@@ -769,11 +920,18 @@ OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const Pl
                                               world.cameraRange(), frame.projection, frame.seconds);
     }
     const auto postconditionBegin = Clock::now();
-    const auto after = m_checkpoint.checkpoint();
+    auto after = m_checkpoint.checkpoint(&timings.postconditionOwners);
     const bool accepted = after && supported(*after, party, frame.seconds);
     timings.postconditionNanoseconds = elapsed(postconditionBegin);
     if (!accepted) {
         return {Status::Unsupported, Refusal::Postcondition};
+    }
+    if (boundary) {
+        // Moving the already validated image keeps the next admission exact;
+        // no second capture or caller-authored state can enter this cache.
+        boundary->state = std::make_unique<OrdinaryCombatCheckpoint::State>(std::move(*after));
+        boundary->owner = this;
+        boundary->rewind = intervalUndo;
     }
     result.status = Status::Advanced;
     if (undo) {
