@@ -52,7 +52,7 @@ struct Fixture {
         REQUIRE(items.load(directory));
         REQUIRE(scene.build(layout, models, textures, device));
         rotators.bind(layout);
-        rotators.bindFigures(device, layout, items);
+        rotators.bindFigures(device, layout, AssetScope(items));
         REQUIRE(rotators.size() == 4);
         REQUIRE(rotators.rotator(1).pad);
         REQUIRE(rotators.rotator(2).pad);
@@ -161,7 +161,7 @@ TEST_CASE("rotator checkpoint refuses malformed rosters and stale preparations a
     CHECK_FALSE(f.owner.canCommit(*beforeCursorRestore));
     auto beforeFigures = f.owner.prepareRestore(baseline);
     REQUIRE(beforeFigures);
-    f.rotators.bindFigures(f.device, f.layout, f.items);
+    f.rotators.bindFigures(f.device, f.layout, AssetScope(f.items));
     CHECK_FALSE(f.owner.canCommit(*beforeFigures));
     auto beforeBind = f.owner.prepareRestore(f.state());
     REQUIRE(beforeBind);
@@ -226,8 +226,8 @@ TEST_CASE("native invisible turntable checkpoints preserve contact and delayed c
     Rotators live, restored;
     live.bind(layout);
     restored.bind(layout);
-    live.bindFigures(device, layout, items);
-    restored.bindFigures(device, layout, items);
+    live.bindFigures(device, layout, AssetScope(items));
+    restored.bindFigures(device, layout, AssetScope(items));
     RotatorsCheckpoint a{live}, b{restored};
     WorldScene first, second;
     const auto uploads = device.texturesCreated;

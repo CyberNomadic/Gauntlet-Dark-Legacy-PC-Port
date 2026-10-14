@@ -15,7 +15,7 @@ namespace gdl::game {
  * no queue, body, pose or contact is silently omitted to make a packet fit. */
 class EnemyPoolCheckpoint {
 public:
-    static constexpr u32 kVersion = 1;
+    static constexpr u32 kVersion = 2;
     static constexpr usize kMaxBytes = 512 * 1024;
     static constexpr usize kMaxNodes = 128;
     static constexpr usize kMaxTotalNodes = 2048;

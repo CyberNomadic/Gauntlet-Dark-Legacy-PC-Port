@@ -76,6 +76,31 @@ struct Fixture {
     }
 };
 
+TEST_CASE(
+    "runtime checkpoint retains congratulated gargoyle records without accepting corrupt counts",
+    "[rollback][player-runtime-checkpoint]") {
+    Fixture fixture;
+    for (auto& progress : fixture.player().actor.save().classes) {
+        progress.relics.gargoylePieces.fill(-1);
+    }
+    fixture.player().entrySave = fixture.player().actor.save();
+    const auto state = fixture.owner.checkpoint();
+    REQUIRE(state);
+    fixture.player().actor.save().progress().relics.gargoylePieces.fill(0);
+    REQUIRE(fixture.owner.restore(*state));
+    CHECK(fixture.owner.checkpoint() == state);
+    for (const s32 invalid : {-2, std::numeric_limits<s32>::min()}) {
+        auto corrupt = *state;
+        corrupt.save.classes.front().relics.gargoylePieces.front() = invalid;
+        CHECK_FALSE(fixture.owner.restore(corrupt));
+        CHECK(fixture.owner.checkpoint() == state);
+        corrupt = *state;
+        corrupt.entrySave.classes.front().relics.gargoylePieces.front() = invalid;
+        CHECK_FALSE(fixture.owner.restore(corrupt));
+        CHECK(fixture.owner.checkpoint() == state);
+    }
+}
+
 TEST_CASE("runtime checkpoint restores native damage movement rewards and random cue continuation",
           "[rollback][player-runtime-checkpoint]") {
     Fixture fixture;

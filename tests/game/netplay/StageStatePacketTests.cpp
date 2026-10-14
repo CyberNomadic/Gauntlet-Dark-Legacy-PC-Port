@@ -765,8 +765,7 @@ struct NativeStage {
         REQUIRE(fixtureOwner.bindResources());
         if (native) {
             REQUIRE(levels.load(root));
-            portals.bind(device, world.layout(), world.items(), levels, &world.collision(),
-                         &world.realmItems());
+            portals.bind(device, world.layout(), world.itemScope(), levels, &world.collision());
             portalOwner = std::make_unique<ExitPortalsCheckpoint>(
                 portals, world.layout(), world.items(), &world.realmItems());
             REQUIRE(portalOwner->bindResources());

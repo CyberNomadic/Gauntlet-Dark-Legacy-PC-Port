@@ -42,6 +42,7 @@ public:
         std::optional<EnemySpawn> enemy;
         std::string form;      ///< a gargoyle's ("GAR_EAGL"); empty for the default
         ItemInstance instance; ///< where the level puts it
+        bool onFloor = true;   ///< stood on the floor beneath, unless its record keeps its height
         f32 radius = 0.0f;     ///< the record's solid body, independent of the wake range
         f32 height = 0.0f;
         f32 viewRadius = 0.0f; ///< twice the record's larger size, for coming into view

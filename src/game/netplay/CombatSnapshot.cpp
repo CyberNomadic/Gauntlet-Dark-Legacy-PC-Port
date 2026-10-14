@@ -15,7 +15,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLB");
-constexpr u32 kVersion = 44;
+constexpr u32 kVersion = 45;
 constexpr u32 kOpponentReplay = 1U << InputCommand::kSeats;
 constexpr u32 kCombatReplay = kOpponentReplay << 1U;
 void word(std::vector<u8>& bytes, u32 value) {

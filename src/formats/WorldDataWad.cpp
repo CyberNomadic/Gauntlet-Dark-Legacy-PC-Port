@@ -42,6 +42,7 @@ LevelRecord readLevel(std::span<const u8> bytes, usize at) {
     level.audioBank = readWadText(bytes, at + 0x24, kTextSize, kWhat);
     level.movie = readWadText(bytes, at + 0x34, kTextSize, kWhat);
     level.bossType = static_cast<s32>(readWadU32(bytes, at + 0x44, kWhat));
+    level.earlyEnemies = static_cast<s32>(readWadU32(bytes, at + 0x48, kWhat));
     for (usize i = 0; i < level.enemyTypes.size(); ++i) {
         level.enemyTypes[i] = readS16(bytes, at + 0x4C + i * 2);
     }

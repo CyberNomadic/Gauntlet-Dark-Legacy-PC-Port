@@ -1168,7 +1168,7 @@ TEST_CASE(
     WorldLayout ramLayout;
     REQUIRE(ramLayout.load(ramDirectory));
     ItemArchive missing;
-    REQUIRE(barrels.bind(scene.device, ramLayout, missing, nullptr));
+    REQUIRE(barrels.bind(scene.device, ramLayout, AssetScope(missing), nullptr));
     REQUIRE(barrels.standing(0));
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable owned test fixture
     auto& ramBarrel = const_cast<Breakables::Barrel&>(barrels.barrel(0));

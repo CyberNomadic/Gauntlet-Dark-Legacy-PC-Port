@@ -47,7 +47,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     LevelWorld world;
     REQUIRE(world.load(device, root, *level));
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     chests.setPlayerCount(1);
     usize index = 0;
     while (index < chests.size() &&
@@ -65,14 +65,13 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     REQUIRE(item.figure);
     world.placedItems().draw(device, Mat4{1}, {}); // apply native flipbook selection
     device.draws.clear();
-    // The native pickup's own draw identifies its blended submeshes. This includes
-    // fruit shadows sharing a mesh with their opaque food, not just separate nodes.
-    item.model.draw(device, Mat4{1}, item.transform, {}, item.pose.matrices());
+    // The pickup's own blended pass identifies what waits for the fixtures: every part of
+    // an alpha-textured mesh, fruit shadows sharing a mesh with their opaque food included.
+    item.model.draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
+                    TreeModel::Pass::Blended);
     std::vector<const Texture*> blendedTextures;
     for (const auto& draw : device.draws) {
-        if (draw.state.alphaTest > 0) {
-            blendedTextures.push_back(draw.texture);
-        }
+        blendedTextures.push_back(draw.texture);
     }
     REQUIRE_FALSE(blendedTextures.empty());
     device.draws.clear();

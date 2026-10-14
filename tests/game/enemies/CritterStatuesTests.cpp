@@ -4,9 +4,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/assets/AnimationSet.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -237,6 +239,50 @@ TEST_CASE("statue sight is bounded by the native item query cells without becomi
     REQUIRE(statues.add(device, archive, golemAt(Vec3{5, 0, 5}, 30), nullptr));
     statues.touch(Vec3{35, 0, 5}, 1);
     CHECK(statues.woken(0)); // a new level cannot inherit the old grid
+}
+
+TEST_CASE("the forest golem's statue rises over its flip-book waking",
+          "[game][enemies][critter-statues][forest-entrance][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/GOLEM/levelD/ANIM.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    const auto tree = archive.trees.find("GOL_STATUE");
+    REQUIRE(tree.has_value());
+    const TreeInfo& info = archive.trees.tree(*tree);
+    REQUIRE(info.sequences.size() == 2);
+    CAPTURE(info.sequences[1].frames, info.sequences[1].frameRate, info.nodes.size());
+    CritterStatues statues;
+    REQUIRE(statues.add(device, archive, golemAt(Vec3{0, 0, 0}), nullptr));
+    statues.wake(0);
+    const auto seen = [](const Vec3&, f32) { return true; };
+    statues.update(kTicks, kStep, seen);
+    REQUIRE(statues.rising(0));
+    std::vector<f64> shapes;
+    s32 updates = 0;
+    while (statues.count() == 1 && updates < 200) {
+        device.draws.clear();
+        statues.draw(device, Mat4{1}, WorldLighting{});
+        f64 signature = 0.0;
+        for (const auto& draw : device.draws) {
+            for (const auto& vertex : draw.vertices) {
+                signature += vertex.position.x + 3.0 * vertex.position.y + 7.0 * vertex.position.z;
+            }
+        }
+        shapes.push_back(signature);
+        statues.update(kTicks, kStep, seen);
+        ++updates;
+    }
+    CAPTURE(updates, shapes);
+    CHECK(statues.count() == 0);
+    CHECK(statues.takeRisen().size() == 1);
+    CHECK(updates ==
+          CritterStatues::activeTicks(info.sequences[1].frames, info.sequences[1].frameRate) /
+              kTicks);
+    std::vector<f64> distinct = shapes;
+    std::ranges::sort(distinct);
+    distinct.erase(std::ranges::unique(distinct).begin(), distinct.end());
+    CHECK(distinct.size() >= 5);
 }
 
 } // namespace

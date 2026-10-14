@@ -86,6 +86,7 @@ private:
     bool m_revealStarted = false;
     Phase m_phase = Phase::Speech;
     f32 m_placementLeft = 0;
+    f32 m_hitIn = 0; ///< seconds until a shard's pane sounds its strike; nought once sounded
     RenderDevice* m_device = nullptr;
     LevelWorld* m_world = nullptr;
     EffectTrees m_figures;

@@ -24,6 +24,7 @@
 #include "game/world/LevelWorld.h"
 namespace gdl::game {
 struct EnemyFeedbackEmission;
+struct EnemyBirthEmission;
 /** Level enemy population, damage/reward routing and following combat cues.
  * Owns enemy archives, missiles, generators and the boss meter. Borrowed level services
  * must outlive close(). Phase hooks synchronously interleave scene-level rites,
@@ -204,6 +205,8 @@ private:
     /** Stands the statues woken and seen whose ACTIVE has played out as the great ones they
      * are, and wakes what the triggers ask. */
     void updateStatues(s32 ticks, f32 seconds, std::span<PlayerRuntime> players);
+    using BirthPublisher = std::function<std::optional<u32>(const EnemyBirthEmission&)>;
+    bool playBirths(const BirthPublisher& publish = {});
     PlacedEnemies m_placements;
     CritterStatues m_statues;
     /** What each of the great ones carries, by its place in the pool. */

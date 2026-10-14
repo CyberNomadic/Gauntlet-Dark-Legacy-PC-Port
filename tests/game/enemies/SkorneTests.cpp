@@ -183,6 +183,7 @@ TEST_CASE("Temple Skorne death creates collectable timed relics from the level r
     EffectTrees effects;
     LevelSoundscape audio;
     LevelOpponents opponents;
+    LevelFixtures fixtures;
     std::array<PlayerRuntime, 2> players;
     BossSequence sequence;
     sequence.bind({device, world, weapons, textures, effects, audio, &catalog});
@@ -190,7 +191,7 @@ TEST_CASE("Temple Skorne death creates collectable timed relics from the level r
     spew.origin = {0, 0, 0};
     spew.velocity = {0, 30, 40};
     spew.halfAngle = 1;
-    sequence.spewCoins(spew, opponents, players);
+    sequence.spewCoins(spew, opponents, fixtures, players);
     REQUIRE(world.placedItems().size() == before + 4);
     constexpr std::array<u32, 4> kFlags{0x4000, 0x2000, 0x1000, 0x8000};
     for (usize i = 0; i < 4; ++i) {

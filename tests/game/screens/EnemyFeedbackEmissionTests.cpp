@@ -13,6 +13,7 @@
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/combat/DamageTypes.h"
+#include "game/enemies/Enemies.h"
 #include "game/screens/CombatResources.h"
 #include "game/screens/EnemyFeedbackEmission.h"
 
@@ -207,6 +208,85 @@ TEST_CASE("prepared swarm feedback keeps native effect lifetime identities and s
     REQUIRE(native.count() == 0);
     CHECK(replay.count() == 0);
     CHECK(replay.checkpointPool(binding) == native.checkpointPool(binding));
+}
+
+TEST_CASE("enemy birth artwork obeys the first provider kind prefix and native tier fallback",
+          "[enemy-feedback-emission][enemy-birth-emission]") {
+    ItemArchive first, later;
+    constexpr std::array<std::string_view, 2> firstTrees{"GENFX1", "GENFX3"};
+    constexpr std::array<std::string_view, 3> laterTrees{"GENFX1", "GENFX2", "GENFX3"};
+    REQUIRE(first.load(archiveFixture("enemy-birth-first", firstTrees)));
+    REQUIRE(later.load(archiveFixture("enemy-birth-later", laterTrees)));
+    std::array<ItemArchive*, kSwarmKindCount> archives{};
+    archives[kGruntKind] = &first;
+    archives[7] = &later;
+    EnemyBirth birth{{3, 2, 1}, kGruntKind, 2};
+    auto result = EnemyBirthEmission::resolve(birth, archives);
+    CHECK(result.archive == &first);
+    CHECK(result.tree == "GENFX1"); // no tier-two tree in the first provider
+    CHECK(result.position == birth.position);
+    birth.tier = 3;
+    result = EnemyBirthEmission::resolve(birth, archives);
+    CHECK(result.tree == "GENFX3");
+    birth.kind = 1; // an earlier tall kind borrows the first provider
+    CHECK(EnemyBirthEmission::resolve(birth, archives).archive == &first);
+    for (const s32 kind : {kRatKind, 7, -1, kSwarmKindCount}) {
+        birth.kind = kind;
+        result = EnemyBirthEmission::resolve(birth, archives);
+        CHECK(result.archive == nullptr);
+        CHECK(result.tree.empty());
+    }
+    archives[kGruntKind] = nullptr;
+    birth.kind = 7;
+    birth.tier = 2;
+    result = EnemyBirthEmission::resolve(birth, archives);
+    CHECK(result.archive == &later);
+    CHECK(result.tree == "GENFX2");
+}
+
+TEST_CASE("prepared birth effects match native lifetime clocks and require trusted lenders",
+          "[enemy-feedback-emission][enemy-birth-emission]") {
+    const s32 ticks = GENERATE(1, 2);
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    constexpr std::array<std::string_view, 2> trees{"GENFX1", "GENFX3"};
+    REQUIRE(archive.load(archiveFixture("enemy-birth-prepared", trees)));
+    CombatResources resources;
+    const std::vector<TextureSet*> lenders{&archive.textures};
+    const std::array banks{CombatResources::Bank{1, &archive, lenders}};
+    REQUIRE(resources.bind(device, banks));
+    std::array<ItemArchive*, kSwarmKindCount> archives{};
+    archives[kGruntKind] = &archive;
+    EffectTrees native, replay;
+    native.setTextureLenders(lenders);
+    replay.setTextureLenders(lenders);
+    const auto bindings = resources.resources().sharedEffects;
+    for (s32 tick = 0; tick < 60; tick += ticks) {
+        if (tick == 0 || tick == 4 || tick == 12) {
+            const EnemyBirth birth{{static_cast<f32>(tick), 2, -4}, kGruntKind, tick == 12 ? 3 : 2};
+            // Independent native GENFX selection for this known first-provider roster.
+            const u32 id = native.startSet(device, archive, birth.tier == 3 ? "GENFX3" : "GENFX1",
+                                           birth.position, {});
+            REQUIRE(id != 0);
+            const auto emission = EnemyBirthEmission::resolve(birth, archives);
+            CHECK_FALSE(emission.prepare({}, lenders));
+            CHECK_FALSE(emission.prepare(bindings, {}));
+            const auto prepared = emission.prepare(bindings, lenders);
+            REQUIRE(prepared);
+            const auto uploads = device.texturesCreated;
+            REQUIRE(replay.startPrepared(*prepared, emission.position, {}) == id);
+            CHECK(device.texturesCreated == uploads);
+        }
+        const auto expected = native.checkpointPool(bindings);
+        REQUIRE(expected);
+        CHECK(replay.checkpointPool(bindings) == expected);
+        native.capturePresentation();
+        replay.capturePresentation();
+        native.update(static_cast<f32>(ticks) / 60);
+        replay.update(static_cast<f32>(ticks) / 60);
+    }
+    CHECK(native.count() == 0);
+    CHECK(replay.checkpointPool(bindings) == native.checkpointPool(bindings));
 }
 
 } // namespace

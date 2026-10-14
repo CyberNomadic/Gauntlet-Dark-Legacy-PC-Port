@@ -207,9 +207,22 @@ bool PlayerAttacksCheckpoint::State::valid() const {
     }
     for (const auto& shield : shields) {
         if (shield.actor >= actors.size() || !finite(shield.radius) || shield.radius < 0 ||
-            !finite(shield.damage) || !finite(shield.secondsLeft) || !finite(shield.harmIn) ||
-            !ledger(shield.blessed)) {
+            !finite(shield.damage) || !finite(shield.secondsLeft) || !ledger(shield.blessed) ||
+            shield.marks.size() > kMaxContacts - contacts) {
             return false;
+        }
+        contacts += shield.marks.size();
+        std::unordered_set<u64> marked;
+        for (const auto& mark : shield.marks) {
+            // Native kinds are swarm, critter, generator, boss, and barrel.
+            // These are historical IDs: a target may disappear before its mark
+            // expires. Zero wait is harmless and expires at the next update.
+            if (mark.kind < 0 || mark.kind > 4 || mark.id < 0 || (mark.kind == 3 && mark.id != 0) ||
+                !finite(mark.wait) || mark.wait < 0 || mark.wait > PlayerAttacks::kShieldHitAgain ||
+                !marked.insert((static_cast<u64>(mark.kind) << 32) | static_cast<u32>(mark.id))
+                     .second) {
+                return false;
+            }
         }
     }
     return true;
@@ -290,8 +303,17 @@ PlayerAttacksCheckpoint::capture(const PlayerAttacks& owner, std::span<const Act
             {particle.actor, particle.effect, particle.parent, particle.node, particle.offset});
     }
     for (const auto& shield : owner.m_shields) {
-        state.shields.push_back({shield.actor, shield.flags, shield.effect, shield.radius,
-                                 shield.damage, shield.secondsLeft, shield.harmIn, shield.blessed});
+        if (shield.marks.size() > State::kMaxContacts) {
+            return std::nullopt;
+        }
+        State::Shield copied{
+            shield.actor,       shield.flags, shield.effect, shield.radius, shield.damage,
+            shield.secondsLeft, {},           shield.blessed};
+        copied.marks.reserve(shield.marks.size());
+        for (const auto& mark : shield.marks) {
+            copied.marks.push_back({mark.kind, mark.id, mark.wait});
+        }
+        state.shields.push_back(std::move(copied));
     }
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
@@ -397,9 +419,14 @@ PlayerAttacksCheckpoint::prepare(PlayerAttacks& owner, const State& state,
         if (shield.actor >= actors.size() || !effect(shield.effect)) {
             return std::nullopt;
         }
-        prepared->shields.push_back({shield.actor, shield.flags, shield.effect, shield.radius,
-                                     shield.damage, shield.secondsLeft, shield.harmIn,
-                                     shield.blessed});
+        PlayerAttacks::PotionShield copied{
+            shield.actor,       shield.flags, shield.effect, shield.radius, shield.damage,
+            shield.secondsLeft, {},           shield.blessed};
+        copied.marks.reserve(shield.marks.size());
+        for (const auto& mark : shield.marks) {
+            copied.marks.push_back({mark.kind, mark.id, mark.wait});
+        }
+        prepared->shields.push_back(std::move(copied));
     }
     return Prepared{std::move(prepared)};
 }

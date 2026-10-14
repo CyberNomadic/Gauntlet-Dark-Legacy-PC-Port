@@ -36,8 +36,8 @@ bool CrittersCheckpoint::State::valid() const {
         const auto& actor = actors[index];
         if (!actor.valid() || actor.lookouts != std::optional{lookouts} ||
             actor.parts.size() != 1 ||
-            (actor.parts[0].actor.definition.resource != 0 &&
-             actor.parts[0].id != static_cast<s32>(index)) ||
+            (actor.parts[0].id != static_cast<s32>(index) &&
+             (actor.parts[0].actor.definition.resource != 0 || actor.parts[0].id != -1)) ||
             actor.parts[0].actor.definition.resource > banks.size()) {
             return false;
         }

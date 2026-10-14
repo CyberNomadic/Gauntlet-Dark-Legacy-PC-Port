@@ -284,7 +284,8 @@ TEST_CASE("sustained damage cannot lock the Lich in its roar reaction",
     REQUIRE(bosses.spawn(41, Vec3{0}, 0, 20));
     REQUIRE(bosses.rewardOffset() == Vec3{0, 10, 0});
     const std::vector<EnemyView> near{playerAt({0, 0, 20})};
-    for (s32 frame = 0; frame < 300; ++frame) {
+    // Two seconds asleep, then the whole of his entrance, which nothing may cut.
+    for (s32 frame = 0; frame < 400; ++frame) {
         bosses.update(kTicks, kStep, near);
     }
     s32 roars = 0;

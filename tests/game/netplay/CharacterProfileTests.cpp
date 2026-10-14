@@ -83,8 +83,11 @@ TEST_CASE("character profile decoding is exact bounded and rejects malformed val
     for (const usize offset : {0U, 4U, 14U, 16U, 20U, 48U, 52U, 128U, 132U, 176U, 188U, 392U, 416U,
                                442U, 444U, 468U, 507U}) {
         bytes = *original;
+        // A word of -2: out of every field's bounds, where -1 is a gargoyle record's
+        // "congratulated" sentinel and so allowed there.
         std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
                     std::min(usize{4}, bytes.size() - offset), 0xff);
+        bytes[offset] = 0xfe;
         CHECK_FALSE(CharacterProfilePacket::decode(bytes));
     }
     bytes = *original;

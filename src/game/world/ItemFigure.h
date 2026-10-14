@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -100,11 +101,24 @@ public:
      * case the item still has its place and its obstacle. */
     bool place(RenderDevice& device, ItemArchive& items, std::string_view name,
                const ItemInstance& instance, const WorldCollision* collision);
-    /** Scenery may have no animation tree: try its static name, nameL1, then nameL1ROOT.
-     * Ordinary place() callers retain their tree-only contract. */
-    bool placeStaticFallback(RenderDevice& device, ItemArchive& items, std::string_view name,
+    /** AddItemSub's FloorPos: a radius-one sweep from four above the instance to ten below. */
+    static constexpr f32 kFloorReachAbove = 4.0f;
+    static constexpr f32 kFloorReachBelow = 10.0f;
+    static constexpr f32 kFloorReachRadius = 1.0f;
+    /** The same from whichever of the scope's archives holds the tree, in its search order. */
+    bool place(RenderDevice& device, const AssetScope& scope, std::string_view name,
+               const ItemInstance& instance, const WorldCollision* collision);
+    /** Scenery may have no animation tree: try its static name with the authored object
+     * suffixes across the scope. Ordinary place() callers retain their tree-only contract. */
+    bool placeStaticFallback(RenderDevice& device, const AssetScope& scope, std::string_view name,
                              const ItemInstance& instance, const WorldCollision* collision,
                              u32 objectFlags);
+    bool placeStaticFallback(RenderDevice& device, ItemArchive& items, std::string_view name,
+                             const ItemInstance& instance, const WorldCollision* collision,
+                             u32 objectFlags) {
+        return placeStaticFallback(device, AssetScope(items), name, instance, collision,
+                                   objectFlags);
+    }
 
     /** Starts the figure's sequence number `index`. */
     void play(s32 index, bool loop);
@@ -202,10 +216,5 @@ bool shownToParty(s32 minPlayers, s32 players);
 
 /** Places authored item angles by world-axis pitch, yaw, then roll, followed by translation. */
 Mat4 itemPlacement(const Vec3& position, const Vec3& rotation);
-
-/** Borrows missing trees from the realm while retaining level-specific overrides.
- * Both archives must outlive figures placed from them. */
-ItemArchive& itemArchiveForTree(ItemArchive& items, std::string_view name,
-                                ItemArchive* realmItems = nullptr);
 
 } // namespace gdl::game

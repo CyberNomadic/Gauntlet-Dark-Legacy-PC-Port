@@ -32,8 +32,8 @@ std::string_view LockedGates::openingSound(s32 realm, s32 subtype) {
     return kSounds[static_cast<usize>(realm)][static_cast<usize>(subtype)];
 }
 
-bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                       const WorldCollision* collision, ItemArchive* realmItems) {
+bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+                       const WorldCollision* collision) {
     clear();
     m_collision = collision;
     m_layout = &layout;
@@ -52,8 +52,8 @@ bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
         gate->subtype = info.subtype;
         gate->minPlayers = instance.minPlayers;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        ItemArchive& art = itemArchiveForTree(items, name, realmItems);
-        if (!gate->figure.place(device, art, name, instance, collision)) {
+        if (!gate->figure.place(device, scope, name, instance,
+                                (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Gates: no figure {} in the item archive", name);
         }
         gate->box = gate->figure.obstacle(info);

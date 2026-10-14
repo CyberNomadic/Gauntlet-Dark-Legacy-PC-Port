@@ -177,6 +177,14 @@ struct EnemyBurst {
     bool operator==(const EnemyBurst&) const = default;
 };
 
+/** One of the swarm appearing: a brood at its generator's spot, a placement at its own. */
+struct EnemyBirth {
+    Vec3 position{0.0f, 0.0f, 0.0f};
+    s32 kind = -1;
+    s32 tier = 1; ///< one to three; the variants placed at a strength over three are not reported
+    bool operator==(const EnemyBirth&) const = default;
+};
+
 /** A sound one of the swarm makes other than on being hit: a throw going off (the arrow's
  * or a bolt's), or a suicide's yell as it starts its run. */
 struct EnemyCue {
@@ -282,6 +290,8 @@ public:
     std::vector<EnemyBlow> takeBlows();
     std::vector<EnemyLoss> takeLosses();
     std::vector<EnemyBurst> takeBursts();
+    /** The ordinary births since last asked (generate_enemy's, short of the variants). */
+    std::vector<EnemyBirth> takeBirths();
     std::vector<EnemyCue> takeCues();
     std::vector<EnemyFeedback> takeFeedback();
     std::vector<DeathEvent> takeDeathEvents();
@@ -505,6 +515,7 @@ public:
         std::vector<EnemyBlow> blows;
         std::vector<EnemyLoss> losses;
         std::vector<EnemyBurst> bursts;
+        std::vector<EnemyBirth> births;
         std::vector<EnemyCue> cues;
         std::vector<EnemyFeedback> feedback;
         std::vector<DeathEvent> deathEvents;
@@ -648,6 +659,7 @@ private:
     std::vector<EnemyBlow> m_blows;
     std::vector<EnemyLoss> m_losses;
     std::vector<EnemyBurst> m_bursts;
+    std::vector<EnemyBirth> m_births;
     std::vector<EnemyCue> m_cues;
     std::vector<EnemyFeedback> m_feedback;
     std::vector<DeathEvent> m_deathEvents;

@@ -143,7 +143,7 @@ void decorate(Packet::State& state) {
     potion.blessed = {3};
     potion.struck = true;
     auto& shield = attacks.shields[0];
-    shield.harmIn = 0.3f;
+    shield.marks = {{0, 13, 0}, {1, 17, 0.1f}, {2, 19, 0.2f}, {3, 0, 0.25f}, {4, 23, 0.125f}};
     shield.blessed = {3};
     MoveStrikes::Strike strike;
     strike.id = 11;
@@ -309,9 +309,11 @@ void decorate(Packet::State& state) {
     placement.viewRadius = 10;
     placement.sight = 12;
     placement.activeOn = 4;
+    placement.onFloor = false;
     placement.carried = 8;
     auto& statues = adapter.statues;
     statues.roster.push_back({1, placement});
+    placement.onFloor = true;
     placement.kind = CombatantKind::Unknown;
     placement.enemy = EnemySpawn{.kind = kDeathKind,
                                  .tier = 2,
@@ -378,11 +380,16 @@ TEST_CASE("combat packet round trips complete nonempty native owners and adapter
     CHECK((*encoded)[1] == 'B');
     CHECK((*encoded)[2] == 'S');
     CHECK((*encoded)[3] == 'T');
-    CHECK((*encoded)[4] == 2);
+    CHECK((*encoded)[4] == 4);
     const auto decoded = Packet::decode(*encoded);
     REQUIRE(decoded);
     CHECK(*decoded == state);
     CHECK(Packet::encode(*decoded) == encoded);
+    for (u32 previous = 1; previous < Packet::kVersion; ++previous) {
+        auto obsolete = *encoded;
+        word(obsolete, 4, previous);
+        CHECK_FALSE(Packet::decode(obsolete));
+    }
     // Neither serialization nor decoding touches the actual party/pool owners.
     CHECK(fixture.state() != state);
     CHECK(fixture.native.helps.empty());
@@ -473,7 +480,7 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
     auto baseline = fixture.state();
     decorate(baseline);
     auto bad = baseline;
-    const s32 mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14);
+    const s32 mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
     CAPTURE(mutation);
     switch (mutation) {
     case 0: bad.adapter.generatorRewards[0].player = 0; break;
@@ -505,6 +512,11 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
         bad.adapter.statues.statues[0].figure.position.x = std::numeric_limits<f32>::infinity();
         break;
     case 14: bad.adapter.critters.banks.push_back(bad.adapter.critters.banks[0]); break;
+    case 15: bad.combat.attacks.shields[0].marks[0].kind = 5; break;
+    case 16: bad.combat.attacks.shields[0].marks[0].wait = 0.2501f; break;
+    case 17:
+        bad.combat.attacks.shields[0].marks.push_back(bad.combat.attacks.shields[0].marks[0]);
+        break;
     }
     CHECK_FALSE(Packet::encode(bad));
     CHECK(Packet::encode(baseline));
@@ -555,6 +567,31 @@ TEST_CASE("combat packet rejects forged nested fields and opaque leaf lengths",
     SECTION("runtime leaf cannot be silently omitted") {
         auto bytes = *encoded;
         word(bytes, Packet::kHeaderBytes + 4, 0);
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("shield target family and cooldown are checked after decode") {
+        const usize mark = unique({4, 23, std::bit_cast<u32>(0.125f)});
+        auto bytes = *encoded;
+        word(bytes, mark, 5);
+        CHECK_FALSE(Packet::decode(bytes));
+        bytes = *encoded;
+        word(bytes, mark + 8, std::bit_cast<u32>(0.5f));
+        CHECK_FALSE(Packet::decode(bytes));
+        bytes = *encoded;
+        word(bytes, mark + 8, 0x7FC00000);
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("shield mark count is bounded before allocation") {
+        auto bytes = *encoded;
+        word(bytes, unique({0, 13, 0, 1, 17, std::bit_cast<u32>(0.1f)}) - 4, 0xFFFFFFFF);
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("statue floor flag is a canonical boolean") {
+        auto bytes = *encoded;
+        // Unique roster record: view radius, sight, activeOn, onFloor=false,
+        // carried-present. The other roster entry and risen copy retain true.
+        word(bytes, unique({std::bit_cast<u32>(10.0f), std::bit_cast<u32>(12.0f), 4, 0, 1}) + 12,
+             2);
         CHECK_FALSE(Packet::decode(bytes));
     }
 }

@@ -314,7 +314,9 @@ void Gauntlet::onUpdate(f64 deltaSeconds) {
     }
     // The music ducks under the pause menu and comes back once it is left.
     m_musicDuck.update(deltaSeconds, m_pause.isOpen() && !m_pause.musicAudible());
-    m_sounds->setCategoryScale(SoundCategory::Music, m_musicDuck.level());
+    // The level flybys are silent (sndFxPaused holds every voice through the attract modes).
+    m_sounds->setCategoryScale(SoundCategory::Music, m_demo.isOpen() ? 0.0f : m_musicDuck.level());
+    m_sounds->setCategoryScale(SoundCategory::Effects, m_demo.isOpen() ? 0.0f : 1.0f);
     m_sounds->update();
 
     m_fpsAccumulator += deltaSeconds;
@@ -562,6 +564,7 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
             ((menu.start && !menu.select) || menu.escape || input().wasKeyPressed(Key::Escape)) &&
             m_pause.open(renderDevice(), context(), m_play->scene.party(), player)) {
             m_play->scene.pauseGameplaySounds();
+            m_play->scene.holdSounds();
             resetPlayInput();
             return;
         }
@@ -728,6 +731,9 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
     auto party = m_pause.party();
     m_pause.close();
     m_audio->mixer().setPaused(false);
+    if (m_play) {
+        m_play->scene.releaseSounds();
+    }
     resetPlayInput();
     if (outcome == PauseOutcome::Resume) {
         return;

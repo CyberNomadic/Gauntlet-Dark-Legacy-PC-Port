@@ -10,14 +10,12 @@
 
 namespace gdl::game {
 
-bool Traps::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                 const WorldCollision* collision, u32 seed, f32 timeScale, f32 damageScale,
-                 ItemArchive* realmItems) {
+bool Traps::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+                 const WorldCollision* collision, u32 seed, f32 timeScale, f32 damageScale) {
     clear();
     m_collision = collision;
     m_layout = &layout;
-    m_items = &items;
-    m_realmItems = realmItems;
+    m_scope = scope;
     const auto authored = itemSupportWorld(layout, collision);
     m_random.seed(seed);
     m_timeScale = timeScale;
@@ -40,16 +38,15 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& i
         std::memcpy(&ownRest, &instance.params[2], sizeof(ownRest));
         trap->damage = static_cast<f32>(ownDamage != 0 ? ownDamage : info.value) * damageScale;
         trap->subtype = info.subtype;
+        trap->name = info.name;
         trap->properties = info.properties;
         trap->rectangularContact = info.collisionType == 3;
         trap->offTime = ownRest != 0 ? -ownRest * 3 : info.activeOff;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        ItemArchive& source =
-            !items.trees.find(name).has_value() && realmItems != nullptr ? *realmItems : items;
         // SetItem preserves placements with collision flag 1 (the Courtyard tentacles
         // emerge from below the floor); their collision offset rotates with the item.
         const auto* floor = (info.collisionFlags & 1U) != 0 ? nullptr : collision;
-        if (!trap->figure.place(device, source, name, instance, floor)) {
+        if (!trap->figure.place(device, scope, name, instance, floor)) {
             log::warn("Traps: no figure {} in the item archive", name);
         }
         trap->box = trap->figure.obstacle(info);
@@ -74,8 +71,7 @@ void Traps::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
     m_layout = nullptr;
-    m_items = nullptr;
-    m_realmItems = nullptr;
+    m_scope = {};
     m_collision = nullptr;
     m_traps.clear();
     m_wakes.clear();
@@ -110,8 +106,8 @@ bool Traps::stop(usize index) {
     return shows;
 }
 
-bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                   const WorldCollision* collision, ItemArchive* realmItems) {
+bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout,
+                   const AssetScope& scope, const WorldCollision* collision) {
     if (index >= m_traps.size() || !m_traps[index]->shown || m_traps[index]->disarmed) {
         return false;
     }
@@ -119,13 +115,11 @@ bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout,
     const ItemInstance& instance = layout.itemInstances()[static_cast<usize>(trap.instance)];
     std::string name = layout.itemInfos()[static_cast<usize>(instance.info)].name;
     name += kDisarmedSuffix;
-    ItemArchive& source =
-        !items.trees.find(name).has_value() && realmItems != nullptr ? *realmItems : items;
     trap.disarmed = true;
     const Mat4 placement = trap.figure.transform();
     trap.action = kResting;
-    if (source.trees.find(name).has_value() &&
-        trap.figure.place(device, source, name, instance, collision)) {
+    if (scope.findTree(name).has_value() &&
+        trap.figure.place(device, scope, name, instance, collision)) {
         trap.figure.play(kResting, true);
         trap.figure.placeAt(placement);
     } else {
@@ -139,6 +133,11 @@ bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout,
  * random from half of it to one and a half. */
 s32 Traps::restTicks(const Trap& trap) {
     s32 time = trap.offTime * kTicksPerTimeUnit;
+    // A trap of more than four sequences (the Forest's blades) does not rest at random at
+    // all (ProcessItems: its negative off time is taken as nought).
+    if (time < 0 && trap.figure.sequenceCount() > 4) {
+        return 0;
+    }
     if (time < 0) {
         const s32 span = -time;
         time = static_cast<s32>(m_random() % static_cast<u32>(span)) + span / 2;

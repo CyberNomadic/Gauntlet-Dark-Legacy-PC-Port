@@ -21,8 +21,8 @@ public:
         ItemSupport support;
         Obstacle box;
     };
-    void bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-              const WorldCollision* collision, ItemArchive* realmItems = nullptr);
+    void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+              const WorldCollision* collision);
     void clear();
     void setPlayerCount(s32 players);
     void capturePresentation();

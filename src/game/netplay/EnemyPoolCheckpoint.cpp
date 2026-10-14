@@ -320,6 +320,8 @@ template <class IO, class T> bool event(IO& io, T& value) {
                   value.position);
     } else if constexpr (std::is_same_v<Value, EnemyBurst>) {
         return io(value.position, value.damage, value.enemy, value.kind, value.silencesYell);
+    } else if constexpr (std::is_same_v<Value, EnemyBirth>) {
+        return io(value.position, value.kind, value.tier);
     } else if constexpr (std::is_same_v<Value, EnemyCue>) {
         return io(value.kind, value.enemyKind, value.position);
     } else if constexpr (std::is_same_v<Value, EnemyFeedback>) {
@@ -385,9 +387,9 @@ template <class IO, class T> bool pool(IO& io, T& state) {
             [&](auto& value) { return event(io, value); }, &eventsLeft);
     };
     if (!events(state.blows, 40) || !events(state.losses, 36) || !events(state.bursts, 28) ||
-        !events(state.cues, 20) || !events(state.feedback, 44) || !events(state.deathEvents, 32) ||
-        !events(state.deathShots, 32) || !events(state.tagged, 4) ||
-        !events(state.generatorEvents, 8)) {
+        !events(state.births, 20) || !events(state.cues, 20) || !events(state.feedback, 44) ||
+        !events(state.deathEvents, 32) || !events(state.deathShots, 32) ||
+        !events(state.tagged, 4) || !events(state.generatorEvents, 8)) {
         return false;
     }
     usize nodesLeft = EnemyPoolCheckpoint::kMaxTotalNodes;

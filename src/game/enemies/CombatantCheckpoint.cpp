@@ -341,7 +341,8 @@ bool CombatantCheckpoint::Part::valid() const {
            id <= std::numeric_limits<s32>::max() - static_cast<s32>(kMaxParts) &&
            game::scales(scales) && realm >= 'A' && realm <= 'Z' && arenaRandom > 0 &&
            arenaRandom < 2147483647U && events.valid() &&
-           (actor.definition.resource != 0 || (actor.state == 0 && id == -1));
+           // Retirement resets Actor, not the enclosing native slot identity.
+           (actor.definition.resource != 0 || actor.state == 0);
 }
 bool CombatantCheckpoint::Part::operator==(const Part& other) const {
     return std::tie(actor, incarnation, id, collision, hazards, scales, realm, fullHarm,

@@ -65,8 +65,13 @@ struct PortalFixture {
         bind();
     }
     void bind() {
-        REQUIRE(portals.bind(device, layout, items, catalog, &collision, nullptr, &access));
+        REQUIRE(portals.bind(device, layout, AssetScope(items), catalog, &collision, &access));
         REQUIRE(portals.size() == 3);
+        if (!items.loaded()) {
+            for (usize index = 0; index < portals.size(); ++index) {
+                CHECK(portals.portal(index).icon.presentation().archive == nullptr);
+            }
+        }
         REQUIRE(checkpoint.bindResources());
     }
     ExitPortalsCheckpoint::State state() const {
@@ -201,8 +206,8 @@ TEST_CASE("native tower portal restore retains open and EXIT_OFF resources indep
     progress[0].levels.recordBeaten(7, 0);
     const TowerAccess access{progress};
     ExitPortals host, guest;
-    REQUIRE(host.bind(device, layout, hostItems, catalog, nullptr, nullptr, &access));
-    REQUIRE(guest.bind(device, layout, guestItems, catalog, nullptr, nullptr, &access));
+    REQUIRE(host.bind(device, layout, AssetScope(hostItems), catalog, nullptr, &access));
+    REQUIRE(guest.bind(device, layout, AssetScope(guestItems), catalog, nullptr, &access));
     ExitPortalsCheckpoint hostState{host, layout, hostItems}, guestState{guest, layout, guestItems};
     REQUIRE(hostState.bindResources());
     REQUIRE(guestState.bindResources());

@@ -39,7 +39,7 @@ struct Fixture {
         players[1].actor.spawn(1, {}, nullptr, Vec3{4, 5, 6}, 0);
     }
     void bind() { sequence.bind({device, world, weapons, textures, effects, audio, &levels}); }
-    void loadLevel(s32 bossType = 41) {
+    void loadLevel(s32 bossType = 41, std::string_view items = "") {
         const auto root = test::scratchDirectory("boss-sequence");
         const auto level = root / "LEVELS/LEVELG5";
         std::filesystem::create_directories(level);
@@ -48,8 +48,10 @@ struct Fixture {
                       std::format(R"({{"realm":7,"prefix":"levelG","levels":[
             {{"name":"G5","bossType":{},"rune":1}},{{"name":"G1","rune":2}}]}})",
                                   bossType));
-        writeTextFile(level / "world.json", R"({"objects":[
-            {"name":"FLOOR","object":0,"parent":-1,"position":[0,0,0]}]})");
+        writeTextFile(level / "world.json",
+                      std::format(R"({{"objects":[
+            {{"name":"FLOOR","object":0,"parent":-1,"position":[0,0,0]}}]{}}})",
+                                  items));
         writeTextFile(level / "objects.json",
                       R"({"objects":[{"name":"FLOOR","file":"mesh.obj","meshTriangles":1}]})");
         writeTextFile(level / "mesh.obj",
@@ -183,12 +185,13 @@ TEST_CASE("boss coins count waiting party members but not departed controller sl
     players[1].life = PlayerLife::InTower;
     players[1].departed = true;
     LevelOpponents opponents;
+    LevelFixtures fixtures;
     CombatSpew spew;
     spew.origin = Vec3{0, 10, 0};
     spew.velocity = Vec3{0, 10, 10};
     spew.halfAngle = 0.5f;
     const usize before = f.world.placedItems().size();
-    f.sequence.spewCoins(spew, opponents, players);
+    f.sequence.spewCoins(spew, opponents, fixtures, players);
     // SetPlayerVars counts nonzero states, including the waiting dead but not quit slots.
     // G5's per-participant table is four bronze and one silver coin.
     REQUIRE(f.world.placedItems().size() == before + 15);
@@ -201,6 +204,36 @@ TEST_CASE("boss coins count waiting party members but not departed controller sl
     }
     CHECK(bronze == 12);
     CHECK(silver == 3);
+}
+
+TEST_CASE("the boss's death blast breaks the arena's cover before its coins fly",
+          "[game][screens][boss-sequence][safe-rocks]") {
+    Fixture f;
+    // Two of the lair's rocks, one within the blast's thousand units and one beyond.
+    f.loadLevel(34, R"(,"itemInfos":[{"type":10,"subtype":41,"name":"ROCK","radius":2,
+        "height":5,"collisionType":1,"hitPoints":100,"armor":10}],
+      "itemInstances":[
+        {"info":0,"minPlayers":1,"position":[30,0,-16],"rotation":[0,0,0],
+         "params":[41,0,1,0,0,0,0,0,0,0,0,0]},
+        {"info":0,"minPlayers":1,"position":[1500,0,0],"rotation":[0,0,0],
+         "params":[41,0,1,0,0,0,0,0,0,0,0,0]}])");
+    LevelFixtures fixtures;
+    fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio});
+    REQUIRE(fixtures.safeRocks().size() == 2);
+    REQUIRE(fixtures.safeRocks().standing(0));
+    REQUIRE(fixtures.safeRocks().standing(1));
+    LevelOpponents opponents;
+    CombatSpew spew;
+    spew.origin = Vec3{0, 10, 0};
+    spew.velocity = Vec3{0, 10, 10};
+    spew.halfAngle = 0.5f;
+    f.sequence.spewCoins(spew, opponents, fixtures, f.players);
+    // BossSpewCoins' unseen effect of a thousand damage over a thousand units breaks the
+    // near rock, so the coins can reach the party; the far one is out of its reach.
+    CHECK_FALSE(fixtures.safeRocks().standing(0));
+    CHECK(fixtures.safeRocks().rock(0).health == 0);
+    CHECK(fixtures.safeRocks().standing(1));
+    CHECK(fixtures.safeRocks().obstacles().size() == 1);
 }
 
 TEST_CASE("boss victory queues rune speech and waits for audio before departing",

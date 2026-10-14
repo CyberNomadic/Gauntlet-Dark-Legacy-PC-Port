@@ -48,6 +48,10 @@ public:
     void setPan(f32 pan);
     f32 pan() const;
 
+    /** Held, the stream contributes nothing and keeps its place until let go. */
+    void setPaused(bool paused);
+    bool paused() const;
+
     /** Adds this stream's contribution to an interleaved stereo buffer at the output rate. */
     void mixInto(std::span<f32> stereoOut);
 
@@ -74,6 +78,7 @@ private:
     f32 m_rightLevel = -1.0f;
     bool m_finished = false;
     bool m_stopping = false;
+    bool m_paused = false;
 };
 
 } // namespace gdl

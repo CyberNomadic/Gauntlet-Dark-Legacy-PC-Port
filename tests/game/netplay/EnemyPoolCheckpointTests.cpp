@@ -2,6 +2,7 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -160,6 +161,7 @@ Enemies::Checkpoint varied() {
         {1, kGruntKind, 2, 3.5f, true, 0x87654321, {1, 2, 3}, EnemyMeleeWard::HealthVamp}};
     state.losses = {{2, kRatKind, 3, 1, 37, true, {3, 2, 1}}};
     state.bursts = {{{4, 5, 6}, 7.5f, 3, kGruntKind, true}};
+    state.births = {{{-8, 9, -10}, kGruntKind, 3}, {{11, -12, 13}, kRatKind, 1}};
     state.cues = {{EnemyCue::Kind::Yell, kRatKind, {7, 8, 9}}};
     state.feedback = {{kGruntKind, 3, 17, true, true, 0xABCDEF12, {-1, -2, -3}, 0.375f, 2.5f}};
     state.deathEvents = {{DeathEvent::Kind::Unmoved, 4, 2, DeathForm::Black, 8.5f, {2, 4, 6}}};
@@ -196,7 +198,7 @@ TEST_CASE("enemy pool wire preserves every slot field queue clock and all three 
     // Pin little-endian version, fixed native slot count, MT words and a full
     // 64-bit lifetime counter independently of the decoder under test.
     CHECK(std::vector<u8>(encoded->begin(), encoded->begin() + 8) ==
-          std::vector<u8>{1, 0, 0, 0, 25, 0, 0, 0});
+          std::vector<u8>{2, 0, 0, 0, 25, 0, 0, 0});
     const auto random = RandomCheckpoint::encode(state.random);
     REQUIRE(random);
     CHECK(std::equal(random->begin(), random->end(), encoded->begin() + 8));
@@ -228,20 +230,21 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
           "[netplay][rollback][enemy-pool-codec]") {
     const auto plain = EnemyPoolCheckpoint::encode(Enemies::Checkpoint{});
     REQUIRE(plain);
-    CHECK(plain->size() == 11644);
+    CHECK(plain->size() == 11648);
     constexpr usize kPool = 8 + RandomCheckpoint::kBytes;
     constexpr usize kView = kPool + 84;
     constexpr usize kStocks = kView + 4;
     constexpr usize kLookouts = kStocks + 4;
     constexpr usize kCombatants = kLookouts + 4;
     constexpr usize kBlows = kCombatants + 4;
-    constexpr usize kBody = kBlows + 9 * 4;
+    constexpr usize kBody = kBlows + 10 * 4;
     const auto reject = [&](usize offset, u32 value) {
         auto bytes = *plain;
         word(bytes, offset, value);
         CHECK_FALSE(EnemyPoolCheckpoint::decode(bytes));
     };
     reject(0, EnemyPoolCheckpoint::kVersion + 1);
+    reject(0, 1); // the previous schema omitted the native birth queue
     reject(4, Enemies::kMost + 1);
     reject(8 + 624 * 4, 625);       // invalid MT cursor
     reject(kPool + 8, 0);           // no native slots
@@ -252,6 +255,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     reject(kLookouts, LookoutRoute::kMost + 1);
     reject(kCombatants, EnemyPoolCheckpoint::kMaxCombatants + 1);
     reject(kBlows, EnemyPoolCheckpoint::kMaxEvents + 1);
+    reject(kBlows + 3 * 4, EnemyPoolCheckpoint::kMaxEvents + 1);
     reject(kBody + 8, 4);           // state past Dying
     reject(kBody + 8, 256);         // do not narrow an invalid u32 into enum zero
     reject(kBody + 32, 2);          // bred boolean
@@ -287,6 +291,27 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     trailing.push_back(0);
     CHECK_FALSE(EnemyPoolCheckpoint::decode(trailing));
     CHECK_FALSE(EnemyPoolCheckpoint::decode(std::vector<u8>(EnemyPoolCheckpoint::kMaxBytes + 1)));
+}
+
+TEST_CASE("enemy birth wire validates every row and preserves the exhausted ordered queue",
+          "[netplay][rollback][enemy-pool-codec]") {
+    Enemies::Checkpoint state;
+    state.births = {{{1, 2, 3}, kGruntKind, 3}};
+    const auto bytes = EnemyPoolCheckpoint::encode(state);
+    REQUIRE(bytes);
+    CHECK(EnemyPoolCheckpoint::decode(*bytes) == state);
+    constexpr usize kBirths = 8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 + 3 * 4;
+    for (const auto [offset, value] : std::array{
+             std::pair{kBirths, u32{EnemyPoolCheckpoint::kMaxEvents + 1}},
+             std::pair{kBirths + 4, u32{0x7FC00000}}, std::pair{kBirths + 16, u32{kEnemyKindCount}},
+             std::pair{kBirths + 20, u32{0}}, std::pair{kBirths + 20, u32{4}}}) {
+        auto bad = *bytes;
+        word(bad, offset, value);
+        CHECK_FALSE(EnemyPoolCheckpoint::decode(bad));
+    }
+    state.births.resize(EnemyPoolCheckpoint::kMaxEvents + 1, state.births.front());
+    REQUIRE(state.valid());
+    CHECK_FALSE(EnemyPoolCheckpoint::encode(state));
 }
 
 TEST_CASE("enemy pool wire refuses every truncated prefix without partial state",
@@ -336,7 +361,7 @@ TEST_CASE(
     constexpr usize kQueues = 8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 +
                               EnemyPoolCheckpoint::kMaxCombatants * 24;
     constexpr usize kTagged =
-        kQueues + 7 * 4 + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 44 + 32);
+        kQueues + 8 * 4 + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 44 + 32);
     word(tooManyEvents, kTagged, 1);
     tooManyEvents.insert(tooManyEvents.begin() + static_cast<s64>(kTagged + 4), 4, u8{0});
     CHECK_FALSE(EnemyPoolCheckpoint::decode(tooManyEvents));

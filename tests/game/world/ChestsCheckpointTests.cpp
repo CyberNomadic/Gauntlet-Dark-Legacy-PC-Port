@@ -63,7 +63,7 @@ struct Fixture {
            "sequences":[{"name":"OFF","frames":8,"frameRate":30}]}]})");
         REQUIRE(layout.load(directory));
         REQUIRE(items.load(directory));
-        REQUIRE(chests.bind(device, layout, items, nullptr));
+        REQUIRE(chests.bind(device, layout, AssetScope(items), nullptr));
         chests.setPlayerCount(2);
         REQUIRE(chests.size() == 4);
         REQUIRE(chests.chest(0).figure.hasFigure());
@@ -76,7 +76,7 @@ struct Fixture {
     void reveal() {
         const std::array party{ChestVisitor{Vec3{0}, 1, 0, true},
                                ChestVisitor{Vec3{60, 0, 0}, 1, 0, true}};
-        REQUIRE(chests.updateXray(device, items, items, 1.0f / 60, party) == 2);
+        REQUIRE(chests.updateXray(device, AssetScope(items), items, party) == 2);
         REQUIRE(chests.chest(0).preview.hasFigure());
         REQUIRE(chests.chest(3).preview.hasFigure());
     }
@@ -166,7 +166,7 @@ TEST_CASE("unbound container art and previews retain exact moving-floor presenta
     test::FakeRenderDevice device;
     ItemArchive empty;
     Chests chests;
-    REQUIRE(chests.bind(device, layout, empty, &collision));
+    REQUIRE(chests.bind(device, layout, AssetScope(empty), &collision));
     REQUIRE(chests.chest(0).floor);
     ChestsCheckpoint owner(chests);
     chests.capturePresentation();
@@ -258,8 +258,7 @@ TEST_CASE("native campaign containers retain full authored roster and preloaded 
     LevelWorld world;
     REQUIRE(world.load(device, root, *catalog.byName(name)));
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision(),
-                        &world.realmItems()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     ChestsCheckpoint owner(chests);
     const auto before = owner.checkpoint();
     REQUIRE(before);

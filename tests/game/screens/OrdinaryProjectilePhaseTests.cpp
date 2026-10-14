@@ -147,6 +147,7 @@ TEST_CASE("ordinary world and liquid impacts preserve native effects and buffere
                                     MissileWallSound::FiveWay, MissileWallSound::Silent);
     const s32 contact = GENERATE(0, 1, 2); // floor, wall, liquid floor
     const bool liquid = contact == 2;
+    CAPTURE(seconds, character, wallSound, contact);
     Fixture native, replay;
     native.impactArt();
     replay.impactArt();
@@ -169,8 +170,10 @@ TEST_CASE("ordinary world and liquid impacts preserve native effects and buffere
     } else if (contact == 1) {
         for (auto* fixture : {&native, &replay}) {
             auto& collision = const_cast<WorldCollision&>(fixture->world.collision());
-            collision.build({{{0, 0, -1}, {{{-20, 0, 1}, {-20, 20, 1}, {20, 20, 1}}}, 0, 4},
-                             {{0, 0, -1}, {{{-20, 0, 1}, {20, 20, 1}, {20, 0, 1}}}, 0, 4}});
+            // Synthetic defaults include wall queries; floor-only flag 4 does not.
+            collision.build({{{0, 0, -1}, {{{-20, 0, 1}, {-20, 20, 1}, {20, 20, 1}}}, 0},
+                             {{0, 0, -1}, {{{-20, 0, 1}, {20, 20, 1}, {20, 0, 1}}}, 0}});
+            REQUIRE(collision.resolveWalls({10, 3, .9f}, 0.5f, 2.75f, 3.25f) != Vec3{10, 3, .9f});
         }
     }
     auto shot = native.launch(5, {10, .01f, 0}, {0, -10, 0});

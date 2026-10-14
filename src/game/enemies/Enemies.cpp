@@ -100,6 +100,10 @@ bool checkpointEvent(const EnemyBurst& value) {
     return checkpointSlot(value.enemy) && (value.kind == -1 || checkpointKind(value.kind)) &&
            checkpointNumber(value.damage, 0) && checkpointPoint(value.position);
 }
+bool checkpointEvent(const EnemyBirth& value) {
+    return checkpointKind(value.kind) && value.tier >= 1 && value.tier <= 3 &&
+           checkpointPoint(value.position);
+}
 bool checkpointEvent(const EnemyCue& value) {
     return value.kind <= EnemyCue::Kind::Yell && checkpointKind(value.enemyKind) &&
            checkpointPoint(value.position);
@@ -339,9 +343,9 @@ bool Enemies::Checkpoint::valid() const {
         scales.players < 0 || scales.players > 4 || lookouts.points.size() > LookoutRoute::kMost ||
         lookouts.points.size() != lookouts.next.size() || combatants.size() > kMaxCombatants ||
         !checkpointEvents(blows) || !checkpointEvents(losses) || !checkpointEvents(bursts) ||
-        !checkpointEvents(cues) || !checkpointEvents(feedback) || !checkpointEvents(deathEvents) ||
-        !checkpointEvents(deathShots) || !checkpointEvents(tagged) ||
-        !checkpointEvents(generatorEvents)) {
+        !checkpointEvents(births) || !checkpointEvents(cues) || !checkpointEvents(feedback) ||
+        !checkpointEvents(deathEvents) || !checkpointEvents(deathShots) ||
+        !checkpointEvents(tagged) || !checkpointEvents(generatorEvents)) {
         return false;
     }
     for (const f32 scale : {scales.health, scales.speed, scales.sight, scales.damage,
@@ -395,12 +399,13 @@ bool Enemies::Checkpoint::valid() const {
 
 bool Enemies::Checkpoint::operator==(const Checkpoint& other) const {
     const auto fields = [](const Checkpoint& value) {
-        return std::tie(
-            value.enemies, value.stocks, value.nextInstance, value.random, value.most, value.scales,
-            value.lookouts, value.blows, value.losses, value.bursts, value.cues, value.feedback,
-            value.deathEvents, value.deathShots, value.tagged, value.generatorEvents,
-            value.combatants, value.contactGridOrigin, value.contactGridInverseWidth, value.bomber,
-            value.inView, value.frame, value.pendingTicks, value.pendingSeconds, value.shrink);
+        return std::tie(value.enemies, value.stocks, value.nextInstance, value.random, value.most,
+                        value.scales, value.lookouts, value.blows, value.losses, value.bursts,
+                        value.births, value.cues, value.feedback, value.deathEvents,
+                        value.deathShots, value.tagged, value.generatorEvents, value.combatants,
+                        value.contactGridOrigin, value.contactGridInverseWidth, value.bomber,
+                        value.inView, value.frame, value.pendingTicks, value.pendingSeconds,
+                        value.shrink);
     };
     return fields(*this) == fields(other) && view.has_value() == other.view.has_value() &&
            (!view || checkpointView(*view) == checkpointView(*other.view));
@@ -435,6 +440,7 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
     state.blows = m_blows;
     state.losses = m_losses;
     state.bursts = m_bursts;
+    state.births = m_births;
     state.cues = m_cues;
     state.feedback = m_feedback;
     state.deathEvents = m_deathEvents;
@@ -566,6 +572,7 @@ bool Enemies::commitRestore(Prepared&& prepared) {
     m_blows = std::move(values.blows);
     m_losses = std::move(values.losses);
     m_bursts = std::move(values.bursts);
+    m_births = std::move(values.births);
     m_cues = std::move(values.cues);
     m_feedback = std::move(values.feedback);
     m_deathEvents = std::move(values.deathEvents);
@@ -630,6 +637,7 @@ void Enemies::close() {
     m_blows.clear();
     m_losses.clear();
     m_bursts.clear();
+    m_births.clear();
     m_cues.clear();
     m_feedback.clear();
     m_deathEvents.clear();
@@ -1101,6 +1109,9 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
     }
     if (enemy.generator >= 0) {
         m_generatorEvents.push_back({enemy.generator, EnemyGeneratorEvent::Kind::Born});
+    }
+    if (enemy.variant == 0) {
+        m_births.push_back({spawn.position, spawn.kind, enemy.tier});
     }
     enemy.instance = m_nextInstance++;
     return slot;
@@ -2367,9 +2378,15 @@ Enemies::Figure Enemies::bodyOf(const Appearance& appearance) {
             return {&stock->variantBodies[v], stock->variantTrees[v], &stock->textures};
         }
     }
+    // A tier the archive lacks wears the nearest it has, as treeOf does: below, else any.
     s32 tier = appearance.tier;
     while (tier > 1 && stock->trees[static_cast<usize>(tier - 1)] == nullptr) {
         --tier;
+    }
+    for (s32 t = 1; stock->trees[static_cast<usize>(tier - 1)] == nullptr && t <= 3; ++t) {
+        if (stock->trees[static_cast<usize>(t - 1)] != nullptr) {
+            tier = t;
+        }
     }
     const auto index = static_cast<usize>(tier - 1);
     TreeModel& body = stock->bodies[index];
@@ -2406,6 +2423,10 @@ void Enemies::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& place
 
 std::vector<EnemyBurst> Enemies::takeBursts() {
     return std::exchange(m_bursts, {});
+}
+
+std::vector<EnemyBirth> Enemies::takeBirths() {
+    return std::exchange(m_births, {});
 }
 
 std::vector<EnemyBlow> Enemies::takeBlows() {

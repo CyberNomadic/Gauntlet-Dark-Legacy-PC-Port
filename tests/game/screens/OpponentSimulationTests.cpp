@@ -159,6 +159,43 @@ TEST_CASE("opponent island preserves the native generator enemy and missile phas
     CHECK(island.device.texturesCreated == uploads);
 }
 
+TEST_CASE("birth publication occurs after native AI before missiles and refusal is fully undoable",
+          "[rollback][opponent-simulation][enemy-birth-emission][assets]") {
+    Island island;
+    island.spawn({0, 0, 40});
+    island.missiles.launch(EnemyMissileKind::arrow(), {80, 10, 80}, {80, 10, 100}, 1, nullptr, -1);
+    const auto baseline = island.simulation.checkpoint(island.resources);
+    REQUIRE(baseline);
+    REQUIRE_FALSE(baseline->enemies.births.empty());
+    REQUIRE_FALSE(baseline->missiles.missiles.empty());
+    auto undo = island.simulation.prepareRestore(*baseline, island.resources);
+    REQUIRE(undo);
+    bool called = false;
+    CHECK(island.simulation.stageCombat(island.frame(), island.resources, [&] {
+        called = true;
+        const auto afterAi = island.enemies.checkpoint();
+        REQUIRE(afterAi);
+        CHECK(afterAi->pendingTicks != baseline->enemies.pendingTicks);
+        CHECK(island.missiles.checkpoint(island.resources) == baseline->missiles);
+        CHECK(island.enemies.takeBirths() == baseline->enemies.births);
+        return false; // no trusted GENFX binding: the outer combat transaction must undo
+    }) == OpponentSimulation::Result::Interaction);
+    REQUIRE(called);
+    CHECK(island.missiles.checkpoint(island.resources) == baseline->missiles);
+    REQUIRE(island.simulation.commitRestore(std::move(*undo)));
+    CHECK(island.simulation.checkpoint(island.resources) == baseline);
+    CHECK(island.simulation.stageCombat(island.frame(), island.resources, [&] {
+        CHECK(island.enemies.takeBirths() == baseline->enemies.births);
+        return true;
+    }) == OpponentSimulation::Result::Advanced);
+    const auto advanced = island.simulation.checkpoint(island.resources);
+    REQUIRE(advanced);
+    CHECK(advanced->enemies.births.empty());
+    CHECK(advanced->missiles != baseline->missiles);
+    REQUIRE(island.simulation.restore(*baseline, island.resources));
+    CHECK(island.enemies.takeBirths() == baseline->enemies.births);
+}
+
 TEST_CASE("opponent bundle restores nothing if any one checkpoint or preparation is invalid",
           "[rollback][opponent-simulation][assets]") {
     Island island(true);

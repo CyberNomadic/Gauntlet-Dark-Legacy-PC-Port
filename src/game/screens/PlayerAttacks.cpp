@@ -35,8 +35,8 @@ constexpr std::array<std::string_view, 5> kShieldSounds{"S_SHIELD2", "S_SHIELD2"
                                                         "S_SHIELD3", "S_SHIELD4"};
 constexpr f32 kShieldSeconds = 3.0f; ///< how long a potion's ring lasts
 constexpr f32 kShieldDamage = 25.0f;
-constexpr f32 kShieldPotency = 0.25f;  ///< of the character's magic power, its radius
-constexpr f32 kShieldHarmEvery = 0.5f; ///< seconds between its harming what it touches
+constexpr f32 kShieldPotency = 0.25f; ///< of the character's magic power, its radius
+constexpr f32 kGasEffectGap = 0.5f;   ///< a gas blow's wait before its next effect
 constexpr std::string_view kBlockEffect = "BLOCKFX";
 constexpr f32 kRamDamage = 3.0f;   ///< what a charge does to what it runs into
 constexpr f32 kChargeBlow = 32.0f; ///< and to an enemy or a great one (PlayerMotion's anim 8)
@@ -727,7 +727,7 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
                 }
                 targets.hurt(index, hit.damage, HurtKind::Blow, {flags, direction});
                 if ((row.damageType & Damage::kGas) != 0) {
-                    player.effectGap = kShieldHarmEvery;
+                    player.effectGap = kGasEffectGap;
                 } else if (hit.damage > 2) {
                     f32 gap = hit.hitGap;
                     if (hit.swept) {
@@ -1000,13 +1000,18 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
             EffectTrees::Setting settings;
             settings.persistent = true;
             settings.depthWrite = false;
+            settings.yaw = actor.yaw();
             runtime.deathHeldEffect = m_resources->effects.startSet(
                 m_resources->device, *archive,
                 DeathRules::effect(DeathRules::form(enemies.tierOf(slot))), actor.position(),
                 settings);
         }
     } else {
-        m_resources->effects.moveTo(runtime.deathHeldEffect, actor.position());
+        // StartDeathFX hangs the arc on the player's node: it goes where they go and turns
+        // as they turn, toward Death, the way Death's own arc turns toward its victim.
+        m_resources->effects.placeAt(runtime.deathHeldEffect,
+                                     glm::rotate(glm::translate(Mat4{1.0f}, actor.position()),
+                                                 actor.yaw(), Vec3{0.0f, 1.0f, 0.0f}));
     }
     return at;
 }
@@ -1098,11 +1103,27 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         }
         const Vec3 at = players[shield.actor].actor.position();
         m_resources->effects.moveTo(shield.effect, at);
-        shield.harmIn -= seconds;
-        if (shield.harmIn > 0.0f) {
-            continue;
+        // ProcessEffects strikes whatever is within the ring at once and, per target, not
+        // again for a quarter second; nothing it pushes away escapes the first blow.
+        for (PotionShield::Mark& mark : shield.marks) {
+            mark.wait -= seconds;
         }
-        shield.harmIn = kShieldHarmEvery;
+        std::erase_if(shield.marks,
+                      [](const PotionShield::Mark& mark) { return mark.wait <= 0.0f; });
+        const auto fresh = [&shield](s32 kind, s32 id) {
+            for (const PotionShield::Mark& mark : shield.marks) {
+                if (mark.kind == kind && mark.id == id) {
+                    return false;
+                }
+            }
+            shield.marks.push_back({kind, id, kShieldHitAgain});
+            return true;
+        };
+        constexpr s32 kEnemy = 0;
+        constexpr s32 kCritter = 1;
+        constexpr s32 kGenerator = 2;
+        constexpr s32 kBoss = 3;
+        constexpr s32 kBarrel = 4;
         const auto& actor = players[shield.actor].actor;
         // Its magic carries its bearer's class perk as a burst's does (start_magic's shield).
         if (const auto perk =
@@ -1112,6 +1133,9 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         }
         for (const s32 id : targets.opponents.enemies().reachedBy(
                  at, shield.radius, std::numbers::pi_v<f32>, {0, 0, 1})) {
+            if (!fresh(kEnemy, id)) {
+                continue;
+            }
             const Vec3 struck = targets.opponents.enemies().positionOf(id);
             const f32 credit = targets.opponents.strikeEnemy(id, shield.damage, shield.flags,
                                                              struck - at, actor.player(), players);
@@ -1119,6 +1143,9 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         }
         for (const s32 id : targets.opponents.critters().reachedBy(
                  at, shield.radius, std::numbers::pi_v<f32>, {0, 0, 1})) {
+            if (!fresh(kCritter, id)) {
+                continue;
+            }
             const Vec3 struck = targets.opponents.critters().positionOf(id);
             const f32 credit =
                 targets.opponents.strikeCritter(id, shield.damage, shield.flags, struck - at,
@@ -1126,9 +1153,11 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
             healHit(actor.player(), shield.flags, credit, struck, players, targets);
         }
         for (const s32 id : targets.opponents.generators().within(at, shield.radius)) {
-            targets.opponents.strikeGenerator(id, shield.damage, actor.player());
+            if (fresh(kGenerator, id)) {
+                targets.opponents.strikeGenerator(id, shield.damage, actor.player());
+            }
         }
-        if (targets.opponents.bosses().within(at, shield.radius)) {
+        if (targets.opponents.bosses().within(at, shield.radius) && fresh(kBoss, 0)) {
             EnemyHit hit;
             hit.damage = shield.damage;
             hit.flags = shield.flags;
@@ -1141,7 +1170,8 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         }
         // Magic leaves the walls, the rocks and every barrel but one holding something alone.
         for (const usize barrel : targets.fixtures.barrels().within(at, shield.radius)) {
-            if (!immuneToMagic(static_cast<s32>(barrel), targets)) {
+            if (!immuneToMagic(static_cast<s32>(barrel), targets) &&
+                fresh(kBarrel, static_cast<s32>(barrel))) {
                 targets.fixtures.strikeBarrel(barrel, shield.damage,
                                               players[shield.actor].actor.player(), players,
                                               targets.fixtureEvents);

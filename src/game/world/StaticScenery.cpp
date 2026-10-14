@@ -3,8 +3,8 @@
 #include "engine/core/Types.h"
 
 namespace gdl::game {
-void StaticScenery::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                         const WorldCollision* collision, ItemArchive* realmItems) {
+void StaticScenery::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+                         const WorldCollision* collision) {
     clear();
     m_layout = &layout;
     m_collision = collision;
@@ -32,12 +32,8 @@ void StaticScenery::bind(RenderDevice& device, const WorldLayout& layout, ItemAr
             }
         }
         if ((instance.flags & 2U) == 0) {
-            if (!prop->figure.placeStaticFallback(device, items, info.name, placed, nullptr,
-                                                  info.objectFlags) &&
-                realmItems != nullptr) {
-                prop->figure.placeStaticFallback(device, *realmItems, info.name, placed, nullptr,
-                                                 info.objectFlags);
-            }
+            prop->figure.placeStaticFallback(device, scope, info.name, placed, nullptr,
+                                             info.objectFlags);
         }
         // NoGeometry suppresses the mesh, not the item's authored collision/placement.
         prop->figure.placeAt(itemPlacement(placed.position, placed.rotation));

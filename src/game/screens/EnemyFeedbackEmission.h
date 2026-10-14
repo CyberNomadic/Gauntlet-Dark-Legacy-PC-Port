@@ -9,6 +9,21 @@
 #include "game/world/EffectTrees.h"
 
 namespace gdl::game {
+struct EnemyBirth;
+
+/** Native GENFX birth artwork. The roster is indexed by swarm kind; absent
+ * loaded archives remain null. No sound, damage or resource load is implied. */
+struct EnemyBirthEmission {
+    ItemArchive* archive = nullptr;
+    std::string_view tree;
+    Vec3 position{0};
+
+    static EnemyBirthEmission resolve(const EnemyBirth& birth,
+                                      std::span<ItemArchive* const> archives);
+    std::optional<EffectTrees::Prepared>
+    prepare(std::span<const EffectTrees::PoolResource> resources,
+            std::span<TextureSet* const> lenders) const;
+};
 
 /** Native swarm impact presentation, resolved before its actor/slot can be
  * recycled. Resolution never starts an effect, plays sound, or awards damage.

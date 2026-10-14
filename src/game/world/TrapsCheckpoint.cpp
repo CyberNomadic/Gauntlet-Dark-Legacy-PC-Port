@@ -126,8 +126,7 @@ bool TrapsCheckpoint::State::valid() const {
 }
 struct TrapsCheckpoint::Resources {
     const WorldLayout* layout = nullptr;
-    ItemArchive* items = nullptr;
-    ItemArchive* realm = nullptr;
+    AssetScope scope;
     const WorldCollision* collision = nullptr;
     f32 timeScale = 1;
     std::shared_ptr<const u8> binding;
@@ -161,27 +160,26 @@ TrapsCheckpoint::TrapsCheckpoint(Traps& owner) : m_owner(owner) {}
 TrapsCheckpoint::~TrapsCheckpoint() = default;
 bool TrapsCheckpoint::bound() const {
     return m_resources && m_resources->binding == m_owner.m_checkpointBinding &&
-           m_resources->layout == m_owner.m_layout && m_resources->items == m_owner.m_items &&
-           m_resources->realm == m_owner.m_realmItems &&
+           m_resources->layout == m_owner.m_layout &&
+           std::ranges::equal(m_resources->scope.archives(), m_owner.m_scope.archives()) &&
            m_resources->collision == m_owner.m_collision &&
            m_resources->rows.size() == m_owner.m_traps.size();
 }
 bool TrapsCheckpoint::bindResources(RenderDevice& device) {
     auto resources = std::make_unique<Resources>();
     resources->layout = m_owner.m_layout;
-    resources->items = m_owner.m_items;
-    resources->realm = m_owner.m_realmItems;
+    resources->scope = m_owner.m_scope;
     resources->collision = m_owner.m_collision;
     resources->timeScale = m_owner.m_timeScale;
     resources->binding = m_owner.m_checkpointBinding;
     if (m_owner.m_traps.size() > State::kMaxTraps ||
-        ((!resources->layout || !resources->items) && !m_owner.m_traps.empty())) {
+        (!resources->layout && !m_owner.m_traps.empty())) {
         return false;
     }
     Traps prototypes;
-    if (resources->layout && resources->items) {
-        prototypes.bind(device, *resources->layout, *resources->items, resources->collision, 1, 1,
-                        1, resources->realm);
+    if (resources->layout) {
+        prototypes.bind(device, *resources->layout, resources->scope, resources->collision, 1, 1,
+                        1);
     }
     if (prototypes.size() != m_owner.size()) {
         return false;
@@ -204,8 +202,8 @@ bool TrapsCheckpoint::bindResources(RenderDevice& device) {
             return false;
         }
         auto normalFigure = ItemFigureCheckpoint::prepare(prototype.figure, *normal);
-        if (!normalFigure || !prototypes.disarm(i, device, *resources->layout, *resources->items,
-                                                resources->collision, resources->realm)) {
+        if (!normalFigure || !prototypes.disarm(i, device, *resources->layout, resources->scope,
+                                                resources->collision)) {
             return false;
         }
         const auto disarmed = ItemFigureCheckpoint::capture(prototype.figure);
@@ -308,6 +306,7 @@ std::optional<TrapsCheckpoint::Prepared> TrapsCheckpoint::prepareRestore(const S
         trap->damage = saved.damage;
         trap->offTime = saved.offTime;
         trap->subtype = saved.subtype;
+        trap->name = resource.definition.name;
         trap->properties = saved.properties;
         trap->action = saved.action;
         trap->ticksLeft = saved.ticksLeft;

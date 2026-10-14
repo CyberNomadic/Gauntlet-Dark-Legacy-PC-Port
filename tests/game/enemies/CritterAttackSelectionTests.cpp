@@ -227,7 +227,7 @@ TEST_CASE("an animation hold blocks ordinary cut-ins but not critical priority",
     }
 }
 
-TEST_CASE("boss health gates use exclusive upper bounds only above the lower bound",
+TEST_CASE("boss health gates use exclusive upper bounds, a band closed on itself admitting nothing",
           "[game][boss-attacks]") {
     TargetCriteria target;
     target.minRateScale = 1.5f;
@@ -235,7 +235,12 @@ TEST_CASE("boss health gates use exclusive upper bounds only above the lower bou
     REQUIRE_FALSE(target.allowsPhase(1.49f, 0));
     REQUIRE(target.allowsPhase(1.5f, 0));
     REQUIRE_FALSE(target.allowsPhase(2.5f, 0));
-    target.maxRateScale = target.minRateScale; // Dragon SPLITFBALL is uncapped, not empty.
+    // The Dragon's SPLITFBALL and the Chimera's strafes close their bands on themselves:
+    // CritterCalcTarget never admits them, so only a pattern or a link reaches them.
+    target.maxRateScale = target.minRateScale;
+    REQUIRE_FALSE(target.allowsPhase(5, 0));
+    REQUIRE_FALSE(target.allowsPhase(1.5f, 0));
+    target.maxRateScale = 0;
     REQUIRE(target.allowsPhase(5, 0));
     target.maxHomeDistance = 10;
     REQUIRE(target.allowsPhase(5, 10));

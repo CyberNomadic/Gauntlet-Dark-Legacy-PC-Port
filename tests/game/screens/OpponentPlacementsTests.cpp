@@ -179,4 +179,42 @@ TEST_CASE("native placement loader retains missing-statue fallbacks and ordered 
     CHECK(rows[1].carried != rows[3].carried);
 }
 
+TEST_CASE("native statue placement loader preserves the authored floor-binding flag",
+          "[rollback][opponent-placements][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GOLEM.WAD").parent_path().parent_path();
+    const auto directory = test::scratchDirectory("opponent-statue-floor-policy");
+    writeTextFile(directory / "world.json", R"({
+      "objects":[{"name":"FLOOR","position":[0,0,0]}],
+      "itemInfos":[
+        {"type":4,"name":"GOLEM","radius":2,"height":5,"collisionFlags":0},
+        {"type":4,"name":"GOLEM","radius":2,"height":5,"collisionFlags":1}],
+      "itemInstances":[
+        {"info":0,"position":[0,4,0]},
+        {"info":1,"position":[20,4,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(directory));
+    WorldCollision collision;
+    collision.build(
+        {{{0, 1, 0}, {Vec3{-100, 0, -100}, Vec3{100, 0, 100}, Vec3{100, 0, -100}}, 0, 4},
+         {{0, 1, 0}, {Vec3{-100, 0, -100}, Vec3{-100, 0, 100}, Vec3{100, 0, 100}}, 0, 4}});
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    Critters critters;
+    CritterStatues statues;
+    critters.open(device, root, &collision, {}, 'G');
+    const auto rows = OpponentPlacements::load(
+        device, layout, {}, 1, enemies, critters, statues, &collision,
+        [](const Vec3&, f32, f32) -> std::optional<usize> { return std::nullopt; });
+    CHECK(rows.empty());
+    REQUIRE(statues.count() == 2);
+    CHECK(statues.placement(0).onFloor);
+    CHECK_FALSE(statues.placement(1).onFloor);
+    CHECK(statues.positionOf(0).y == ItemFigure::kFloorLift);
+    CHECK(statues.positionOf(1).y == 4);
+    const auto state = statues.checkpoint();
+    REQUIRE(state);
+    REQUIRE(statues.restore(*state));
+    CHECK(statues.checkpoint() == state);
+}
+
 } // namespace

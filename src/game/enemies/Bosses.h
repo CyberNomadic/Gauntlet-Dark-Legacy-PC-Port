@@ -75,6 +75,12 @@ public:
     const LegendRite& legend() const { return m_rite; }
 
     void update(s32 ticks, f32 seconds, std::span<const EnemyView> players);
+    /** Its waking clock runs from its placement, through an entrance that holds it still. */
+    void arm(f32 seconds) {
+        if (!m_awake) {
+            m_wakeClock += seconds;
+        }
+    }
     void setArenaAnchors(std::span<const Mat4> anchors) { m_fighter.setArenaAnchors(anchors); }
     void setArenaTargets(std::span<const CombatArenaTarget> targets) {
         m_fighter.setArenaTargets(targets);
@@ -142,6 +148,7 @@ public:
     std::string_view moveName() const;
     /** The id targets and sweeps name the boss by. */
     static constexpr s32 kTargetId = 0;
+    static constexpr f32 kWakeArmSeconds = 2.0f; ///< asleep at least this long after placing
 
 private:
     friend class OpponentCombatCheckpoint;
@@ -165,6 +172,7 @@ private:
     std::string m_name;
     bool m_awake = false;
     f32 m_wakeDistance = 0.0f;
+    f32 m_wakeClock = 0.0f; ///< seconds since it was placed; it may not wake in the first two
     LegendRite m_rite;
     bool m_roarAsked = false;
     bool m_legendStruck = false;

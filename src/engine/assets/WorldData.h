@@ -47,6 +47,12 @@ struct LevelTuning {
      * take and deal does not. */
     f32 enemySpeedScale(f32 gain) const { return enemySpeed * gain; }
     f32 enemySightScale(f32 gain) const { return enemySight * gain; }
+    /** What the casters' wait between casts is multiplied by: the original keeps the
+     * reciprocal of the rate at the difficulty's gain (ResolveWorldDataPointers). */
+    f32 enemyMissileWaitScale(f32 gain) const {
+        const f32 rate = enemyMissileRate * gain;
+        return rate > 0.0f ? 1.0f / rate : 1.0f;
+    }
     f32 generatorRateScale(f32 gain) const { return generatorRate * gain; }
     f32 generatorMostScale(f32 gain) const { return generatorMost * gain; }
 };
@@ -95,8 +101,9 @@ struct LevelInfo {
     s32 audioIndex = -1;
     s32 maxEnemies = 25; ///< gameplay capacity: the camera overrides the level's initial limit
     s32 bossType = -1;   ///< the kind of its boss, none under nought
-    s32 rune = 0;        ///< the runestone it holds, from one; none at nought
-    s32 legend = 0;      ///< the realm whose legend item it holds; none at nought
+    bool earlyEnemies = false; ///< its enemies go about during the party's entrance (the Peak)
+    s32 rune = 0;              ///< the runestone it holds, from one; none at nought
+    s32 legend = 0;            ///< the realm whose legend item it holds; none at nought
     std::optional<BossCameraInfo> bossCamera; ///< how its boss fight is framed, when it has one
     std::vector<LevelEnemy> enemies;          ///< its roster, from the realm's
     f32 musicVolume = 1.0f;

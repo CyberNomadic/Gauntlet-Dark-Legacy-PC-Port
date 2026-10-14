@@ -40,6 +40,12 @@ TEST_CASE("relics keep the runes, legend items and gargoyle pieces within their 
     REQUIRE_FALSE(relics.gargoyleComplete(1));
     REQUIRE(relics.addGargoylePiece(3) == -1);
     REQUIRE_FALSE(relics.gargoyleComplete(3));
+    // Once the tower has congratulated the collector the record is kept under nought: it
+    // still counts as complete and another piece does not advance it.
+    relics.gargoylePieces[2] = -1;
+    REQUIRE(relics.gargoyleComplete(2));
+    REQUIRE(relics.addGargoylePiece(2) == -1);
+    REQUIRE(relics.gargoylePieces[2] == -1);
 }
 
 TEST_CASE("relics survive the save's round trip", "[game][players]") {

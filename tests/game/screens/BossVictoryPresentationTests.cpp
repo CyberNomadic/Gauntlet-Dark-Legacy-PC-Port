@@ -264,8 +264,14 @@ TEST_CASE("victory captions use the table's weighted text and render typed multi
     canvas.end();
     REQUIRE(device.draws.size() == 1);
     REQUIRE(device.draws.front().vertices.size() == 18); // AB on the first line, A on the second
-    REQUIRE(test::minCorner(device.draws.front()).y == Approx(252.375f));
-    REQUIRE(test::maxCorner(device.draws.front()).y == Approx(277.125f));
+    // At the top of the screen (CaptionText's y of 16), lines 32 * 0.667 apart; the tower's
+    // ceremony captions are the ones over the status boxes.
+    REQUIRE(test::minCorner(device.draws.front()).y >= 16.0f);
+    REQUIRE(test::minCorner(device.draws.front()).y < 18.0f);
+    REQUIRE(test::maxCorner(device.draws.front()).y < 16.0f + 2.0f * 32.0f * 0.667f);
+    const f32 middle = (test::minCorner(device.draws.front()).x +
+                        test::maxCorner(device.draws.front()).x) / 2.0f;
+    REQUIRE(std::abs(middle - 256.0f) < 8.0f); // centred on the 512-wide screen's middle
     REQUIRE(device.draws.front().texture == &sheet);
     presentation.update(BossVictory::kPagePauseTicks, 0.0f, false, strings);
     REQUIRE(presentation.state().caption().has_value());

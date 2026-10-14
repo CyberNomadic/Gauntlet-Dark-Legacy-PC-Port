@@ -60,7 +60,7 @@ struct ContinuationFixture {
         scales.speed = info->tuning.enemySpeedScale(gain);
         scales.sight = info->tuning.enemySightScale(gain);
         scales.damage = info->tuning.enemyDamage;
-        scales.missileRate = info->tuning.enemyMissileRate;
+        scales.missileRate = info->tuning.enemyMissileWaitScale(gain);
         scales.missileAim = info->tuning.enemyMissileAim;
         scales.playerLevel = info->tuning.playerLevel;
         scales.bossEncounter = info->bossType >= 0;

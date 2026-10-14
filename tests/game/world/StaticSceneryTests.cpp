@@ -47,7 +47,7 @@ TEST_CASE("ordinary scenery opts into each static model name without weakening t
     const ItemInstance instance;
     CHECK_FALSE(strict.place(device, archive, "PROP", instance, nullptr));
     CHECK_FALSE(strict.hasFigure());
-    CHECK(strict.placeStaticFallback(device, archive, "PROP", instance, nullptr, 0));
+    CHECK(strict.placeStaticFallback(device, AssetScope(archive), "PROP", instance, nullptr, 0));
     CHECK(strict.hasFigure());
     strict.update(1.0f / 30);
     strict.draw(device, Mat4{1}, WorldLighting{});
@@ -75,7 +75,7 @@ TEST_CASE("static item scenery is grounded, cylindrical and follows its supporti
     collision.setMovingObjects(moving);
     collision.setObjectTransform(7, Mat4{1});
     StaticScenery props;
-    props.bind(device, layout, archive, &collision);
+    props.bind(device, layout, AssetScope(archive), &collision);
     REQUIRE(props.size() == 1);
     CHECK(props.prop(0).figure.hasFigure());
     CHECK(props.prop(0).figure.position().y == Approx(0.1f));
@@ -113,7 +113,7 @@ TEST_CASE("scenery borrows missing realm meshes but preserves a level's animatio
     REQUIRE(level.load(levelDir));
     test::FakeRenderDevice device;
     StaticScenery props;
-    props.bind(device, layout, level, nullptr, &realm);
+    props.bind(device, layout, AssetScope(level, &realm), nullptr);
     REQUIRE(props.size() == 1);
     CHECK(props.prop(0).figure.hasFigure());
     CHECK(props.prop(0).figure.nodeTransform("PROP").has_value());
@@ -121,7 +121,7 @@ TEST_CASE("scenery borrows missing realm meshes but preserves a level's animatio
     writeTextFile(levelDir / "animations.json", R"({"trees":[{"name":"PROP",
       "nodes":[{"name":"LEVEL_OVERRIDE","object":"WALL","parent":-1,"position":[0,0,0]}]}]})");
     REQUIRE(level.load(levelDir));
-    props.bind(device, layout, level, nullptr, &realm);
+    props.bind(device, layout, AssetScope(level, &realm), nullptr);
     REQUIRE(props.size() == 1);
     CHECK(props.prop(0).figure.nodeTransform("LEVEL_OVERRIDE").has_value());
     CHECK_FALSE(props.prop(0).figure.nodeTransform("PROP").has_value());
@@ -146,7 +146,7 @@ TEST_CASE("static scenery respects no-geometry, no-floor and exact-party authori
     WorldCollision collision;
     collision.build({floor});
     StaticScenery props;
-    props.bind(device, layout, archive, &collision);
+    props.bind(device, layout, AssetScope(archive), &collision);
     REQUIRE(props.size() == 1); // positive subtype overrides belong to other handlers
     CHECK_FALSE(props.prop(0).figure.hasFigure());
     CHECK(props.prop(0).figure.position().y == 2);
@@ -193,7 +193,7 @@ TEST_CASE("every catalogued native exit sign has a renderable static item model"
                 own.load(root / level->ownItems);
             }
             StaticScenery props;
-            props.bind(device, layout, own.loaded() ? own : archive, nullptr, &archive);
+            props.bind(device, layout, AssetScope(own.loaded() ? own : archive, &archive), nullptr);
             REQUIRE(props.size() > 0);
             for (usize i = 0; i < props.size(); ++i) {
                 const auto& prop = props.prop(i);

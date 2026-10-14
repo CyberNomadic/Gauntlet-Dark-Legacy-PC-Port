@@ -93,7 +93,8 @@ struct Fixture {
                              &world.collision()));
         figure.play(0, true);
         REQUIRE(catalog.load(root));
-        REQUIRE(portals.bind(device, world.layout(), archive, catalog, &world.collision()));
+        REQUIRE(
+            portals.bind(device, world.layout(), AssetScope(archive), catalog, &world.collision()));
         REQUIRE(portals.size() == 1);
         REQUIRE(portals.portal(0).secret);
         effect = effects.startSet(device, archive, "SPRAY", {3, 4, 5}, {.seconds = 3});
@@ -304,7 +305,7 @@ TEST_CASE("stage figure collection preserves native eligibility order pass and b
     fixtures.setPlayerCount(players);
     const std::array visitor{
         ChestVisitor{.position = fixtures.chests().chest(0).figure.position(), .xray = true}};
-    REQUIRE(fixtures.chests().updateXray(device, world.items(), world.items(), 0, visitor) == 1);
+    REQUIRE(fixtures.chests().updateXray(device, world.itemScope(), world.items(), visitor) == 1);
     REQUIRE(fixtures.chests().chest(0).preview.hasFigure());
     auto rows = StageParticlePresentation::collectFigures(world, fixtures, opponents);
     REQUIRE(rows);
@@ -365,8 +366,9 @@ TEST_CASE(
         fixture.step(1.0f / 60);
     }
     if (kind == 2) {
-        REQUIRE(fixture.figure.placeStaticFallback(fixture.device, fixture.archive, "WALL",
-                                                   {.position = Vec3{2, 3, 4}}, nullptr, 0));
+        REQUIRE(fixture.figure.placeStaticFallback(fixture.device, AssetScope(fixture.archive),
+                                                   "WALL", {.position = Vec3{2, 3, 4}}, nullptr,
+                                                   0));
     }
     CameraFrame camera;
     camera.right = {0, 0, 1};

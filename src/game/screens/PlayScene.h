@@ -155,6 +155,9 @@ public:
     PlayOutcome update(f64 deltaSeconds, const Inputs& inputs);
     /** Silence ambience and drain loops before the options menu stops gameplay updates. */
     void pauseGameplaySounds();
+    /** The pause menu holds the level's sounds and speech where they are, and lets them go. */
+    void holdSounds() { m_audio.holdSounds(); }
+    void releaseSounds() { m_audio.releaseSounds(); }
     void render(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth, f32 frameHeight,
                 bool optionsOpen = false, f32 frameBlend = -1.0f);
 

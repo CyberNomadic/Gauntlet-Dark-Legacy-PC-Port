@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 
@@ -17,8 +18,6 @@ namespace gdl::game {
 namespace {
 
 constexpr f32 kTicksPerSecond = 60.0f;
-constexpr f32 kFloorReachAbove = 0.5f;
-constexpr f32 kFloorReachBelow = 3.0f;
 constexpr usize kTagAt = 4; ///< where an exit's parameters keep its two characters
 
 } // namespace
@@ -39,22 +38,17 @@ s32 ExitPortals::gateOf(std::string_view tag) {
 
 /** Puts the EXIT_OFF figure (a lone mesh of the item archives) in a portal's place and marks
  * it shut, as the original swaps the object and inactivates the item. */
-void ExitPortals::shut(RenderDevice& device, Portal& portal, ItemArchive& items,
-                       ItemArchive* realmItems) {
+void ExitPortals::shut(RenderDevice& device, Portal& portal, const AssetScope& scope) {
     portal.shut = true;
-    for (ItemArchive* archive : {&items, realmItems}) {
-        if (archive == nullptr || !archive->loaded() ||
-            !archive->models.find(TowerAccess::kOffFigure).has_value()) {
-            continue;
-        }
+    if (const auto hit = scope.findObject(TowerAccess::kOffFigure)) {
         TreeInfo tree;
         tree.name = std::string(TowerAccess::kOffFigure);
         TreeNodeInfo node;
         node.name = tree.name;
-        node.object = tree.name;
+        node.object = hit->name;
         tree.nodes.push_back(node);
-        if (portal.model.bind(tree, archive->models, archive->textures, device)) {
-            portal.archive = archive;
+        if (portal.model.bind(tree, hit->archive->models, hit->archive->textures, device)) {
+            portal.archive = hit->archive;
             return;
         }
     }
@@ -83,7 +77,8 @@ std::vector<ExitPortals::Contact> ExitPortals::contacts(const WorldLayout& layou
         portal.position = instance.position;
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
             if (const auto floor =
-                    collision->floorAt(instance.position, kFloorReachAbove, kFloorReachBelow);
+                    collision->floorAt(instance.position, ItemFigure::kFloorReachAbove,
+                                       ItemFigure::kFloorReachBelow, ItemFigure::kFloorReachRadius);
                 floor.has_value()) {
                 portal.position.y = floor->y + kFloorLift;
             }
@@ -107,15 +102,15 @@ std::vector<ExitPortals::Contact> ExitPortals::contacts(const WorldLayout& layou
     return result;
 }
 
-bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
+bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
                        const LevelCatalog& catalog, const WorldCollision* collision,
-                       ItemArchive* realmItems, const TowerAccess* access) {
+                       const TowerAccess* access) {
     clear();
     m_collision = collision;
-    ItemArchive& art = itemArchiveForTree(items, kFigure, realmItems);
-    const auto tree = art.loaded() ? art.trees.find(kFigure) : std::nullopt;
+    ItemArchive* art = scope.archiveForTree(kFigure);
+    const auto tree = art != nullptr ? art->trees.find(kFigure) : std::nullopt;
     if (tree.has_value()) {
-        m_tree = &art.trees.tree(*tree);
+        m_tree = &art->trees.tree(*tree);
         for (usize i = 0; i < kSequences.size(); ++i) {
             const auto sequence = m_tree->findSequence(kSequences[i]);
             m_sequences[i] = sequence.has_value() ? static_cast<s32>(*sequence) : -1;
@@ -129,15 +124,14 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, ItemArch
         portal.tag = tagOf(instance);
         portal.destination = catalog.byTag(portal.tag);
         if (portal.secret) {
-            ItemArchive& iconArt = itemArchiveForTree(items, info.name, realmItems);
-            portal.icon.place(device, iconArt, info.name, instance, collision);
+            portal.icon.place(device, scope, info.name, instance, collision);
             portal.icon.play(0, true);
         } else if (access != nullptr && portal.destination.has_value() &&
                    !access->portalOpen(portal.destination->realmId, gateOf(portal.tag))) {
-            shut(device, portal, items, realmItems);
+            shut(device, portal, scope);
         } else if (m_tree != nullptr &&
-                   portal.model.bind(*m_tree, art.models, art.textures, device)) {
-            portal.archive = &art;
+                   portal.model.bind(*m_tree, art->models, art->textures, device)) {
+            portal.archive = art;
             portal.pose.rest(*m_tree);
         }
         m_portals.push_back(std::move(portal));

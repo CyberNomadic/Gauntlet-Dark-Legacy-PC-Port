@@ -70,6 +70,13 @@ public:
      * passes and presents establish committed replay and presentation. Legacy
      * means combat without Stage, not the separate local movement predictor.
      * Timings surround the existing calls, never another decode or simulation. */
+    struct Timing {
+        u64 count = 0;
+        u64 nanoseconds = 0;
+        u64 maximumNanoseconds = 0;
+        void add(u64 elapsed);
+        bool operator==(const Timing&) const = default;
+    };
     struct Counters {
         u64 updates = 0;
         u64 passes = 0;
@@ -84,6 +91,20 @@ public:
         u64 decodeFailures = 0;
         u64 decodeNanoseconds = 0;
         u64 advanceNanoseconds = 0;
+        u64 restorePasses = 0;
+        u64 appendPasses = 0;
+        u64 reusedPasses = 0;
+        u64 attemptedTicks = 0;
+        u64 maximumTicksPerPass = 0;
+        Timing passCost;
+        Timing seedCost;
+        Timing decodeCost;
+        Timing restoreCost;
+        Timing advanceCost;
+        Timing captureCost;
+        Timing prepareCost;
+        Timing postconditionCost;
+        Timing pictureCost;
         std::array<u64, static_cast<usize>(Refusal::Count)> reasons{};
         std::array<u64, static_cast<usize>(OrdinaryCombatCheckpoint::RestoreIssue::Count)>
             seedIssues{};

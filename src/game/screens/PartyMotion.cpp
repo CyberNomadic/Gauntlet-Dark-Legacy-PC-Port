@@ -220,14 +220,6 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
             players[i].capture.clear();
             players[i].transport.clear();
             players[i].knockback.clear();
-        } else if (players[i].transport.active()) {
-            players[i].knockback.clear();
-            actor.update({}, cameraYaw, seconds, nullptr);
-            if (players[i].figure != nullptr) {
-                players[i].figure->animate(0, ticks, seconds, PlayerDeed::None);
-            }
-            subjects.push_back({actor.position(), actor.followPoint()});
-            continue;
         } else if (players[i].capture.active()) {
             players[i].knockback.clear();
             PlayerCapture& capture = players[i].capture;

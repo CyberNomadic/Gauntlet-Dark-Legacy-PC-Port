@@ -99,8 +99,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     // stands coming back (fn_8005B5B8, SetPlayerStartPos).
     m_towerAccess = world.isTower() ? TowerAccess{party} : TowerAccess{};
     if (context.levels != nullptr) {
-        m_portals.bind(device, world.layout(), world.items(), *context.levels, &world.collision(),
-                       &world.realmItems(), world.isTower() ? &m_towerAccess : nullptr);
+        m_portals.bind(device, world.layout(), world.itemScope(), *context.levels,
+                       &world.collision(), world.isTower() ? &m_towerAccess : nullptr);
         for (const ExitPortals::ShutGate& gate : m_portals.shutGates()) {
             world.shutPortalGlow(gate.world, gate.gate);
         }
@@ -128,8 +128,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     if (!world.ref().isSecret()) {
         m_hud.showRelics();
     }
-    m_transporters.bind(device, world.layout(), world.items(), static_cast<s32>(m_players.size()),
-                        &world.realmItems());
+    m_transporters.bind(device, world.layout(), world.itemScope(),
+                        static_cast<s32>(m_players.size()), &world.collision());
     for (const DroppedItem& item : options.items) {
         world.placeItem(device, item.name, item.position);
     }
@@ -650,7 +650,7 @@ LevelOpponents::Events PlayScene::opponentEvents() {
             },
         .spew =
             [this](const CombatSpew& spew) {
-                m_bossSequence.spewCoins(spew, m_opponents, m_players);
+                m_bossSequence.spewCoins(spew, m_opponents, m_fixtures, m_players);
             },
         .advanceVictory = [this](s32 elapsed, f32 duration) { updateVictory(elapsed, duration); },
         .levels = [this] { updateLevels(); },
@@ -954,6 +954,13 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
         }
         m_bossSequence.advanceLegend(0, m_opponents.bosses(), m_players);
         m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
+        // The entrance holds the enemies still, unless the level has them early (world_update's
+        // earlyenemies: the Mountain's Peak).
+        if (const LevelInfo* level = m_world->level(); level != nullptr && level->earlyEnemies) {
+            updateEnemies(ticks, seconds);
+        } else {
+            m_opponents.bosses().arm(seconds);
+        }
         updateAmbience();
         const bool cameraHandoff = m_arrival.camera().active();
         // Ride to the camera that will actually take over. A boss entrance must not
@@ -1029,6 +1036,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     }
     m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
     m_opponents.syncFloors();
+    m_transporters.syncFloors(m_world->collision());
     m_world->revealCrystals(seconds);
     m_hud.pickups().step(ticks, seconds);
     m_sumner.update(seconds);
@@ -1085,6 +1093,7 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     m_world->updateTriggers(seconds, visitors());
     m_fixtures.syncFloors();
     m_opponents.syncFloors();
+    m_transporters.syncFloors(m_world->collision());
     handleTriggerEvents();
     if (m_switchCutscene.active()) {
         updateAmbience();

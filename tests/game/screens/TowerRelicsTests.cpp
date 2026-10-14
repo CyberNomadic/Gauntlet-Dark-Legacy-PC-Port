@@ -92,8 +92,14 @@ TEST_CASE("tower ceremonies hold for speech then placement and complete once in 
     REQUIRE(display.phase() == TowerRelics::Phase::Speech);
     REQUIRE(display.update(1, 0, false).placement);
     REQUIRE(display.phase() == TowerRelics::Phase::Placement);
-    REQUIRE_FALSE(display.update(60, 1, false).completed);
-    const auto complete = display.update(60, 1, false).completed;
+    // The pane sounds its strike 91 ticks after the shard sets out (the window camera's
+    // forty ticks and its count from 300 to 250), not when the flight is over.
+    const auto flying = display.update(60, 1, false);
+    REQUIRE_FALSE(flying.completed);
+    REQUIRE(flying.sound.empty());
+    const auto struck = display.update(60, 1, false);
+    REQUIRE(struck.sound == "S_STNDGLASS");
+    const auto complete = struck.completed;
     REQUIRE(complete.has_value());
     REQUIRE(complete->kind == TowerRelics::Kind::Shard);
     REQUIRE(display.displayedShards() == 2);

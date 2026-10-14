@@ -10,6 +10,7 @@
 #include "engine/assets/WorldData.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -43,7 +44,7 @@ TEST_CASE("transporters link ids rather than instance order and reject missing p
     test::FakeRenderDevice device;
     ItemArchive items;
     LevelTransporters pads;
-    pads.bind(device, layout, items, 1);
+    pads.bind(device, layout, AssetScope(items), 1);
     REQUIRE(pads.size() == 3);
     CHECK(pads.pad(0).destination == 1);
     CHECK(pads.pad(1).destination == 0);
@@ -63,10 +64,72 @@ TEST_CASE("transporters link ids rather than instance order and reject missing p
     WorldCamera away;
     away.position.z = 30;
     CHECK_FALSE(pads.landing(0, 0.75f, collision, away, {}));
-    pads.bind(device, layout, items, 2);
+    pads.bind(device, layout, AssetScope(items), 2);
     CHECK(pads.size() == 4);
     pads.clear();
     CHECK(pads.size() == 0);
+}
+
+TEST_CASE("transporter pads ride their moving floor with their art, contact and landing point",
+          "[transporters][transporter-platform]") {
+    const auto dir = test::sampleLevel("transporters-moving-floor");
+    writeTextFile(dir / "world.json", R"({
+      "objects":[{"name":"LIFT","position":[10,5,20],"flags":4102}],
+      "itemInfos":[{"type":11,"name":"TRANS","radius":3,"height":4}],
+      "itemInstances":[
+        {"info":0,"position":[12,5,23],"rotation":[0,0,0],"params":[1,0,0,0,2,0,0,0,0,0,0,0]},
+        {"info":0,"position":[-20,0,-20],"rotation":[0,0,0],"params":[2,0,0,0,1,0,0,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    WorldCollision collision;
+    collision.build(
+        {CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{30, 0, 30}, Vec3{30, 0, -30}},
+                           .object = 0},
+         CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{-30, 0, 30}, Vec3{30, 0, 30}},
+                           .object = 0}});
+    collision.setMovingObjects(std::array<s32, 1>{0});
+    collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{10, -15, 20}));
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    LevelTransporters pads;
+    pads.bind(device, layout, AssetScope(items), 1, &collision);
+    auto contacts = LevelTransporters::contacts(layout, 1, &collision);
+    REQUIRE(pads.size() == 2);
+    REQUIRE(contacts.size() == pads.size());
+    REQUIRE(pads.pad(0).support == 0);
+    CHECK(pads.pad(1).support == -1); // off the lift, on no floor: it stands where authored
+    const Mat4 moved =
+        glm::rotate(glm::translate(Mat4{1}, Vec3{30, 10, 40}), 1.57079637f, Vec3{0, 1, 0});
+    collision.setSolid(0, false);
+    collision.setObjectTransform(0, moved);
+    pads.syncFloors(collision);
+    for (auto& contact : contacts) {
+        contact.sync(collision);
+    }
+    const Vec3 expected{moved * Vec4{2, 0, 3, 1}}; // the authored spot, in the lift's space
+    CHECK(glm::distance(pads.pad(0).position, expected) < 0.001f);
+    CHECK(glm::distance(Vec3{pads.pad(0).transform[3]},
+                        expected + Vec3{0, ItemFigure::kFloorLift, 0}) < 0.001f);
+    // Standing where the pad now is finds it; where it was authored no longer does.
+    CHECK(pads.contact(expected, 0.75f, 2.0f) == 0);
+    CHECK_FALSE(pads.contact(Vec3{12, 5, 23}, 0.75f, 2.0f).has_value());
+    for (usize index = 0; index < contacts.size(); ++index) {
+        CHECK(contacts[index].position == pads.pad(index).position);
+        CHECK(contacts[index].transform == pads.pad(index).transform);
+        CHECK(contacts[index].support == pads.pad(index).support);
+        CHECK(contacts[index].destination == pads.pad(index).destination);
+    }
+    CHECK(contacts[0].touches(expected, 0.75f, 2.0f));
+    CHECK_FALSE(contacts[0].touches(Vec3{12, 5, 23}, 0.75f, 2.0f));
+
+    // A rollback checker may revisit an earlier world pose. The floor-local
+    // anchor, rather than the last drawn world position, determines contact.
+    collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{10, 5, 20}));
+    pads.syncFloors(collision);
+    contacts[0].sync(collision);
+    CHECK(contacts[0].position == pads.pad(0).position);
+    CHECK(contacts[0].touches(Vec3{12, 5, 23}, 0.75f, 2.0f));
+    CHECK_FALSE(contacts[0].touches(expected, 0.75f, 2.0f));
 }
 
 TEST_CASE("a transporter destination must fit within the shared camera", "[transporters]") {
@@ -140,7 +203,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     REQUIRE(realm.load(root / "realm"));
     REQUIRE(layout.load(root));
     LevelTransporters pads;
-    pads.bind(device, layout, own, 1, &realm);
+    pads.bind(device, layout, AssetScope(own, &realm), 1);
     REQUIRE(pads.size() == 1);
     REQUIRE(pads.pad(0).model.bound());
     CHECK(pads.pad(0).animation.playing());
@@ -153,7 +216,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     CHECK(device.draws[0].state.depthTest);
     CHECK(device.draws[0].state.depthWrite);
     ExitPortals exits;
-    REQUIRE(exits.bind(device, layout, own, catalog, nullptr, &realm));
+    REQUIRE(exits.bind(device, layout, AssetScope(own, &realm), catalog, nullptr));
     REQUIRE(exits.size() == 2);
     CHECK(exits.portal(0).model.bound());
     CHECK(exits.portal(1).icon.hasFigure());
@@ -161,9 +224,9 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     Chests chests;
     LockedGates gates;
     Breakables barrels;
-    REQUIRE(chests.bind(device, layout, own, nullptr, &realm));
-    REQUIRE(gates.bind(device, layout, own, nullptr, &realm));
-    REQUIRE(barrels.bind(device, layout, own, nullptr, &realm));
+    REQUIRE(chests.bind(device, layout, AssetScope(own, &realm), nullptr));
+    REQUIRE(gates.bind(device, layout, AssetScope(own, &realm), nullptr));
+    REQUIRE(barrels.bind(device, layout, AssetScope(own, &realm), nullptr));
     REQUIRE(chests.size() == 1);
     REQUIRE(gates.size() == 1);
     REQUIRE(barrels.size() == 1);
@@ -184,7 +247,7 @@ TEST_CASE("placed item art falls back per tree without replacing level-specific 
     }
     ItemArchive powerups;
     const std::array visitors{ChestVisitor{Vec3{33, 0, 0}, 0.75f, 0, true}};
-    REQUIRE(chests.updateXray(device, own, powerups, 0, visitors, &realm) == 1);
+    REQUIRE(chests.updateXray(device, AssetScope(own, &realm), powerups, visitors) == 1);
     CHECK(chests.chest(0).revealed);
     CHECK(chests.chest(0).preview.hasFigure());
     // The borrowed realm remains loaded and reusable after releasing all consumers.
@@ -275,7 +338,7 @@ TEST_CASE("every catalogued transporter has a partner, a landing floor and anima
             LevelWorld world;
             REQUIRE(world.load(device, root, *ref));
             LevelTransporters pads;
-            pads.bind(device, layout, world.items(), players, &world.realmItems());
+            pads.bind(device, layout, world.itemScope(), players);
             for (usize i = 0; i < pads.size(); ++i) {
                 const auto& pad = pads.pad(i);
                 CAPTURE(i, pad.id, pad.destinationId);
@@ -308,7 +371,7 @@ TEST_CASE("Castle transporters clear their supporting ground without bypassing w
     LevelWorld world;
     REQUIRE(world.load(device, root, *ref));
     LevelTransporters pads;
-    pads.bind(device, world.layout(), world.items(), 1, &world.realmItems());
+    pads.bind(device, world.layout(), world.itemScope(), 1);
     REQUIRE(pads.size() > 0);
     const auto& instances = world.layout().itemInstances();
     for (usize i = 0; i < pads.size(); ++i) {

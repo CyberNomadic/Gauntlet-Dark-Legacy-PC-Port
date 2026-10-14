@@ -13,6 +13,21 @@
 
 namespace gdl::game {
 namespace {
+using ReplayClock = std::chrono::steady_clock;
+u64 elapsedNanoseconds(ReplayClock::time_point begin) {
+    return static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(ReplayClock::now() - begin).count());
+}
+class MeasureReplayCost {
+public:
+    explicit MeasureReplayCost(OnlineCombatReplay::Timing& destination)
+        : m_destination(destination), m_begin(ReplayClock::now()) {}
+    ~MeasureReplayCost() { m_destination.add(elapsedNanoseconds(m_begin)); }
+
+private:
+    OnlineCombatReplay::Timing& m_destination;
+    ReplayClock::time_point m_begin;
+};
 bool sameInput(const InputCommand& first, const InputCommand& second) {
     const auto real = [](f32 a, f32 b) { return std::bit_cast<u32>(a) == std::bit_cast<u32>(b); };
     return first.epoch == second.epoch && first.tick == second.tick &&
@@ -26,6 +41,11 @@ bool sameInput(const InputCommand& first, const InputCommand& second) {
            first.heldButtons == second.heldButtons && first.pressedButtons == second.pressedButtons;
 }
 } // namespace
+void OnlineCombatReplay::Timing::add(u64 elapsed) {
+    ++count;
+    nanoseconds += elapsed;
+    maximumNanoseconds = std::max(maximumNanoseconds, elapsed);
+}
 OnlineCombatReplay::Domain OnlineCombatReplay::domainOf(const CombatSnapshot* state) {
     if (state == nullptr || !state->combatState || !state->combatFrame || !state->opponents ||
         !state->opponentFrame) {
@@ -99,6 +119,8 @@ u64 OnlineCombatReplay::tick() const {
 
 std::unique_ptr<CombatSnapshot>
 OnlineCombatReplay::picture(std::shared_ptr<const StageParticlePresentation>& particles) const {
+    const MeasureReplayCost measured{
+        m_diagnostics.domains[static_cast<usize>(m_domain)].pictureCost};
     particles.reset();
     if (!m_authority || m_prediction == nullptr || !m_prediction->active() ||
         m_prediction->enemies() == nullptr) {
@@ -134,15 +156,23 @@ bool OnlineCombatReplay::update(const CombatSnapshot* authority,
     m_domain = domainOf(incoming ? authority : m_authority.get());
     auto& counters = m_diagnostics.domains[static_cast<usize>(m_domain)];
     ++counters.updates;
+    const MeasureReplayCost measured{counters.passCost};
+    const auto attemptsBefore = counters.attemptedTicks;
+    const auto finish = [&] {
+        counters.maximumTicksPerPass =
+            std::max(counters.maximumTicksPerPass, counters.attemptedTicks - attemptsBefore);
+    };
     try {
         const bool accepted = updatePass(authority, sent);
         counters.passes += accepted ? 1 : 0;
+        finish();
         return accepted;
     } catch (...) {
         // Presentation allocation or a refused native restore must never leave
         // a partly replayed party available to the next rendered frame.
         discard();
         refuse(Refusal::Exception);
+        finish();
         throw;
     }
 }
@@ -266,6 +296,7 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         return refuse(Refusal::SeedRestore);
     }
     if (!m_seed) {
+        const MeasureReplayCost measured{counters.seedCost};
         auto seed = std::make_unique<OrdinaryCombatCheckpoint::State>();
         seed->combat = m_authority->combatState->combat;
         seed->opponents = *m_authority->opponents;
@@ -273,10 +304,9 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
         if (m_authority->combatState->stage) {
             const auto begin = std::chrono::steady_clock::now();
             seed->stage = m_prediction->decodeStage(*m_authority->combatState->stage);
-            counters.decodeNanoseconds +=
-                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now() - begin)
-                                     .count());
+            const auto duration = elapsedNanoseconds(begin);
+            counters.decodeNanoseconds += duration;
+            counters.decodeCost.add(duration);
             ++counters.decodeAttempts;
             if (!seed->stage) {
                 ++counters.decodeFailures;
@@ -295,6 +325,8 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
                        return std::equal(first.begin(), first.end(), second.begin(), sameInput);
                    });
     if (!continuing) {
+        ++counters.restorePasses;
+        const MeasureReplayCost measured{counters.restoreCost};
         discard();
         OrdinaryCombatCheckpoint::RestoreIssue seedIssue{};
         if (!m_prediction->begin(m_context.epoch, baseline, *m_seed, &seedIssue)) {
@@ -304,7 +336,10 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
     } else if (m_executed.size() == effective.size()) {
         // Preserve the complete previous/current pair and its native particle
         // history. A repeated publication is not a simulation or render step.
+        ++counters.reusedPasses;
         return true;
+    } else {
+        ++counters.appendPasses;
     }
     auto frame = continuing ? *m_nextFrame : *m_authority->combatFrame;
     for (usize index = m_executed.size(); index < effective.size(); ++index) {
@@ -324,11 +359,20 @@ bool OnlineCombatReplay::updatePass(const CombatSnapshot* authority,
             }
         }
         const auto begin = std::chrono::steady_clock::now();
+        ++counters.attemptedTicks;
         const auto result = m_prediction->advance(tick, inputs, frame);
-        counters.advanceNanoseconds +=
-            static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                 std::chrono::steady_clock::now() - begin)
-                                 .count());
+        const auto duration = elapsedNanoseconds(begin);
+        counters.advanceNanoseconds += duration;
+        counters.advanceCost.add(duration);
+        if (result.timings.captureNanoseconds) {
+            counters.captureCost.add(*result.timings.captureNanoseconds);
+        }
+        if (result.timings.prepareNanoseconds) {
+            counters.prepareCost.add(*result.timings.prepareNanoseconds);
+        }
+        if (result.timings.postconditionNanoseconds) {
+            counters.postconditionCost.add(*result.timings.postconditionNanoseconds);
+        }
         if (result.status != OrdinaryCombatTick::Status::Advanced) {
             discard();
             ++counters.tickRefusals[static_cast<usize>(result.refusal)];

@@ -51,6 +51,7 @@ struct LevelRecord {
     std::string audioBank;  ///< usually empty; the audio record names the bank
     std::string movie;
     s32 bossType = 0;
+    s32 earlyEnemies = 0;            ///< nonzero: the enemies go about during the entrance
     std::array<s16, 6> enemyTypes{}; ///< rows of the realm's enemies the level uses; -1 none
     s16 cameraIndex = -1;
     s16 audioIndex = -1;

@@ -56,6 +56,10 @@ TEST_CASE("a pickup count shows for three seconds", "[game][screens][hud]") {
     REQUIRE(hud.count(0).count == 3);
     REQUIRE(hud.count(0).total == 15);
     REQUIRE_FALSE(hud.count(1).showing());
+    // A realm already completed keeps a record under nought; it reads as full, not "-1".
+    hud.showCount(1, PickupHud::crystalIcon(2), -1, 100);
+    REQUIRE(hud.count(1).count == 100);
+    REQUIRE(hud.count(1).total == 100);
     hud.step(0, 2.9f);
     REQUIRE(hud.count(0).showing());
     hud.step(0, 0.2f);

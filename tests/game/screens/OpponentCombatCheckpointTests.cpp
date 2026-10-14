@@ -474,6 +474,14 @@ TEST_CASE("opponent adapter preserves defeated critters and their pending reward
     const auto dead = fixture.adapter.checkpoint(fixture.visual());
     REQUIRE(dead);
     CHECK_FALSE(dead->critters.events.losses.empty());
+    REQUIRE(dead->critters.actors[static_cast<usize>(*general)].parts.size() == 1);
+    const auto& retired = dead->critters.actors[static_cast<usize>(*general)].parts.front();
+    CHECK(retired.actor.definition.resource == 0);
+    CHECK(retired.id == *general);
+    auto foreignSlot = *dead;
+    foreignSlot.critters.actors[static_cast<usize>(*general)].parts.front().id = *general + 1;
+    CHECK_FALSE(foreignSlot.valid());
+    CHECK_FALSE(fixture.adapter.prepareRestore(foreignSlot, fixture.visual()));
     REQUIRE(fixture.adapter.canCommit(*undo));
     REQUIRE(fixture.adapter.commitRestore(std::move(*undo)));
     CHECK(fixture.adapter.checkpoint(fixture.visual()) == alive);

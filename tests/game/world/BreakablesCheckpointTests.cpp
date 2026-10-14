@@ -71,7 +71,7 @@ struct Fixture {
             collision.setMovingObjects(std::array<s32, 1>{0});
             collision.setObjectTransform(0, Mat4{1});
         }
-        REQUIRE(barrels.bind(device, layout, items, moving ? &collision : nullptr));
+        REQUIRE(barrels.bind(device, layout, AssetScope(items), moving ? &collision : nullptr));
         barrels.setPlayerCount(2);
         REQUIRE(barrels.size() == 6);
     }
@@ -244,8 +244,7 @@ TEST_CASE("native campaign barrel snapshots preserve their full original placeme
     LevelWorld world;
     REQUIRE(world.load(device, root, *catalog.byName(name)));
     Breakables barrels;
-    REQUIRE(barrels.bind(device, world.layout(), world.items(), &world.collision(),
-                         &world.realmItems()));
+    REQUIRE(barrels.bind(device, world.layout(), world.itemScope(), &world.collision()));
     BreakablesCheckpoint owner(barrels);
     const auto before = owner.checkpoint();
     REQUIRE(before);

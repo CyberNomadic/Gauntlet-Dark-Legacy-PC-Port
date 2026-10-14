@@ -4,6 +4,7 @@
 #include <cmath>
 #include <format>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 
@@ -56,29 +57,24 @@ bool SafeRocks::bind(RenderDevice& device, const WorldLayout& layout, ItemArchiv
         for (s32 tier = 0; tier <= kWhole; ++tier) {
             const std::string base = std::format("{}{}", info.name, tier);
             bool found = false;
-            for (const char* suffix : {"", "L1", "L1ROOT"}) {
-                const auto index = items.models.find(base + suffix);
-                if (!index.has_value()) {
-                    continue;
-                }
+            if (const auto object = AssetScope(items).findObject(base)) {
                 TreeInfo tree;
                 tree.name = base;
                 TreeNodeInfo node;
                 node.name = base;
-                node.object = items.models.entry(*index).name;
+                node.object = object->name;
                 node.objectFlags = info.objectFlags;
                 tree.nodes.push_back(node);
                 found = rock->models[static_cast<usize>(tier)].bind(tree, items.models,
                                                                     items.textures, device);
                 if (found) {
-                    for (const MeshPart& part : items.models.mesh(*index).parts) {
+                    for (const MeshPart& part : items.models.mesh(object->index).parts) {
                         if (std::ranges::find(m_textureSlots, part.texture) ==
                             m_textureSlots.end()) {
                             m_textureSlots.push_back(part.texture);
                         }
                     }
                 }
-                break;
             }
             if (!found) {
                 log::warn("Safe rocks: no model for {}", base);

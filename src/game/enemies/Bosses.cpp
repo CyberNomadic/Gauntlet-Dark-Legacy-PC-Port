@@ -36,6 +36,7 @@ void Bosses::close() {
     m_name.clear();
     m_awake = false;
     m_wakeDistance = 0.0f;
+    m_wakeClock = 0.0f;
     m_rite.clear();
     m_roarAsked = false;
     m_legendStruck = false;
@@ -216,6 +217,7 @@ bool Bosses::spawn(s32 kind, const Vec3& position, f32 yaw, f32 wakeDistance) {
     m_kind = kind;
     m_name = bossNameOf(kind);
     m_awake = false;
+    m_wakeClock = 0.0f;
     const CritterData* data = m_fighter.data();
     m_wakeDistance = wakeDistance;
     m_rewardOffset = rewardOffset();
@@ -234,14 +236,22 @@ void Bosses::update(s32 ticks, f32 seconds, std::span<const EnemyView> players) 
     if (!m_id.has_value()) {
         return;
     }
-    // Asleep until the party comes within its threshold; then it fights on until it falls.
+    // Asleep for two seconds at least, then until the whole party is within its threshold
+    // (CritterBossAI's activation deadline and MaxPlayerDist); then it fights on until it falls.
     if (!m_awake) {
+        m_wakeClock += seconds;
         const Vec3* at = position();
+        f32 farthest = 0.0f;
+        bool anyone = false;
         for (const EnemyView& view : players) {
-            if (at != nullptr && !view.hidden &&
-                (m_wakeDistance <= 0.0f || glm::distance(view.position, *at) <= m_wakeDistance)) {
-                m_awake = true;
+            if (at != nullptr && !view.hidden) {
+                farthest = std::max(farthest, glm::distance(view.position, *at));
+                anyone = true;
             }
+        }
+        if (m_wakeClock >= kWakeArmSeconds &&
+            (m_wakeDistance <= 0.0f || (anyone && farthest <= m_wakeDistance))) {
+            m_awake = true;
         }
         if (!m_awake) {
             return;

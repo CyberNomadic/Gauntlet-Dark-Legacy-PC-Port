@@ -77,9 +77,15 @@ public:
             bool operator==(const Particle&) const = default;
         };
         struct Shield {
+            struct Mark {
+                s32 kind = 0, id = 0;
+                f32 wait = 0;
+                bool operator==(const Mark&) const = default;
+            };
             usize actor = 0;
             u32 flags = 0, effect = 0;
-            f32 radius = 0, damage = 0, secondsLeft = 0, harmIn = 0;
+            f32 radius = 0, damage = 0, secondsLeft = 0;
+            std::vector<Mark> marks;
             std::vector<s32> blessed;
             bool operator==(const Shield&) const = default;
         };

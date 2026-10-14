@@ -48,7 +48,7 @@ struct Fixture {
         collision.build({{{0, 1, 0}, {Vec3{-8, 0, -8}, Vec3{8, 0, -8}, Vec3{0, 0, 8}}, 0, 4100}});
         collision.setMovingObjects(std::array<s32, 1>{0});
         collision.setObjectTransform(0, Mat4{1});
-        scenery.bind(device, layout, archive, &collision);
+        scenery.bind(device, layout, AssetScope(archive), &collision);
         REQUIRE(scenery.size() == 3);
         REQUIRE(scenery.prop(0).figure.hasFigure() == !missing);
         REQUIRE(scenery.prop(0).support.object() == 0);
@@ -169,7 +169,8 @@ TEST_CASE("scenery snapshot plans refuse malformed foreign or rebound owners ato
     CHECK_FALSE(fixture.owner.canCommit(*first));
     first = fixture.owner.prepareRestore(before);
     REQUIRE(first);
-    fixture.scenery.bind(fixture.device, fixture.layout, fixture.archive, &fixture.collision);
+    fixture.scenery.bind(fixture.device, fixture.layout, AssetScope(fixture.archive),
+                         &fixture.collision);
     CHECK_FALSE(fixture.owner.canCommit(*first));
     first = fixture.owner.prepareRestore(fixture.state());
     REQUIRE(first);
@@ -187,7 +188,7 @@ TEST_CASE("native Ghost Town scenery checkpoint restores trusted static exit sig
     LevelWorld world;
     REQUIRE(world.load(device, root, *catalog.byName("G1")));
     StaticScenery scenery;
-    scenery.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+    scenery.bind(device, world.layout(), world.itemScope(), &world.collision());
     REQUIRE(scenery.size() == 1);
     REQUIRE(scenery.prop(0).instance == 107);
     StaticSceneryCheckpoint owner(scenery);

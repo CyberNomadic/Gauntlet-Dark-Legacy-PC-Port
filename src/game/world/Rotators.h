@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -55,8 +56,7 @@ public:
     };
 
     void bind(const WorldLayout& layout);
-    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                     ItemArchive* realmItems = nullptr);
+    void bindFigures(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope);
     void clear();
     usize size() const { return m_rotators.size(); }
     const Rotator& rotator(usize index) const { return m_rotators[index]; }

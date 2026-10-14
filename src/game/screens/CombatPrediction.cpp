@@ -126,8 +126,7 @@ struct CombatPrediction::Data {
         effects.setTextureLenders(lenders);
         fixtures.bind({device, world, weapons, effects, audio, gain});
         fixtures.setPlayerCount(count);
-        portals.bind(device, world.layout(), world.items(), levelsCatalog, &world.collision(),
-                     &world.realmItems());
+        portals.bind(device, world.layout(), world.itemScope(), levelsCatalog, &world.collision());
         opponents.open({device, world, weapons, effects, audio, root, gain, true}, party);
         // Match the native scene's borrowed animation resources, including levels
         // with no safe rocks. Checkpoints retain this binding independently of

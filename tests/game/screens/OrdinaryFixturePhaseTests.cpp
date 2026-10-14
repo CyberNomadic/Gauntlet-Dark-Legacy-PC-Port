@@ -320,9 +320,8 @@ TEST_CASE("staged X-Ray refuses before creating the native chest preview",
     // staged path. Its WALL textures are already cached by the chest's figure;
     // a new figure does not imply another GPU texture upload.
     const std::array visitors{ChestVisitor{actor.position(), actor.radius(), 0, true}};
-    REQUIRE(fixture.fixtures.chests().updateXray(fixture.device, fixture.world.items(),
-                                                 fixture.world.powerups(), 0, visitors,
-                                                 &fixture.world.realmItems()) == 1);
+    REQUIRE(fixture.fixtures.chests().updateXray(fixture.device, fixture.world.itemScope(),
+                                                 fixture.world.powerups(), visitors) == 1);
     CHECK(fixture.fixtures.chests().chest(0).preview.hasFigure());
     CHECK(fixture.state().fixtures.chests != before.fixtures.chests);
     CHECK(fixture.device.texturesCreated == textures);
@@ -438,7 +437,7 @@ TEST_CASE("travel contact values retain native authored boundaries and party fil
     ItemArchive archive;
     LevelCatalog catalog;
     ExitPortals exits;
-    REQUIRE(exits.bind(device, layout, archive, catalog, nullptr));
+    REQUIRE(exits.bind(device, layout, AssetScope(archive), catalog, nullptr));
     const auto exitContacts = ExitPortals::contacts(layout, nullptr);
     REQUIRE(exitContacts.size() == exits.size());
     for (const f32 horizontal : {3.74f, 3.75f, 3.76f}) {
@@ -453,7 +452,7 @@ TEST_CASE("travel contact values retain native authored boundaries and party fil
     CHECK(exitContacts[0].touches({{4.75f, 3, 0}, .75f}, 1));
     LevelTransporters pads;
     for (const s32 party : {1, 2}) {
-        pads.bind(device, layout, archive, party);
+        pads.bind(device, layout, AssetScope(archive), party);
         const auto contacts = LevelTransporters::contacts(layout, party);
         REQUIRE(contacts.size() == pads.size());
         CHECK(contacts.size() == static_cast<usize>(party + 1));

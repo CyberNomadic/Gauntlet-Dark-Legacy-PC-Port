@@ -532,7 +532,9 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.effect, v.parent, v.node, v.offset);
     } else if constexpr (std::is_same_v<V, PlayerAttacksCheckpoint::State::Shield>) {
         index(a, v.actor);
-        fields(a, v.flags, v.effect, v.radius, v.damage, v.secondsLeft, v.harmIn, v.blessed);
+        fields(a, v.flags, v.effect, v.radius, v.damage, v.secondsLeft, v.marks, v.blessed);
+    } else if constexpr (std::is_same_v<V, PlayerAttacksCheckpoint::State::Shield::Mark>) {
+        fields(a, v.kind, v.id, v.wait);
     } else if constexpr (std::is_same_v<V, MoveStrikes::Checkpoint>) {
         fields(a, v.strikes, v.next);
     } else if constexpr (std::is_same_v<V, MoveStrikes::Strike>) {
@@ -623,7 +625,7 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.instance, v.figure, v.woken, v.rising, v.ticksLeft);
     } else if constexpr (std::is_same_v<V, CritterStatues::Placement>) {
         fields(a, v.kind, v.enemy, v.form, v.instance, v.radius, v.height, v.viewRadius, v.sight,
-               v.activeOn);
+               v.activeOn, v.onFloor);
         optionalIndex(a, v.carried);
     } else if constexpr (std::is_same_v<V, EnemySpawn>) {
         fields(a, v.zigZagSide, v.kind, v.tier, v.algorithm, v.position, v.direction, v.clearance,

@@ -138,6 +138,11 @@ class DockerLatencyTests(unittest.TestCase):
             directory = Path(temporary)
             for name in ('host-a', 'guest-b', 'guest-c'):
                 report = dict(self.report(), schema=3, workload='throw', status='complete', render_fps=60,
+                              stage='tower', loaded_stage='tower', scene_id=1,
+                              stage_probe_schema=1, stage_activity_scope='authority-checkpoints',
+                              stage_authority_observations=20, stage_enemy_frames=0,
+                              stage_enemy_motion_samples=0, stage_enemy_animation_samples=0,
+                              stage_enemy_peak=0, stage_opponent_seed_observations=20,
                               missed_motion=0, missed_throws=0,
                               motion_to_first_frame={'count': 10, 'p95_ms': 25},
                               throw_to_first_frame={'count': 10, 'p95_ms': 250 if name == 'guest-c' else 150},

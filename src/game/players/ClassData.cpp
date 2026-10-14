@@ -165,6 +165,20 @@ std::vector<s32> ClassStats::strikesOf(s32 first) const {
     return chain;
 }
 
+s32 baseClassOf(s32 classIndex) {
+    if (classIndex == kSumnerClass) {
+        return kWizardClass;
+    }
+    if (classIndex < 0 || classIndex >= kClassCount) {
+        return classIndex;
+    }
+    return classIndex % kStartingClassCount;
+}
+
+s32 archiveClassOf(s32 classIndex) {
+    return classIndex == kSumnerClass ? kWizardClass : classIndex;
+}
+
 std::string_view classCode(s32 classIndex) {
     if (classIndex < 0 || classIndex >= kClassCount) {
         return {};

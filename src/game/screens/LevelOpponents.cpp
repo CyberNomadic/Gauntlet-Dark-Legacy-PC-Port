@@ -458,7 +458,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
         scales.speed = level->tuning.enemySpeedScale(gain);
         scales.sight = level->tuning.enemySightScale(gain);
         scales.damage = level->tuning.enemyDamage;
-        scales.missileRate = level->tuning.enemyMissileRate;
+        scales.missileRate = level->tuning.enemyMissileWaitScale(gain);
         scales.missileAim = level->tuning.enemyMissileAim;
         scales.playerLevel = level->tuning.playerLevel;
         scales.bossEncounter = level->bossType >= 0;
@@ -575,6 +575,38 @@ void LevelOpponents::wakeStatueNear(const Vec3& spot) {
         }
     }
     m_statues.wake(statue->first);
+}
+
+/** Each birth of a body whose reach is past two (the medium and large kinds) is marked by
+ * the realm's burst for its tier, GENFX1 to GENFX3 (generate_enemy). The level finds them
+ * once, in the first loaded kind's archive holding them, kind by kind in order (InitEffects),
+ * a tier without its own sharing the first's, and only the kinds up to that one are marked. */
+bool LevelOpponents::playBirths(const BirthPublisher& publish) {
+    const auto births = m_enemies.takeBirths();
+    if (births.empty()) {
+        return true;
+    }
+    std::array<ItemArchive*, kSwarmKindCount> archives{};
+    for (s32 kind = 0; kind < kSwarmKindCount; ++kind) {
+        archives[static_cast<usize>(kind)] = m_enemies.archive(kind);
+    }
+    for (const EnemyBirth& birth : births) {
+        const auto emission = EnemyBirthEmission::resolve(birth, archives);
+        if (emission.archive == nullptr) {
+            continue; // The native provider/size rule requests no artwork.
+        }
+        const auto effect = publish ? publish(emission)
+                                    : std::optional{m_resources->effects.startSet(
+                                          m_resources->device, *emission.archive, emission.tree,
+                                          emission.position, {})};
+        if (!effect) {
+            return false; // The complete combat caller owns the queue/effect undo.
+        }
+        if (*effect != 0) {
+            m_cueEffects.push_back(*effect);
+        }
+    }
+    return true;
 }
 
 void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRuntime> players) {
@@ -858,7 +890,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     auto inTheWay = OpponentSimulation{m_generators, m_enemies, m_enemyMissiles}.advance(
         {ticks, seconds, views, fixtures, stops, m_critters.targets(true), m_bosses.targets(),
          &m_resources->world.collision(), missileSpeed, timeStopped},
-        events.blastScenery);
+        events.blastScenery, [this] { playBirths(); });
     landEnemyMissiles(players, events);
     playEnemyCues();
     // What blows itself up goes up with the bomb's bang; one struck down stops crying out

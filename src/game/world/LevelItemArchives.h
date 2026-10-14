@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 
 #include "game/world/LevelCatalog.h"
@@ -17,6 +18,8 @@ public:
     ItemArchive& primary() { return m_primary; }
     const ItemArchive& primary() const { return m_primary; }
     ItemArchive& realm() { return m_realm; }
+    /** The level's archive then the realm's, the order the original searches. */
+    AssetScope scope() { return AssetScope(m_primary, m_realm.loaded() ? &m_realm : nullptr); }
     bool loaded() const { return m_primary.loaded(); }
     /** Borrowed for the lifetime of these archives; never a corpus-wide lookup. */
     std::vector<TextureSet*> textureLenders();

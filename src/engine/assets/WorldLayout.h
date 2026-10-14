@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "engine/assets/AnimationSet.h"
+#include "engine/assets/ObjectFlags.h"
 #include "engine/assets/ParticleTemplate.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
@@ -53,14 +54,14 @@ struct WorldObject {
     static constexpr u32 kAnimated = 0x1000;  ///< keyframed, or under something keyframed
     static constexpr u32 kReverse = 0x100000; ///< its animation plays backwards, once
     static constexpr u32 kOnce = 0x200000;    ///< its animation plays forwards, once
-    /** Model layer flags. */
-    static constexpr u32 kNoDepthTest = 0x40;
-    static constexpr u32 kNoDepthWrite = 0x80;
-    static constexpr u32 kSorted = 0x800; ///< drawn after the opaque, farthest first
-    static constexpr u32 kChrome = 0x8000;
-    static constexpr u32 kSortBack = 0x80000;    ///< subtracts 10000 from the deferred depth key
-    static constexpr u32 kSortBehind = 0x400000; ///< subtracts 20000; drawn after ordinary surfaces
-    static constexpr u32 kAdditive = 0x800000;   ///< added onto the frame: glows and flames
+    /** Model layer flags, the shared object-layer word (ObjectFlags.h). */
+    static constexpr u32 kNoDepthTest = object_flags::kNoDepthTest;
+    static constexpr u32 kNoDepthWrite = object_flags::kNoDepthWrite;
+    static constexpr u32 kSorted = object_flags::kSorted;
+    static constexpr u32 kChrome = object_flags::kChrome;
+    static constexpr u32 kSortBack = object_flags::kSortBack;
+    static constexpr u32 kSortBehind = object_flags::kSortBehind;
+    static constexpr u32 kAdditive = object_flags::kAdditive;
 
     bool particles() const { return (flags & kParticles) != 0; }
     bool prelit() const { return (flags & kPrelit) != 0; }

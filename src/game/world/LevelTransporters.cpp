@@ -8,6 +8,7 @@
 #include "engine/core/Log.h"
 
 #include "game/world/ItemFigure.h"
+#include "game/world/ItemSupport.h"
 
 namespace gdl::game {
 namespace {
@@ -20,9 +21,11 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 }
 } // namespace
 
-std::vector<LevelTransporters::Contact> LevelTransporters::contacts(const WorldLayout& layout,
-                                                                    s32 players) {
+std::vector<LevelTransporters::Contact>
+LevelTransporters::contacts(const WorldLayout& layout, s32 players,
+                            const WorldCollision* collision) {
     std::vector<Contact> result;
+    const auto authored = itemSupportWorld(layout, collision);
     const auto& infos = layout.itemInfos();
     const auto& instances = layout.itemInstances();
     for (usize i = 0; i < instances.size(); ++i) {
@@ -42,6 +45,21 @@ std::vector<LevelTransporters::Contact> LevelTransporters::contacts(const WorldL
         pad.position = instance.position;
         pad.radius = info.radius;
         pad.height = info.height;
+        // The skirt clears the floor, but contact and landing keep their native anchor.
+        pad.transform =
+            itemPlacement(pad.position + Vec3{0, ItemFigure::kFloorLift, 0}, instance.rotation);
+        const auto* supportWorld =
+            itemSupportAt(instance.position, collision, authored ? &*authored : nullptr);
+        if (supportWorld != nullptr && (info.collisionFlags & 1U) == 0) {
+            if (const auto floor = supportWorld->floorAt(instance.position, 4, 10, 1)) {
+                if (const auto transform = supportWorld->objectTransform(floor->object)) {
+                    const Mat4 inverse = glm::inverse(*transform);
+                    pad.support = floor->object;
+                    pad.supportLocal = inverse * pad.transform;
+                    pad.anchorLocal = Vec3{inverse * Vec4{pad.position, 1.0f}};
+                }
+            }
+        }
         result.push_back(pad);
     }
     for (usize i = 0; i < result.size(); ++i) {
@@ -55,24 +73,20 @@ std::vector<LevelTransporters::Contact> LevelTransporters::contacts(const WorldL
     return result;
 }
 
-void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                             s32 players, ItemArchive* realmItems) {
+void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
+                             const AssetScope& scope, s32 players,
+                             const WorldCollision* collision) {
     clear();
-    ItemArchive& art = itemArchiveForTree(items, "TRANS", realmItems);
-    const auto tree = art.trees.find("TRANS");
+    ItemArchive* art = scope.archiveForTree("TRANS");
+    const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
-        m_tree = &art.trees.tree(*tree);
-        m_textures.bind(art.trees.textureAnimations(), art.textures, device);
+        m_tree = &art->trees.tree(*tree);
+        m_textures.bind(art->trees.textureAnimations(), art->textures, device);
     }
-    for (const auto& contact : contacts(layout, players)) {
+    for (const auto& contact : contacts(layout, players, collision)) {
         Pad pad;
         static_cast<Contact&>(pad) = contact;
-        const auto& instance = layout.itemInstances()[static_cast<usize>(pad.instance)];
-        // TRANS includes a floor-level textured skirt. Keep the ordinary fixture
-        // clearance on its artwork, without raising the contact or landing anchor.
-        pad.transform =
-            itemPlacement(pad.position + Vec3{0, ItemFigure::kFloorLift, 0}, instance.rotation);
-        if (m_tree != nullptr && pad.model.bind(*m_tree, art.models, art.textures, device)) {
+        if (m_tree != nullptr && pad.model.bind(*m_tree, art->models, art->textures, device)) {
             pad.pose.rest(*m_tree);
             if (const auto sequence = m_tree->findSequence("ACTIVE")) {
                 pad.animation.start(m_tree->sequences[*sequence], *sequence);
@@ -86,6 +100,23 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout, It
         }
     }
     animate(0.0f);
+}
+
+void LevelTransporters::syncFloors(const WorldCollision& collision) {
+    for (Pad& pad : m_pads) {
+        pad.sync(collision);
+    }
+}
+
+void LevelTransporters::Contact::sync(const WorldCollision& collision) {
+    if (support < 0) {
+        return;
+    }
+    // Collision may switch off while the floor moves; the pad still rides it.
+    if (const auto placement = collision.objectTransform(support)) {
+        transform = *placement * supportLocal;
+        position = Vec3{*placement * Vec4{anchorLocal, 1.0f}};
+    }
 }
 
 void LevelTransporters::clear() {

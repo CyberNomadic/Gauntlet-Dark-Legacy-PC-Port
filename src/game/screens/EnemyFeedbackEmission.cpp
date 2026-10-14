@@ -1,6 +1,9 @@
 #include "game/screens/EnemyFeedbackEmission.h"
 
 #include <algorithm>
+#include <array>
+
+#include "game/enemies/Enemies.h"
 
 namespace gdl::game {
 
@@ -35,9 +38,11 @@ EnemyFeedbackEmission EnemyFeedbackEmission::resolve(const EnemyFeedback& feedba
     return result;
 }
 
+namespace {
 std::optional<EffectTrees::Prepared>
-EnemyFeedbackEmission::prepare(std::span<const EffectTrees::PoolResource> resources,
-                               std::span<TextureSet* const> lenders) const {
+prepareEffect(ItemArchive* archive, std::string_view tree,
+              std::span<const EffectTrees::PoolResource> resources,
+              std::span<TextureSet* const> lenders) {
     if (archive == nullptr || tree.empty()) {
         return std::nullopt;
     }
@@ -61,6 +66,42 @@ EnemyFeedbackEmission::prepare(std::span<const EffectTrees::PoolResource> resour
         return prepared;
     }
     return std::nullopt;
+}
+} // namespace
+
+std::optional<EffectTrees::Prepared>
+EnemyFeedbackEmission::prepare(std::span<const EffectTrees::PoolResource> resources,
+                               std::span<TextureSet* const> lenders) const {
+    return prepareEffect(archive, tree, resources, lenders);
+}
+
+EnemyBirthEmission EnemyBirthEmission::resolve(const EnemyBirth& birth,
+                                               std::span<ItemArchive* const> archives) {
+    EnemyBirthEmission result;
+    result.position = birth.position;
+    constexpr std::array<std::string_view, 3> kTrees{"GENFX1", "GENFX2", "GENFX3"};
+    for (usize kind = 0; kind < std::min<usize>(archives.size(), kSwarmKindCount); ++kind) {
+        ItemArchive* archive = archives[kind];
+        if (archive == nullptr || !archive->trees.find(kTrees.front())) {
+            continue;
+        }
+        // InitEffects stops at the FIRST provider, even when the birth's kind
+        // lies after it. A later archive cannot extend the eligible prefix.
+        if (birth.kind >= 0 && static_cast<usize>(birth.kind) <= kind &&
+            0.5f * enemyKind(birth.kind).height > 2) {
+            const auto own = kTrees[static_cast<usize>(std::clamp(birth.tier, 1, 3) - 1)];
+            result.archive = archive;
+            result.tree = archive->trees.find(own) ? own : kTrees.front();
+        }
+        break;
+    }
+    return result;
+}
+
+std::optional<EffectTrees::Prepared>
+EnemyBirthEmission::prepare(std::span<const EffectTrees::PoolResource> resources,
+                            std::span<TextureSet* const> lenders) const {
+    return prepareEffect(archive, tree, resources, lenders);
 }
 
 } // namespace gdl::game

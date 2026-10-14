@@ -22,7 +22,6 @@ constexpr s32 kMagicPerkLevel = 25;
 constexpr s32 kGreaterMagicPerkLevel = 50;
 constexpr Color kMagicLineColor = Color::rgba(255, 128, 192);
 constexpr Color kPriceFlash = Color::rgba(255, 0, 0);
-constexpr s32 kWizardClass = 2;
 constexpr Color kPointerHighlight = Color::rgba(130, 0, 234);
 } // namespace
 void AfterLevelScene::pointerTarget(const ShopLane& lane, PointerAction action, const Rect& area,
@@ -202,8 +201,7 @@ void AfterLevelScene::drawMagicLine(const ShopLane& lane, s32 x) {
         return;
     }
     const auto& message = m_titles.message(*id);
-    const auto page = static_cast<usize>(
-        save.character == kSumnerClass ? kWizardClass : save.character % kStartingClassCount);
+    const auto page = static_cast<usize>(baseClassOf(save.character));
     if (page >= message.pages.size()) {
         return;
     }
@@ -211,7 +209,8 @@ void AfterLevelScene::drawMagicLine(const ShopLane& lane, s32 x) {
     s32 y = kMagicLineY;
     while (!rest.empty()) {
         const auto end = rest.find('\n');
-        line(x + kMagicLineX, y, rest.substr(0, end), message.scale, kMagicLineColor);
+        // shop_show_lv draws each line at the lane's centre column negated: centred on it.
+        line(-(x + kMagicLineX), y, rest.substr(0, end), message.scale, kMagicLineColor);
         if (end == std::string_view::npos) {
             break;
         }

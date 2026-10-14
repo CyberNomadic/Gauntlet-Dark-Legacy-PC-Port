@@ -148,8 +148,7 @@ TEST_CASE("four controllers retain distinct characters through death shop save a
     play.close();
 
     ExitPortals exits;
-    REQUIRE(exits.bind(device, world.layout(), world.items(), levels, &world.collision(),
-                       &world.realmItems()));
+    REQUIRE(exits.bind(device, world.layout(), world.itemScope(), levels, &world.collision()));
     usize exitIndex = 0;
     while (exitIndex < exits.size() && exits.portal(exitIndex).secret) {
         ++exitIndex;

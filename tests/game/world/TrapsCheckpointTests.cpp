@@ -58,8 +58,8 @@ struct Fixture {
             collision.setMovingObjects(std::array<s32, 1>{0});
             collision.setObjectTransform(0, Mat4{1});
         }
-        REQUIRE(
-            traps.bind(device, layout, items, moving ? &collision : nullptr, 7123, 1.25f, 1.5f));
+        REQUIRE(traps.bind(device, layout, AssetScope(items), moving ? &collision : nullptr, 7123,
+                           1.25f, 1.5f));
         REQUIRE(owner.bindResources(device));
     }
 };
@@ -117,7 +117,8 @@ TEST_CASE("trap checkpoints switch between original disarmed and vanished figure
     const auto initial = first.owner.checkpoint();
     REQUIRE(initial);
     for (usize i = 0; i < first.traps.size(); ++i) {
-        REQUIRE(first.traps.disarm(i, first.device, first.layout, first.items, nullptr));
+        REQUIRE(
+            first.traps.disarm(i, first.device, first.layout, AssetScope(first.items), nullptr));
     }
     CHECK(first.traps.trap(0).disarmed);
     CHECK_FALSE(first.traps.trap(0).gone);
@@ -171,8 +172,8 @@ TEST_CASE("trap plans reject malformed state wrong authored rows and changed bin
     CHECK_FALSE(fixture.owner.canCommit(*stale));
     stale = fixture.owner.prepareRestore(*state);
     REQUIRE(stale);
-    REQUIRE(fixture.traps.bind(fixture.device, fixture.layout, fixture.items, nullptr, 7123, 1.25f,
-                               1.5f));
+    REQUIRE(fixture.traps.bind(fixture.device, fixture.layout, AssetScope(fixture.items), nullptr,
+                               7123, 1.25f, 1.5f));
     CHECK_FALSE(fixture.owner.canCommit(*stale));
     CHECK_FALSE(fixture.owner.checkpoint());
     REQUIRE(fixture.owner.bindResources(fixture.device));
@@ -190,7 +191,7 @@ TEST_CASE("disarming a striking trap without alternate art retains its frozen na
     const auto striking = first.owner.checkpoint();
     REQUIRE(striking);
     const auto textures = second.device.texturesCreated;
-    REQUIRE(first.traps.disarm(1, first.device, first.layout, first.items, nullptr));
+    REQUIRE(first.traps.disarm(1, first.device, first.layout, AssetScope(first.items), nullptr));
     const auto vanished = first.owner.checkpoint();
     REQUIRE(vanished);
     CHECK(vanished->traps[1].action == Traps::kResting);
@@ -227,10 +228,8 @@ TEST_CASE(
     LevelWorld world;
     REQUIRE(world.load(device, root, *level));
     Traps a, b;
-    a.bind(device, world.layout(), world.items(), &world.collision(), 42, 1, 1,
-           &world.realmItems());
-    b.bind(device, world.layout(), world.items(), &world.collision(), 42, 1, 1,
-           &world.realmItems());
+    a.bind(device, world.layout(), world.itemScope(), &world.collision(), 42, 1, 1);
+    b.bind(device, world.layout(), world.itemScope(), &world.collision(), 42, 1, 1);
     TrapsCheckpoint first{a}, second{b};
     REQUIRE(first.bindResources(device));
     REQUIRE(second.bindResources(device));
@@ -240,12 +239,16 @@ TEST_CASE(
     CHECK(second.checkpoint() == state);
     const auto textures = device.texturesCreated;
     for (usize i = 0; i < a.size(); ++i) {
-        a.disarm(i, device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+        CHECK(b.trap(i).name == a.trap(i).name);
+        a.disarm(i, device, world.layout(), world.itemScope(), &world.collision());
     }
     const auto disarmed = first.checkpoint();
     REQUIRE(disarmed);
     REQUIRE(second.restore(*disarmed));
     CHECK(second.checkpoint() == disarmed);
+    for (usize i = 0; i < a.size(); ++i) {
+        CHECK(b.trap(i).name == a.trap(i).name);
+    }
     CHECK(device.texturesCreated == textures);
 }
 TEST_CASE("trap floor attachments rewind with native nonblocking moving support",

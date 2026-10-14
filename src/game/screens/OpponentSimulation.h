@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -10,7 +11,8 @@
 namespace gdl::game {
 
 /** The native generator, swarm and missile phase, without player damage,
- * rewards, sounds or effect dispatch. Resource owners and the captured world
+ * rewards or sounds. Its optional inter-phase callback owns effect dispatch.
+ * Resource owners and the captured world
  * collision must outlive this borrowed view and every prepared restore. */
 class OpponentSimulation {
 public:
@@ -69,7 +71,8 @@ public:
     /** Returns the exact stop roster used by this phase; the native combatant
      * projectile phase adjusts its rock health using the swarm's queued hits. */
     std::vector<MissileStop> advance(const Frame& frame,
-                                     const EnemyMissiles::SceneryBlast& scenery = {});
+                                     const EnemyMissiles::SceneryBlast& scenery = {},
+                                     const std::function<void()>& afterEnemies = {});
 
     static std::vector<MissileTarget> targets(const Enemies& enemies,
                                               std::span<const MissileTarget> critters = {},
@@ -93,15 +96,18 @@ public:
     /** The same bounded native phase inside a caller-owned complete combat
      * rewind. Ordinary blows, loss rewards and hit feedback remain queued for
      * that caller's native health/reward/presentation phases. Other interactions
+     * and a refused afterEnemies publisher
      * refuse the step without undoing it here:
      * the caller MUST rewind all participants and discard buffered outputs.
      * This deliberately does not relax speculate's no-interaction contract. */
-    Result stageCombat(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {});
+    Result stageCombat(const Frame& frame, std::span<const EnemyMissiles::Resource> resources = {},
+                       const std::function<bool()>& afterEnemies = {});
     static bool combatSupported(const Checkpoint& state, const Frame& frame);
 
 private:
     std::vector<MissileStop> advance(const Frame& frame, const EnemyMissiles::SceneryBlast& scenery,
-                                     EnemyMissileWork* work, PlacedEnemies* placements);
+                                     EnemyMissileWork* work, PlacedEnemies* placements,
+                                     const std::function<bool()>& afterEnemies = {});
     Generators& m_generators;
     Enemies& m_enemies;
     EnemyMissiles& m_missiles;

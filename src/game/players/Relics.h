@@ -49,10 +49,13 @@ struct Relics {
 
     /** Adds a piece of `kind`; the count now, or -1 for no such kind. */
     s32 addGargoylePiece(s32 kind);
+    /** Enough pieces, or a record under nought: the one kept once the tower has
+     * congratulated the collector (towerLevelStatusA). */
     bool gargoyleComplete(s32 kind) const {
         return inRange(kind, static_cast<s32>(kGargoyleKinds)) &&
-               gargoylePieces[static_cast<usize>(kind)] >=
-                   kGargoyleNeeded[static_cast<usize>(kind)];
+               (gargoylePieces[static_cast<usize>(kind)] < 0 ||
+                gargoylePieces[static_cast<usize>(kind)] >=
+                    kGargoyleNeeded[static_cast<usize>(kind)]);
     }
 
     bool operator==(const Relics&) const = default;

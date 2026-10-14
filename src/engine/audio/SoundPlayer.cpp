@@ -200,6 +200,15 @@ void SoundPlayer::setPan(SoundHandle handle, f32 pan) {
     }
 }
 
+void SoundPlayer::setCategoryPaused(SoundCategory category, bool paused) {
+    m_categoryPaused[static_cast<usize>(category)] = paused;
+    for (Voice& voice : m_voices) {
+        if (voice.category == category && voice.stream != nullptr) {
+            voice.stream->setPaused(paused);
+        }
+    }
+}
+
 void SoundPlayer::stop(SoundHandle handle) {
     if (handle != kNoSound && m_observer) {
         m_observer({Event::Kind::Stop, handle, kNoSound, {}});

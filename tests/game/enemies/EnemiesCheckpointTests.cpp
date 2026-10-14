@@ -94,6 +94,28 @@ struct Pool {
     }
 };
 
+TEST_CASE("native birth outputs retain their exact order across consume undo and foreign restore",
+          "[rollback][enemies][enemies-checkpoint][assets]") {
+    Pool host;
+    Pool guest(true);
+    const auto initial = host.enemies.checkpoint();
+    REQUIRE(initial);
+    REQUIRE_FALSE(initial->births.empty());
+    auto undo = host.enemies.prepareRestore(*initial);
+    REQUIRE(undo);
+    CHECK(host.enemies.takeBirths() == initial->births);
+    CHECK(host.enemies.takeBirths().empty());
+    REQUIRE(host.enemies.commitRestore(std::move(*undo)));
+    CHECK(host.enemies.takeBirths() == initial->births);
+    REQUIRE(guest.enemies.restore(*initial));
+    CHECK(guest.enemies.takeBirths() == initial->births);
+    const auto consumed = guest.enemies.checkpoint();
+    REQUIRE(consumed);
+    REQUIRE(consumed->births.empty());
+    REQUIRE(host.enemies.restore(*consumed));
+    CHECK(host.enemies.takeBirths().empty());
+}
+
 TEST_CASE("native enemy correction resolves the same trusted stocks in different load orders",
           "[rollback][enemies][enemies-checkpoint][assets]") {
     Pool host;

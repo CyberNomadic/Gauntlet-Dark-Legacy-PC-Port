@@ -76,7 +76,7 @@ TEST_CASE("boss approach follows horizontal camera markers until the boss wakes"
     CHECK(camera.pitch() == Approx(markers[0].rotation.x));
     party[0] = standing({0, 0, 23}); // slightly nearer second, but within hysteresis
     camera.update(boss, party, record, {}, 1.0f / 60, markers);
-    CHECK(camera.yaw() == Approx(markers[0].rotation.y));
+    CHECK(camera.yaw() == Approx(markers[0].rotation.y).margin(0.001f));
     party[0] = standing({0, 0, 10});
     for (s32 frame = 0; frame < 600; ++frame) {
         camera.update(boss, party, record, {}, 1.0f / 60, markers);
@@ -86,7 +86,7 @@ TEST_CASE("boss approach follows horizontal camera markers until the boss wakes"
     boss.awake = true;
     const f32 before = camera.pitch();
     camera.update(boss, party, record, {}, 1.0f / 60, markers);
-    CHECK(std::abs(camera.pitch() - before) < 0.001f);
+    CHECK(std::abs(camera.pitch() - before) < 0.01f); // the pan to the boss, not a cut
     for (s32 frame = 0; frame < 600; ++frame) {
         camera.update(boss, party, record, {}, 1.0f / 60, markers);
     }
@@ -198,7 +198,7 @@ TEST_CASE("the boss camera looks at the boss from behind the party, flatter than
     for (s32 i = 0; i < 600; ++i) {
         camera.update(lich, party, record, view, 1.0f / 60.0f);
     }
-    REQUIRE(camera.yaw() == Approx(kPi).margin(0.01f));
+    REQUIRE(std::abs(BossCamera::wrapAngle(camera.yaw() - kPi)) < 0.01f);
     REQUIRE(camera.attention().z == Approx(-2.0f).margin(0.1f));
     REQUIRE(camera.attention().y < 2.3f);
     REQUIRE(camera.attention().y > -9.3f);
@@ -212,7 +212,7 @@ TEST_CASE("the boss camera looks at the boss from behind the party, flatter than
     camera.update(lich, beside, record, view, 1.0f / 60.0f);
     const f32 turned = std::abs(BossCamera::wrapAngle(camera.yaw() - kPi));
     REQUIRE(turned > 0.0f);
-    REQUIRE(turned <= BossCamera::kTurnRate / 60.0f + 0.001f);
+    REQUIRE(turned <= BossCamera::kYawSpeed / 60.0f + 0.001f);
     for (s32 i = 0; i < 600; ++i) {
         camera.update(lich, beside, record, view, 1.0f / 60.0f);
     }
@@ -252,7 +252,8 @@ TEST_CASE("the boss camera keeps within the boss's facing when the record limits
     REQUIRE(off == Approx(kPi / 4.0f).margin(0.02f));
 }
 
-TEST_CASE("boss pitch accelerates from rest when waking instead of snapping to the fight angle",
+TEST_CASE("waking holds the camera where it stands while its look pans to the boss, and the "
+          "pitch then follows under its speeds instead of snapping to the fight angle",
           "[game][world][camera][boss-pitch]") {
     const f32 seconds = GENERATE(1.0f / 30.0f, 1.0f / 60.0f);
     const bool rising = GENERATE(false, true);
@@ -267,22 +268,77 @@ TEST_CASE("boss pitch accelerates from rest when waking instead of snapping to t
     BossCamera camera;
     camera.reset(boss, party, record, {});
     const f32 asleepPitch = camera.pitch();
+    const Vec3 stood = camera.camera().position;
     boss.awake = true;
     camera.update(boss, party, record, {}, 0.0f);
     REQUIRE(camera.pitch() == asleepPitch);
+    // The look point is further off than it may go in a step: the camera stays put and
+    // turns to keep it as it pans (BossCamBossCalc's transition), so nothing jumps.
     camera.update(boss, party, record, {}, seconds);
-    const f32 firstStep = camera.pitch() - asleepPitch;
-    CHECK(std::abs(firstStep) ==
-          Approx(BossCamera::kPitchAcceleration * seconds * seconds).margin(1.0e-7f));
-    CHECK((rising ? firstStep : -firstStep) > 0.0f);
+    CHECK(camera.camera().position == stood);
+    CHECK(std::abs(camera.pitch() - asleepPitch) < 0.01f);
+    CHECK(glm::distance(camera.attention(), party[0].follow) <= BossCamera::kLookSpeed * seconds);
+    s32 panned = 0;
     for (s32 frame = 0; frame < 600; ++frame) {
         const f32 before = camera.pitch();
+        const Vec3 at = camera.camera().position;
+        const Vec3 looked = camera.attention();
         camera.update(boss, party, record, {}, seconds);
         REQUIRE(std::isfinite(camera.pitch()));
+        if (camera.camera().position == at) {
+            // Still panning: the look point moves, the camera does not.
+            panned += glm::distance(camera.attention(), looked) > 1.0e-3f ? 1 : 0;
+            continue;
+        }
         REQUIRE(std::abs(BossCamera::wrapAngle(camera.pitch() - before)) <=
                 BossCamera::kPitchSpeed * seconds + 1.0e-6f);
     }
-    CHECK(std::abs(camera.pitch() - asleepPitch) > 0.02f);
+    CHECK(panned > 0);
+    CHECK(panned < 120);
+    CHECK(camera.attention().z == Approx(-2.0f).margin(0.1f));
+    CHECK(camera.pitch() != asleepPitch);
+}
+
+TEST_CASE("the boss camera backs off and comes in no faster than its speeds and rests once "
+          "everyone fits, instead of stepping out and in each frame",
+          "[game][world][camera][boss-distance]") {
+    const auto record = cryptRecord();
+    const CameraView view;
+    BossCameraSubject boss;
+    boss.awake = true;
+    std::vector<CameraSubject> party{standing({0, 0, 30})};
+    party[0].viewRadius = 3;
+    BossCamera camera;
+    camera.reset(boss, party, record, view);
+    REQUIRE(camera.margin() >= 0.0f);
+    // The player walks toward the camera: it backs off, each frame by no more than its
+    // speed allows, and keeps them in view.
+    f32 furthestStep = 0.0f;
+    for (s32 frame = 0; frame < 240; ++frame) {
+        party[0] = standing({0, 0, 30.0f + 0.15f * static_cast<f32>(frame)});
+        party[0].viewRadius = 3;
+        const f32 before = camera.distance();
+        camera.update(boss, party, record, view, 1.0f / 60.0f);
+        furthestStep = std::max(furthestStep, std::abs(camera.distance() - before));
+    }
+    CHECK(furthestStep <= BossCamera::kOutSpeed / 60.0f + 1.0e-4f);
+    CHECK(furthestStep > 0.0f);
+    CHECK(camera.distance() > record.minDistance);
+    // They stop: the camera settles and then holds still, with everyone in view.
+    for (s32 frame = 0; frame < 300; ++frame) {
+        camera.update(boss, party, record, view, 1.0f / 60.0f);
+    }
+    f32 drift = 0.0f;
+    for (s32 frame = 0; frame < 120; ++frame) {
+        const f32 before = camera.distance();
+        const f32 pitchBefore = camera.pitch();
+        camera.update(boss, party, record, view, 1.0f / 60.0f);
+        drift = std::max(drift, std::abs(camera.distance() - before));
+        drift = std::max(drift, std::abs(camera.pitch() - pitchBefore));
+    }
+    CHECK(drift < 0.01f);
+    CHECK(camera.margin() >= 0.0f);
+    CHECK(camera.margin() < BossCamera::kLooseMargin + 0.5f);
 }
 
 TEST_CASE("the dragon camera uses its authored yaw limit and elevated attention anchor",

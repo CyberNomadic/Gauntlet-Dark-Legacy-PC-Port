@@ -5,14 +5,13 @@
 #include <limits>
 #include <string>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 
 namespace gdl::game {
 
 namespace {
 
-constexpr f32 kFloorReachAbove = 0.5f;
-constexpr f32 kFloorReachBelow = 3.0f;
 constexpr f32 kTicksPerSecond = 60.0f;
 constexpr s32 kExactPlayersMark = 10;
 constexpr f32 kPresentationCutDistance = 32.0f;
@@ -207,11 +206,6 @@ bool ItemFigure::restore(const Checkpoint& state) {
     return true;
 }
 
-ItemArchive& itemArchiveForTree(ItemArchive& items, std::string_view name,
-                                ItemArchive* realmItems) {
-    return !items.trees.find(name) && realmItems != nullptr ? *realmItems : items;
-}
-
 Vec3 Obstacle::pushOut(const Vec3& position, f32 radius) const {
     if (!solid || !levelWith(*this, position)) {
         return position;
@@ -319,8 +313,8 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
                        const ItemInstance& instance, const WorldCollision* collision) {
     m_position = instance.position;
     if (collision != nullptr) {
-        if (const auto floor =
-                collision->floorAt(instance.position, kFloorReachAbove, kFloorReachBelow);
+        if (const auto floor = collision->floorAt(instance.position, kFloorReachAbove,
+                                                  kFloorReachBelow, kFloorReachRadius);
             floor.has_value()) {
             m_position.y = floor->y + kFloorLift;
         }
@@ -366,40 +360,53 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
     return true;
 }
 
-bool ItemFigure::placeStaticFallback(RenderDevice& device, ItemArchive& items,
+bool ItemFigure::place(RenderDevice& device, const AssetScope& scope, std::string_view name,
+                       const ItemInstance& instance, const WorldCollision* collision) {
+    if (ItemArchive* archive = scope.archiveForTree(name)) {
+        return place(device, *archive, name, instance, collision);
+    }
+    // An empty scope: the item still takes its place, with nothing to show.
+    static ItemArchive none;
+    const bool placed = place(device, none, name, instance, collision);
+    // This placeholder is not an authored archive in the level's resource
+    // catalog. Empty figures retain their placement, not a synthetic binding.
+    m_archive = nullptr;
+    return placed;
+}
+
+bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& scope,
                                      std::string_view name, const ItemInstance& instance,
                                      const WorldCollision* collision, u32 objectFlags) {
-    if (place(device, items, name, instance, collision)) {
+    if (place(device, scope, name, instance, collision)) {
         return true;
     }
     // A present but invalid tree is not a request to silently substitute another mesh.
-    if (!items.loaded() || items.trees.find(name)) {
+    if (scope.findTree(name)) {
         return false;
     }
-    for (const char* suffix : {"", "L1", "L1ROOT"}) {
-        const auto model = items.models.find(std::string{name} + suffix);
-        if (!model) {
-            continue;
-        }
-        m_staticTree = std::make_unique<TreeInfo>();
-        m_staticTree->name = name;
-        TreeNodeInfo node;
-        node.name = name;
-        node.object = items.models.entry(*model).name;
-        node.objectFlags = objectFlags;
-        m_staticTree->nodes.push_back(std::move(node));
-        if (!m_model.bind(*m_staticTree, items.models, items.textures, device)) {
-            m_staticTree.reset();
-            return false;
-        }
-        m_tree = m_staticTree.get();
-        m_pose.rest(*m_tree);
-        m_textures.bind(items.trees.textureAnimations(), items.textures, device);
-        m_holdPose = false;
-        m_index = 0;
-        return true;
+    const auto model = scope.findObject(name);
+    if (!model) {
+        return false;
     }
-    return false;
+    ItemArchive& items = *model->archive;
+    m_archive = &items;
+    m_staticTree = std::make_unique<TreeInfo>();
+    m_staticTree->name = name;
+    TreeNodeInfo node;
+    node.name = name;
+    node.object = model->name;
+    node.objectFlags = objectFlags;
+    m_staticTree->nodes.push_back(std::move(node));
+    if (!m_model.bind(*m_staticTree, items.models, items.textures, device)) {
+        m_staticTree.reset();
+        return false;
+    }
+    m_tree = m_staticTree.get();
+    m_pose.rest(*m_tree);
+    m_textures.bind(items.trees.textureAnimations(), items.textures, device);
+    m_holdPose = false;
+    m_index = 0;
+    return true;
 }
 
 void ItemFigure::gateParticlesOnSequence(bool enabled) {

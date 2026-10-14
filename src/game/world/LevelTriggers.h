@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
@@ -215,8 +216,7 @@ public:
     /** Visible pressure pads are separate from the world objects they activate. Their art is
      * looked up the way the original searches its headers: the level's archive, then the
      * realm's. */
-    void bindFigures(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                     ItemArchive* realmItems = nullptr);
+    void bindFigures(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
     void clear();
     usize size() const { return m_triggers.size(); }

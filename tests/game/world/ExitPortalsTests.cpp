@@ -58,7 +58,7 @@ struct Fixture {
         const auto dir = sampleLevel(name);
         REQUIRE(layout.load(dir));
         REQUIRE(catalog.load(dir));
-        REQUIRE(portals.bind(device, layout, items, catalog, nullptr));
+        REQUIRE(portals.bind(device, layout, AssetScope(items), catalog, nullptr));
     }
 
     /** Steps until a portal is left by or `frames` have gone; the portal, if any. */
@@ -205,7 +205,7 @@ TEST_CASE("portal readiness is cleared by leaving disappearing or rebinding",
     }
     SECTION("rebinding clears both readiness and queued wait messages") {
         REQUIRE_FALSE(f.portals.update(1, 1.0f / 60, party));
-        REQUIRE(f.portals.bind(f.device, f.layout, f.items, f.catalog, nullptr));
+        REQUIRE(f.portals.bind(f.device, f.layout, AssetScope(f.items), f.catalog, nullptr));
         CHECK(f.portals.takeWaiting().empty());
     }
     party[0].position = Vec3{10, 0, 10};
@@ -248,7 +248,7 @@ TEST_CASE("exit portals ride their authored floor through motion and collision h
     LevelCatalog catalog;
     REQUIRE(catalog.load(dir));
     ExitPortals portals;
-    REQUIRE(portals.bind(device, layout, items, catalog, &collision));
+    REQUIRE(portals.bind(device, layout, AssetScope(items), catalog, &collision));
     REQUIRE(portals.portal(0).support == 0);
     CHECK(glm::distance(portals.portal(0).position, Vec3{12, -15 + ExitPortals::kFloorLift, 23}) <
           0.001f);
@@ -298,7 +298,7 @@ TEST_CASE("exit portal artwork retains authored yaw pitch and roll", "[portals][
     test::convertModelFixture(dir);
     REQUIRE(layout.load(dir));
     REQUIRE(art.load(dir));
-    REQUIRE(portals.bind(device, layout, art, catalog, nullptr));
+    REQUIRE(portals.bind(device, layout, AssetScope(art), catalog, nullptr));
     portals.draw(device, Mat4{1}, {});
     REQUIRE(device.draws.size() == 3);
     const std::array forward{Vec3{-1, 0, 0}, Vec3{0, -1, 0}, Vec3{0, 0, -1}};
@@ -383,7 +383,7 @@ TEST_CASE("the real portal holds ACTIVE2 without replaying ACTIVE1 for a waiting
     Fixture f("portals-real-loop");
     const auto archive = test::assetOrSkip("ITEMS/LEVELL/ANIM.PS2").parent_path();
     REQUIRE(f.items.load(archive));
-    REQUIRE(f.portals.bind(f.device, f.layout, f.items, f.catalog, nullptr));
+    REQUIRE(f.portals.bind(f.device, f.layout, AssetScope(f.items), f.catalog, nullptr));
     const std::array split{PortalVisitor{Vec3{10, 0, 10}, 0.75f, 1, true},
                            PortalVisitor{Vec3{30, 0, 10}, 0.75f, 3, true}};
     REQUIRE_FALSE(f.run(split, 200));
@@ -474,7 +474,7 @@ TEST_CASE("a secret icon takes one toucher, keeps its authored radius, and is co
     ExitPortals portals;
     REQUIRE(layout.load(dir));
     REQUIRE(catalog.load(dir));
-    REQUIRE(portals.bind(device, layout, items, catalog, nullptr));
+    REQUIRE(portals.bind(device, layout, AssetScope(items), catalog, nullptr));
     REQUIRE(portals.size() == 1);
     REQUIRE(portals.portal(0).secret);
     REQUIRE(portals.portal(0).destination);
@@ -495,7 +495,8 @@ TEST_CASE("a portal the tower keeps shut never wakes and takes nobody",
     // The sample's "g1" is the town's first portal, which stands whatever has been beaten.
     std::vector<ClassProgress> party(1);
     TowerAccess access{party};
-    REQUIRE(f.portals.bind(f.device, f.layout, f.items, f.catalog, nullptr, nullptr, &access));
+    REQUIRE(f.portals.bind(f.device, f.layout, AssetScope(f.items), f.catalog, nullptr,
+                           &access));
     REQUIRE_FALSE(f.portals.portal(0).shut); // a realm's first portal always stands
     REQUIRE(f.portals.shutGates().empty());
     REQUIRE(ExitPortals::gateOf("g1") == 0);
@@ -513,7 +514,8 @@ TEST_CASE("a portal the tower keeps shut never wakes and takes nobody",
      "params": [0, 0, 0, 0, 103, 50, 0, 0, 0, 0, 0, 0]}]})");
     REQUIRE(f.layout.load(dir));
     REQUIRE(f.catalog.load(dir));
-    REQUIRE(f.portals.bind(f.device, f.layout, f.items, f.catalog, nullptr, nullptr, &access));
+    REQUIRE(f.portals.bind(f.device, f.layout, AssetScope(f.items), f.catalog, nullptr,
+                           &access));
     REQUIRE(f.portals.portal(0).tag == "g2");
     REQUIRE(f.portals.portal(0).shut);
     REQUIRE(f.portals.shutGates() == std::vector{ExitPortals::ShutGate{7, 1}});
@@ -524,7 +526,8 @@ TEST_CASE("a portal the tower keeps shut never wakes and takes nobody",
     // With the first beaten it opens like any other.
     party[0].levels.recordBeaten(7, 0);
     access = TowerAccess{party};
-    REQUIRE(f.portals.bind(f.device, f.layout, f.items, f.catalog, nullptr, nullptr, &access));
+    REQUIRE(f.portals.bind(f.device, f.layout, AssetScope(f.items), f.catalog, nullptr,
+                           &access));
     REQUIRE_FALSE(f.portals.portal(0).shut);
     REQUIRE(f.run(on, 400) == 0);
 }
@@ -546,7 +549,7 @@ TEST_CASE("the real tower shuts the portals past what the party has beaten, wear
     party[0].levels.recordBeaten(7, 0); // the town's first: its second opens, its third not
     const TowerAccess access{party};
     ExitPortals portals;
-    REQUIRE(portals.bind(device, layout, items, catalog, nullptr, nullptr, &access));
+    REQUIRE(portals.bind(device, layout, AssetScope(items), catalog, nullptr, &access));
     const auto named = [&](std::string_view tag) -> const ExitPortals::Portal& {
         for (usize i = 0; i < portals.size(); ++i) {
             if (portals.portal(i).tag == tag) {
@@ -615,7 +618,7 @@ TEST_CASE("portal solid platforms and depthless columns draw in separate passes"
     test::convertModelFixture(dir);
     REQUIRE(layout.load(dir));
     REQUIRE(art.load(dir));
-    REQUIRE(portals.bind(device, layout, art, catalog, nullptr));
+    REQUIRE(portals.bind(device, layout, AssetScope(art), catalog, nullptr));
     for (const auto pass : {TreeModel::Pass::DepthWriting, TreeModel::Pass::Effects}) {
         device.draws.clear();
         portals.draw(device, Mat4{1}, {}, nullptr, pass);

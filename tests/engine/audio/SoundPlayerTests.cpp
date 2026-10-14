@@ -154,6 +154,45 @@ TEST_CASE("a chained sound starts when the one before it ends", "[audio][player]
     REQUIRE(player.playAfter(three, SoundSequence{}) == kNoSound);
 }
 
+TEST_CASE("a held category keeps its voices where they are, silent, and a chained line waits",
+          "[audio][player]") {
+    AudioMixer mixer(48000);
+    SoundPlayer player(mixer);
+    const SoundClip first = tone(48000, 100, 0.5f);
+    const SoundClip second = tone(48000, 100, 0.25f);
+    SoundSequence a;
+    a.steps.push_back(SoundSequenceStep{&first, false, false});
+    SoundSequence b;
+    b.steps.push_back(SoundSequenceStep{&second, false, false});
+    const SoundClip long_ = tone(48000, 1000, 0.5f);
+    SoundSequence music;
+    music.steps.push_back(SoundSequenceStep{&long_, false, false});
+    const SoundHandle line = player.play(a);
+    const SoundHandle next = player.playAfter(line, b);
+    const SoundHandle song = player.play(music, 1.0f, SoundCategory::Music);
+    std::vector<f32> out = pull(mixer, 10);
+    REQUIRE(out[0] == 1.0f); // both tones
+    player.setCategoryPaused(SoundCategory::Effects, true);
+    for (s32 i = 0; i < 20; ++i) {
+        out = pull(mixer, 10);
+        player.update();
+    }
+    // Only the music sounds; the line neither ends nor lets its follower start.
+    REQUIRE(out[0] == 0.5f);
+    REQUIRE(player.isPlaying(line));
+    REQUIRE(player.isPlaying(next));
+    REQUIRE(player.isPlaying(song));
+    player.setCategoryPaused(SoundCategory::Effects, false);
+    out = pull(mixer, 10);
+    REQUIRE(out[0] == 1.0f); // the line goes on from where it was held
+    for (s32 i = 0; i < 12; ++i) {
+        out = pull(mixer, 10);
+        player.update();
+    }
+    REQUIRE_FALSE(player.isPlaying(line));
+    REQUIRE(player.isPlaying(next));
+}
+
 TEST_CASE("category and master volumes scale voices, live and on start", "[audio][player]") {
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);

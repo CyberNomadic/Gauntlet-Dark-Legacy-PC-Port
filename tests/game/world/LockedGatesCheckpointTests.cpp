@@ -60,7 +60,7 @@ struct Fixture {
             collision.setMovingObjects(std::array<s32, 1>{0});
             collision.setObjectTransform(0, Mat4{1});
         }
-        REQUIRE(gates.bind(device, layout, items, moving ? &collision : nullptr));
+        REQUIRE(gates.bind(device, layout, AssetScope(items), moving ? &collision : nullptr));
         gates.setPlayerCount(2);
         REQUIRE(gates.size() == 3);
         REQUIRE_FALSE(gates.gate(2).blocksPassage);
@@ -202,8 +202,7 @@ TEST_CASE("native campaign gates retain the complete trusted geometry and figure
     LevelWorld world;
     REQUIRE(world.load(device, root, *catalog.byName(name)));
     LockedGates gates;
-    REQUIRE(
-        gates.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems()));
+    REQUIRE(gates.bind(device, world.layout(), world.itemScope(), &world.collision()));
     LockedGatesCheckpoint owner(gates);
     const auto before = owner.checkpoint();
     REQUIRE(before);

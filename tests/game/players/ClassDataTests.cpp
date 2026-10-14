@@ -25,6 +25,20 @@ TEST_CASE("class and colour codes name the assets", "[game][players]") {
     REQUIRE(playerColor(9) == Color::white());
 }
 
+TEST_CASE("a character plays as its base class and wears its own archive, Sumner the wizard's",
+          "[game][players]") {
+    REQUIRE(baseClassOf(0) == 0);
+    REQUIRE(baseClassOf(7) == 7);
+    REQUIRE(baseClassOf(9) == 1);  // the falconess shadows the valkyrie
+    REQUIRE(baseClassOf(15) == 7); // the hyena the jester
+    REQUIRE(baseClassOf(kSumnerClass) == kWizardClass);
+    REQUIRE(baseClassOf(-1) == -1);
+    REQUIRE(baseClassOf(kClassCount) == kClassCount);
+    REQUIRE(archiveClassOf(9) == 9);
+    REQUIRE(archiveClassOf(kSumnerClass) == kWizardClass);
+    REQUIRE(kSumnerCostume == "SUM");
+}
+
 TEST_CASE("starting classes are always unlocked and the rest by their bit", "[game][players]") {
     REQUIRE(classUnlocked(0, 0));
     REQUIRE(classUnlocked(7, 0));

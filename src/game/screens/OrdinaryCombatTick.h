@@ -95,6 +95,11 @@ public:
         "Damage",       "Lessons",      "Feedback",          "RewardPromotion",
         "Projectiles",  "Strikes",      "Pickups",           "Trigger",
         "Portal",       "ExitWait",     "Postcondition"};
+    struct Timings {
+        std::optional<u64> captureNanoseconds;
+        std::optional<u64> prepareNanoseconds;
+        std::optional<u64> postconditionNanoseconds;
+    };
     struct Result {
         Status status = Status::Invalid;
         Refusal refusal = Refusal::None;
@@ -108,6 +113,7 @@ public:
         std::vector<OrdinaryWeaponEmission::Cue> throws; ///< buffered once per native fan
         std::vector<OrdinaryStrongPhase::Cue> strong; ///< authored free-A cues, never played here
         std::vector<OrdinaryProjectilePhase::Cue> impacts;
+        Timings timings; ///< local CPU durations, including refused native attempts
     };
 
     /** Every owner and trusted archive must outlive this view. The supplied
@@ -119,6 +125,8 @@ public:
                 const Frame& frame);
 
 private:
+    Result stepTimed(std::span<PlayerRuntime> party, std::span<const PlayInput> inputs,
+                     const Frame& frame, Timings& timings);
     bool bound(std::span<PlayerRuntime> party) const;
     bool environment() const;
     bool travelContact(std::span<const PlayerRuntime> party, bool portals) const;

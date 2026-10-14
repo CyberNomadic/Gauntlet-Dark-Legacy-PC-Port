@@ -202,6 +202,10 @@ TEST_CASE("malformed statue values and foreign prototypes never partially restor
     SECTION("foreign full placement") {
         ++bad.roster[1].placement.instance.params[11];
     }
+    SECTION("foreign native floor-binding policy") {
+        bad.roster[1].placement.onFloor = !bad.roster[1].placement.onFloor;
+        REQUIRE(bad.valid());
+    }
     SECTION("invalid grid") {
         bad.contactGridInverseWidth = -1;
     }

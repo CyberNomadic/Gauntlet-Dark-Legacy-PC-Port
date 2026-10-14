@@ -534,7 +534,7 @@ TEST_CASE("a switch and its artwork follow the floor from its rest pose through 
       "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
     ItemArchive items;
     REQUIRE(items.load(dir));
-    f.triggers.bindFigures(f.device, f.layout, items);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(items));
     f.triggers.draw(f.device, Mat4{1}, {});
     REQUIRE(f.device.draws.size() == 1);
     CHECK(f.device.draws.front().vertices.front().position.y == Approx(30.1f));
@@ -1034,9 +1034,9 @@ TEST_CASE("switch art missing from the level's own item archive comes from the r
     ItemArchive realmItems;
     REQUIRE(ownItems.load(own));
     REQUIRE(realmItems.load(realm));
-    f.triggers.bindFigures(f.device, f.layout, ownItems);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(ownItems));
     CHECK(f.triggers.figure(0) == nullptr);
-    f.triggers.bindFigures(f.device, f.layout, ownItems, &realmItems);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(ownItems, &realmItems));
     REQUIRE(f.triggers.figure(0) != nullptr);
     f.triggers.draw(f.device, Mat4{1}, {});
     CHECK(f.device.draws.size() == 1);
@@ -1056,14 +1056,54 @@ TEST_CASE("Castle Courtyard switches are visible despite the level's own item ar
     REQUIRE(triggers.size() == 8);
     usize shown = 0;
     for (usize i = 0; i < triggers.size(); ++i) {
-        const auto& instance = world.layout().itemInstances()[static_cast<usize>(
-            triggers.trigger(i).instance)];
+        const auto& instance =
+            world.layout().itemInstances()[static_cast<usize>(triggers.trigger(i).instance)];
         const bool markerOnly = (instance.flags & 2U) != 0;
         INFO("trigger " << i);
         CHECK((triggers.figure(i) != nullptr) == !markerOnly);
         shown += triggers.figure(i) != nullptr ? 1 : 0;
     }
     CHECK(shown == 6);
+}
+
+TEST_CASE("every catalogued level resolves the art of each of its visible switches",
+          "[triggers][trigger-visibility][asset-conformance][assets]") {
+    const auto root = test::assetOrSkip("WDATA/CASTLE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    usize levels = 0;
+    usize figures = 0;
+    for (const auto& realm : catalog.realms()) {
+        // The developer test realm places BIGTRIGGER, whose art only the unsupported demo
+        // archive holds; every shipped realm must resolve all of its switches.
+        if (realm.file == "TEST") {
+            continue;
+        }
+        for (const std::string& name : realm.levels) {
+            const auto ref = catalog.byName(name);
+            REQUIRE(ref);
+            test::FakeRenderDevice device;
+            LevelWorld world;
+            CAPTURE(name);
+            REQUIRE(world.load(device, root, *ref));
+            ++levels;
+            const auto& triggers = world.triggers();
+            for (usize i = 0; i < triggers.size(); ++i) {
+                const auto& instance =
+                    world.layout()
+                        .itemInstances()[static_cast<usize>(triggers.trigger(i).instance)];
+                if ((instance.flags & 2U) != 0) {
+                    continue;
+                }
+                const auto& info = world.layout().itemInfos()[static_cast<usize>(instance.info)];
+                CAPTURE(i, info.name, instance.position);
+                CHECK(triggers.figure(i) != nullptr);
+                figures += triggers.figure(i) != nullptr ? 1 : 0;
+            }
+        }
+    }
+    CHECK(levels >= 62); // the shipped realms, without the three test levels
+    CHECK(figures > 0);
 }
 
 TEST_CASE("marker-only switches stay invisible without losing trigger behavior",
@@ -1078,7 +1118,7 @@ TEST_CASE("marker-only switches stay invisible without losing trigger behavior",
       "sequences":[{"name":"OFF","frames":1,"rate":30}]}]})");
     ItemArchive items;
     REQUIRE(items.load(dir));
-    f.triggers.bindFigures(f.device, f.layout, items);
+    f.triggers.bindFigures(f.device, f.layout, AssetScope(items));
     f.triggers.draw(f.device, Mat4{1}, {});
     REQUIRE(f.device.draws.size() == 1);
     CHECK(f.device.draws.front().vertices.front().position.x == Approx(20));
@@ -1107,7 +1147,7 @@ TEST_CASE("Tower and Province trigger figures respect their authored geometry ex
         REQUIRE(items.load(root / "ITEMS" / std::format("LEVEL{}", level.front())));
         LevelTriggers triggers;
         triggers.bind(layout, animator, nullptr);
-        triggers.bindFigures(device, layout, items);
+        triggers.bindFigures(device, layout, AssetScope(items));
         triggers.draw(device, Mat4{1}, {});
         const usize actual = device.draws.size();
         device.draws.clear();
@@ -1146,7 +1186,7 @@ TEST_CASE("Temple bridge pads are visible and activate their authored world targ
     triggers.bind(layout, animator, nullptr);
     ItemArchive items;
     REQUIRE(items.load(root / "ITEMS/LEVELE"));
-    triggers.bindFigures(device, layout, items);
+    triggers.bindFigures(device, layout, AssetScope(items));
     triggers.draw(device, Mat4{1}, {});
     REQUIRE_FALSE(device.draws.empty());
     ModelSet models;
@@ -1299,6 +1339,43 @@ TEST_CASE("lift pads activate from the lowered deck rather than their authored m
     world.updateTriggers(kStep, visitors);
     CHECK(world.triggers().trigger(index).fired);
     CHECK(world.triggers().opened(trigger.target));
+}
+
+TEST_CASE("the Mine's lift is walkable across its green centre, which is a child of its ring",
+          "[game][world][triggers][ice-lift][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELI3/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("I3");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    const auto& objects = world.layout().objects();
+    const auto indexOf = [&](std::string_view name) {
+        for (usize i = 0; i < objects.size(); ++i) {
+            if (objects[i].name == name) {
+                return static_cast<s32>(i);
+            }
+        }
+        return -1;
+    };
+    const s32 ring = indexOf("I3ELEV6");
+    const s32 centre = indexOf("I3NS_CYLINDER46");
+    REQUIRE(ring >= 0);
+    REQUIRE(centre >= 0);
+    const Vec3 lift = world.layout().worldPosition(static_cast<usize>(ring));
+    // The ring's walkable strip is half a unit wide; the shallow cone within it, raised
+    // 2.3 units in the ring's space, carries the rest of the platform.
+    const auto middle = world.collision().floorAt(lift + Vec3{0, 2.0f, 0}, 3.0f, 4.0f);
+    REQUIRE(middle.has_value());
+    CHECK(middle->object == centre);
+    CHECK(middle->y == Approx(lift.y + 2.3f + 0.5f).margin(0.2f));
+    const auto halfway = world.collision().floorAt(lift + Vec3{2.5f, 2.0f, 1.5f}, 3.0f, 4.0f);
+    REQUIRE(halfway.has_value());
+    CHECK(halfway->object == centre);
+    CHECK(halfway->y < middle->y);
 }
 
 TEST_CASE("Maze invisible platforms respond to floor contact", "[maze-triggers][assets]") {
@@ -1477,7 +1554,7 @@ TEST_CASE("Underworld switch artwork remains visible before and after trigger co
     animator.bind(layout);
     LevelTriggers triggers;
     triggers.bind(layout, animator, nullptr);
-    triggers.bindFigures(device, layout, items);
+    triggers.bindFigures(device, layout, AssetScope(items));
     REQUIRE(triggers.size() == 11);
     triggers.setPlayerCount(3);
     WorldScene scene;

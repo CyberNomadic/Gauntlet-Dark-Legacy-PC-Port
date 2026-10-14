@@ -269,14 +269,21 @@ std::vector<MissileTarget> OpponentSimulation::targets(const Enemies& enemies,
 }
 
 std::vector<MissileStop> OpponentSimulation::advance(const Frame& frame,
-                                                     const EnemyMissiles::SceneryBlast& scenery) {
-    return advance(frame, scenery, nullptr, m_placements);
+                                                     const EnemyMissiles::SceneryBlast& scenery,
+                                                     const std::function<void()>& afterEnemies) {
+    return advance(frame, scenery, nullptr, m_placements, [&] {
+        if (afterEnemies) {
+            afterEnemies();
+        }
+        return true;
+    });
 }
 
 std::vector<MissileStop> OpponentSimulation::advance(const Frame& frame,
                                                      const EnemyMissiles::SceneryBlast& scenery,
                                                      EnemyMissileWork* work,
-                                                     PlacedEnemies* placements) {
+                                                     PlacedEnemies* placements,
+                                                     const std::function<bool()>& afterEnemies) {
     if (placements != nullptr) {
         // This is the native watch phase's ordinary dispatcher. It intentionally
         // consumes each selected record even when the spawn fails or replaces a
@@ -293,6 +300,12 @@ std::vector<MissileStop> OpponentSimulation::advance(const Frame& frame,
     // update. Bound the resulting pool before any new flight is integrated.
     if (work != nullptr && (work->exhausted || !boundedFlights(m_missiles, frame.seconds))) {
         work->exhausted = true;
+        return {};
+    }
+    // Native GENFX births are dispatched after AI, before missile collision
+    // callbacks can create other effects. The complete combat caller supplies
+    // a prepared-only publisher and owns undo on refusal.
+    if (afterEnemies && !afterEnemies()) {
         return {};
     }
     std::vector<MissileStop> stops;
@@ -392,7 +405,8 @@ bool OpponentSimulation::combatSupported(const Checkpoint& state, const Frame& f
 
 OpponentSimulation::Result
 OpponentSimulation::stageCombat(const Frame& frame,
-                                std::span<const EnemyMissiles::Resource> resources) {
+                                std::span<const EnemyMissiles::Resource> resources,
+                                const std::function<bool()>& afterEnemies) {
     if (!validFrame(frame)) {
         return Result::Invalid;
     }
@@ -404,7 +418,14 @@ OpponentSimulation::stageCombat(const Frame& frame,
         return Result::Unsupported;
     }
     EnemyMissileWork work;
-    advance(frame, {}, &work, m_placements);
+    bool published = true;
+    advance(frame, {}, &work, m_placements, [&] {
+        published = !afterEnemies || afterEnemies();
+        return published;
+    });
+    if (!published) {
+        return Result::Interaction;
+    }
     if (work.exhausted) {
         return Result::Unsupported;
     }

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "engine/assets/AnimationSet.h"
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/ModelSet.h"
 #include "engine/assets/TextureSet.h"
@@ -201,6 +202,8 @@ public:
     TextureSet& textures() { return m_textures; }
     /** Common realm figures still available when a boss supplies its own item archive. */
     ItemArchive& realmItems() { return m_itemArchives.realm(); }
+    /** The item archives in the order the original searches them: the level's, the realm's. */
+    AssetScope itemScope() { return m_itemArchives.scope(); }
     ItemArchive& powerups() { return m_powerups; }
     bool hasItems() const { return m_itemArchives.loaded(); }
     const WorldCollision& collision() const { return m_collision; }

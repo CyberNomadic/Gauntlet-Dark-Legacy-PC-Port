@@ -316,6 +316,7 @@ bool PlacedItemsCheckpoint::bindResources(RenderDevice& device) {
     for (const auto& resourceName : names) {
         PlacedItems scratch;
         scratch.m_archives = catalog->archives;
+        scratch.m_scope = AssetScope(catalog->archives);
         // Reuse native descriptor/texture fallback and node ordering, including
         // trees without mesh nodes. Missing resources remain unavailable, never fabricated.
         scratch.startEffect(device, resourceName, Vec3{0});

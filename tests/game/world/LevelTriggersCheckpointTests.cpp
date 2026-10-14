@@ -50,7 +50,7 @@ struct Fixture {
         REQUIRE(scene.build(layout, items.models, items.textures, device));
         animator.bind(layout);
         triggers.bind(layout, animator, &collision);
-        triggers.bindFigures(device, layout, items);
+        triggers.bindFigures(device, layout, AssetScope(items));
         triggers.setPlayerCount(2);
         REQUIRE(triggers.size() == 4);
         REQUIRE(triggers.figure(0));
@@ -166,7 +166,7 @@ TEST_CASE("trigger plans bind trusted owner roster resources and sibling generat
     CHECK_FALSE(host.triggers.canCommit(*first));
     first = host.triggers.prepareRestore(host.state());
     REQUIRE(first);
-    host.triggers.bindFigures(host.device, host.layout, host.items);
+    host.triggers.bindFigures(host.device, host.layout, AssetScope(host.items));
     CHECK_FALSE(host.triggers.canCommit(*first));
     first = host.triggers.prepareRestore(host.state());
     REQUIRE(first);
@@ -219,7 +219,7 @@ TEST_CASE("native campaign trigger owners retain their complete loaded roster an
     WorldCollision collision = world.collision();
     LevelTriggers owner;
     owner.bind(world.layout(), animator, &collision);
-    owner.bindFigures(device, world.layout(), world.items(), &world.realmItems());
+    owner.bindFigures(device, world.layout(), world.itemScope());
     const auto state = owner.checkpoint();
     REQUIRE(state);
     REQUIRE_FALSE(state->triggers.empty());

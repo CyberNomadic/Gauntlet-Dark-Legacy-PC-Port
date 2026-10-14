@@ -61,7 +61,8 @@ bool progressValid(const ClassProgress& progress) {
            (relics.pendingRunes & ~relics.runes) == 0 &&
            (relics.pendingShards & ~relics.shards) == 0 &&
            (relics.pendingCeremonies & ~Relics::kTowerCeremonyMask) == 0 &&
-           std::ranges::all_of(relics.gargoylePieces, counter) &&
+           std::ranges::all_of(relics.gargoylePieces,
+                               [](s32 value) { return value == -1 || counter(value); }) &&
            std::ranges::all_of(progress.levels.runeLevels,
                                [](u16 mask) { return (mask >> Relics::kRuneCount) == 0; }) &&
            counter(progress.lifetime.enemiesKilled) &&

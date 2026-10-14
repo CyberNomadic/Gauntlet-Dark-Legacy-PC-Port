@@ -61,7 +61,8 @@ bool CharacterProfile::valid() const {
         (relics.runes >> Relics::kRuneCount) != 0 || (relics.pendingRunes & ~relics.runes) != 0 ||
         (relics.pendingShards & ~relics.shards) != 0 ||
         (relics.pendingCeremonies & ~Relics::kTowerCeremonyMask) != 0 ||
-        !std::ranges::all_of(relics.gargoylePieces, counter) ||
+        !std::ranges::all_of(relics.gargoylePieces,
+                             [](s32 value) { return value == -1 || counter(value); }) ||
         !std::ranges::all_of(p.levels.runeLevels,
                              [](u16 mask) { return (mask >> Relics::kRuneCount) == 0; }) ||
         p.lifetime.enemiesKilled < 0 || p.lifetime.generatorsDestroyed < 0 ||

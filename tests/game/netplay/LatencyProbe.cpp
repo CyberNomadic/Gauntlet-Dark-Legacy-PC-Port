@@ -1168,7 +1168,28 @@ nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
             {"decode_successes", difference(first.decodeSuccesses, last.decodeSuccesses)},
             {"decode_failures", difference(first.decodeFailures, last.decodeFailures)},
             {"decode_nanoseconds", difference(first.decodeNanoseconds, last.decodeNanoseconds)},
-            {"advance_nanoseconds", difference(first.advanceNanoseconds, last.advanceNanoseconds)}};
+            {"advance_nanoseconds", difference(first.advanceNanoseconds, last.advanceNanoseconds)},
+            {"restore_passes", difference(first.restorePasses, last.restorePasses)},
+            {"append_passes", difference(first.appendPasses, last.appendPasses)},
+            {"reused_passes", difference(first.reusedPasses, last.reusedPasses)},
+            {"attempted_ticks", difference(first.attemptedTicks, last.attemptedTicks)},
+            {"maximum_ticks_per_pass_since_begin", last.maximumTicksPerPass}};
+        const auto timing = [&](std::string_view name, const OnlineCombatReplay::Timing& initial,
+                                const OnlineCombatReplay::Timing& final) {
+            output["cpu"][name] = {
+                {"count", difference(initial.count, final.count)},
+                {"nanoseconds", difference(initial.nanoseconds, final.nanoseconds)},
+                {"maximum_nanoseconds_since_begin", final.maximumNanoseconds}};
+        };
+        timing("full_pass", first.passCost, last.passCost);
+        timing("seed_copy_and_decode", first.seedCost, last.seedCost);
+        timing("stage_decode", first.decodeCost, last.decodeCost);
+        timing("restore", first.restoreCost, last.restoreCost);
+        timing("native_advance", first.advanceCost, last.advanceCost);
+        timing("tick_capture", first.captureCost, last.captureCost);
+        timing("tick_prepare", first.prepareCost, last.prepareCost);
+        timing("tick_postcondition", first.postconditionCost, last.postconditionCost);
+        timing("picture", first.pictureCost, last.pictureCost);
         for (usize reason = 0; reason < OnlineCombatReplay::kRefusals.size(); ++reason) {
             output["reasons"][OnlineCombatReplay::kRefusals[reason]] =
                 difference(first.reasons[reason], last.reasons[reason]);
@@ -1490,8 +1511,8 @@ void run(const Options& options, Clock::time_point processBegin) {
         }
         if (!reported && started &&
             Clock::now() - *started >= std::chrono::seconds(options.seconds)) {
-            require(!pendingThrow, "Probe attack was never admitted to a local input tick");
             auto report = nlohmann::json::parse(session.match().latency().report(true));
+            report["unadmitted_attack_requests"] = pendingThrow ? 1 : 0;
             report["role"] = options.host ? "host" : "guest";
             report["prediction"] = options.prediction;
             report["workload"] = options.workload;
@@ -1551,9 +1572,12 @@ void run(const Options& options, Clock::time_point processBegin) {
             report["input_lead_ticks"] = session.match().inputLead();
             report["corrections"] = play.predictionMetrics().corrections;
             report["largest_correction"] = play.predictionMetrics().largestCorrection;
-            report["status"] = "complete";
+            report["status"] = pendingThrow ? "failed" : "complete";
             writeFile(options.report, report.dump(2));
             std::cout << "Latency report: " << options.report.string() << '\n';
+            // Retain real CPU/network evidence on failure, without accepting an
+            // unadmitted request or weakening the probe's nonzero exit status.
+            require(!pendingThrow, "Probe attack was never admitted to a local input tick");
             reported = true;
             if (!options.host && !options.holdAfterReport) {
                 return;

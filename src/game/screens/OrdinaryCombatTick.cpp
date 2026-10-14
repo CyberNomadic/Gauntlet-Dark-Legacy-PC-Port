@@ -1,6 +1,7 @@
 #include "game/screens/OrdinaryCombatTick.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <iterator>
@@ -118,7 +119,8 @@ OrdinaryCombatTick::OrdinaryCombatTick(OrdinaryCombatCheckpoint& checkpoint,
         const auto& world = m_checkpoint.m_opponents.m_resources->world;
         m_exits = ExitPortals::contacts(world.layout(), &world.collision());
         m_transports = LevelTransporters::contacts(
-            world.layout(), static_cast<s32>(m_checkpoint.m_combat.m_players.size()));
+            world.layout(), static_cast<s32>(m_checkpoint.m_combat.m_players.size()),
+            &world.collision());
     }
 }
 
@@ -188,7 +190,8 @@ bool OrdinaryCombatTick::environment() const {
 bool OrdinaryCombatTick::travelContact(std::span<const PlayerRuntime> party, bool portals) const {
     const auto& world = m_checkpoint.m_opponents.m_resources->world;
     if (!portals) {
-        return std::ranges::any_of(m_transports, [&](const auto& pad) {
+        return std::ranges::any_of(m_transports, [&](auto pad) {
+            pad.sync(world.collision());
             return std::ranges::any_of(party, [&](const auto& runtime) {
                 const auto& actor = runtime.actor;
                 return pad.touches(actor.position(), actor.radius(), actor.height());
@@ -294,6 +297,21 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
 OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> party,
                                                     std::span<const PlayInput> inputs,
                                                     const Frame& suppliedFrame) {
+    Timings timings;
+    auto result = stepTimed(party, inputs, suppliedFrame, timings);
+    result.timings = timings;
+    return result;
+}
+
+OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party,
+                                                         std::span<const PlayInput> inputs,
+                                                         const Frame& suppliedFrame,
+                                                         Timings& timings) {
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](Clock::time_point begin) {
+        return static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count());
+    };
     Frame frame = suppliedFrame;
     // Gameplay camera state is part of the joint correction. Its smoothing
     // history advances each native tick; repeating the seed's visible pose
@@ -310,7 +328,9 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
         std::ranges::any_of(inputs, [](const auto& input) { return !ordinaryInput(input); })) {
         return {Status::Unsupported, Refusal::Environment};
     }
+    const auto captureBegin = Clock::now();
     auto before = m_checkpoint.checkpoint();
+    timings.captureNanoseconds = elapsed(captureBegin);
     if (!before) {
         return {};
     }
@@ -352,7 +372,9 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
             {.ticks = frame.ticks, .seconds = frame.seconds, .players = initialViews})) {
         return {Status::Unsupported, Refusal::OpponentAdmission};
     }
+    const auto prepareBegin = Clock::now();
     auto rewind = m_checkpoint.prepareRewind();
+    timings.prepareNanoseconds = elapsed(prepareBegin);
     if (!rewind) {
         return {};
     }
@@ -586,8 +608,19 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
         .stops = stops,
         .collision = &collision,
         .missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1};
-    if (m_checkpoint.m_pools.stageCombat(opponentFrame, m_checkpoint.m_missiles) !=
-        OpponentSimulation::Result::Advanced) {
+    if (m_checkpoint.m_pools.stageCombat(opponentFrame, m_checkpoint.m_missiles, [&] {
+            return opponents.playBirths(
+                [&](const EnemyBirthEmission& emission) -> std::optional<u32> {
+                    const auto prepared =
+                        emission.prepare(combat.m_sharedEffects, combat.m_effects.textureLenders());
+                    if (!prepared) {
+                        return std::nullopt;
+                    }
+                    const auto effect =
+                        combat.m_effects.startPrepared(*prepared, emission.position, {});
+                    return effect != 0 ? std::optional{effect} : std::nullopt;
+                });
+        }) != OpponentSimulation::Result::Advanced) {
         return {Status::Unsupported, Refusal::OpponentStep};
     }
     result.enemyCues = opponents.m_enemies.takeCues();
@@ -719,8 +752,11 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
         m_checkpoint.m_camera->m_owner.update(result.subjects, world.cameraMarkers(),
                                               world.cameraRange(), frame.projection, frame.seconds);
     }
+    const auto postconditionBegin = Clock::now();
     const auto after = m_checkpoint.checkpoint();
-    if (!after || !supported(*after, party, frame.seconds)) {
+    const bool accepted = after && supported(*after, party, frame.seconds);
+    timings.postconditionNanoseconds = elapsed(postconditionBegin);
+    if (!accepted) {
         return {Status::Unsupported, Refusal::Postcondition};
     }
     result.status = Status::Advanced;

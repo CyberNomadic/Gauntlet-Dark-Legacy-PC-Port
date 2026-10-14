@@ -227,6 +227,7 @@ add_executable(tests
     engine/assets/PngImageTests.cpp
     engine/assets/TextureSetTests.cpp
     engine/assets/TextureBindingsTests.cpp
+    engine/assets/AssetScopeTests.cpp
     engine/assets/ObjectMaterialTests.cpp
     engine/world/AssetAuditTests.cpp
     engine/assets/NativeDataAuditTests.cpp
@@ -270,6 +271,7 @@ add_executable(tests
     game/world/BodyCollisionTests.cpp
     game/world/BlobShadowTests.cpp
     game/world/PlayerFigureTests.cpp
+    game/world/AssetCensusTests.cpp
     game/world/PlayerFamiliarTests.cpp
     game/world/MikeyFigureTests.cpp
     game/world/WeaponGlowTests.cpp
@@ -515,6 +517,9 @@ if(GDL_ENABLE_NETPLAY)
     set_target_properties(netplaytests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
     # Focused native gameplay regressions without rebuilding unrelated test suites.
     add_executable(netplayplaytests game/netplay/OnlinePlayTests.cpp game/netplay/OnlinePartyTests.cpp
+        engine/assets/AssetScopeTests.cpp
+        engine/world/WorldSceneTests.cpp
+        engine/world/TreeModelTests.cpp
         game/netplay/PlayReplicationTests.cpp
         game/netplay/LocalMovementPredictionTests.cpp
         game/netplay/RollbackInputHistoryTests.cpp

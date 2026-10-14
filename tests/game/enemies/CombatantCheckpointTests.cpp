@@ -89,6 +89,46 @@ TEST_CASE("combatant checkpoint refuses malformed values and never reads transie
     CHECK(capture(owner) == emptyAdvanced);
 }
 
+TEST_CASE("native retired combatant slots preserve identity and may be restored before reuse",
+          "[combatant-checkpoint][assets]") {
+    Fighter native(General::definition());
+    Fighter replay(General::definition());
+    const auto alive = capture(*native.checkpoint);
+    EnemyHit hit;
+    hit.player = 2;
+    hit.damage = 1000000;
+    native.actor.hurt(hit);
+    for (s32 tick = 0; tick < 1200 && native.actor.present(); ++tick) {
+        native.actor.update(2, 1.0f / 30, {});
+    }
+    REQUIRE_FALSE(native.actor.present());
+    const auto retired = capture(*native.checkpoint);
+    REQUIRE(retired.parts.size() == 1);
+    CHECK(retired.parts[0].actor.definition.resource == 0);
+    CHECK(retired.parts[0].id == alive.parts[0].id);
+    CHECK(retired.parts[0].incarnation == alive.parts[0].incarnation);
+    REQUIRE_FALSE(retired.parts[0].events.losses.empty());
+    const auto uploads = replay.device.texturesCreated;
+    REQUIRE(replay.checkpoint->restore(retired));
+    CHECK(capture(*replay.checkpoint) == retired);
+    auto bad = retired;
+    bad.parts[0].actor.player.playing = true;
+    CHECK_FALSE(replay.checkpoint->restore(bad));
+    bad = retired;
+    bad.parts[0].actor.state = 1;
+    CHECK_FALSE(replay.checkpoint->restore(bad));
+    CHECK(capture(*replay.checkpoint) == retired);
+    REQUIRE(native.actor.spawn(native.stock, 40, {2, 0, 3}, 0, nullptr, {}, 'G'));
+    REQUIRE(replay.actor.spawn(replay.stock, 40, {2, 0, 3}, 0, nullptr, {}, 'G'));
+    const auto reused = capture(*native.checkpoint);
+    CHECK(reused.parts[0].incarnation > retired.parts[0].incarnation);
+    CHECK(capture(*replay.checkpoint) == reused);
+    REQUIRE(replay.checkpoint->restore(retired));
+    REQUIRE(replay.checkpoint->restore(reused));
+    CHECK(capture(*replay.checkpoint) == reused);
+    CHECK(replay.device.texturesCreated == uploads);
+}
+
 TEST_CASE("combatant prepared values are owner bound single use and cleared on native teardown",
           "[combatant-checkpoint]") {
     Combatant actor, other;

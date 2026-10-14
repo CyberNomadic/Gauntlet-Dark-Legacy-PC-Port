@@ -71,6 +71,7 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
                 CritterStatues::Placement statue;
                 statue.kind = family;
                 statue.instance = instance;
+                statue.onFloor = (info.collisionFlags & 1U) == 0;
                 statue.radius = info.radius;
                 statue.height = info.height;
                 statue.viewRadius = placement.viewRadius;
@@ -97,6 +98,7 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
             CritterStatues::Placement statue;
             statue.enemy = placement.spawn;
             statue.instance = instance;
+            statue.onFloor = (info.collisionFlags & 1U) == 0;
             statue.radius = info.radius;
             statue.height = info.height;
             statue.viewRadius = placement.viewRadius;

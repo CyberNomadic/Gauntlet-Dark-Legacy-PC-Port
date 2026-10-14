@@ -29,6 +29,7 @@
 #include "game/combat/DamageTypes.h"
 #include "game/config/GameConfig.h"
 #include "game/enemies/Enemies.h"
+#include "game/enemies/EnemyAnimator.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/menu/ScrollBox.h"
 #include "game/players/CharacterSave.h"
@@ -3455,11 +3456,24 @@ TEST_CASE("in the town's crypt the lich rises for the party, its meter over the 
     }
     // The boss stands at its mark; the meter shows it whole; the fight's own camera looks
     // from behind the party toward the boss. The approach pitch eases into the fight,
-    // rather than snapping to the combat record's shallow angle on the wake frame.
+    // rather than snapping to the combat record's shallow angle on the wake frame: the
+    // camera holds its place while its look pans to the boss, and turns no faster than
+    // its speed allows.
     REQUIRE(glm::distance(*scene.bosses().position(), Vec3{0.0f, 0.0f, -0.5f}) < 2.0f);
     REQUIRE(world.level()->bossCamera.has_value());
     REQUIRE(scene.bossCameraOn());
     REQUIRE(scene.viewCamera().position.z > scene.actor(0)->position().z);
+    REQUIRE(std::abs(scene.viewCamera().pitch - approachPitch) < 0.05f);
+    // It wakes for the party within its threshold, its look panning to it, and backs off
+    // under its speed until the boss and the party both fit, the pitch easing all the while.
+    for (s32 i = 0; i < 900 && (!scene.bosses().view().awake || scene.bossCamera().margin() < 0.0f ||
+                                 scene.viewCamera().pitch >= approachPitch);
+         ++i) {
+        const f32 before = scene.viewCamera().pitch;
+        scene.update(1.0 / 60.0, still);
+        REQUIRE(std::abs(scene.viewCamera().pitch - before) < 0.1f);
+    }
+    REQUIRE(scene.bosses().view().awake);
     REQUIRE(scene.viewCamera().pitch < approachPitch);
     REQUIRE(scene.bossCamera().margin() >= 0.0f);
     REQUIRE(scene.bossMeter().showing());
@@ -4827,7 +4841,7 @@ TEST_CASE("tower portal columns draw after horizon sheets while retaining wall o
     LevelWorld world;
     REQUIRE(world.load(device, root, *levels.byName("L1")));
     ExitPortals probe;
-    REQUIRE(probe.bind(device, world.layout(), world.items(), levels, &world.collision()));
+    REQUIRE(probe.bind(device, world.layout(), world.itemScope(), levels, &world.collision()));
     std::optional<Vec3> position;
     for (usize i = 0; i < probe.size(); ++i) {
         if (probe.portal(i).tag == "b1") {
@@ -5061,6 +5075,175 @@ TEST_CASE("fully unlocked character walks both tower wing gates in both directio
         CHECK(glm::dot(position - center, direction) * sign >= 6);
         REQUIRE(tower.triggers().opened(static_cast<s32>(gate)));
     }
+    scene.close();
+}
+
+TEST_CASE("the swamp's lizards play their whole entrance in the scene before walking off",
+          "[game][screens][forest-entrance][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/LIZ/ANIM.PS2");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("D1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    save.progress().health = 400;
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    // A lizard generator of strength one, and open ground about it to stand on.
+    const Vec3 generator{43.0f, 12.6f, -16.8f};
+    std::optional<Vec3> ground;
+    for (s32 d = 0; d < 8 && !ground.has_value(); ++d) {
+        const f32 angle = static_cast<f32>(d) * kPi / 4.0f;
+        const Vec3 spot = generator + Vec3{12.0f * std::sin(angle), 0.0f, 12.0f * std::cos(angle)};
+        const auto floor = world.collision().floorAt(spot, 4.0f, 4.0f);
+        if (floor.has_value() && std::abs(floor->y - generator.y) < 1.5f &&
+            !world.collision().wallBetween(generator + Vec3{0, 2, 0}, spot + Vec3{0, 2, 0}, 1.5f)) {
+            ground = Vec3{spot.x, floor->y, spot.z};
+        }
+    }
+    REQUIRE(ground.has_value());
+    PlayOptions options;
+    options.welcome = false;
+    options.position = *ground;
+    options.yaw = std::atan2(generator.x - ground->x, generator.z - ground->z);
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.enemies().kindLoaded(10));
+    std::array<u64, Enemies::kMost> seen{};
+    const auto scan = [&](bool wantNew) -> std::optional<s32> {
+        for (s32 id = 0; id < Enemies::kMost; ++id) {
+            const auto now = scene.enemies().observe(id);
+            if (now.has_value() && now->instance != seen[static_cast<usize>(id)]) {
+                seen[static_cast<usize>(id)] = now->instance;
+                if (wantNew && scene.enemies().bred(id) && scene.enemies().kindOf(id) == 10) {
+                    return id;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    (void)scan(false);
+    // The next body bred plays its whole entrance, frame by frame, before it walks off.
+    std::optional<s32> born;
+    std::vector<s32> actions;
+    std::vector<f32> playerFrames;
+    std::vector<u32> sequences;
+    for (s32 i = 0; i < 3600; ++i) {
+        scene.update(1.0 / 60.0, still);
+        if (!born.has_value()) {
+            born = scan(true);
+            if (!born.has_value()) {
+                continue;
+            }
+        }
+        const EnemyAnimator* animator = scene.enemies().animatorOf(*born);
+        REQUIRE(animator != nullptr);
+        actions.push_back(static_cast<s32>(animator->action()));
+        playerFrames.push_back(animator->player().frame());
+        sequences.push_back(animator->player().sequence());
+        if (animator->action() != EnemyAction::Start) {
+            break;
+        }
+    }
+    CAPTURE(actions, playerFrames, sequences);
+    REQUIRE(born.has_value());
+    const TreeInfo* tree = scene.enemies().appearanceTree({10, 1, 0, false});
+    REQUIRE(tree != nullptr);
+    const auto entrance = tree->findSequence("START");
+    REQUIRE(entrance.has_value());
+    // Twenty frames at thirty a second, stepped at sixty.
+    CHECK(actions.size() >= 38);
+    CHECK(actions.size() <= 44);
+    const auto entering = std::span(sequences).first(sequences.size() - 1);
+    const auto advancing = std::span(playerFrames).first(playerFrames.size() - 1);
+    CHECK(std::ranges::all_of(entering, [&](u32 s) { return s == *entrance; }));
+    CHECK(std::ranges::is_sorted(advancing));
+    CHECK(advancing.back() > advancing.front() + 15.0f);
+    CHECK(actions.back() == static_cast<s32>(EnemyAction::Walk));
+    scene.close();
+}
+
+TEST_CASE("the lich comes for a party that waits by the crypt's gate",
+          "[game][screens][lich-gate][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELG5/WORLDS.PS2");
+    test::assetOrSkip("CRITTER/LICH.WAD");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    const auto crypt = levels.byName("G5");
+    REQUIRE(crypt.has_value());
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *crypt));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    save.progress().health = 9999;
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false; // the party stays where the level puts it: by the gate
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    REQUIRE(scene.bosses().present());
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    // The gate lies beyond his waking threshold; woken all the same, he makes his entrance.
+    scene.bosses().wake();
+    for (s32 i = 0; i < 60 * 12; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.bossView()->awake);
+    // Whole, half spent, or nearly done: his data narrows what he may do as he weakens.
+    const f32 left = GENERATE(1.0f, 0.5f, 0.2f);
+    CAPTURE(left);
+    if (left < 1.0f) {
+        EnemyHit hit;
+        hit.damage = scene.bossView()->maxHealth * (1.0f - left);
+        scene.bosses().hurt(hit);
+    }
+    std::vector<std::string> moves;
+    s32 attacks = 0;
+    for (s32 i = 0; i < 60 * 60; ++i) {
+        scene.update(1.0 / 60.0, still);
+        const std::string move{scene.bosses().moveName()};
+        if (moves.empty() || !moves.back().starts_with(move + " ")) {
+            const f32 apart =
+                scene.bosses().position() != nullptr
+                    ? glm::distance(*scene.bosses().position(), scene.actor(0)->position())
+                    : -1.0f;
+            moves.push_back(std::format("{} @{}s d{:.0f}", move, i / 60, apart));
+            attacks += move.starts_with("AXE") || move.starts_with("SPIKE") || move == "CHAIN" ||
+                               move == "STOMP" || move == "HEADTOSS" || move == "HEADTOSS2" ||
+                               move == "CHARGE" || move == "SPIT" || move == "CRACK" ||
+                               move == "HANDGRAB" || move == "GRAB"
+                           ? 1
+                           : 0;
+        }
+    }
+    // Head tosses, charges, cracks and hand grabs reach the gate at every strength; the data
+    // leaves him only SPIT when the party stands within twenty-five of his leashed body.
+    CAPTURE(moves, scene.actor(0)->position());
+    CHECK(attacks >= 3);
     scene.close();
 }
 

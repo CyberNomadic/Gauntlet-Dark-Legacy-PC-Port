@@ -933,6 +933,48 @@ TEST_CASE("player figures select costume tiers without requiring a scene",
     REQUIRE(PlayerFigure::costumeDirectory(root, save).filename() == "BLU20");
 }
 
+/** The wizard's archive with Sumner's costume beside the blue one, and the wizard's actions. */
+std::filesystem::path sumnerFixture() {
+    const auto root = costumeFixture("figure-sumner", true);
+    for (const auto& [from, to] : {std::pair{"PLAYERS/WAR/BLU", "PLAYERS/WIZ/SUM"},
+                                   std::pair{"PLAYERS/WAR/ANIM", "PLAYERS/WIZ/ANIM"}}) {
+        std::filesystem::create_directories(root / to);
+        std::filesystem::copy(root / from, root / to,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    }
+    writeTextFile(root / "PLAYERS/WIZ/SUM/animations.json", R"({"trees":[
+        {"name":"WIZ_SUM","nodes":[
+            {"name":"HAND","object":"R_WRIST","position":[1,2,3]},
+            {"name":"ORNAMENT","object":"ORNAMENT","position":[4,0,0]}],"sequences":[]}]})");
+    writeTextFile(root / "PLAYERS/WIZ/ANIM/animations.json", R"({"trees":[
+        {"name":"WIZ","nodes":[
+            {"name":"UNUSED","position":[0,0,0]},
+            {"name":"HAND","position":[7,8,9]}],
+         "sequences":[{"name":"READY","frames":60,"frameRate":30,"repeats":true}]}]})");
+    return root;
+}
+
+TEST_CASE("Sumner wears the wizard's SUM costume and takes the wizard's actions and effects",
+          "[game][world][figure][sumner]") {
+    const auto root = sumnerFixture();
+    CharacterSave save;
+    save.character = kSumnerClass;
+    save.color = 1; // the colour chosen is no costume of his
+    REQUIRE(PlayerFigure::costumeDirectory(root, save) == root / "PLAYERS/WIZ/SUM");
+    REQUIRE(PlayerFigure::actionsClassOf(root, kSumnerClass) == "WIZ");
+    REQUIRE(PlayerFigure::classFolder(root, kSumnerClass, "SFXBLU") == root / "PLAYERS/WIZ/SFXBLU");
+    test::FakeRenderDevice device;
+    const auto figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(figure != nullptr);
+    REQUIRE(figure->directory() == root / "PLAYERS/WIZ/SUM");
+    REQUIRE(figure->animator().bound());
+    figure->animate(1.0f, 2, 1.0f / 30);
+    device.draws.clear();
+    figure->draw(device, Mat4{1}, Mat4{1}, {}, 1.0f, false);
+    CHECK_FALSE(device.draws.empty());
+}
+
 TEST_CASE("a player figure draws a rest-pose weapon when optional animations are missing",
           "[game][world][figure]") {
     const auto root = costumeFixture("figure-rest-pose", false);
@@ -1026,8 +1068,10 @@ TEST_CASE("the body is placed at its scale and lifted by levitation, its shadow'
     PowerupEffects wings;
     wings.special = powerup::kLevitation | powerup::kGrowth;
     const Mat4 lifted = PlayerFigure::bodyPlacement(base, save, wings);
-    CHECK(Vec3{lifted[3]} == Vec3{1.0f, 2.0f + PowerupEffects::kLevitationLift, 3.0f});
-    CHECK(lifted[0].x == PowerupEffects::kGrowthScale); // the lift is not scaled
+    // The lift is the costume root's own, under the scaled node: it grows with the body.
+    CHECK(Vec3{lifted[3]} ==
+          Vec3{1.0f, 2.0f + PowerupEffects::kLevitationLift * PowerupEffects::kGrowthScale, 3.0f});
+    CHECK(lifted[0].x == PowerupEffects::kGrowthScale);
     CHECK(lifted[1].y == PowerupEffects::kGrowthScale);
 }
 } // namespace

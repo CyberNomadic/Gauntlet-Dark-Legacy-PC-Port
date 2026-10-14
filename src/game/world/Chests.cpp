@@ -21,6 +21,22 @@ s16 paramS16(const ItemInstance& instance, usize at) {
 
 } // namespace
 
+s32 Chests::contentsRecord(std::span<const ItemInfo> infos, s32 record, s32 count) {
+    constexpr s32 kKey = 2;
+    if (record < 0 || static_cast<usize>(record) >= infos.size() || count <= 1 ||
+        infos[static_cast<usize>(record)].type != ItemInfo::kPowerup ||
+        infos[static_cast<usize>(record)].subtype != kKey) {
+        return record;
+    }
+    for (usize i = 0; i < infos.size(); ++i) {
+        if (infos[i].type == ItemInfo::kPowerup && infos[i].subtype == kKey &&
+            infos[i].name == "KEYRING") {
+            return static_cast<s32>(i);
+        }
+    }
+    return record;
+}
+
 s32 Chests::resolveContents(std::span<const ItemInfo> infos, s32 record, usize itemIndex,
                             u32& seed) {
     // A list may name a list; each pick moves the seed on.
@@ -43,8 +59,8 @@ s32 Chests::resolveContents(std::span<const ItemInfo> infos, s32 record, usize i
     return -1;
 }
 
-bool Chests::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-                  const WorldCollision* collision, ItemArchive* realmItems) {
+bool Chests::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+                  const WorldCollision* collision) {
     clear();
     m_collision = collision;
     m_layout = &layout;
@@ -69,8 +85,8 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& 
         chest->minPlayers = instance.minPlayers;
         chest->locked = (static_cast<u32>(info.activeType) & kLocked) != 0;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        ItemArchive& art = itemArchiveForTree(items, name, realmItems);
-        if (!chest->figure.place(device, art, name, instance, collision)) {
+        if (!chest->figure.place(device, scope, name, instance,
+                                 (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Chests: no figure {} in the item archive", name);
         }
         const auto* support =
@@ -178,8 +194,11 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
                 chest.opener = static_cast<s32>(v);
                 chest.figure.play(kOpening, false);
                 event.kind = ChestEvent::Kind::Unlocked;
-                chest.contents = resolveContents(m_infos, chest.contents,
-                                                 static_cast<usize>(chest.instance), m_seed);
+                chest.contents =
+                    contentsRecord(m_infos,
+                                   resolveContents(m_infos, chest.contents,
+                                                   static_cast<usize>(chest.instance), m_seed),
+                                   chest.count);
                 if (chest.subtype != kTrappedChest && chest.subtype != kGoldChest) {
                     event.contents = chest.contents;
                 }
@@ -260,7 +279,7 @@ void Chests::rock(Chest& chest, f32 seconds) {
 }
 
 bool Chests::changeContents(usize index, s32 record, RenderDevice& device,
-                            const WorldLayout& layout, ItemArchive& items,
+                            const WorldLayout& layout, const AssetScope& scope,
                             const WorldCollision* collision, std::string_view figure) {
     if (index >= m_chests.size()) {
         return false;
@@ -270,10 +289,10 @@ bool Chests::changeContents(usize index, s32 record, RenderDevice& device,
         return false;
     }
     chest.contents = record;
-    if (!figure.empty() && items.trees.find(figure).has_value()) {
+    if (!figure.empty() && scope.findTree(figure).has_value()) {
         const Mat4 placement = chest.figure.transform();
         const ItemInstance& instance = layout.itemInstances()[static_cast<usize>(chest.instance)];
-        chest.figure.place(device, items, figure, instance, collision);
+        chest.figure.place(device, scope, figure, instance, collision);
         chest.figure.placeAt(placement);
         chest.figure.play(kShut, true);
     }
@@ -286,9 +305,8 @@ void Chests::hold(usize chest, s32 item) {
     }
 }
 
-usize Chests::updateXray(RenderDevice& device, ItemArchive& items, ItemArchive& powerups,
-                         f32 seconds, std::span<const ChestVisitor> party,
-                         ItemArchive* realmItems) {
+usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArchive& powerups,
+                         std::span<const ChestVisitor> party) {
     std::vector<bool> selected(m_chests.size(), false);
     for (const auto& visitor : party) {
         if (!visitor.xray) {
@@ -328,8 +346,10 @@ usize Chests::updateXray(RenderDevice& device, ItemArchive& items, ItemArchive& 
         if (selected[i]) {
             fresh += chest.revealed ? 0U : 1U;
             u32 seed = m_seed; // Looking must not change what opening a random chest produces.
-            const s32 inside =
-                resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed);
+            const s32 inside = contentsRecord(
+                m_infos,
+                resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed),
+                chest.count);
             if (inside != chest.previewContents) {
                 chest.previewContents = inside;
                 const auto& record = m_infos[static_cast<usize>(inside)];
@@ -339,14 +359,14 @@ usize Chests::updateXray(RenderDevice& device, ItemArchive& items, ItemArchive& 
                 } else if (record.subtype == 2 && chest.count > 1) {
                     name = "KEYRING";
                 }
-                ItemArchive& levelArt = itemArchiveForTree(items, name, realmItems);
-                ItemArchive& archive = itemArchiveForTree(levelArt, name, &powerups);
+                AssetScope previewArt = scope;
+                previewArt.add(powerups);
                 ItemInstance instance;
                 instance.position = chest.figure.position();
                 instance.rotation.y = -chest.figure.yaw();
-                chest.preview.place(device, archive, name, instance, nullptr);
+                // do_see_thru's overlay tree is never animated: it holds its first pose.
+                chest.preview.place(device, previewArt, name, instance, nullptr);
             }
-            chest.preview.update(seconds);
         }
         chest.revealed = selected[i];
     }

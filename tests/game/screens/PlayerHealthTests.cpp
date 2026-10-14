@@ -347,6 +347,33 @@ TEST_CASE("a heavy blow taken unguarded teaches the guard to one who never block
     CHECK(f.blockLessons == 1);
 }
 
+TEST_CASE("a blow taken during the running shove flashes the guard's lines",
+          "[game][screens][player-health][assets]") {
+    // P_SHOVE sets hud_flags 0x400 as the guards set 0x200: damage_player halves the blow
+    // and starts the block flash for either.
+    const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
+                          .parent_path()
+                          .parent_path()
+                          .parent_path()
+                          .parent_path();
+    test::FakeRenderDevice device;
+    Fixture f;
+    f.player.figure = PlayerFigure::load(device, root, f.player.actor.save(), false);
+    REQUIRE(f.player.figure);
+    s32 flashes = 0;
+    f.events.block = [&](f32 blocked, f32 taken) {
+        ++flashes;
+        CHECK(blocked > 0);
+        CHECK(taken > 0);
+    };
+    f.player.figure->animate(0, 2, 1.0f / 30, PlayerDeed::Shove);
+    REQUIRE(f.player.figure->animator().shoving());
+    f.health.hurt(f.player, 40, HurtKind::Blow, true, false, 1, f.events,
+                  PlayerImpact{.flags = PlayerImpact::kKnockDown});
+    CHECK(flashes == 1);
+    CHECK(f.player.actor.save().health() == 1000 - 20);
+}
+
 TEST_CASE("ordinary enemy damage flashes the skin without inventing a stagger",
           "[game][screens][player-health]") {
     Fixture f;

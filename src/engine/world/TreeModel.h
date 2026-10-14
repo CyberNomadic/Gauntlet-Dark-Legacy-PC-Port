@@ -106,9 +106,12 @@ public:
     void setSubtreeFrame(usize root, u32 sequence, s32 frame);
 
     /** Draws with `model` placing model space in the world and `clip` mapping the world to
-     * clip space; opaque parts first, then translucent ones. `nodeTransforms`, one matrix per
-     * tree node in model space, poses the figure; empty, it stands at rest. An `alpha` under
-     * one blends every part that much (writing no depth); at zero nothing is drawn. */
+     * clip space: the nodes drawn at once first, then those the authored flags defer (a
+     * sortable node that is faded, glowing, flagged behind or alpha-textured, the way the
+     * original's MBSetupObject decides), every part with the console's alpha compare.
+     * `nodeTransforms`, one matrix per tree node in model space, poses the figure; empty, it
+     * stands at rest. An `alpha` under one blends every part that much (writing no depth);
+     * at zero nothing is drawn. */
     void draw(RenderDevice& device, const Mat4& clip, const Mat4& model,
               const WorldLighting& lighting = {}, std::span<const Mat4> nodeTransforms = {},
               const CameraFrame* camera = nullptr, f32 alpha = 1.0f, Pass pass = Pass::All,
@@ -146,6 +149,8 @@ private:
         bool additive = false; ///< added onto the frame, after the opaque
         bool depthWrite = true;
         bool depthTest = true;
+        bool sorted = false;          ///< eligible for deferral (flag 0x800)
+        bool deferAlways = false;     ///< a glow or sort-behind node: deferred while sorted
         u32 facing = 0;               ///< turned to the camera this way, when given one
         std::vector<FrameRun> runs;   ///< an object node's, one per sequence
         std::vector<usize> ancestors; ///< includes this node, then its parents

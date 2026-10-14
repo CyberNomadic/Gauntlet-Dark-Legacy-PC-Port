@@ -342,6 +342,7 @@ private:
     void finishStrikes();
     /** A potion's magic ringing a character: it goes about with them and harms what it
      * touches, every so often, until it is spent. */
+    static constexpr f32 kShieldHitAgain = 0.25f; ///< ProcessEffects' per-target fxhittime
     struct PotionShield {
         usize actor = 0;
         u32 flags = 0;
@@ -349,7 +350,13 @@ private:
         f32 radius = 0.0f;
         f32 damage = 0.0f;
         f32 secondsLeft = 0.0f;
-        f32 harmIn = 0.0f;
+        /** What it has struck and how long until it may again (fxhittime per owner). */
+        struct Mark {
+            s32 kind = 0;
+            s32 id = 0;
+            f32 wait = 0.0f;
+        };
+        std::vector<Mark> marks;
         std::vector<s32> blessed; ///< what its bearer's class perk has reached
     };
     std::vector<PotionShield> m_shields;

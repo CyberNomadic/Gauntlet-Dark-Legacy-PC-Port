@@ -30,7 +30,9 @@ void PickupHud::showCount(s32 player, std::string_view icon, s32 count, s32 tota
     }
     PickupCount& shown = m_counts[static_cast<usize>(player)];
     shown.icon = std::string(icon);
-    shown.count = count;
+    // A record under nought is one already congratulated: the HUD shows it full
+    // (towerBossStatus returns the total for it, and the drawing clamps again).
+    shown.count = count < 0 && total > 0 ? total : count;
     shown.total = total;
     shown.secondsLeft = kCountSeconds;
 }

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/assets/AssetScope.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
@@ -55,8 +56,8 @@ public:
         ItemSupport support;
     };
 
-    bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items,
-              const WorldCollision* collision, ItemArchive* realmItems = nullptr);
+    bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
+              const WorldCollision* collision);
     void clear();
     void syncFloors();
     usize size() const { return m_gates.size(); }

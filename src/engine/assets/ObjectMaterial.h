@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/ObjectFlags.h"
 #include "engine/core/Types.h"
 
 namespace gdl {
@@ -16,27 +17,28 @@ struct ObjectMaterial {
     bool depthWrite = true;
     bool depthTest = true;
     bool chrome = false;
-    bool sorted = false;       ///< may be deferred (flag 0x800)
+    bool sorted = false;      ///< may be deferred (flag 0x800)
     bool deferAlways = false; ///< a glow or sort-behind object: deferred while sorted
     u32 facing = 0;
     f32 sortBias = 0;
 
     static constexpr ObjectMaterial fromFlags(u32 flags) {
+        using namespace object_flags;
         f32 bias = 0.0f;
-        if ((flags & 0x100400U) != 0) {
+        if ((flags & kDistanceFade) != 0) {
             bias = -30000.0f;
-        } else if ((flags & 0x400000U) != 0) {
+        } else if ((flags & kSortBehind) != 0) {
             bias = -20000.0f;
-        } else if ((flags & 0x80000U) != 0) {
+        } else if ((flags & kSortBack) != 0) {
             bias = -10000.0f;
         }
-        return {.additive = (flags & 0x800000U) != 0,
-                .depthWrite = (flags & 0x80U) == 0,
-                .depthTest = (flags & 0x40U) == 0,
-                .chrome = (flags & 0x8000U) != 0,
-                .sorted = (flags & 0x800U) != 0,
-                .deferAlways = (flags & 0x40800000U) != 0,
-                .facing = (flags >> 24U) & 0xFU,
+        return {.additive = (flags & kAdditive) != 0,
+                .depthWrite = (flags & kNoDepthWrite) == 0,
+                .depthTest = (flags & kNoDepthTest) == 0,
+                .chrome = (flags & kChrome) != 0,
+                .sorted = (flags & kSorted) != 0,
+                .deferAlways = (flags & kDeferAlways) != 0,
+                .facing = (flags >> kFacingShift) & kFacingMask,
                 .sortBias = bias};
     }
 

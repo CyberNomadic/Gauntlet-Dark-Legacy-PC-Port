@@ -1789,12 +1789,10 @@ TEST_CASE("Ghost Town generators retain viable exits beside props and select nat
     REQUIRE(world.load(device, root, *level));
     REQUIRE(world.level());
     Breakables barrels;
-    REQUIRE(barrels.bind(device, world.layout(), world.items(), &world.collision(),
-                         &world.realmItems()));
+    REQUIRE(barrels.bind(device, world.layout(), world.itemScope(), &world.collision()));
     barrels.setPlayerCount(1);
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision(),
-                        &world.realmItems()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     chests.setPlayerCount(1);
     const auto barrelBodies = barrels.obstacles();
     const auto chestBodies = chests.obstacles();
@@ -1867,8 +1865,7 @@ TEST_CASE("all solo G1 generators have a viable native birth and authored initia
     // camera_mode_level replaces InitEnemies' initial 13-slot limit with CAMS' 25.
     REQUIRE(world.level()->maxEnemies == 25);
     Breakables barrels;
-    REQUIRE(barrels.bind(device, world.layout(), world.items(), &world.collision(),
-                         &world.realmItems()));
+    REQUIRE(barrels.bind(device, world.layout(), world.itemScope(), &world.collision()));
     barrels.setPlayerCount(1);
     const auto barrelBodies = barrels.obstacles();
     REQUIRE_FALSE(barrelBodies.empty());
@@ -1878,8 +1875,7 @@ TEST_CASE("all solo G1 generators have a viable native birth and authored initia
         CHECK(barrel.enemyItem->radius == 1);
     }
     Chests chests;
-    REQUIRE(chests.bind(device, world.layout(), world.items(), &world.collision(),
-                        &world.realmItems()));
+    REQUIRE(chests.bind(device, world.layout(), world.itemScope(), &world.collision()));
     chests.setPlayerCount(1);
     const auto chestBodies = chests.obstacles();
     const auto seed = GENERATE(1U, 7U, 41U);

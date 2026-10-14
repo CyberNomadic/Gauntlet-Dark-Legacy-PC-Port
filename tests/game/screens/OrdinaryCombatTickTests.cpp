@@ -38,10 +38,28 @@ using Tick = OrdinaryCombatTick;
 using Output = PartyDamage::Output;
 using OutputKind = PartyDamage::OutputKind;
 
-enum class MovingStage { None, Lift, Spinner };
+enum class MovingStage { None, Lift, Spinner, Transporter };
 
 std::filesystem::path movingStage(MovingStage kind) {
     const auto directory = test::sampleLevel("ordinary-combat-moving-stage");
+    if (kind == MovingStage::Transporter) {
+        writeTextFile(directory / "world.json", R"({"objects":[
+          {"name":"FLOOR","position":[20,1,0],"flags":4100,"next":1},
+          {"name":"FLOOR","position":[0,0,0],"flags":4}],
+          "animations":[{"object":0,"frames":121,"state":257,"start":0,
+            "track":{"flags":16,"frames":[0,120],"values":[0,-44]}}],
+          "itemInfos":[{"type":11,"name":"TRANS","radius":3,"height":4}],
+          "itemInstances":[
+            {"info":0,"position":[20,1,0],"params":[1,0,0,0,2,0,0,0,0,0,0,0]},
+            {"info":0,"position":[-40,0,-40],"params":[2,0,0,0,1,0,0,0,0,0,0,0]}],
+          "bounds":{"min":[-60,-20,-60],"max":[60,30,60]}})");
+        writeTextFile(directory / "collision.json", R"({"objects":[
+          {"object":0,"normals":[0,1,0,0,1,0],
+           "vertices":[-1,0,-1,1,0,1,1,0,-1,-1,0,-1,-1,0,1,1,0,1]},
+          {"object":1,"normals":[0,1,0,0,1,0],
+           "vertices":[-60,0,-60,60,0,60,60,0,-60,-60,0,-60,-60,0,60,60,0,60]}]})");
+        return directory;
+    }
     const bool lift = kind == MovingStage::Lift;
     const std::string motion =
         lift ? R"("animations":[{"object":0,"frames":2000,"state":257,"start":0,
@@ -119,8 +137,7 @@ struct Fixture {
                     world.load(device, movingStage(moving), {.name = "TEST", .directory = "."}));
             }
             world.setPlayerCount(2);
-            portals.bind(device, world.layout(), world.items(), catalog, &world.collision(),
-                         &world.realmItems());
+            portals.bind(device, world.layout(), world.itemScope(), catalog, &world.collision());
         }
         if (explosive) {
             const auto directory = test::sampleLevel("ordinary-combat-pending-world-explosion");
@@ -781,6 +798,54 @@ TEST_CASE("complete stage combat carries native lift and turntable riders across
     CHECK(fixture->device.textureUpdates == uploads);
 }
 
+TEST_CASE("stage combat refuses a carried transporter at its current native contact",
+          "[ordinary-combat-tick][ordinary-stage-tick][transporter-platform][assets]") {
+    const s32 ticks = GENERATE(1, 2);
+    auto fixture =
+        std::make_unique<Fixture>(false, false, false, 0, false, false, MovingStage::Transporter);
+    LevelTransporters pads;
+    pads.bind(fixture->device, fixture->world.layout(), fixture->world.itemScope(), 2,
+              &fixture->world.collision());
+    REQUIRE(pads.size() == 2);
+    REQUIRE(pads.pad(0).support == 0);
+    const auto authored = pads.pad(0).position;
+    const auto uploads = fixture->device.texturesCreated;
+    bool advanced = false, refused = false;
+    for (s32 step = 0; step < 180; ++step) {
+        CAPTURE(ticks, step);
+        const auto frame = Fixture::frame(step, ticks);
+        const auto before = fixture->state();
+        // Observe the actual native pad after the world phase, then rewind that
+        // whole phase before asking the transactional runner to execute it.
+        fixture->world.update(frame.seconds, false);
+        pads.syncFloors(fixture->world.collision());
+        const bool touched = std::ranges::any_of(fixture->players, [&](const auto& player) {
+            return pads
+                .contact(player.actor.position(), player.actor.radius(), player.actor.height())
+                .has_value();
+        });
+        REQUIRE(fixture->boundary->restore(before));
+        const auto result = fixture->runner->step(fixture->players, {}, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        if (touched) {
+            REQUIRE(pads.pad(0).position != authored);
+            CHECK(result.status == Tick::Status::Unsupported);
+            CHECK(result.refusal == Tick::Refusal::WorldMotion);
+            CHECK(result.subjects.empty());
+            CHECK(result.damage.empty());
+            CHECK(result.throws.empty());
+            CHECK(fixture->state() == before);
+            refused = true;
+            break;
+        }
+        REQUIRE(result.status == Tick::Status::Advanced);
+        advanced = true;
+    }
+    CHECK(advanced);
+    CHECK(refused);
+    CHECK(fixture->device.texturesCreated == uploads);
+}
+
 TEST_CASE("ordinary combat melee matches native hits rewards and prepared feedback",
           "[ordinary-combat-tick][ordinary-melee][assets]") {
     const s32 ticks = GENERATE(1, 2);
@@ -999,8 +1064,14 @@ TEST_CASE("ordinary stationary and strafing throws replay native release flight 
         REQUIRE(observedStrafe);
     }
     CHECK(observedStrong == strong);
-    CHECK(released == ((1U << 3) | (1U << 1)));
-    CHECK(flew);
+    // Sorceress free-A is an authored DAMG effect, not a weapon release. The
+    // second local seat is always Sorceress; both native hits and queued rewards
+    // above still have to match, including the all-Sorceress strong case.
+    constexpr s32 kSorceressClass = 6;
+    const u32 expectedReleases =
+        strong ? (character == kSorceressClass ? 0U : 1U << 3) : (1U << 3) | (1U << 1);
+    CHECK(released == expectedReleases);
+    CHECK(flew == (expectedReleases != 0));
     CHECK(pendingLoss);
     CHECK(awardedNextPhase);
     CHECK(fixture.device.texturesCreated == uploads);

@@ -156,6 +156,78 @@ TEST_CASE("attack restoration preserves native turbo repeated-contact cooldowns 
     CHECK(player.turbo.held() == paid);
 }
 
+TEST_CASE("attack checkpoint resumes independent native potion shield target cooldowns",
+          "[player-attacks-checkpoint][potion-shield-checkpoint]") {
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    CAPTURE(seconds);
+    test::AttackCheckpointFixture fixture;
+    fixture.opponents.open({fixture.device, fixture.world, fixture.weapons, fixture.effects,
+                            fixture.audio, fixture.root, 1},
+                           fixture.players);
+    auto& enemies = fixture.opponents.enemies();
+    EnemyScales scales;
+    scales.health = 100;
+    enemies.open(fixture.device, fixture.root, nullptr, 8, scales, 19);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const auto first =
+        enemies.spawn({.kind = kGruntKind, .position = {0, 0, 1}, .placed = true}, {});
+    REQUIRE(first);
+    auto& inventory = fixture.players[0].actor.save().progress().inventory;
+    inventory.addPotions(2, 2);
+    fixture.attacks.shieldPotion(0, fixture.players);
+    const auto paid = inventory;
+    const f32 firstFull = enemies.healthOf(*first);
+    fixture.attacks.updateShields(seconds, fixture.players, fixture.targets);
+    REQUIRE(enemies.healthOf(*first) < firstFull);
+    const f32 firstHit = enemies.healthOf(*first);
+    const auto second =
+        enemies.spawn({.kind = kGruntKind, .position = {1, 0, 1}, .placed = true}, {});
+    REQUIRE(second);
+    const f32 secondFull = enemies.healthOf(*second);
+    fixture.attacks.updateShields(seconds, fixture.players, fixture.targets);
+    CHECK(enemies.healthOf(*first) == firstHit);
+    REQUIRE(enemies.healthOf(*second) < secondFull);
+    const f32 secondHit = enemies.healthOf(*second);
+    const auto saved = fixture.state();
+    const auto visual = fixture.effectState();
+    const auto victims = enemies.checkpoint();
+    REQUIRE(victims);
+    REQUIRE(saved.shields.size() == 1);
+    REQUIRE(saved.shields[0].marks.size() == 2);
+    CHECK(saved.shields[0].marks[0] == Boundary::State::Shield::Mark{0, *first, 0.25f - seconds});
+    CHECK(saved.shields[0].marks[1] == Boundary::State::Shield::Mark{0, *second, 0.25f});
+    const auto uploads = fixture.device.texturesCreated;
+    std::vector<Boundary::State> expected;
+    std::vector<EffectTrees::PoolCheckpoint> shown;
+    std::vector<std::array<f32, 2>> health;
+    const auto step = [&] {
+        fixture.attacks.updateShields(seconds, fixture.players, fixture.targets);
+        fixture.effects.update(seconds);
+    };
+    for (s32 tick = 0; tick < 200; ++tick) {
+        step();
+        expected.push_back(fixture.state());
+        shown.push_back(fixture.effectState());
+        health.push_back({enemies.healthOf(*first), enemies.healthOf(*second)});
+    }
+    CHECK(health.back()[0] < firstHit);
+    CHECK(health.back()[1] < secondHit);
+    REQUIRE_FALSE(fixture.attacks.pendingGameplay());
+    fixture.restore(saved, visual);
+    REQUIRE(enemies.restore(*victims));
+    for (usize tick = 0; tick < expected.size(); ++tick) {
+        CAPTURE(tick);
+        step();
+        CHECK(fixture.state() == expected[tick]);
+        CHECK(fixture.effectState() == shown[tick]);
+        CHECK(enemies.healthOf(*first) == health[tick][0]);
+        CHECK(enemies.healthOf(*second) == health[tick][1]);
+    }
+    CHECK(inventory == paid);
+    CHECK(fixture.device.texturesCreated == uploads);
+    CHECK(fixture.helps.empty());
+}
+
 TEST_CASE("attack preparation rejects malformed references and actor rebinding atomically",
           "[player-attacks-checkpoint]") {
     test::AttackCheckpointFixture fixture;
@@ -169,9 +241,13 @@ TEST_CASE("attack preparation rejects malformed references and actor rebinding a
     saved.attachments.push_back({0, visual.effects[0].id, 0, Mat4{1}, true});
     saved.particles.push_back({0, 0, visual.effects[0].id, "BODY", {1, 2, 3}});
     saved.items.push_back({Boundary::Item::FireBreath, 0, 0, 0.2f, 2, true, {101}});
+    // A mark need not still name a live target. Preserve all native families,
+    // their order, and the zero-expiry boundary without inventing a live roster.
+    saved.shields[0].marks = {
+        {0, 17, 0}, {1, 19, 0.1f}, {2, 23, 0.2f}, {3, 0, 0.25f}, {4, 29, 0.125f}};
     fixture.restore(saved, visual);
     REQUIRE(fixture.state() == saved);
-    for (s32 mutation = 0; mutation < 13; ++mutation) {
+    for (s32 mutation = 0; mutation < 22; ++mutation) {
         CAPTURE(mutation);
         auto bad = saved;
         switch (mutation) {
@@ -181,13 +257,22 @@ TEST_CASE("attack preparation rejects malformed references and actor rebinding a
         case 3: bad.items[0].hit.push_back(101); break;
         case 4: bad.potions[0].impact.effectResource = 999; break;
         case 5: bad.shields[0].effect = visual.nextId; break;
-        case 6: bad.shields[0].harmIn = std::numeric_limits<f32>::quiet_NaN(); break;
+        case 6: bad.shields[0].marks[0].wait = std::numeric_limits<f32>::quiet_NaN(); break;
         case 7: bad.attachments[0].local[3][3] = 0; break;
         case 8: bad.particles[0].node.assign(257, 'A'); break;
         case 9: bad.strikeSources.push_back({1, 0, 999}); break;
         case 10: bad.actors[0].player = 0; break;
         case 11: bad.actors[0].character = 2; break;
         case 12: bad.potions.resize(Boundary::State::kMaxAreas + 1); break;
+        case 13: bad.shields[0].marks[0].kind = -1; break;
+        case 14: bad.shields[0].marks[0].kind = 5; break;
+        case 15: bad.shields[0].marks[0].id = -1; break;
+        case 16: bad.shields[0].marks[3].id = 1; break;
+        case 17: bad.shields[0].marks[0].wait = -0.01f; break;
+        case 18: bad.shields[0].marks[0].wait = 0.2501f; break;
+        case 19: bad.shields[0].marks.push_back(bad.shields[0].marks[0]); break;
+        case 20: bad.shields[0].marks.resize(Boundary::State::kMaxContacts + 1); break;
+        case 21: bad.shields[0].marks[0].wait = std::numeric_limits<f32>::infinity(); break;
         }
         CHECK_FALSE(Boundary::prepare(fixture.attacks, bad, fixture.actors, visual,
                                       fixture.missileResources));

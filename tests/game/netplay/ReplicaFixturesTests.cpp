@@ -123,16 +123,16 @@ struct Fixture {
             native ? test::assetOrSkip("ITEMS/LEVELG/ANIM.PS2").parent_path() : root;
         REQUIRE(archive.load(archiveRoot));
         REQUIRE(layout.load(root));
-        CHECK(chests.bind(device, layout, archive, nullptr) == !hazards);
-        CHECK(gates.bind(device, layout, archive, nullptr) == !hazards);
+        CHECK(chests.bind(device, layout, AssetScope(archive), nullptr) == !hazards);
+        CHECK(gates.bind(device, layout, AssetScope(archive), nullptr) == !hazards);
         if (hazards) {
-            REQUIRE(barrels.bind(device, layout, archive, nullptr));
-            REQUIRE(traps.bind(device, layout, archive, nullptr));
+            REQUIRE(barrels.bind(device, layout, AssetScope(archive), nullptr));
+            REQUIRE(traps.bind(device, layout, AssetScope(archive), nullptr));
             barrels.setPlayerCount(1);
             traps.setPlayerCount(1);
         }
         switches.bind(layout, animator, nullptr);
-        switches.bindFigures(device, layout, archive);
+        switches.bindFigures(device, layout, AssetScope(archive));
         switches.setPlayerCount(1);
         REQUIRE(resources.bind(device, std::array{&archive}, generators, rocks));
     }
@@ -242,11 +242,11 @@ TEST_CASE("fixture capture carries chests gates and X-Ray previews on the host f
     const std::array<Vec3, 3> vertices{Vec3{-100, 0, -100}, Vec3{100, 0, -100}, Vec3{0, 0, 100}};
     floor.build({{{0, 1, 0}, vertices, 0, 4100}});
     floor.setMovingObjects(std::array<s32, 1>{0});
-    REQUIRE(f.chests.bind(f.device, f.layout, f.archive, &floor));
-    REQUIRE(f.gates.bind(f.device, f.layout, f.archive, &floor));
+    REQUIRE(f.chests.bind(f.device, f.layout, AssetScope(f.archive), &floor));
+    REQUIRE(f.gates.bind(f.device, f.layout, AssetScope(f.archive), &floor));
     REQUIRE(f.chests.chest(0).floor);
     const std::array visitors{ChestVisitor{{0, 0, 0}, 1, 1, true}};
-    REQUIRE(f.chests.updateXray(f.device, f.archive, f.archive, 0, visitors) == 1);
+    REQUIRE(f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, visitors) == 1);
     const auto first = f.capture(10);
     REQUIRE(first.fixtures.size() == 3);
     CHECK(first.fixtures[0].alpha == Approx(63.0f / 255));
@@ -281,7 +281,7 @@ TEST_CASE("fixture capture carries chests gates and X-Ray previews on the host f
     f.device.draws.clear();
     f.resources.draw(f.device, second.fixtures[1], Mat4{1}, {}, camera, TreeModel::Pass::All);
     sameGeometry(f.device.draws, expected);
-    f.chests.updateXray(f.device, f.archive, f.archive, 0, {});
+    f.chests.updateXray(f.device, AssetScope(f.archive), f.archive, {});
     CHECK(f.capture(15).fixtures.size() == 2);
 }
 
@@ -355,8 +355,8 @@ TEST_CASE("trap replicas retain host phases through cycles stops disarming and f
     const std::array<Vec3, 3> vertices{Vec3{-100, 0, -100}, Vec3{100, 0, -100}, Vec3{0, 0, 100}};
     floor.build({{{0, 1, 0}, vertices, 0, 4100}});
     floor.setMovingObjects(std::array<s32, 1>{0});
-    REQUIRE(f.traps.bind(f.device, f.layout, f.archive, &floor));
-    REQUIRE(f.barrels.bind(f.device, f.layout, f.archive, &floor));
+    REQUIRE(f.traps.bind(f.device, f.layout, AssetScope(f.archive), &floor));
+    REQUIRE(f.barrels.bind(f.device, f.layout, AssetScope(f.archive), &floor));
     f.barrels.setPlayerCount(1);
     const auto first = f.capture(1);
     floor.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{0, -4, 0}));
@@ -398,8 +398,8 @@ TEST_CASE("trap replicas retain host phases through cycles stops disarming and f
     REQUIRE(f.traps.stop(0));
     CHECK(f.traps.trap(0).action == Traps::kResting);
     const auto stopped = f.capture(241);
-    REQUIRE(f.traps.disarm(0, f.device, f.layout, f.archive, &floor));
-    REQUIRE(f.traps.disarm(1, f.device, f.layout, f.archive, &floor));
+    REQUIRE(f.traps.disarm(0, f.device, f.layout, AssetScope(f.archive), &floor));
+    REQUIRE(f.traps.disarm(1, f.device, f.layout, AssetScope(f.archive), &floor));
     const auto disarmed = f.capture(242);
     CHECK(disarmed.fixtures.size() + 1 == stopped.fixtures.size());
     const auto oldTrap =
@@ -453,7 +453,7 @@ TEST_CASE("native light-trap replicas preserve transparent shutdown frames throu
             WorldLayout layout;
             REQUIRE(layout.load(dir));
             Traps traps;
-            REQUIRE(traps.bind(device, layout, items, nullptr));
+            REQUIRE(traps.bind(device, layout, AssetScope(items), nullptr));
             const Generators generators;
             const SafeRocks rocks;
             const Chests chests;
@@ -690,8 +690,8 @@ TEST_CASE("native fixture roster covers every level for four players without run
             std::array{&world.textures(), &world.items().textures, &world.realmItems().textures}));
         Chests chests;
         LockedGates gates;
-        chests.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
-        gates.bind(device, world.layout(), world.items(), &world.collision(), &world.realmItems());
+        chests.bind(device, world.layout(), world.itemScope(), &world.collision());
+        gates.bind(device, world.layout(), world.itemScope(), &world.collision());
         chests.setPlayerCount(4);
         gates.setPlayerCount(4);
         Breakables barrels;
@@ -699,13 +699,10 @@ TEST_CASE("native fixture roster covers every level for four players without run
         SafeRocks rocks;
         ExitPortals portals;
         const Rubble rubble;
-        barrels.bind(device, world.layout(), world.items(), &world.collision(),
-                     &world.realmItems());
-        traps.bind(device, world.layout(), world.items(), &world.collision(), 1, 1, 1,
-                   &world.realmItems());
+        barrels.bind(device, world.layout(), world.itemScope(), &world.collision());
+        traps.bind(device, world.layout(), world.itemScope(), &world.collision(), 1, 1, 1);
         rocks.bind(device, world.layout(), world.items());
-        portals.bind(device, world.layout(), world.items(), catalog, &world.collision(),
-                     &world.realmItems());
+        portals.bind(device, world.layout(), world.itemScope(), catalog, &world.collision());
         barrels.setPlayerCount(4);
         traps.setPlayerCount(4);
         rocks.setPlayerCount(4);
@@ -801,8 +798,8 @@ TEST_CASE("native portal replicas retain locked exits raised loops fades and con
         REQUIRE(world.load(device, root, *level));
         const TowerAccess access(std::array{CharacterSave{}});
         ExitPortals portals;
-        REQUIRE(portals.bind(device, world.layout(), world.items(), catalog, &world.collision(),
-                             &world.realmItems(), level->isTower() ? &access : nullptr));
+        REQUIRE(portals.bind(device, world.layout(), world.itemScope(), catalog, &world.collision(),
+                             level->isTower() ? &access : nullptr));
         usize selected = portals.size();
         for (usize i = 0; i < portals.size(); ++i) {
             const auto& portal = portals.portal(i);

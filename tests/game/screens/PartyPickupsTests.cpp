@@ -253,6 +253,47 @@ TEST_CASE("tower crystal congratulations survive the in-level notice and acknowl
     CHECK(pages.size() == 1);
 }
 
+TEST_CASE("the tower congratulates the party on the gargoyles' pieces before the crystals",
+          "[pickups][tower-crystals][gargoyle-pieces]") {
+    LevelWorld world;
+    LevelFixtures fixtures;
+    PartyHud hud;
+    LevelSoundscape audio;
+    const ClassDataSet classes;
+    std::array<PlayerRuntime, 2> players;
+    std::vector<std::pair<std::string, usize>> opened;
+    PartyPickups::Services services{.world = world,
+                                    .fixtures = fixtures,
+                                    .hud = hud,
+                                    .audio = audio,
+                                    .classes = classes,
+                                    .sounds = nullptr,
+                                    .help = {},
+                                    .openMessage = {},
+                                    .challengeCoin = {}};
+    services.openMessage = [&](std::string_view key, usize page) {
+        opened.emplace_back(std::string(key), page);
+        return true;
+    };
+    // TowerCheckMessages: all twelve fangs in hand, the West Wing's scroll comes before any
+    // crystal notice, and the record is then kept under nought, as the crystals' are.
+    auto& fangs = players[0].actor.save().progress().relics;
+    fangs.gargoylePieces[0] = Relics::kGargoyleNeeded[0];
+    players[1].actor.save().progress().relics.gargoylePieces[0] = 3;
+    players[1].actor.save().progress().crystals[2] = LevelTriggers::crystalsNeeded(2);
+    REQUIRE(PartyPickups::announceTowerUnlock(players, services));
+    REQUIRE(opened == std::vector<std::pair<std::string, usize>>{{"UNLOCKSECTION", 0}});
+    CHECK(fangs.gargoylePieces[0] == -1);
+    CHECK(fangs.gargoyleComplete(0));
+    CHECK(players[0].entrySave.classes[0].relics.gargoylePieces[0] == -1);
+    CHECK(players[1].actor.save().progress().relics.gargoylePieces[0] == 3);
+    // The next notice is the crystals'; the fangs are not announced again.
+    REQUIRE(PartyPickups::announceTowerUnlock(players, services));
+    REQUIRE(opened.size() == 2);
+    CHECK(opened[1].first == "UNLOCKLEVEL");
+    CHECK_FALSE(PartyPickups::announceTowerUnlock(players, services));
+}
+
 TEST_CASE("the narrator counts the party's runestones as the original does",
           "[game][screens][pickups]") {
     CHECK(PartyPickups::runeCountVoices(0).empty());

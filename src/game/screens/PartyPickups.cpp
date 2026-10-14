@@ -24,6 +24,10 @@ constexpr std::string_view kRunesFoundVoice = "S_RUNEFOUND2";
 constexpr s32 kMostRunesCounted = 12;
 constexpr std::string_view kLevelScrollPrefix = "SCROLLS"; ///< a level's scroll pages
 constexpr std::string_view kUnlockLevel = "UNLOCKLEVEL";
+constexpr std::string_view kUnlockSection = "UNLOCKSECTION";
+/** The tower's word on a wing opened by the gargoyles' pieces (fn_8009C5B8). */
+constexpr std::array<std::string_view, Relics::kGargoyleKinds> kUnlockSectionVoices{
+    "S_FNGS4WST", "S_FTHS4WST", "S_CLWS4BTL"};
 constexpr s32 kGoldLesson = 17; ///< COLLECTGOLD, for a pile of 25 or more
 constexpr s32 kGoldLessonAmount = 25;
 constexpr s32 kKeyLessonGates = 8; ///< SAVEKEYS, where there are gates to spend keys on
@@ -362,8 +366,36 @@ bool PartyPickups::announceTowerUnlock(std::span<PlayerRuntime> players, const S
         return !runtime.departed && (costume == nullptr || costume->character != save.character ||
                                      costume->directory != "SUM");
     };
-    // TowerCheckMessages scans completion2[0..7], excluding the black-crystal entry.
-    // A negative count is the native, persisted "already congratulated" sentinel.
+    // TowerCheckMessages looks to the gargoyles' pieces first (completion record A: the
+    // fangs, feathers and claws), then to completion2[0..7], excluding the black-crystal
+    // entry. A negative count is the native, persisted "already congratulated" sentinel.
+    for (usize kind = 0; kind < Relics::kGargoyleKinds; ++kind) {
+        const s32 needed = Relics::kGargoyleNeeded[kind];
+        s32 best = 0;
+        for (const auto& runtime : players) {
+            if (participates(runtime)) {
+                const s32 count = runtime.actor.save().progress().relics.gargoylePieces[kind];
+                if (best >= 0 && (count < 0 || count > best)) {
+                    best = count;
+                }
+            }
+        }
+        if (best != needed || !services.openMessage ||
+            !services.openMessage(kUnlockSection, kind)) {
+            continue;
+        }
+        services.audio.speakOverScroll(kUnlockSectionVoices[kind]);
+        for (auto& runtime : players) {
+            if (participates(runtime) &&
+                runtime.actor.save().progress().relics.gargoylePieces[kind] == needed) {
+                runtime.actor.save().progress().relics.gargoylePieces[kind] = -1;
+                const s32 character = runtime.actor.save().character;
+                runtime.entrySave.classes[static_cast<usize>(character)]
+                    .relics.gargoylePieces[kind] = -1;
+            }
+        }
+        return true;
+    }
     for (usize realm = 1; realm < 8; ++realm) {
         const s32 needed = LevelTriggers::crystalsNeeded(static_cast<s32>(realm));
         s32 best = 0;

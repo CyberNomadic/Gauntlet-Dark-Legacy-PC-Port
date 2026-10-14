@@ -71,9 +71,9 @@ bool validPlacement(const CritterStatues::Placement& p) {
 bool CritterStatues::Placement::operator==(const Placement& other) const {
     return kind == other.kind && enemy.has_value() == other.enemy.has_value() &&
            (!enemy || sameSpawn(*enemy, *other.enemy)) && form == other.form &&
-           sameInstance(instance, other.instance) && radius == other.radius &&
-           height == other.height && viewRadius == other.viewRadius && sight == other.sight &&
-           activeOn == other.activeOn && carried == other.carried;
+           sameInstance(instance, other.instance) && onFloor == other.onFloor &&
+           radius == other.radius && height == other.height && viewRadius == other.viewRadius &&
+           sight == other.sight && activeOn == other.activeOn && carried == other.carried;
 }
 
 bool CritterStatues::Checkpoint::valid() const {
@@ -279,7 +279,8 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
     }
     auto statue = std::make_unique<Statue>();
     statue->placement = placement;
-    if (!statue->figure.place(device, archive, tree, placement.instance, collision)) {
+    if (!statue->figure.place(device, archive, tree, placement.instance,
+                              placement.onFloor ? collision : nullptr)) {
         return false;
     }
     statue->figure.play(kIdleSequence, true);

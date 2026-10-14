@@ -4638,9 +4638,12 @@ TEST_CASE("potion shields harm enemies behind the bearer and stop at expiration"
     CHECK(enemies.healthOf(*id) < before);
     const auto after = enemies.healthOf(*id);
     f.attacks.updateShields(0.1f, f.players, f.targets);
-    CHECK(enemies.healthOf(*id) == after);
+    CHECK(enemies.healthOf(*id) == after); // not again within a quarter second
+    f.attacks.updateShields(0.2f, f.players, f.targets);
+    CHECK(enemies.healthOf(*id) < after); // then it is, while still within the ring
+    const auto twice = enemies.healthOf(*id);
     f.attacks.updateShields(4, f.players, f.targets);
-    CHECK(enemies.healthOf(*id) == after);
+    CHECK(enemies.healthOf(*id) == twice);
     f.attacks.clear();
     f.opponents.close();
 }
