@@ -14,9 +14,9 @@ namespace gdl::game {
 namespace {
 constexpr std::string_view kWizardTree = "WIZARD";
 constexpr f32 kWizardLift = 3.0f;
-constexpr f32 kCaptionScale = 0.75f;
-constexpr s32 kCaptionBottom = 96;
-constexpr s32 kCaptionLineHeight = 18;
+constexpr f32 kCaptionScale = 0.667f; ///< CaptionText: two thirds of the scroll's scale
+constexpr f32 kCaptionTop = 16.0f;     ///< do_good_wizard lays its captions at y 16 of 384
+constexpr f32 kCaptionLineHeight = 32.0f * kCaptionScale;
 } // namespace
 
 void BossVictoryPresentation::begin(s32 kind, char realm, u16 runesInRealm, u16 runesFound,
@@ -173,12 +173,14 @@ void BossVictoryPresentation::drawCaption(Canvas& canvas, const TextPainter& tex
     const std::string shown =
         strings.message(*found).pages[caption->page].substr(0, caption->shown);
     const std::vector<std::string> lines = ScrollBox::splitLines(shown);
+    // Unlike the tower's ceremony captions over the status boxes, the wizard's visit after
+    // a boss writes at the top of the screen, each line centred.
     TextStyle style;
     style.scale = kCaptionScale;
-    s32 y = static_cast<s32>(height) - kCaptionBottom -
-            static_cast<s32>(lines.size()) * kCaptionLineHeight;
+    f32 y = height * kCaptionTop / 384.0f;
     for (const std::string& line : lines) {
-        text.draw(canvas, -static_cast<s32>(width / 2.0f), y, line, style);
+        const auto x = text.leftEdge(-static_cast<s32>(width / 2.0f), line, style.scale);
+        text.draw(canvas, x, static_cast<s32>(y), line, style);
         y += kCaptionLineHeight;
     }
 }
