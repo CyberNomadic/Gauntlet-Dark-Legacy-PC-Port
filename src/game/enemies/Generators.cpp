@@ -368,7 +368,7 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
             bodies->models[static_cast<usize>(state)].setFrame(0, 0);
             continue;
         }
-        for (const char* suffix : {"L1", "", "ROOT"}) {
+        for (const char* suffix : {"", "L1", "L1ROOT"}) {
             const auto object = archive->models.find(base + suffix);
             if (!object.has_value()) {
                 continue;

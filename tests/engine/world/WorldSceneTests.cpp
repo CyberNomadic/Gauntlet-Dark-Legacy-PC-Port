@@ -249,8 +249,8 @@ TEST_CASE("controlled static geometry hides only its own mesh without moving or 
     f.device.draws.clear();
     f.scene.draw(f.device, Mat4{1});
     REQUIRE(f.device.draws.size() == 2);
-    REQUIRE(f.device.draws[0].vertices[0].position == Vec3{20, 0, 0});
-    REQUIRE(f.device.draws[1].vertices[0].position == Vec3{10, 5, 0}); // child still draws
+    REQUIRE(f.device.draws[0].vertices[0].position == Vec3{10, 5, 0}); // child still draws
+    REQUIRE(f.device.draws[1].vertices[0].position == Vec3{20, 0, 0});
     REQUIRE(f.scene.setObjectVisible(0, true));
     f.scene.setObjectAlpha(0, 0.5f);
     REQUIRE(f.scene.setObjectVisible(0, false));
@@ -282,10 +282,15 @@ TEST_CASE("a world scene places every object that has a mesh and draws it in pas
     for (const auto& draw : f.device.draws) {
         CHECK(draw.state.mipmaps); // baked batches and individually animated scenery
     }
-    // The opaque wall draws first, offset by its parent, then the lightmapped floor (its own
-    // batch under the same texture) and the moving blade; the translucent window follows;
-    // the sorted units come farthest first; the glowing copy of the wall adds itself last.
-    const auto& wall = f.device.draws[0];
+    // The solid batches draw in object order: the window (alpha-textured but not authored
+    // to sort, so a solid cutout), the wall offset by its parent, then the lightmapped floor
+    // (its own batch under the wall's texture); the moving blade follows; the sorted panes
+    // come farthest first; the flame and the glowing copy of the wall add themselves last.
+    const auto& window = f.device.draws[0];
+    REQUIRE(window.vertices[0].position == Vec3{10.0f, 5.0f, 0.0f});
+    REQUIRE(window.state.alphaTest == WorldScene::kAlphaTest);
+    REQUIRE(window.state.depthWrite);
+    const auto& wall = f.device.draws[1];
     REQUIRE(wall.vertices.size() == 3);
     REQUIRE(wall.vertices[0].position == Vec3{11.0f, 0.0f, 0.0f});
     REQUIRE(wall.vertices[1].position == Vec3{12.0f, 0.0f, 0.0f});
@@ -294,18 +299,14 @@ TEST_CASE("a world scene places every object that has a mesh and draws it in pas
     REQUIRE(wall.state.cullBack);
     REQUIRE(wall.state.depthWrite);
     REQUIRE(wall.state.alphaTest == WorldScene::kAlphaTest);
-    const auto& floor = f.device.draws[1];
+    const auto& floor = f.device.draws[2];
     REQUIRE(floor.texture == wall.texture);
     REQUIRE(floor.lightmap() == &f.textures.texture(f.device, 2));
     REQUIRE(floor.vertices[0].position == Vec3{10.0f, 0.0f, 20.0f}); // under the group
     REQUIRE(floor.vertices[1].uv2 == Vec2{0.5f, 0.25f});             // texels over the 2x2 lightmap
-    const auto& blade = f.device.draws[2];
+    const auto& blade = f.device.draws[3];
     REQUIRE(blade.texture == wall.texture);
     REQUIRE(blade.vertices[0].position == Vec3{11.0f, 0.0f, 50.0f});
-    const auto& window = f.device.draws[3];
-    REQUIRE(window.vertices[0].position == Vec3{10.0f, 5.0f, 0.0f});
-    REQUIRE(window.state.alphaTest == WorldScene::kAlphaTest);
-    REQUIRE(window.state.depthWrite);
     // Lit from above, the upward-facing wall is brighter than the downward-facing window,
     // which keeps the ambient alone.
     REQUIRE(wall.vertices[0].color.r > window.vertices[0].color.r);
@@ -400,6 +401,93 @@ TEST_CASE("Temple stained-glass light rays composite after the curtain meshes",
     REQUIRE(curtainCount > 0);
     REQUIRE(firstRay < device.draws.size());
     CHECK(lastCurtain < firstRay);
+}
+
+TEST_CASE("alpha-textured scenery is a solid unless its object is authored to sort",
+          "[world][scene][draw-policy]") {
+    // MBSetupObject defers only sortable objects (0x800) that are faded, glowing, flagged
+    // behind, or whose mesh is marked alpha-textured; the texture alone decides nothing.
+    Fixture f("world-scene-draw-policy");
+    writeTextFile(f.directory / "world.json", R"({"objects":[
+      {"name":"WALL","position":[0,0,0],"next":1,"child":-1,"objectFlags":0},
+      {"name":"PANE","position":[0,0,10],"next":2,"child":-1,"objectFlags":0},
+      {"name":"PANE","position":[0,0,20],"next":3,"child":-1,"objectFlags":2048},
+      {"name":"WALL","position":[0,0,30],"next":-1,"child":-1,"objectFlags":2048}]})");
+    REQUIRE(f.layout.load(f.directory));
+    REQUIRE(f.build());
+    REQUIRE(f.scene.batchCount() == 2); // the wall and the unsorted pane, both solids
+    REQUIRE(f.scene.unitCount() == 2);  // the sortable pane and the sortable wall
+    const Texture* stone = &f.textures.texture(f.device, 0);
+    const Texture* glass = &f.textures.texture(f.device, 1);
+    const CameraFrame camera;
+
+    f.scene.drawOpaque(f.device, Mat4{1}, camera);
+    REQUIRE(f.device.draws.size() == 3);
+    const auto& pane = f.device.draws[1];
+    CHECK(pane.texture == glass);
+    CHECK(pane.vertices[0].position.z == 10.0f);
+    CHECK(pane.state.depthWrite);
+    CHECK(pane.state.depthTest);
+    CHECK(pane.state.alphaTest == WorldScene::kAlphaTest);
+    const auto& sortableWall = f.device.draws[2];
+    CHECK(sortableWall.texture == stone);
+    CHECK(sortableWall.vertices[0].position.z == 30.0f); // opaque mesh: solid until faded
+    CHECK(sortableWall.state.depthWrite);
+
+    f.device.draws.clear();
+    f.scene.drawDeferred(f.device, Mat4{1}, camera);
+    REQUIRE(f.device.draws.size() == 1);
+    CHECK(f.device.draws[0].texture == glass);
+    CHECK(f.device.draws[0].vertices[0].position.z == 20.0f);
+
+    // Fading the sortable wall is what moves it into the deferred queue.
+    f.scene.setObjectAlpha(3, 0.5f);
+    f.device.draws.clear();
+    f.scene.drawOpaque(f.device, Mat4{1}, camera);
+    REQUIRE(f.device.draws.size() == 2);
+    f.scene.drawDeferred(f.device, Mat4{1}, camera);
+    REQUIRE(f.device.draws.size() == 4);
+    CHECK(f.device.draws[2].vertices[0].position.z == 30.0f); // farther first
+    CHECK_FALSE(f.device.draws[2].state.depthWrite);
+    CHECK(f.device.draws[3].vertices[0].position.z == 20.0f);
+}
+
+TEST_CASE("the Castle Treasury weapon rack is drawn with the solids", "[world][scene][assets]") {
+    const auto root = test::assetOrSkip("LEVELS/LEVELA4/WORLDS.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout layout;
+    WorldScene scene;
+    REQUIRE(models.load(root));
+    REQUIRE(textures.load(root));
+    REQUIRE(layout.load(root));
+    // A4RECTANGLE192: a cutout quad on the wall, alpha-textured, with no sort flag.
+    const auto rack = models.find("A4RECTANGLE192");
+    REQUIRE(rack);
+    REQUIRE((models.entry(*rack).flags & 1U) != 0);
+    REQUIRE(models.mesh(*rack).alphaTextured());
+    const auto slot = textures.find("SWRDSHLD_3");
+    REQUIRE(slot);
+    REQUIRE(textures.entry(*slot).translucent());
+    const Texture* texture = &textures.texture(device, *slot);
+    REQUIRE(scene.build(layout, models, textures, device, {}, {}));
+    scene.drawOpaque(device, Mat4{1}, CameraFrame{});
+    usize solidDraws = 0;
+    for (const auto& draw : device.draws) {
+        if (draw.texture == texture) {
+            ++solidDraws;
+            CHECK(draw.state.depthWrite);
+            CHECK(draw.state.depthTest);
+            CHECK(draw.state.alphaTest == WorldScene::kAlphaTest);
+        }
+    }
+    REQUIRE(solidDraws > 0);
+    device.draws.clear();
+    scene.drawDeferred(device, Mat4{1}, CameraFrame{});
+    for (const auto& draw : device.draws) {
+        CHECK(draw.texture != texture);
+    }
 }
 
 TEST_CASE("S8 wheat cutouts reject clear texels in both batched and independent scenery",
@@ -557,11 +645,11 @@ TEST_CASE("moving objects carry what stands under them", "[world][scene]") {
     f.scene.setObjectTransform(8, turned);
     f.scene.setObjectTransform(2, turned); // the still wall ignores it
     f.scene.draw(f.device, Mat4{1.0f}, Vec3{10.0f, 0.0f, 0.0f});
-    const auto& blade = f.device.draws[2];
+    const auto& blade = f.device.draws[3];
     REQUIRE(blade.vertices[0].position.x == Approx(10.0f).margin(1e-5f));
     REQUIRE(blade.vertices[0].position.z == Approx(49.0f).margin(1e-5f));
     REQUIRE(blade.vertices[1].position.z == Approx(48.0f).margin(1e-5f));
-    REQUIRE(f.device.draws[0].vertices[0].position == Vec3{11.0f, 0.0f, 0.0f});
+    REQUIRE(f.device.draws[1].vertices[0].position == Vec3{11.0f, 0.0f, 0.0f});
 }
 
 TEST_CASE("texture slots can show another frame or slide their coordinates", "[world][scene]") {
@@ -576,10 +664,10 @@ TEST_CASE("texture slots can show another frame or slide their coordinates", "[w
     REQUIRE(f.scene.textureOf(0) == &frame);
     REQUIRE(f.scene.textureOffset(1) == Vec2{0.25f, 0.0f});
     f.scene.draw(f.device, Mat4{1.0f}, Vec3{10.0f, 0.0f, 0.0f});
-    REQUIRE(f.device.draws[0].texture == &frame); // the wall
-    REQUIRE(f.device.draws[2].texture == &frame); // and the blade, in the same slot
-    REQUIRE(f.device.draws[3].state.uvOffset == Vec2{0.25f, 0.0f}); // the window
-    REQUIRE(f.device.draws[0].state.uvOffset == Vec2{0.0f, 0.0f});
+    REQUIRE(f.device.draws[1].texture == &frame); // the wall
+    REQUIRE(f.device.draws[3].texture == &frame); // and the blade, in the same slot
+    REQUIRE(f.device.draws[0].state.uvOffset == Vec2{0.25f, 0.0f}); // the window
+    REQUIRE(f.device.draws[1].state.uvOffset == Vec2{0.0f, 0.0f});
     f.scene.setTextureFrame(0, nullptr);
     REQUIRE(f.scene.textureOf(0) == &f.textures.texture(f.device, 0));
     // Slots the scene never draws are ignored.
@@ -716,7 +804,7 @@ TEST_CASE("moving world geometry interpolates its local hierarchy without moving
         f.device.draws.clear();
         f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0}), alpha);
         REQUIRE(f.device.draws.size() == 8);
-        const Vec3 vertex = f.device.draws[2].vertices[0].position;
+        const Vec3 vertex = f.device.draws[3].vertices[0].position;
         CHECK(vertex.x == Approx(10 + 6 * alpha + std::cos(alpha)).margin(1e-5f));
         CHECK(vertex.y == Approx(2 * alpha));
         CHECK(vertex.z == Approx(50 - std::sin(alpha)).margin(1e-5f));
@@ -724,19 +812,19 @@ TEST_CASE("moving world geometry interpolates its local hierarchy without moving
     }
     f.device.draws.clear();
     f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0}));
-    CHECK(f.device.draws[2].vertices[0].position == Vec3{native * Vec4{1, 0, 0, 1}});
+    CHECK(f.device.draws[3].vertices[0].position == Vec3{native * Vec4{1, 0, 0, 1}});
 
     // An explicit teleport starts at its destination even before the next snapshot.
     const Mat4 teleported = glm::translate(Mat4{1}, Vec3{80, 5, 50});
     f.scene.setObjectTransform(8, teleported, true);
     f.device.draws.clear();
     f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0}), 0.0f);
-    CHECK(f.device.draws[2].vertices[0].position == Vec3{91, 5, 50});
+    CHECK(f.device.draws[3].vertices[0].position == Vec3{91, 5, 50});
     f.scene.capturePresentation();
     for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
         f.device.draws.clear();
         f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0}), alpha);
-        CHECK(f.device.draws[2].vertices[0].position == Vec3{91, 5, 50});
+        CHECK(f.device.draws[3].vertices[0].position == Vec3{91, 5, 50});
     }
 }
 

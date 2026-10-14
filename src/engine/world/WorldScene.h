@@ -21,9 +21,11 @@ namespace gdl {
 /**
  * A level's geometry placed by its layout. What never moves is gathered per texture into a
  * few batches, lit once when the scene is built. Objects the layout animates, and those it
- * marks for sorting, stay units of their own: they are placed and lit every frame and the
- * sorted ones are drawn farthest first, the way the original defers its translucent
- * objects. Textures a texture animation cycles or slides are swapped per slot.
+ * marks for sorting, stay units of their own: they are placed and lit every frame. Which
+ * pass anything draws in follows the authored flags alone (ObjectMaterial): a sortable
+ * object is deferred, farthest first, once it is faded, a glow, flagged behind or wears an
+ * alpha-textured mesh; everything else, alpha texture or not, is a solid drawn with the
+ * cutout test. Textures a texture animation cycles or slides are swapped per slot.
  */
 class WorldScene {
 public:
@@ -100,7 +102,7 @@ public:
      * events or modify the WorldCollision used by the authoritative simulation. */
     bool applyGeometry(const SceneGeometry& state);
 
-    /** Draws the still opaque geometry, the moving objects, the still translucent geometry,
+    /** Draws the still solid geometry, the undeferred objects, the deferred objects,
      * then the sorted objects farthest from the camera first (those flagged to face it
      * turned its way), and the glows last; `clip` maps world to clip space.
      * A texture-frame offset samples scrolls and soft flipbooks without advancing clocks. */
@@ -136,7 +138,6 @@ private:
         Vec2 offset{0.0f, 0.0f};
         Vec2 scrollPhase{0.0f};
         Vec2 scrollVelocity{0.0f};
-        bool translucent = false;
         bool usable = false;
         bool thermal = false;
 
@@ -152,7 +153,6 @@ private:
         std::vector<Vec3> normals; ///< one per vertex, for the point lights
         Vec3 lowest{0.0f};         ///< the corners of what it holds
         Vec3 highest{0.0f};
-        bool translucent = false;
         bool additive = false;
         bool depthWrite = true;
         bool depthTest = true;
@@ -162,7 +162,6 @@ private:
         const MeshPart* part = nullptr;
         const Texture* lightmap = nullptr;
         Vec2 lightmapScale{1.0f, 1.0f};
-        bool translucent = false;
         bool additive = false;
     };
     /** An object placed every frame: animated, or drawn in depth order. */
@@ -175,11 +174,16 @@ private:
         u32 facing = 0;
         bool prelit = false; ///< shaded by its vertices' colours ///< turned to the camera this way
         bool chrome = false;
-        bool sorted = false;
-        bool background = false; ///< depthless, far-layer scenery (e.g. A5 lightning sheets)
+        bool sorted = false;      ///< eligible for the deferred queue (flag 0x800)
+        bool deferAlways = false; ///< a glow or sort-behind object
+        bool meshAlpha = false;   ///< its mesh is marked alpha-textured
+        bool background = false;  ///< depthless, far-layer scenery (e.g. A5 lightning sheets)
         bool visible = true;
         bool depthWrite = true;
         bool depthTest = true;
+
+        /** Drawn after the solids, farthest first, as the original's MBSetupObject decides. */
+        bool deferred() const { return sorted && (alpha < 1.0f || deferAlways || meshAlpha); }
     };
     struct Placement {
         Mat4 local{1.0f};    ///< relative to the parent
@@ -199,8 +203,9 @@ private:
     const Unit* unitOf(usize object) const;
     void drawBatch(RenderDevice& device, const Batch& batch, const Mat4& clip,
                    std::optional<f32> textureFrameOffset) const;
+    /** Draws the unit's plain parts, its additive parts, or both. */
     void drawUnit(RenderDevice& device, const Unit& unit, const Mat4& clip,
-                  const CameraFrame& camera, bool opaque, bool translucent, f32 alpha,
+                  const CameraFrame& camera, bool plainParts, bool additiveParts, f32 alpha,
                   std::optional<f32> textureFrameOffset) const;
 
     std::unordered_map<u32, Slot> m_slots;

@@ -43,7 +43,7 @@ struct Fixture {
     Vec3 bladeAt() {
         device.draws.clear();
         scene.draw(device, Mat4{1.0f}, Vec3{10.0f, 0.0f, 0.0f});
-        return device.draws[2].vertices[0].position;
+        return device.draws[3].vertices[0].position;
     }
 };
 
@@ -97,8 +97,8 @@ TEST_CASE("world animation jumps and loop resets cut the presentation without ex
     const auto at = [&](f32 alpha) {
         f.device.draws.clear();
         f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0}), alpha);
-        REQUIRE(f.device.draws.size() >= 3);
-        return f.device.draws[2].vertices[0].position;
+        REQUIRE(f.device.draws.size() >= 4);
+        return f.device.draws[3].vertices[0].position;
     };
     f.scene.capturePresentation();
     f.animator.fire(8, true, true);
