@@ -52,6 +52,9 @@ s32 Relics::addGargoylePiece(s32 kind) {
         return -1;
     }
     s32& count = gargoylePieces[static_cast<usize>(kind)];
+    if (count < 0) {
+        return count; // congratulated already: towerAdvanceLevelRecord leaves it
+    }
     count = std::min(count + 1, kGargoyleNeeded[static_cast<usize>(kind)]);
     return count;
 }
