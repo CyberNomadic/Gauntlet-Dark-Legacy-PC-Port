@@ -1,6 +1,7 @@
 #include "game/screens/CombatPrediction.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <utility>
 
@@ -55,6 +56,7 @@ struct CombatPrediction::Data {
     std::unique_ptr<OrdinaryCombatTick> stagedRunner;
     StageStatePacket::Catalog stageCatalog;
     std::unique_ptr<OrdinaryCombatCheckpoint::State> authority;
+    std::optional<OrdinaryCombatCheckpoint::Rewind> baselineUndo;
     MatchContext context;
     u64 baseline = 0;
     u64 tick = 0;
@@ -68,6 +70,7 @@ struct CombatPrediction::Data {
 
     ~Data() {
         lifetime.reset(); // Invalidate borrowed particle artwork before any owner releases it.
+        baselineUndo.reset();
         stagedRunner.reset();
         staged.reset();
         stagePortals.reset();
@@ -231,14 +234,19 @@ struct CombatPrediction::Data {
         }
         active = false;
         ++replayRevision;
-        if (authority) {
+        if (baselineUndo) {
             // The admitted runner cannot replace resources or external owners.
             // Failure to undo here is an ownership bug, never partial success.
-            if (!resources.matches(party) || !checkpointOwner()->restore(*authority)) {
+            if (!resources.matches(party) || !checkpointOwner()->rewind(std::move(*baselineUndo))) {
                 std::terminate();
             }
-            tick = baseline;
+            baselineUndo.reset();
+        } else if (tick != baseline) {
+            // Preparation precedes the first native mutation. A picture-only
+            // interval needs no restore; an advanced interval always has undo.
+            std::terminate();
         }
+        tick = baseline;
     }
 };
 
@@ -351,8 +359,27 @@ OrdinaryCombatTick::Result CombatPrediction::advance(u64 tick, std::span<const P
     }
     auto& data = *m_data;
     try {
+        std::optional<u64> prepareNanoseconds;
+        if (!data.baselineUndo) {
+            // Keep one preallocated undo until this authority interval ends,
+            // including appends published by separate coordinator updates.
+            // A refused/throwing preparation has not mutated the seed.
+            const auto begin = std::chrono::steady_clock::now();
+            data.baselineUndo = data.checkpointOwner()->prepareRewind();
+            prepareNanoseconds =
+                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - begin)
+                                     .count());
+            if (!data.baselineUndo) {
+                data.resetReplay();
+                OrdinaryCombatTick::Result result;
+                result.timings.prepareNanoseconds = prepareNanoseconds;
+                return result;
+            }
+        }
         auto* runner = data.stageSelected ? data.stagedRunner.get() : data.runner.get();
-        auto result = runner->step(data.party, inputs, frame);
+        auto result = runner->stepUnderRewind(data.party, inputs, frame, *data.baselineUndo);
+        result.timings.prepareNanoseconds = prepareNanoseconds;
         if (result.status != OrdinaryCombatTick::Status::Advanced) {
             data.resetReplay();
             return result;

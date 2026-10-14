@@ -739,9 +739,14 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
         }
         const auto commands = MatchInputs::commands(match, *local);
         match.latency().update();
-        match.latency().motionRequest(commands, shown());
+        match.latency().motionRequest(commands, shown(), match.playback().latest());
         if (!match.sample(commands)) {
             return fail(Failure::Input);
+        }
+        // Submit the stamped input before potentially expensive local replay.
+        // The final flush still retries congestion and sends later frame output.
+        if (!m_session->flush()) {
+            return fail(Failure::Session);
         }
         if (m_prediction.epoch() != match.context().epoch) {
             const auto* world = m_replica.world();

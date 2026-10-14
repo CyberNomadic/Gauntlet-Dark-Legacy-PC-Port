@@ -156,6 +156,37 @@ struct Fixture {
     }
 };
 
+TEST_CASE("level support batches retain appended collision owners and reject stale resources",
+          "[rollback][level-world-checkpoint]") {
+    Fixture fixture("level-world-support-batch");
+    const auto objects = fixture.owner.collisionObjects();
+    REQUIRE_FALSE(objects.empty());
+    CHECK(std::ranges::is_sorted(objects));
+    CHECK(std::ranges::adjacent_find(objects) == objects.end());
+    CHECK(std::ranges::binary_search(objects, 0));
+    const auto wallObject = fixture.world.walls().wall(0).object;
+    REQUIRE(wallObject >= static_cast<s32>(fixture.world.layout().objects().size()));
+    CHECK(std::ranges::binary_search(objects, wallObject));
+    for (const auto object : objects) {
+        CHECK(fixture.owner.hasCollisionObject(object));
+    }
+    CHECK_FALSE(std::ranges::binary_search(objects, -1));
+    CHECK_FALSE(std::ranges::binary_search(objects, 999999));
+    const std::vector<s32> identities(objects.begin(), objects.end());
+    REQUIRE(fixture.world.strikeWall(0, 1000) == 0);
+    const auto after = fixture.owner.collisionObjects();
+    CHECK(std::ranges::equal(after, identities));
+    CHECK_FALSE(fixture.world.collision().solid(wallObject));
+    fixture.owner.clearResources();
+    CHECK(fixture.owner.collisionObjects().empty());
+    CHECK_FALSE(fixture.owner.hasCollisionObject(wallObject));
+    REQUIRE(fixture.owner.bindResources(fixture.device));
+    CHECK(std::ranges::equal(fixture.owner.collisionObjects(), identities));
+    fixture.world.clear();
+    CHECK(fixture.owner.collisionObjects().empty());
+    CHECK_FALSE(fixture.owner.hasCollisionObject(0));
+}
+
 TEST_CASE("complete level checkpoints rewind native motion destruction pickups and cue queues",
           "[rollback][level-world-checkpoint]") {
     Fixture host("level-world-checkpoint-host");

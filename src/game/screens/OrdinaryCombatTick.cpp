@@ -298,20 +298,33 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::step(std::span<PlayerRuntime> par
                                                     std::span<const PlayInput> inputs,
                                                     const Frame& suppliedFrame) {
     Timings timings;
-    auto result = stepTimed(party, inputs, suppliedFrame, timings);
+    auto result = stepTimed(party, inputs, suppliedFrame, timings, nullptr);
     result.timings = timings;
     return result;
 }
 
-OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party,
-                                                         std::span<const PlayInput> inputs,
-                                                         const Frame& suppliedFrame,
-                                                         Timings& timings) {
+OrdinaryCombatTick::Result
+OrdinaryCombatTick::stepUnderRewind(std::span<PlayerRuntime> party,
+                                    std::span<const PlayInput> inputs, const Frame& frame,
+                                    const OrdinaryCombatCheckpoint::Rewind& rewind) {
+    Timings timings;
+    auto result = stepTimed(party, inputs, frame, timings, &rewind);
+    result.timings = timings;
+    return result;
+}
+
+OrdinaryCombatTick::Result
+OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime> party, std::span<const PlayInput> inputs,
+                              const Frame& suppliedFrame, Timings& timings,
+                              const OrdinaryCombatCheckpoint::Rewind* intervalUndo) {
     using Clock = std::chrono::steady_clock;
     const auto elapsed = [](Clock::time_point begin) {
         return static_cast<u64>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count());
     };
+    if (intervalUndo && !m_checkpoint.canRewind(*intervalUndo)) {
+        return {};
+    }
     Frame frame = suppliedFrame;
     // Gameplay camera state is part of the joint correction. Its smoothing
     // history advances each native tick; repeating the seed's visible pose
@@ -372,13 +385,16 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime
             {.ticks = frame.ticks, .seconds = frame.seconds, .players = initialViews})) {
         return {Status::Unsupported, Refusal::OpponentAdmission};
     }
-    const auto prepareBegin = Clock::now();
-    auto rewind = m_checkpoint.prepareRewind();
-    timings.prepareNanoseconds = elapsed(prepareBegin);
-    if (!rewind) {
-        return {};
+    std::optional<Undo> undo;
+    if (intervalUndo == nullptr) {
+        const auto prepareBegin = Clock::now();
+        auto rewind = m_checkpoint.prepareRewind();
+        timings.prepareNanoseconds = elapsed(prepareBegin);
+        if (!rewind) {
+            return {};
+        }
+        undo.emplace(m_checkpoint, std::move(*rewind));
     }
-    Undo undo{m_checkpoint, std::move(*rewind)};
     auto& combat = m_checkpoint.m_combat;
     auto& opponents = m_checkpoint.m_opponents;
     auto& world = opponents.m_resources->world;
@@ -760,7 +776,9 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(std::span<PlayerRuntime
         return {Status::Unsupported, Refusal::Postcondition};
     }
     result.status = Status::Advanced;
-    undo.accept();
+    if (undo) {
+        undo->accept();
+    }
     return result;
 }
 

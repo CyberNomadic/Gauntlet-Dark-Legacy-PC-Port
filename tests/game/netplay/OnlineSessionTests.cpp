@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "game/netplay/OnlinePair.h"
 #include "game/netplay/OnlineSession.h"
 
 namespace {
@@ -177,6 +178,25 @@ std::vector<u8> prepare(MatchOwners owners = {1, 2, 0, 0}) {
     REQUIRE(bytes);
     return *bytes;
 }
+std::vector<InputCommand> inputs(const MatchSession& session, bool pressed = false) {
+    std::vector<InputCommand> result;
+    const auto& context = session.context();
+    for (usize seat = 0; seat < context.owners.size(); ++seat) {
+        if (context.owners[seat] != session.localPeer()) {
+            continue;
+        }
+        InputCommand command;
+        command.epoch = context.epoch;
+        command.tick = session.inputTick();
+        command.grant = context.grants[seat];
+        command.seat = static_cast<u8>(seat);
+        command.direction = {1, 0};
+        command.magnitude = 0.5f;
+        command.pressedButtons = pressed ? static_cast<u32>(CommandPress::UsePotion) : 0;
+        result.push_back(command);
+    }
+    return result;
+}
 
 TEST_CASE("online room readiness waits for authenticated links and server confirmation",
           "[netplay][online-session]") {
@@ -267,6 +287,190 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
         CHECK(host.session.failure() == Failure::Match);
         CHECK_FALSE(host.session.flush());
     }
+}
+
+TEST_CASE("guest input flushes preserve sampled history through congestion without resampling",
+          "[netplay][online-session][latency][early-input-flush]") {
+    std::vector<std::vector<u8>> attempts;
+    bool congested = false;
+    test::OnlinePair pair{{}, true, 2, 2};
+    pair.prepare();
+    pair.ready();
+    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
+        if (InputPacket::decode(bytes)) {
+            CHECK(delivery == PacketTransport::Delivery::Unreliable);
+            attempts.emplace_back(bytes.begin(), bytes.end());
+            return congested ? PacketTransport::SendResult::Congested
+                             : PacketTransport::SendResult::Sent;
+        }
+        return PacketTransport::SendResult::Sent;
+    };
+    const auto hostPolls = pair.hostWire.polls;
+    const auto guestPolls = pair.guestWire.polls;
+    const auto epoch = pair.guest.context().epoch;
+    const auto firstTick = pair.guest.inputTick();
+    std::vector<InputCommand> history;
+    for (u64 tick = 0; tick < InputHistory::kTicks; ++tick) {
+        const auto frame = inputs(pair.guest, tick == 0);
+        REQUIRE(frame.size() == 2);
+        REQUIRE(pair.guest.sample(frame));
+        history.insert(history.end(), frame.begin(), frame.end());
+        if (tick + 1 < InputHistory::kTicks) {
+            REQUIRE(pair.guestSession.flush());
+            REQUIRE(pair.guestSession.flush());
+            CHECK(attempts.size() == tick + 1);
+        }
+    }
+    attempts.clear();
+    const auto sentBefore = pair.guest.latency().sendQueue().summary().count;
+    REQUIRE(sentBefore == 6);
+    const auto latestSample = InputPacket::encode(pair.guest.sampledInputs());
+    REQUIRE(latestSample);
+    const auto expected = InputPacket::encode(history);
+    REQUIRE(expected);
+    congested = true;
+    pair.guestService.closed = true; // Any accidental poll would fail the session.
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(pair.guestSession.flush());
+    CHECK(pair.guest.latency().sendQueue().summary().count == sentBefore);
+    congested = false;
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(attempts.size() == 3);
+    for (const auto& attempt : attempts) {
+        CHECK(attempt == *expected);
+    }
+    CHECK(InputPacket::encode(pair.guest.sampledInputs()) == latestSample);
+    CHECK(pair.guest.inputTick() == firstTick + InputHistory::kTicks);
+    CHECK(pair.guest.context().epoch == epoch);
+    CHECK(pair.guestSession.phase() == Phase::Active);
+    CHECK(pair.guest.latency().sendQueue().summary().count == sentBefore + 2);
+    CHECK(pair.hostWire.polls == hostPolls);
+    CHECK(pair.guestWire.polls == guestPolls);
+    CHECK(pair.host.tick() == 0);
+    pair.guestService.closed = false;
+    pair.guestWire.beforeSend = {};
+
+    // Redundant receipt still resolves each edge once at its original input tick.
+    pair.hostSession.update(0);
+    std::array<u32, InputCommand::kSeats> presses{};
+    for (u64 tick = 0; tick < firstTick + InputHistory::kTicks; ++tick) {
+        const auto frame = pair.host.advance();
+        REQUIRE(frame);
+        for (usize seat = 0; seat < frame->size(); ++seat) {
+            presses[seat] += (*frame)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        }
+    }
+    CHECK(presses == std::array<u32, 4>{0, 0, 1, 1});
+}
+
+TEST_CASE("pending guest input cannot survive a pause or travel between flush attempts",
+          "[netplay][online-session][latency][early-input-flush]") {
+    usize attempts = 0;
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
+        if (InputPacket::decode(bytes)) {
+            ++attempts;
+            return PacketTransport::SendResult::Congested;
+        }
+        return PacketTransport::SendResult::Sent;
+    };
+    REQUIRE(pair.guest.sample(inputs(pair.guest, true)));
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(attempts == 1);
+    const auto oldEpoch = pair.guest.context().epoch;
+    SECTION("pause") {
+        REQUIRE(pair.host.requestPause());
+        REQUIRE(pair.hostSession.flush());
+        pair.guestSession.update(0);
+        REQUIRE(pair.guest.phase() == MatchSession::Phase::Paused);
+        REQUIRE(pair.guestSession.flush());
+        CHECK(attempts == 1);
+        pair.prepare(MatchTransition::Resume);
+    }
+    SECTION("travel") {
+        REQUIRE(pair.hostSession.party());
+        REQUIRE(pair.host.prepare(2, MatchTransition::Travel, pair.hostSession.party()));
+        REQUIRE(pair.hostSession.flush());
+        pair.guestSession.update(0);
+        REQUIRE(pair.guest.phase() == MatchSession::Phase::Loading);
+        REQUIRE(pair.guestSession.flush());
+        CHECK(attempts == 1);
+    }
+    pair.ready();
+    CHECK(attempts == 1);
+    CHECK(pair.guest.context().epoch > oldEpoch);
+    pair.guestWire.beforeSend = {};
+    REQUIRE(pair.guest.sample(inputs(pair.guest)));
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(pair.guestSession.flush());
+    pair.hostSession.update(0);
+    for (u64 tick = 0; tick <= pair.guest.context().inputLead; ++tick) {
+        const auto frame = pair.host.advance();
+        REQUIRE(frame);
+        CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
+    }
+}
+
+TEST_CASE("flushing throttled guest input neither invents a tick nor repeats a sent packet",
+          "[netplay][online-session][latency][early-input-flush]") {
+    usize attempts = 0;
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
+        if (InputPacket::decode(bytes)) {
+            ++attempts;
+        }
+        return PacketTransport::SendResult::Sent;
+    };
+    for (usize sample = 0; sample < InputTimeline::kMaxAhead && pair.guest.inputReady(); ++sample) {
+        REQUIRE(pair.guest.sample(inputs(pair.guest)));
+        REQUIRE(pair.guestSession.flush());
+        REQUIRE(pair.guestSession.flush());
+        CHECK(attempts == sample + 1);
+    }
+    REQUIRE_FALSE(pair.guest.inputReady());
+    const auto pendingTick = pair.guest.inputTick();
+    const auto sentBefore = attempts;
+    const auto polls = pair.guestWire.polls;
+    for (usize sample = 0; sample < 3; ++sample) {
+        REQUIRE(pair.guest.sample(inputs(pair.guest, sample == 0)));
+        CHECK(pair.guest.sampledInputs().empty());
+        REQUIRE(pair.guestSession.flush());
+        REQUIRE(pair.guestSession.flush());
+        CHECK(pair.guest.inputTick() == pendingTick);
+        CHECK(attempts == sentBefore);
+    }
+    CHECK(pair.guestWire.polls == polls);
+    CHECK(pair.host.tick() == 0);
+    pair.guestWire.beforeSend = {};
+}
+
+TEST_CASE("an immediate guest input send failure stops the active session",
+          "[netplay][online-session][latency][early-input-flush]") {
+    usize attempts = 0;
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
+        if (InputPacket::decode(bytes)) {
+            ++attempts;
+            return PacketTransport::SendResult::Disconnected;
+        }
+        return PacketTransport::SendResult::Sent;
+    };
+    REQUIRE(pair.guest.sample(inputs(pair.guest)));
+    CHECK_FALSE(pair.guestSession.flush());
+    CHECK(pair.guestSession.phase() == Phase::Failed);
+    CHECK(pair.guestSession.failure() == Failure::Match);
+    CHECK(pair.guest.phase() == MatchSession::Phase::Stopped);
+    CHECK(pair.guest.stopReason() == MatchStop::TransportFailure);
+    CHECK_FALSE(pair.guestSession.flush());
+    CHECK(attempts == 1);
+    pair.guestWire.beforeSend = {};
 }
 
 TEST_CASE("online sessions handle split local seats, sparse rosters and unordered replies",

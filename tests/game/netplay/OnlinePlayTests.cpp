@@ -176,26 +176,83 @@ TEST_CASE("native G1 transport supplies complete staged replay and an atomic gue
     }
 }
 
-TEST_CASE("native online updates submit new input and snapshots before returning",
-          "[netplay][online-play][assets][latency]") {
+TEST_CASE("native online updates submit input before replay and snapshots before returning",
+          "[netplay][online-play][assets][latency][early-input-flush]") {
+    const bool congested = GENERATE(false, true);
+    struct Attempt {
+        std::vector<u8> bytes;
+        PacketTransport::Delivery delivery;
+        u64 predictionSamples;
+        u64 replayUpdates;
+        u64 inputTick;
+    };
+    std::vector<Attempt> attempts;
     RuntimePair pair;
     pair.open();
     for (s32 tick = 0; tick < 150; ++tick) {
         pair.step();
     }
     const auto sentBefore = pair.wire.guest.latency().sendQueue().summary().count;
+    const auto predictionBefore = pair.guest.predictionMetrics().samples;
+    const auto replayUpdates = [&] {
+        u64 updates = 0;
+        for (const auto& domain : pair.guest.combatReplayDiagnostics().domains) {
+            updates += domain.updates;
+        }
+        return updates;
+    };
+    const auto replayBefore = replayUpdates();
     const auto hostPolls = pair.wire.hostWire.polls;
     const auto guestPolls = pair.wire.guestWire.polls;
+    pair.wire.guestWire.beforeSend = [&](std::span<const u8> bytes,
+                                         PacketTransport::Delivery delivery) {
+        if (!InputPacket::decode(bytes)) {
+            return PacketTransport::SendResult::Sent;
+        }
+        attempts.push_back({{bytes.begin(), bytes.end()},
+                            delivery,
+                            pair.guest.predictionMetrics().samples,
+                            replayUpdates(),
+                            pair.wire.guest.inputTick()});
+        return congested && attempts.size() == 1 ? PacketTransport::SendResult::Congested
+                                                 : PacketTransport::SendResult::Sent;
+    };
     REQUIRE(pair.guest.update({}) != OnlinePlay::Phase::Failed);
+    pair.wire.guestWire.beforeSend = {};
     const auto sampled = pair.wire.guest.sampledInputs();
     REQUIRE(sampled.size() == 2);
     const u64 inputTick = sampled.front().tick;
+    REQUIRE(attempts.size() == (congested ? 2 : 1));
+    CHECK(attempts.front().predictionSamples == predictionBefore);
+    CHECK(attempts.front().replayUpdates == replayBefore);
+    CHECK(attempts.front().inputTick == inputTick + 1);
+    CHECK(pair.wire.guest.inputTick() == inputTick + 1);
+    CHECK(replayUpdates() == replayBefore + 1);
+    for (const auto& attempt : attempts) {
+        CHECK(attempt.delivery == PacketTransport::Delivery::Unreliable);
+        CHECK(attempt.bytes == attempts.front().bytes);
+        CHECK(attempt.inputTick == inputTick + 1);
+    }
+    if (congested) {
+        CHECK(attempts.back().replayUpdates == replayBefore + 1);
+        CHECK(attempts.back().predictionSamples == pair.guest.predictionMetrics().samples);
+    }
+    const auto sent = InputPacket::decode(attempts.front().bytes);
+    REQUIRE(sent);
+    std::vector<InputCommand> newest;
+    for (const auto& command : *sent) {
+        if (command.tick == inputTick) {
+            newest.push_back(command);
+        }
+    }
+    CHECK(InputPacket::encode(newest) == InputPacket::encode(sampled));
     CHECK(pair.wire.guest.latency().sendQueue().summary().count == sentBefore + 2);
     CHECK(pair.wire.guestWire.polls == guestPolls + 1);
     CHECK(pair.wire.hostWire.polls == hostPolls);
     // Receiving only, with no second guest update, must admit that exact sample.
     pair.wire.hostSession.update(0);
     CHECK(pair.wire.host.inputDiagnostics(2).received == inputTick);
+    CHECK(pair.wire.host.inputDiagnostics(3).received == inputTick);
 
     while (pair.wire.host.tick() % PlayReplication::kSnapshotStride != 0) {
         pair.step();

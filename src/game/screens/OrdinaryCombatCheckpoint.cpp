@@ -395,9 +395,15 @@ OrdinaryCombatCheckpoint::prepareRestore(const State& state, RestoreIssue* issue
     if (!state.valid()) {
         return reject(RestoreIssue::State);
     }
-    if (state.stage &&
-        !supports(state, [&](s32 object) { return m_world->hasCollisionObject(object); })) {
-        return reject(RestoreIssue::Supports);
+    if (state.stage) {
+        // Every rider shares the same immutable collision identity catalog.
+        // Validate it once, not once per player, fixture and enemy. Child
+        // preparation and commit still fence the live binding independently.
+        const auto objects = m_world->collisionObjects();
+        if (!supports(state,
+                      [&](s32 object) { return std::ranges::binary_search(objects, object); })) {
+            return reject(RestoreIssue::Supports);
+        }
     }
     auto data = std::make_unique<Prepared::Data>();
     data->owner = this;

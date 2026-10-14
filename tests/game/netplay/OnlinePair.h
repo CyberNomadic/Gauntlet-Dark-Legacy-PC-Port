@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
@@ -51,6 +52,7 @@ struct OnlinePair {
         std::vector<Delayed> delayed;
         u64 polls = 0;
         u64 latency = 0; ///< receiver polls; zero preserves the immediate harness
+        std::function<SendResult(std::span<const u8>, Delivery)> beforeSend;
         bool configurePeer(std::string peer, bool isHost) override {
             identity = std::move(peer);
             host = isHost;
@@ -72,8 +74,14 @@ struct OnlinePair {
             return connection == (host ? 1U : 99U) ? std::optional{remoteIdentity} : std::nullopt;
         }
         SendResult send(Connection connection, std::span<const u8> bytes,
-                        Delivery /*delivery*/) override {
+                        Delivery delivery) override {
             REQUIRE(connection == (host ? 1U : 99U));
+            if (beforeSend) {
+                const auto result = beforeSend(bytes, delivery);
+                if (result != SendResult::Sent) {
+                    return result;
+                }
+            }
             Event event{EventType::Message, host ? 99U : 1U, {bytes.begin(), bytes.end()}, {}};
             if (latency == 0) {
                 remote->events.push_back(std::move(event));

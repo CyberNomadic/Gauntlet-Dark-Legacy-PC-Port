@@ -67,6 +67,9 @@ public:
     void clearResources();
     bool binds(const LevelWorld& owner) const;
     bool hasCollisionObject(s32 object) const;
+    /** Sorted trusted identities for one synchronous support preflight. Borrowed
+     * until resource rebind/clear; validates the catalog once for the batch. */
+    std::span<const s32> collisionObjects() const;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

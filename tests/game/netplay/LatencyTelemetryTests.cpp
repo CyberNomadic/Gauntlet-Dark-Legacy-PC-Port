@@ -1,8 +1,11 @@
+#include <string_view>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
 
+#include "LatencyProbeEligibility.h"
 #include "game/netplay/LatencyTelemetry.h"
 #include "game/players/PlayerAnimator.h"
 
@@ -44,6 +47,19 @@ ProjectileState projectile(const ShotIdentity& origin) {
     result.rollback = ProjectileState::Rollback{};
     result.rollback->origin = origin;
     REQUIRE(result.valid());
+    return result;
+}
+CombatSnapshot motionAuthority() {
+    auto result = projectileState();
+    result.players[1]->movement.enabled = true;
+    result.players[1]->movement.current = true;
+    result.players[1]->animation.generation = 1;
+    return result;
+}
+InputCommand movementInput(const CombatSnapshot& authority) {
+    auto result = consumedInput(authority, authority.motion.tick + 1);
+    result.direction = {1, 0};
+    result.magnitude = 1;
     return result;
 }
 
@@ -95,26 +111,221 @@ TEST_CASE("motion latency requires a visible change and counts blocked or stalle
     state.motion.players[1] = SeatMotion{1, 1, Vec3{0}, 0};
     state.players[1] = PlayerCombatState{};
     state.players[1]->movement.enabled = true;
+    state.motion.tick = 10;
+    const auto authority = state;
+    state.players[1]->movement = {}; // Native Stage drawing results contain no replay certificate.
     InputCommand input;
     input.epoch = 1;
     input.grant = 1;
     input.seat = 1;
+    input.tick = 11;
     input.direction = {1, 0};
     input.magnitude = 1;
     const LatencyTelemetry::Time start{};
-    trace.motionRequest(std::array{input}, &state, start);
+    trace.checkpoint(authority, start);
+    trace.motionRequest(std::array{input}, &state, &authority, start);
     trace.presented(state, start + 16ms);
     CHECK(trace.firstMotion().summary().count == 0);
     state.motion.players[1]->position.x = 0.1f;
     trace.presented(state, start + 33ms);
     CHECK(trace.firstMotion().summary().p95 == 33);
     input.magnitude = 0;
-    trace.motionRequest(std::array{input}, &state, start + 34ms);
+    trace.motionRequest(std::array{input}, &state, &authority, start + 34ms);
     input.magnitude = 1;
-    trace.motionRequest(std::array{input}, &state, start + 35ms);
+    trace.motionRequest(std::array{input}, &state, &authority, start + 35ms);
     trace.update(start + 2s);
     CHECK(trace.missedMotion() == 1);
     CHECK(trace.firstMotion().summary().count == 1);
+}
+
+TEST_CASE("motion latency uses current authority with delayed or predicted drawing origins",
+          "[netplay][latency][probe-eligibility]") {
+    const auto shownTick = GENERATE(u64{8}, u64{12});
+    const auto authority = motionAuthority();
+    auto shown = authority;
+    shown.motion.tick = shownTick;
+    shown.players[1]->movement = {};
+    shown.players[1]->rollback.reset();
+    const auto input = movementInput(authority);
+    LatencyTelemetry trace;
+    trace.begin(authority.motion.epoch);
+    const LatencyTelemetry::Time start{};
+    trace.checkpoint(authority, start);
+    trace.motionRequest(std::array{input}, &shown, &authority, start + 1ms);
+    trace.motionRequest(std::array{input}, &shown, &authority, start + 5ms);
+    trace.presented(shown, start + 9ms);
+    CHECK(trace.firstMotion().summary().count == 0);
+    shown.motion.players[1]->position.x += 0.1f;
+    trace.presented(shown, start + 17ms);
+    trace.presented(shown, start + 20ms);
+    CHECK(trace.firstMotion().summary().count == 1);
+    CHECK(trace.firstMotion().summary().p95 == 16);
+    CHECK(trace.missedMotion() == 0);
+}
+
+TEST_CASE("motion latency counts refused movement edges without certifying unrelated authority",
+          "[netplay][latency][probe-eligibility]") {
+    const auto refusal = GENERATE("unobserved", "absent", "historical", "future", "epoch", "grant",
+                                  "continuity", "position", "missing-player", "missing-motion",
+                                  "disabled", "dying", "portal", "past-input", "wrong-input-grant");
+    CAPTURE(refusal);
+    const LatencyTelemetry::Time start{};
+    auto authority = motionAuthority();
+    auto shown = authority;
+    shown.players[1]->movement = {};
+    auto input = movementInput(authority);
+    LatencyTelemetry trace;
+    trace.begin(authority.motion.epoch);
+    if (std::string_view{refusal} != "unobserved") {
+        trace.checkpoint(authority, start);
+    }
+    const CombatSnapshot* source = &authority;
+    if (std::string_view{refusal} == "absent") {
+        source = nullptr;
+    } else if (std::string_view{refusal} == "historical") {
+        --authority.motion.tick;
+        trace.checkpoint(authority, start + 1ms); // Reordering cannot lower the trusted fence.
+    } else if (std::string_view{refusal} == "future") {
+        ++authority.motion.tick;
+    } else if (std::string_view{refusal} == "epoch") {
+        ++authority.motion.epoch;
+    } else if (std::string_view{refusal} == "grant") {
+        ++authority.motion.players[1]->grant;
+    } else if (std::string_view{refusal} == "continuity") {
+        ++authority.motion.players[1]->continuity;
+    } else if (std::string_view{refusal} == "position") {
+        authority.motion.players[1]->position.x += 1;
+    } else if (std::string_view{refusal} == "missing-player") {
+        authority.players[1].reset();
+    } else if (std::string_view{refusal} == "missing-motion") {
+        authority.motion.players[1].reset();
+    } else if (std::string_view{refusal} == "disabled") {
+        authority.players[1]->movement.enabled = false;
+    } else if (std::string_view{refusal} == "dying") {
+        authority.players[1]->life = ReplicaPlayerLife::Dying;
+    } else if (std::string_view{refusal} == "portal") {
+        authority.players[1]->portalPhase = 0.0f;
+    } else if (std::string_view{refusal} == "past-input") {
+        input.tick = authority.motion.tick;
+    } else if (std::string_view{refusal} == "wrong-input-grant") {
+        ++input.grant;
+    }
+    trace.motionRequest(std::array{input}, &shown, source, start + 2ms);
+    trace.motionRequest(std::array{input}, &shown, source, start + 3ms);
+    CHECK(trace.missedMotion() == 1); // A held rejected edge is not a stream of new requests.
+    shown.motion.players[1]->position.x += 0.1f;
+    trace.presented(shown, start + 17ms);
+    trace.update(start + 2s);
+    CHECK(trace.firstMotion().summary().count == 0);
+    CHECK(trace.missedMotion() == 1);
+}
+
+TEST_CASE("motion latency rejects mismatched visual owners and interrupted post-draw observations",
+          "[netplay][latency][probe-eligibility]") {
+    const bool beforeRequest = GENERATE(false, true);
+    const auto refusal = GENERATE("epoch", "grant", "continuity", "missing-player",
+                                  "missing-motion", "dying", "portal");
+    CAPTURE(beforeRequest, refusal);
+    const LatencyTelemetry::Time start{};
+    const auto authority = motionAuthority();
+    auto shown = authority;
+    shown.players[1]->movement = {};
+    const auto input = movementInput(authority);
+    LatencyTelemetry trace;
+    trace.begin(authority.motion.epoch);
+    trace.checkpoint(authority, start);
+    if (!beforeRequest) {
+        trace.motionRequest(std::array{input}, &shown, &authority, start + 1ms);
+    }
+    shown.motion.players[1]->position.x += 0.1f;
+    if (std::string_view{refusal} == "epoch") {
+        ++shown.motion.epoch;
+    } else if (std::string_view{refusal} == "grant") {
+        ++shown.motion.players[1]->grant;
+    } else if (std::string_view{refusal} == "continuity") {
+        ++shown.motion.players[1]->continuity;
+    } else if (std::string_view{refusal} == "missing-player") {
+        shown.players[1].reset();
+    } else if (std::string_view{refusal} == "missing-motion") {
+        shown.motion.players[1].reset();
+    } else if (std::string_view{refusal} == "dying") {
+        shown.players[1]->life = ReplicaPlayerLife::Dying;
+    } else if (std::string_view{refusal} == "portal") {
+        shown.players[1]->portalPhase = 0.0f;
+    }
+    if (beforeRequest) {
+        trace.motionRequest(std::array{input}, &shown, &authority, start + 1ms);
+        CHECK(trace.missedMotion() == 1);
+    }
+    trace.presented(shown, start + 17ms);
+    trace.update(start + 2s);
+    CHECK(trace.firstMotion().summary().count == 0);
+    CHECK(trace.missedMotion() == 1);
+}
+
+TEST_CASE("motion latency ignores a historical draw before observing the actual request origin",
+          "[netplay][latency][probe-eligibility]") {
+    const auto authority = motionAuthority();
+    auto shown = authority;
+    shown.players[1]->movement = {};
+    const auto input = movementInput(authority);
+    LatencyTelemetry trace;
+    trace.begin(authority.motion.epoch);
+    const LatencyTelemetry::Time start{};
+    trace.checkpoint(authority, start);
+    trace.motionRequest(std::array{input}, &shown, &authority, start);
+    --shown.motion.tick;
+    shown.motion.players[1]->position.x += 0.1f;
+    trace.presented(shown, start + 10ms);
+    CHECK(trace.firstMotion().summary().count == 0);
+    ++shown.motion.tick;
+    trace.presented(shown, start + 25ms);
+    CHECK(trace.firstMotion().summary().p95 == 25);
+    CHECK(trace.missedMotion() == 0);
+}
+
+TEST_CASE("probe throw readiness separates visual idle from native authority permission",
+          "[netplay][latency][probe-eligibility]") {
+    using Eligibility = test::LatencyProbeEligibility;
+    auto authority = motionAuthority();
+    authority.players[1]->rollback = PlayerAnimator::Checkpoint{};
+    authority.players[1]->rollback->action = PlayerAnimator::Action::Ready;
+    auto shown = authority;
+    shown.players[1]->movement = {};
+    shown.players[1]->rollback.reset();
+    const u64 epoch = authority.motion.epoch;
+    const u32 grant = authority.motion.players[1]->grant;
+    CHECK(Eligibility::ready(&shown, &authority, epoch, 1, grant));
+    CHECK(Eligibility::idleForThrow(&shown, &authority, epoch, 1, grant));
+    CHECK_FALSE(Eligibility::authorityIdle(&shown, 1));
+    CHECK_FALSE(Eligibility::ready(&shown, &authority, epoch + 1, 1, grant));
+    CHECK_FALSE(Eligibility::ready(&shown, &authority, epoch, 1, grant + 1));
+    CHECK_FALSE(Eligibility::ready(nullptr, &authority, epoch, 1, grant));
+    CHECK_FALSE(Eligibility::ready(&shown, nullptr, epoch, 1, grant));
+    CHECK_FALSE(Eligibility::ready(&shown, &authority, epoch, InputCommand::kSeats, grant));
+
+    SECTION("host native action overrides a stale idle presentation cursor") {
+        authority.players[1]->rollback->action = PlayerAnimator::Action::Throw;
+    }
+    SECTION("displayed throw blocks a new sparse request despite idle authority") {
+        shown.players[1]->animation.action = static_cast<u32>(PlayerAnimator::Action::Throw);
+    }
+    SECTION("host movement permission is still required") {
+        authority.players[1]->movement.enabled = false;
+    }
+    SECTION("the displayed origin cannot belong to a previous occupant") {
+        ++shown.motion.players[1]->grant;
+    }
+    SECTION("the displayed origin cannot precede a host teleport") {
+        ++authority.motion.players[1]->continuity;
+    }
+    SECTION("departure is not an input-ready standing body") {
+        shown.players[1]->portalPhase = 0.0f;
+    }
+    SECTION("a host dead body is not an input-ready standing body") {
+        authority.players[1]->life = ReplicaPlayerLife::Dying;
+    }
+    CHECK_FALSE(Eligibility::idleForThrow(&shown, &authority, epoch, 1, grant));
 }
 
 TEST_CASE("throw latency requires a new rendered throw and counts missing attacks",

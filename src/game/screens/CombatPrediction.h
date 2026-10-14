@@ -36,6 +36,8 @@ public:
      * Unknown effect/projectile resources refuse the entire seed. */
     bool begin(u64 epoch, u64 tick, const OrdinaryCombatCheckpoint::State& authority,
                OrdinaryCombatCheckpoint::RestoreIssue* issue = nullptr);
+    /** The first advance prepares one baseline undo. Later advances retain it,
+     * never restoring a child independently or publishing irreversible outputs. */
     OrdinaryCombatTick::Result advance(u64 tick, std::span<const PlayInput> inputs,
                                        const OrdinaryCombatTick::Frame& frame);
     /** Rejecting any step invalidates the complete replay pass, not just its

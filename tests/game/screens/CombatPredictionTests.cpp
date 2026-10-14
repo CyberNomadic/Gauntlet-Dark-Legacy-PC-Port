@@ -243,6 +243,9 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK(replay.diagnostics().domains[domain].appendPasses == 10);
         CHECK(replay.diagnostics().domains[domain].attemptedTicks == 13);
         CHECK(replay.diagnostics().domains[domain].maximumTicksPerPass == 3);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
+        CHECK(replay.diagnostics().domains[domain].captureCost.count == 13);
+        CHECK(replay.diagnostics().domains[domain].postconditionCost.count == 13);
         verifyFullReplay(sent, 113);
         const auto incremental = checkpoint(guest);
         REQUIRE(incremental);
@@ -267,6 +270,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK_FALSE(replay.active());
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 26);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
         CHECK(matches(guest, *incremental));
         shown = std::make_unique<CombatSnapshot>(*received);
         presentation = {};
@@ -282,12 +286,14 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK_FALSE(replay.update(nullptr, refused));
         CHECK_FALSE(replay.active());
         CHECK(matches(guest, *seed));
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
 
         // A received frame can fill a concealed gap inside the executed prefix.
         REQUIRE(replay.begin(context, 2, guest));
         sent = {commandAt(101), commandAt(106)};
         REQUIRE(replay.update(received.get(), sent));
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 6);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
         auto gap = commandAt(102); // currently identical to native concealment
         REQUIRE(replay.update(nullptr, std::span{&gap, 1}));
         sent.push_back(gap);
@@ -298,11 +304,13 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(replay.update(nullptr, std::span{&gap, 1}));
         sent.push_back(gap);
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 12);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
         verifyFullReplay(sent, 106);
         gap = commandAt(114); // crosses the six-tick held-input expiration
         REQUIRE(replay.update(nullptr, std::span{&gap, 1}));
         sent.push_back(gap);
         CHECK(replay.diagnostics().domains[domain].advancedTicks == 20);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
         verifyFullReplay(sent, 114);
 
         // Early admission failures used to be cleaned up by entry-time reset.
@@ -526,7 +534,11 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
     for (u64 tick = 101; tick <= 110; ++tick) {
         frame.damage.playSeconds = static_cast<f32>(tick - 100) * frame.seconds;
         REQUIRE(host.advance(tick, input, frame).status == OrdinaryCombatTick::Status::Advanced);
-        REQUIRE(guest.advance(tick, input, frame).status == OrdinaryCombatTick::Status::Advanced);
+        const auto advanced = guest.advance(tick, input, frame);
+        REQUIRE(advanced.status == OrdinaryCombatTick::Status::Advanced);
+        CHECK(advanced.timings.prepareNanoseconds.has_value() == (tick == 101));
+        CHECK(advanced.timings.captureNanoseconds.has_value());
+        CHECK(advanced.timings.postconditionNanoseconds.has_value());
         CHECK(matches(guest, host));
     }
     const auto predicted = checkpoint(guest);
@@ -599,6 +611,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(presentation.particles);
         const auto retainedParticles = presentation.particles;
         REQUIRE(retainedParticles->matches(context.epoch, 101));
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
         const auto oldLifetime = guest.resourceLifetime();
         guest.clear();
         CHECK(oldLifetime.expired());
@@ -609,6 +622,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(guest.open(device, root, level, context, profiles, 1));
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 2);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 2);
         CHECK(matches(guest, *firstPicture));
         auto corrected = std::make_unique<CombatSnapshot>(*received);
         ++corrected->motion.tick;
@@ -616,6 +630,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(corrected->valid());
         REQUIRE(replay.update(corrected.get(), std::span{&command, 1}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 3);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 3);
         REQUIRE(replay.update(nullptr, {}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 3);
         ++corrected->motion.tick;
@@ -626,6 +641,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK_FALSE(replay.active());
         CHECK(replay.diagnostics().domains[domain].decodeFailures == 1);
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 4);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 3);
         replay.clear();
         REQUIRE(replay.begin(context, 2, guest));
         command.tick = 101;
@@ -640,6 +656,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         CHECK(replay.diagnostics().domains[domain].seedIssues[static_cast<usize>(
                   OrdinaryCombatCheckpoint::RestoreIssue::Context)] == 1);
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 1);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 0);
         replay.clear();
         REQUIRE(replay.begin(context, 2, guest));
         (*corrected->combatState->stage)[16] ^= 1;
@@ -647,6 +664,7 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
         REQUIRE(corrected->valid());
         REQUIRE(replay.update(corrected.get(), std::span{&command, 1}));
         CHECK(replay.diagnostics().domains[domain].decodeAttempts == 1);
+        CHECK(replay.diagnostics().domains[domain].prepareCost.count == 1);
         CHECK(matches(guest, *firstPicture));
     }
 }

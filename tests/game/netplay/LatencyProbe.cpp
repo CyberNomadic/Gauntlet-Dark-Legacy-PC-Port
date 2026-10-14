@@ -19,6 +19,7 @@
 #include "engine/net/SessionTransport.h"
 
 #include "FakeRenderDevice.h"
+#include "LatencyProbeEligibility.h"
 #include "fixtures/MeasuredPacketTransport.h"
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/AssetDigest.h"
@@ -167,16 +168,6 @@ void writeFile(const std::filesystem::path& path, const std::string& text) {
     file.close();
     require(!file.fail(), "Could not write output");
 }
-bool idleForThrow(const CombatSnapshot* state, u8 seat, bool native) {
-    if (state == nullptr || seat >= state->players.size() || !state->players[seat]) {
-        return false;
-    }
-    const auto& player = *state->players[seat];
-    const auto action = native && player.rollback ? static_cast<u32>(player.rollback->action)
-                                                  : player.animation.action;
-    return player.movement.enabled && action <= static_cast<u32>(PlayerAnimator::Action::Idle2Loop);
-}
-
 /** Request windows classify observations, not exact input acceptance or hit acknowledgements.
  * Keep typed bounded records during play; JSON formatting happens only in the final report. */
 struct ThrowDiagnostics {
@@ -561,8 +552,12 @@ struct TurboDiagnostics {
 
     static bool ready(const CombatSnapshot* state, u8 seat, bool native,
                       PlayerAnimator::Action action) {
-        if (!idleForThrow(state, seat, native) || !state->motion.players[seat]) {
+        if (!(native ? test::LatencyProbeEligibility::authorityIdle(state, seat)
+                     : test::LatencyProbeEligibility::visualIdle(state, seat))) {
             return false;
+        }
+        if (!native) {
+            return true; // A drawing result is not a turbo or movement certificate.
         }
         const auto& player = *state->players[seat];
         return player.turbo && player.turboGeometry && player.turboGeometry->moving &&
@@ -1338,9 +1333,10 @@ void run(const Options& options, Clock::time_point processBegin) {
                         // an acknowledged command or a predicted walking animation.
                         if (!turboWorkload && phase >= 0.6 && lastThrow != pulse &&
                             elapsed < options.seconds - 1.1 && !pendingThrow &&
-                            idleForThrow(play.shown(), session.seats().front(), false) &&
-                            idleForThrow(session.match().playback().latest(),
-                                         session.seats().front(), true)) {
+                            test::LatencyProbeEligibility::idleForThrow(
+                                play.shown(), session.match().playback().latest(),
+                                session.match().context().epoch, session.seats().front(),
+                                session.match().context().grants[session.seats().front()])) {
                             lastThrow = pulse;
                             input[0].attack = input[0].attackPressed = true;
                             pendingThrow = ThrowProbe{
@@ -1349,8 +1345,11 @@ void run(const Options& options, Clock::time_point processBegin) {
                                                               session.seats().front(), true)};
                         }
                         if (turboWorkload && phase >= 0.6 && lastThrow != pulse &&
-                            elapsed < options.seconds - 2.1 && play.shown() != nullptr &&
-                            session.match().playback().latest() != nullptr &&
+                            elapsed < options.seconds - 2.1 &&
+                            test::LatencyProbeEligibility::ready(
+                                play.shown(), session.match().playback().latest(),
+                                session.match().context().epoch, session.seats().front(),
+                                session.match().context().grants[session.seats().front()]) &&
                             turbo.arm(*play.shown(), *session.match().playback().latest(),
                                       session.seats().front(), turboAction, now)) {
                             lastThrow = pulse;
@@ -1488,8 +1487,11 @@ void run(const Options& options, Clock::time_point processBegin) {
                                started, play.phase());
             if (!started && play.phase() == OnlinePlay::Phase::Playing && play.shown()) {
                 const auto seat = session.seats().front();
-                const auto& player = play.shown()->players[seat];
-                if (player && player->movement.enabled) {
+                const auto* authority =
+                    options.host ? play.shown() : session.match().playback().latest();
+                if (test::LatencyProbeEligibility::ready(play.shown(), authority,
+                                                         session.match().context().epoch, seat,
+                                                         session.match().context().grants[seat])) {
                     require(session.match().context().scene == *requestedScene &&
                                 OnlinePlay::levelOf(levels, session.match().context().scene) ==
                                     requestedLevel,

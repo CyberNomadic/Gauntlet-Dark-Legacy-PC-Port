@@ -38,8 +38,12 @@ public:
     void sampled(std::span<const InputCommand> commands, Time now = Clock::now());
     void sent(std::span<const InputCommand> commands, Time now = Clock::now());
     void checkpoint(const CombatSnapshot& state, Time now = Clock::now());
+    /** Measure a pure movement edge against its last submitted visual origin.
+     * Eligibility belongs to the latest authenticated checkpoint already passed
+     * to checkpoint(), not the certificate-free drawing snapshot. Refused edges
+     * count as misses; this observation does not prove accepted input. */
     void motionRequest(std::span<const InputCommand> commands, const CombatSnapshot* shown,
-                       Time now = Clock::now());
+                       const CombatSnapshot* authority, Time now = Clock::now());
     /** Opt-in probe for an ordinary weapon throw from idle, not arbitrary attacks.
      * First-frame timing includes locally replayed animation. Independent host
      * action observation survives that presentation result. Call after sampling
@@ -76,6 +80,7 @@ private:
     struct Motion {
         Time sampled;
         SeatMotion origin;
+        u64 shownTick = 0;
     };
     struct Throw {
         Time sampled;
@@ -88,6 +93,7 @@ private:
         u64 generation = 0;
         u64 tick = 0;
         u32 action = 0;
+        bool movementEnabled = false;
     };
     struct Release {
         ShotIdentity shot;

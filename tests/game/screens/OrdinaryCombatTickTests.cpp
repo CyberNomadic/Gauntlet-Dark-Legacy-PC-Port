@@ -626,6 +626,9 @@ TEST_CASE("ordinary combat runner matches native complete party and enemy phases
         const auto result = fixture.runner->step(fixture.players, input, frame);
         INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
         REQUIRE(result.status == Tick::Status::Advanced);
+        // Standalone callers retain per-tick atomic undo even though the
+        // private network owner can retain one over an authority interval.
+        CHECK(result.timings.prepareNanoseconds.has_value());
         CHECK(fixture.state() == expected);
         CHECK(result.damage == outputs);
         CHECK(result.footsteps == footsteps);
@@ -731,6 +734,7 @@ TEST_CASE("stage combat refuses a real G1 pickup without spending or publishing 
     frame.camera.position += frame.attention;
     const auto result = fixture->runner->step(fixture->players, {}, frame);
     CHECK(result.status == Tick::Status::Unsupported);
+    CHECK(result.timings.prepareNanoseconds.has_value());
     CHECK(result.subjects.empty());
     CHECK(result.damage.empty());
     CHECK(result.throws.empty());
@@ -1160,6 +1164,7 @@ TEST_CASE("ordinary melee rewinds a hit when its authored feedback cannot be pre
         const auto uploads = fixture.device.texturesCreated;
         const auto result = runner.step(fixture.players, input, frame);
         CHECK(result.status == Tick::Status::Unsupported);
+        CHECK(result.timings.prepareNanoseconds.has_value());
         CHECK(result.meleeHits.empty());
         CHECK(result.feedback.empty());
         CHECK(result.damage.empty());

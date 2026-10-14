@@ -125,8 +125,14 @@ public:
                 const Frame& frame);
 
 private:
+    friend class CombatPrediction;
+    /** Only the private owner may reuse its exact authority-interval undo.
+     * It must rewind the entire interval on refusal or exception. */
+    Result stepUnderRewind(std::span<PlayerRuntime> party, std::span<const PlayInput> inputs,
+                           const Frame& frame, const OrdinaryCombatCheckpoint::Rewind& rewind);
     Result stepTimed(std::span<PlayerRuntime> party, std::span<const PlayInput> inputs,
-                     const Frame& frame, Timings& timings);
+                     const Frame& frame, Timings& timings,
+                     const OrdinaryCombatCheckpoint::Rewind* intervalUndo);
     bool bound(std::span<PlayerRuntime> party) const;
     bool environment() const;
     bool travelContact(std::span<const PlayerRuntime> party, bool portals) const;

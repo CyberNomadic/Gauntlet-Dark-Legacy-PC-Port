@@ -28,6 +28,14 @@ bool ordinaryThrow(u32 action) {
 bool idle(u32 action) {
     return action <= static_cast<u32>(PlayerAnimator::Action::Idle2Loop);
 }
+bool standing(const CombatSnapshot& state, usize seat) {
+    const auto& player = state.players[seat];
+    const auto& pose = state.motion.players[seat];
+    return player && pose && pose->grant != 0 && pose->continuity != 0 &&
+           std::isfinite(pose->position.x) && std::isfinite(pose->position.y) &&
+           std::isfinite(pose->position.z) && std::isfinite(pose->yaw) &&
+           player->life == ReplicaPlayerLife::Standing && !player->portalPhase;
+}
 } // namespace
 void LatencyTelemetry::Distribution::add(f64 value) {
     if (!std::isfinite(value) || value < 0) {
@@ -133,7 +141,8 @@ void LatencyTelemetry::checkpoint(const CombatSnapshot& state, Time now) {
                 }
             }
         }
-        previous = AuthoritativeAction{*pose, generation, state.motion.tick, action};
+        previous = AuthoritativeAction{*pose, generation, state.motion.tick, action,
+                                       player->movement.enabled};
     }
     if (!m_projectileTick || state.motion.tick > *m_projectileTick) {
         m_projectileTick = state.motion.tick;
@@ -150,22 +159,42 @@ void LatencyTelemetry::checkpoint(const CombatSnapshot& state, Time now) {
     }
 }
 void LatencyTelemetry::motionRequest(std::span<const InputCommand> commands,
-                                     const CombatSnapshot* shown, Time now) {
+                                     const CombatSnapshot* shown, const CombatSnapshot* authority,
+                                     Time now) {
     for (const auto& command : commands) {
         if (!command.valid() || command.epoch != m_epoch) {
             continue;
         }
         const auto seat = command.seat;
         const bool moving = command.magnitude > 0 && glm::length(command.direction) > 0;
-        if (moving && !m_moving[seat] && command.heldButtons == 0 && command.pressedButtons == 0 &&
-            shown != nullptr && shown->motion.epoch == m_epoch) {
-            const auto& state = shown->players[seat];
-            const auto& origin = shown->motion.players[seat];
-            if (state && state->movement.enabled && origin) {
-                if (m_motion[seat]) {
-                    ++m_missedMotion;
+        if (moving && !m_moving[seat] && command.heldButtons == 0 && command.pressedButtons == 0) {
+            auto& request = m_motion[seat];
+            if (request) {
+                ++m_missedMotion;
+                request.reset();
+            }
+            const auto& known = m_authoritativeActions[seat];
+            const auto& owner = m_projectileOwners[seat];
+            const bool latest = authority != nullptr && m_projectileTick &&
+                                authority->motion.epoch == m_epoch &&
+                                authority->motion.tick == *m_projectileTick && known && owner &&
+                                known->tick == authority->motion.tick && known->movementEnabled &&
+                                command.tick > authority->motion.tick;
+            if (latest && shown != nullptr && shown->motion.epoch == m_epoch &&
+                standing(*authority, seat) && standing(*shown, seat)) {
+                const auto& host = *authority->motion.players[seat];
+                const auto& origin = *shown->motion.players[seat];
+                if (authority->players[seat]->movement.enabled && host.grant == command.grant &&
+                    host.grant == owner->grant && host.continuity == owner->continuity &&
+                    host.grant == known->origin.grant &&
+                    host.continuity == known->origin.continuity &&
+                    host.position == known->origin.position && host.yaw == known->origin.yaw &&
+                    origin.grant == host.grant && origin.continuity == host.continuity) {
+                    request = Motion{now, origin, shown->motion.tick};
                 }
-                m_motion[seat] = Motion{now, *origin};
+            }
+            if (!request) {
+                ++m_missedMotion;
             }
         }
         m_moving[seat] = moving;
@@ -320,14 +349,15 @@ void LatencyTelemetry::presented(const CombatSnapshot& shown, Time now) {
     for (usize seat = 0; seat < m_motion.size(); ++seat) {
         auto& request = m_motion[seat];
         const auto& pose = shown.motion.players[seat];
-        if (!request || !pose) {
+        if (!request) {
             continue;
         }
-        if (pose->grant != request->origin.grant ||
+        if (!standing(shown, seat) || pose->grant != request->origin.grant ||
             pose->continuity != request->origin.continuity) {
             ++m_missedMotion;
             request.reset();
-        } else if (glm::distance(pose->position, request->origin.position) > 0.005f) {
+        } else if (shown.motion.tick >= request->shownTick &&
+                   glm::distance(pose->position, request->origin.position) > 0.005f) {
             m_motionFrames.add(milliseconds(request->sampled, now));
             request.reset();
         }

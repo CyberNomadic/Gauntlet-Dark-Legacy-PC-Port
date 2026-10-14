@@ -155,6 +155,9 @@ bool LevelWorldCheckpoint::binds(const LevelWorld& owner) const {
 bool LevelWorldCheckpoint::hasCollisionObject(s32 object) const {
     return bound() && m_resources->core.hasCollisionObject(object);
 }
+std::span<const s32> LevelWorldCheckpoint::collisionObjects() const {
+    return bound() ? m_resources->core.collisionObjects() : std::span<const s32>{};
+}
 std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() const {
     if (!bound()) {
         return std::nullopt;

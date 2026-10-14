@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <limits>
 
@@ -335,5 +336,145 @@ TEST_CASE("catalog fingerprints are independent of mutable clocks transforms and
     CHECK(fixture.state() == advanced);
     REQUIRE(fixture.checkpoint.restore(initial));
     CHECK(fixture.state() == initial);
+}
+
+TEST_CASE("world texture lookup preserves first authored occurrence and repeated cycle ids",
+          "[world][world-state-checkpoint]") {
+    Fixture authority("world-core-texture-ids");
+    Fixture replay("world-core-texture-ids-other");
+    const auto initial = authority.state();
+    REQUIRE(replay.state() == initial);
+
+    // Independent linear oracle: native base slots first, then authored cycles.
+    // Aliases retain the first id even when their references repeat or reorder.
+    std::vector<const Texture*> resources;
+    const auto add = [&](const Texture* texture) {
+        if (texture && std::ranges::find(resources, texture) == resources.end()) {
+            resources.push_back(texture);
+        }
+    };
+    for (const auto& slot : initial.slots) {
+        authority.scene.setTextureFrame(slot.index, nullptr);
+        const auto* texture = authority.scene.textureOf(slot.index);
+        REQUIRE((texture != nullptr) == slot.texture.has_value());
+        add(texture);
+    }
+    for (usize entry = 0; entry < authority.textureClock.size(); ++entry) {
+        for (usize frame = 0;; ++frame) {
+            const auto* texture = authority.textureClock.cycleFrame(entry, frame);
+            if (!texture) {
+                break;
+            }
+            add(texture);
+        }
+    }
+    REQUIRE(resources.size() == initial.resourceCount);
+    REQUIRE(resources.size() >= 2);
+    REQUIRE(authority.checkpoint.restore(initial));
+    const auto uploads = replay.device.texturesCreated;
+    const auto slot = initial.slots.front().index;
+    std::vector<const Texture*> frames;
+    std::vector<u32> expected;
+    for (usize i = 0; i < 512; ++i) {
+        const auto id = static_cast<u32>((resources.size() - 1) - (i % resources.size()));
+        frames.push_back(resources[id]);
+        expected.push_back(id);
+    }
+    authority.scene.setTextureFrame(slot, resources.back());
+    authority.scene.setTextureCycle(slot, frames, 3.25f, -0.5f);
+    const auto captured = authority.state();
+    CHECK(captured.catalog == initial.catalog);
+    CHECK(captured.resourceCount == initial.resourceCount);
+    CHECK(captured.slots.front().frame == initial.resourceCount - 1);
+    CHECK(captured.slots.front().cycle == expected);
+    REQUIRE(replay.checkpoint.restore(captured));
+    CHECK(replay.state() == captured);
+    CHECK(replay.scene.textureOf(slot) != authority.scene.textureOf(slot));
+    CHECK(replay.device.texturesCreated == uploads);
+    sameDraw(authority, replay, 0.5f);
+
+    // A lookup miss must not insert a new catalog id, including in long cycles.
+    frames.back() = &authority.device.whiteTexture();
+    authority.scene.setTextureCycle(slot, frames, 3.25f, -0.5f);
+    CHECK_FALSE(authority.checkpoint.checkpoint());
+    REQUIRE(authority.checkpoint.restore(captured));
+    CHECK(authority.state() == captured);
+}
+
+TEST_CASE("world state flat membership checks preserve unordered native rosters",
+          "[world][world-state-checkpoint]") {
+    WorldStateCheckpoint::State state;
+    state.placements.resize(513);
+    state.units = {{512, 1, true}, {0, 0.5f, false}, {42, 0, true}};
+    state.hidden = {1'000'000, -1, 8, 0};
+    state.contactOnly = {500, 0, -1, 2};
+    state.blockedFloorExits = {300, 1'000'000, 0};
+    state.moving = {{1'000'000, Mat4{1}}, {0, Mat4{1}}, {800, Mat4{1}}};
+    state.animations = {{512, 3, 0}, {0, 3, 1}};
+    state.cycles = {{0, false}, {512, true}, {0, true}};
+    const auto original = state;
+    REQUIRE(state.valid());
+    CHECK(state == original);
+    SECTION("duplicate units") {
+        state.units.back().object = state.units.front().object;
+    }
+    SECTION("out of range unit") {
+        state.units.front().object = 513;
+    }
+    SECTION("duplicate hidden") {
+        state.hidden.back() = state.hidden.front();
+    }
+    SECTION("duplicate contact only") {
+        state.contactOnly.back() = state.contactOnly.front();
+    }
+    SECTION("duplicate exit lock") {
+        state.blockedFloorExits.back() = state.blockedFloorExits.front();
+    }
+    SECTION("negative exit lock") {
+        state.blockedFloorExits.back() = -1;
+    }
+    SECTION("mask beyond maximum") {
+        state.hidden.front() = 1'000'001;
+    }
+    SECTION("duplicate movers") {
+        state.moving.back().object = state.moving.front().object;
+    }
+    SECTION("out of range animation") {
+        state.animations.front().object = 513;
+    }
+    SECTION("negative event") {
+        state.cycles.back().object = -1;
+    }
+    SECTION("out of range event") {
+        state.cycles.back().object = 513;
+    }
+    SECTION("unit without animation is not an event owner") {
+        state.cycles.back().object = 42;
+    }
+    CHECK_FALSE(state.valid());
+}
+
+TEST_CASE("world capture and preparation still validate derived moving triangles",
+          "[world][world-state-checkpoint]") {
+    Fixture fixture("world-core-moving-validation");
+    const auto baseline = fixture.state();
+    REQUIRE(baseline.moving.size() == 1);
+    auto invalid = baseline;
+    // Every transform scalar is in range, but applying it to the bound local
+    // vertices leaves the validated spatial range. Refuse before any mutation.
+    invalid.moving.front().transform = glm::scale(Mat4{1}, Vec3{1'000'000});
+    REQUIRE(invalid.valid());
+    CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
+    CHECK(fixture.state() == baseline);
+    fixture.collision.setObjectTransform(8, invalid.moving.front().transform);
+    CHECK_FALSE(fixture.checkpoint.checkpoint());
+    REQUIRE(fixture.checkpoint.restore(baseline));
+    CHECK(fixture.state() == baseline);
+    auto collapsed = baseline;
+    collapsed.moving.front().transform = glm::scale(Mat4{1}, Vec3{0});
+    REQUIRE(fixture.checkpoint.restore(collapsed));
+    CHECK(fixture.state() == collapsed);
+    REQUIRE(fixture.checkpoint.restore(baseline));
+    CHECK(fixture.state() == baseline);
 }
 } // namespace

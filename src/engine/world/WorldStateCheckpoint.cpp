@@ -4,7 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
-#include <set>
+#include <unordered_map>
 
 #include "engine/io/Sha256.h"
 
@@ -254,13 +254,13 @@ bool mask(const std::vector<s32>& values, s32 minimum) {
     if (values.size() > WorldStateCheckpoint::State::kMaxObjects) {
         return false;
     }
-    std::set<s32> unique;
-    for (const auto value : values) {
-        if (value < minimum || value > 1'000'000 || !unique.insert(value).second) {
-            return false;
-        }
+    if (!std::ranges::all_of(values,
+                             [&](s32 value) { return value >= minimum && value <= 1'000'000; })) {
+        return false;
     }
-    return true;
+    auto sorted = values;
+    std::ranges::sort(sorted);
+    return std::ranges::adjacent_find(sorted) == sorted.end();
 }
 } // namespace
 
@@ -273,6 +273,7 @@ bool WorldStateCheckpoint::Light::valid() const {
 }
 WorldStateCheckpoint::Light WorldStateCheckpoint::Light::capture(const WorldLighting& source) {
     Light result{source.ambient, source.lightColor, source.direction, {}};
+    result.points.reserve(source.points.size());
     for (const auto& point : source.points) {
         result.points.push_back({point.position, point.color, point.radius, point.intensity});
     }
@@ -283,6 +284,7 @@ WorldLighting WorldStateCheckpoint::Light::lighting() const {
     result.ambient = ambient;
     result.lightColor = color;
     result.direction = direction;
+    result.points.reserve(points.size());
     for (const auto& point : points) {
         result.points.push_back({point.position, point.color, point.radius, point.intensity});
     }
@@ -301,13 +303,15 @@ bool WorldStateCheckpoint::State::valid() const {
             return false;
         }
     }
-    std::set<u32> unitObjects;
-    for (usize i = 0; i < units.size(); ++i) {
-        const auto& unit = units[i];
-        if (unit.object >= placements.size() || !unitObjects.insert(unit.object).second ||
-            !scalar(unit.alpha) || unit.alpha < 0 || unit.alpha > 1) {
+    // Units and animation events refer to this bounded, dense placement roster.
+    // Keep its membership in one flat allocation, without changing native order.
+    std::vector<u8> objects(placements.size());
+    for (const auto& unit : units) {
+        if (unit.object >= placements.size() || objects[unit.object] != 0 || !scalar(unit.alpha) ||
+            unit.alpha < 0 || unit.alpha > 1) {
             return false;
         }
+        objects[unit.object] = 1;
     }
     usize cyclesSize = 0;
     u32 previous = 0;
@@ -332,21 +336,27 @@ bool WorldStateCheckpoint::State::valid() const {
         previous = slot.index;
         first = false;
     }
-    std::set<s32> movers;
+    std::vector<s32> movers;
+    movers.reserve(moving.size());
     for (const auto& object : moving) {
-        if (object.object < 0 || object.object > 1'000'000 ||
-            !movers.insert(object.object).second || !matrix(object.transform)) {
+        if (object.object < 0 || object.object > 1'000'000 || !matrix(object.transform)) {
             return false;
         }
+        movers.push_back(object.object);
+    }
+    std::ranges::sort(movers);
+    if (std::ranges::adjacent_find(movers) != movers.end()) {
+        return false;
     }
     for (const auto& cursor : animations) {
         if (!cursor.valid() || static_cast<usize>(cursor.object) >= placements.size()) {
             return false;
         }
+        objects[static_cast<usize>(cursor.object)] |= 2;
     }
     for (const auto& event : cycles) {
-        if (!std::ranges::any_of(
-                animations, [&](const auto& cursor) { return cursor.object == event.object; })) {
+        if (event.object < 0 || static_cast<usize>(event.object) >= objects.size() ||
+            (objects[static_cast<usize>(event.object)] & 2) == 0) {
             return false;
         }
     }
@@ -367,6 +377,8 @@ struct WorldStateCheckpoint::Catalog {
     const TextureAnimator::Entry* textureStorage = nullptr;
     std::vector<Resource> resources;
     std::vector<const Texture*> pointers;
+    // Lookup only: canonical ids and the fingerprint still use ordered vectors.
+    std::unordered_map<const Texture*, u32> textureIds;
     std::vector<u32> slots;
     std::vector<const WorldScene::Slot*> slotPointers;
     const WorldScene::Placement* placements = nullptr;
@@ -380,9 +392,8 @@ struct WorldStateCheckpoint::Catalog {
           movingCount = 0, cellCount = 0;
     u64 layout = 0;
     std::optional<u32> id(const Texture* texture) const {
-        const auto found = std::ranges::find(pointers, texture);
-        return found == pointers.end() ? std::nullopt
-                                       : std::optional{static_cast<u32>(found - pointers.begin())};
+        const auto found = textureIds.find(texture);
+        return found == textureIds.end() ? std::nullopt : std::optional{found->second};
     }
 };
 struct WorldStateCheckpoint::Prepared::Data {
@@ -435,15 +446,23 @@ bool WorldStateCheckpoint::bind(const TextureAnimator& textures, const WorldLayo
     catalog->entryOfInfo = textures.m_entryOfInfo;
     catalog->textureStorage = textures.m_entries.data();
     catalog->layout = m_scene.m_layoutSignature;
+    catalog->slots.reserve(m_scene.m_slots.size());
     for (const auto& [index, slot] : m_scene.m_slots) {
         (void)slot;
         catalog->slots.push_back(index);
     }
     std::ranges::sort(catalog->slots);
+    catalog->slotPointers.reserve(catalog->slots.size());
+    catalog->textureIds.reserve(catalog->slots.size());
     const auto add = [&](const Texture* texture, Resource resource) {
-        if (texture && !catalog->id(texture)) {
-            catalog->resources.push_back(resource);
-            catalog->pointers.push_back(texture);
+        if (texture) {
+            const auto [entry, inserted] = catalog->textureIds.try_emplace(
+                texture, static_cast<u32>(catalog->pointers.size()));
+            (void)entry;
+            if (inserted) {
+                catalog->resources.push_back(resource);
+                catalog->pointers.push_back(texture);
+            }
         }
     };
     for (const auto index : catalog->slots) {
@@ -599,6 +618,7 @@ bool WorldStateCheckpoint::bind(const TextureAnimator& textures, const WorldLayo
         hash.sequence(*textures.m_authored);
     }
     hash.add(static_cast<u64>(textures.m_entries.size()));
+    catalog->textureOrigins.reserve(textures.m_entries.size());
     for (const auto& entry : textures.m_entries) {
         hash.add(entry.slot);
         hash.add(entry.direction);
@@ -704,12 +724,15 @@ std::optional<WorldStateCheckpoint::State> WorldStateCheckpoint::checkpoint() co
     state.layout = m_scene.m_layoutSignature;
     state.catalog = m_catalog->fingerprint;
     state.resourceCount = static_cast<u32>(m_catalog->resources.size());
+    state.placements.reserve(m_scene.m_placements.size());
     for (const auto& placement : m_scene.m_placements) {
         state.placements.push_back({placement.local, placement.previous, placement.continuity});
     }
+    state.units.reserve(m_scene.m_units.size());
     for (const auto& unit : m_scene.m_units) {
         state.units.push_back({static_cast<u32>(unit.object), unit.alpha, unit.visible});
     }
+    state.slots.reserve(m_catalog->slots.size());
     for (const auto index : m_catalog->slots) {
         const auto& source = m_scene.m_slots.at(index);
         Slot slot{index,
@@ -726,6 +749,7 @@ std::optional<WorldStateCheckpoint::State> WorldStateCheckpoint::checkpoint() co
         if ((source.texture && !slot.texture) || (source.frame && !slot.frame)) {
             return std::nullopt;
         }
+        slot.cycle.reserve(source.cycle.size());
         for (const auto* frame : source.cycle) {
             const auto id = m_catalog->id(frame);
             if (!id) {
@@ -739,6 +763,7 @@ std::optional<WorldStateCheckpoint::State> WorldStateCheckpoint::checkpoint() co
     state.darken = m_scene.m_darken;
     state.textureFrame = m_scene.m_textureFrame;
     usize triangleCount = 0;
+    state.moving.reserve(m_collision.m_moving.size());
     for (const auto& object : m_collision.m_moving) {
         if (!vector(object.boundsMin) || !vector(object.boundsMax) ||
             !validTriangles(object.placed, triangleCount)) {
@@ -750,6 +775,7 @@ std::optional<WorldStateCheckpoint::State> WorldStateCheckpoint::checkpoint() co
     state.contactOnly = m_collision.m_contactOnly;
     state.blockedFloorExits = m_collision.m_blockedFloorExits;
     state.animations = m_animator.checkpoint();
+    state.cycles.reserve(m_animator.m_cycleEvents.size());
     for (const auto& event : m_animator.m_cycleEvents) {
         state.cycles.push_back({event.object, event.wrapped});
     }
@@ -800,6 +826,7 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
     data->generation = m_generation;
     data->state = state;
     data->lighting = state.light.lighting();
+    data->slots.reserve(state.slots.size());
     for (usize i = 0; i < state.slots.size(); ++i) {
         const auto& saved = state.slots[i];
         if (saved.index != m_catalog->slots[i]) {
@@ -812,11 +839,13 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
         }
         Prepared::Data::Slot slot{
             &local, saved.frame ? m_catalog->pointers[*saved.frame] : nullptr, {}};
+        slot.cycle.reserve(saved.cycle.size());
         for (const auto id : saved.cycle) {
             slot.cycle.push_back(m_catalog->pointers[id]);
         }
         data->slots.push_back(std::move(slot));
     }
+    data->moving.reserve(state.moving.size());
     for (usize i = 0; i < state.moving.size(); ++i) {
         const auto& saved = state.moving[i];
         const auto& local = m_collision.m_moving[i];
@@ -835,6 +864,7 @@ WorldStateCheckpoint::prepareRestore(const State& state) const {
         std::vector<CollisionTriangle>{}.swap(staged.local);
         data->moving.push_back(std::move(staged));
     }
+    data->events.reserve(state.cycles.size());
     for (const auto& event : state.cycles) {
         data->events.push_back({event.object, event.wrapped});
     }
