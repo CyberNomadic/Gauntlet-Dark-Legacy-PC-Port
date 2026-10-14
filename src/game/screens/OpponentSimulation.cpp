@@ -5,6 +5,8 @@
 #include <exception>
 #include <utility>
 
+#include "game/enemies/Critters.h"
+
 namespace gdl::game {
 namespace {
 
@@ -12,8 +14,9 @@ bool ordinaryKind(s32 kind) {
     return kind >= 0 && kind != kDeathKind && kind != kItKind && kind != kGarmBroodKind;
 }
 
-bool ordinary(const Enemies::Checkpoint& state) {
-    return state.combatants.empty() && std::ranges::none_of(state.enemies, [](const auto& enemy) {
+bool ordinary(const Enemies::Checkpoint& state, bool combatants = false) {
+    return (combatants || state.combatants.empty()) &&
+           std::ranges::none_of(state.enemies, [](const auto& enemy) {
                return enemy.state != Enemies::State::Inactive &&
                       (!ordinaryKind(enemy.kind) || enemy.algorithm == kSuicideWay);
            });
@@ -145,6 +148,20 @@ bool ordinary(const EnemyView& player) {
 
 bool finite(const Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool critterBodies(std::span<const MissileTarget> bodies) {
+    if (bodies.size() > Enemies::Checkpoint::kMaxCombatants) {
+        return false;
+    }
+    constexpr f32 kMagnitude = 1'000'000;
+    return std::ranges::all_of(bodies, [](const auto& body) {
+        return body.id >= 0 && body.id < Critters::kMost && body.node >= -1 &&
+               body.surface.empty() && finite(body.base) && std::abs(body.base.x) <= kMagnitude &&
+               std::abs(body.base.y) <= kMagnitude && std::abs(body.base.z) <= kMagnitude &&
+               std::isfinite(body.radius) && body.radius > 0 && body.radius <= kMagnitude &&
+               std::isfinite(body.height) && body.height >= 0 && body.height <= kMagnitude;
+    });
 }
 
 bool validFrame(const OpponentSimulation::Frame& frame) {
@@ -407,10 +424,10 @@ bool OpponentSimulation::PlacementObservation::valid() const {
 bool OpponentSimulation::combatSupported(const Checkpoint& state, const Frame& frame,
                                          const PlacementObservation* observation) {
     return (!observation || observation->valid()) && state.valid() && validFrame(frame) &&
-           frame.critters.empty() && frame.bosses.empty() &&
+           critterBodies(frame.critters) && frame.bosses.empty() &&
            std::ranges::all_of(frame.players,
                                [](const auto& player) { return ordinary(player); }) &&
-           ordinary(state.enemies) && state.missiles.bursts.empty() &&
+           ordinary(state.enemies, true) && state.missiles.bursts.empty() &&
            !pendingInteraction(state, true) && !unsupportedMinds(state, observation);
 }
 

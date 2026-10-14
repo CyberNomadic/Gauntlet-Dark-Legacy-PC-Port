@@ -201,8 +201,8 @@ std::optional<ChestsCheckpoint::State> ChestsCheckpoint::checkpoint() const {
         }
         result.placements.push_back(
             m_owner.m_layout->itemInstances()[static_cast<usize>(source->instance)]);
-        const auto figure = ItemFigureCheckpoint::capture(source->figure);
-        const auto preview = ItemFigureCheckpoint::capture(source->preview);
+        auto figure = ItemFigureCheckpoint::capture(source->figure);
+        auto preview = ItemFigureCheckpoint::capture(source->preview);
         if (!figure || !preview) {
             return std::nullopt;
         }
@@ -223,8 +223,8 @@ std::optional<ChestsCheckpoint::State> ChestsCheckpoint::checkpoint() const {
              source->revealed,
              source->previewContents,
              source->wobble,
-             *preview,
-             *figure,
+             std::move(*preview),
+             std::move(*figure),
              source->box,
              source->floor ? std::optional{Floor{source->floor->object, source->floor->local}}
                            : std::nullopt,

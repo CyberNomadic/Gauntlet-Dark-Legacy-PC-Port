@@ -1873,7 +1873,8 @@ void PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
 }
 
 bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const Targets& targets,
-                          const LevelOpponents::GeneratorPublisher& generators) {
+                          const LevelOpponents::GeneratorPublisher& generators,
+                          const LevelFixtures::BarrelPublisher& barrels) {
     if (!m_resources || index >= players.size() || players[index].figure == nullptr) {
         return true;
     }
@@ -1974,8 +1975,10 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
             players[index].streak.record(!standing || !enemies.alive(enemy));
         }
     } else {
-        targets.fixtures.strikeBarrel(static_cast<usize>(id), damage, actor.player(), players,
-                                      targets.fixtureEvents);
+        if (!targets.fixtures.strikeBarrel(static_cast<usize>(id), damage, actor.player(), players,
+                                           targets.fixtureEvents, barrels)) {
+            return false;
+        }
         targets.fixtures.settleBlasts(players, targets.fixtureEvents);
     }
     if (credit > 0.0f && targets.meleeHit) {
@@ -2088,7 +2091,8 @@ void PlayerAttacks::stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> 
 bool PlayerAttacks::dispatchProjectileImpact(
     const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
     const std::function<void(const MissileImpact&, f32)>& presentation,
-    const LevelOpponents::GeneratorPublisher& generators) {
+    const LevelOpponents::GeneratorPublisher& generators,
+    const LevelFixtures::BarrelPublisher& barrels) {
     if (!m_resources) {
         return true;
     }
@@ -2198,8 +2202,10 @@ bool PlayerAttacks::dispatchProjectileImpact(
                                                impact.flags, direction, impact.owner, players,
                                                false, impact.position);
     } else if (impact.target >= 0) {
-        targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
-                                      impact.owner, players, targets.fixtureEvents);
+        if (!targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
+                                           impact.owner, players, targets.fixtureEvents, barrels)) {
+            return false;
+        }
         targets.fixtures.settleBlasts(players, targets.fixtureEvents);
     }
     healHit(impact.owner, impact.flags, credit, impact.position, players, targets);

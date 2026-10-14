@@ -430,6 +430,13 @@ add_library(game STATIC
     screens/OrdinaryCombatCheckpoint.cpp
     screens/OrdinaryCombatTick.cpp
     screens/CombatPrediction.cpp
+    screens/CombatAgreement.cpp
+    screens/CombatReplayWorker.cpp
+    screens/OrdinaryBarrelEmission.cpp
+    screens/OrdinaryPickupPhase.cpp
+    screens/OrdinaryCritterPhase.cpp
+    screens/CritterCueEmission.cpp
+    screens/PartyLighting.cpp
     screens/CombatResources.cpp
     screens/EnemyFeedbackEmission.cpp
     screens/OrdinaryProjectilePhase.cpp
@@ -437,6 +444,7 @@ add_library(game STATIC
     screens/OrdinaryFloorSupport.cpp
     screens/StageCombatPresentation.cpp
     screens/StageParticlePresentation.cpp
+    screens/StageReplayPresentation.cpp
     screens/StageSnapshotSampling.cpp
     netplay/StageStatePacket.cpp
     screens/OrdinaryWeaponEmission.cpp

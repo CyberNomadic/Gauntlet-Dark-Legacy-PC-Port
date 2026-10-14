@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <chrono>
 #include <set>
+#include <thread>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -7,98 +9,17 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/netplay/OnlinePair.h"
+#include "game/netplay/OnlinePlayPair.h"
 #include "game/screens/OnlinePlay.h"
 
 namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-struct RuntimePair {
-    std::filesystem::path root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
-    test::FakeRenderDevice hostDevice;
-    test::FakeRenderDevice guestDevice;
-    GameConfig config;
-    StringTable strings;
-    LevelCatalog catalog;
-    GameContext context;
-    test::OnlinePair wire{{}, false, 2, 2};
-    OnlineParty hostParty;
-    OnlineParty guestParty;
-    OnlinePlay host;
-    OnlinePlay guest;
-
-    explicit RuntimePair(s32 classOffset = 0, bool pendingPromotion = false,
-                         bool pendingRelic = false, s32 startingLevel = 60) {
-        REQUIRE(catalog.load(root));
-        context.config = &config;
-        REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
-        context.strings = &strings;
-        context.levels = &catalog;
-        context.unpackedRoot = root;
-        const auto choice = [pendingPromotion, pendingRelic,
-                             startingLevel](s32 device, s32 character, s32 color) {
-            CharacterSave save;
-            save.name = "ONLINE";
-            save.character = character;
-            save.color = color;
-            save.progress().experience = levelExperience(startingLevel);
-            if (startingLevel == 1) {
-                save.autoAttack = false;
-            }
-            save.progress().promotedLevel = pendingPromotion ? 20 : -1;
-            if (pendingRelic) {
-                save.progress().relics.runes = save.progress().relics.pendingRunes = 1;
-            }
-            save.progress().health = 9000;
-            save.classUnlock = 0xFFFF;
-            save.moviesSeen = {"PRIVATE"};
-            save.classes[static_cast<usize>((character + 1) % kClassCount)].experience = 123456;
-            return PartyMember{device, save, static_cast<usize>(10 + device)};
-        };
-        REQUIRE(hostParty.select(wire.hostSession, std::array{choice(1, classOffset, 0),
-                                                              choice(3, classOffset + 1, 1)}));
-        REQUIRE(guestParty.select(wire.guestSession, std::array{choice(0, classOffset + 2, 2),
-                                                                choice(2, classOffset + 3, 3)}));
-        wire.start();
-    }
-    void open(const LevelRef& level = LevelRef::tower(), PlayOptions options = {}) {
-        options.welcome = false;
-        if (level.isTower() && !options.position) {
-            options.position = Vec3{0, 0, 0}; // bypass the tower entry pan for immediate input
-        }
-        REQUIRE(guest.open(guestDevice, context, wire.guestSession, guestParty));
-        REQUIRE(host.open(hostDevice, context, wire.hostSession, hostParty, level, options));
-        // The host cannot simulate before the guest has loaded its own resources.
-        CHECK(host.update({}) == OnlinePlay::Phase::Loading);
-        CHECK(wire.host.tick() == 0);
-        CHECK_FALSE(host.shown());
-        for (s32 i = 0; i < 3600 && host.phase() != OnlinePlay::Phase::Playing; ++i) {
-            step();
-        }
-        REQUIRE(host.phase() == OnlinePlay::Phase::Playing);
-        REQUIRE(guest.phase() == OnlinePlay::Phase::Playing);
-    }
-    void step(const SessionInputs::Frame& hostInputs = {},
-              const SessionInputs::Frame& guestInputs = {}) {
-        REQUIRE(host.update(hostInputs) != OnlinePlay::Phase::Failed);
-        REQUIRE(guest.update(guestInputs) != OnlinePlay::Phase::Failed);
-        if (host.entryVisible()) {
-            hostDevice.draws.clear();
-            host.render(hostDevice, Mat4{1}, 1280, 720, 1.0 / 60, 1);
-        }
-        if (guest.entryVisible()) {
-            draw();
-        }
-    }
-    void draw() {
-        guestDevice.draws.clear();
-        guest.render(guestDevice, Mat4{1}, 1280, 720, 1.0 / 60, 1);
-        REQUIRE(guest.phase() != OnlinePlay::Phase::Failed);
-    }
-};
+using RuntimePair = gdl::test::OnlinePlayPair;
 
 TEST_CASE("native G1 transport supplies complete staged replay and an atomic guest picture",
-          "[netplay][online-play][assets][stage-combat-presentation]") {
+          "[netplay][online-play][assets][stage-combat-presentation][native-replay-bookkeeping]") {
     RuntimePair pair{0, false, false, 1};
     const auto level = pair.catalog.byName("G1");
     REQUIRE(level);
@@ -108,6 +29,7 @@ TEST_CASE("native G1 transport supplies complete staged replay and an atomic gue
     u64 stageSeeds = 0;
     usize stageBytes = 0;
     usize acknowledgedScrolls = 0;
+    u64 samplesDuringStage = 0;
     for (s32 tick = 0; tick < 1200; ++tick) {
         SessionInputs::Frame accept;
         if (pair.host.hostScene()->scroll().active()) {
@@ -116,7 +38,22 @@ TEST_CASE("native G1 transport supplies complete staged replay and an atomic gue
             }
             ++acknowledgedScrolls;
         }
+        const auto samplesBefore = pair.guest.predictionMetrics().samples;
+        const auto passesBefore = pair.guest.combatReplayDiagnostics().domains[kStage].passes;
         pair.step(accept, accept);
+        // This is a correctness barrier, not a latency measurement. Keep the
+        // authenticated authority fixed while its exclusive producer finishes;
+        // transport/CPU contention remains covered by the real-network harness.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto worker = pair.guest.combatReplayWorkerMetrics();
+            if (!worker.inFlight && !worker.pending) {
+                break;
+            }
+            std::this_thread::yield();
+        }
+        REQUIRE_FALSE(pair.guest.combatReplayWorkerMetrics().inFlight);
+        REQUIRE_FALSE(pair.guest.combatReplayWorkerMetrics().pending);
         if (const auto* authority = pair.wire.guest.playback().latest();
             authority != nullptr && authority->motion.tick > latestObserved) {
             latestObserved = authority->motion.tick;
@@ -127,6 +64,11 @@ TEST_CASE("native G1 transport supplies complete staged replay and an atomic gue
         }
         pair.draw();
         const auto& stage = pair.guest.combatReplayDiagnostics().domains[kStage];
+        if (stage.passes > passesBefore) {
+            const auto samplesAfter = pair.guest.predictionMetrics().samples;
+            REQUIRE(samplesAfter >= samplesBefore);
+            samplesDuringStage += samplesAfter - samplesBefore;
+        }
         if (stage.passes >= 3 && stage.presents >= 3) {
             break;
         }
@@ -163,6 +105,7 @@ TEST_CASE("native G1 transport supplies complete staged replay and an atomic gue
     REQUIRE(stage.decodeSuccesses > 0);
     REQUIRE(stage.passes >= 3);
     REQUIRE(stage.presents >= 3);
+    CHECK(samplesDuringStage > 0);
     REQUIRE(pair.guest.shown());
     const auto& shown = *pair.guest.shown();
     CHECK_FALSE(shown.combatState);

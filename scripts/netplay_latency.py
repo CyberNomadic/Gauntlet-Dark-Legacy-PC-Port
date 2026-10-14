@@ -64,6 +64,62 @@ def throw_diagnostics(report):
             "omitted_requests": diagnostics.get("omitted_requests"), "requests": records}
 
 
+def input_admission_report(guest, host):
+    """Join full input identities across processes; consumption is not an attack/hit ACK."""
+    trace = host.get("host_input_trace")
+    diagnostics = guest.get("throw_diagnostics")
+    if (not isinstance(trace, dict) or type(trace.get("schema")) is not int or
+            trace["schema"] != 1 or not isinstance(diagnostics, dict) or
+            not isinstance(diagnostics.get("requests"), list) or
+            not isinstance(trace.get("entries"), list)):
+        return None
+    requests = diagnostics["requests"]
+
+    def identity(value):
+        if not isinstance(value, dict):
+            return None
+        key = tuple(value.get(field) for field in ("epoch", "seat", "grant", "tick"))
+        return key if all(type(part) is int and part >= 0 for part in key) else None
+
+    indexed = {}
+    for entry in trace.get("entries", []):
+        key = identity(entry)
+        if key is not None:
+            indexed.setdefault(key, []).append(entry)
+    records = []
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        key = identity(request)
+        matches = indexed.get(key, []) if key is not None else []
+        record = {field: request.get(field) for field in ("epoch", "seat", "grant", "tick")}
+        record["status"] = "unobserved"
+        if len(matches) > 1:
+            record["status"] = "ambiguous_trace"
+        elif matches:
+            entry = matches[0]
+            admission, executed = entry.get("admission"), entry.get("executed_tick")
+            record.update({field: entry.get(field) for field in
+                           ("received_tick", "admission", "executed_tick", "concealed_ticks")})
+            payload = (("sampled_held_buttons", "held_buttons"),
+                       ("sampled_pressed_buttons", "pressed_buttons"))
+            if any(type(request.get(a)) is not int or request[a] != entry.get(b)
+                   for a, b in payload):
+                record["status"] = "payload_mismatch"
+            elif admission == "accepted" and type(executed) is int and executed == key[3]:
+                record["status"] = "executed"
+            elif admission == "accepted" and executed is None:
+                record["status"] = "accepted_not_executed"
+            elif admission == "too_late" and executed is None:
+                record["status"] = "too_late"
+            else:
+                record["status"] = "inconsistent_trace"
+        records.append(record)
+    return {"scope": "exact-input-identity-and-buttons; consumption-is-not-an-attack-or-hit-ack",
+            "unobserved_meaning": "not-in-bounded-trace; not-proof-of-packet-loss",
+            "dropped": trace.get("dropped"), "requests": records}
+
+
 def attack_response(report):
     """Independent mixed-combat observations, never a substitute for strict throw evidence."""
     if report.get("attack_probe_schema") != 1:
@@ -231,6 +287,63 @@ REPLAY_REFUSALS = ("unbound", "invalid_authority", "invalid_input", "input_histo
                    "held", "cutscene", "resync", "stale_authority", "seat_mismatch", "no_local_input",
                    "divergent_horizon", "horizon", "stage_decode", "seed_restore", "input_gap",
                    "picture", "native_invalid", "native_unsupported", "exception")
+WORKER_COUNTERS = ("starts", "stops", "submitted", "coalesced", "executed", "superseded",
+                   "publications", "adoptions", "rejected_publications", "presents",
+                   "present_refusals", "submission_refusals", "expired", "errors")
+
+
+def evaluate_replay_worker(report, required=False, minimum_coverage=0.95):
+    """Do not mistake successful off-thread work for pictures actually displayed.
+
+    Legacy reports have no worker evidence. New reports must keep window-local
+    counters and count every main-thread presentation refusal, including jobs
+    superseded by a newer authority before publication.
+    """
+    worker = report.get("combat_worker")
+    if worker is None:
+        return []
+    if not isinstance(worker, dict):
+        return ["Invalid combat worker diagnostics"]
+    failures = []
+    if (type(worker.get("schema")) is not int or worker["schema"] != 1 or
+            type(worker.get("counter_resets")) is not int or worker["counter_resets"] != 0):
+        failures.append("Invalid or reset combat worker measurement window")
+    for key in ("stage", "running", "in_flight", "pending"):
+        if type(worker.get(key)) is not bool:
+            failures.append(f"Invalid combat worker state for {key}")
+    for key in (*WORKER_COUNTERS, "retained_commands"):
+        value = worker.get(key)
+        if type(value) is not int or not 0 <= value < 1 << 64:
+            failures.append(f"No valid combat worker counter for {key}")
+    if failures:
+        return failures
+    if worker["retained_commands"] > 480:
+        failures.append("Combat worker input journal exceeds its bound")
+    if (worker["publications"] != worker["adoptions"] + worker["rejected_publications"] or
+            worker["superseded"] > worker["executed"]):
+        failures.append("Inconsistent combat worker publication accounting")
+    evidence = report.get("combat_replay")
+    stage = evidence.get("stage") if isinstance(evidence, dict) else None
+    if not isinstance(stage, dict):
+        stage = {}
+    if (worker["presents"] != stage.get("presents") or
+            worker["present_refusals"] != stage.get("present_refusals")):
+        failures.append("Combat worker presentation counters disagree with Stage diagnostics")
+    if required:
+        if not worker["stage"] or not worker["running"]:
+            failures.append("No active Stage replay worker during measurement")
+        if worker["errors"] or worker["submission_refusals"]:
+            failures.append("Combat worker failed or refused input during measurement")
+        attempted = worker["presents"] + worker["present_refusals"]
+        if attempted == 0:
+            failures.append("No measured combat worker presentation attempts")
+        elif (type(minimum_coverage) in (int, float) and math.isfinite(minimum_coverage) and
+              0 < minimum_coverage <= 1 and worker["presents"] / attempted < minimum_coverage):
+            failures.append(
+                f"Stage worker displayed-frame coverage {worker['presents']}/{attempted} "
+                f"({worker['presents'] / attempted:.2%}) is below {minimum_coverage:.2%}; "
+                "successful but superseded work does not count as displayed replay")
+    return failures
 
 
 def stage_replay_coverage(report):
@@ -280,7 +393,7 @@ def evaluate_stage_replay(report, required=False, minimum_coverage=0.95):
     evidence, seeds = report.get("combat_replay"), report.get("combat_seeds")
     if not required and evidence is None and seeds is None:
         return []
-    failures = []
+    failures = evaluate_replay_worker(report, required, minimum_coverage)
     if not isinstance(evidence, dict) or not isinstance(seeds, dict):
         return ["Missing native Stage replay diagnostics"]
     if (type(evidence.get("schema")) is not int or evidence["schema"] != 1 or
@@ -869,6 +982,7 @@ def main(argv=None):
                                           "throw_startup": report.get("throw_to_first_frame", {}),
                                           "throw_authority": report.get("throw_to_authority", {}),
                                           "throw_diagnostics": throw_diagnostics(report),
+                                          "host_input_admission": input_admission_report(report, authority),
                                           "ordinary_attack_response": attack_response(report),
                                           "release_to_first_projectile_frame": report.get("release_to_first_projectile_frame", {}),
                                           "release_to_host_projectile": report.get("release_to_host_projectile", {}),

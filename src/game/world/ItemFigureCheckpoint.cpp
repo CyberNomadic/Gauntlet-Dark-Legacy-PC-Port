@@ -44,8 +44,8 @@ bool ItemFigureCheckpoint::State::valid() const {
 
 std::optional<ItemFigureCheckpoint::State> ItemFigureCheckpoint::capture(const ItemFigure& figure) {
     if (figure.hasFigure()) {
-        const auto state = figure.checkpoint();
-        return state ? std::optional{State{*state, true, true}} : std::nullopt;
+        auto state = figure.checkpoint();
+        return state ? std::optional{State{std::move(*state), true, true}} : std::nullopt;
     }
     if (figure.m_staticTree || figure.m_model.bound() || figure.m_pose.posed() ||
         figure.m_presentationPose.posed() || figure.m_particles.field().size() != 0 ||

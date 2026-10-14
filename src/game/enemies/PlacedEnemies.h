@@ -106,6 +106,8 @@ public:
      * transaction must also undo any pools changed by the spawn callback. A
      * bind, clear, or successful restore/rewind invalidates every sibling. */
     std::optional<Rewind> prepareRewind() const;
+    /** Validated historical target; preparation never changes the live watch. */
+    std::optional<Rewind> prepareRewind(const Checkpoint& target) const;
     bool canRewind(const Rewind& rewind) const;
     bool rewind(Rewind&& rewind);
 

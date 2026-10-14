@@ -80,6 +80,13 @@ bool accumulate(const ParticleField& field, usize& count) {
     count += added;
     return field.checkpoint().valid();
 }
+bool validLight(const PointLight& light) {
+    const auto finite = [](const Vec3& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    return finite(light.position) && finite(light.color) && std::isfinite(light.radius) &&
+           light.radius >= 0 && std::isfinite(light.intensity);
+}
 } // namespace
 
 struct StageParticlePresentation::Data {
@@ -101,6 +108,7 @@ struct StageParticlePresentation::Data {
     std::vector<WorldMesh> worldMeshes;
     std::optional<StageSnapshotSampling::Swarm> swarm;
     std::optional<StageSnapshotSampling::Party> party;
+    std::vector<PointLight> lights;
     f32 fallingRemainder = 0;
     f32 fallingSeconds = 0;
     bool worldAdvanced = false;
@@ -210,13 +218,16 @@ std::unique_ptr<StageParticlePresentation>
 StageParticlePresentation::capture(u64 epoch, u64 tick,
                                    const std::shared_ptr<const void>& resourceLifetime,
                                    const Sources& sources) {
-    if (epoch == 0 || !resourceLifetime || sources.fixtures.size() > kMaxRows) {
+    if (epoch == 0 || !resourceLifetime || sources.fixtures.size() > kMaxRows ||
+        sources.lights.size() > WorldLighting::kMostPoints ||
+        !std::ranges::all_of(sources.lights, validLight)) {
         return nullptr;
     }
     auto result = std::make_unique<Data>();
     result->epoch = epoch;
     result->tick = tick;
     result->lifetime = resourceLifetime;
+    result->lights.assign(sources.lights.begin(), sources.lights.end());
     if (sources.enemies != nullptr) {
         result->swarm = StageSnapshotSampling::captureSwarm(*sources.enemies);
     }
@@ -422,6 +433,11 @@ StageParticlePresentation::capture(u64 epoch, u64 tick,
 bool StageParticlePresentation::matches(u64 epoch, u64 tick) const {
     return m_data && !m_data->lifetime.expired() && m_data->epoch == epoch && m_data->tick == tick;
 }
+bool StageParticlePresentation::matches(u64 epoch, u64 tick,
+                                        const std::weak_ptr<const void>& resources) const {
+    return matches(epoch, tick) && !resources.expired() &&
+           !m_data->lifetime.owner_before(resources) && !resources.owner_before(m_data->lifetime);
+}
 usize StageParticlePresentation::particleCount() const {
     return m_data ? m_data->particles : 0;
 }
@@ -430,6 +446,10 @@ const StageSnapshotSampling::Swarm* StageParticlePresentation::swarm() const {
 }
 const StageSnapshotSampling::Party* StageParticlePresentation::party() const {
     return m_data && !m_data->lifetime.expired() && m_data->party ? &*m_data->party : nullptr;
+}
+std::span<const PointLight> StageParticlePresentation::lights() const {
+    return m_data && !m_data->lifetime.expired() ? std::span<const PointLight>{m_data->lights}
+                                                 : std::span<const PointLight>{};
 }
 bool StageParticlePresentation::draw(Phase phase, RenderDevice& device, const Mat4& clip,
                                      const CameraFrame& camera, f32 alpha) const {

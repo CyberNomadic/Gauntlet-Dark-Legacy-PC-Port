@@ -16,6 +16,7 @@
 #include "engine/io/Sha256.h"
 
 #include "game/netplay/AnimationCheckpoint.h"
+#include "game/netplay/CanonicalDigestSink.h"
 
 namespace gdl::game {
 namespace {
@@ -57,6 +58,8 @@ public:
                     GeometryCatalog* collecting = nullptr)
         : catalog(geometry), collect(collecting) {}
     std::vector<u8> bytes;
+    CanonicalDigestSink* digest = nullptr;
+    bool agreement = false;
     usize records = 0, strings = 0, triangles = 0, used = 0;
     usize limit = StageStatePacket::kMaxBytes;
     bool countOnly = false;
@@ -67,7 +70,9 @@ public:
             throw FormatError("stage byte budget");
         }
         used += source.size();
-        if (!collect && !countOnly) {
+        if (digest) {
+            digest->append(source);
+        } else if (!collect && !countOnly) {
             bytes.insert(bytes.end(), source.begin(), source.end());
         }
     }
@@ -169,6 +174,19 @@ template <class T, usize N> struct IsArray<std::array<T, N>> : std::true_type {}
 template <class T> struct IsPair : std::false_type {};
 template <class T, class U> struct IsPair<std::pair<T, U>> : std::true_type {};
 template <class A, class T> void field(A&, T&);
+/** These optional poses are overwritten by draw before use. The agreement
+ * visitor alone elides them; wire and native restore retain and validate them. */
+template <class A, class T> void drawCache(A& a, T& value) {
+    if constexpr (!A::reading) {
+        if (a.agreement) {
+            const std::remove_cv_t<T> empty{};
+            field(a, empty);
+            return;
+        }
+    }
+    field(a, value);
+}
+
 template <class A, class... T> void fields(A& a, T&... v) {
     (field(a, v), ...);
 }
@@ -521,7 +539,9 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.index, v.texture, v.frame, v.cycle, v.cyclePosition, v.cycleSpeed, v.offset,
                v.scrollPhase, v.scrollVelocity, v.usable, v.thermal);
     } else if constexpr (std::is_same_v<V, WorldStateCheckpoint::Light>) {
-        fields(a, v.ambient, v.color, v.direction, v.points);
+        fields(a, v.ambient, v.color, v.direction);
+        // Native gatherLights overwrites all three Stage point-light copies at draw.
+        drawCache(a, v.points);
     } else if constexpr (std::is_same_v<V, WorldStateCheckpoint::Point>) {
         fields(a, v.position, v.color, v.radius, v.intensity);
     } else if constexpr (std::is_same_v<V, WorldStateCheckpoint::Moving>) {
@@ -599,8 +619,8 @@ template <class A, class T> void field(A& a, T& v) {
                v.strength, v.minPlayers, v.radius, v.height, v.position, v.transform, v.particles,
                v.pose, v.animation, v.alpha, v.visible, v.taken, v.contained, v.velocity, v.thrown,
                v.carried, v.opener, v.noGrabSeconds, v.previousTransform, v.previousFrame,
-               v.previousAlpha, v.previousGeneration, v.presentationCaptured, v.continuity,
-               v.presentationPose);
+               v.previousAlpha, v.previousGeneration, v.presentationCaptured, v.continuity);
+        drawCache(a, v.presentationPose);
     } else if constexpr (std::is_same_v<V, PlacedItemsCheckpoint::Effect>) {
         fields(a, v.resource, v.position, v.animation, v.pose, v.emitters, v.secondsLeft,
                v.emitting);
@@ -698,11 +718,13 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, ItemFigureCheckpoint::State>) {
         fields(a, v.state, v.bound, v.archive);
     } else if constexpr (std::is_same_v<V, ItemFigure::Checkpoint>) {
-        fields(a, v.animation, v.pose, v.presentationPose, v.textures, v.particles, v.poseSequence,
-               v.poseFrame, v.poseGeneration, v.continuity, v.previousTransform, v.previousFrame,
-               v.previousGeneration, v.presentationCaptured, v.presentationAdvanced,
-               v.textureSequence, v.textureFrame, v.gateParticles, v.position, v.yaw, v.transform,
-               v.placement, v.index, v.loop, v.holdPose);
+        fields(a, v.animation, v.pose);
+        drawCache(a, v.presentationPose);
+        fields(a, v.textures, v.particles, v.poseSequence, v.poseFrame, v.poseGeneration,
+               v.continuity, v.previousTransform, v.previousFrame, v.previousGeneration,
+               v.presentationCaptured, v.presentationAdvanced, v.textureSequence, v.textureFrame,
+               v.gateParticles, v.position, v.yaw, v.transform, v.placement, v.index, v.loop,
+               v.holdPose);
     } else if constexpr (std::is_same_v<V, AnimationPlayer::Checkpoint>) {
         if constexpr (A::reading) {
             const auto decoded = AnimationCheckpoint::decode(a.raw(AnimationCheckpoint::kBytes));
@@ -929,6 +951,25 @@ std::optional<usize> StageStatePacket::decodedSize(const State& state, const Cat
         return std::nullopt;
     }
 }
+std::optional<std::array<u8, 32>> StageStatePacket::canonicalDigest(const State& state,
+                                                                    const Catalog& catalog,
+                                                                    bool presentationIndependent) {
+    if (!catalog.valid() || !matches(state, *catalog.m_data)) {
+        return std::nullopt;
+    }
+    try {
+        CanonicalDigestSink sink;
+        Writer writer(catalog.m_data.get());
+        writer.limit = kMaxDecodedBytes;
+        writer.digest = &sink;
+        writer.agreement = presentationIndependent;
+        field(writer, state);
+        return sink.finish();
+    } catch (const FormatError&) {
+        return std::nullopt;
+    }
+}
+
 std::optional<StageStatePacket::State> StageStatePacket::decode(std::span<const u8> bytes,
                                                                 const Catalog& catalog) {
     if (!catalog.valid() || !envelopeValid(bytes) ||

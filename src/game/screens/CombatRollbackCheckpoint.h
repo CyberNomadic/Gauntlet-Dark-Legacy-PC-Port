@@ -94,6 +94,8 @@ public:
      * owner replacement still invalidate it. The caller buffers all outputs and
      * refuses uncaptured interactions BEFORE dispatching them. */
     std::optional<Rewind> prepareRewind() const;
+    /** Prepares a validated historical target without changing current owners. */
+    std::optional<Rewind> prepareRewind(const State& target) const;
     bool canRewind(const Rewind& rewind) const;
     /** Joint preflight, then allocation-free/callback-free single-use undo. */
     bool rewind(Rewind&& rewind);

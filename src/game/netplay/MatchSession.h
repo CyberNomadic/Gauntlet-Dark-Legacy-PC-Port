@@ -68,6 +68,37 @@ public:
  * The scene adapter must call advance() before stepping gameplay; clients never get a frame. */
 class MatchSession {
 public:
+    using Clock = LatencyTelemetry::Clock;
+    using Time = Clock::time_point;
+    /** Compact completed-checkpoint evidence, not an input execution or hit ACK.
+     * Native action clocks take precedence over independently sampled artwork. */
+    struct ActionReceipt {
+        Time receivedAt;
+        u64 epoch = 0;
+        u64 tick = 0;
+        u64 generation = 0;
+        u64 actualInput = 0;
+        u64 receivedInput = 0;
+        u32 grant = 0;
+        u32 continuity = 0;
+        u32 action = 0;
+        u32 lateInputs = 0;
+        u8 seat = 0;
+        ReplicaPlayerLife life = ReplicaPlayerLife::Standing;
+        PlayerDeed reaction = PlayerDeed::None;
+        bool present = false;
+        bool portalPhase = false;
+        bool rollback = false;
+        bool enabled = false;
+        bool current = false;
+        bool ranged = false;
+        bool weapon = false;
+        bool melee = false;
+        bool turbo = false;
+        bool released = false;
+        bool operator==(const ActionReceipt&) const = default;
+    };
+    static constexpr usize kActionReceipts = 256; // sixty-four complete four-seat checkpoints
     enum class Phase : u8 { Offline, Lobby, Loading, Running, Paused, Stopped };
     enum class Admission : u8 { Accepted, Stale, WrongPeer, WrongPhase, Invalid };
     // Includes the native route/preview and encounter movie before asset readiness.
@@ -81,6 +112,11 @@ public:
     // A quiet/stalled host must never let client input numbering run away.
     static constexpr u64 kInputSlack = 6;
     static constexpr u8 kMaxInputLead = 30;
+    // A received checkpoint can age while this process is busy. Estimate only
+    // this bounded amount of host progress; a stalled host cannot replenish it.
+    static constexpr u64 kMaxDeadlineAdvance = kMaxInputLead;
+    static constexpr u64 kMaxUnconfirmedTicks = kMaxDeadlineAdvance + kMaxInputLead + kInputSlack;
+    static_assert(kMaxUnconfirmedTicks <= InputTimeline::kMaxAhead);
 
     bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links);
     /** A new transport/room lifetime is required before opening again after clear(). */
@@ -108,17 +144,19 @@ public:
     bool requestPause();
     void leave();
     void disconnected(PacketTransport::Connection connection);
-    void update(f64 seconds);
+    /** seconds is simulation/lifecycle time; now is independent monotonic time. */
+    void update(f64 seconds, Time now = Clock::now());
     /** Out-of-phase gameplay datagrams are discarded as Stale. They may overtake
      * reliable start/travel control or arrive late after pause; neither is fatal. */
-    Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes);
-    void flush(PacketTransport& transport);
+    Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
+                      std::optional<Time> now = std::nullopt);
+    void flush(PacketTransport& transport, Time now = Clock::now());
 
     /** One complete local frame per 60 Hz local update, without UI pointers.
      * Guests ahead of the latest host checkpoint coalesce into one pending frame:
      * latest held state/aim plus one pending edge per action, not a replay backlog.
      * Acceptance need not advance inputTick() when the host has fallen behind. */
-    bool sample(std::span<const InputCommand> frame);
+    bool sample(std::span<const InputCommand> frame, Time now = Clock::now());
     /** Exact last accepted sample, including coalesced edges; empty while throttled. */
     std::span<const InputCommand> sampledInputs() const { return m_sampled; }
     bool inputReady() const;
@@ -139,6 +177,16 @@ public:
     const InputTimeline::Diagnostics& inputDiagnostics(usize seat) const {
         return m_timeline.diagnostics(seat);
     }
+    /** Bounded, local host action-input evidence; never serialized to peers. */
+    const std::deque<InputTimeline::CommandTrace>& commandTrace() const {
+        return m_timeline.commandTrace();
+    }
+    u64 droppedCommandTraces() const { return m_timeline.droppedCommandTraces(); }
+    /** Guest-only, bounded receipt history. Read timestamps before doing expensive
+     * replay/render work; rendering must retain its independent observation time.
+     * Missing occupied seats are retained as present=false interruption evidence. */
+    const std::deque<ActionReceipt>& actionReceipts() const { return m_actionReceipts; }
+    u64 droppedActionReceipts() const { return m_droppedActionReceipts; }
     const std::optional<InputCommand>& resolvedInput(usize seat) const {
         return m_timeline.previous(seat);
     }
@@ -176,6 +224,11 @@ private:
     Admission checkpoint(u8 peer, const PartyCheckpoint& message);
     Admission receipt(u8 peer, const CombatReplica::Receipt& message);
     void resetLeadRecovery();
+    Time observeInputTime(Time now);
+    u64 deadlineAdvance() const;
+    void refreshInputDeadline(Time now);
+    bool calibrateInputDeadline(const CombatSnapshot& state, usize seat);
+    void recordActionReceipt(const CombatSnapshot& state, Time now);
 
     Phase m_phase = Phase::Offline;
     MatchStop m_stop = MatchStop::None;
@@ -201,11 +254,23 @@ private:
     u32 m_healthyLeadSamples = 0;
     s32 m_healthyLeadMargin = 0;
     u64 m_sampleClock = 0;
+    std::optional<Time> m_inputTime;
+    struct DeadlineAnchor {
+        u64 tick = 0;
+        Time received;
+    };
+    std::optional<DeadlineAnchor> m_deadlineAnchor;
+    // Pair a host admission tick with our first successful send, not with the
+    // later snapshot receipt. This removes snapshot age from the safety lead.
+    std::optional<DeadlineAnchor> m_admissionAnchor;
     struct SentInput {
         u64 tick;
-        u64 sampled;
+        Time sampled;
+        std::optional<Time> firstSent;
     };
     std::deque<SentInput> m_sentInputs;
+    std::deque<ActionReceipt> m_actionReceipts;
+    u64 m_droppedActionReceipts = 0;
     std::array<u64, InputCommand::kSeats> m_feedbackInput{};
     std::array<u32, InputCommand::kSeats> m_pendingPress{};
     std::optional<u64> m_published;

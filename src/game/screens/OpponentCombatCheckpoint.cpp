@@ -30,7 +30,8 @@ bool effectReferences(const OpponentCombatCheckpoint::State& state,
            std::ranges::all_of(state.critterEffects,
                                [&](const auto& effect) { return issued(effect.effect); }) &&
            std::ranges::all_of(state.moveEffects,
-                               [&](const auto& effect) { return issued(effect.effect); });
+                               [&](const auto& effect) { return issued(effect.effect); }) &&
+           std::ranges::all_of(state.bags, [&](const auto& bag) { return issued(bag.effect); });
 }
 } // namespace
 
@@ -52,7 +53,10 @@ bool OpponentCombatCheckpoint::State::validAggregate() const {
         !finite(shrink) || shrink <= 0 || shrink > 1 ||
         std::ranges::any_of(hitStreak, [](s32 value) { return value < 0; }) ||
         critterEffects.size() > kMaxRecords || moveEffects.size() > kMaxRecords ||
-        barrelRams.size() > kMaxRecords || projectiles.catalog.size() != critters.banks.size()) {
+        barrelRams.size() > kMaxRecords || bags.size() > kMaxRecords ||
+        projectiles.catalog.size() != critters.banks.size() ||
+        !std::ranges::all_of(carried,
+                             [](const auto& item) { return !item || *item <= kMaxRecords; })) {
         return false;
     }
     for (usize index = 0; index < projectiles.catalog.size(); ++index) {
@@ -81,6 +85,16 @@ bool OpponentCombatCheckpoint::State::validAggregate() const {
     }
     for (const auto& effect : moveEffects) {
         if (effect.effect == 0 || effect.ofBoss || !critter(effect.critter)) {
+            return false;
+        }
+    }
+    for (const auto& bag : bags) {
+        // StartBagFX chooses one reward source. Native update removes a bag
+        // after three seconds, but its issued effect may expire before cleanup.
+        if (bag.item.has_value() == !bag.name.empty() || (bag.item && *bag.item > kMaxRecords) ||
+            !fixture_checkpoint::name(bag.name) || !finite(bag.position) || !finite(bag.velocity) ||
+            !finite(bag.age) || bag.age < 0 || bag.age >= 3 || !finite(bag.pitch) ||
+            !finite(bag.spin) || bag.spin < 0 || bag.effect == 0) {
             return false;
         }
     }
@@ -130,7 +144,8 @@ bool OpponentCombatCheckpoint::State::dormant() const {
            projectiles.hits.empty() && projectiles.worldHits.empty() &&
            projectiles.rockHits.empty() && projectiles.generators.empty() &&
            projectiles.summons.empty() && projectiles.ricochetIn == 0 && critterEffects.empty() &&
-           moveEffects.empty() && barrelRams.empty() &&
+           moveEffects.empty() && barrelRams.empty() && bags.empty() &&
+           std::ranges::none_of(carried, [](const auto& item) { return item.has_value(); }) &&
            std::ranges::all_of(critterExperienceOwed, [](f32 value) { return value == 0; });
 }
 
@@ -154,7 +169,8 @@ bool OpponentCombatCheckpoint::State::references(u8 playerMask,
                    return !v.playerAttachment || player(*v.playerAttachment);
                });
     };
-    if (!events(critters.events) || !std::ranges::all_of(cueEffects, issued)) {
+    if (!events(critters.events) || !std::ranges::all_of(cueEffects, issued) ||
+        !std::ranges::all_of(bags, [&](const auto& bag) { return issued(bag.effect); })) {
         return false;
     }
     for (usize index = 0; index < critterExperienceOwed.size(); ++index) {
@@ -186,6 +202,12 @@ bool OpponentCombatCheckpoint::State::references(u8 playerMask,
            std::ranges::all_of(projectiles.hits, [&](const auto& v) { return player(v.player); });
 }
 
+bool OpponentCombatCheckpoint::State::pickupReferences(usize count) const {
+    const auto inRange = [&](const auto& item) { return !item || *item < count; };
+    return std::ranges::all_of(carried, inRange) &&
+           std::ranges::all_of(bags, [&](const auto& bag) { return inRange(bag.item); });
+}
+
 bool OpponentCombatCheckpoint::unused(const Combatant& actor) {
     return !actor.present() && actor.m_actor.stock == nullptr && actor.m_children.empty() &&
            actor.m_cues.empty() && actor.m_grabs.empty() && actor.m_spews.empty() &&
@@ -198,10 +220,8 @@ bool OpponentCombatCheckpoint::supported() const {
     const auto& owner = m_owner;
     if (!owner.m_resources || owner.m_bindingGeneration == 0 ||
         (owner.m_resources->world.level() && owner.m_resources->world.level()->bossType >= 0) ||
-        !owner.m_clouds.empty() || !owner.m_deathShots.empty() || !owner.m_bags.empty() ||
-        owner.m_deathSound != kNoSound || owner.m_deathContact || !owner.m_yells.empty() ||
-        owner.m_bossMeter.bound() ||
-        std::ranges::any_of(owner.m_carried, [](const auto& item) { return item.has_value(); }) ||
+        !owner.m_clouds.empty() || !owner.m_deathShots.empty() || owner.m_deathSound != kNoSound ||
+        owner.m_deathContact || !owner.m_yells.empty() || owner.m_bossMeter.bound() ||
         std::ranges::any_of(owner.m_deathEffects, [](u32 effect) { return effect != 0; })) {
         return false;
     }
@@ -238,6 +258,7 @@ struct OpponentCombatCheckpoint::Prepared::Data {
     std::vector<LevelOpponents::CritterEffect> critterEffects;
     std::vector<LevelOpponents::MoveEffect> moveEffects;
     std::vector<CombatantRam> barrelRams;
+    std::vector<LevelOpponents::Bag> bags;
 };
 
 struct OpponentCombatCheckpoint::CaptureResources {
@@ -315,6 +336,12 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     state.cueEffects = m_owner.m_cueEffects;
     state.shrink = m_owner.m_shrink;
     state.bagSeed = m_owner.m_bagSeed;
+    state.carried = m_owner.m_carried;
+    state.bags.reserve(m_owner.m_bags.size());
+    for (const auto& bag : m_owner.m_bags) {
+        state.bags.push_back({bag.item, bag.name, bag.position, bag.velocity, bag.age, bag.pitch,
+                              bag.spin, bag.effect, bag.landed});
+    }
     state.statues = std::move(*statues);
     state.critters = std::move(*critters);
     state.projectiles = std::move(*projectiles);
@@ -371,6 +398,11 @@ OpponentCombatCheckpoint::prepareRestore(const State& state,
     for (const auto& ram : state.barrelRams) {
         data->barrelRams.push_back({ram.id, ram.damage});
     }
+    data->bags.reserve(state.bags.size());
+    for (const auto& bag : state.bags) {
+        data->bags.push_back({bag.item, bag.name, bag.position, bag.velocity, bag.age, bag.pitch,
+                              bag.spin, bag.effect, bag.landed});
+    }
     data->rewards.reserve(state.generatorRewards.size());
     for (const auto& reward : state.generatorRewards) {
         data->rewards.push_back({reward.player, reward.experience, reward.destroyed});
@@ -410,6 +442,8 @@ bool OpponentCombatCheckpoint::commitRestore(Prepared&& prepared) {
     m_owner.m_cueEffects.swap(data->state.cueEffects);
     m_owner.m_shrink = data->state.shrink;
     m_owner.m_bagSeed = data->state.bagSeed;
+    m_owner.m_carried = data->state.carried;
+    m_owner.m_bags.swap(data->bags);
     m_owner.m_critterExperienceOwed = data->state.critterExperienceOwed;
     m_owner.m_critterEffects.swap(data->critterEffects);
     m_owner.m_moveEffects.swap(data->moveEffects);

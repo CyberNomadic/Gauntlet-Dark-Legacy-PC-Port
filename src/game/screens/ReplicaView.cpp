@@ -48,9 +48,7 @@ bool ReplicaView::resume(const MatchContext& context) {
     return true;
 }
 void ReplicaView::clear() {
-    m_particles.reset();
-    m_particleTick = 0;
-    m_particleBlend = 0;
+    discardPresentation();
     m_presentedClip.reset();
     m_presentedPlayers.fill(std::nullopt);
     m_context = {};
@@ -68,10 +66,17 @@ void ReplicaView::clear() {
     m_fighterResources = {};
     m_geometry.clear();
     m_textures.clear();
+    m_lighting = {};
+    m_fullLighting = {};
     m_presentationFloors = {};
     m_hud.clear();
     m_shown.reset();
     m_resuming = false;
+}
+void ReplicaView::discardPresentation() {
+    m_particles.reset();
+    m_particleTick = 0;
+    m_particleBlend = 0;
 }
 bool ReplicaView::setPlayer(u8 seat, std::unique_ptr<PlayerFigure> figure, f32 scale,
                             const ClassStats* stats) {
@@ -295,11 +300,21 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     }
     const auto frame = CameraFrame::of(camera);
     const bool nativeParticles = m_particles && m_particles->matches(motion.epoch, m_particleTick);
+    m_lighting = m_world->lighting();
+    m_fullLighting = m_world->fullLighting();
+    if (nativeParticles && motion.epoch == m_context.epoch) {
+        const auto lights = m_particles->lights();
+        m_lighting.points.assign(lights.begin(), lights.end());
+        m_fullLighting.points.assign(lights.begin(), lights.end());
+    }
+    // Ordinary transported snapshots currently carry no dynamic point-light list.
+    // Revocation therefore restores the existing borrowed-world fallback; it must
+    // never leave a prior speculative effect or lantern illuminating this picture.
+    m_geometry.setPointLights(m_lighting.points);
     const auto drawParticles = [&](StageParticlePresentation::Phase phase) {
         if (nativeParticles) {
             m_particles->draw(phase, device, clip, frame, m_particleBlend);
-            m_particles->drawDecorations(phase, device, clip, m_world->lighting(), frame,
-                                         m_particleBlend);
+            m_particles->drawDecorations(phase, device, clip, m_lighting, frame, m_particleBlend);
         }
     };
     // Draw only host-controlled pickups; never tick the local world's item physics.
@@ -313,16 +328,13 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
     m_geometry.drawOpaque(device, clip, frame, -1, textureOffset);
     drawParticles(StageParticlePresentation::Phase::WorldScenery);
     drawParticles(StageParticlePresentation::Phase::WorldFixtures);
-    m_fixtures.drawTransporters(device, *m_fixtureResources, clip, m_world->lighting());
-    m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
-                    TreeModel::Pass::Opaque);
-    m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
-                   TreeModel::Pass::Opaque);
-    m_actors.draw(device, *m_enemies, clip, m_world->lighting(), frame, textureFrame, hitFlash,
+    m_fixtures.drawTransporters(device, *m_fixtureResources, clip, m_lighting);
+    m_fixtures.draw(device, *m_fixtureResources, clip, m_lighting, frame, TreeModel::Pass::Opaque);
+    m_pickups.draw(device, *m_pickupResources, clip, m_lighting, frame, TreeModel::Pass::Opaque);
+    m_actors.draw(device, *m_enemies, clip, m_lighting, frame, textureFrame, hitFlash,
                   TreeModel::Pass::DepthWriting);
-    m_projectiles.draw(device, *m_resources, clip, m_world->fullLighting(), frame,
-                       TreeModel::Pass::Opaque);
-    m_fighters.draw(device, m_fighterResources, clip, m_world->lighting(), hitFlash, frozen,
+    m_projectiles.draw(device, *m_resources, clip, m_fullLighting, frame, TreeModel::Pass::Opaque);
+    m_fighters.draw(device, m_fighterResources, clip, m_lighting, hitFlash, frozen,
                     TreeModel::Pass::DepthWriting);
     drawParticles(StageParticlePresentation::Phase::SolidFixtures);
     if (video.display.ambientOcclusion) {
@@ -330,25 +342,23 @@ void ReplicaView::draw(RenderDevice& device, const Mat4& frameProjection, f32 fr
         occlusion.clipToView = camera.view() * glm::inverse(clip);
         device.applyAmbientOcclusion(occlusion);
     }
-    m_actors.drawShadows(device, clip, m_world->lighting(), camera.position);
+    m_actors.drawShadows(device, clip, m_lighting, camera.position);
     m_geometry.drawDeferred(device, clip, frame, -1, textureOffset);
-    m_pickups.draw(device, *m_pickupResources, clip, m_world->lighting(), frame,
-                   TreeModel::Pass::Blended);
+    m_pickups.draw(device, *m_pickupResources, clip, m_lighting, frame, TreeModel::Pass::Blended);
     drawParticles(StageParticlePresentation::Phase::Pickups);
     drawParticles(StageParticlePresentation::Phase::World);
-    m_fixtures.draw(device, *m_fixtureResources, clip, m_world->lighting(), frame,
-                    TreeModel::Pass::Blended);
+    m_fixtures.draw(device, *m_fixtureResources, clip, m_lighting, frame, TreeModel::Pass::Blended);
     drawParticles(StageParticlePresentation::Phase::Fixtures);
-    m_actors.draw(device, *m_enemies, clip, m_world->lighting(), frame, textureFrame, hitFlash,
+    m_actors.draw(device, *m_enemies, clip, m_lighting, frame, textureFrame, hitFlash,
                   TreeModel::Pass::Effects);
-    m_projectiles.draw(device, *m_resources, clip, m_world->fullLighting(), frame,
-                       TreeModel::Pass::Blended, !nativeParticles);
+    m_projectiles.draw(device, *m_resources, clip, m_fullLighting, frame, TreeModel::Pass::Blended,
+                       !nativeParticles);
     drawParticles(StageParticlePresentation::Phase::Projectiles);
     drawParticles(StageParticlePresentation::Phase::Effects);
-    m_fighters.draw(device, m_fighterResources, clip, m_world->lighting(), hitFlash, frozen,
+    m_fighters.draw(device, m_fighterResources, clip, m_lighting, hitFlash, frozen,
                     TreeModel::Pass::Effects);
     if (effects != nullptr) {
-        effects->draw(device, *m_shown, clip, m_world->fullLighting(), frame, effectBlend);
+        effects->draw(device, *m_shown, clip, m_fullLighting, frame, effectBlend);
     }
     canvas.end();
     if (video.display.bloom) {

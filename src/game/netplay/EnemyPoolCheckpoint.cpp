@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "game/netplay/AnimationCheckpoint.h"
+#include "game/netplay/CanonicalDigestSink.h"
 #include "game/netplay/RandomCheckpoint.h"
 
 namespace gdl::game {
@@ -18,15 +19,18 @@ namespace {
 struct Writer {
     static constexpr bool kReading = false;
     std::vector<u8> bytes;
+    CanonicalDigestSink* digest = nullptr;
+    usize used = 0;
 
     bool word(u32 value) {
-        if (bytes.size() > EnemyPoolCheckpoint::kMaxBytes - 4) {
+        if (used > EnemyPoolCheckpoint::kMaxBytes - 4) {
             return false;
         }
+        std::array<u8, 4> encoded{};
         for (u32 shift = 0; shift < 32; shift += 8) {
-            bytes.push_back(static_cast<u8>(value >> shift));
+            encoded[shift / 8] = static_cast<u8>(value >> shift);
         }
-        return true;
+        return raw(encoded);
     }
     bool scalar(u32 value) { return word(value); }
     bool scalar(s32 value) { return word(std::bit_cast<u32>(value)); }
@@ -44,22 +48,24 @@ struct Writer {
     bool scalar(const Vec2& value) { return (*this)(value.x, value.y); }
     template <class... T> bool operator()(const T&... values) { return (scalar(values) && ...); }
     bool raw(std::span<const u8> value) {
-        if (value.size() > EnemyPoolCheckpoint::kMaxBytes - bytes.size()) {
+        if (value.size() > EnemyPoolCheckpoint::kMaxBytes - used) {
             return false;
         }
-        bytes.insert(bytes.end(), value.begin(), value.end());
+        used += value.size();
+        if (digest) {
+            digest->append(value);
+        } else {
+            bytes.insert(bytes.end(), value.begin(), value.end());
+        }
         return true;
     }
     bool name(const std::string& value) {
         if (value.size() > TreePose::Checkpoint::kMaxName ||
-            value.size() + 4 > EnemyPoolCheckpoint::kMaxBytes - bytes.size() ||
+            value.size() + 4 > EnemyPoolCheckpoint::kMaxBytes - used ||
             !word(static_cast<u32>(value.size()))) {
             return false;
         }
-        for (const char letter : value) {
-            bytes.push_back(static_cast<u8>(letter));
-        }
-        return true;
+        return raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     bool count(usize& value, usize maximum, usize, usize* budget = nullptr) {
         if (value > maximum || (budget && value > *budget)) {
@@ -412,6 +418,14 @@ std::optional<std::vector<u8>> EnemyPoolCheckpoint::encode(const Enemies::Checkp
         return std::nullopt;
     }
     return std::move(writer.bytes);
+}
+
+std::optional<std::array<u8, 32>>
+EnemyPoolCheckpoint::canonicalDigest(const Enemies::Checkpoint& state) {
+    CanonicalDigestSink sink;
+    Writer writer;
+    writer.digest = &sink;
+    return pool(writer, state) ? std::optional{sink.finish()} : std::nullopt;
 }
 
 std::optional<Enemies::Checkpoint> EnemyPoolCheckpoint::decode(std::span<const u8> bytes) {

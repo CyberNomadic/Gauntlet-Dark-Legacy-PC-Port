@@ -5,9 +5,129 @@
 
 #include "engine/core/Log.h"
 
+#include "game/screens/CombatReplayWorker.h"
 #include "game/screens/MatchInputs.h"
 
 namespace gdl::game {
+namespace {
+void accumulate(OnlineCombatReplay::Diagnostics& total,
+                const OnlineCombatReplay::Diagnostics& current,
+                OnlineCombatReplay::Diagnostics& previous) {
+    const auto count = [](u64& sum, u64 value, u64 before) {
+        sum += value >= before ? value - before : value;
+    };
+    const auto timing = [&](auto& sum, const auto& value, const auto& before) {
+        count(sum.count, value.count, before.count);
+        count(sum.nanoseconds, value.nanoseconds, before.nanoseconds);
+        sum.maximumNanoseconds = std::max(sum.maximumNanoseconds, value.maximumNanoseconds);
+    };
+    for (usize domain = 0; domain < total.domains.size(); ++domain) {
+        auto& sum = total.domains[domain];
+        const auto& value = current.domains[domain];
+        const auto& before = previous.domains[domain];
+        for (const auto member :
+             {&OnlineCombatReplay::Counters::updates, &OnlineCombatReplay::Counters::passes,
+              &OnlineCombatReplay::Counters::refusals, &OnlineCombatReplay::Counters::advancedTicks,
+              &OnlineCombatReplay::Counters::invalidTicks,
+              &OnlineCombatReplay::Counters::unsupportedTicks,
+              &OnlineCombatReplay::Counters::presents,
+              &OnlineCombatReplay::Counters::presentRefusals,
+              &OnlineCombatReplay::Counters::decodeAttempts,
+              &OnlineCombatReplay::Counters::decodeSuccesses,
+              &OnlineCombatReplay::Counters::decodeFailures,
+              &OnlineCombatReplay::Counters::decodeNanoseconds,
+              &OnlineCombatReplay::Counters::advanceNanoseconds,
+              &OnlineCombatReplay::Counters::restorePasses,
+              &OnlineCombatReplay::Counters::appendPasses,
+              &OnlineCombatReplay::Counters::reusedPasses,
+              &OnlineCombatReplay::Counters::promotionAttempts,
+              &OnlineCombatReplay::Counters::promotedPasses,
+              &OnlineCombatReplay::Counters::attemptedTicks}) {
+            count(sum.*member, value.*member, before.*member);
+        }
+        sum.maximumTicksPerPass = std::max(sum.maximumTicksPerPass, value.maximumTicksPerPass);
+        for (const auto member :
+             {&OnlineCombatReplay::Counters::passCost, &OnlineCombatReplay::Counters::seedCost,
+              &OnlineCombatReplay::Counters::decodeCost, &OnlineCombatReplay::Counters::restoreCost,
+              &OnlineCombatReplay::Counters::promotionCost,
+              &OnlineCombatReplay::Counters::agreementRecordCost,
+              &OnlineCombatReplay::Counters::advanceCost,
+              &OnlineCombatReplay::Counters::captureCost,
+              &OnlineCombatReplay::Counters::prepareCost,
+              &OnlineCombatReplay::Counters::postconditionCost,
+              &OnlineCombatReplay::Counters::pictureCost}) {
+            timing(sum.*member, value.*member, before.*member);
+        }
+        const auto counts = [&](auto& destination, const auto& next, const auto& last) {
+            for (usize index = 0; index < destination.size(); ++index) {
+                count(destination[index], next[index], last[index]);
+            }
+        };
+        counts(sum.reasons, value.reasons, before.reasons);
+        counts(sum.presentReasons, value.presentReasons, before.presentReasons);
+        counts(sum.seedIssues, value.seedIssues, before.seedIssues);
+        counts(sum.tickRefusals, value.tickRefusals, before.tickRefusals);
+        counts(sum.partyRefusals, value.partyRefusals, before.partyRefusals);
+        counts(sum.projectileRefusals, value.projectileRefusals, before.projectileRefusals);
+        counts(sum.refusedActions, value.refusedActions, before.refusedActions);
+        counts(sum.refusedTargets, value.refusedTargets, before.refusedTargets);
+        for (usize index = 0; index < sum.postconditionOwners.size(); ++index) {
+            timing(sum.postconditionOwners[index], value.postconditionOwners[index],
+                   before.postconditionOwners[index]);
+        }
+        for (usize index = 0; index < sum.postconditionWorld.size(); ++index) {
+            timing(sum.postconditionWorld[index], value.postconditionWorld[index],
+                   before.postconditionWorld[index]);
+        }
+    }
+    previous = current;
+}
+
+void workerCounts(OnlinePlay::CombatWorkerMetrics& total,
+                  const CombatReplayWorker::QueueState& value,
+                  const CombatReplayWorker::QueueState& previous) {
+    total.submitted += value.submitted - previous.submitted;
+    total.coalesced += value.coalesced - previous.coalesced;
+    total.executed += value.executed - previous.executed;
+    total.superseded += value.superseded - previous.superseded;
+    total.running = value.running;
+    total.inFlight = value.inFlight;
+    total.pending = value.pending;
+    total.retainedCommands = value.retainedCommands;
+}
+} // namespace
+
+struct OnlinePlay::CombatReplayState {
+    CombatReplayWorker worker;
+    StageReplayPresentation presenter;
+    OnlineCombatReplay::Diagnostics diagnostics, producerDiagnostics;
+    CombatWorkerMetrics metrics;
+    CombatReplayWorker::QueueState queue;
+    MatchContext context;
+    RollbackInputHistory inputs;
+    std::weak_ptr<const void> resources;
+    std::optional<StageReplayPresentation::Authority> authority;
+    std::optional<u64> authorityTick;
+    std::array<std::optional<u32>, InputCommand::kSeats> continuity;
+    u32 cameraContinuity = 0;
+    u32 unchangedFrames = 0;
+    bool keyAttempted = false;
+    bool sawStage = false;
+    bool workerOwned = false;
+    bool legacyBound = false;
+    bool faulted = false;
+    bool currentAuthority = false;
+
+    void observe(const OnlineCombatReplay::Diagnostics& value) {
+        accumulate(diagnostics, value, producerDiagnostics);
+    }
+    void observeQueue() {
+        const auto value = worker.queueState();
+        workerCounts(metrics, value, queue);
+        queue = value;
+    }
+};
+
 struct OnlinePlay::Host {
     Host() = default;
     Host(const Host&) = delete;
@@ -22,7 +142,7 @@ struct OnlinePlay::Host {
     PlayReplication driver;
     ~Host() { scene.close(); }
 };
-OnlinePlay::OnlinePlay() = default;
+OnlinePlay::OnlinePlay() : m_combatState(std::make_unique<CombatReplayState>()) {}
 OnlinePlay::~OnlinePlay() {
     close();
 }
@@ -101,7 +221,13 @@ bool OnlinePlay::open(RenderDevice& device, const GameContext& context, OnlineSe
     return true;
 }
 void OnlinePlay::quiet() {
-    m_combatReplay.clear();
+    stopCombatReplay();
+    m_combatState->context = {};
+    m_combatState->inputs.clear();
+    m_combatState->authorityTick.reset();
+    m_combatState->sawStage = false;
+    m_combatState->currentAuthority = false;
+    m_combatState->faulted = false;
     m_opponentReplay.clear();
     m_prediction.clear();
     m_projectilePrediction.clear();
@@ -116,6 +242,311 @@ void OnlinePlay::quiet() {
     if (m_context.stopVibration) {
         m_context.stopVibration();
     }
+}
+
+const OnlineCombatReplay::Diagnostics& OnlinePlay::combatReplayDiagnostics() const {
+    return m_combatState->diagnostics;
+}
+OnlinePlay::CombatWorkerMetrics OnlinePlay::combatReplayWorkerMetrics() const {
+    auto result = m_combatState->metrics;
+    result.stage = m_combatState->sawStage;
+    if (m_combatState->workerOwned) {
+        workerCounts(result, m_combatState->worker.queueState(), m_combatState->queue);
+    }
+    return result;
+}
+void OnlinePlay::setMovementPrediction(bool enabled) {
+    if (m_predictMovement == enabled) {
+        return;
+    }
+    m_predictMovement = enabled;
+    if (!enabled) {
+        stopCombatReplay();
+    }
+}
+void OnlinePlay::stopCombatReplay() {
+    auto& replay = *m_combatState;
+    if (replay.workerOwned) {
+        if (const auto done = replay.worker.take(); done && done->diagnostics) {
+            replay.observe(*done->diagnostics);
+        }
+        replay.observeQueue();
+        replay.worker.stop(); // join before touching native owners or borrowed artwork
+        ++replay.metrics.stops;
+        replay.workerOwned = false;
+        replay.queue = {};
+        replay.metrics.running = replay.metrics.inFlight = replay.metrics.pending = false;
+        replay.metrics.retainedCommands = 0;
+    }
+    if (replay.legacyBound) {
+        replay.observe(m_combatReplay.diagnostics());
+    }
+    replay.presenter.clear();
+    replay.authority.reset();
+    replay.resources.reset();
+    replay.keyAttempted = false;
+    m_replica.discardPresentation();
+    // This coordinator is unbound during worker ownership. Never call even its
+    // const native-backed methods until the exclusive producer has joined.
+    m_combatReplay.clear();
+    replay.legacyBound = false;
+    replay.producerDiagnostics = {};
+}
+void OnlinePlay::pollCombatReplay() {
+    auto& replay = *m_combatState;
+    if (!replay.workerOwned) {
+        return;
+    }
+    replay.observeQueue();
+    const auto done = replay.worker.take();
+    if (done) {
+        if (done->diagnostics) {
+            replay.observe(*done->diagnostics);
+        }
+        if (done->status == CombatReplayWorker::Status::Published && done->publication) {
+            ++replay.metrics.publications;
+            if (m_predictMovement && !replay.faulted && replay.currentAuthority &&
+                replay.authority && replay.unchangedFrames <= 30 &&
+                replay.presenter.adopt(done->publication, *replay.authority)) {
+                ++replay.metrics.adoptions;
+            } else {
+                ++replay.metrics.rejectedPublications;
+                replay.presenter.clear();
+                m_replica.discardPresentation();
+            }
+        } else {
+            replay.presenter.clear();
+            m_replica.discardPresentation();
+        }
+    }
+    if ((done && (done->status == CombatReplayWorker::Status::Exception ||
+                  done->status == CombatReplayWorker::Status::Resources)) ||
+        replay.queue.failed) {
+        ++replay.metrics.errors;
+        stopCombatReplay();
+        replay.faulted = true;
+    }
+}
+
+bool OnlinePlay::updateCombatReplay(const CombatSnapshot* authority,
+                                    std::span<const InputCommand> inputs) {
+    auto& replay = *m_combatState;
+    const auto& match = m_session->match();
+    if (replay.context != match.context()) {
+        stopCombatReplay();
+        replay.context = match.context();
+        RollbackInputHistory::Grants grants{};
+        for (usize seat = 0; seat < grants.size(); ++seat) {
+            if (replay.context.owners[seat] == match.localPeer()) {
+                grants[seat] = replay.context.grants[seat];
+            }
+        }
+        replay.inputs.begin(replay.context.epoch, grants);
+        replay.authorityTick.reset();
+        replay.continuity.fill(std::nullopt);
+        replay.cameraContinuity = 0;
+        replay.unchangedFrames = 0;
+        replay.sawStage = replay.faulted = false;
+    }
+    const bool current = authority != nullptr && authority->motion.epoch == replay.context.epoch &&
+                         (!replay.authorityTick || authority->motion.tick >= *replay.authorityTick);
+    const bool newer =
+        current && (!replay.authorityTick || authority->motion.tick > *replay.authorityTick);
+    replay.currentAuthority = current;
+    if (newer) {
+        bool discontinuity = false;
+        for (usize seat = 0; seat < replay.context.owners.size(); ++seat) {
+            const auto& body = authority->motion.players[seat];
+            if (replay.context.owners[seat] == match.localPeer() &&
+                (!body || body->grant != replay.context.grants[seat] ||
+                 (replay.authorityTick &&
+                  (replay.cameraContinuity != authority->motion.cameraContinuity ||
+                   (replay.continuity[seat] && *replay.continuity[seat] != body->continuity))))) {
+                replay.inputs.invalidate(seat);
+                discontinuity = true;
+            }
+            replay.continuity[seat] = body ? std::optional{body->continuity} : std::nullopt;
+        }
+        if (discontinuity && replay.workerOwned) {
+            // The worker also retains exact future commands. A native camera or
+            // body cut invalidates that journal, not only the fallback history.
+            stopCombatReplay();
+        }
+        replay.cameraContinuity = authority->motion.cameraContinuity;
+        replay.authorityTick = authority->motion.tick;
+        replay.inputs.resolve(replay.context.epoch, authority->motion.tick);
+        replay.unchangedFrames = 0;
+        replay.keyAttempted = false;
+        replay.authority.reset();
+        replay.presenter.clear();
+        m_replica.discardPresentation();
+    } else {
+        replay.unchangedFrames = std::min(replay.unchangedFrames + 1, u32{31});
+        if (replay.unchangedFrames == 31 && replay.authority) {
+            ++replay.metrics.expired;
+            replay.authority.reset();
+            replay.presenter.clear();
+            m_replica.discardPresentation();
+        }
+    }
+    // Keep exact sampled edges even before the first Stage seed, while a worker
+    // is busy, and across intervals which do not carry an admissible Stage.
+    for (const auto& input : inputs) {
+        if ((!replay.authorityTick || input.tick > *replay.authorityTick) &&
+            !replay.inputs.record(std::span{&input, 1})) {
+            replay.faulted = true;
+        }
+    }
+    if (!m_predictMovement || replay.faulted || !current || replay.unchangedFrames > 30) {
+        if (replay.faulted) {
+            stopCombatReplay();
+        }
+        replay.presenter.clear();
+        m_replica.discardPresentation();
+        pollCombatReplay();
+        return false;
+    }
+    const bool stage = authority->combatState && authority->combatState->stage;
+    replay.sawStage |= stage;
+    if (!replay.sawStage) {
+        if (!replay.legacyBound) {
+            if (auto* prediction = m_replica.combatPrediction()) {
+                replay.legacyBound =
+                    m_combatReplay.begin(replay.context, match.localPeer(), *prediction);
+            }
+        }
+        const bool accepted = m_combatReplay.update(authority, inputs);
+        replay.observe(m_combatReplay.diagnostics());
+        return accepted;
+    }
+    const bool eligible = stage && authority->combatFrame && authority->opponents &&
+                          authority->opponentFrame && !authority->opponentFrame->held &&
+                          !authority->opponentFrame->timeStopped &&
+                          !authority->combatFrame->damage.cutscene;
+    CombatPrediction* prediction = nullptr;
+    if (eligible && !replay.workerOwned) {
+        // Cache before start. Even resourceLifetime()/active()/tick() must not
+        // read the private owner once its worker is running.
+        prediction = m_replica.combatPrediction();
+        if (prediction != nullptr) {
+            replay.resources = prediction->resourceLifetime();
+        }
+    }
+    if (!replay.keyAttempted) {
+        replay.keyAttempted = true;
+        if (eligible) {
+            replay.authority = StageReplayPresentation::authority(replay.context, match.localPeer(),
+                                                                  *authority, replay.resources);
+        }
+    }
+    if (!eligible || !replay.authority) {
+        replay.presenter.clear();
+        m_replica.discardPresentation();
+        pollCombatReplay();
+        return false;
+    }
+    if (!replay.workerOwned) {
+        if (replay.legacyBound) {
+            replay.observe(m_combatReplay.diagnostics());
+        }
+        m_combatReplay.clear();
+        replay.legacyBound = false;
+        replay.producerDiagnostics = {};
+        if (prediction == nullptr ||
+            !replay.worker.start(replay.context, match.localPeer(), *prediction)) {
+            ++replay.metrics.errors;
+            replay.faulted = true;
+            replay.authority.reset();
+            return false;
+        }
+        replay.workerOwned = true;
+        ++replay.metrics.starts;
+    }
+    pollCombatReplay();
+    if (!replay.workerOwned) {
+        return false;
+    }
+    std::vector<InputCommand> pending;
+    pending.reserve(replay.inputs.pending());
+    for (usize seat = 0; seat < replay.context.owners.size(); ++seat) {
+        if (replay.context.owners[seat] == match.localPeer()) {
+            for (const auto& entry : replay.inputs.replay(seat)) {
+                if (!entry.predicted) {
+                    pending.push_back(entry.input);
+                }
+            }
+        }
+    }
+    const auto submitted = replay.worker.submit(authority, pending);
+    if (submitted != CombatReplayWorker::Submission::Queued &&
+        submitted != CombatReplayWorker::Submission::Unchanged) {
+        ++replay.metrics.submissionRefusals;
+        stopCombatReplay();
+        replay.faulted = true;
+        return false;
+    }
+    pollCombatReplay();
+    return replay.presenter.active();
+}
+
+bool OnlinePlay::presentCombatReplay(CombatSnapshot& shown, EnemyPresentation& presentation,
+                                     f32 blend) {
+    auto& replay = *m_combatState;
+    if (!replay.sawStage) {
+        if (!replay.currentAuthority || replay.faulted || replay.unchangedFrames > 30) {
+            return false;
+        }
+        const bool result = m_combatReplay.present(shown, presentation, blend);
+        replay.observe(m_combatReplay.diagnostics());
+        return result;
+    }
+    pollCombatReplay();
+    auto reason = StageReplayPresentation::Refusal::Inactive;
+    bool result = false;
+    bool exception = false;
+    try {
+        result = replay.currentAuthority && !replay.faulted && replay.authority &&
+                 replay.unchangedFrames <= 30 &&
+                 replay.presenter.present(shown, presentation, *replay.authority,
+                                          StageReplayPresentation::Clock::now(), &reason);
+    } catch (...) {
+        // The detached sampler stages allocations before changing the drawing
+        // cohort. An unavailable picture leaves the authoritative fallback.
+        exception = true;
+        replay.presenter.clear();
+        m_replica.discardPresentation();
+    }
+    auto& counters =
+        replay.diagnostics.domains[static_cast<usize>(OnlineCombatReplay::Domain::Stage)];
+    if (result) {
+        ++counters.presents;
+        ++replay.metrics.presents;
+    } else {
+        ++counters.presentRefusals;
+        ++replay.metrics.presentRefusals;
+        auto mapped = OnlineCombatReplay::PresentRefusal::Inactive;
+        switch (reason) {
+        case StageReplayPresentation::Refusal::Authority:
+        case StageReplayPresentation::Refusal::Snapshot:
+            mapped = OnlineCombatReplay::PresentRefusal::Snapshot;
+            break;
+        case StageReplayPresentation::Refusal::Roster:
+            mapped = OnlineCombatReplay::PresentRefusal::Roster;
+            break;
+        case StageReplayPresentation::Refusal::ParticleInterval:
+            mapped = OnlineCombatReplay::PresentRefusal::ParticleInterval;
+            break;
+        case StageReplayPresentation::Refusal::Sampling:
+            mapped = OnlineCombatReplay::PresentRefusal::StageSampling;
+            break;
+        default: break;
+        }
+        if (exception) {
+            mapped = OnlineCombatReplay::PresentRefusal::Exception;
+        }
+        ++counters.presentReasons[static_cast<usize>(mapped)];
+    }
+    return result;
 }
 void OnlinePlay::close() {
     quiet();
@@ -287,6 +718,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
                 m_completion.close();
                 m_effectPrediction.clear();
                 m_presentEffects = false;
+                stopCombatReplay();
                 m_replica.clear();
                 m_clock.clear();
                 std::vector<PartyMember> preview;
@@ -328,6 +760,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
             }
         }
         if (context.transition == MatchTransition::Resume) {
+            stopCombatReplay();
             if (m_epoch == 0 ||
                 (match.host() ? !m_host || !m_host->driver.bind(m_host->scene, match,
                                                                 m_host->pickups, m_host->fixtures)
@@ -369,6 +802,7 @@ bool OnlinePlay::load(const SessionInputs::Frame& devices) {
             const f32 difficulty = room != nullptr && room->settings.valid()
                                        ? DifficultyConfig::kGains[room->settings.difficulty]
                                        : 1;
+            stopCombatReplay();
             if (profiles == nullptr ||
                 !m_replica.open(*m_device, m_context.unpackedRoot, *level, context, *profiles,
                                 m_context.strings, difficulty) ||
@@ -749,6 +1183,7 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
             return fail(Failure::Session);
         }
         if (m_prediction.epoch() != match.context().epoch) {
+            stopCombatReplay();
             const auto* world = m_replica.world();
             const auto* view = m_replica.view();
             if (world == nullptr || view == nullptr) {
@@ -757,10 +1192,6 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
             m_prediction.begin(match.context(), match.localPeer(), world->collision(),
                                &world->scene(), &world->layout());
             m_opponentReplay.clear();
-            m_combatReplay.clear();
-            if (auto* combat = m_replica.combatPrediction()) {
-                m_combatReplay.begin(match.context(), match.localPeer(), *combat);
-            }
             if (auto* opponents = m_replica.opponentPrediction()) {
                 m_opponentReplay.begin(match.context(), match.localPeer(), *opponents,
                                        world->scene(), world->layout(), world->collision());
@@ -801,11 +1232,13 @@ OnlinePlay::Phase OnlinePlay::updateFrame(const SessionInputs::Frame& devices) {
             }
         }
         const bool nativeCombat =
-            m_predictMovement &&
-            m_combatReplay.update(match.playback().latest(), match.sampledInputs());
+            updateCombatReplay(match.playback().latest(), match.sampledInputs());
+        // Keep the optional opponent lane's input/revocation bookkeeping, but
+        // do not prepare another native pool when whole-party replay succeeded.
         m_prediction.update(
             match.playback().latest(), match.sampledInputs(),
-            m_opponentReplay.callbacks(match.playback().latest(), match.sampledInputs()),
+            m_opponentReplay.callbacks(nativeCombat ? nullptr : match.playback().latest(),
+                                       match.sampledInputs()),
             !nativeCombat);
         m_potionPrediction.update(match.playback().latest(), m_prediction, match.sampledInputs());
         m_effectPrediction.update(match.playback().latest(), m_prediction);
@@ -998,7 +1431,7 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
     if (auto sample = m_clock.sample(m_session->match(), seconds, &presentation)) {
         m_presentEffects = false;
         if (m_predictMovement) {
-            const bool native = m_combatReplay.present(*sample, presentation, frameBlend);
+            const bool native = presentCombatReplay(*sample, presentation, frameBlend);
             if (!native) {
                 m_prediction.present(*sample, frameBlend);
                 m_opponentReplay.present(*sample, presentation, frameBlend);
@@ -1006,7 +1439,7 @@ void OnlinePlay::render(RenderDevice& device, const Mat4& projection, f32 width,
             // A successful Stage picture already owns every projectile/effect
             // cohort at the same native tick. Independent visual extrapolation
             // would splice another age into that atomic picture.
-            if (!native || !m_combatReplay.staged()) {
+            if (!native || !m_combatState->sawStage) {
                 m_projectilePrediction.present(*sample, frameBlend);
                 m_potionPrediction.present(*sample, frameBlend);
                 m_presentEffects = m_effectPrediction.present(*sample);

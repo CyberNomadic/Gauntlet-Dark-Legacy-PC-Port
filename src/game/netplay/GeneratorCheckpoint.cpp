@@ -5,26 +5,28 @@
 
 #include "engine/io/ByteReader.h"
 
+#include "game/netplay/CanonicalDigestSink.h"
+
 namespace gdl::game {
 namespace {
-void word(std::vector<u8>& bytes, u32 value) {
+template <class Output> void word(Output& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
     }
 }
-void integer(std::vector<u8>& bytes, s32 value) {
+template <class Output> void integer(Output& bytes, s32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
 s32 integer(ByteReader& reader) {
     return std::bit_cast<s32>(reader.readU32());
 }
-void real(std::vector<u8>& bytes, f32 value) {
+template <class Output> void real(Output& bytes, f32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
 f32 real(ByteReader& reader) {
     return std::bit_cast<f32>(reader.readU32());
 }
-void vector(std::vector<u8>& bytes, const Vec3& value) {
+template <class Output> void vector(Output& bytes, const Vec3& value) {
     real(bytes, value.x);
     real(bytes, value.y);
     real(bytes, value.z);
@@ -32,7 +34,7 @@ void vector(std::vector<u8>& bytes, const Vec3& value) {
 Vec3 vector(ByteReader& reader) {
     return {real(reader), real(reader), real(reader)};
 }
-void matrix(std::vector<u8>& bytes, const Mat4& value) {
+template <class Output> void matrix(Output& bytes, const Mat4& value) {
     for (s32 column = 0; column < 4; ++column) {
         for (s32 row = 0; row < 4; ++row) {
             real(bytes, value[column][row]);
@@ -48,7 +50,7 @@ Mat4 matrix(ByteReader& reader) {
     }
     return value;
 }
-void view(std::vector<u8>& bytes, const ViewVolume& value) {
+template <class Output> void view(Output& bytes, const ViewVolume& value) {
     vector(bytes, value.position);
     vector(bytes, value.right);
     vector(bytes, value.up);
@@ -70,7 +72,7 @@ ViewVolume view(ByteReader& reader) {
     value.cosY = real(reader);
     return value;
 }
-void slot(std::vector<u8>& bytes, const Generators::Slot& value) {
+template <class Output> void slot(Output& bytes, const Generators::Slot& value) {
     integer(bytes, value.minPlayers);
     word(bytes, static_cast<u32>(value.presence));
     integer(bytes, value.kind);
@@ -170,17 +172,21 @@ std::optional<Generators::Slot> slot(ByteReader& reader) {
 }
 } // namespace
 
-std::optional<std::vector<u8>> GeneratorCheckpoint::encode(const Generators::Checkpoint& state) {
-    if (state.generators.size() > kMaxGenerators || state.roster.size() > kMaxGenerators ||
-        state.bodies.size() > kMaxBodies || !state.valid()) {
-        return std::nullopt;
+namespace {
+template <class Output>
+bool writeCanonical(Output& bytes, const Generators::Checkpoint& state, bool validate) {
+    if (state.generators.size() > GeneratorCheckpoint::kMaxGenerators ||
+        state.roster.size() > GeneratorCheckpoint::kMaxGenerators ||
+        state.bodies.size() > GeneratorCheckpoint::kMaxBodies || (validate && !state.valid())) {
+        return false;
     }
-    const usize size = kHeaderBytes + (state.view ? kViewBytes : 0) +
-                       (state.attention ? kAttentionBytes : 0) + state.bodies.size() * kBodyBytes +
-                       (state.roster.size() + state.generators.size()) * kSlotBytes;
-    std::vector<u8> bytes;
+    const usize size =
+        GeneratorCheckpoint::kHeaderBytes + (state.view ? GeneratorCheckpoint::kViewBytes : 0) +
+        (state.attention ? GeneratorCheckpoint::kAttentionBytes : 0) +
+        state.bodies.size() * GeneratorCheckpoint::kBodyBytes +
+        (state.roster.size() + state.generators.size()) * GeneratorCheckpoint::kSlotBytes;
     bytes.reserve(size);
-    word(bytes, kVersion);
+    word(bytes, GeneratorCheckpoint::kVersion);
     word(bytes, static_cast<u32>(state.roster.size()));
     word(bytes, static_cast<u32>(state.generators.size()));
     word(bytes, static_cast<u32>(state.bodies.size()));
@@ -208,7 +214,19 @@ std::optional<std::vector<u8>> GeneratorCheckpoint::encode(const Generators::Che
     for (const auto& value : state.generators) {
         slot(bytes, value);
     }
-    return bytes.size() == size ? std::optional{std::move(bytes)} : std::nullopt;
+    return bytes.size() == size;
+}
+} // namespace
+
+std::optional<std::vector<u8>> GeneratorCheckpoint::encode(const Generators::Checkpoint& state) {
+    std::vector<u8> bytes;
+    return writeCanonical(bytes, state, true) ? std::optional{std::move(bytes)} : std::nullopt;
+}
+
+std::optional<std::array<u8, 32>>
+GeneratorCheckpoint::canonicalDigest(const Generators::Checkpoint& state) {
+    CanonicalDigestSink sink;
+    return writeCanonical(sink, state, false) ? std::optional{sink.finish()} : std::nullopt;
 }
 
 std::optional<Generators::Checkpoint> GeneratorCheckpoint::decode(std::span<const u8> bytes) {

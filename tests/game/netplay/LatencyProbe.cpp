@@ -24,6 +24,7 @@
 #include "game/combat/DamageTypes.h"
 #include "game/netplay/AssetDigest.h"
 #include "game/netplay/HostedRoom.h"
+#include "game/netplay/MatchSession.h"
 #include "game/players/ClassData.h"
 #include "game/players/PlayerAnimator.h"
 #include "game/screens/OnlinePlay.h"
@@ -296,7 +297,58 @@ struct ThrowDiagnostics {
         request.origins.reserve(kOrigins);
         requests.push_back(std::move(request));
     }
-    void observe(const CombatSnapshot* state, Clock::time_point now) {
+    void observe(const CombatSnapshot* state, Clock::time_point now,
+                 const std::deque<MatchSession::ActionReceipt>& receipts) {
+        // Process every committed checkpoint before applying the wall-clock
+        // deadline. Replay can stall after receipt, or several checkpoints can
+        // arrive during one poll; neither may hide an on-time native action.
+        for (const auto& receipt : receipts) {
+            for (auto& request : requests) {
+                if (request.closed) {
+                    continue;
+                }
+                using Evidence = test::LatencyProbeEligibility::ReceiptEvidence;
+                const auto evidence = test::LatencyProbeEligibility::receiptEvidence(
+                    request.input, request.continuity, request.pressed, request.lastTick, receipt);
+                if (evidence == Evidence::Ignore) {
+                    continue;
+                }
+                if (evidence == Evidence::Interrupted) {
+                    request.closed = request.interrupted = true;
+                    continue;
+                }
+                Observation observed{
+                    receipt.tick,
+                    receipt.generation,
+                    receipt.actualInput,
+                    receipt.receivedInput,
+                    receipt.action,
+                    static_cast<u32>(receipt.reaction),
+                    receipt.lateInputs,
+                    std::chrono::duration<f64, std::milli>(receipt.receivedAt - request.pressed)
+                        .count(),
+                    receipt.rollback,
+                    receipt.enabled,
+                    receipt.current,
+                    receipt.ranged,
+                    receipt.weapon,
+                    receipt.melee,
+                    receipt.turbo,
+                    receipt.released};
+                request.lastTick = receipt.tick;
+                if (request.host.size() < kObservations) {
+                    request.host.push_back(observed);
+                } else {
+                    ++request.omittedObservations;
+                }
+                if (!request.hostAction && attack(observed.action) &&
+                    observed.generation > request.hostSeed.generation &&
+                    observed.actualInput >= request.input.tick &&
+                    observed.actualInput <= observed.tick) {
+                    request.hostAction = observed;
+                }
+            }
+        }
         for (auto& request : requests) {
             if (request.closed) {
                 continue;
@@ -318,22 +370,24 @@ struct ThrowDiagnostics {
                 request.closed = request.interrupted = true;
                 continue;
             }
-            if (state->motion.tick < input.tick || state->motion.tick <= request.lastTick) {
+            if (state->motion.tick < input.tick) {
                 continue;
             }
-            request.lastTick = state->motion.tick;
             const auto elapsed =
                 std::chrono::duration<f64, std::milli>(now - request.pressed).count();
-            const auto observed = observation(*state, input.seat, true, elapsed);
-            if (request.host.size() < kObservations) {
-                request.host.push_back(observed);
-            } else {
-                ++request.omittedObservations;
-            }
-            if (!request.hostAction && attack(observed.action) &&
-                observed.generation > request.hostSeed.generation &&
-                observed.actualInput >= input.tick && observed.actualInput <= observed.tick) {
-                request.hostAction = observed;
+            if (state->motion.tick > request.lastTick) {
+                request.lastTick = state->motion.tick;
+                const auto observed = observation(*state, input.seat, true, elapsed);
+                if (request.host.size() < kObservations) {
+                    request.host.push_back(observed);
+                } else {
+                    ++request.omittedObservations;
+                }
+                if (!request.hostAction && attack(observed.action) &&
+                    observed.generation > request.hostSeed.generation &&
+                    observed.actualInput >= input.tick && observed.actualInput <= observed.tick) {
+                    request.hostAction = observed;
+                }
             }
             for (const auto& shot : state->projectiles) {
                 const auto* origin = shot.releaseOrigin();
@@ -1152,6 +1206,46 @@ struct StageDiagnostics {
  * prefixes separately from accepted passes prevents a late refusal from being
  * reported as usable Stage prediction. The local movement-only lane is not in
  * these counters; legacy means a complete combat seed without Stage owners. */
+void appendInputTrace(nlohmann::json& report, const MatchSession& match) {
+    const auto admissionName = [](InputTimeline::Admission admission) -> std::string_view {
+        switch (admission) {
+        case InputTimeline::Admission::Accepted: return "accepted";
+        case InputTimeline::Admission::Invalid: return "invalid";
+        case InputTimeline::Admission::WrongEpoch: return "wrong_epoch";
+        case InputTimeline::Admission::WrongOwner: return "wrong_owner";
+        case InputTimeline::Admission::WrongGrant: return "wrong_grant";
+        case InputTimeline::Admission::TooLate: return "too_late";
+        case InputTimeline::Admission::TooEarly: return "too_early";
+        case InputTimeline::Admission::Duplicate: return "duplicate";
+        }
+        return "unknown";
+    };
+    auto entries = nlohmann::json::array();
+    for (const auto& trace : match.commandTrace()) {
+        const auto& command = trace.command;
+        entries.push_back(
+            {{"epoch", command.epoch},
+             {"seat", command.seat},
+             {"grant", command.grant},
+             {"tick", command.tick},
+             {"sender", trace.sender},
+             {"held_buttons", command.heldButtons},
+             {"pressed_buttons", command.pressedButtons},
+             {"received_tick", trace.receivedTick},
+             {"admission", admissionName(trace.admission)},
+             {"repeats", trace.repeats},
+             {"executed_tick",
+              trace.executedTick ? nlohmann::json(*trace.executedTick) : nlohmann::json(nullptr)},
+             {"concealed_ticks", trace.concealedTicks}});
+    }
+    report["host_input_trace"] = {
+        {"schema", 1},
+        {"scope", "current-epoch-authenticated-action-inputs; execution-is-not-an-action-ack"},
+        {"capacity", InputTimeline::kCommandTraces},
+        {"dropped", match.droppedCommandTraces()},
+        {"entries", std::move(entries)}};
+}
+
 nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
                             const OnlineCombatReplay::Diagnostics& after) {
     u64 resets = 0;
@@ -1187,6 +1281,8 @@ nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
             {"restore_passes", difference(first.restorePasses, last.restorePasses)},
             {"append_passes", difference(first.appendPasses, last.appendPasses)},
             {"reused_passes", difference(first.reusedPasses, last.reusedPasses)},
+            {"promotion_attempts", difference(first.promotionAttempts, last.promotionAttempts)},
+            {"promoted_passes", difference(first.promotedPasses, last.promotedPasses)},
             {"attempted_ticks", difference(first.attemptedTicks, last.attemptedTicks)},
             {"maximum_ticks_per_pass_since_begin", last.maximumTicksPerPass}};
         const auto timing = [&](std::string_view name, const OnlineCombatReplay::Timing& initial,
@@ -1200,6 +1296,8 @@ nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
         timing("seed_copy_and_decode", first.seedCost, last.seedCost);
         timing("stage_decode", first.decodeCost, last.decodeCost);
         timing("restore", first.restoreCost, last.restoreCost);
+        timing("promotion", first.promotionCost, last.promotionCost);
+        timing("agreement_record", first.agreementRecordCost, last.agreementRecordCost);
         timing("native_advance", first.advanceCost, last.advanceCost);
         timing("tick_capture", first.captureCost, last.captureCost);
         timing("tick_prepare", first.prepareCost, last.prepareCost);
@@ -1207,6 +1305,11 @@ nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
         for (usize owner = 0; owner < OrdinaryCombatCheckpoint::kCaptureOwners.size(); ++owner) {
             timing("postcondition_" + std::string(OrdinaryCombatCheckpoint::kCaptureOwners[owner]),
                    first.postconditionOwners[owner], last.postconditionOwners[owner]);
+        }
+        for (usize owner = 0; owner < LevelWorldCheckpoint::kCaptureOwners.size(); ++owner) {
+            timing("postcondition_world_" +
+                       std::string(LevelWorldCheckpoint::kCaptureOwners[owner]),
+                   first.postconditionWorld[owner], last.postconditionWorld[owner]);
         }
         timing("picture", first.pictureCost, last.pictureCost);
         for (usize reason = 0; reason < OnlineCombatReplay::kRefusals.size(); ++reason) {
@@ -1235,11 +1338,46 @@ nlohmann::json replayReport(const OnlineCombatReplay::Diagnostics& before,
             output["native_refusals"][OrdinaryCombatTick::kRefusals[phase]] =
                 difference(first.tickRefusals[phase], last.tickRefusals[phase]);
         }
+        for (usize reason = 0; reason < OrdinaryProjectilePhase::kRefusals.size(); ++reason) {
+            output["projectile_refusals"][OrdinaryProjectilePhase::kRefusals[reason]] =
+                difference(first.projectileRefusals[reason], last.projectileRefusals[reason]);
+        }
         for (usize reason = 0; reason < OrdinaryCombatTick::kPartyRefusals.size(); ++reason) {
             output["party_refusals"][OrdinaryCombatTick::kPartyRefusals[reason]] =
                 difference(first.partyRefusals[reason], last.partyRefusals[reason]);
         }
     }
+    result["counter_resets"] = resets;
+    return result;
+}
+
+nlohmann::json workerReport(const OnlinePlay::CombatWorkerMetrics& before,
+                            const OnlinePlay::CombatWorkerMetrics& after) {
+    nlohmann::json result{{"schema", 1},
+                          {"stage", after.stage},
+                          {"running", after.running},
+                          {"in_flight", after.inFlight},
+                          {"pending", after.pending},
+                          {"retained_commands", after.retainedCommands}};
+    usize resets = 0;
+    const auto field = [&](std::string_view name, u64 initial, u64 final) {
+        resets += final < initial ? 1 : 0;
+        result[name] = final >= initial ? final - initial : 0;
+    };
+    field("starts", before.starts, after.starts);
+    field("stops", before.stops, after.stops);
+    field("submitted", before.submitted, after.submitted);
+    field("coalesced", before.coalesced, after.coalesced);
+    field("executed", before.executed, after.executed);
+    field("superseded", before.superseded, after.superseded);
+    field("publications", before.publications, after.publications);
+    field("adoptions", before.adoptions, after.adoptions);
+    field("rejected_publications", before.rejectedPublications, after.rejectedPublications);
+    field("presents", before.presents, after.presents);
+    field("present_refusals", before.presentRefusals, after.presentRefusals);
+    field("submission_refusals", before.submissionRefusals, after.submissionRefusals);
+    field("expired", before.expired, after.expired);
+    field("errors", before.errors, after.errors);
     result["counter_resets"] = resets;
     return result;
 }
@@ -1324,6 +1462,7 @@ void run(const Options& options, Clock::time_point processBegin) {
     LoopDiagnostics diagnostics;
     StageDiagnostics stage;
     OnlineCombatReplay::Diagnostics replayBegin;
+    OnlinePlay::CombatWorkerMetrics workerBegin;
     std::optional<PlayScene::CombatCaptureCosts> captureBegin;
     u64 overruns = 0;
     s32 lastThrow = -1;
@@ -1439,7 +1578,8 @@ void run(const Options& options, Clock::time_point processBegin) {
                     if (options.host) {
                         throws.observePhysical(play.hostScene(), play.shown());
                     } else {
-                        throws.observe(session.match().playback().latest(), Clock::now());
+                        throws.observe(session.match().playback().latest(), Clock::now(),
+                                       session.match().actionReceipts());
                     }
                 }
                 if (turboWorkload && !options.host) {
@@ -1553,6 +1693,7 @@ void run(const Options& options, Clock::time_point processBegin) {
                     started = Clock::now();
                     measuredWire.reset();
                     replayBegin = play.combatReplayDiagnostics();
+                    workerBegin = play.combatReplayWorkerMetrics();
                     if (options.host && play.hostScene() != nullptr) {
                         captureBegin = play.hostScene()->combatCaptureCosts();
                     }
@@ -1585,6 +1726,9 @@ void run(const Options& options, Clock::time_point processBegin) {
                     {"host_seed", ThrowDiagnostics::encode(pendingThrow->hostSeed)}};
             }
             report["role"] = options.host ? "host" : "guest";
+            if (options.host) {
+                appendInputTrace(report, session.match());
+            }
             report["prediction"] = options.prediction;
             report["workload"] = options.workload;
             report["element"] = options.element;
@@ -1622,6 +1766,7 @@ void run(const Options& options, Clock::time_point processBegin) {
                     "measurement-window-existing-host-calls-including-refusals";
             }
             report["combat_replay"] = replayReport(replayBegin, play.combatReplayDiagnostics());
+            report["combat_worker"] = workerReport(workerBegin, play.combatReplayWorkerMetrics());
             if (!turboWorkload) {
                 throws.append(report);
             }

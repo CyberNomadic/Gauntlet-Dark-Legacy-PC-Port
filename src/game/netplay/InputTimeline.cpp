@@ -17,6 +17,8 @@ bool InputTimeline::assign(usize seat, Peer peer) {
     state.pending.clear();
     state.previous.reset();
     state.diagnostics = {};
+    std::erase_if(m_commandTrace,
+                  [seat](const CommandTrace& trace) { return trace.command.seat == seat; });
     return true;
 }
 
@@ -24,6 +26,8 @@ void InputTimeline::disconnect(Peer peer) {
     if (peer == 0) {
         return;
     }
+    std::erase_if(m_commandTrace,
+                  [peer](const CommandTrace& trace) { return trace.sender == peer; });
     for (auto& state : m_seats) {
         if (state.owner == peer) {
             state.owner = 0;
@@ -45,6 +49,8 @@ void InputTimeline::beginEpoch() {
     GDL_VERIFY(m_epoch < std::numeric_limits<u64>::max(), "Input epoch exhausted");
     ++m_epoch;
     m_tick = 0;
+    m_commandTrace.clear();
+    m_droppedCommandTraces = 0;
     for (auto& state : m_seats) {
         state.pending.clear();
         state.previous.reset();
@@ -80,14 +86,60 @@ InputTimeline::Admission InputTimeline::submit(Peer sender, const InputCommand& 
         }
     }
     if (command.tick < m_tick) {
+        traceAdmission(sender, command, Admission::TooLate);
         return Admission::TooLate;
     }
     if (command.tick - m_tick > kMaxAhead) {
         return Admission::TooEarly;
     }
     // First accepted command wins: redundant packets cannot change a queued tick.
-    return state.pending.emplace(command.tick, command).second ? Admission::Accepted
-                                                               : Admission::Duplicate;
+    const auto [queued, inserted] = state.pending.emplace(command.tick, command);
+    const auto result = inserted ? Admission::Accepted : Admission::Duplicate;
+    traceAdmission(sender, queued->second, result);
+    return result;
+}
+
+void InputTimeline::traceAdmission(Peer sender, const InputCommand& command, Admission admission) {
+    if (command.heldButtons == 0 && command.pressedButtons == 0) {
+        return;
+    }
+    const auto found = std::ranges::find_if(m_commandTrace, [&](const CommandTrace& trace) {
+        return trace.sender == sender && trace.command.epoch == command.epoch &&
+               trace.command.seat == command.seat && trace.command.grant == command.grant &&
+               trace.command.tick == command.tick;
+    });
+    if (found != m_commandTrace.end()) {
+        // Keep the first submitted payload/result, including after its deadline.
+        // Redundant or conflicting packets cannot rewrite execution evidence.
+        if (found->repeats < std::numeric_limits<u32>::max()) {
+            ++found->repeats;
+        }
+        return;
+    }
+    if (m_commandTrace.size() == kCommandTraces) {
+        m_commandTrace.pop_front();
+        ++m_droppedCommandTraces;
+    }
+    m_commandTrace.push_back({command, sender, m_tick, admission});
+}
+
+void InputTimeline::traceExecution(Peer sender, const InputCommand& command, bool concealed) {
+    if (command.heldButtons == 0 && command.pressedButtons == 0) {
+        return;
+    }
+    const auto found = std::ranges::find_if(m_commandTrace, [&](const CommandTrace& trace) {
+        return trace.sender == sender && trace.command.epoch == command.epoch &&
+               trace.command.seat == command.seat && trace.command.grant == command.grant &&
+               trace.command.tick == command.tick;
+    });
+    if (found == m_commandTrace.end()) {
+        return;
+    }
+    if (concealed) {
+        ++found->concealedTicks;
+    } else {
+        found->executedTick = m_tick;
+    }
 }
 
 InputCommand InputTimeline::heldOrNeutral(const std::optional<InputCommand>& previous, u64 epoch,
@@ -117,12 +169,14 @@ InputTimeline::Frame InputTimeline::advance() {
         if (found != state.pending.end()) {
             state.previous = found->second;
             command = found->second;
+            traceExecution(state.owner, found->second, false);
             state.pending.erase(found);
         } else {
             command =
                 heldOrNeutral(state.previous, m_epoch, m_tick, state.grant, static_cast<u8>(seat));
             if (state.previous && m_tick - state.previous->tick <= kHoldTicks) {
                 ++state.diagnostics.concealed;
+                traceExecution(state.owner, *state.previous, true);
             } else if (state.owner != 0) {
                 ++state.diagnostics.neutral;
             }

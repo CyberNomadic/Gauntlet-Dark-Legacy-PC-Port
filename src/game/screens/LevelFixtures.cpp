@@ -970,16 +970,36 @@ void LevelFixtures::strikeWall(usize index, f32 power, u32 flags) {
  * lying, or it blows up, or its gas hangs where it stood. */
 void LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
                                  std::span<PlayerRuntime> players, const Events& events) {
+    (void)strikeBarrel(barrel, power, byPlayer, players, events, {});
+}
+
+bool LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
+                                 std::span<PlayerRuntime> players, const Events& events,
+                                 const BarrelPublisher& publish) {
     if (!m_resources.has_value()) {
-        return;
+        return true;
     }
     const auto struck = m_barrels.strike(barrel, power);
     if (!struck.has_value()) {
-        return;
+        return true;
     }
+    std::string sound{kWoodHitSound};
+    if (struck->broken) {
+        std::string_view stem = kBarrelBreakSound;
+        if (struck->kind == BreakableStrike::Kind::Exploding) {
+            stem = kBarrelBlastSound;
+        } else if (struck->kind == BreakableStrike::Kind::Poison) {
+            stem = kBarrelGasSound;
+        }
+        const auto& level = m_resources->world.ref().name;
+        sound = std::format("{}{}", stem, level.empty() ? 'G' : level.front());
+    }
+    if (publish) {
+        return publish(*struck, sound);
+    }
+    m_resources->audio.playNamed(sound);
     if (!struck->broken) {
-        m_resources->audio.playNamed(kWoodHitSound);
-        return;
+        return true;
     }
     const auto effect = [&](std::string_view tree) -> std::optional<f32> {
         if (!m_resources->weapons.loaded()) {
@@ -1000,22 +1020,8 @@ void LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
     switch (struck->kind) {
     case BreakableStrike::Kind::Plain:
     case BreakableStrike::Kind::Holding:
-        playRealmSound(kBarrelBreakSound);
-        // What it held comes out: Death himself, or a pickup (fn_8005E90C).
-        if (struck->contents >= 0 &&
-            ((events.releaseEnemy &&
-              events.releaseEnemy(struck->contents, struck->position, struck->count)) ||
-             m_resources->world.placeItemRecord(m_resources->device, struck->contents,
-                                                struck->position, struck->count))) {
-            for (usize i = 0; i < players.size(); ++i) {
-                if (players[i].actor.player() == byPlayer) {
-                    events.help(HelpMessages::kBarrelsHold, i);
-                }
-            }
-        }
-        break;
+        return releaseBarrelContents(*struck, byPlayer, players, events);
     case BreakableStrike::Kind::Exploding: {
-        playRealmSound(kBarrelBlastSound);
         const f32 seconds = effect(kBarrelBlast).value_or(kExplosionSeconds);
         effect(kBarrelSmoke);
         leaveRubble(Rubble::kBlownBarrel, m_barrels.transformOf(barrel));
@@ -1031,7 +1037,6 @@ void LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
         break;
     }
     case BreakableStrike::Kind::Poison: {
-        playRealmSound(kBarrelGasSound);
         leaveRubble(Rubble::kGasBarrel, m_barrels.transformOf(barrel));
         // StartExplosion(25): entrance -> sustained gas -> dispersal,
         // with horizontal scale 3.5 and a four-second sustained hazard.
@@ -1049,6 +1054,36 @@ void LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
         break;
     }
     }
+    return true;
+}
+
+bool LevelFixtures::releaseBarrelContents(const BreakableStrike& struck, s32 byPlayer,
+                                          std::span<PlayerRuntime> players, const Events& events,
+                                          const BarrelPickupPublisher& pickup) {
+    if (!m_resources || !struck.broken || struck.contents < 0) {
+        return true;
+    }
+    // What it held comes out: Death himself, or a pickup (fn_8005E90C).
+    bool released =
+        events.releaseEnemy && events.releaseEnemy(struck.contents, struck.position, struck.count);
+    if (!released) {
+        const auto placed =
+            pickup ? pickup(struck.contents, struck.position, struck.count)
+                   : std::optional{m_resources->world.placeItemRecord(
+                         m_resources->device, struck.contents, struck.position, struck.count)};
+        if (!placed) {
+            return false;
+        }
+        released = *placed;
+    }
+    if (released) {
+        for (usize i = 0; i < players.size(); ++i) {
+            if (players[i].actor.player() == byPlayer) {
+                events.help(HelpMessages::kBarrelsHold, i);
+            }
+        }
+    }
+    return true;
 }
 
 /** Whoever is within a blast is hurt by it, and the barrels within it are struck by it (so

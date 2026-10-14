@@ -25,6 +25,7 @@ public:
               const StringTable* strings = nullptr, f32 difficultyGain = 1);
     bool resume(const MatchContext& context);
     void clear();
+    void discardPresentation();
     bool show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation = nullptr);
     void draw(RenderDevice& device, const Mat4& frameProjection, f32 width, f32 height,
               f32 textureFrame, const GameConfig& video = {},

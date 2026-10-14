@@ -237,7 +237,7 @@ std::optional<TrapsCheckpoint::State> TrapsCheckpoint::checkpoint() const {
     for (usize i = 0; i < m_owner.size(); ++i) {
         const auto& source = *m_owner.m_traps[i];
         const auto& resource = m_resources->rows[i];
-        const auto figure = ItemFigureCheckpoint::capture(source.figure);
+        auto figure = ItemFigureCheckpoint::capture(source.figure);
         if (!figure || resource.instance != source.instance) {
             return std::nullopt;
         }
@@ -257,7 +257,7 @@ std::optional<TrapsCheckpoint::State> TrapsCheckpoint::checkpoint() const {
              source.disarmed,
              source.gone,
              source.rectangularContact,
-             *figure,
+             std::move(*figure),
              source.box,
              {support.m_object, support.m_local, support.m_boxOffset, support.m_boxYaw}});
     }

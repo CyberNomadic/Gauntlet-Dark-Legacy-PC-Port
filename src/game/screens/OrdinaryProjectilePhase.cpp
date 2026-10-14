@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "game/screens/EnemyFeedbackEmission.h"
+#include "game/screens/OrdinaryBarrelEmission.h"
 #include "game/screens/OrdinaryStrongPhase.h"
 
 namespace gdl::game {
@@ -31,6 +32,11 @@ bool knownOwner(s32 owner, std::span<const PlayerRuntime> players) {
     return std::ranges::any_of(players, [owner](const auto& player) {
         return !player.departed && player.actor.player() == owner;
     });
+}
+
+OrdinaryProjectilePhase::Result refuse(OrdinaryProjectilePhase::Refusal reason,
+                                       std::optional<s32> target = std::nullopt) {
+    return {.refusal = reason, .refusedTarget = target};
 }
 
 } // namespace
@@ -66,9 +72,7 @@ OrdinaryProjectilePhase::impactResource(const PlayerArsenal::ImpactPresentation&
 }
 
 bool OrdinaryProjectilePhase::ordinaryTarget(s32 target) {
-    return target == -1 ||
-           (target >= PlayerAttacks::kEnemyTargetBase &&
-            target < PlayerAttacks::kCritterTargetBase) ||
+    return target == -1 || (target >= 0 && target < PlayerAttacks::kCritterTargetBase) ||
            (target >= PlayerAttacks::kItemStopBase && target < PlayerAttacks::kPotionTargetBase);
 }
 
@@ -184,21 +188,26 @@ bool OrdinaryProjectilePhase::supportsEffect(const PlayerArsenal& arsenal,
 OrdinaryProjectilePhase::Result
 OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime> players,
                                  const PlayerAttacks::Targets& targets, f32 seconds,
-                                 const CombatRollbackCheckpoint::Resources& resources) {
-    if (!attacks.m_resources || targets.multiplayer != MultiplayerMode::Normal || players.empty() ||
-        players.size() > 4 || !OrdinaryStrongPhase::supported(attacks, players)) {
-        return {};
+                                 const CombatRollbackCheckpoint::Resources& resources,
+                                 LevelWorldCheckpoint* world) {
+    if (!attacks.m_resources || players.empty() || players.size() > 4) {
+        return refuse(Refusal::Binding);
     }
     auto& bound = *attacks.m_resources;
-    if (bound.multiplayer != nullptr && *bound.multiplayer != MultiplayerMode::Normal) {
-        return {};
+    if (targets.multiplayer != MultiplayerMode::Normal ||
+        (bound.multiplayer != nullptr && *bound.multiplayer != MultiplayerMode::Normal)) {
+        return refuse(Refusal::Multiplayer);
     }
-    if (targets.fixtures.inertStops().size() >
+    if (!OrdinaryStrongPhase::supported(attacks, players)) {
+        return refuse(Refusal::StrongState);
+    }
+    if (targets.fixtures.barrels().size() > static_cast<usize>(PlayerAttacks::kEnemyTargetBase) ||
+        targets.fixtures.inertStops().size() >
             static_cast<usize>(PlayerAttacks::kPotionTargetBase - PlayerAttacks::kItemStopBase) ||
         targets.opponents.generators().count() >
             static_cast<usize>(PlayerAttacks::kCritterTargetBase -
                                PlayerAttacks::kGeneratorTargetBase)) {
-        return {}; // Native sequential stop IDs must not alias the next target family.
+        return refuse(Refusal::TargetCapacity); // Native IDs must not alias another family.
     }
     std::array<bool, 4> occupied{};
     for (const auto& player : players) {
@@ -206,20 +215,25 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
         const auto worn = PowerupEffects::of(player.actor.save().progress().inventory);
         if (slot < 0 || slot >= 4 || occupied[static_cast<usize>(slot)] ||
             (worn.weapon & ~PlayerMissiles::kPlainModifiers) != 0) {
-            return {};
+            return refuse(Refusal::Owner);
         }
         occupied[static_cast<usize>(slot)] = true;
     }
     const auto before = PlayerArsenalCheckpoint::capture(bound.arsenal, resources.missiles,
                                                          resources.missileEffects);
-    if (!before || !supported(*before, resources.missiles, seconds) ||
-        std::ranges::any_of(
+    if (!before) {
+        return refuse(Refusal::Capture);
+    }
+    if (!supported(*before, resources.missiles, seconds)) {
+        return refuse(Refusal::State);
+    }
+    if (std::ranges::any_of(
             before->missiles.missiles,
             [&](const auto& flight) { return !knownOwner(flight.owner, players); }) ||
         std::ranges::any_of(before->missiles.impacts, [&](const auto& impact) {
             return !knownOwner(impact.owner, players);
         })) {
-        return {};
+        return refuse(Refusal::Owner);
     }
     attacks.stepProjectileFlights(seconds, players, targets);
     // Native scenery contact happens only at surviving endpoints after all
@@ -231,35 +245,51 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
         const auto& missile = flying.missile(index);
         if (bound.world.fallingScenery().wouldShoot(
                 missile.position, missile.spec != nullptr ? missile.spec->radius : 1.0f)) {
-            return {};
+            return refuse(Refusal::Scenery);
         }
     }
     const auto impacts = flying.takeImpacts();
     if (impacts.size() > kMaxImpacts) {
-        return {};
+        return refuse(Refusal::State);
     }
     const auto& enemies = targets.opponents.enemies();
     std::vector<std::optional<EffectTrees::Prepared>> presentation;
     presentation.reserve(impacts.size());
     for (const auto& impact : impacts) {
-        if (!ordinaryImpact(impact) || !ordinaryTarget(impact.target) ||
-            !knownOwner(impact.owner, players) ||
-            bound.world.wouldExplodeObject(impact.worldObject)) {
-            return {};
+        if (!ordinaryImpact(impact)) {
+            return refuse(Refusal::Impact, impact.target);
         }
-        if (impact.target >= PlayerAttacks::kEnemyTargetBase &&
-            impact.target < PlayerAttacks::kGeneratorTargetBase) {
+        if (!ordinaryTarget(impact.target)) {
+            return refuse(Refusal::Target, impact.target);
+        }
+        if (!knownOwner(impact.owner, players)) {
+            return refuse(Refusal::Owner, impact.target);
+        }
+        if (bound.world.wouldExplodeObject(impact.worldObject)) {
+            return refuse(Refusal::WorldExplosion, impact.target);
+        }
+        if (impact.target >= 0 && impact.target < PlayerAttacks::kEnemyTargetBase) {
+            if (static_cast<usize>(impact.target) >= targets.fixtures.barrels().size()) {
+                return refuse(Refusal::Target, impact.target);
+            }
+            // Native barrel dispatch settles the entire blast queue, even if
+            // this particular strike is nonbreaking or a no-op on spent wood.
+            if (!targets.fixtures.m_blasts.empty()) {
+                return refuse(Refusal::BarrelBlasts, impact.target);
+            }
+        } else if (impact.target >= PlayerAttacks::kEnemyTargetBase &&
+                   impact.target < PlayerAttacks::kGeneratorTargetBase) {
             const s32 id = impact.target - PlayerAttacks::kEnemyTargetBase;
             const s32 kind = enemies.kindOf(id);
             if (!enemies.observe(id) || kind < 0 || kind == kDeathKind || kind == kItKind ||
                 kind == kGarmBroodKind || enemies.algorithmOf(id) == kSuicideWay) {
-                return {};
+                return refuse(Refusal::Enemy, impact.target);
             }
         } else if (impact.target >= PlayerAttacks::kGeneratorTargetBase &&
                    impact.target < PlayerAttacks::kCritterTargetBase &&
                    !ordinaryGenerator(targets.opponents.generators(),
                                       impact.target - PlayerAttacks::kGeneratorTargetBase)) {
-            return {};
+            return refuse(Refusal::Generator, impact.target);
         }
         // Native missing artwork remains missing; an available native tree must
         // have exactly its prebound archive/lender prototype before any damage.
@@ -269,7 +299,7 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
             prepared = impactResource(emission, resources.sharedEffects,
                                       bound.effects.textureLenders(), bound.device);
             if (!prepared) {
-                return {};
+                return refuse(Refusal::Resource, impact.target);
             }
         }
         presentation.push_back(prepared);
@@ -279,6 +309,7 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
     // whole-tick undo, including earlier impacts and the consumed flight queue.
     Result result{.advanced = true, .impacts = impacts.size()};
     for (usize index = 0; index < impacts.size(); ++index) {
+        Refusal failure = Refusal::None;
         const bool dispatched = attacks.dispatchProjectileImpact(
             impacts[index], players, targets,
             [&](const MissileImpact& impact, f32 distance) {
@@ -287,17 +318,64 @@ OrdinaryProjectilePhase::advance(PlayerAttacks& attacks, std::span<PlayerRuntime
                     bound.effects.startPrepared(*presentation[index], emission.position,
                                                 emission.setting) == 0) {
                     result.advanced = false;
+                    failure = Refusal::Effect;
                 }
                 if (emission.cue) {
                     result.cues.push_back(*emission.cue);
                 }
             },
             [&](const GeneratorFeedbackEmission& emission) {
-                return generatorPresentation(emission, bound.effects, bound.device,
-                                             resources.sharedEffects, result.cues);
+                const auto effect = generatorPresentation(emission, bound.effects, bound.device,
+                                                          resources.sharedEffects, result.cues);
+                if (!effect) {
+                    failure = Refusal::GeneratorEmission;
+                }
+                return effect;
+            },
+            [&](const BreakableStrike& strike, std::string_view sound) {
+                // Preserve native mutation/order; the caller's complete undo
+                // owns rounded damage, authored break animation and choice RNG.
+                // No rejected drop/help, hazard, rubble or sound has run yet.
+                if (strike.broken) {
+                    if (strike.contents >= 0 && world == nullptr) {
+                        failure = Refusal::BarrelContents;
+                    } else if (strike.kind == BreakableStrike::Kind::Exploding) {
+                        failure = Refusal::BarrelExplosion;
+                    } else if (strike.kind == BreakableStrike::Kind::Poison) {
+                        failure = Refusal::BarrelGas;
+                    } else if (strike.kind != BreakableStrike::Kind::Plain &&
+                               strike.kind != BreakableStrike::Kind::Holding) {
+                        failure = Refusal::BarrelEmission;
+                    }
+                }
+                if (failure != Refusal::None) {
+                    return false;
+                }
+                if (world != nullptr) {
+                    auto emission = OrdinaryBarrelEmission::advance(
+                        strike, sound, impacts[index].owner, players, targets.fixtures, *world);
+                    if (!emission.accepted) {
+                        using Rejected = OrdinaryBarrelEmission::Refusal;
+                        failure = emission.refusal == Rejected::Record ||
+                                          emission.refusal == Rejected::Birth ||
+                                          emission.refusal == Rejected::Lesson
+                                      ? Refusal::BarrelContents
+                                      : Refusal::BarrelEmission;
+                        return false;
+                    }
+                    if (emission.cue) {
+                        result.cues.push_back(std::move(*emission.cue));
+                    }
+                    return true;
+                }
+                result.cues.push_back({std::string{sound}, strike.position, std::nullopt, 1});
+                return true;
             });
         if (!dispatched || !result.advanced) {
-            return {}; // The enclosing transaction owns the partial native pool undo.
+            // No partial outbox escapes. The enclosing transaction owns all
+            // earlier damage and the consumed flight queue, not just this impact.
+            return refuse(failure == Refusal::None ? Refusal::BarrelEmission : failure,
+                          impacts[index].target);
         }
     }
     return result;

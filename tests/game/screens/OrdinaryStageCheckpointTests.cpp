@@ -308,6 +308,84 @@ struct Fixture {
     }
 };
 
+TEST_CASE("stage checkpoint exposes nested world capture costs without another capture",
+          "[ordinary-stage-checkpoint][checkpoint-timing]") {
+    Fixture fixture("stage-checkpoint-timing");
+    const auto before = fixture.state();
+    Boundary::CaptureTimings timings;
+    LevelWorldCheckpoint::CaptureTimings worldTimings;
+    const auto measured = fixture.boundary->checkpoint(&timings, &worldTimings);
+    REQUIRE(measured);
+    CHECK(static_cast<bool>(*measured == before));
+    CHECK(timings[static_cast<usize>(Boundary::CaptureOwner::World)]);
+    CHECK(std::ranges::all_of(worldTimings, [](const auto& value) { return value.has_value(); }));
+    CHECK(static_cast<bool>(fixture.state() == before));
+}
+
+TEST_CASE("fixture pose captures retain independent history after native updates and restores",
+          "[ordinary-stage-checkpoint][fixture-capture-storage]") {
+    const auto rate = GENERATE(30, 60);
+    Fixture fixture("fixture-capture-storage");
+    const auto retained = fixture.state();
+    const auto independent = retained;
+    const auto textures = fixture.device.texturesCreated;
+    for (s32 frame = 0; frame < 8; ++frame) {
+        fixture.step(1.0f / static_cast<f32>(rate));
+        const auto next = fixture.state();
+        REQUIRE(next.valid());
+        CHECK(retained == independent);
+    }
+    REQUIRE(fixture.boundary->restore(retained));
+    CHECK(fixture.state() == independent);
+    CHECK(retained == independent);
+    CHECK(fixture.device.texturesCreated == textures);
+}
+
+TEST_CASE("opponent cargo references the incoming joint pickup catalog and requires its world",
+          "[ordinary-stage-checkpoint][opponent-loot-stage]") {
+    const auto owner = std::make_unique<Fixture>("ordinary-stage-opponent-loot");
+    auto& fixture = *owner;
+    const usize held = fixture.collectChest(1.0f / 60);
+    const u32 issued = fixture.effects.start(fixture.device, fixture.weapons, "BURST", Vec3{0});
+    REQUIRE(issued != 0);
+    fixture.effects.stop(issued);
+    const auto before = fixture.state();
+    auto incoming = before;
+    incoming.adapter.carried[0] = held;
+    OpponentCombatCheckpoint::State::Bag bag;
+    bag.item = held;
+    bag.effect = issued;
+    incoming.adapter.bags.push_back(bag);
+    REQUIRE(incoming.valid());
+    REQUIRE(fixture.boundary->restore(incoming));
+    CHECK(fixture.state() == incoming);
+    REQUIRE(fixture.boundary->restore(before));
+    CHECK(fixture.state() == before);
+
+    for (const bool carried : {false, true}) {
+        auto invalid = incoming;
+        const usize missing = invalid.stage->world.pickups.items.size();
+        if (carried) {
+            invalid.adapter.carried[0] = missing;
+        } else {
+            invalid.adapter.bags.front().item = missing;
+        }
+        REQUIRE(invalid.adapter.valid());
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.boundary->prepareRestore(invalid));
+        CHECK(fixture.state() == before);
+    }
+    incoming.stage.reset();
+    CHECK_FALSE(incoming.valid());
+    incoming.adapter.carried = {};
+    incoming.adapter.bags.front().item.reset();
+    incoming.adapter.bags.front().name = "COIN";
+    REQUIRE(incoming.adapter.valid());
+    CHECK_FALSE(incoming.valid()); // Named loot also needs captured world ownership.
+    incoming.adapter.bags.clear();
+    CHECK(incoming.valid());
+}
+
 TEST_CASE("stage transaction restores native chest pickups and moving party support together",
           "[rollback][ordinary-stage-checkpoint]") {
     const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -12,6 +13,11 @@ namespace gdl::game {
  * restoration must match the receiver's immutable native level roster. */
 class PlacedEnemyCheckpoint {
 public:
+    /** Canonical encoded-byte SHA for an already validated native boundary.
+     * Not a validity certificate; incoming state must still pass full restore. */
+    static std::optional<std::array<u8, 32>>
+    canonicalDigest(const PlacedEnemies::Checkpoint& state);
+
     static constexpr u32 kVersion = 1;
     static constexpr usize kMaxPlacements = 512;
     static constexpr usize kHeaderBytes = 32;

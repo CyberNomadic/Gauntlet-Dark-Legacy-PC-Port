@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -12,6 +13,10 @@ namespace gdl::game {
  * decoding alone does not authorize restoration into a different roster. */
 class GeneratorCheckpoint {
 public:
+    /** Canonical encoded-byte SHA for an already validated native boundary.
+     * Not a validity certificate; incoming state must still pass full restore. */
+    static std::optional<std::array<u8, 32>> canonicalDigest(const Generators::Checkpoint& state);
+
     static constexpr u32 kVersion = 1;
     static constexpr usize kMaxGenerators = 512;
     static constexpr usize kMaxBodies = static_cast<usize>(kEnemyKindCount) + 2;

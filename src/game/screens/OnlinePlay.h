@@ -68,12 +68,24 @@ public:
     const LocalMovementPrediction::Metrics& predictionMetrics() const {
         return m_prediction.metrics();
     }
-    const OnlineCombatReplay::Diagnostics& combatReplayDiagnostics() const {
-        return m_combatReplay.diagnostics();
-    }
+    const OnlineCombatReplay::Diagnostics& combatReplayDiagnostics() const;
+    struct CombatWorkerMetrics {
+        bool stage = false;
+        bool running = false;
+        bool inFlight = false;
+        bool pending = false;
+        usize retainedCommands = 0;
+        u64 starts = 0, stops = 0;
+        u64 submitted = 0, coalesced = 0, executed = 0, superseded = 0;
+        u64 publications = 0, adoptions = 0, rejectedPublications = 0;
+        u64 presents = 0, presentRefusals = 0;
+        u64 submissionRefusals = 0, expired = 0, errors = 0;
+    };
+    /** Main-owned cumulative values, never a read of the private native owner. */
+    CombatWorkerMetrics combatReplayWorkerMetrics() const;
     /** Diagnostic A/B control for local movement, action and projectile replay;
      * never changes host authority or input scheduling. */
-    void setMovementPrediction(bool enabled) { m_predictMovement = enabled; }
+    void setMovementPrediction(bool enabled);
     OnlineLevelEntry::Phase entryPhase() const { return m_entry.phase(); }
     bool entryVisible() const { return m_entry.visible() || m_completion.visible(); }
     const OnlineCompletion& completion() const { return m_completion; }
@@ -86,6 +98,7 @@ public:
 
 private:
     struct Host;
+    struct CombatReplayState;
     bool load(const SessionInputs::Frame& devices);
     bool travel();
     bool loadShop();
@@ -94,6 +107,10 @@ private:
     Phase fail(Failure reason);
     void quiet();
     void feedback();
+    void stopCombatReplay();
+    void pollCombatReplay();
+    bool updateCombatReplay(const CombatSnapshot* authority, std::span<const InputCommand> inputs);
+    bool presentCombatReplay(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend);
     RenderDevice* m_device = nullptr;
     GameContext m_context;
     std::function<void(s32, s32, ControlFeedback)> m_vibrate;
@@ -112,6 +129,7 @@ private:
     LocalMovementPrediction m_prediction;
     OnlineOpponentReplay m_opponentReplay;
     OnlineCombatReplay m_combatReplay;
+    std::unique_ptr<CombatReplayState> m_combatState;
     LocalProjectilePrediction m_projectilePrediction;
     LocalPotionPrediction m_potionPrediction;
     LocalTurboEffectPrediction m_effectPrediction;

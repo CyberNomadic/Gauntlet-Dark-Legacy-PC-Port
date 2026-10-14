@@ -18,6 +18,7 @@
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/CinematicBars.h"
+#include "game/screens/PartyLighting.h"
 #include "game/screens/PartyRecords.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/TargetAssist.h"
@@ -1259,13 +1260,7 @@ std::vector<TriggerVisitor> PlayScene::visitors() const {
  * them again): the effects' own and, in a dark level, a lantern over each standing player; the
  * newest first, at most twelve. */
 void PlayScene::gatherLights() {
-    m_lights.clear();
-    m_effects.lights(m_lights);
-    m_opponents.lights(m_lights);
-    PartyFigures::addLanterns(m_lights, m_players, m_world->level());
-    if (m_lights.size() > WorldLighting::kMostPoints) {
-        m_lights.resize(WorldLighting::kMostPoints);
-    }
+    PartyLighting::gather(m_lights, m_effects, m_opponents, m_players, m_world->level());
     m_world->setPointLights(m_lights);
 }
 

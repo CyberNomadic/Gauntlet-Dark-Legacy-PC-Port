@@ -1,12 +1,32 @@
 #pragma once
 
 #include "game/netplay/CombatSnapshot.h"
+#include "game/netplay/MatchSession.h"
 #include "game/players/PlayerAnimator.h"
 
 namespace gdl::test {
 /** The headless probe observes submitted visuals, but only its authenticated
  * latest host checkpoint can certify that an input is currently eligible. */
 struct LatencyProbeEligibility {
+    enum class ReceiptEvidence { Ignore, Interrupted, Observe };
+    /** Deadline belongs to the completed network receipt, not later replay or
+     * rendering. This is action observation, never an execution/hit ACK. */
+    static ReceiptEvidence receiptEvidence(const game::InputCommand& input, u32 continuity,
+                                           game::MatchSession::Time pressed, u64 lastTick,
+                                           const game::MatchSession::ActionReceipt& receipt) {
+        if (receipt.seat != input.seat || receipt.receivedAt < pressed ||
+            receipt.receivedAt - pressed > std::chrono::seconds(1)) {
+            return ReceiptEvidence::Ignore;
+        }
+        if (receipt.epoch != input.epoch || !receipt.present || receipt.grant != input.grant ||
+            receipt.continuity != continuity || receipt.life != game::ReplicaPlayerLife::Standing ||
+            receipt.portalPhase) {
+            return ReceiptEvidence::Interrupted;
+        }
+        return receipt.tick < input.tick || receipt.tick <= lastTick ? ReceiptEvidence::Ignore
+                                                                     : ReceiptEvidence::Observe;
+    }
+
     static bool standing(const game::CombatSnapshot* state, u8 seat) {
         return state != nullptr && seat < state->players.size() && state->players[seat] &&
                state->motion.players[seat] && state->motion.players[seat]->grant != 0 &&

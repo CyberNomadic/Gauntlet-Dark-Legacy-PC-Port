@@ -54,6 +54,18 @@ public:
             f32 damage = 0;
             bool operator==(const Ram&) const = default;
         };
+        struct Bag {
+            std::optional<usize> item;
+            std::string name;
+            Vec3 position{0};
+            f32 velocity = 20;
+            f32 age = 0;
+            f32 pitch = 0;
+            f32 spin = 0;
+            u32 effect = 0;
+            bool landed = false;
+            bool operator==(const Bag&) const = default;
+        };
         State();
         std::array<s32, 4> hitStreak{};
         std::vector<std::pair<s32, s32>> lessons;
@@ -73,11 +85,18 @@ public:
         std::vector<FollowingEffect> critterEffects;
         std::vector<MoveEffect> moveEffects;
         std::vector<Ram> barrelRams;
+        /** Pickup indices, not input slots or live critter identities. A retired
+         * critter can retain its cargo until native loss settlement. */
+        std::array<std::optional<usize>, Critters::kMost> carried{};
+        std::vector<Bag> bags;
         bool valid() const;
         /** Prior dormant-only simulation domain. Complete capture is not
          * permission to advance or dispatch any of these additional owners. */
         bool dormant() const;
         bool references(u8 playerMask, const EffectTrees::PoolCheckpoint& effects) const;
+        /** Validate against the incoming stage's complete pickup list, never
+         * the current owner's list before that stage has been restored. */
+        bool pickupReferences(usize count) const;
         bool operator==(const State&) const = default;
 
     private:
@@ -111,7 +130,7 @@ public:
     OpponentCombatCheckpoint& operator=(OpponentCombatCheckpoint&&) = delete;
     ~OpponentCombatCheckpoint();
 
-    /** Refuses uncaptured boss, Death and carried-item owners, including their
+    /** Refuses uncaptured boss and Death owners, including their
      * pending outputs. The enclosing bundle restores the supplied shared effect
      * pool once. Capturing an ordinary critter does not authorize dispatch of
      * grabs, drops, arena callbacks or unprepared effects. */

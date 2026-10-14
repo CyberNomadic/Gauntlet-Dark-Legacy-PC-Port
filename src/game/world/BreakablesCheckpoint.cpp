@@ -195,7 +195,7 @@ std::optional<BreakablesCheckpoint::State> BreakablesCheckpoint::checkpoint() co
             static_cast<usize>(source->instance) >= m_owner.m_layout->itemInstances().size()) {
             return std::nullopt;
         }
-        const auto figure = ItemFigureCheckpoint::capture(source->figure);
+        auto figure = ItemFigureCheckpoint::capture(source->figure);
         if (!figure) {
             return std::nullopt;
         }
@@ -216,7 +216,7 @@ std::optional<BreakablesCheckpoint::State> BreakablesCheckpoint::checkpoint() co
              source->radius,
              source->height,
              source->collisionOffset,
-             *figure,
+             std::move(*figure),
              source->box,
              {support.m_object, support.m_local, support.m_boxOffset, support.m_boxYaw}});
     }

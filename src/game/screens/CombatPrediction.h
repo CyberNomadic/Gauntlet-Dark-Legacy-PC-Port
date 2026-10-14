@@ -41,12 +41,53 @@ public:
      * never restoring a child independently or publishing irreversible outputs. */
     OrdinaryCombatTick::Result advance(u64 tick, std::span<const PlayInput> inputs,
                                        const OrdinaryCombatTick::Frame& frame);
+    class Promotion {
+    public:
+        Promotion(Promotion&&) noexcept;
+        Promotion& operator=(Promotion&&) noexcept;
+        ~Promotion();
+        Promotion(const Promotion&) = delete;
+        Promotion& operator=(const Promotion&) = delete;
+        u64 baseline() const;
+        u64 currentTick() const;
+
+    private:
+        friend class CombatPrediction;
+        struct Data;
+        explicit Promotion(std::unique_ptr<Data> data);
+        std::unique_ptr<Data> m_data;
+    };
+    /** Probabilistic SHA-256 agreement with an accepted historical boundary,
+     * followed by complete incoming validation and trusted target preparation.
+     * The caller must first verify the effective command suffix and session
+     * ownership. nextFrame is the context immediately AFTER the supplied tick.
+     * Refusal leaves the current private state and its existing undo untouched. */
+    std::optional<Promotion> preparePromotion(u64 epoch, u64 tick,
+                                              const OrdinaryCombatCheckpoint::State& authority,
+                                              const OrdinaryCombatTick::Frame& nextFrame);
+    /** Replace only the authority-interval undo, retaining the current native
+     * state. No gameplay, restore, rendering or external output runs here.
+     * Wrong-owner/stale tokens refuse without consuming another owner's token. */
+    bool commitPromotion(Promotion&& promotion);
+    struct AgreementTimings {
+        u64 recorded = 0;
+        u64 recordNanoseconds = 0;
+        u64 checked = 0;
+        u64 checkNanoseconds = 0;
+        u64 prepared = 0;
+        u64 prepareNanoseconds = 0;
+        u64 promoted = 0;
+    };
+    /** Cumulative attempts/cost since load, including refused comparisons and
+     * preparations. Recording reads the existing native postcondition only;
+     * these measurements never trigger another checkpoint capture. */
+    AgreementTimings agreementTimings() const;
     /** Rejecting any step invalidates the complete replay pass, not just its
      * last tick. A caller must buffer outputs until its whole pass commits. */
     void resetReplay();
     bool active() const;
     u64 tick() const;
-    /** Changes whenever this private owner is restored, reset or advanced.
+    /** Changes whenever this private owner is restored, reset, advanced or promoted.
      * Pair with resourceLifetime(): equal ticks alone do not prove continuity. */
     u64 replayRevision() const;
     std::span<const PlayerRuntime> players() const;

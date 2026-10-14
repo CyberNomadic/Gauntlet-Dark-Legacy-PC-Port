@@ -559,4 +559,72 @@ TEST_CASE("stage swarm anchors distinguish absent capture and expire with the bo
     fixture.lifetime.reset();
     CHECK_FALSE(with->swarm());
 }
+
+TEST_CASE("stage point lights are bounded owned native-order endpoints with a resource fence",
+          "[rollback][stage-particle-presentation][stage-point-lights]") {
+    Fixture fixture;
+    std::vector<PointLight> lights;
+    for (usize index = 0; index < WorldLighting::kMostPoints; ++index) {
+        lights.push_back(
+            {{static_cast<f32>(index), 3, 2}, {0.2f, 0.5f, 0.7f}, static_cast<f32>(index), 2});
+    }
+    StageParticlePresentation::Sources sources{fixture.world, fixture.projectiles, fixture.effects};
+    sources.lights = lights;
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    const auto captured = StageParticlePresentation::capture(7, 25, fixture.lifetime, sources);
+    REQUIRE(captured);
+    REQUIRE(captured->lights().size() == lights.size());
+    for (usize index = 0; index < lights.size(); ++index) {
+        CHECK(captured->lights()[index].position == lights[index].position);
+        CHECK(captured->lights()[index].color == lights[index].color);
+        CHECK(captured->lights()[index].radius == lights[index].radius);
+        CHECK(captured->lights()[index].intensity == lights[index].intensity);
+    }
+    lights.front().position.x = 100;
+    lights.clear();
+    CHECK(captured->lights().front().position.x == 0);
+    CHECK(captured->matches(7, 25, fixture.lifetime));
+    CHECK_FALSE(captured->matches(7, 26));
+    CHECK_FALSE(captured->matches(8, 25));
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+    fixture.lifetime.reset();
+    CHECK(captured->lights().empty());
+    CHECK_FALSE(captured->matches(7, 25));
+}
+
+TEST_CASE("stage point light capture rejects malformed lists without changing the sources",
+          "[rollback][stage-particle-presentation][stage-point-lights]") {
+    const s32 invalid = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+    Fixture fixture;
+    std::vector<PointLight> lights(1);
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    if (invalid == 0) {
+        lights.resize(WorldLighting::kMostPoints + 1);
+    } else if (invalid == 1) {
+        lights[0].position.x = nan;
+    } else if (invalid == 2) {
+        lights[0].position.y = std::numeric_limits<f32>::infinity();
+    } else if (invalid == 3) {
+        lights[0].color.z = nan;
+    } else if (invalid == 4) {
+        lights[0].radius = -1;
+    } else if (invalid == 5) {
+        lights[0].radius = nan;
+    } else if (invalid == 6) {
+        lights[0].intensity = nan;
+    } else {
+        lights[0].intensity = std::numeric_limits<f32>::infinity();
+    }
+    StageParticlePresentation::Sources sources{fixture.world, fixture.projectiles, fixture.effects};
+    sources.lights = lights;
+    const auto before = fixture.world.particles().checkpoint();
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    CHECK_FALSE(StageParticlePresentation::capture(7, 25, fixture.lifetime, sources));
+    CHECK(fixture.world.particles().checkpoint() == before);
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+}
 } // namespace

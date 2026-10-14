@@ -3,6 +3,7 @@
 #include <string>
 
 #include "game/screens/OrdinaryCombatCheckpoint.h"
+#include "game/screens/OrdinaryPickupPhase.h"
 #include "game/screens/OrdinaryProjectilePhase.h"
 #include "game/screens/OrdinaryStrongPhase.h"
 #include "game/screens/OrdinaryWeaponEmission.h"
@@ -21,7 +22,10 @@ namespace gdl::game {
  * advances with the party; legacy callers retain held observation. Only static player supports and
  * plain walking, guard, close attacks, normal/strong throws on the ordinary swarm/generators, and
  * nonlethal incoming blows are admitted. Inert fixture and nonexplosive world stops retain native
- * impact presentation. Other special attacks, pickups, world events, lessons, promotions and
+ * impact presentation. Barrel hits and wood breaks can create prepared pickups;
+ * ordinary Gold/Keys collection shares native judgment and mutation. Explosions and gas remain
+ * unsupported. Other special attacks, pickups,
+ * world events, lessons, promotions and
  * player death refuse the complete phase.
  *
  * Sound/rumble/footstep and BLOCKFX presentation requests are returned only on
@@ -101,6 +105,7 @@ public:
         std::optional<u64> prepareNanoseconds;
         std::optional<u64> postconditionNanoseconds;
         OrdinaryCombatCheckpoint::CaptureTimings postconditionOwners;
+        LevelWorldCheckpoint::CaptureTimings postconditionWorld;
     };
     enum class PartyRefusal {
         None,
@@ -117,13 +122,31 @@ public:
         Statue,
         FloorSupport,
         GeneratorEmission,
+        BarrelEmission,
+        BarrelContents,
+        BarrelExplosion,
+        BarrelGas,
         Count
     };
     static constexpr std::array<std::string_view, static_cast<usize>(PartyRefusal::Count)>
-        kPartyRefusals{"none",          "unsupported_action", "familiar_shot",   "no_potion",
-                       "melee_scenery", "melee_target",       "weapon_emission", "selector",
-                       "turbo_action",  "turbo_emission",     "turbo_lesson",    "statue",
-                       "floor_support", "generator_emission"};
+        kPartyRefusals{"none",
+                       "unsupported_action",
+                       "familiar_shot",
+                       "no_potion",
+                       "melee_scenery",
+                       "melee_target",
+                       "weapon_emission",
+                       "selector",
+                       "turbo_action",
+                       "turbo_emission",
+                       "turbo_lesson",
+                       "statue",
+                       "floor_support",
+                       "generator_emission",
+                       "barrel_emission",
+                       "barrel_contents",
+                       "barrel_explosion",
+                       "barrel_gas"};
     enum class TargetFamily {
         None,
         Barrel,
@@ -160,8 +183,11 @@ public:
         std::vector<OrdinaryWeaponEmission::Cue> throws; ///< buffered once per native fan
         std::vector<OrdinaryStrongPhase::Cue> strong; ///< authored free-A cues, never played here
         std::vector<OrdinaryProjectilePhase::Cue> impacts;
+        std::vector<OrdinaryPickupPhase::Output>
+            pickups;     ///< accepted native order; never dispatched here
         Timings timings; ///< local CPU durations, including refused native attempts
         PartyRefusal partyRefusal = PartyRefusal::None; ///< detail when refusal is PartyMotion
+        OrdinaryProjectilePhase::Refusal projectileRefusal = OrdinaryProjectilePhase::Refusal::None;
         /** Exact native action/winning target at the first action-related refusal.
          * Diagnostic only: an absent value never substitutes for admission. */
         std::optional<PlayerAnimator::Action> refusedAction;

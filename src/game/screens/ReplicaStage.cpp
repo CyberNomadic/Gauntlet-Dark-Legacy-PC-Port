@@ -195,6 +195,11 @@ void ReplicaStage::clear() {
     m_assets.reset();
     m_epoch = 0;
 }
+void ReplicaStage::discardPresentation() {
+    if (m_assets != nullptr) {
+        m_assets->view.discardPresentation();
+    }
+}
 bool ReplicaStage::show(const CombatSnapshot& snapshot, const EnemyPresentation* presentation) {
     return m_assets != nullptr && m_assets->view.show(snapshot, presentation);
 }

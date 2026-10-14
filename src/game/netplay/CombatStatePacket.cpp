@@ -13,6 +13,7 @@
 #include "engine/io/ByteReader.h"
 
 #include "game/netplay/AnimationCheckpoint.h"
+#include "game/netplay/CanonicalDigestSink.h"
 #include "game/netplay/PlayerHealthCheckpoint.h"
 #include "game/netplay/PlayerRuntimePacket.h"
 #include "game/netplay/RandomCheckpoint.h"
@@ -28,6 +29,9 @@ class Writer {
 public:
     static constexpr bool reading = false;
     std::vector<u8> bytes;
+    CanonicalDigestSink* digest = nullptr;
+    bool agreement = false;
+    usize used = 0;
     usize records = 0;
     usize strings = 0;
 
@@ -35,7 +39,12 @@ public:
         if (source.size() > remaining()) {
             throw FormatError("combat checkpoint byte limit");
         }
-        bytes.insert(bytes.end(), source.begin(), source.end());
+        used += source.size();
+        if (digest) {
+            digest->append(source);
+        } else {
+            bytes.insert(bytes.end(), source.begin(), source.end());
+        }
     }
     void word(u32 value) {
         std::array<u8, 4> data{};
@@ -48,7 +57,7 @@ public:
         if (value.size() > remaining()) {
             throw FormatError("combat checkpoint byte limit");
         }
-        bytes.insert(bytes.end(), value.begin(), value.end());
+        raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     template <class T> void number(T value) {
         if constexpr (std::is_enum_v<T>) {
@@ -78,7 +87,7 @@ public:
             word(static_cast<u32>(value));
         }
     }
-    usize remaining() const { return CombatStatePacket::kMaxBytes - bytes.size(); }
+    usize remaining() const { return CombatStatePacket::kMaxBytes - used; }
 };
 
 class Reader {
@@ -148,6 +157,19 @@ template <class T> struct IsArray : std::false_type {};
 template <class T, usize N> struct IsArray<std::array<T, N>> : std::true_type {};
 
 template <class A, class T> void field(A& archive, T& value);
+/** These optional poses are overwritten by draw before use. The agreement
+ * visitor alone elides them; wire and native restore retain and validate them. */
+template <class A, class T> void drawCache(A& a, T& value) {
+    if constexpr (!A::reading) {
+        if (a.agreement) {
+            const std::remove_cv_t<T> empty{};
+            field(a, empty);
+            return;
+        }
+    }
+    field(a, value);
+}
+
 template <class A, class... T> void fields(A& archive, T&... value) {
     (field(archive, value), ...);
 }
@@ -397,6 +419,10 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.hitStreak, v.lessons, v.generatorRewards, v.rockHits, v.hearers, v.cueEffects,
                v.shrink, v.bagSeed, v.statues, v.critters, v.projectiles, v.critterExperienceOwed,
                v.critterEffects, v.moveEffects, v.barrelRams);
+        for (auto& item : v.carried) {
+            optionalIndex(a, item);
+        }
+        field(a, v.bags);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::Reward>) {
         fields(a, v.player, v.experience, v.destroyed);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::FollowingEffect>) {
@@ -406,6 +432,9 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.effect, v.critter, v.ofBoss);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::Ram>) {
         fields(a, v.id, v.damage);
+    } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::Bag>) {
+        optionalIndex(a, v.item);
+        fields(a, v.name, v.position, v.velocity, v.age, v.pitch, v.spin, v.effect, v.landed);
     } else if constexpr (std::is_same_v<V, CrittersCheckpoint::State>) {
         fields(a, v.scales, v.realm, v.gargoyleForm, v.lookouts, v.banks, v.actors, v.events);
     } else if constexpr (std::is_same_v<V, CrittersCheckpoint::Bank>) {
@@ -637,11 +666,13 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, ItemCollisionTriangle>) {
         fields(a, v.normal, v.vertices);
     } else if constexpr (std::is_same_v<V, ItemFigure::Checkpoint>) {
-        fields(a, v.animation, v.pose, v.presentationPose, v.textures, v.particles, v.poseSequence,
-               v.poseFrame, v.poseGeneration, v.continuity, v.previousTransform, v.previousFrame,
-               v.previousGeneration, v.presentationCaptured, v.presentationAdvanced,
-               v.textureSequence, v.textureFrame, v.gateParticles, v.position, v.yaw, v.transform,
-               v.placement, v.index, v.loop, v.holdPose);
+        fields(a, v.animation, v.pose);
+        drawCache(a, v.presentationPose);
+        fields(a, v.textures, v.particles, v.poseSequence, v.poseFrame, v.poseGeneration,
+               v.continuity, v.previousTransform, v.previousFrame, v.previousGeneration,
+               v.presentationCaptured, v.presentationAdvanced, v.textureSequence, v.textureFrame,
+               v.gateParticles, v.position, v.yaw, v.transform, v.placement, v.index, v.loop,
+               v.holdPose);
     } else if constexpr (std::is_same_v<V, TreePose::Checkpoint>) {
         fields(a, v.tree, v.nodes, v.poses);
     } else if constexpr (std::is_same_v<V, TreePose::Checkpoint::Node>) {
@@ -701,6 +732,24 @@ std::optional<std::vector<u8>> CombatStatePacket::encode(const State& state) {
             writer.bytes[8 + index] = static_cast<u8>(length >> (index * 8));
         }
         return std::move(writer.bytes);
+    } catch (const FormatError&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<std::array<u8, 32>>
+CombatStatePacket::canonicalDigest(const CombatRollbackCheckpoint::State& combat,
+                                   const OpponentCombatCheckpoint::State& adapter,
+                                   bool presentationIndependent) {
+    try {
+        CanonicalDigestSink sink;
+        Writer writer;
+        writer.used = kHeaderBytes; // Same bounded body budget as ordinary encoding.
+        writer.digest = &sink;
+        writer.agreement = presentationIndependent;
+        fields(writer, combat, adapter);
+        writer.number(false); // Stage has its own uncompressed, catalog-bound digest.
+        return sink.finish();
     } catch (const FormatError&) {
         return std::nullopt;
     }

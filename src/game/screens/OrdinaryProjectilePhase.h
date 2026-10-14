@@ -1,8 +1,13 @@
 #pragma once
 
+#include <array>
+#include <string_view>
+
 #include "game/screens/CombatRollbackCheckpoint.h"
 
 namespace gdl::game {
+
+class LevelWorldCheckpoint;
 
 /** The native player-projectile phase inside an already prepared ordinary-combat
  * transaction. This is not a world checkpoint: the caller must undo the complete
@@ -16,11 +21,62 @@ public:
     static constexpr usize kMaxTotalSteps = 4096;
     static constexpr usize kMaxImpacts = 4096;
     using Cue = PlayerArsenal::ImpactCue;
+    enum class Refusal {
+        None,
+        Binding,
+        Multiplayer,
+        StrongState,
+        TargetCapacity,
+        Owner,
+        Capture,
+        State,
+        Scenery,
+        Impact,
+        Target,
+        WorldExplosion,
+        Enemy,
+        Generator,
+        Resource,
+        Effect,
+        GeneratorEmission,
+        BarrelBlasts,
+        BarrelContents,
+        BarrelExplosion,
+        BarrelGas,
+        BarrelEmission,
+        Count
+    };
+    static constexpr std::array<std::string_view, static_cast<usize>(Refusal::Count)> kRefusals{
+        "none",
+        "binding",
+        "multiplayer",
+        "strong_state",
+        "target_capacity",
+        "owner",
+        "capture",
+        "state",
+        "scenery",
+        "impact",
+        "target",
+        "world_explosion",
+        "enemy",
+        "generator",
+        "resource",
+        "effect",
+        "generator_emission",
+        "barrel_blasts",
+        "barrel_contents",
+        "barrel_explosion",
+        "barrel_gas",
+        "barrel_emission"};
 
     struct Result {
         bool advanced = false;
         usize impacts = 0;
         std::vector<Cue> cues;
+        Refusal refusal = Refusal::None;
+        /** Native impact target when one was actually selected; diagnostic only. */
+        std::optional<s32> refusedTarget;
     };
 
     /** Pure admission/work check against complete native state and a trusted
@@ -38,12 +94,18 @@ public:
      * ordering. All queued and new impacts are checked BEFORE the first impact
      * is dispatched. Surviving shot endpoints use the same scenery contact
      * predicate as native play; distant or already-started scenery is harmless.
+     * Barrel hits reuse the native rounded damage/choice outcome. Nonbreaking
+     * hits and Plain/empty-Holding breaks need no additional owner. Passing the
+     * persistent Stage world enables prepared Holding pickup births with native
+     * suppressed lessons; a null world retains the earlier no-drop domain.
+     * Hazards remain unsupported. Any prior blast queue forbids barrel dispatch.
      * A refusal after flight changes only owners covered by the
      * caller's prepared OrdinaryCombatCheckpoint undo. The caller also verifies
      * the resulting complete state, including newly queued lessons/rewards. */
     static Result advance(PlayerAttacks& attacks, std::span<PlayerRuntime> players,
                           const PlayerAttacks::Targets& targets, f32 seconds,
-                          const CombatRollbackCheckpoint::Resources& resources);
+                          const CombatRollbackCheckpoint::Resources& resources,
+                          LevelWorldCheckpoint* world = nullptr);
 
 private:
     friend class OrdinaryWeaponEmission;

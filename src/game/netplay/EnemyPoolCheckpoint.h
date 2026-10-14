@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -15,6 +16,9 @@ namespace gdl::game {
  * no queue, body, pose or contact is silently omitted to make a packet fit. */
 class EnemyPoolCheckpoint {
 public:
+    /** Canonical encoded-byte SHA, not validation of incoming state. */
+    static std::optional<std::array<u8, 32>> canonicalDigest(const Enemies::Checkpoint& state);
+
     static constexpr u32 kVersion = 2;
     static constexpr usize kMaxBytes = 512 * 1024;
     static constexpr usize kMaxNodes = 128;

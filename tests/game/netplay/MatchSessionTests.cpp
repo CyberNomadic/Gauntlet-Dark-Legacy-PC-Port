@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <chrono>
 #include <limits>
+#include <memory>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -8,6 +10,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/netplay/RollbackInputHistory.h"
 #include "game/players/ClassData.h"
 #include "game/screens/MatchInputs.h"
 #include "game/screens/PartyMotion.h"
@@ -30,6 +33,7 @@ struct Wire final : PacketTransport {
     usize budget = std::numeric_limits<usize>::max();
     std::vector<Packet> sent;
     std::optional<Statistics> stats;
+    mutable usize statisticsQueries = 0;
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
         if (feedbackCongested && FeedbackSync::recognizes(bytes)) {
             return SendResult::Congested;
@@ -44,7 +48,10 @@ struct Wire final : PacketTransport {
         return result;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection /*connection*/) const override { return stats; }
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
+        ++statisticsQueries;
+        return stats;
+    }
     void close(Connection /*connection*/) override {}
 };
 
@@ -77,19 +84,19 @@ struct Room {
         }
         return result;
     }
-    void pump() {
+    void pump(MatchSession::Time now = MatchSession::Clock::now()) {
         for (u8 pass = 0; pass < 5; ++pass) {
             for (u8 peer = 1; peer <= 4; ++peer) {
                 if (!present(peer)) {
                     continue;
                 }
-                sessions[peer].flush(wires[peer]);
+                sessions[peer].flush(wires[peer], now);
                 const auto sent = std::move(wires[peer].sent);
                 wires[peer].sent.clear();
                 for (const auto& packet : sent) {
                     const auto target = peer == 1 ? packet.connection + 1 : 1;
                     const auto sender = peer == 1 ? 99 : peer - 1;
-                    const auto admitted = sessions[target].receive(sender, packet.bytes);
+                    const auto admitted = sessions[target].receive(sender, packet.bytes, now);
                     REQUIRE((admitted == Admission::Accepted || admitted == Admission::Stale));
                 }
             }
@@ -1787,23 +1794,29 @@ TEST_CASE("input scheduling adapts to delayed lossy links without repeating late
     usize serial = 0;
     u32 lateAtWarmup = 0;
     usize actions = 0;
+    std::vector<std::array<u64, 7>> timingChanges;
     for (u64 tick = 0; tick < 900; ++tick) {
-        host.update(1.0 / 60);
-        guest.update(1.0 / 60);
+        const auto now = MatchSession::Time{std::chrono::seconds{1}} +
+                         std::chrono::duration_cast<MatchSession::Clock::duration>(
+                             std::chrono::duration<f64>{static_cast<f64>(tick) / 60});
+        host.update(1.0 / 60, now);
+        const auto previousLead = guest.inputLead();
+        const auto previousLate = host.inputDiagnostics(1).late;
+        guest.update(1.0 / 60, now);
         std::ranges::stable_sort(pending, {}, &Delayed::due);
         for (const auto& packet : pending) {
             if (packet.due > tick) {
                 break;
             }
-            const auto admitted =
-                packet.toHost ? host.receive(1, packet.bytes) : guest.receive(99, packet.bytes);
+            const auto admitted = packet.toHost ? host.receive(1, packet.bytes, now)
+                                                : guest.receive(99, packet.bytes, now);
             REQUIRE((admitted == Admission::Accepted || admitted == Admission::Stale));
         }
         std::erase_if(pending, [tick](const auto& packet) { return packet.due <= tick; });
         SessionInputs::Frame local;
         local[0].move = {{0, 1}, 1};
         local[0].usePotion = tick % 60 == 0 && (tick >= 400 || measuredPath);
-        REQUIRE(MatchInputs::sample(guest, local));
+        REQUIRE(guest.sample(MatchInputs::commands(guest, local), now));
         const auto frame = host.advance();
         REQUIRE(frame);
         actions += (*frame)[1].pressed(CommandPress::UsePotion) ? 1U : 0U;
@@ -1816,7 +1829,7 @@ TEST_CASE("input scheduling adapts to delayed lossy links without repeating late
             REQUIRE(host.publish(state));
         }
         for (const u8 peer : {u8{1}, u8{2}}) {
-            room.sessions[peer].flush(room.wires[peer]);
+            room.sessions[peer].flush(room.wires[peer], now);
             for (const auto& packet : room.wires[peer].sent) {
                 ++serial;
                 if (serial % 11 == 0) {
@@ -1835,9 +1848,24 @@ TEST_CASE("input scheduling adapts to delayed lossy links without repeating late
         if (tick == 400) {
             lateAtWarmup = host.inputDiagnostics(1).late;
         }
+        if (tick >= 400 &&
+            (guest.inputLead() != previousLead || host.inputDiagnostics(1).late != previousLate)) {
+            const auto* latest = guest.playback().latest();
+            timingChanges.push_back({tick, host.tick(), guest.inputTick(), guest.inputLead(),
+                                     latest ? latest->motion.tick : 0,
+                                     host.inputDiagnostics(1).received.value_or(0),
+                                     host.inputDiagnostics(1).late});
+        }
         CHECK(guest.inputLead() <= 30);
     }
     CAPTURE(latency, guest.inputLead(), lateAtWarmup, host.inputDiagnostics(1).late);
+    if (host.inputDiagnostics(1).late != lateAtWarmup) {
+        for (const auto& change : timingChanges) {
+            UNSCOPED_INFO("timing tick/host/next/lead/checkpoint/received/late: "
+                          << change[0] << '/' << change[1] << '/' << change[2] << '/' << change[3]
+                          << '/' << change[4] << '/' << change[5] << '/' << change[6]);
+        }
+    }
     CHECK(host.inputDiagnostics(1).late == lateAtWarmup);
     CHECK(actions == (measuredPath ? 15 : 8));
     CHECK(guest.inputTick() < host.tick() + 36);
@@ -1877,18 +1905,21 @@ TEST_CASE("healthy delivery recovers inflated input lead without rewinding comma
     usize reductions = 0;
     u8 previousLead = guest.inputLead();
     for (u64 tick = 0; tick < 1200; ++tick) {
-        host.update(1.0 / 60);
-        guest.update(1.0 / 60);
+        const auto now = MatchSession::Time{std::chrono::seconds{1}} +
+                         std::chrono::duration_cast<MatchSession::Clock::duration>(
+                             std::chrono::duration<f64>{static_cast<f64>(tick) / 60});
+        host.update(1.0 / 60, now);
+        guest.update(1.0 / 60, now);
         SessionInputs::Frame local;
         for (auto& seat : local) {
             seat.usePotion = tick < 1100 && tick % 40 == 0;
         }
-        REQUIRE(MatchInputs::sample(guest, local));
+        REQUIRE(guest.sample(MatchInputs::commands(guest, local), now));
         for (const auto& command : guest.sampledInputs()) {
             CHECK(command.tick > lastInput[command.seat]);
             lastInput[command.seat] = command.tick;
         }
-        room.pump();
+        room.pump(now);
         const auto frame = host.advance();
         REQUIRE(frame);
         for (usize seat = 1; seat < frame->size(); ++seat) {
@@ -1906,18 +1937,17 @@ TEST_CASE("healthy delivery recovers inflated input lead without rewinding comma
                 state.players[seat]->movement.lateInputs = feedback.late;
             }
             REQUIRE(host.publish(state));
-            room.pump();
+            room.pump(now);
         }
         if (guest.inputLead() < previousLead) {
-            CHECK(previousLead - guest.inputLead() <= 3);
+            // The first exact admission pairs the host clock to a successful
+            // send, replacing the old RTT-sized bootstrap margin at once.
+            CHECK((reductions == 0 || previousLead - guest.inputLead() <= 3));
             ++reductions;
         }
         previousLead = guest.inputLead();
-        if (tick < 60) {
-            CHECK(guest.inputLead() == 30);
-        }
     }
-    CHECK(reductions >= 9);
+    CHECK(reductions >= 1);
     CHECK(guest.inputLead() == guest.context().inputLead);
     for (usize seat = 1; seat <= (twoLocalSeats ? 2U : 1U); ++seat) {
         CHECK(host.inputDiagnostics(seat).late == 0);
@@ -2040,6 +2070,734 @@ TEST_CASE("clean links do not impose a six-tick input floor on guests",
         CHECK(host.inputDiagnostics(seat).late == 0);
         CHECK(actions[seat] == 8);
     }
+}
+
+TEST_CASE("a stalled guest advances only its new attack deadline using monotonic time",
+          "[netplay][latency][match-session][input-admission-trace][asymmetric-input-clock]") {
+    const bool maximumLead = GENERATE(false, true);
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->wires[2].stats = PacketTransport::Statistics{maximumLead ? 500 : 0};
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const u64 lead = maximumLead ? 30 : 3;
+    REQUIRE(guest.inputLead() == lead);
+    const MatchSession::Time start{std::chrono::seconds{1}};
+
+    // Deliver a real snapshot after its capture. At maximum lead, the delayed
+    // snapshot consumes 27 ticks of that lead, as a slow complete seed can do.
+    REQUIRE(host.advance());
+    const auto baseline = std::make_unique<CombatSnapshot>(snapshot(host));
+    REQUIRE(host.publish(*baseline));
+    for (u64 tick = 0; tick < lead - 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->pump(start);
+    REQUIRE(guest.playback().latest());
+    CHECK(guest.playback().latest()->motion.tick == 0);
+    CHECK(host.tick() == lead - 2);
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    REQUIRE(guest.sampledInputs().size() == 1);
+    const auto prior = guest.sampledInputs().front();
+    REQUIRE(prior.tick == lead);
+    room->pump(start); // neutral sample arrives two host ticks before its deadline
+
+    // No sleeps or benchmark: the host runs twelve 60 Hz ticks while the guest
+    // performs no update, exactly 200 ms of asymmetric simulation progress.
+    for (u64 tick = 0; tick < 12; ++tick) {
+        host.update(1.0 / 60);
+        REQUIRE(host.advance());
+    }
+    REQUIRE(host.resolvedInput(1));
+    CHECK(host.resolvedInput(1)->tick == prior.tick);
+    CHECK(host.tick() == lead + 10);
+    CHECK(guest.inputTick() == prior.tick + 1);
+    REQUIRE(guest.inputReady());
+    const auto resumed = start + std::chrono::milliseconds{200};
+    guest.update(1.0 / 60, resumed);
+    CHECK(guest.inputTick() == lead + 12);
+    REQUIRE(guest.inputReady());
+    SessionInputs::Frame attack;
+    attack[0].attack = attack[0].attackPressed = true;
+    REQUIRE(guest.sample(MatchInputs::commands(guest, attack), resumed));
+    REQUIRE(guest.sampledInputs().size() == 1);
+    const auto current = guest.sampledInputs().front();
+    REQUIRE(current.tick == lead + 12);
+    REQUIRE(current.held(CommandHeld::Attack));
+    REQUIRE(current.pressed(CommandPress::Attack));
+
+    // Replay retains the original neutral sample and the newly stamped attack.
+    // Filling the skipped interval cannot fabricate another attack edge.
+    RollbackInputHistory history;
+    REQUIRE(history.begin(guest.context().epoch, guest.context().grants));
+    REQUIRE(history.resolve(guest.context().epoch, baseline->motion.tick));
+    REQUIRE(history.record(std::span{&prior, 1}, 0));
+    REQUIRE(history.record(std::span{&current, 1}, 1));
+    const auto replay = history.replay(1);
+    REQUIRE_FALSE(replay.empty());
+    CHECK(replay.back().input.epoch == current.epoch);
+    CHECK(replay.back().input.grant == current.grant);
+    CHECK(replay.back().input.seat == current.seat);
+    CHECK(replay.back().input.tick == current.tick);
+    CHECK(replay.back().input.heldButtons == current.heldButtons);
+    CHECK(replay.back().input.pressedButtons == current.pressedButtons);
+    CHECK_FALSE(replay.back().predicted);
+    for (const auto& entry : replay.first(replay.size() - 1)) {
+        CHECK_FALSE(entry.input.pressed(CommandPress::Attack));
+        if (entry.input.tick == prior.tick) {
+            CHECK_FALSE(entry.predicted);
+        }
+    }
+
+    room->pump(resumed);
+    REQUIRE(host.commandTrace().size() == 1);
+    const auto& accepted = host.commandTrace().front();
+    CHECK(accepted.command.epoch == current.epoch);
+    CHECK(accepted.command.grant == current.grant);
+    CHECK(accepted.command.seat == current.seat);
+    CHECK(accepted.command.tick == current.tick);
+    CHECK(accepted.sender == guest.localPeer());
+    CHECK(accepted.receivedTick == lead + 10);
+    CHECK(accepted.admission == InputTimeline::Admission::Accepted);
+    CHECK_FALSE(accepted.executedTick);
+    CHECK(accepted.concealedTicks == 0);
+    CHECK(host.inputDiagnostics(1).arrivalMargin == 2);
+    while (host.tick() <= current.tick) {
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        CHECK((*frame)[1].pressed(CommandPress::Attack) == ((*frame)[1].tick == current.tick));
+    }
+    REQUIRE(accepted.executedTick);
+    CHECK(*accepted.executedTick == current.tick);
+    CHECK(host.droppedCommandTraces() == 0);
+}
+
+TEST_CASE("a stalled host bounds the monotonic estimate and preserves coalesced edges",
+          "[netplay][match-session][input-pacing][asymmetric-input-clock]") {
+    const bool maximumLead = GENERATE(false, true);
+    const bool minimumTime = GENERATE(false, true);
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 2, 0});
+    room->wires[2].stats = PacketTransport::Statistics{maximumLead ? 500 : 0};
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const u64 lead = maximumLead ? 30 : 3;
+    const auto start =
+        minimumTime ? MatchSession::Time::min() : MatchSession::Time{std::chrono::seconds{1}};
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    room->pump(start);
+    guest.update(1.0 / 60, MatchSession::Time::max());
+    CHECK(guest.inputTick() == MatchSession::kMaxDeadlineAdvance + lead);
+    usize samples = 0;
+    while (guest.inputReady() && samples < InputTimeline::kMaxAhead) {
+        REQUIRE(guest.sample(MatchInputs::commands(guest, {}), MatchSession::Time::max()));
+        room->pump(MatchSession::Time::max());
+        ++samples;
+    }
+    CHECK(samples == MatchSession::kInputSlack + 1);
+    REQUIRE_FALSE(guest.inputReady());
+    const u64 blockedTick = guest.inputTick();
+    CHECK(blockedTick == MatchSession::kMaxDeadlineAdvance + lead + MatchSession::kInputSlack + 1);
+    CHECK(blockedTick <= MatchSession::kMaxUnconfirmedTicks + 1);
+    CHECK(blockedTick <= RollbackInputHistory::kHistory);
+    CHECK(host.tick() == 1);
+
+    SessionInputs::Frame edge;
+    edge[0].usePotion = true;
+    edge[1].attack = edge[1].attackPressed = true;
+    for (usize repeat = 0; repeat < 20; ++repeat) {
+        guest.update(1.0 / 60, MatchSession::Time::max());
+        REQUIRE(guest.sample(MatchInputs::commands(guest, edge), MatchSession::Time::max()));
+        CHECK(guest.sampledInputs().empty());
+        CHECK(guest.inputTick() == blockedTick);
+    }
+
+    // Only actual host progress releases the bound; the queued tap is emitted
+    // once, with the current controls, not once for every blocked local update.
+    while (host.tick() <= blockedTick) {
+        REQUIRE(host.advance());
+    }
+    REQUIRE(host.publish(snapshot(host)));
+    room->pump(MatchSession::Time::max());
+    REQUIRE(guest.inputReady());
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), MatchSession::Time::max()));
+    REQUIRE(guest.sampledInputs().size() == 2);
+    const u64 releasedTick = guest.sampledInputs().front().tick;
+    CHECK(guest.sampledInputs()[0].pressed(CommandPress::UsePotion));
+    CHECK(guest.sampledInputs()[1].pressed(CommandPress::Attack));
+    CHECK(guest.sampledInputs()[1].held(CommandHeld::Attack));
+    room->pump(MatchSession::Time::max());
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), MatchSession::Time::max()));
+    room->pump(MatchSession::Time::max());
+    usize potions = 0;
+    usize attacks = 0;
+    while (host.tick() <= releasedTick + InputTimeline::kHoldTicks + 2) {
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        potions += (*frame)[1].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        attacks += (*frame)[2].pressed(CommandPress::Attack) ? 1U : 0U;
+        if ((*frame)[2].tick > releasedTick) {
+            CHECK_FALSE((*frame)[2].held(CommandHeld::Attack));
+        }
+    }
+    CHECK(potions == 1);
+    CHECK(attacks == 1);
+}
+
+TEST_CASE("deadline anchors ignore stale peers and backwards time and reset at a new epoch",
+          "[netplay][match-session][input-pacing][asymmetric-input-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    const auto packets = CombatReplica::packets(*state);
+    REQUIRE(packets);
+    REQUIRE(host.publish(*state));
+    room->pump(start);
+    guest.update(1.0 / 60, start + std::chrono::milliseconds{100});
+    CHECK(guest.inputTick() == 9);
+    guest.update(1.0 / 60, MatchSession::Time::min());
+    CHECK(guest.inputTick() == 9);
+    auto revoked = MatchInputs::commands(guest, {});
+    REQUIRE(revoked.size() == 1);
+    ++revoked.front().grant;
+    CHECK_FALSE(guest.sample(revoked, MatchSession::Time::max()));
+    for (const auto& bytes : *packets) {
+        CHECK(guest.receive(1234, bytes, MatchSession::Time::max()) == Admission::WrongPeer);
+        const auto admission = guest.receive(99, bytes, MatchSession::Time::max());
+        CHECK((admission == Admission::Accepted || admission == Admission::Stale));
+    }
+    // Duplicate/stale snapshots cannot reset the clock or consume the time jump.
+    guest.update(1.0 / 60, start + std::chrono::milliseconds{200});
+    CHECK(guest.inputTick() == 15);
+    guest.update(1.0 / 60, MatchSession::Time::max());
+    CHECK(guest.inputTick() == MatchSession::kMaxDeadlineAdvance + guest.inputLead());
+
+    SessionInputs::Frame edge;
+    edge[0].usePotion = true;
+    for (usize step = 0; step < InputTimeline::kMaxAhead && guest.inputReady(); ++step) {
+        REQUIRE(guest.sample(MatchInputs::commands(guest, {}), MatchSession::Time::max()));
+    }
+    REQUIRE_FALSE(guest.inputReady());
+    REQUIRE(guest.sample(MatchInputs::commands(guest, edge), MatchSession::Time::max()));
+    CHECK(guest.sampledInputs().empty());
+    const auto oldEpoch = guest.context().epoch;
+    REQUIRE(host.requestPause());
+    room->pump(MatchSession::Time::max());
+    room->ready(MatchTransition::Resume);
+    REQUIRE(guest.context().epoch != oldEpoch);
+    CHECK(guest.inputTick() == guest.context().inputLead);
+    REQUIRE(guest.inputReady());
+    for (const auto& bytes : *packets) {
+        CHECK(guest.receive(99, bytes, MatchSession::Time::max()) == Admission::Stale);
+    }
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    room->pump(start);
+    guest.update(1.0 / 60, start + std::chrono::milliseconds{200});
+    CHECK(guest.inputTick() == 15);
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start + std::chrono::milliseconds{200}));
+    REQUIRE(guest.sampledInputs().size() == 1);
+    CHECK_FALSE(guest.sampledInputs().front().pressed(CommandPress::UsePotion));
+    CHECK(guest.sampledInputs().front().epoch == guest.context().epoch);
+    CHECK(guest.sampledInputs().front().grant == guest.context().grants[1]);
+}
+
+TEST_CASE("congested retries keep their original input identity when the clock advances",
+          "[netplay][match-session][input-pacing][asymmetric-input-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    auto& wire = room->wires[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(host.advance());
+    REQUIRE(host.publish(snapshot(host)));
+    room->pump(start);
+    SessionInputs::Frame attack;
+    attack[0].attack = attack[0].attackPressed = true;
+    REQUIRE(guest.sample(MatchInputs::commands(guest, attack), start));
+    const auto original = guest.sampledInputs().front();
+    const auto originalPacket = InputPacket::encode(std::span{&original, 1});
+    REQUIRE(originalPacket);
+    wire.result = PacketTransport::SendResult::Congested;
+    guest.flush(wire);
+    CHECK(wire.sent.empty());
+    for (usize tick = 0; tick < 12; ++tick) {
+        REQUIRE(host.advance());
+    }
+    const auto resumed = start + std::chrono::milliseconds{200};
+    guest.update(1.0 / 60, resumed);
+    CHECK(guest.inputTick() == 15);
+    CHECK(guest.sampledInputs().front().tick == original.tick);
+    wire.result = PacketTransport::SendResult::Sent;
+    guest.flush(wire);
+    REQUIRE(wire.sent.size() == 1);
+    CHECK(wire.sent.front().bytes == *originalPacket);
+    REQUIRE(host.receive(1, wire.sent.front().bytes, resumed) == Admission::Accepted);
+    wire.sent.clear();
+    guest.flush(wire);
+    CHECK(wire.sent.empty());
+    REQUIRE(host.commandTrace().size() == 1);
+    CHECK(host.commandTrace().front().command.tick == original.tick);
+    CHECK(host.commandTrace().front().admission == InputTimeline::Admission::TooLate);
+    CHECK_FALSE(host.commandTrace().front().executedTick);
+
+    // A new neutral sample must not relabel/reissue the old attack as a new tap.
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), resumed));
+    REQUIRE(guest.sampledInputs().size() == 1);
+    const auto current = guest.sampledInputs().front();
+    CHECK(current.tick == 15);
+    CHECK_FALSE(current.held(CommandHeld::Attack));
+    CHECK_FALSE(current.pressed(CommandPress::Attack));
+    room->pump(resumed);
+    while (host.tick() <= current.tick) {
+        const auto frame = host.advance();
+        REQUIRE(frame);
+        CHECK_FALSE((*frame)[1].held(CommandHeld::Attack));
+        CHECK_FALSE((*frame)[1].pressed(CommandPress::Attack));
+    }
+    CHECK(host.commandTrace().size() == 1);
+}
+
+TEST_CASE("exact admission feedback ages the host clock instead of inflating safety lead",
+          "[netplay][latency][match-session][asymmetric-input-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    for (usize tick = 0; tick < 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->pump(start);
+    CHECK(host.inputDiagnostics(1).arrivalMargin == 0);
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    const auto& feedback = host.inputDiagnostics(1);
+    state->players[1]->movement.receivedInput = feedback.received.value_or(0);
+    state->players[1]->movement.arrivalMargin = feedback.arrivalMargin;
+    REQUIRE(host.publish(*state));
+    room->pump(start + std::chrono::milliseconds{200});
+    CHECK(guest.inputLead() == guest.context().inputLead);
+    CHECK(guest.inputTick() == 3 + 12 + guest.inputLead());
+}
+
+TEST_CASE("deadline extrapolation cannot wrap an exhausted authoritative tick counter",
+          "[netplay][match-session][asymmetric-input-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    state->motion.tick = std::numeric_limits<u64>::max() - 5;
+    const auto packets = CombatReplica::packets(*state);
+    REQUIRE(packets);
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    for (const auto& packet : *packets) {
+        REQUIRE(guest.receive(99, packet, start) == Admission::Accepted);
+    }
+    CHECK(guest.inputTick() == std::numeric_limits<u64>::max() - 2);
+    guest.update(1.0 / 60, start + std::chrono::milliseconds{200});
+    CHECK(guest.inputTick() == std::numeric_limits<u64>::max());
+    CHECK_FALSE(guest.inputReady());
+    CHECK_FALSE(guest.sample(MatchInputs::commands(guest, {}), start));
+    guest.update(1.0 / 60, MatchSession::Time::min());
+    CHECK(guest.inputTick() == std::numeric_limits<u64>::max());
+}
+
+TEST_CASE("admission calibration starts at successful transmission not a congested sample",
+          "[netplay][match-session][admission-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    room->wires[2].result = PacketTransport::SendResult::Congested;
+    guest.flush(room->wires[2], start + std::chrono::milliseconds{500});
+    CHECK(room->wires[2].sent.empty());
+    for (usize tick = 0; tick < 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->wires[2].result = PacketTransport::SendResult::Sent;
+    room->pump(start + std::chrono::seconds{1});
+    REQUIRE(host.inputDiagnostics(1).received == 3);
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    state->players[1]->movement.receivedInput = 3;
+    state->players[1]->movement.arrivalMargin = host.inputDiagnostics(1).arrivalMargin;
+    REQUIRE(host.publish(*state));
+    room->pump(start + std::chrono::milliseconds{1200});
+    CHECK(guest.inputLead() == 3);
+    CHECK(guest.inputTick() == 18); // admission 3 + 200 ms + safety 3
+    const u64 frozen = state->motion.tick + MatchSession::kMaxDeadlineAdvance + 3;
+    guest.update(0, MatchSession::Time::max());
+    CHECK(guest.inputTick() == frozen);
+    guest.update(0, MatchSession::Time::min());
+    CHECK(guest.inputTick() == frozen);
+}
+
+TEST_CASE("redundant input transmission cannot refresh the first send used for clock calibration",
+          "[netplay][match-session][admission-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    for (usize tick = 0; tick < 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->pump(start + std::chrono::milliseconds{100});
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    state->players[1]->movement.receivedInput = 3;
+    state->players[1]->movement.arrivalMargin = host.inputDiagnostics(1).arrivalMargin;
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start + std::chrono::milliseconds{300}));
+    room->pump(start + std::chrono::milliseconds{300});
+    REQUIRE(host.publish(*state));
+    room->pump(start + std::chrono::milliseconds{400});
+    CHECK(guest.inputLead() == 3);
+    CHECK(guest.inputTick() == 24); // original successful send was 300 ms ago
+}
+
+TEST_CASE("unknown unsent foreign and saturated feedback cannot calibrate the guest clock",
+          "[netplay][match-session][admission-clock]") {
+    const s32 invalid = GENERATE(0, 1, 2, 3);
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->wires[2].stats = PacketTransport::Statistics{600};
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    REQUIRE(guest.inputLead() == 30);
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    if (invalid != 1) {
+        room->pump(start);
+    }
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    auto& feedback = state->players[1]->movement;
+    feedback.receivedInput = invalid == 0 ? 29 : 30;
+    feedback.arrivalMargin = invalid == 2 ? -static_cast<s32>(InputTimeline::kMaxAhead) : 30;
+    if (invalid == 3) {
+        ++state->motion.players[1]->grant;
+    }
+    const auto packets = CombatReplica::packets(*state);
+    REQUIRE(packets);
+    for (const auto& packet : *packets) {
+        REQUIRE(guest.receive(99, packet, start + std::chrono::milliseconds{200}) ==
+                Admission::Accepted);
+    }
+    CHECK(guest.inputLead() == 30);
+    if (invalid == 3) {
+        // Wrong-seat feedback must not consume the watermark: a subsequent
+        // authenticated checkpoint can report the same received command.
+        ++state->motion.tick;
+        --state->motion.players[1]->grant;
+        const auto corrected = CombatReplica::packets(*state);
+        REQUIRE(corrected);
+        for (const auto& packet : *corrected) {
+            REQUIRE(guest.receive(99, packet, start + std::chrono::milliseconds{300}) ==
+                    Admission::Accepted);
+        }
+        CHECK(guest.inputLead() == guest.context().inputLead);
+    }
+}
+
+TEST_CASE(
+    "calibrated two-seat safety lead uses the worst fresh real admission in either seat order",
+    "[netplay][match-session][admission-clock]") {
+    const usize lateSeat = GENERATE(usize{1}, usize{2});
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 2, 0});
+    room->wires[2].stats = PacketTransport::Statistics{600};
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.inputLead() == 30);
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    for (usize tick = 0; tick < 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->pump(start);
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    for (usize seat : {usize{1}, usize{2}}) {
+        state->players[seat]->movement.receivedInput = 30;
+        state->players[seat]->movement.arrivalMargin = host.inputDiagnostics(seat).arrivalMargin;
+    }
+    REQUIRE(host.publish(*state));
+    room->pump(start + std::chrono::milliseconds{100});
+    REQUIRE(guest.inputLead() == 3);
+
+    const auto sentAt = start + std::chrono::milliseconds{500};
+    guest.update(0, sentAt);
+    const auto nextTick = guest.inputTick();
+    REQUIRE(nextTick > 31);
+    const auto inputs = MatchInputs::commands(guest, {});
+    REQUIRE(guest.sample(inputs, sentAt));
+    guest.flush(room->wires[2], sentAt);
+    room->wires[2].sent.clear();
+    while (host.tick() < nextTick) {
+        REQUIRE(host.advance());
+    }
+    const auto admit = [&](usize seat) {
+        const auto found = std::ranges::find(inputs, seat, &InputCommand::seat);
+        REQUIRE(found != inputs.end());
+        const auto bytes = InputPacket::encode(std::span{&*found, 1});
+        REQUIRE(bytes);
+        REQUIRE(host.receive(1, *bytes, sentAt) == Admission::Accepted);
+    };
+    admit(lateSeat == 1 ? 2 : 1);
+    for (usize tick = 0; tick < 6; ++tick) {
+        REQUIRE(host.advance());
+    }
+    admit(lateSeat);
+    REQUIRE(host.inputDiagnostics(lateSeat).arrivalMargin == -6);
+    REQUIRE(host.advance());
+    state = std::make_unique<CombatSnapshot>(snapshot(host));
+    for (usize seat : {usize{1}, usize{2}}) {
+        state->players[seat]->movement.receivedInput = nextTick;
+        state->players[seat]->movement.arrivalMargin = host.inputDiagnostics(seat).arrivalMargin;
+    }
+    REQUIRE(host.publish(*state));
+    room->pump(sentAt + std::chrono::milliseconds{100});
+    CHECK(guest.inputLead() == 11);
+}
+
+TEST_CASE("transport statistics tolerate extreme and backwards injected clocks",
+          "[netplay][match-session][admission-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& guest = room->sessions[2];
+    auto& wire = room->wires[2];
+    const auto before = wire.statisticsQueries;
+    guest.flush(wire, MatchSession::Time::min());
+    CHECK(wire.statisticsQueries == before);
+    guest.flush(wire, MatchSession::Time::max());
+    CHECK(wire.statisticsQueries == before + 1);
+    guest.flush(wire, MatchSession::Time::min());
+    CHECK(wire.statisticsQueries == before + 1);
+    guest.flush(wire, MatchSession::Time::max());
+    CHECK(wire.statisticsQueries == before + 1);
+}
+
+TEST_CASE("an older admission anchor follows renewed authority without widening the stalled bound",
+          "[netplay][match-session][admission-clock]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    REQUIRE(guest.sample(MatchInputs::commands(guest, {}), start));
+    for (usize tick = 0; tick < 3; ++tick) {
+        REQUIRE(host.advance());
+    }
+    room->pump(start);
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    state->players[1]->movement.receivedInput = 3;
+    state->players[1]->movement.arrivalMargin = 0;
+    const auto receive = [&](MatchSession::Time now) {
+        const auto packets = CombatReplica::packets(*state);
+        REQUIRE(packets);
+        for (const auto& packet : *packets) {
+            REQUIRE(guest.receive(99, packet, now) == Admission::Accepted);
+        }
+    };
+    receive(start + std::chrono::milliseconds{200});
+    REQUIRE(guest.inputTick() == 18);
+    // The original command is still the latest feedback. Newer host snapshots
+    // renew the bounded clock without pretending that command was sent again.
+    state->motion.tick = 45;
+    receive(start + std::chrono::seconds{1});
+    CHECK(guest.inputTick() == 66); // admission3 + elapsed60 + safety3
+    guest.update(0, start + std::chrono::milliseconds{1100});
+    CHECK(guest.inputTick() == 72);
+    guest.update(0, MatchSession::Time::max());
+    CHECK(guest.inputTick() == 78); // newest authority45 + cap30 + safety3
+}
+
+TEST_CASE("committed action receipts preserve native clocks before replay and render delays",
+          "[netplay][match-session][action-receipt]") {
+    auto room = std::make_unique<Room>();
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    for (usize tick = 0; tick < 5; ++tick) {
+        REQUIRE(host.advance());
+    }
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    auto& player = *state->players[1];
+    player.animation = {static_cast<u32>(PlayerAnimator::Action::Ready), 0, 3, 0, 1};
+    player.rollback.emplace();
+    player.rollback->action = PlayerAnimator::Action::Quick1;
+    player.rollback->animation.generation = 7;
+    player.rollback->animation.playing = true;
+    player.rollback->released = true;
+    player.rollbackInput = InputCommand{state->motion.epoch, 3, host.context().grants[1], 1};
+    player.movement.enabled = player.movement.current = true;
+    player.movement.receivedInput = 6;
+    player.movement.lateInputs = 2;
+    REQUIRE(state->valid());
+    const auto packets = CombatReplica::packets(*state, SnapshotBlock::Compression::None);
+    REQUIRE(packets);
+    REQUIRE(packets->size() > 1);
+    const MatchSession::Time pressed{std::chrono::seconds{1}};
+    const auto received = pressed + std::chrono::milliseconds{900};
+    for (usize index = 0; index + 1 < packets->size(); ++index) {
+        REQUIRE(guest.receive(99, (*packets)[index], received) == Admission::Accepted);
+        CHECK(guest.actionReceipts().empty());
+    }
+    REQUIRE(guest.receive(99, packets->back(), received) == Admission::Accepted);
+    REQUIRE(guest.actionReceipts().size() == 4);
+    const auto receipt = guest.actionReceipts()[1];
+    CHECK(receipt.epoch == state->motion.epoch);
+    CHECK(receipt.tick == state->motion.tick);
+    CHECK(receipt.seat == 1);
+    CHECK(receipt.grant == state->motion.players[1]->grant);
+    CHECK(receipt.continuity == state->motion.players[1]->continuity);
+    CHECK(receipt.present);
+    CHECK(receipt.life == player.life);
+    CHECK_FALSE(receipt.portalPhase);
+    CHECK(receipt.rollback);
+    CHECK(receipt.action == static_cast<u32>(player.rollback->action));
+    CHECK(receipt.generation == player.rollback->animation.generation);
+    CHECK(receipt.action != player.animation.action);
+    CHECK(receipt.generation != player.animation.generation);
+    CHECK(receipt.actualInput == player.rollbackInput->tick);
+    CHECK(receipt.receivedInput == player.movement.receivedInput);
+    CHECK(receipt.lateInputs == player.movement.lateInputs);
+    CHECK(receipt.reaction == player.reaction);
+    CHECK(receipt.enabled);
+    CHECK(receipt.current);
+    CHECK_FALSE(receipt.ranged);
+    CHECK_FALSE(receipt.weapon);
+    CHECK_FALSE(receipt.melee);
+    CHECK_FALSE(receipt.turbo);
+    CHECK(receipt.released);
+    CHECK(receipt.receivedAt == received);
+
+    // A delayed consumer can still distinguish a timely authority receipt from
+    // its first rendered frame after the unchanged one-second response deadline.
+    const auto rendered = pressed + std::chrono::milliseconds{1150};
+    guest.update(1.0 / 60, rendered);
+    guest.latency().presented(*state, rendered);
+    CHECK(guest.actionReceipts()[1] == receipt);
+    CHECK(receipt.receivedAt - pressed < std::chrono::seconds{1});
+    CHECK(rendered - pressed > std::chrono::seconds{1});
+    CHECK(guest.droppedActionReceipts() == 0);
+
+    // More than one committed state in a poll cannot erase an intervening action.
+    REQUIRE(host.advance());
+    state = std::make_unique<CombatSnapshot>(snapshot(host));
+    const auto neutral = CombatReplica::packets(*state);
+    REQUIRE(neutral);
+    for (const auto& packet : *neutral) {
+        REQUIRE(guest.receive(99, packet, rendered) == Admission::Accepted);
+    }
+    REQUIRE(guest.actionReceipts().size() == 8);
+    CHECK(guest.actionReceipts()[1] == receipt);
+    CHECK(guest.actionReceipts()[5].receivedAt == rendered);
+    CHECK_FALSE(guest.actionReceipts()[5].rollback);
+    CHECK(guest.actionReceipts()[5].action == state->players[1]->animation.action);
+    CHECK(guest.actionReceipts()[5].generation == state->players[1]->animation.generation);
+}
+
+TEST_CASE("action receipt history excludes unauthenticated incomplete and stale checkpoints",
+          "[netplay][match-session][action-receipt]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    REQUIRE(host.advance());
+    auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+    const auto packets = CombatReplica::packets(*state);
+    REQUIRE(packets);
+    const MatchSession::Time now{std::chrono::seconds{1}};
+    for (const auto& packet : *packets) {
+        CHECK(guest.receive(98, packet, now) == Admission::WrongPeer);
+    }
+    CHECK(guest.actionReceipts().empty());
+    for (const auto& packet : *packets) {
+        REQUIRE(guest.receive(99, packet, now) == Admission::Accepted);
+    }
+    const auto expected = guest.actionReceipts();
+    REQUIRE(expected.size() == 2);
+    for (const auto& packet : *packets) {
+        const auto result = guest.receive(99, packet, now + std::chrono::seconds{1});
+        CHECK((result == Admission::Accepted || result == Admission::Stale));
+    }
+    auto corrupt = packets->front();
+    corrupt[0] ^= 0xff;
+    CHECK(guest.receive(99, corrupt, now) == Admission::Invalid);
+    CHECK(guest.actionReceipts() == expected);
+
+    ++state->motion.epoch;
+    const auto foreign = CombatReplica::packets(*state);
+    REQUIRE(foreign);
+    for (const auto& packet : *foreign) {
+        CHECK(guest.receive(99, packet, now) == Admission::Stale);
+    }
+    CHECK(guest.actionReceipts() == expected);
+    CHECK(guest.droppedActionReceipts() == 0);
+}
+
+TEST_CASE("action receipts retain interruptions and bounded history across session epochs",
+          "[netplay][match-session][action-receipt]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0});
+    room->ready();
+    auto& host = room->sessions[1];
+    auto& guest = room->sessions[2];
+    const MatchSession::Time start{std::chrono::seconds{1}};
+    for (usize index = 0; index <= MatchSession::kActionReceipts / 2; ++index) {
+        REQUIRE(host.advance());
+        auto state = std::make_unique<CombatSnapshot>(snapshot(host));
+        if (index == 0) {
+            state->players[1]->portalPhase = 0.0f;
+        } else if (index == 1) {
+            state->players[1]->life = ReplicaPlayerLife::Dying;
+        } else if (index == 2) {
+            state->players[1].reset();
+            state->motion.players[1].reset();
+        }
+        const auto packets = CombatReplica::packets(*state);
+        REQUIRE(packets);
+        const auto now = start + std::chrono::milliseconds{static_cast<s64>(index * 20)};
+        for (const auto& packet : *packets) {
+            REQUIRE(guest.receive(99, packet, now) == Admission::Accepted);
+        }
+        const auto& receipt = guest.actionReceipts().back();
+        CHECK(receipt.seat == 1);
+        CHECK(receipt.tick == index);
+        CHECK(receipt.grant == host.context().grants[1]);
+        CHECK(receipt.present == (index != 2));
+        CHECK(receipt.portalPhase == (index == 0));
+        if (index == 1) {
+            CHECK(receipt.life == ReplicaPlayerLife::Dying);
+        }
+    }
+    CHECK(guest.actionReceipts().size() == MatchSession::kActionReceipts);
+    CHECK(guest.droppedActionReceipts() == 2);
+    CHECK(guest.actionReceipts().front().tick == 1);
+    REQUIRE(guest.requestPause());
+    room->pump();
+    REQUIRE(host.phase() == Phase::Paused);
+    REQUIRE(host.prepare(host.context().scene, MatchTransition::Resume));
+    room->pump();
+    CHECK(guest.actionReceipts().empty());
+    CHECK(guest.droppedActionReceipts() == 0);
+    guest.clear();
+    CHECK(guest.actionReceipts().empty());
+    CHECK(guest.droppedActionReceipts() == 0);
 }
 
 } // namespace

@@ -117,7 +117,10 @@ bool supports(const OrdinaryCombatCheckpoint::State& state, const Present& prese
 
 bool stageLinks(const OrdinaryCombatCheckpoint::State& state) {
     if (!state.stage) {
-        return true;
+        // Loot references address placed pickup instances, not item-info rows.
+        // Without the joint world owner there is no catalog to authenticate or
+        // restore, even for a named bag which will create its pickup on landing.
+        return state.adapter.bags.empty() && state.adapter.pickupReferences(0);
     }
     const auto& stage = *state.stage;
     if ((stage.camera && stage.camera->level != stage.world.level) ||
@@ -125,6 +128,9 @@ bool stageLinks(const OrdinaryCombatCheckpoint::State& state) {
         return false;
     }
     const auto pickup = [&](usize index) { return index < stage.world.pickups.items.size(); };
+    if (!state.adapter.pickupReferences(stage.world.pickups.items.size())) {
+        return false;
+    }
     if (stage.portals) {
         const auto partyIndex = [&](s32 index) {
             return index >= 0 && static_cast<usize>(index) < state.combat.players.size();
@@ -364,9 +370,19 @@ bool OrdinaryCombatCheckpoint::stageBound() const {
     return m_world && bindingsValid();
 }
 std::optional<OrdinaryCombatCheckpoint::State>
-OrdinaryCombatCheckpoint::checkpoint(CaptureTimings* timings) const {
+OrdinaryCombatCheckpoint::checkpoint(CaptureTimings* timings,
+                                     LevelWorldCheckpoint::CaptureTimings* worldTimings) const {
+    return capture(timings, worldTimings, nullptr);
+}
+std::optional<OrdinaryCombatCheckpoint::State>
+OrdinaryCombatCheckpoint::capture(CaptureTimings* timings,
+                                  LevelWorldCheckpoint::CaptureTimings* worldTimings,
+                                  LevelWorldCheckpoint::State* reusableWorld) const {
     if (timings) {
         *timings = {};
+    }
+    if (worldTimings) {
+        *worldTimings = {};
     }
     const auto measured = [&](CaptureOwner owner, auto&& operation) {
         if (!timings) {
@@ -395,7 +411,10 @@ OrdinaryCombatCheckpoint::checkpoint(CaptureTimings* timings) const {
     }
     State result{std::move(*combat), std::move(*pools), std::move(*adapter)};
     if (m_world) {
-        auto world = measured(CaptureOwner::World, [&] { return m_world->checkpoint(); });
+        auto world = measured(CaptureOwner::World, [&] {
+            return reusableWorld ? m_world->checkpoint(std::move(*reusableWorld), worldTimings)
+                                 : m_world->checkpoint(worldTimings);
+        });
         auto fixtures = measured(CaptureOwner::Fixtures, [&] { return m_fixtures->checkpoint(); });
         if (!world || !fixtures) {
             return std::nullopt;
@@ -434,16 +453,15 @@ OrdinaryCombatCheckpoint::checkpoint(CaptureTimings* timings) const {
                ? std::optional{std::move(result)}
                : std::nullopt;
 }
-std::optional<OrdinaryCombatCheckpoint::Prepared>
-OrdinaryCombatCheckpoint::prepareRestore(const State& state, RestoreIssue* issue) const {
+bool OrdinaryCombatCheckpoint::targetValid(const State& state, RestoreIssue* issue) const {
     if (issue) {
         *issue = RestoreIssue::None;
     }
-    const auto reject = [&](RestoreIssue why) -> std::optional<Prepared> {
+    const auto reject = [&](RestoreIssue why) {
         if (issue) {
             *issue = why;
         }
-        return std::nullopt;
+        return false;
     };
     if (!bindingsValid() || state.stage.has_value() != (m_world != nullptr) ||
         (state.stage && state.stage->camera.has_value() != (m_camera != nullptr)) ||
@@ -464,6 +482,19 @@ OrdinaryCombatCheckpoint::prepareRestore(const State& state, RestoreIssue* issue
             return reject(RestoreIssue::Supports);
         }
     }
+    return true;
+}
+std::optional<OrdinaryCombatCheckpoint::Prepared>
+OrdinaryCombatCheckpoint::prepareRestore(const State& state, RestoreIssue* issue) const {
+    if (!targetValid(state, issue)) {
+        return std::nullopt;
+    }
+    const auto reject = [&](RestoreIssue why) -> std::optional<Prepared> {
+        if (issue) {
+            *issue = why;
+        }
+        return std::nullopt;
+    };
     auto data = std::make_unique<Prepared::Data>();
     data->owner = this;
     data->lifetime = m_lifetime;
@@ -573,14 +604,19 @@ bool OrdinaryCombatCheckpoint::restore(const State& state, RestoreIssue* issue) 
 
 std::optional<OrdinaryCombatCheckpoint::Rewind> OrdinaryCombatCheckpoint::prepareRewind() const {
     const auto state = checkpoint();
-    if (!state) {
+    return state ? prepareRewind(*state) : std::nullopt;
+}
+std::optional<OrdinaryCombatCheckpoint::Rewind>
+OrdinaryCombatCheckpoint::prepareRewind(const State& target) const {
+    if (!targetValid(target)) {
         return std::nullopt;
     }
+    const auto* state = &target;
     auto data = std::make_unique<Rewind::Data>();
     data->owner = this;
     data->lifetime = m_lifetime;
     data->generation = m_generation;
-    data->combat = m_combat.prepareRewind();
+    data->combat = m_combat.prepareRewind(state->combat);
     // These pools already fence resource/restore generations independently of
     // normal gameplay. Placements additionally change their stale-command
     // revision on observe/activate, so they need the distinct rewind token.
@@ -588,7 +624,9 @@ std::optional<OrdinaryCombatCheckpoint::Rewind> OrdinaryCombatCheckpoint::prepar
     data->enemies = m_opponents.m_enemies.prepareRestore(state->opponents.enemies);
     data->missiles =
         m_opponents.m_enemyMissiles.prepareRestore(state->opponents.missiles, m_missiles);
-    data->placements = m_opponents.m_placements.prepareRewind();
+    data->placements = state->opponents.placements
+                           ? m_opponents.m_placements.prepareRewind(*state->opponents.placements)
+                           : std::nullopt;
     data->adapter = m_adapter.prepareRestore(state->adapter, state->combat.effects);
     if (state->stage) {
         data->world = m_world->prepareRestore(state->stage->world);

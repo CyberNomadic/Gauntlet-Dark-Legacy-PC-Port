@@ -234,10 +234,10 @@ bool PlacedEnemies::restore(const Checkpoint& state) {
 
 std::optional<PlacedEnemies::Rewind> PlacedEnemies::prepareRewind() const {
     const auto state = checkpoint();
-    if (!state) {
-        return std::nullopt;
-    }
-    auto prepared = prepareRestore(*state);
+    return state ? prepareRewind(*state) : std::nullopt;
+}
+std::optional<PlacedEnemies::Rewind> PlacedEnemies::prepareRewind(const Checkpoint& target) const {
+    auto prepared = prepareRestore(target);
     return prepared ? std::optional{Rewind{std::move(*prepared)}} : std::nullopt;
 }
 bool PlacedEnemies::canRewind(const Rewind& rewind) const {

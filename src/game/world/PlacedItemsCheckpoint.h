@@ -84,6 +84,11 @@ public:
         bool layout = false, collision = false;
         bool valid() const;
         bool operator==(const State&) const;
+
+    private:
+        friend class PlacedItemsCheckpoint;
+        bool validIdentity() const;
+        bool validMutable() const;
     };
     class Prepared {
     public:
@@ -110,6 +115,11 @@ public:
     bool bindResources(RenderDevice& device);
     void clearResources();
     std::optional<State> checkpoint() const;
+    /** Consumes value storage, not restore authority. The immutable identity
+     * must exactly match the current bound catalog; all mutable values are
+     * discarded, freshly captured and validated. Failure may consume storage
+     * but never changes the native owner. Identical independent catalogs work. */
+    std::optional<State> checkpoint(State&& reusable) const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;
     /** Allocation/callback-free commit. Ordinary owner mutations are undoable;
@@ -119,9 +129,38 @@ public:
     bool commitRestore(Prepared&& prepared);
     bool restore(const State& state);
 
+    /** Native pickup births using the untouched load-time figures. These are
+     * synchronous CPU-only mutations, not deserialized item rows. The result is
+     * the actual appended index; refusal (including missing art/capacity) leaves
+     * the owner unchanged. Collision must be null or this owner's bound world.
+     * Amount overrides one pickup's value, never the number of spawned items.
+     * Existing prepared undo remains valid across successful births/releases. */
+    std::optional<usize> place(std::string_view name, const Vec3& position,
+                               const WorldCollision* collision);
+    std::optional<usize> placeRecord(s32 record, const Vec3& position,
+                                     const WorldCollision* collision, s32 amount = 0);
+    std::optional<usize> throwItem(std::string_view name, const Vec3& position,
+                                   const Vec3& velocity, const WorldCollision* collision,
+                                   f32 noGrabSeconds, std::optional<f32> strength = std::nullopt);
+    /** False is the native missing/not-carried no-op; absence is an unsupported
+     * request or binding. This releases pickups only, never a Death actor. */
+    std::optional<bool> release(usize index, const Vec3& position, const Vec3& velocity,
+                                const WorldCollision* collision, f32 noGrabSeconds);
+
+    /** Same ordered native offers and partial amounts, without creating bursts.
+     * A refused judge/burst returns absence; earlier mutations require the
+     * caller's enclosing rewind. No resource loading or presentation callbacks. */
+    std::optional<std::vector<Pickup>> collect(std::span<const Collector> collectors,
+                                               const StagedPickupJudge& judge);
+
 private:
     struct Catalog;
     bool ready() const;
+    std::optional<State> capture(State state) const;
+    std::optional<PlacedItems::Item> birth(s32 record, const Vec3& position,
+                                           const WorldCollision* collision, s32 amount) const;
+    bool placementValid(const PlacedItems::Item& item) const;
+    std::optional<usize> append(PlacedItems::Item item);
     PlacedItems& m_owner;
     std::shared_ptr<const Catalog> m_catalog;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);

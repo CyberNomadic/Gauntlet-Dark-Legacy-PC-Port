@@ -292,6 +292,66 @@ TEST_CASE("tick-major callbacks replay actual native players and enemies once pe
     CHECK_FALSE(fixture.coordinator.active());
 }
 
+TEST_CASE("whole-party replay withdraws optional opponent preparation without losing inputs",
+          "[rollback][online-opponent-replay][assets][native-replay-bookkeeping]") {
+    const bool attackDuringNative = GENERATE(false, true);
+    CoupledScene fixture;
+    const auto first = fixture.command(fixture.authority.motion.tick + 1);
+    fixture.movement.update(&fixture.authority, std::span{&first, 1},
+                            fixture.coordinator.callbacks(&fixture.authority));
+    REQUIRE(fixture.coordinator.active());
+    REQUIRE(fixture.opponents.active());
+    REQUIRE(fixture.opponents.tick() == first.tick);
+    REQUIRE(fixture.movement.replayed(1));
+    const auto samplesBefore = fixture.movement.metrics().samples;
+    const auto uploads = fixture.device.texturesCreated;
+    const auto updates = fixture.device.textureUpdates;
+
+    auto next = fixture.command(first.tick + 1);
+    if (attackDuringNative) {
+        next.heldButtons = static_cast<u32>(CommandHeld::Attack);
+        next.pressedButtons = static_cast<u32>(CommandPress::Attack);
+    }
+    REQUIRE(next.valid());
+    // This is OnlinePlay's successful whole-party branch. Null authority skips
+    // optional pool preparation while still observing every stamped input and
+    // withdrawing the old coupled picture, including its speculative owners.
+    const auto skipped = fixture.coordinator.callbacks(nullptr, std::span{&next, 1});
+    CHECK_FALSE(skipped.begin);
+    CHECK_FALSE(skipped.beforeTick);
+    CHECK_FALSE(skipped.afterTick);
+    CHECK_FALSE(skipped.end);
+    CHECK_FALSE(fixture.coordinator.active());
+    CHECK_FALSE(fixture.opponents.active());
+    CHECK(fixture.opponents.checkpoint() == fixture.authority.opponents);
+    fixture.movement.update(&fixture.authority, std::span{&next, 1}, skipped, false);
+    CHECK(fixture.movement.metrics().samples == samplesBefore + 1);
+    CHECK(fixture.movement.metrics().pending > 0);
+    CHECK_FALSE(fixture.movement.replayed(1));
+
+    const auto repeated = fixture.coordinator.callbacks(nullptr);
+    CHECK_FALSE(repeated.begin);
+    CHECK_FALSE(fixture.coordinator.active());
+    CHECK(fixture.opponents.checkpoint() == fixture.authority.opponents);
+    const auto fallback = fixture.coordinator.callbacks(&fixture.authority);
+    if (attackDuringNative) {
+        // The attack was observed during the native-only interval. The quiet
+        // opponent lane must not restart before authority resolves that edge.
+        CHECK_FALSE(fallback.begin);
+        CHECK_FALSE(fixture.coordinator.active());
+    } else {
+        REQUIRE(fallback.begin);
+        fixture.movement.update(&fixture.authority, {}, fallback);
+        REQUIRE(fixture.movement.replayed(1));
+        CHECK(fixture.movement.replayed(1)->endTick == next.tick);
+        CHECK(fixture.movement.metrics().samples == samplesBefore + 1);
+        CHECK(fixture.coordinator.active());
+        CHECK(fixture.opponents.tick() == next.tick);
+    }
+    CHECK(fixture.device.texturesCreated == uploads);
+    CHECK(fixture.device.textureUpdates == updates);
+}
+
 TEST_CASE("coupled continuation refuses outside gameplay and withdraws both replay outputs",
           "[rollback][online-opponent-replay][assets]") {
     CoupledScene fixture;

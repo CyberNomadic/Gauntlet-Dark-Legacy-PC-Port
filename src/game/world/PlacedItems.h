@@ -53,6 +53,14 @@ struct Pickup {
  * amount is left there (none takes it away). */
 using PickupJudge = std::function<std::optional<s32>(const Pickup&)>;
 
+/** A staged judge can refuse the enclosing transaction, separately from leaving
+ * an offered item lying. Earlier offers may already have changed their owners. */
+struct PickupDecision {
+    bool accepted = true;
+    std::optional<s32> left;
+};
+using StagedPickupJudge = std::function<PickupDecision(const Pickup&)>;
+
 /**
  * The pickups a level places, as far as the tower needs them: each powerup's figure, found
  * by name in the archives it is given (the level's own before the powerups'), stood at its
@@ -279,6 +287,9 @@ public:
 
 private:
     friend class PlacedItemsCheckpoint;
+    std::optional<std::vector<Pickup>>
+    collectUsing(std::span<const Collector> collectors, const StagedPickupJudge& judge,
+                 const std::function<bool(std::string_view, const Vec3&)>& burst);
     void startEffect(RenderDevice& device, std::string_view tree, const Vec3& position);
     static std::optional<s32> damagePotion(Item& item, const ItemInfo& info, f32 damage);
 
@@ -298,6 +309,14 @@ private:
     std::vector<ItemInfo> m_infos; ///< the level's item records, for dropping more
     /** Builds the figure of an item named `name`; false when no archive holds it. */
     bool makeFigure(RenderDevice& device, Item& item);
+    std::optional<s32> recordOf(std::string_view name) const;
+    static void setRecord(Item& item, const ItemInfo& info, s32 record, s32 amount);
+    static void placeAt(Item& item, const Vec3& position, const WorldCollision* collision);
+    static void throwFrom(Item& item, const Vec3& position, const Vec3& velocity,
+                          const WorldCollision* collision, f32 noGrabSeconds,
+                          std::optional<f32> strength);
+    static void releaseFrom(Item& item, const Vec3& position, const Vec3& velocity,
+                            const WorldCollision* collision, f32 noGrabSeconds, s32 players);
     bool replaceFigure(RenderDevice& device, Item& item, std::string_view name);
     bool exposedWithin(const Item& item, const Vec3& position, f32 radius) const;
     /** Flies a thrown item `seconds` on. */

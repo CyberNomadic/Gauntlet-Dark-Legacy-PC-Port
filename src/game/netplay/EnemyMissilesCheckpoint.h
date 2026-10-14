@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -15,6 +16,11 @@ namespace gdl::game {
  * An oversized pool is refused intact, never pruned to make a packet fit. */
 class EnemyMissilesCheckpoint {
 public:
+    /** Canonical encoded-byte SHA for an already validated native boundary.
+     * Not a validity certificate; incoming state must still pass full restore. */
+    static std::optional<std::array<u8, 32>>
+    canonicalDigest(const EnemyMissiles::Checkpoint& state);
+
     static constexpr usize kMaxMissiles = 512;
     static constexpr usize kMaxBursts = 64;
     static constexpr usize kMaxEvents = 2048;

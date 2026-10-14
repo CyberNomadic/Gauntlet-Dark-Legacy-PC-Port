@@ -14,6 +14,57 @@ using namespace gdl;
 using namespace gdl::game;
 using namespace std::chrono_literals;
 
+TEST_CASE("attack receipt deadlines exclude replay and retain exact request identity",
+          "[latency][action-receipt-evidence]") {
+    using Eligibility = test::LatencyProbeEligibility;
+    using Evidence = Eligibility::ReceiptEvidence;
+    const auto pressed = MatchSession::Time{} + 1s;
+    InputCommand input;
+    input.epoch = 4;
+    input.tick = 120;
+    input.grant = 9;
+    input.seat = 2;
+    MatchSession::ActionReceipt receipt;
+    receipt.receivedAt = pressed + 950ms;
+    receipt.epoch = input.epoch;
+    receipt.tick = input.tick;
+    receipt.grant = input.grant;
+    receipt.seat = input.seat;
+    receipt.continuity = 3;
+    receipt.present = true;
+    const auto inspect = [&](const auto& value, u64 lastTick = 0) {
+        return Eligibility::receiptEvidence(input, 3, pressed, lastTick, value);
+    };
+    // The caller may inspect this after a long replay. Only the stored receipt
+    // instant decides whether host evidence arrived within the one-second gate.
+    CHECK(inspect(receipt) == Evidence::Observe);
+    CHECK(inspect(receipt, 120) == Evidence::Ignore);
+    auto changed = receipt;
+    changed.receivedAt = pressed + 1001ms;
+    CHECK(inspect(changed) == Evidence::Ignore);
+    changed.receivedAt = pressed + 1s;
+    CHECK(inspect(changed) == Evidence::Observe);
+    changed.receivedAt = pressed - 1ms;
+    CHECK(inspect(changed) == Evidence::Ignore);
+    changed = receipt;
+    changed.seat = 1;
+    CHECK(inspect(changed) == Evidence::Ignore);
+    changed = receipt;
+    changed.tick = 119;
+    CHECK(inspect(changed) == Evidence::Ignore);
+    for (const auto mutation : {0, 1, 2, 3, 4}) {
+        changed = receipt;
+        switch (mutation) {
+        case 0: ++changed.epoch; break;
+        case 1: ++changed.grant; break;
+        case 2: ++changed.continuity; break;
+        case 3: changed.present = false; break;
+        case 4: changed.portalPhase = true; break;
+        }
+        CHECK(inspect(changed) == Evidence::Interrupted);
+    }
+}
+
 InputCommand throwInput(const CombatSnapshot& state, u64 tick = 0) {
     InputCommand input;
     input.epoch = state.motion.epoch;

@@ -18,6 +18,7 @@
 #include "game/players/PlayerAnimator.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
+#include "game/screens/CritterCueEmission.h"
 #include "game/screens/EnemyFeedbackEmission.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentPlacements.h"
@@ -866,6 +867,21 @@ void LevelOpponents::countOrdinaryPlayers(std::span<const PlayerRuntime> players
         players, [](const PlayerRuntime& player) { return !player.departed; })));
 }
 
+void LevelOpponents::advanceCritters(s32 ticks, f32 seconds, std::span<const EnemyView> views,
+                                     bool timeStopped,
+                                     std::span<const CombatantObstacle> walkedInto,
+                                     std::span<PlayerRuntime> players) {
+    m_critters.update(ticks, seconds, views, timeStopped, critterObstacles(walkedInto), &m_enemies);
+    for (const CombatPush& push : m_critters.takePushes()) {
+        for (PlayerRuntime& player : players) {
+            if (player.actor.player() == push.player && player.life == PlayerLife::Standing &&
+                !player.departed && !player.capture.active() && !player.combo.riding) {
+                player.knockback.addVelocity(push.velocity);
+            }
+        }
+    }
+}
+
 void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
                             std::span<const Obstacle> fixtures, const Events& events,
                             std::span<const MissileStop> stops,
@@ -912,15 +928,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     advanceDeathShots();
     events.settleBlasts();
     updateStatues(ticks, seconds, players);
-    m_critters.update(ticks, seconds, views, timeStopped, critterObstacles(walkedInto), &m_enemies);
-    for (const CombatPush& push : m_critters.takePushes()) {
-        for (PlayerRuntime& player : players) {
-            if (player.actor.player() == push.player && player.life == PlayerLife::Standing &&
-                !player.departed && !player.capture.active() && !player.combo.riding) {
-                player.knockback.addVelocity(push.velocity);
-            }
-        }
-    }
+    advanceCritters(ticks, seconds, views, timeStopped, walkedInto, players);
     for (const CombatantRam& ram : m_critters.takeRams()) {
         if (ram.id >= kGeneratorRamBase) {
             strikeGenerator(ram.id - kGeneratorRamBase, ram.damage, -1, players);
@@ -1368,9 +1376,10 @@ bool LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
 /** Plays what one of the great ones (the boss with `ofBoss`) has set off: its tree from its
  * own archive (or the weapons', which holds the common marks of a hit) where it happened,
  * riding along with it when it follows, and its sound. */
-void LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, bool ofBoss) {
+bool LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, bool ofBoss,
+                                    const CritterPublisher& publish) {
     if (!m_resources.has_value()) {
-        return;
+        return true;
     }
     if (cue.stopMoveEffect) {
         std::erase_if(m_moveEffects, [&](const MoveEffect& previous) {
@@ -1380,7 +1389,7 @@ void LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
             m_resources->effects.stop(previous.effect);
             return true;
         });
-        return;
+        return true;
     }
     if (cue.arena && m_bosses.present()) {
         if (ofBoss && m_bosses.view().kind == 42 && m_bosses.position() != nullptr) {
@@ -1391,20 +1400,16 @@ void LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
             m_resources->world.setObjectVisible(object, false);
         }
     }
-    if (archive == nullptr || !archive->trees.find(cue.tree).has_value()) {
-        archive =
-            m_resources->weapons.loaded() && m_resources->weapons.trees.find(cue.tree).has_value()
-                ? &m_resources->weapons
-                : nullptr;
-    }
-    if (!cue.tree.empty() && archive != nullptr) {
-        EffectTrees::Setting setting;
-        setting.scale = cue.scale;
-        setting.yaw = cue.yaw;
-        setting.seconds = cue.life;
-        setting.loop = cue.loop;
-        const u32 effect = m_resources->effects.startSet(m_resources->device, *archive, cue.tree,
-                                                         cue.position, setting);
+    const auto emission = CritterCueEmission::resolve(cue, archive, m_resources->weapons);
+    if (emission.archive != nullptr) {
+        const auto issued = publish ? publish(emission)
+                                    : std::optional{m_resources->effects.startSet(
+                                          m_resources->device, *emission.archive, emission.tree,
+                                          emission.position, emission.setting)};
+        if (!issued) {
+            return false;
+        }
+        const u32 effect = *issued;
         if (effect != 0) {
             m_cueEffects.push_back(effect);
             if (cue.untilNextMove) {
@@ -1424,11 +1429,12 @@ void LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
     }
     // The great ones' sounds play at 224 of 255 as heard from where the players stand
     // (CritterDoSfx: AudioPlay3DSel, sndFxPlay3DAtten); a death's at that level whole.
-    if (!cue.sound.empty() && cue.attenuated) {
+    if (!publish && !cue.sound.empty() && cue.attenuated) {
         playAt(cue.sound, kLoudSound, cue.soundPosition);
-    } else if (!cue.sound.empty()) {
+    } else if (!publish && !cue.sound.empty()) {
         m_resources->audio.playAt(cue.sound, cue.soundPosition, 0.0f, kLoudSound / kFullLevel);
     }
+    return true;
 }
 
 void LevelOpponents::finishSummons(std::span<const EnemyView> players) {

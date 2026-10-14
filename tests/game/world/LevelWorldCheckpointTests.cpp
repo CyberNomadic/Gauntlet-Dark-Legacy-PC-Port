@@ -2,6 +2,7 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -284,6 +285,198 @@ TEST_CASE("complete level preparation is atomic across malformed child owners",
     CHECK(fixture.state() == before);
 }
 
+TEST_CASE("world scratch capture retains pickup catalog storage and every native postcondition",
+          "[rollback][level-world-checkpoint][world-capture-reuse]") {
+    Fixture fixture("level-world-capture-reuse");
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    const auto baseline = fixture.state();
+    auto undo = fixture.owner.prepareRestore(baseline);
+    REQUIRE(undo);
+    auto scratch = baseline;
+    const auto* definitions = scratch.pickups.definitions.data();
+    const auto* placements = scratch.pickups.placements.data();
+    REQUIRE_FALSE(scratch.pickups.placements[4].collision.empty());
+    const auto* collision = scratch.pickups.placements[4].collision.data();
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    for (s32 tick = 0; tick < 30; ++tick) {
+        CAPTURE(tick, seconds);
+        fixture.step(tick, seconds);
+        const auto expected = fixture.state();
+        LevelWorldCheckpoint::CaptureTimings timings;
+        auto refreshed = fixture.owner.checkpoint(std::move(scratch), &timings);
+        REQUIRE(refreshed);
+        CHECK(refreshed->valid());
+        CHECK(*refreshed == expected);
+        CHECK(refreshed->pickups.definitions.data() == definitions);
+        CHECK(refreshed->pickups.placements.data() == placements);
+        CHECK(refreshed->pickups.placements[4].collision.data() == collision);
+        CHECK(std::ranges::all_of(timings, [](const auto& value) { return value.has_value(); }));
+        scratch = std::move(*refreshed);
+    }
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+    REQUIRE(fixture.owner.canCommit(*undo));
+    REQUIRE(fixture.owner.commitRestore(std::move(*undo)));
+    CHECK(fixture.state() == baseline);
+}
+
+TEST_CASE("world scratch recaptures live fields while rejecting catalog and native corruption",
+          "[rollback][level-world-checkpoint][world-capture-reuse]") {
+    Fixture fixture("level-world-capture-reuse-validation");
+    const auto baseline = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    auto scratch = baseline;
+    scratch.core.placements.front().local[0][0] = nan;
+    scratch.falling.remainder = nan;
+    scratch.walls.walls.front().flash = nan;
+    scratch.pickups.items.front().position.x = nan;
+    scratch.rotators.rotators.front().cursor.turned = nan;
+    scratch.particles.entries.front().emitter.saved = nan;
+    scratch.textures.remainder = nan;
+    scratch.frameRemainder = nan;
+    scratch.ambientOffset = nan;
+    scratch.playerCount = 4;
+    CHECK_FALSE(scratch.valid());
+    CHECK_FALSE(fixture.owner.prepareRestore(scratch));
+    auto refreshed = fixture.owner.checkpoint(std::move(scratch));
+    REQUIRE(refreshed);
+    CHECK(*refreshed == baseline);
+
+    for (s32 mutation = 0; mutation < 9; ++mutation) {
+        CAPTURE(mutation);
+        scratch = baseline;
+        switch (mutation) {
+        case 0: scratch.level.name += "_FOREIGN"; break;
+        case 1: scratch.core.layout ^= 1; break;
+        case 2: scratch.core.catalog[0] ^= 1; break;
+        case 3: ++scratch.core.resourceCount; break;
+        case 4: scratch.particleSources.clear(); break;
+        case 5: ++scratch.pickups.definitions.back().value; break;
+        case 6: scratch.pickups.placements[4].collision[0].normal.x = -0.0f; break;
+        case 7: ++scratch.pickups.placements[4].params[0]; break;
+        case 8: scratch.pickups.placements[4].collision[0].vertices[0].x = nan; break;
+        }
+        CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+        CHECK(fixture.state() == baseline);
+    }
+
+    auto undo = fixture.owner.prepareRestore(baseline);
+    REQUIRE(undo);
+    auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
+    const auto flash = std::exchange(wall.flash, nan);
+    scratch = baseline;
+    CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+    wall.flash = flash;
+    fixture.world.setAmbientOffset(1'000'001.0f);
+    scratch = baseline;
+    CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+    REQUIRE(fixture.owner.canCommit(*undo));
+    REQUIRE(fixture.owner.commitRestore(std::move(*undo)));
+    CHECK(fixture.state() == baseline);
+}
+
+TEST_CASE("world scratch reuse follows current binding and exact value catalog identity",
+          "[rollback][level-world-checkpoint][world-capture-reuse]") {
+    Fixture first("level-world-capture-reuse-bind-a");
+    Fixture second("level-world-capture-reuse-bind-b");
+    const auto baseline = first.state();
+    auto scratch = baseline;
+    auto independent = second.owner.checkpoint(std::move(scratch));
+    REQUIRE(independent);
+    CHECK(*independent == second.state());
+    first.owner.clearResources();
+    scratch = baseline;
+    CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
+    REQUIRE(first.owner.bindResources(first.device));
+    scratch = baseline;
+    CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{baseline});
+    first.world.clear();
+    scratch = baseline;
+    CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
+    CHECK(second.state() == baseline);
+}
+
+TEST_CASE("world capture timings observe the same complete native checkpoint",
+          "[rollback][level-world-checkpoint][world-capture-timing]") {
+    using Owner = LevelWorldCheckpoint;
+    Fixture fixture("level-world-capture-timing");
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    CHECK(Owner::kCaptureOwners ==
+          std::array<std::string_view, 9>{"core", "triggers", "destruction", "falling", "walls",
+                                          "pickups", "rotators", "ambient", "aggregate"});
+    for (s32 tick = 0; tick < 8; ++tick) {
+        CAPTURE(tick, seconds);
+        fixture.step(tick, seconds);
+        const auto textures = fixture.device.texturesCreated;
+        const auto uploads = fixture.device.textureUpdates;
+        const auto expected = fixture.state();
+        Owner::CaptureTimings timings;
+        const auto measured = fixture.owner.checkpoint(&timings);
+        REQUIRE(measured);
+        CHECK(measured->valid());
+        CHECK(*measured == expected);
+        CHECK(fixture.state() == expected);
+        for (const auto& duration : timings) {
+            CHECK(duration.has_value()); // A valid zero-duration clock sample is still present.
+        }
+        CHECK(fixture.device.texturesCreated == textures);
+        CHECK(fixture.device.textureUpdates == uploads);
+
+        auto invalid = *measured;
+        invalid.core.placements.front().local[0][0] = std::numeric_limits<f32>::quiet_NaN();
+        CHECK_FALSE(invalid.valid());
+        CHECK_FALSE(fixture.owner.prepareRestore(invalid));
+        CHECK(fixture.owner.checkpoint(&timings) == measured);
+    }
+}
+
+TEST_CASE("world capture failure timings reset and retain only reached operations",
+          "[rollback][level-world-checkpoint][world-capture-timing]") {
+    using Owner = LevelWorldCheckpoint;
+    Fixture fixture("level-world-capture-failure-timing");
+    const auto before = fixture.state();
+    Owner::CaptureTimings timings;
+    timings.fill(std::numeric_limits<u64>::max());
+
+    // All seven child captures run in native order before the existing joint
+    // refusal. Ambient capture and aggregate validation must remain unreached.
+    auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
+    const auto flash = std::exchange(wall.flash, std::numeric_limits<f32>::quiet_NaN());
+    CHECK_FALSE(fixture.owner.checkpoint());
+    CHECK_FALSE(fixture.owner.checkpoint(&timings));
+    for (usize owner = 0; owner < timings.size(); ++owner) {
+        CAPTURE(owner);
+        CHECK(timings[owner].has_value() ==
+              (owner < static_cast<usize>(Owner::CaptureOwner::Ambient)));
+    }
+    wall.flash = flash;
+    CHECK(fixture.state() == before);
+
+    // This out-of-envelope offset leaves native child lighting finite through
+    // its normal clamp, but the aggregate scalar check must still reject it.
+    fixture.world.setAmbientOffset(1'000'001.0f);
+    CHECK_FALSE(fixture.owner.checkpoint());
+    CHECK_FALSE(fixture.owner.checkpoint(&timings));
+    for (const auto& duration : timings) {
+        CHECK(duration.has_value());
+    }
+    REQUIRE(fixture.owner.restore(before));
+    CHECK(fixture.state() == before);
+
+    fixture.owner.clearResources();
+    CHECK_FALSE(fixture.owner.checkpoint());
+    CHECK_FALSE(fixture.owner.checkpoint(&timings));
+    for (const auto& duration : timings) {
+        CHECK_FALSE(duration.has_value());
+    }
+    REQUIRE(fixture.owner.bindResources(fixture.device));
+    CHECK(fixture.owner.checkpoint(&timings) == std::optional{before});
+    for (const auto& duration : timings) {
+        CHECK(duration.has_value());
+    }
+}
+
 TEST_CASE("level particle checkpoints use authored markers across opposite texture ordering",
           "[rollback][level-world-checkpoint][particle-attachment]") {
     const auto root = test::sampleLevel("level-world-particle-order");
@@ -471,13 +664,23 @@ TEST_CASE("native level checkpoint restores independently loaded world owners wi
     }
     REQUIRE(replay.restore(*captured));
     CHECK(replay.checkpoint() == captured);
+    auto scratch = *captured;
+    const auto* definitions = scratch.pickups.definitions.data();
+    const auto* placements = scratch.pickups.placements.data();
     for (s32 tick = 0; tick < 12; ++tick) {
         for (auto* world : {&host, &restored}) {
             world->capturePresentation();
             world->update(1.0f / 60, tick % 3 == 0);
             world->updateTriggers(1.0f / 60, {});
         }
-        CHECK(replay.checkpoint() == authority.checkpoint());
+        const auto fresh = authority.checkpoint();
+        auto reused = authority.checkpoint(std::move(scratch));
+        REQUIRE(reused);
+        CHECK(reused == fresh);
+        CHECK(reused->pickups.definitions.data() == definitions);
+        CHECK(reused->pickups.placements.data() == placements);
+        CHECK(replay.checkpoint() == reused);
+        scratch = std::move(*reused);
     }
     CHECK(device.texturesCreated == textures);
     CHECK(device.textureUpdates == uploads);

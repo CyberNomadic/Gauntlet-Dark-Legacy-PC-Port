@@ -171,4 +171,138 @@ TEST_CASE("input admission telemetry ignores duplicate late commands and resets 
     CHECK_FALSE(timeline.diagnostics(0).received);
     CHECK(timeline.diagnostics(0).late == 0);
 }
+
+TEST_CASE("action traces distinguish exact execution from redundancy and held concealment",
+          "[netplay][input-timeline][input-admission-trace]") {
+    InputTimeline timeline;
+    REQUIRE(timeline.assign(0, 2));
+    auto command = commandFor(timeline);
+    command.tick = 3;
+    command.heldButtons = static_cast<u32>(CommandHeld::Attack);
+    command.pressedButtons = static_cast<u32>(CommandPress::Attack);
+    REQUIRE(timeline.submit(2, command) == Admission::Accepted);
+    auto conflicting = command;
+    conflicting.direction = {-1, 0};
+    conflicting.heldButtons = static_cast<u32>(CommandHeld::Strafe);
+    conflicting.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
+    REQUIRE(timeline.submit(2, conflicting) == Admission::Duplicate);
+    REQUIRE(timeline.commandTrace().size() == 1);
+    const auto& trace = timeline.commandTrace().front();
+    CHECK(trace.command.epoch == command.epoch);
+    CHECK(trace.command.grant == command.grant);
+    CHECK(trace.command.seat == command.seat);
+    CHECK(trace.command.tick == command.tick);
+    CHECK(trace.command.direction == command.direction);
+    CHECK(trace.command.heldButtons == command.heldButtons);
+    CHECK(trace.command.pressedButtons == command.pressedButtons);
+    CHECK(trace.sender == 2);
+    CHECK(trace.receivedTick == 0);
+    CHECK(trace.admission == Admission::Accepted);
+    CHECK(trace.repeats == 1);
+    CHECK_FALSE(trace.executedTick);
+    for (u64 tick = 0; tick < command.tick; ++tick) {
+        CHECK(timeline.advance()[0].heldButtons == 0);
+        CHECK_FALSE(trace.executedTick);
+    }
+    const auto exact = timeline.advance()[0];
+    CHECK(exact.pressedButtons == command.pressedButtons);
+    REQUIRE(trace.executedTick);
+    CHECK(*trace.executedTick == command.tick);
+    CHECK(timeline.submit(2, conflicting) == Admission::TooLate);
+    CHECK(trace.admission == Admission::Accepted);
+    CHECK(trace.repeats == 2);
+    for (u64 tick = 1; tick <= InputTimeline::kHoldTicks; ++tick) {
+        const auto concealed = timeline.advance()[0];
+        CHECK(concealed.heldButtons == command.heldButtons);
+        CHECK(concealed.pressedButtons == 0);
+        CHECK(trace.concealedTicks == tick);
+        CHECK(*trace.executedTick == command.tick);
+    }
+    CHECK(timeline.advance()[0].heldButtons == 0);
+    CHECK(trace.concealedTicks == InputTimeline::kHoldTicks);
+    CHECK(timeline.droppedCommandTraces() == 0);
+}
+
+TEST_CASE(
+    "action traces retain authenticated identities without accepting conflicting neutral input",
+    "[netplay][input-timeline][input-admission-trace]") {
+    InputTimeline timeline;
+    REQUIRE(timeline.assign(0, 2));
+    REQUIRE(timeline.assign(3, 3));
+    auto neutral = commandFor(timeline);
+    neutral.heldButtons = neutral.pressedButtons = 0;
+    REQUIRE(timeline.submit(2, neutral) == Admission::Accepted);
+    REQUIRE(timeline.submit(2, commandFor(timeline)) == Admission::Duplicate);
+    CHECK(timeline.commandTrace().empty()); // first actual payload is neutral
+    REQUIRE(timeline.submit(3, commandFor(timeline, 3)) == Admission::Accepted);
+    CHECK(timeline.advance()[0].heldButtons == 0);
+    auto late = commandFor(timeline);
+    late.tick = 0;
+    REQUIRE(timeline.submit(2, late) == Admission::TooLate);
+    REQUIRE(timeline.commandTrace().size() == 2);
+    const auto& trace = timeline.commandTrace().back();
+    CHECK(trace.command.tick == 0);
+    CHECK(trace.command.seat == 0);
+    CHECK(trace.receivedTick == 1);
+    CHECK(trace.admission == Admission::TooLate);
+    CHECK_FALSE(trace.executedTick);
+    CHECK(trace.concealedTicks == 0);
+    for (usize index = 0; index <= InputTimeline::kCommandTraces; ++index) {
+        auto invalid = late;
+        invalid.tick = static_cast<u64>(index);
+        CHECK(timeline.submit(9, invalid) == Admission::WrongOwner);
+        ++invalid.grant;
+        CHECK(timeline.submit(2, invalid) == Admission::WrongGrant);
+        invalid = late;
+        ++invalid.epoch;
+        CHECK(timeline.submit(2, invalid) == Admission::WrongEpoch);
+        invalid = late;
+        invalid.seat = 255;
+        CHECK(timeline.submit(2, invalid) == Admission::Invalid);
+        invalid = late;
+        invalid.tick = timeline.tick() + InputTimeline::kMaxAhead + 1;
+        CHECK(timeline.submit(2, invalid) == Admission::TooEarly);
+    }
+    CHECK(timeline.commandTrace().size() == 2);
+    CHECK(timeline.droppedCommandTraces() == 0);
+    REQUIRE(timeline.assign(0, 2));
+    REQUIRE(timeline.commandTrace().size() == 1);
+    CHECK(timeline.commandTrace().front().command.seat == 3);
+    timeline.disconnect(3);
+    CHECK(timeline.commandTrace().empty());
+    REQUIRE(timeline.submit(2, commandFor(timeline)) == Admission::Accepted);
+    timeline.beginEpoch();
+    CHECK(timeline.commandTrace().empty());
+    CHECK(timeline.droppedCommandTraces() == 0);
+}
+
+TEST_CASE("action trace retention is bounded and ordinary movement cannot evict it",
+          "[netplay][input-timeline][input-admission-trace]") {
+    InputTimeline timeline;
+    REQUIRE(timeline.assign(0, 2));
+    constexpr u64 extra = 7;
+    for (u64 tick = 0; tick < InputTimeline::kCommandTraces + extra; ++tick) {
+        REQUIRE(timeline.submit(2, commandFor(timeline)) == Admission::Accepted);
+        timeline.advance();
+    }
+    REQUIRE(timeline.commandTrace().size() == InputTimeline::kCommandTraces);
+    CHECK(timeline.commandTrace().front().command.tick == extra);
+    CHECK(timeline.droppedCommandTraces() == extra);
+    for (const auto& trace : timeline.commandTrace()) {
+        REQUIRE(trace.executedTick);
+        CHECK(*trace.executedTick == trace.command.tick);
+    }
+    for (usize index = 0; index < InputTimeline::kCommandTraces; ++index) {
+        auto movement = commandFor(timeline);
+        movement.heldButtons = movement.pressedButtons = 0;
+        REQUIRE(timeline.submit(2, movement) == Admission::Accepted);
+        timeline.advance();
+    }
+    CHECK(timeline.commandTrace().size() == InputTimeline::kCommandTraces);
+    CHECK(timeline.commandTrace().front().command.tick == extra);
+    CHECK(timeline.droppedCommandTraces() == extra);
+    timeline.beginEpoch();
+    CHECK(timeline.commandTrace().empty());
+    CHECK(timeline.droppedCommandTraces() == 0);
+}
 } // namespace

@@ -469,16 +469,41 @@ bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
     return true;
 }
 
-bool PlacedItems::place(RenderDevice& device, std::string_view name, const Vec3& position,
-                        const WorldCollision* collision) {
+std::optional<s32> PlacedItems::recordOf(std::string_view name) const {
     const auto info = std::ranges::find_if(m_infos, [&](const ItemInfo& candidate) {
         return candidate.type == ItemInfo::kPowerup && candidate.name == name;
     });
-    if (info == m_infos.end()) {
+    return info == m_infos.end() ? std::nullopt
+                                 : std::optional{static_cast<s32>(info - m_infos.begin())};
+}
+
+bool PlacedItems::place(RenderDevice& device, std::string_view name, const Vec3& position,
+                        const WorldCollision* collision) {
+    const auto info = recordOf(name);
+    if (!info) {
         log::warn("Placed items: the level has no item record named {}", name);
         return false;
     }
-    return placeRecord(device, static_cast<s32>(info - m_infos.begin()), position, collision);
+    return placeRecord(device, *info, position, collision);
+}
+
+void PlacedItems::setRecord(Item& item, const ItemInfo& info, s32 record, s32 amount) {
+    item.name = info.name;
+    item.info = record;
+    item.subtype = info.subtype;
+    item.value = amount > 0 ? amount : info.value;
+    item.health = info.hitPoints;
+    item.flags = info.properties;
+    item.strength = static_cast<f32>(info.activeOn);
+    item.radius = info.radius;
+    item.height = info.height;
+}
+
+void PlacedItems::placeAt(Item& item, const Vec3& position, const WorldCollision* collision) {
+    item.position = position;
+    item.transform = itemPlacement(item.position, Vec3{0.0f, 0.0f, 0.0f});
+    restOnFloor(item, collision, kFloorLift);
+    item.visible = true;
 }
 
 bool PlacedItems::placeRecord(RenderDevice& device, s32 record, const Vec3& position,
@@ -487,28 +512,16 @@ bool PlacedItems::placeRecord(RenderDevice& device, s32 record, const Vec3& posi
         m_infos[static_cast<usize>(record)].type != ItemInfo::kPowerup) {
         return false;
     }
-    const ItemInfo* info = &m_infos[static_cast<usize>(record)];
     Item item;
-    item.name = info->name;
-    item.info = record;
-    item.subtype = info->subtype;
-    item.value = amount > 0 ? amount : info->value;
-    item.health = info->hitPoints;
-    item.flags = info->properties;
-    item.strength = static_cast<f32>(info->activeOn);
-    item.radius = info->radius;
-    item.height = info->height;
+    setRecord(item, m_infos[static_cast<usize>(record)], record, amount);
     if (!makeFigure(device, item)) {
         log::warn("Placed items: no archive holds {}", item.name);
         return false;
     }
-    item.position = position;
-    item.transform = itemPlacement(item.position, Vec3{0.0f, 0.0f, 0.0f});
-    restOnFloor(item, collision, kFloorLift);
+    placeAt(item, position, collision);
     if (collision != nullptr) {
         m_collision = collision;
     }
-    item.visible = true;
     m_items.push_back(std::move(item));
     return true;
 }
@@ -521,7 +534,16 @@ bool PlacedItems::throwItem(RenderDevice& device, std::string_view name, const V
     if (!place(device, name, position, collision)) {
         return false;
     }
-    Item& item = m_items.back();
+    throwFrom(m_items.back(), position, velocity, collision, noGrabSeconds, strength);
+    if (collision != nullptr) {
+        m_collision = collision;
+    }
+    return true;
+}
+
+void PlacedItems::throwFrom(Item& item, const Vec3& position, const Vec3& velocity,
+                            const WorldCollision* collision, f32 noGrabSeconds,
+                            std::optional<f32> strength) {
     item.floor.reset();
     item.noGrabSeconds = noGrabSeconds;
     if (strength.has_value()) {
@@ -532,9 +554,7 @@ bool PlacedItems::throwItem(RenderDevice& device, std::string_view name, const V
         item.transform = itemPlacement(item.position, Vec3{0.0f, 0.0f, 0.0f});
         item.velocity = velocity;
         item.thrown = true;
-        m_collision = collision;
     }
-    return true;
 }
 
 std::optional<usize> PlacedItems::claim(const Vec3& position, f32 reach, f32 rise) {
@@ -565,21 +585,27 @@ bool PlacedItems::release(usize index, const Vec3& position, const Vec3& velocit
     if (index >= m_items.size() || !m_items[index].carried) {
         return false;
     }
-    Item& item = m_items[index];
+    releaseFrom(m_items[index], position, velocity, collision, noGrabSeconds, m_players);
+    if (collision != nullptr) {
+        m_collision = collision;
+    }
+    return true;
+}
+
+void PlacedItems::releaseFrom(Item& item, const Vec3& position, const Vec3& velocity,
+                              const WorldCollision* collision, f32 noGrabSeconds, s32 players) {
     item.carried = false;
     ++item.continuity;
     item.presentationCaptured = false;
     item.floor.reset();
-    item.visible = !item.taken && item.shownTo(m_players);
+    item.visible = !item.taken && item.shownTo(players);
     item.position = position;
     item.transform = itemPlacement(item.position, Vec3{0.0f, 0.0f, 0.0f});
     item.noGrabSeconds = noGrabSeconds;
     if (collision != nullptr) {
         item.velocity = velocity;
         item.thrown = true;
-        m_collision = collision;
     }
-    return true;
 }
 
 bool PlacedItems::goldLeft() const {
@@ -619,6 +645,23 @@ std::optional<Pickup> PlacedItems::pickupFor(usize index,
 std::vector<Pickup> PlacedItems::collect(RenderDevice& device,
                                          std::span<const Collector> collectors,
                                          const PickupJudge& judge) {
+    // Native callbacks never refuse the enclosing operation. Missing collection
+    // artwork retains startEffect's original warning/no-art behavior.
+    auto pickups = collectUsing(
+        collectors,
+        [&](const Pickup& pickup) {
+            return PickupDecision{true, judge ? judge(pickup) : std::optional<s32>{0}};
+        },
+        [&](std::string_view tree, const Vec3& position) {
+            startEffect(device, tree, position);
+            return true;
+        });
+    return std::move(*pickups);
+}
+
+std::optional<std::vector<Pickup>>
+PlacedItems::collectUsing(std::span<const Collector> collectors, const StagedPickupJudge& judge,
+                          const std::function<bool(std::string_view, const Vec3&)>& burst) {
     std::vector<Pickup> pickups;
     for (usize i = 0; i < m_items.size(); ++i) {
         const auto offered = pickupFor(i, collectors);
@@ -628,24 +671,31 @@ std::vector<Pickup> PlacedItems::collect(RenderDevice& device,
         Item& item = m_items[i];
         const Pickup& pickup = *offered;
         if (judge) {
-            const std::optional<s32> left = judge(pickup);
-            if (!left.has_value()) {
+            const PickupDecision decision = judge(pickup);
+            if (!decision.accepted) {
+                return std::nullopt;
+            }
+            if (!decision.left) {
                 continue; // left lying
             }
-            if (*left > 0) {
-                item.value = *left; // the rest stays for the next to come by
+            if (*decision.left > 0) {
+                item.value = *decision.left; // the rest stays for the next to come by
                 pickups.push_back(pickup);
                 continue;
             }
         }
         item.taken = true;
         item.visible = false;
+        std::string_view effect;
         if (pickup.realm > 0 && static_cast<usize>(pickup.realm) < kGemEffects.size()) {
-            startEffect(device, kGemEffects[static_cast<usize>(pickup.realm)], item.position);
+            effect = kGemEffects[static_cast<usize>(pickup.realm)];
         } else if (item.subtype == ItemInfo::kRunestone) {
-            startEffect(device, kRuneEffect, item.position);
+            effect = kRuneEffect;
         } else if (item.subtype == ItemInfo::kGargoyleKey) {
-            startEffect(device, kGargoyleEffect, item.position);
+            effect = kGargoyleEffect;
+        }
+        if (!effect.empty() && (!burst || !burst(effect, item.position))) {
+            return std::nullopt;
         }
         pickups.push_back(pickup);
     }

@@ -46,6 +46,12 @@ public:
     };
     static std::optional<std::vector<u8>> encode(const State& state, const Catalog& catalog,
                                                  Encoding encoding = Encoding::Fast);
+    /** SHA-256 of the uncompressed canonical body, not the compressed envelope.
+     * Optional normalization elides draw-overwritten poses/point-light lists.
+     * Not validation: the original state must still pass native preparation. */
+    static std::optional<std::array<u8, 32>> canonicalDigest(const State& state,
+                                                             const Catalog& catalog,
+                                                             bool presentationIndependent = false);
     static std::optional<State> decode(std::span<const u8> bytes, const Catalog& catalog);
     /** Actual on-wire size, including the header. Performs encoding; a refused
      * packet has no encoded size, even if its uncompressed body is valid. */

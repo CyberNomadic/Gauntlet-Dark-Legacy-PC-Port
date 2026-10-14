@@ -541,13 +541,13 @@ TEST_CASE(
     resources[0].spec = &MissileSpec::potion();
     CHECK_FALSE(Phase::supported(state, resources, 1.0f / 60));
     CHECK_FALSE(Phase::supported(state, {}, 1.0f / 60));
-    state.missiles.impacts.back().target = 2000; // generator outcome not owned by this phase yet
-    CHECK_FALSE(Phase::supported(state, fixture.missileResources, 1.0f / 60));
-    for (const s32 target : {-1, 7500, 7999}) {
+    // This value-only check admits family ranges. advance separately validates
+    // the actual native barrel/generator slot and its supported outcome.
+    for (const s32 target : {-1, 0, 999, 2000, 2999, 7500, 7999}) {
         state.missiles.impacts.back().target = target;
         CHECK(Phase::supported(state, fixture.missileResources, 1.0f / 60));
     }
-    for (const s32 target : {0, 3000, 7000, 8000, 9000}) {
+    for (const s32 target : {3000, 7000, 8000, 9000}) {
         state.missiles.impacts.back().target = target;
         CHECK_FALSE(Phase::supported(state, fixture.missileResources, 1.0f / 60));
     }

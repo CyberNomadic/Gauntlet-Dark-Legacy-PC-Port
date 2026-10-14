@@ -1,6 +1,7 @@
 #include "game/world/LevelWorldCheckpoint.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <limits>
 #include <utility>
@@ -155,23 +156,75 @@ bool LevelWorldCheckpoint::bindResources(RenderDevice& device) {
 bool LevelWorldCheckpoint::binds(const LevelWorld& owner) const {
     return &owner == &m_owner && bound();
 }
+std::optional<usize> LevelWorldCheckpoint::placeItemRecord(s32 record, const Vec3& position,
+                                                           s32 amount) {
+    if (!bound()) {
+        return std::nullopt;
+    }
+    return m_resources->pickups.placeRecord(
+        record, position, m_owner.m_collision.loaded() ? &m_owner.m_collision : nullptr, amount);
+}
 bool LevelWorldCheckpoint::hasCollisionObject(s32 object) const {
     return bound() && m_resources->core.hasCollisionObject(object);
+}
+std::optional<std::vector<Pickup>>
+LevelWorldCheckpoint::collectItems(std::span<const Collector> collectors,
+                                   const StagedPickupJudge& judge) {
+    return bound() ? m_resources->pickups.collect(collectors, judge) : std::nullopt;
 }
 std::span<const s32> LevelWorldCheckpoint::collisionObjects() const {
     return bound() ? m_resources->core.collisionObjects() : std::span<const s32>{};
 }
-std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() const {
-    if (!bound()) {
+std::optional<LevelWorldCheckpoint::State>
+LevelWorldCheckpoint::checkpoint(CaptureTimings* timings) const {
+    return capture(nullptr, timings);
+}
+std::optional<LevelWorldCheckpoint::State>
+LevelWorldCheckpoint::checkpoint(State&& reusable, CaptureTimings* timings) const {
+    return capture(&reusable, timings);
+}
+std::optional<LevelWorldCheckpoint::State>
+LevelWorldCheckpoint::capture(State* reusable, CaptureTimings* timings) const {
+    if (timings) {
+        *timings = {};
+    }
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](Clock::time_point begin) {
+        return static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count());
+    };
+    const auto measured = [&](CaptureOwner owner, auto&& operation) {
+        if (!timings) {
+            return operation();
+        }
+        const auto begin = Clock::now();
+        auto result = operation();
+        (*timings)[static_cast<usize>(owner)] = elapsed(begin);
+        return result;
+    };
+    if (!bound() || (reusable && reusable->level != m_owner.m_ref)) {
         return std::nullopt;
     }
-    auto core = m_resources->core.checkpoint();
-    auto triggers = m_owner.m_triggers.checkpoint();
-    auto destruction = m_resources->destruction.checkpoint();
-    auto falling = m_resources->falling.checkpoint();
-    auto walls = m_resources->walls.checkpoint();
-    auto pickups = m_resources->pickups.checkpoint();
-    auto rotators = m_resources->rotators.checkpoint();
+    auto core = measured(CaptureOwner::Core, [&] { return m_resources->core.checkpoint(); });
+    if (reusable && core &&
+        (reusable->core.layout != core->layout || reusable->core.catalog != core->catalog ||
+         reusable->core.resourceCount != core->resourceCount ||
+         reusable->particleSources != m_resources->particleSources)) {
+        return std::nullopt;
+    }
+    auto triggers =
+        measured(CaptureOwner::Triggers, [&] { return m_owner.m_triggers.checkpoint(); });
+    auto destruction =
+        measured(CaptureOwner::Destruction, [&] { return m_resources->destruction.checkpoint(); });
+    auto falling =
+        measured(CaptureOwner::Falling, [&] { return m_resources->falling.checkpoint(); });
+    auto walls = measured(CaptureOwner::Walls, [&] { return m_resources->walls.checkpoint(); });
+    auto pickups = measured(CaptureOwner::Pickups, [&] {
+        return reusable ? m_resources->pickups.checkpoint(std::move(reusable->pickups))
+                        : m_resources->pickups.checkpoint();
+    });
+    auto rotators =
+        measured(CaptureOwner::Rotators, [&] { return m_resources->rotators.checkpoint(); });
     if (!core || !triggers || !destruction || !falling || !walls || !pickups || !rotators) {
         return std::nullopt;
     }
@@ -184,6 +237,7 @@ std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() co
     state.walls = std::move(*walls);
     state.pickups = std::move(*pickups);
     state.rotators = std::move(*rotators);
+    const auto ambientBegin = timings ? Clock::now() : Clock::time_point{};
     state.textures = m_owner.m_textureAnimator.checkpoint();
     state.particles = m_owner.m_particles.checkpoint();
     auto nativeEntries = std::move(state.particles.entries);
@@ -201,9 +255,12 @@ std::optional<LevelWorldCheckpoint::State> LevelWorldCheckpoint::checkpoint() co
     state.textureAdvance = m_owner.m_textureAdvance;
     state.ambientOffset = m_owner.m_ambientOffset;
     state.particlesAdvanced = m_owner.m_particlesAdvanced;
+    if (timings) {
+        (*timings)[static_cast<usize>(CaptureOwner::Ambient)] = elapsed(ambientBegin);
+    }
     // Each optional child capture above already validated its complete value.
     // Raw clocks/particles and every cross-child relation still belong here.
-    if (!state.validAggregate()) {
+    if (!measured(CaptureOwner::Aggregate, [&] { return state.validAggregate(); })) {
         return std::nullopt;
     }
     return state;

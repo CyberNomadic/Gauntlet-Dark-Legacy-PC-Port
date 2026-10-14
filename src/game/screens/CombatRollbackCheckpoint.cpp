@@ -300,10 +300,11 @@ bool CombatRollbackCheckpoint::restore(const State& state) {
 
 std::optional<CombatRollbackCheckpoint::Rewind> CombatRollbackCheckpoint::prepareRewind() const {
     const auto state = checkpoint();
-    if (!state) {
-        return std::nullopt;
-    }
-    auto prepared = prepareRestore(*state);
+    return state ? prepareRewind(*state) : std::nullopt;
+}
+std::optional<CombatRollbackCheckpoint::Rewind>
+CombatRollbackCheckpoint::prepareRewind(const State& target) const {
+    auto prepared = prepareRestore(target);
     return prepared ? std::optional{Rewind{std::move(*prepared)}} : std::nullopt;
 }
 bool CombatRollbackCheckpoint::canRewind(const Rewind& rewind) const {

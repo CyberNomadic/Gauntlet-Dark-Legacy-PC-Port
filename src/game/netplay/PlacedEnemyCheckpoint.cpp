@@ -5,28 +5,30 @@
 
 #include "engine/io/ByteReader.h"
 
+#include "game/netplay/CanonicalDigestSink.h"
+
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDPL");
 
-void word(std::vector<u8>& bytes, u32 value) {
+template <class Output> void word(Output& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
     }
 }
-void integer(std::vector<u8>& bytes, s32 value) {
+template <class Output> void integer(Output& bytes, s32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
 s32 integer(ByteReader& reader) {
     return std::bit_cast<s32>(reader.readU32());
 }
-void real(std::vector<u8>& bytes, f32 value) {
+template <class Output> void real(Output& bytes, f32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
 f32 real(ByteReader& reader) {
     return std::bit_cast<f32>(reader.readU32());
 }
-void vector(std::vector<u8>& bytes, const Vec3& value) {
+template <class Output> void vector(Output& bytes, const Vec3& value) {
     real(bytes, value.x);
     real(bytes, value.y);
     real(bytes, value.z);
@@ -34,7 +36,7 @@ void vector(std::vector<u8>& bytes, const Vec3& value) {
 Vec3 vector(ByteReader& reader) {
     return {real(reader), real(reader), real(reader)};
 }
-void view(std::vector<u8>& bytes, const ViewVolume& value) {
+template <class Output> void view(Output& bytes, const ViewVolume& value) {
     vector(bytes, value.position);
     vector(bytes, value.right);
     vector(bytes, value.up);
@@ -56,7 +58,7 @@ ViewVolume view(ByteReader& reader) {
     value.cosY = real(reader);
     return value;
 }
-void placement(std::vector<u8>& bytes, const PlacedEnemies::Placement& value) {
+template <class Output> void placement(Output& bytes, const PlacedEnemies::Placement& value) {
     const auto& spawn = value.spawn;
     integer(bytes, spawn.zigZagSide);
     integer(bytes, spawn.kind);
@@ -118,16 +120,19 @@ std::optional<PlacedEnemies::Placement> placement(ByteReader& reader) {
 }
 } // namespace
 
-std::optional<std::vector<u8>>
-PlacedEnemyCheckpoint::encode(const PlacedEnemies::Checkpoint& state) {
-    if (!state.valid() || state.roster.size() > kMaxPlacements) {
-        return std::nullopt;
+namespace {
+template <class Output>
+bool writeCanonical(Output& bytes, const PlacedEnemies::Checkpoint& state, bool validate) {
+    if ((validate && !state.valid()) ||
+        state.roster.size() > PlacedEnemyCheckpoint::kMaxPlacements ||
+        state.pending.size() > PlacedEnemyCheckpoint::kMaxPlacements) {
+        return false;
     }
-    std::vector<u8> bytes;
-    bytes.reserve(kHeaderBytes + (state.view ? kViewBytes : 0) +
-                  state.roster.size() * kPlacementBytes + state.pending.size() * 4);
+    bytes.reserve(
+        PlacedEnemyCheckpoint::kHeaderBytes + (state.view ? PlacedEnemyCheckpoint::kViewBytes : 0) +
+        state.roster.size() * PlacedEnemyCheckpoint::kPlacementBytes + state.pending.size() * 4);
     word(bytes, kMagic);
-    word(bytes, kVersion);
+    word(bytes, PlacedEnemyCheckpoint::kVersion);
     word(bytes, static_cast<u32>(state.roster.size()));
     word(bytes, static_cast<u32>(state.pending.size()));
     word(bytes, state.view ? 1U : 0U);
@@ -141,7 +146,20 @@ PlacedEnemyCheckpoint::encode(const PlacedEnemies::Checkpoint& state) {
     for (const auto index : state.pending) {
         word(bytes, static_cast<u32>(index));
     }
-    return bytes;
+    return true;
+}
+} // namespace
+
+std::optional<std::vector<u8>>
+PlacedEnemyCheckpoint::encode(const PlacedEnemies::Checkpoint& state) {
+    std::vector<u8> bytes;
+    return writeCanonical(bytes, state, true) ? std::optional{std::move(bytes)} : std::nullopt;
+}
+
+std::optional<std::array<u8, 32>>
+PlacedEnemyCheckpoint::canonicalDigest(const PlacedEnemies::Checkpoint& state) {
+    CanonicalDigestSink sink;
+    return writeCanonical(sink, state, false) ? std::optional{sink.finish()} : std::nullopt;
 }
 
 std::optional<PlacedEnemies::Checkpoint> PlacedEnemyCheckpoint::decode(std::span<const u8> bytes) {

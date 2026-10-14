@@ -78,6 +78,30 @@ std::optional<s32> refusalHelp(ItemTaking::Outcome outcome) {
     }
 }
 
+struct TheftComplaint {
+    usize recipient = 0;
+    std::string name;
+};
+
+std::optional<TheftComplaint> theftComplaint(s32 opener, s32 taker,
+                                             std::span<const PlayerRuntime> players) {
+    if (opener < 0 || opener == taker) {
+        return std::nullopt;
+    }
+    for (usize index = 0; index < players.size(); ++index) {
+        const auto& runtime = players[index];
+        const CharacterSave& save = runtime.actor.save();
+        if (runtime.actor.player() != opener || runtime.figure == nullptr ||
+            PickupVoices::carriesPojo(save)) {
+            continue;
+        }
+        const s32 voice =
+            save.character == kSumnerClass ? kSumnerVoice : save.character % kStartingClassCount;
+        return TheftComplaint{index, std::format("S_{}STEAL", classCode(voice))};
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> players,
@@ -125,29 +149,96 @@ bool PartyPickups::collectionUnchanged(std::span<const PlayerRuntime> players,
         if (!pickup) {
             continue;
         }
-        // Crystals use the separate shared-party path. Powerups always produce
-        // pickup feedback, even when their inventory write changes nothing;
-        // their selector auto-activation policy is not part of this domain.
-        const auto kind = static_cast<ItemKind>(pickup->subtype);
-        if (pickup->realm > 0 ||
-            (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup)) {
-            return false;
-        }
-        const auto& saved = players[pickup->collector].actor.save();
-        if (saved.character < 0 || static_cast<usize>(saved.character) >= saved.classes.size()) {
-            return false;
-        }
-        auto candidate = saved;
-        const auto taking = judgePickup(candidate, *pickup, world, classes, false);
-        if (taking.took()) {
-            return false;
-        }
-        if (const auto help = refusalHelp(taking.outcome);
-            help && !PartyHelpAdmission::suppressed(*help, pickup->collector, players)) {
+        if (!offerUnchanged(*pickup, players, world, classes)) {
             return false;
         }
     }
     return true;
+}
+
+bool PartyPickups::offerUnchanged(const Pickup& pickup, std::span<const PlayerRuntime> players,
+                                  const LevelWorld& world, const ClassDataSet& classes) {
+    // Crystals use the separate shared-party path. Powerups always produce
+    // pickup feedback, even when their inventory write changes nothing;
+    // their selector auto-activation policy is not part of this domain.
+    const auto kind = static_cast<ItemKind>(pickup.subtype);
+    if (pickup.realm > 0 || pickup.collector >= players.size() ||
+        (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup)) {
+        return false;
+    }
+    const auto& saved = players[pickup.collector].actor.save();
+    if (saved.character < 0 || static_cast<usize>(saved.character) >= saved.classes.size()) {
+        return false;
+    }
+    auto candidate = saved;
+    const auto taking = judgePickup(candidate, pickup, world, classes, false);
+    if (taking.took()) {
+        return false;
+    }
+    const auto help = refusalHelp(taking.outcome);
+    return !help || PartyHelpAdmission::suppressed(*help, pickup.collector, players);
+}
+
+PickupDecision PartyPickups::takeCurrency(const Pickup& pickup, std::span<PlayerRuntime> players,
+                                          const LevelWorld& world, const LevelFixtures& fixtures,
+                                          const ClassDataSet& classes,
+                                          const CurrencyPublisher& publish) {
+    const auto kind = static_cast<ItemKind>(pickup.subtype);
+    if (pickup.realm > 0 || pickup.collector >= players.size() || !publish ||
+        (kind != ItemKind::Gold && kind != ItemKind::Keys)) {
+        return {.accepted = false};
+    }
+    using Event = CurrencyEvent;
+    const auto event = [&](Event::Kind type, std::string_view name = {}, s32 lesson = -1) {
+        return publish({type, pickup.item, pickup.collector, lesson, std::string(name)});
+    };
+    const auto help = [&](s32 lesson) { return event(Event::Kind::Help, {}, lesson); };
+    auto& runtime = players[pickup.collector];
+    auto& actor = runtime.actor;
+    // Gold and keys do not use the selector activation policy.
+    const auto taking = judgePickup(actor.save(), pickup, world, classes, false);
+    if (!taking.took()) {
+        if (const auto lesson = refusalHelp(taking.outcome); lesson && !help(*lesson)) {
+            return {.accepted = false};
+        }
+        return {};
+    }
+    if (!world.isTower()) {
+        runtime.gesture = PlayerDeed::Pick;
+    }
+    const auto theft = [&] {
+        const auto complaint = theftComplaint(pickup.opener, actor.player(), players);
+        return !complaint || publish({Event::Kind::CharacterBark, pickup.item, complaint->recipient,
+                                      -1, complaint->name});
+    };
+    const bool secretCoin = kind == ItemKind::Gold && world.ref().isSecret();
+    if (kind == ItemKind::Gold) {
+        if (!event(Event::Kind::ChallengeCoin) ||
+            (!world.ref().isSecret() && pickup.amount >= kGoldLessonAmount &&
+             (!help(kGoldLesson) || !theft()))) {
+            return {.accepted = false};
+        }
+    } else if (!help(fixtures.gates().size() > 0 ? kKeyLessonGates
+                                                 : HelpMessages::kChestNeedsKey) ||
+               (taking.left == 0 && !theft())) {
+        return {.accepted = false};
+    }
+    if (!taking.card.empty() &&
+        !event(Event::Kind::Card, secretCoin ? kSecretCoinCard : taking.card)) {
+        return {.accepted = false};
+    }
+    if (taking.message >= 0 && !help(taking.message)) {
+        return {.accepted = false};
+    }
+    if (secretCoin) {
+        if (!event(Event::Kind::NamedSound,
+                   PickupVoices::bonusGold(actor.player(), pickup.amount))) {
+            return {.accepted = false};
+        }
+    } else if (!taking.sound.empty() && !event(Event::Kind::NamedSound, taking.sound)) {
+        return {.accepted = false};
+    }
+    return {.left = taking.left};
 }
 
 void PartyPickups::cleanupCollectedChests(const LevelWorld& world, Chests& chests) {
@@ -222,12 +313,41 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     if (pickup.collector >= players.size()) {
         return std::nullopt;
     }
+    if (pickup.subtype == static_cast<s32>(ItemKind::Gold) ||
+        pickup.subtype == static_cast<s32>(ItemKind::Keys)) {
+        return takeCurrency(pickup, players, services.world, services.fixtures, services.classes,
+                            [&](const CurrencyEvent& event) {
+                                const auto& recipient = players[event.recipient];
+                                switch (event.kind) {
+                                case CurrencyEvent::Kind::Help:
+                                    if (services.help) {
+                                        services.help(event.lesson, event.recipient);
+                                    }
+                                    break;
+                                case CurrencyEvent::Kind::ChallengeCoin:
+                                    if (services.challengeCoin) {
+                                        services.challengeCoin(event.item);
+                                    }
+                                    break;
+                                case CurrencyEvent::Kind::Card:
+                                    services.hud.pickups().addCard(recipient.actor.player(),
+                                                                   event.name);
+                                    break;
+                                case CurrencyEvent::Kind::NamedSound:
+                                    services.audio.playNamed(event.name);
+                                    break;
+                                case CurrencyEvent::Kind::CharacterBark:
+                                    services.audio.bark(recipient.figure->voice(), event.name);
+                                    break;
+                                }
+                                return true;
+                            })
+            .left;
+    }
     const LevelWorld& world = services.world;
     PlayerRuntime& runtime = players[pickup.collector];
     PlayerActor& actor = runtime.actor;
     const auto help = [&](s32 id) { return services.help && services.help(id, pickup.collector); };
-    const bool secretCoin =
-        pickup.subtype == static_cast<s32>(ItemKind::Gold) && world.ref().isSecret();
     const auto taking =
         judgePickup(actor.save(), pickup, world, services.classes, services.autoActivateItems);
     if (!taking.took()) {
@@ -248,21 +368,6 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
         runtime.gesture = PlayerDeed::Pick;
     }
     switch (kind) {
-    case ItemKind::Gold:
-        if (services.challengeCoin) {
-            services.challengeCoin(pickup.item);
-        }
-        if (!world.ref().isSecret() && pickup.amount >= kGoldLessonAmount) {
-            help(kGoldLesson);
-            complainOfTheft(pickup.opener, actor.player(), players, services);
-        }
-        break;
-    case ItemKind::Keys:
-        help(services.fixtures.gates().size() > 0 ? kKeyLessonGates : HelpMessages::kChestNeedsKey);
-        if (taking.left == 0) {
-            complainOfTheft(pickup.opener, actor.player(), players, services);
-        }
-        break;
     case ItemKind::Potion:
         complainOfTheft(pickup.opener, actor.player(), players, services);
         // Retail tries the next lesson only when the previous one could not be posted.
@@ -303,15 +408,12 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     default: break;
     }
     if (!taking.card.empty()) {
-        // Retail do_got_it selects COINHUD in realm 12 before testing gold value.
-        services.hud.pickups().addCard(actor.player(), secretCoin ? kSecretCoinCard : taking.card);
+        services.hud.pickups().addCard(actor.player(), taking.card);
     }
     if (taking.message >= 0) {
         help(taking.message);
     }
-    if (secretCoin) {
-        services.audio.playNamed(PickupVoices::bonusGold(actor.player(), pickup.amount));
-    } else if (!taking.sound.empty()) {
+    if (!taking.sound.empty()) {
         services.audio.playNamed(taking.sound);
     } else if (PlayerFigure* figure = runtime.figure.get();
                (taking.ate || taking.hurt) && figure != nullptr && services.sounds != nullptr) {
@@ -332,19 +434,8 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
  * wizard's; not while Pojo is carried), in the characters' turn. */
 void PartyPickups::complainOfTheft(s32 opener, s32 taker, std::span<const PlayerRuntime> players,
                                    const Services& services) {
-    if (opener < 0 || opener == taker) {
-        return;
-    }
-    for (const PlayerRuntime& runtime : players) {
-        const CharacterSave& save = runtime.actor.save();
-        if (runtime.actor.player() != opener || runtime.figure == nullptr ||
-            PickupVoices::carriesPojo(save)) {
-            continue;
-        }
-        const s32 voice =
-            save.character == kSumnerClass ? kSumnerVoice : save.character % kStartingClassCount;
-        services.audio.bark(runtime.figure->voice(), std::format("S_{}STEAL", classCode(voice)));
-        return;
+    if (const auto complaint = theftComplaint(opener, taker, players)) {
+        services.audio.bark(players[complaint->recipient].figure->voice(), complaint->name);
     }
 }
 

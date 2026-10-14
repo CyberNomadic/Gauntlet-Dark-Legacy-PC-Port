@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <memory>
 
 #include "game/combat/Damage.h"
@@ -195,43 +196,65 @@ PartyDamage::Result PartyDamage::stageBlows(std::span<const EnemyBlow> blows,
             if (impact->sound) {
                 result.outputs.push_back({OutputKind::Sound, slot, *impact->sound});
             }
-            bool learns = false;
-            const PlayerHealth::Events events{
-                .block =
-                    [&](f32 taken, f32 left) {
-                        if (const auto duration = block(player, taken, left)) {
-                            result.outputs.push_back({OutputKind::Block, slot, {}, *duration});
-                        }
-                    },
-                .sound =
-                    [&](std::string_view name) {
-                        result.outputs.push_back({OutputKind::Sound, slot, std::string{name}});
-                    },
-                .cry =
-                    [&](std::string_view name) {
-                        result.outputs.push_back({OutputKind::Cry, slot, std::string{name}});
-                    },
-                .named =
-                    [&](std::string_view name, f32 wait) {
-                        result.outputs.push_back(
-                            {OutputKind::Named, slot, std::string{name}, wait});
-                    },
-                .learnBlock =
-                    [&] {
-                        learns |= !PartyHelpAdmission::suppressedForPlayer(
-                            HelpMessages::kLearnBlock, slot, players);
-                    },
-                .vibrate =
-                    [&](s32 frames) {
-                        result.outputs.push_back({OutputKind::Rumble, slot, {}, 0, frames});
-                    },
-                .logDeaths = false};
-            hurt(health, player, blow.damage, impact->kind, true, context, events, impact->impact,
-                 classes.stats(player.actor.save().character));
-            if (learns || player.life != PlayerLife::Standing) {
-                return {Status::Unsupported, {}};
+            auto hit = stageHit(player, players, health, classes, blow.damage, impact->kind, true,
+                                context, impact->impact);
+            if (hit.status != Status::Applied) {
+                return {hit.status, {}};
             }
+            result.outputs.insert(result.outputs.end(),
+                                  std::make_move_iterator(hit.outputs.begin()),
+                                  std::make_move_iterator(hit.outputs.end()));
         }
+    }
+    return result;
+}
+
+PartyDamage::Result PartyDamage::stageHit(PlayerRuntime& player,
+                                          std::span<const PlayerRuntime> party,
+                                          PlayerHealth& health, const ClassDataSet& classes,
+                                          f32 amount, HurtKind kind, bool directed,
+                                          const Context& context, const PlayerImpact& impact) {
+    const s32 slot = player.actor.player();
+    const auto* stats = classes.stats(player.actor.save().character);
+    if (slot < 0 || slot >= 4 || stats == nullptr || party.size() > 4 || !context.valid() ||
+        !bounded(amount) || amount < 0 || !bounded(impact.direction.x) ||
+        !bounded(impact.direction.y) || !bounded(impact.direction.z)) {
+        return {};
+    }
+    Result result{Status::Applied, {}};
+    bool learns = false;
+    const PlayerHealth::Events events{
+        .block =
+            [&](f32 taken, f32 left) {
+                if (const auto duration = block(player, taken, left)) {
+                    result.outputs.push_back({OutputKind::Block, slot, {}, *duration});
+                }
+            },
+        .sound =
+            [&](std::string_view name) {
+                result.outputs.push_back({OutputKind::Sound, slot, std::string{name}});
+            },
+        .cry =
+            [&](std::string_view name) {
+                result.outputs.push_back({OutputKind::Cry, slot, std::string{name}});
+            },
+        .named =
+            [&](std::string_view name, f32 wait) {
+                result.outputs.push_back({OutputKind::Named, slot, std::string{name}, wait});
+            },
+        .learnBlock =
+            [&] {
+                learns |= !PartyHelpAdmission::suppressedForPlayer(HelpMessages::kLearnBlock, slot,
+                                                                   party);
+            },
+        .vibrate =
+            [&](s32 frames) {
+                result.outputs.push_back({OutputKind::Rumble, slot, {}, 0, frames});
+            },
+        .logDeaths = false};
+    hurt(health, player, amount, kind, directed, context, events, impact, stats);
+    if (learns || player.life != PlayerLife::Standing) {
+        return {Status::Unsupported, {}};
     }
     return result;
 }

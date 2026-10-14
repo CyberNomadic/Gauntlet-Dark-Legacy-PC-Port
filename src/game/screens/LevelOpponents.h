@@ -26,6 +26,7 @@ namespace gdl::game {
 struct EnemyFeedbackEmission;
 struct EnemyBirthEmission;
 struct GeneratorFeedbackEmission;
+struct CritterCueEmission;
 /** Level enemy population, damage/reward routing and following combat cues.
  * Owns enemy archives, missiles, generators and the boss meter. Borrowed level services
  * must outlive close(). Phase hooks synchronously interleave scene-level rites,
@@ -157,6 +158,7 @@ private:
     friend class OpponentCombatCheckpoint;
     friend class OrdinaryCombatCheckpoint;
     friend class OrdinaryCombatTick;
+    friend class OrdinaryCritterPhase;
     // Identifies the lifetime of the borrowed level services, not gameplay state.
     u64 m_bindingGeneration = 1;
     /** Plays `name` at `level` of 255 as heard from where the players stand. */
@@ -199,7 +201,12 @@ private:
     bool awardEnemyLosses(const Events& events, const FeedbackPublisher& publish = {});
     void awardBossLosses(std::span<const PlayerRuntime> players, const Events& events);
     void awardCritterLosses(std::span<const PlayerRuntime> players, const Events& events);
-    void showCritterCue(const CombatCue& cue, ItemArchive* archive, bool ofBoss);
+    using CritterPublisher = std::function<std::optional<u32>(const CritterCueEmission&)>;
+    bool showCritterCue(const CombatCue& cue, ItemArchive* archive, bool ofBoss,
+                        const CritterPublisher& publish = {});
+    void advanceCritters(s32 ticks, f32 seconds, std::span<const EnemyView> views, bool timeStopped,
+                         std::span<const CombatantObstacle> walkedInto,
+                         std::span<PlayerRuntime> players);
     void followCritterEffects(std::span<const PlayerRuntime> players);
     void updateDeaths(std::span<PlayerRuntime> players, const Events& events);
     void clearDeaths();

@@ -11,13 +11,28 @@
 #include "game/netplay/StageStatePacket.h"
 #include "game/players/NameCheats.h"
 #include "game/players/Progression.h"
+#include "game/screens/CombatAgreement.h"
 #include "game/screens/CombatResources.h"
 #include "game/screens/OpponentResources.h"
+#include "game/screens/PartyLighting.h"
 #include "game/screens/StageCombatPresentation.h"
 #include "game/screens/StageParticlePresentation.h"
 #include "game/screens/StageResources.h"
 
 namespace gdl::game {
+namespace {
+struct AgreementTimer {
+    u64& count;
+    u64& nanoseconds;
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    ~AgreementTimer() {
+        ++count;
+        nanoseconds += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now() - started)
+                                            .count());
+    }
+};
+} // namespace
 
 struct CombatPrediction::Data {
     LevelWorld world;
@@ -57,7 +72,6 @@ struct CombatPrediction::Data {
     std::unique_ptr<OrdinaryCombatCheckpoint> staged;
     std::unique_ptr<OrdinaryCombatTick> stagedRunner;
     StageStatePacket::Catalog stageCatalog;
-    std::unique_ptr<OrdinaryCombatCheckpoint::State> authority;
     std::optional<OrdinaryCombatCheckpoint::Rewind> baselineUndo;
     OrdinaryCombatTick::Boundary boundary;
     u64 boundaryTick = 0;
@@ -66,8 +80,36 @@ struct CombatPrediction::Data {
     u64 baseline = 0;
     u64 tick = 0;
     u64 replayRevision = 1;
+    bool hasBaseline = false;
     bool active = false;
     bool stageSelected = false;
+    struct Agreement {
+        u64 tick = 0;
+        CombatAgreement::Digest state;
+        CombatAgreement::Digest context;
+    };
+    std::array<std::optional<Agreement>, static_cast<usize>(kMaxTicks) + 1> history;
+    AgreementTimings agreementTimings;
+
+    void recordAgreement(const OrdinaryCombatTick::Frame& frame) {
+        auto& entry = history[static_cast<usize>(tick % history.size())];
+        entry.reset();
+        if (!boundary.state) {
+            return;
+        }
+        const AgreementTimer measured{agreementTimings.recorded,
+                                      agreementTimings.recordNanoseconds};
+        auto nextFrame = frame;
+        nextFrame.damage.playSeconds += frame.seconds;
+        const auto nextContext = CombatAgreement::context(
+            nextFrame, boundary.state->stage && boundary.state->stage->camera.has_value());
+        const auto state = CombatAgreement::state(*boundary.state, stageCatalog);
+        if (nextContext && state) {
+            entry = Agreement{tick, *state, *nextContext};
+        }
+        // An unrepresentable witness disables only promotion for this tick.
+        // The runner already validated and accepted its complete native state.
+    }
 
     OrdinaryCombatCheckpoint* checkpointOwner() const {
         return stageSelected ? staged.get() : ordinary.get();
@@ -241,6 +283,7 @@ struct CombatPrediction::Data {
     }
 
     void resetReplay() {
+        history.fill(std::nullopt);
         if (!active) {
             return;
         }
@@ -263,6 +306,28 @@ struct CombatPrediction::Data {
         tick = baseline;
     }
 };
+
+struct CombatPrediction::Promotion::Data {
+    const CombatPrediction::Data* owner = nullptr;
+    std::weak_ptr<const u8> lifetime;
+    u64 baseline = 0;
+    u64 target = 0;
+    u64 current = 0;
+    u64 revision = 0;
+    bool stage = false;
+    std::optional<OrdinaryCombatCheckpoint::Rewind> undo;
+};
+
+CombatPrediction::Promotion::Promotion(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
+CombatPrediction::Promotion::Promotion(Promotion&&) noexcept = default;
+CombatPrediction::Promotion& CombatPrediction::Promotion::operator=(Promotion&&) noexcept = default;
+CombatPrediction::Promotion::~Promotion() = default;
+u64 CombatPrediction::Promotion::baseline() const {
+    return m_data ? m_data->target : 0;
+}
+u64 CombatPrediction::Promotion::currentTick() const {
+    return m_data ? m_data->current : 0;
+}
 
 CombatPrediction::CombatPrediction() = default;
 CombatPrediction::~CombatPrediction() = default;
@@ -303,7 +368,7 @@ bool CombatPrediction::resume(const MatchContext& context) {
         return false;
     }
     m_data->resetReplay();
-    m_data->authority.reset();
+    m_data->hasBaseline = false;
     m_data->baseline = m_data->tick = 0;
     m_data->context = context;
     ++m_data->replayRevision;
@@ -337,25 +402,25 @@ bool CombatPrediction::begin(u64 epoch, u64 tick, const OrdinaryCombatCheckpoint
     }
     auto& data = *m_data;
     data.resetReplay();
-    if (epoch != data.context.epoch || (data.authority && tick < data.baseline) ||
+    if (epoch != data.context.epoch || (data.hasBaseline && tick < data.baseline) ||
         authority.combat.players.size() != data.party.size()) {
         return reject(Issue::Context);
     }
     if (!authority.valid()) {
         return reject(Issue::State);
     }
-    // Copy first: allocation failure cannot leave the owner at a new boundary
-    // without its associated undo image.
-    auto next = std::make_unique<OrdinaryCombatCheckpoint::State>(authority);
-    auto* owner = next->stage ? data.staged.get() : data.ordinary.get();
+    auto* owner = authority.stage ? data.staged.get() : data.ordinary.get();
     if (owner == nullptr) {
         return reject(Issue::Bindings);
     }
-    if (!owner->restore(*next, issue)) {
+    // Preparation owns every restored value before the allocation-free commit.
+    // The caller's seed need not survive this call; only its accepted tick is
+    // retained until the first advance prepares the native baseline undo.
+    if (!owner->restore(authority, issue)) {
         return false;
     }
-    data.stageSelected = next->stage.has_value();
-    data.authority = std::move(next);
+    data.stageSelected = authority.stage.has_value();
+    data.hasBaseline = true;
     data.baseline = tick;
     data.tick = tick;
     data.active = true;
@@ -409,11 +474,114 @@ OrdinaryCombatTick::Result CombatPrediction::advance(u64 tick, std::span<const P
         ++data.replayRevision;
         data.boundaryTick = data.tick;
         data.boundaryRevision = data.replayRevision;
+        data.recordAgreement(frame);
         return result;
     } catch (...) {
         data.resetReplay();
         throw;
     }
+}
+
+std::optional<CombatPrediction::Promotion>
+CombatPrediction::preparePromotion(u64 epoch, u64 tick,
+                                   const OrdinaryCombatCheckpoint::State& authority,
+                                   const OrdinaryCombatTick::Frame& nextFrame) {
+    if (!m_data || !m_data->active || !m_data->hasBaseline ||
+        !m_data->resources.matches(m_data->party)) {
+        return std::nullopt;
+    }
+    auto& data = *m_data;
+    if (epoch != data.context.epoch || tick <= data.baseline || tick > data.tick ||
+        data.stageSelected != authority.stage.has_value() ||
+        authority.combat.players.size() != data.party.size() || !data.baselineUndo ||
+        !data.boundary.state || data.boundaryTick != data.tick ||
+        data.boundaryRevision != data.replayRevision ||
+        data.boundary.rewind != &*data.baselineUndo ||
+        data.boundary.owner != (data.stageSelected ? data.stagedRunner.get() : data.runner.get()) ||
+        nextFrame.ticks != 60 / static_cast<s32>(data.context.tickRate)) {
+        return std::nullopt;
+    }
+    const auto& witness = data.history[static_cast<usize>(tick % data.history.size())];
+    if (!witness || witness->tick != tick) {
+        return std::nullopt;
+    }
+    {
+        const AgreementTimer measured{data.agreementTimings.checked,
+                                      data.agreementTimings.checkNanoseconds};
+        const auto context = CombatAgreement::context(
+            nextFrame, authority.stage && authority.stage->camera.has_value());
+        if (!context || *context != witness->context) {
+            return std::nullopt;
+        }
+        const auto state = CombatAgreement::state(authority, data.stageCatalog);
+        if (!state || *state != witness->state) {
+            return std::nullopt;
+        }
+    }
+    auto* owner = data.checkpointOwner();
+    if (!owner->canRewind(*data.baselineUndo)) {
+        return std::nullopt;
+    }
+    auto prepared = std::make_unique<Promotion::Data>();
+    {
+        const AgreementTimer measured{data.agreementTimings.prepared,
+                                      data.agreementTimings.prepareNanoseconds};
+        // The digest is never a validity certificate. Validate original values,
+        // including omitted draw caches, and prepare every trusted child before
+        // replacing the existing undo. Preparation does not change native C.
+        prepared->undo = owner->prepareRewind(authority);
+        if (!prepared->undo || !owner->canRewind(*prepared->undo) ||
+            !owner->canRewind(*data.baselineUndo)) {
+            return std::nullopt;
+        }
+    }
+    prepared->owner = &data;
+    prepared->lifetime = data.lifetime;
+    prepared->baseline = data.baseline;
+    prepared->target = tick;
+    prepared->current = data.tick;
+    prepared->revision = data.replayRevision;
+    prepared->stage = data.stageSelected;
+    return Promotion{std::move(prepared)};
+}
+
+bool CombatPrediction::commitPromotion(Promotion&& promotion) {
+    if (!m_data || !promotion.m_data) {
+        return false;
+    }
+    auto& data = *m_data;
+    const auto& prepared = *promotion.m_data;
+    if (prepared.owner != &data || prepared.lifetime.lock() != data.lifetime || !data.active ||
+        !data.hasBaseline || !data.resources.matches(data.party) ||
+        prepared.baseline != data.baseline || prepared.current != data.tick ||
+        prepared.revision != data.replayRevision || prepared.stage != data.stageSelected ||
+        prepared.target <= data.baseline || prepared.target > data.tick || !prepared.undo ||
+        !data.baselineUndo || !data.boundary.state || data.boundaryTick != data.tick ||
+        data.boundaryRevision != data.replayRevision ||
+        data.boundary.rewind != &*data.baselineUndo ||
+        !data.checkpointOwner()->canRewind(*data.baselineUndo) ||
+        !data.checkpointOwner()->canRewind(*prepared.undo)) {
+        return false;
+    }
+    // All potentially failing preparation is complete. No child commit occurs:
+    // C and its native output queues remain exactly as already accepted.
+    auto accepted = std::move(promotion.m_data);
+    data.baselineUndo = std::move(accepted->undo);
+    data.baseline = accepted->target;
+    ++data.replayRevision;
+    data.boundaryRevision = data.replayRevision;
+    data.boundary.rewind = &*data.baselineUndo;
+    for (auto& entry : data.history) {
+        if (entry && entry->tick <= data.baseline) {
+            entry.reset();
+        }
+    }
+    ++data.agreementTimings.promoted;
+    return true;
+}
+
+CombatPrediction::AgreementTimings CombatPrediction::agreementTimings() const {
+    return m_data ? m_data->agreementTimings : AgreementTimings{};
 }
 
 void CombatPrediction::resetReplay() {
@@ -477,10 +645,12 @@ CombatPrediction::stagePicture(const CombatSnapshot& authority, const MotionSnap
     if (!figures) {
         return nullptr;
     }
+    std::vector<PointLight> lights;
+    PartyLighting::gather(lights, data.effects, data.opponents, data.party, data.world.level());
     auto nativeParticles = StageParticlePresentation::capture(
         motion.epoch, motion.tick, data.lifetime,
         {data.world, data.arsenal.missiles().visuals(), data.effects, &data.portals, *figures, true,
-         &data.opponents.enemies(), data.party});
+         &data.opponents.enemies(), data.party, lights});
     if (!nativeParticles) {
         return nullptr;
     }

@@ -65,6 +65,28 @@ public:
      * No live inventory, HUD, audio or collection artwork is touched. */
     static bool collectionUnchanged(std::span<const PlayerRuntime> players, const LevelWorld& world,
                                     const Chests& chests, const ClassDataSet& classes);
+    /** The same no-op judgment for one native first-collector offer. This is
+     * evaluated against the current party after all earlier ordered offers. */
+    static bool offerUnchanged(const Pickup& pickup, std::span<const PlayerRuntime> players,
+                               const LevelWorld& world, const ClassDataSet& classes);
+
+    struct CurrencyEvent {
+        enum class Kind { Help, ChallengeCoin, Card, NamedSound, CharacterBark };
+        Kind kind = Kind::Help;
+        usize item = 0;
+        usize recipient = 0; ///< party index, not input slot
+        s32 lesson = -1;
+        std::string name;
+    };
+    using CurrencyPublisher = std::function<bool(const CurrencyEvent&)>;
+    /** Native Gold/Keys inventory, gesture and ordered feedback dispatch. A
+     * publisher's false means transaction refusal, not a help-display result.
+     * Earlier mutations must be rewound by the caller on refusal. Other kinds
+     * and crystals are refused without mutation; no renderer/audio is invoked. */
+    static PickupDecision takeCurrency(const Pickup& pickup, std::span<PlayerRuntime> players,
+                                       const LevelWorld& world, const LevelFixtures& fixtures,
+                                       const ClassDataSet& classes,
+                                       const CurrencyPublisher& publish);
     /** Native post-collection container cleanup, without pickup/audio callbacks. */
     static void cleanupCollectedChests(const LevelWorld& world, Chests& chests);
 

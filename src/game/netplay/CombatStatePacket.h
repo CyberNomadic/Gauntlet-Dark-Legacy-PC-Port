@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -25,7 +26,7 @@ public:
         bool operator==(const State&) const = default;
     };
 
-    static constexpr u32 kVersion = 4;
+    static constexpr u32 kVersion = 5;
     static constexpr usize kHeaderBytes = 16;
     static constexpr usize kMaxBytes = 512 * 1024;
     /** Shared budgets for these explicit fields. Complete participant leaves
@@ -39,6 +40,13 @@ public:
     /** All fields are encoded, or the whole supplement is refused. These bounds
      * are transport limits, not changes to native pool capacities. */
     static std::optional<std::vector<u8>> encode(const State& state);
+    /** SHA-256 of the canonical body with no opaque Stage. Optional normalization
+     * elides only draw-overwritten ItemFigure caches. This is NOT validation;
+     * incoming state still requires complete native prepareRestore. */
+    static std::optional<std::array<u8, 32>>
+    canonicalDigest(const CombatRollbackCheckpoint::State& combat,
+                    const OpponentCombatCheckpoint::State& adapter,
+                    bool presentationIndependent = false);
     static std::optional<State> decode(std::span<const u8> bytes);
 };
 

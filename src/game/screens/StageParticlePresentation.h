@@ -63,6 +63,9 @@ public:
         const Enemies* enemies = nullptr;
         /** Native player endpoint poses under the same picture lifetime. */
         std::span<const PlayerRuntime> party;
+        /** Complete current native draw-time list, already in native priority
+         * order and capped by WorldLighting::kMostPoints. Copied during capture. */
+        std::span<const PointLight> lights;
     };
     static constexpr usize kMaxRows = 16384;
     static constexpr usize kMaxParticles = 1'000'000;
@@ -90,9 +93,14 @@ public:
             const Sources& sources);
 
     bool matches(u64 epoch, u64 tick) const;
+    /** Also verifies the exact loaded resource owner, not just matching stamps. */
+    bool matches(u64 epoch, u64 tick, const std::weak_ptr<const void>& resources) const;
     usize particleCount() const;
     const StageSnapshotSampling::Swarm* swarm() const;
     const StageSnapshotSampling::Party* party() const;
+    /** Native lighting uses the current endpoint at every render fraction, not
+     * interpolated array indices. Empty after resource-lifetime invalidation. */
+    std::span<const PointLight> lights() const;
     /** Draw each phase exactly once in native ordering. While this complete
      * sidecar is selected, the replica's independently reconstructed weapon
      * particles must stand down, including retiring tails. Negative alpha is

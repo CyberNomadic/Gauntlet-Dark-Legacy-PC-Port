@@ -167,7 +167,7 @@ std::optional<StaticSceneryCheckpoint::State> StaticSceneryCheckpoint::checkpoin
             static_cast<usize>(placement.info) >= m_owner.m_layout->itemInfos().size()) {
             return std::nullopt;
         }
-        const auto figure = ItemFigureCheckpoint::capture(source->figure);
+        auto figure = ItemFigureCheckpoint::capture(source->figure);
         if (!figure) {
             return std::nullopt;
         }
@@ -178,7 +178,7 @@ std::optional<StaticSceneryCheckpoint::State> StaticSceneryCheckpoint::checkpoin
              placement,
              source->minPlayers,
              source->shown,
-             *figure,
+             std::move(*figure),
              {support.m_object, support.m_local, support.m_boxOffset, support.m_boxYaw},
              source->box});
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <map>
 #include <optional>
 
@@ -37,6 +38,21 @@ public:
         u64 concealed = 0;
         u64 neutral = 0;
     };
+    /** Local diagnostics only: authenticated, current-owner commands carrying an
+     * action level or edge. Neutral/movement traffic cannot evict action evidence.
+     * An execution is exact queued consumption, not an action or hit acknowledgement. */
+    struct CommandTrace {
+        InputCommand command;
+        Peer sender = 0;
+        u64 receivedTick = 0;
+        Admission admission = Admission::Invalid;
+        u32 repeats = 0;
+        std::optional<u64> executedTick;
+        u64 concealedTicks = 0;
+    };
+    static constexpr usize kCommandTraces = 128;
+    const std::deque<CommandTrace>& commandTrace() const { return m_commandTrace; }
+    u64 droppedCommandTraces() const { return m_droppedCommandTraces; }
     const Diagnostics& diagnostics(usize seat) const { return m_seats.at(seat).diagnostics; }
     /** Last actual input consumed, retaining its original tick for hold expiration. */
     const std::optional<InputCommand>& previous(usize seat) const {
@@ -61,6 +77,8 @@ public:
     Frame advance();
 
 private:
+    void traceAdmission(Peer sender, const InputCommand& command, Admission admission);
+    void traceExecution(Peer sender, const InputCommand& command, bool concealed);
     struct Seat {
         Peer owner = 0;
         u32 grant = 0;
@@ -69,6 +87,8 @@ private:
         Diagnostics diagnostics;
     };
     std::array<Seat, InputCommand::kSeats> m_seats;
+    std::deque<CommandTrace> m_commandTrace;
+    u64 m_droppedCommandTraces = 0;
     u64 m_epoch = 1;
     u64 m_tick = 0;
 };

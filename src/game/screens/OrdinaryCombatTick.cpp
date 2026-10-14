@@ -11,13 +11,14 @@
 #include "game/players/Progression.h"
 #include "game/screens/EnemyFeedbackEmission.h"
 #include "game/screens/HelpMessages.h"
+#include "game/screens/OrdinaryBarrelEmission.h"
+#include "game/screens/OrdinaryCritterPhase.h"
 #include "game/screens/OrdinaryFixturePhase.h"
 #include "game/screens/OrdinaryFloorSupport.h"
 #include "game/screens/OrdinaryProjectilePhase.h"
 #include "game/screens/PartyFigures.h"
 #include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PartyNames.h"
-#include "game/screens/PartyPickups.h"
 #include "game/screens/PartyRecords.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/CameraMovementLimit.h"
@@ -37,7 +38,7 @@ bool ordinaryAction(PlayerAnimator::Action action) {
                        action != Action::PowerMedRecover && action != Action::PowerLow &&
                        action != Action::PowerLowRecover;
     return PlayerAnimator::locomotion(action) || PlayerAnimator::rollbackReactionAction(action) ||
-           action == Action::Pushed || melee ||
+           action == Action::Pushed || action == Action::Pick || melee ||
            (action >= Action::Throw && action <= Action::ThrowMovingRecover) ||
            (action >= Action::StrafeShootForward1 && action <= Action::StrafeShootRight2) ||
            action == Action::StrongThrow || action == Action::StrongThrowRecover ||
@@ -269,7 +270,7 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
     if (!OrdinaryStrongPhase::supported(m_checkpoint.m_combat.m_attacks, party) ||
         !OrdinaryProjectilePhase::supported(state.combat.arsenal, m_checkpoint.m_combat.m_missiles,
                                             seconds) ||
-        !quiet(state.opponents) || !state.adapter.dormant() ||
+        !quiet(state.opponents) || !OrdinaryCritterPhase::supported(state.adapter) ||
         std::ranges::any_of(state.adapter.lessons,
                             [&](const auto& lesson) {
                                 return !PartyHelpAdmission::suppressedForPlayer(
@@ -314,7 +315,8 @@ bool OrdinaryCombatTick::supported(const OrdinaryCombatCheckpoint::State& state,
     for (const auto& player : party) {
         if (player.life != PlayerLife::Standing || player.departed || player.figure == nullptr ||
             player.capture.active() || player.transport.active() || player.combo.active() ||
-            player.itTicks != 0 || player.deathHeld != -1 || player.gesture != PlayerDeed::None ||
+            player.itTicks != 0 || player.deathHeld != -1 ||
+            (player.gesture != PlayerDeed::None && player.gesture != PlayerDeed::Pick) ||
             player.mikey.shown() || player.mikeyFigure != nullptr || player.gagSeconds != 0 ||
             player.figure->animator().entering() ||
             !ordinaryAction(player.figure->animator().action()) ||
@@ -445,10 +447,13 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     // placements. Probe it without mutating the immutable preceding boundary.
     const OpponentSimulation::PlacementObservation observation{view, frame.attention};
     const auto initialViews = LevelOpponents::enemyViews(party);
-    if (!OpponentSimulation::combatSupported(
-            before->opponents,
-            {.ticks = frame.ticks, .seconds = frame.seconds, .players = initialViews},
-            &observation)) {
+    const auto initialCritters = m_checkpoint.m_opponents.m_critters.targets(true);
+    if (!OpponentSimulation::combatSupported(before->opponents,
+                                             {.ticks = frame.ticks,
+                                              .seconds = frame.seconds,
+                                              .players = initialViews,
+                                              .critters = initialCritters},
+                                             &observation)) {
         return {Status::Unsupported, Refusal::OpponentAdmission};
     }
     std::optional<Undo> undo;
@@ -564,7 +569,12 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
                     const auto target = combat.m_attacks.meleeTarget(
                         player.actor, targets, player.meleeFacing.value_or(player.actor.facing()),
                         player.actor.reach() + PlayerAttacks::kStepReach);
-                    if (target && (target->body.id < PlayerAttacks::kEnemyTargetBase ||
+                    const bool barrel = target && target->body.id >= 0 &&
+                                        target->body.id < PlayerAttacks::kEnemyTargetBase;
+                    if (target && (target->body.id < 0 ||
+                                   (barrel && (!staged || !m_fixtures.m_blasts.empty() ||
+                                               static_cast<usize>(target->body.id) >=
+                                                   m_fixtures.barrels().size())) ||
                                    target->body.id >= PlayerAttacks::kCritterTargetBase ||
                                    (target->body.id >= PlayerAttacks::kGeneratorTargetBase &&
                                     !OrdinaryProjectilePhase::ordinaryGenerator(
@@ -580,8 +590,37 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
                                         emission, combat.m_effects,
                                         combat.m_attacks.m_resources->device,
                                         combat.m_sharedEffects, result.impacts);
+                                },
+                                [&](const BreakableStrike& strike, std::string_view sound) {
+                                    // Native strike already resolved damage, contents and
+                                    // RNG. Publish a prepared birth in that same transaction;
+                                    // the later collector still decides actual pickup eligibility.
+                                    const auto emission = OrdinaryBarrelEmission::advance(
+                                        strike, sound, player.actor.player(), party, m_fixtures,
+                                        *m_checkpoint.m_world);
+                                    if (!emission.accepted) {
+                                        auto reason = PartyRefusal::BarrelEmission;
+                                        if (strike.contents >= 0) {
+                                            reason = PartyRefusal::BarrelContents;
+                                        } else if (strike.kind ==
+                                                   BreakableStrike::Kind::Exploding) {
+                                            reason = PartyRefusal::BarrelExplosion;
+                                        } else if (strike.kind == BreakableStrike::Kind::Poison) {
+                                            reason = PartyRefusal::BarrelGas;
+                                        }
+                                        refuseParty(reason, player.figure->animator().action(),
+                                                    TargetFamily::Barrel);
+                                        return false;
+                                    }
+                                    if (emission.cue) {
+                                        result.impacts.push_back(*emission.cue);
+                                    }
+                                    return true;
                                 })) {
-                            refuseParty(PartyRefusal::GeneratorEmission);
+                            refuseParty(barrel ? PartyRefusal::BarrelEmission
+                                               : PartyRefusal::GeneratorEmission,
+                                        player.figure->animator().action(),
+                                        barrel ? TargetFamily::Barrel : TargetFamily::Generator);
                         }
                     }
                 } else if ((action == PartyMotion::Action::ThrowWeapon ||
@@ -755,12 +794,15 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     const auto* level = world.level();
     const auto obstacles = m_fixtures.obstacles();
     const auto stops = m_fixtures.missileStops();
+    const auto critters = opponents.m_critters.targets(true);
+    opponents.m_enemies.setCombatantBodies(critters);
     const OpponentSimulation::Frame opponentFrame{
         .ticks = frame.ticks,
         .seconds = frame.seconds,
         .players = views,
         .fixtures = obstacles,
         .stops = stops,
+        .critters = critters,
         .collision = &collision,
         .missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1};
     if (m_checkpoint.m_pools.stageCombat(opponentFrame, m_checkpoint.m_missiles, [&] {
@@ -783,11 +825,28 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
                             [](const auto& cue) { return cue.kind == EnemyCue::Kind::Yell; })) {
         return {Status::Unsupported, Refusal::EnemyCue};
     }
-    // The complete bound great-creature pool is unused, and no statue can
-    // wake or correct a player. Its native phase still advances each shared
-    // preloaded texture bank, even while there is no visible creature.
-    opponents.m_critters.update(frame.ticks, frame.seconds, views, false, {}, &opponents.m_enemies);
-    opponents.followCritterEffects(party);
+    auto critterStep = OrdinaryCritterPhase::advance(opponents, frame.ticks, frame.seconds, views,
+                                                     m_fixtures.critterObstacles(), party);
+    if (!critterStep.advanced()) {
+        return {Status::Unsupported, Refusal::OpponentStep};
+    }
+    auto damage = frame.damage;
+    damage.playSeconds += frame.seconds;
+    auto critterFinish = OrdinaryCritterPhase::finish(
+        opponents, party, combat.m_health, m_classes, damage, combat.m_sharedEffects,
+        [&](const Vec3& from, const Vec3& to) {
+            return m_fixtures.safeRocks().blocksBreath(from, to);
+        },
+        [&](const Vec3& from, const Vec3& to) {
+            return m_fixtures.safeRocks().blocksSegment(from, to, .1f);
+        });
+    if (!critterFinish.advanced()) {
+        return {Status::Unsupported, Refusal::Damage};
+    }
+    for (auto& cue : critterFinish.sounds) {
+        result.feedback.push_back({std::move(cue.name), cue.position, cue.volume});
+    }
+    result.damage = std::move(critterFinish.damage);
     // Native levels precede the ordinary blow queue. A new level needs healing,
     // equipment rebinding and lesson owners; refuse rather than emulate those.
     for (const auto& player : party) {
@@ -796,8 +855,6 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
             return {Status::Unsupported, Refusal::Promotion};
         }
     }
-    auto damage = frame.damage;
-    damage.playSeconds += frame.seconds;
     auto blows =
         PartyDamage::stageBlows(opponents.m_enemies.takeBlows(), party, combat.m_health, m_classes,
                                 level != nullptr ? std::span<const LevelEnemy>{level->enemies}
@@ -806,7 +863,8 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     if (blows.status != PartyDamage::Status::Applied) {
         return {Status::Unsupported, Refusal::Damage};
     }
-    result.damage = std::move(blows.outputs);
+    result.damage.insert(result.damage.end(), std::make_move_iterator(blows.outputs.begin()),
+                         std::make_move_iterator(blows.outputs.end()));
     // Native melee lands before the opponent phase; its feedback and experience
     // are delivered here, after incoming blows and the level observation. Later
     // projectile impacts retain their queues until the next opponent phase.
@@ -863,9 +921,15 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     // native impact batch before dispatching any external world interaction.
     auto projectiles = OrdinaryProjectilePhase::advance(
         combat.m_attacks, party, targets, frame.seconds,
-        {combat.m_missiles, combat.m_missileEffects, combat.m_sharedEffects});
+        {combat.m_missiles, combat.m_missileEffects, combat.m_sharedEffects},
+        staged ? m_checkpoint.m_world : nullptr);
     if (!projectiles.advanced) {
-        return {Status::Unsupported, Refusal::Projectiles};
+        Result rejected{Status::Unsupported, Refusal::Projectiles};
+        rejected.projectileRefusal = projectiles.refusal;
+        if (projectiles.refusedTarget) {
+            rejected.refusedTarget = targetFamily(*projectiles.refusedTarget);
+        }
+        return rejected;
     }
     result.impacts.insert(result.impacts.end(), std::make_move_iterator(projectiles.cues.begin()),
                           std::make_move_iterator(projectiles.cues.end()));
@@ -878,10 +942,12 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
     combat.m_attacks.updateArmour(frame.seconds, party, targets);
     combat.m_effects.update(frame.seconds);
     if (staged) {
-        if (!PartyPickups::collectionUnchanged(party, world, m_fixtures.chests(), m_classes)) {
+        auto pickups = OrdinaryPickupPhase::advance(party, world, m_fixtures, m_classes,
+                                                    *m_checkpoint.m_world);
+        if (!pickups.advanced) {
             return {Status::Unsupported, Refusal::Pickups};
         }
-        PartyPickups::cleanupCollectedChests(world, m_fixtures.chests());
+        result.pickups = std::move(pickups.outputs);
         world.updateTriggers(frame.seconds, triggerVisitors(party, collision));
         m_fixtures.syncFloors();
         opponents.syncFloors();
@@ -920,7 +986,13 @@ OrdinaryCombatTick::Result OrdinaryCombatTick::stepTimed(
                                               world.cameraRange(), frame.projection, frame.seconds);
     }
     const auto postconditionBegin = Clock::now();
-    auto after = m_checkpoint.checkpoint(&timings.postconditionOwners);
+    // All reads of the preceding boundary are complete. Its world storage can
+    // now be consumed without changing any native owner or the interval undo.
+    auto* reusableWorld = boundary && boundary->state && boundary->state->stage
+                              ? &boundary->state->stage->world
+                              : nullptr;
+    auto after = m_checkpoint.capture(&timings.postconditionOwners, &timings.postconditionWorld,
+                                      reusableWorld);
     const bool accepted = after && supported(*after, party, frame.seconds);
     timings.postconditionNanoseconds = elapsed(postconditionBegin);
     if (!accepted) {

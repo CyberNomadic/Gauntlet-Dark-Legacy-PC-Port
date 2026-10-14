@@ -29,6 +29,10 @@ public:
      * arrives. Travel must instead release old registries before begin(). */
     bool resume(const MatchContext& context);
     void clear();
+    /** Release detached native artwork before its producer's resources unload.
+     * Replica-bound poses are owned values; the next authoritative show replaces
+     * them normally. This does not reload or release replica resources. */
+    void discardPresentation();
     bool setPlayer(u8 seat, std::unique_ptr<PlayerFigure> figure, f32 scale = 1,
                    const ClassStats* stats = nullptr);
     bool bindCompanions(RenderDevice& device, ItemArchive& powerups, ItemArchive* weapons);
@@ -75,6 +79,9 @@ private:
     ReplicaFighters m_fighters;
     WorldScene m_geometry;
     TextureAnimator m_textures;
+    /** Draw-only copies: selecting a native Stage endpoint must not mutate the
+     * borrowed world's lighting or retain its speculative lights after revocation. */
+    WorldLighting m_lighting, m_fullLighting;
     /** Private query-only floor artwork at lower, upper, and displayed clocks.
      * Never exposed to or advanced by guest gameplay. */
     std::array<WorldCollision, 3> m_presentationFloors;

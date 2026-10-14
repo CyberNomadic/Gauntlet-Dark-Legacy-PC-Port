@@ -1,5 +1,9 @@
 #pragma once
 
+#include <array>
+#include <optional>
+#include <string_view>
+
 #include "engine/world/WorldStateCheckpoint.h"
 
 #include "game/world/DestructibleWallsCheckpoint.h"
@@ -70,11 +74,42 @@ public:
     bool bindResources(RenderDevice& device);
     void clearResources();
     bool binds(const LevelWorld& owner) const;
+    /** Native record birth through the persistent load-time pickup catalog.
+     * Returns its actual appended index, never a synthesized checkpoint row.
+     * Failure leaves the pickup owner unchanged; no loads/uploads or effects.
+     * Ordinary successful births preserve an already-prepared whole-stage undo. */
+    std::optional<usize> placeItemRecord(s32 record, const Vec3& position, s32 amount = 0);
+    /** Ordered native collection using the persistent pickup owner. Absence
+     * requires whole-transaction undo; collection bursts are not admitted. */
+    std::optional<std::vector<Pickup>> collectItems(std::span<const Collector> collectors,
+                                                    const StagedPickupJudge& judge);
     bool hasCollisionObject(s32 object) const;
     /** Sorted trusted identities for one synchronous support preflight. Borrowed
      * until resource rebind/clear; validates the catalog once for the batch. */
     std::span<const s32> collisionObjects() const;
-    std::optional<State> checkpoint() const;
+    enum class CaptureOwner : usize {
+        Core,
+        Triggers,
+        Destruction,
+        Falling,
+        Walls,
+        Pickups,
+        Rotators,
+        Ambient,
+        Aggregate,
+        Count
+    };
+    static constexpr std::array<std::string_view, static_cast<usize>(CaptureOwner::Count)>
+        kCaptureOwners{"core",    "triggers", "destruction", "falling",  "walls",
+                       "pickups", "rotators", "ambient",     "aggregate"};
+    using CaptureTimings = std::array<std::optional<u64>, static_cast<usize>(CaptureOwner::Count)>;
+    /** Optional CPU nanoseconds for actual capture work, reset on every call.
+     * Unreached operations remain absent, including an initial binding refusal. */
+    std::optional<State> checkpoint(CaptureTimings* timings = nullptr) const;
+    /** Consumes an earlier value image's pickup storage after exact catalog
+     * authentication. Every live child and aggregate check still runs. Failure
+     * may consume scratch storage, but cannot mutate any native participant. */
+    std::optional<State> checkpoint(State&& reusable, CaptureTimings* timings = nullptr) const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;
     /** Preflight every participant before mutation. Synchronous commit performs
@@ -86,6 +121,7 @@ public:
 private:
     struct Resources;
     bool bound() const;
+    std::optional<State> capture(State* reusable, CaptureTimings* timings) const;
     LevelWorld& m_owner;
     std::shared_ptr<Resources> m_resources;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);

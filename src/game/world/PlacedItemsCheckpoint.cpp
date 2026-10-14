@@ -1,10 +1,13 @@
 #include "game/world/PlacedItemsCheckpoint.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <set>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 
 namespace gdl::game {
 namespace {
@@ -57,6 +60,60 @@ bool sameDefinitions(const std::vector<ItemInfo>& a, const std::vector<ItemInfo>
 bool samePlacements(const std::vector<ItemInstance>& a, const std::vector<ItemInstance>& b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), samePlacement);
 }
+bool sameBits(f32 a, f32 b) {
+    return std::bit_cast<u32>(a) == std::bit_cast<u32>(b);
+}
+bool sameBits(const Vec3& a, const Vec3& b) {
+    return sameBits(a.x, b.x) && sameBits(a.y, b.y) && sameBits(a.z, b.z);
+}
+bool sameCaptureIdentity(const PlacedItemsCheckpoint::State& a,
+                         const PlacedItemsCheckpoint::State& b) {
+    if (a.layout != b.layout || a.archives != b.archives || a.figures != b.figures ||
+        a.bursts != b.bursts || a.definitions.size() != b.definitions.size() ||
+        a.placements.size() != b.placements.size()) {
+        return false;
+    }
+    // Unlike restore's semantic equality, storage reuse must preserve the exact
+    // captured representation, including signed zero in authored float fields.
+    for (usize i = 0; i < a.definitions.size(); ++i) {
+        const auto& x = a.definitions[i];
+        const auto& y = b.definitions[i];
+        if (std::tie(x.type, x.subtype, x.name, x.collisionType, x.collisionFlags, x.objectFlags,
+                     x.properties, x.value, x.armor, x.hitPoints, x.activeType, x.activeOff,
+                     x.activeOn, x.choices) !=
+                std::tie(y.type, y.subtype, y.name, y.collisionType, y.collisionFlags,
+                         y.objectFlags, y.properties, y.value, y.armor, y.hitPoints, y.activeType,
+                         y.activeOff, y.activeOn, y.choices) ||
+            !sameBits(x.radius, y.radius) || !sameBits(x.height, y.height) ||
+            !sameBits(x.xSize, y.xSize) || !sameBits(x.zSize, y.zSize) ||
+            !sameBits(x.collisionOffset, y.collisionOffset)) {
+            return false;
+        }
+    }
+    for (usize i = 0; i < a.placements.size(); ++i) {
+        const auto& x = a.placements[i];
+        const auto& y = b.placements[i];
+        if (std::tie(x.info, x.minPlayers, x.flags, x.name, x.params) !=
+                std::tie(y.info, y.minPlayers, y.flags, y.name, y.params) ||
+            !sameBits(x.position, y.position) || !sameBits(x.rotation, y.rotation) ||
+            x.collision.size() != y.collision.size()) {
+            return false;
+        }
+        for (usize triangle = 0; triangle < x.collision.size(); ++triangle) {
+            const auto& left = x.collision[triangle];
+            const auto& right = y.collision[triangle];
+            if (!sameBits(left.normal, right.normal)) {
+                return false;
+            }
+            for (usize vertex = 0; vertex < left.vertices.size(); ++vertex) {
+                if (!sameBits(left.vertices[vertex], right.vertices[vertex])) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
 bool animation(AnimationPlayer& player, const TreeInfo& tree,
                const AnimationPlayer::Checkpoint& saved) {
     if (saved.playing && saved.sequence >= tree.sequences.size()) {
@@ -88,14 +145,14 @@ bool PlacedItemsCheckpoint::State::operator==(const State& other) const {
 }
 
 bool PlacedItemsCheckpoint::State::valid() const {
+    return validIdentity() && validMutable();
+}
+
+bool PlacedItemsCheckpoint::State::validIdentity() const {
     if (definitions.size() > kMaxItems || placements.size() > kMaxItems ||
-        items.size() > kMaxItems || figures.size() > kMaxResources ||
-        bursts.size() > kMaxResources || archives.size() > kMaxArchives ||
-        effects.size() > kMaxEffects ||
-        textures.size() != static_cast<usize>(std::ranges::count(archives, true)) || players < 0 ||
-        players > 4 || !scalar(revealTime) || revealTime < 0 ||
-        (!layout && (!definitions.empty() || !placements.empty())) ||
-        particleResources.size() != particles.entries.size() || !particles.valid()) {
+        figures.size() > kMaxResources || bursts.size() > kMaxResources ||
+        archives.size() > kMaxArchives ||
+        (!layout && (!definitions.empty() || !placements.empty()))) {
         return false;
     }
     usize choices = 0;
@@ -129,6 +186,16 @@ bool PlacedItemsCheckpoint::State::valid() const {
             }
             previous = resource.name;
         }
+    }
+    return true;
+}
+
+bool PlacedItemsCheckpoint::State::validMutable() const {
+    if (items.size() > kMaxItems || effects.size() > kMaxEffects ||
+        textures.size() != static_cast<usize>(std::ranges::count(archives, true)) || players < 0 ||
+        players > 4 || !scalar(revealTime) || revealTime < 0 ||
+        particleResources.size() != particles.entries.size() || !particles.valid()) {
+        return false;
     }
     if (!std::ranges::all_of(textures, [](const auto& value) { return value.valid(); })) {
         return false;
@@ -404,12 +471,151 @@ bool PlacedItemsCheckpoint::ready() const {
     return true;
 }
 
+bool PlacedItemsCheckpoint::placementValid(const PlacedItems::Item& item) const {
+    if (!vector(item.position) || !matrix(item.transform) || !vector(item.velocity) ||
+        !scalar(item.strength) || !scalar(item.noGrabSeconds) || item.noGrabSeconds < 0) {
+        return false;
+    }
+    return !item.floor || (m_owner.m_collision && item.floor->object >= 0 &&
+                           item.floor->object <= 65535 && matrix(item.floor->local) &&
+                           m_owner.m_collision->objectTransform(item.floor->object).has_value());
+}
+
+std::optional<PlacedItems::Item> PlacedItemsCheckpoint::birth(s32 record, const Vec3& position,
+                                                              const WorldCollision* collision,
+                                                              s32 amount) const {
+    if (!ready() || m_owner.m_items.size() >= State::kMaxItems || !vector(position) ||
+        (collision && collision != m_owner.m_collision) || record < 0 ||
+        static_cast<usize>(record) >= m_owner.m_infos.size()) {
+        return std::nullopt;
+    }
+    const auto& info = m_owner.m_infos[static_cast<usize>(record)];
+    if (info.type != ItemInfo::kPowerup) {
+        return std::nullopt;
+    }
+    const auto prototype =
+        std::ranges::find(m_catalog->figures, info.name, &PlacedItems::Item::name);
+    if (prototype == m_catalog->figures.end()) {
+        return std::nullopt;
+    }
+    const auto pose = prototype->pose.checkpoint();
+    const auto particles = prototype->particles.checkpoint();
+    if (!pose || !pose->valid() || !prototype->player.checkpoint().valid() || !particles.valid() ||
+        std::ranges::any_of(particles.field.entries,
+                            [](const auto& entry) { return !entry.emitter.particles.empty(); })) {
+        return std::nullopt;
+    }
+    // makeFigure binds at the default placement before native floor/throw rules.
+    // TreeParticles seeds each authored node with i+1, independent of the item
+    // index or sorted catalog index. The immutable prototype retains that exact
+    // empty birth state; neither a live bank clock nor an older item is cloned.
+    auto item = *prototype;
+    PlacedItems::setRecord(item, info, record, amount);
+    PlacedItems::placeAt(item, position, collision);
+    return placementValid(item) ? std::optional{std::move(item)} : std::nullopt;
+}
+
+std::optional<usize> PlacedItemsCheckpoint::append(PlacedItems::Item item) {
+    if (!placementValid(item)) {
+        return std::nullopt;
+    }
+    // All fallible CPU preparation precedes the vector's strongly exception-safe
+    // insertion. Resource/generation fences are unchanged by native gameplay.
+    static_assert(std::is_nothrow_move_constructible_v<PlacedItems::Item>);
+    const usize index = m_owner.m_items.size();
+    m_owner.m_items.push_back(std::move(item));
+    return index;
+}
+
+std::optional<usize> PlacedItemsCheckpoint::place(std::string_view itemName, const Vec3& position,
+                                                  const WorldCollision* collision) {
+    const auto record = m_owner.recordOf(itemName);
+    return record ? placeRecord(*record, position, collision) : std::nullopt;
+}
+
+std::optional<usize> PlacedItemsCheckpoint::placeRecord(s32 record, const Vec3& position,
+                                                        const WorldCollision* collision,
+                                                        s32 amount) {
+    auto item = birth(record, position, collision, amount);
+    return item ? append(std::move(*item)) : std::nullopt;
+}
+
+std::optional<usize> PlacedItemsCheckpoint::throwItem(std::string_view itemName,
+                                                      const Vec3& position, const Vec3& velocity,
+                                                      const WorldCollision* collision,
+                                                      f32 noGrabSeconds,
+                                                      std::optional<f32> strength) {
+    if (!vector(velocity) || !scalar(noGrabSeconds) || noGrabSeconds < 0 ||
+        (strength && !scalar(*strength))) {
+        return std::nullopt;
+    }
+    const auto record = m_owner.recordOf(itemName);
+    auto item = record ? birth(*record, position, collision, 0) : std::nullopt;
+    if (!item) {
+        return std::nullopt;
+    }
+    PlacedItems::throwFrom(*item, position, velocity, collision, noGrabSeconds, strength);
+    return append(std::move(*item));
+}
+
+std::optional<bool> PlacedItemsCheckpoint::release(usize index, const Vec3& position,
+                                                   const Vec3& velocity,
+                                                   const WorldCollision* collision,
+                                                   f32 noGrabSeconds) {
+    if (!ready() || (collision && collision != m_owner.m_collision)) {
+        return std::nullopt;
+    }
+    if (index >= m_owner.m_items.size() || !m_owner.m_items[index].carried) {
+        return false;
+    }
+    if (!vector(position) || !vector(velocity) || !scalar(noGrabSeconds) || noGrabSeconds < 0) {
+        return std::nullopt;
+    }
+    auto item = m_owner.m_items[index];
+    PlacedItems::releaseFrom(item, position, velocity, collision, noGrabSeconds, m_owner.m_players);
+    if (!placementValid(item)) {
+        return std::nullopt;
+    }
+    static_assert(std::is_nothrow_move_assignable_v<PlacedItems::Item>);
+    m_owner.m_items[index] = std::move(item);
+    return true;
+}
+
+std::optional<std::vector<Pickup>>
+PlacedItemsCheckpoint::collect(std::span<const Collector> collectors,
+                               const StagedPickupJudge& judge) {
+    if (!ready() || !judge || m_owner.m_items.size() > State::kMaxItems) {
+        return std::nullopt;
+    }
+    return m_owner.collectUsing(collectors, judge, {});
+}
+
 std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() const {
     if (!ready() || m_owner.m_items.size() > State::kMaxItems ||
         m_owner.m_effects.size() > State::kMaxEffects) {
         return std::nullopt;
     }
-    State state = m_catalog->identity;
+    return capture(m_catalog->identity);
+}
+
+std::optional<PlacedItemsCheckpoint::State>
+PlacedItemsCheckpoint::checkpoint(State&& reusable) const {
+    if (!ready() || m_owner.m_items.size() > State::kMaxItems ||
+        m_owner.m_effects.size() > State::kMaxEffects ||
+        !sameCaptureIdentity(reusable, m_catalog->identity)) {
+        return std::nullopt;
+    }
+    return capture(std::move(reusable));
+}
+
+std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::capture(State state) const {
+    // Only immutable, catalog-verified storage survives. A caller's stale or
+    // malformed live fields are never an input to native capture or validation.
+    state.items.clear();
+    state.effects.clear();
+    state.particleResources.clear();
+    state.items.reserve(m_owner.m_items.size());
+    state.effects.reserve(m_owner.m_effects.size());
     state.players = m_owner.m_players;
     state.revealTime = m_owner.m_revealTime;
     state.revealing = m_owner.m_revealing;
@@ -425,7 +631,7 @@ std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() 
             return prototype.figure == item.figure && prototype.archive == item.archive &&
                    prototype.name == item.name;
         });
-        const auto pose = item.pose.checkpoint();
+        auto pose = item.pose.checkpoint();
         if (resource == m_catalog->figures.end() || !pose) {
             return std::nullopt;
         }
@@ -447,7 +653,7 @@ std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() 
         saved.position = item.position;
         saved.transform = item.transform;
         saved.particles = item.particles.checkpoint();
-        saved.pose = *pose;
+        saved.pose = std::move(*pose);
         saved.animation = item.player.checkpoint();
         saved.alpha = item.alpha;
         saved.visible = item.visible;
@@ -465,14 +671,22 @@ std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() 
         saved.presentationCaptured = item.presentationCaptured;
         saved.continuity = item.continuity;
         if (item.presentationPose.posed()) {
-            const auto presentation = item.presentationPose.checkpoint();
+            auto presentation = item.presentationPose.checkpoint();
             if (!presentation) {
                 return std::nullopt;
             }
             for (usize i = 0; i < m_catalog->figures.size(); ++i) {
+                const auto& tree = *m_catalog->figures[i].figure;
+                // Reject impossible identities before restore rescans the pose.
+                // Compatible candidates still validate topology and composed
+                // matrices in their original first-success catalog order.
+                if (tree.name != presentation->tree ||
+                    tree.nodes.size() != presentation->nodes.size()) {
+                    continue;
+                }
                 TreePose candidate;
-                if (candidate.restore(*m_catalog->figures[i].figure, *presentation)) {
-                    saved.presentationPose = Pose{static_cast<u32>(i), *presentation};
+                if (candidate.restore(tree, *presentation)) {
+                    saved.presentationPose = Pose{static_cast<u32>(i), std::move(*presentation)};
                     break;
                 }
             }
@@ -498,14 +712,14 @@ std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() 
         const auto found = std::ranges::find_if(m_catalog->bursts, [&](const auto& prototype) {
             return prototype.figure == effect.figure;
         });
-        const auto pose = effect.pose.checkpoint();
+        auto pose = effect.pose.checkpoint();
         if (found == m_catalog->bursts.end() || !pose) {
             return std::nullopt;
         }
         Effect saved{static_cast<u32>(found - m_catalog->bursts.begin()),
                      effect.position,
                      effect.player.checkpoint(),
-                     *pose,
+                     std::move(*pose),
                      {},
                      effect.secondsLeft,
                      effect.emitting};
@@ -517,7 +731,10 @@ std::optional<PlacedItemsCheckpoint::State> PlacedItemsCheckpoint::checkpoint() 
         }
         state.effects.push_back(std::move(saved));
     }
-    return state.valid() ? std::optional{std::move(state)} : std::nullopt;
+    // The identity is copied from or exactly compared with the immutable catalog
+    // that bindResources validated. Live values and their catalog links are
+    // checked on every capture; incoming states still require full validation.
+    return state.validMutable() ? std::optional{std::move(state)} : std::nullopt;
 }
 
 std::optional<PlacedItemsCheckpoint::Prepared>

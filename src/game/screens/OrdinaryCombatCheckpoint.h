@@ -130,7 +130,9 @@ public:
                        "fixtures", "camera", "portals", "transporters", "links"};
     using CaptureTimings = std::array<std::optional<u64>, static_cast<usize>(CaptureOwner::Count)>;
     /** Optional CPU timing of the actual captures; never recaptures for diagnostics. */
-    std::optional<State> checkpoint(CaptureTimings* timings = nullptr) const;
+    std::optional<State>
+    checkpoint(CaptureTimings* timings = nullptr,
+               LevelWorldCheckpoint::CaptureTimings* worldTimings = nullptr) const;
     bool stageBound() const;
     std::optional<Prepared> prepareRestore(const State& state, RestoreIssue* issue = nullptr) const;
     bool canCommit(const Prepared& prepared) const;
@@ -145,12 +147,21 @@ public:
      * must be refused before mutation. No nested restore or resource change
      * may occur between preparation and rewind. */
     std::optional<Rewind> prepareRewind() const;
+    /** Validates/preallocates a different baseline without restoring it. All
+     * incoming, resource and cross-owner checks remain identical to restore. */
+    std::optional<Rewind> prepareRewind(const State& target) const;
     bool canRewind(const Rewind& rewind) const;
     bool rewind(Rewind&& rewind);
 
 private:
     friend class OrdinaryCombatTick;
+    /** Recycles only storage from the preceding private native boundary. The
+     * world authenticates immutable values and captures all live state anew. */
+    std::optional<State> capture(CaptureTimings* timings,
+                                 LevelWorldCheckpoint::CaptureTimings* worldTimings,
+                                 LevelWorldCheckpoint::State* reusableWorld) const;
     bool bindingsValid() const;
+    bool targetValid(const State& state, RestoreIssue* issue = nullptr) const;
     CombatRollbackCheckpoint& m_combat;
     LevelOpponents& m_opponents;
     OpponentSimulation m_pools;

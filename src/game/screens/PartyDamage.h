@@ -56,6 +56,11 @@ public:
         Status status = Status::Invalid;
         std::vector<Output> outputs;
     };
+    /** A selected native impact under caller-owned undo. Callers retain their
+     * own contact/gap selection; this buffers the shared health output path. */
+    static Result stageHit(PlayerRuntime&, std::span<const PlayerRuntime> party, PlayerHealth&,
+                           const ClassDataSet&, f32 amount, HurtKind, bool directed, const Context&,
+                           const PlayerImpact&);
     static constexpr usize kMaxBlows = 1024;
     /** Runs the same phase under a CALLER-OWNED transaction. Unsupported can
      * leave partial gameplay mutations: the caller must restore its full saved

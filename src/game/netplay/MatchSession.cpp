@@ -3,12 +3,36 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 #include "engine/io/ByteReader.h"
+
+#include "game/netplay/RollbackInputHistory.h"
 
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLT");
+static_assert(MatchSession::kMaxUnconfirmedTicks <= RollbackInputHistory::kHistory);
+
+u64 elapsedTicks(MatchSession::Time first, MatchSession::Time last, u16 rate, u64 limit) {
+    if (last <= first) {
+        return 0;
+    }
+    // Ordered unsigned subtraction can represent the entire signed clock range,
+    // including min() to max(). Split whole seconds before multiplying by rate
+    // so neither a long-running calibration nor injected extremes overflow.
+    using Count = std::make_unsigned_t<MatchSession::Clock::duration::rep>;
+    using Duration = std::chrono::duration<Count, MatchSession::Clock::period>;
+    const Duration elapsed{static_cast<Count>(last.time_since_epoch().count()) -
+                           static_cast<Count>(first.time_since_epoch().count())};
+    const auto seconds = std::chrono::duration_cast<std::chrono::duration<Count>>(elapsed);
+    if (seconds.count() > limit / rate) {
+        return limit;
+    }
+    const u64 whole = static_cast<u64>(seconds.count()) * rate;
+    const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed - seconds);
+    return whole + std::min(limit - whole, static_cast<u64>(nanos.count()) * rate / 1'000'000'000);
+}
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
@@ -189,7 +213,12 @@ void MatchSession::discardGameplay() {
     m_leadFeedbackFloor = 0;
     resetLeadRecovery();
     m_sampleClock = 0;
+    m_inputTime.reset();
+    m_deadlineAnchor.reset();
+    m_admissionAnchor.reset();
     m_sentInputs.clear();
+    m_actionReceipts.clear();
+    m_droppedActionReceipts = 0;
     m_audio.clear();
     m_feedback.clear();
     m_history.clear();
@@ -204,6 +233,137 @@ void MatchSession::resetLeadRecovery() {
     m_healthyLeadSince.reset();
     m_healthyLeadSamples = 0;
     m_healthyLeadMargin = 0;
+}
+MatchSession::Time MatchSession::observeInputTime(Time now) {
+    if (!m_inputTime || now > *m_inputTime) {
+        m_inputTime = now;
+    }
+    return *m_inputTime;
+}
+u64 MatchSession::deadlineAdvance() const {
+    if (!m_deadlineAnchor || !m_inputTime) {
+        return 0;
+    }
+    u64 advance = elapsedTicks(m_deadlineAnchor->received, *m_inputTime, m_context.tickRate,
+                               kMaxDeadlineAdvance);
+    if (m_admissionAnchor) {
+        const u64 ceiling =
+            m_deadlineAnchor->tick +
+            std::min(kMaxDeadlineAdvance, std::numeric_limits<u64>::max() - m_deadlineAnchor->tick);
+        const u64 allowance =
+            ceiling > m_admissionAnchor->tick ? ceiling - m_admissionAnchor->tick : 0;
+        const u64 elapsed =
+            elapsedTicks(m_admissionAnchor->received, *m_inputTime, m_context.tickRate, allowance);
+        const u64 estimate = std::min(ceiling, m_admissionAnchor->tick) + elapsed;
+        if (estimate > m_deadlineAnchor->tick) {
+            advance =
+                std::max(advance, std::min(kMaxDeadlineAdvance, estimate - m_deadlineAnchor->tick));
+        }
+    }
+    return advance;
+}
+bool MatchSession::calibrateInputDeadline(const CombatSnapshot& state, usize seat) {
+    if (!state.players[seat] || !state.motion.players[seat] ||
+        state.motion.players[seat]->grant != m_context.grants[seat]) {
+        return false;
+    }
+    const auto& feedback = state.players[seat]->movement;
+    const auto sent = std::ranges::find(m_sentInputs, feedback.receivedInput, &SentInput::tick);
+    // The negative margin saturates in InputTimeline; a saturated value cannot
+    // identify the admission tick. Unsent, forgotten or foreign inputs cannot
+    // establish a clock either. Epoch changes clear the entire local history.
+    if (sent == m_sentInputs.end() || !sent->firstSent ||
+        feedback.arrivalMargin <= -static_cast<s32>(InputTimeline::kMaxAhead) ||
+        feedback.arrivalMargin > static_cast<s32>(InputTimeline::kMaxAhead)) {
+        return false;
+    }
+    u64 admitted = feedback.receivedInput;
+    if (feedback.arrivalMargin >= 0) {
+        const auto margin = static_cast<u64>(feedback.arrivalMargin);
+        if (margin > admitted) {
+            return false;
+        }
+        admitted -= margin;
+    } else {
+        const auto late = static_cast<u64>(-feedback.arrivalMargin);
+        if (late > std::numeric_limits<u64>::max() - admitted) {
+            return false;
+        }
+        admitted += late;
+    }
+    if (admitted > state.motion.tick && admitted - state.motion.tick > 1) {
+        return false;
+    }
+    if (!m_admissionAnchor || *sent->firstSent > m_admissionAnchor->received ||
+        (*sent->firstSent == m_admissionAnchor->received && admitted > m_admissionAnchor->tick)) {
+        if (!m_admissionAnchor) {
+            // The old lead included snapshot age. Do not add that age again on
+            // top of the newly calibrated host clock. Already sent ticks remain
+            // immutable; inputReady coalesces until that old lead is consumed.
+            m_adaptiveLead = m_context.inputLead;
+            m_leadFeedbackFloor = m_nextInput;
+            resetLeadRecovery();
+        }
+        m_admissionAnchor = DeadlineAnchor{admitted, *sent->firstSent};
+    }
+    return true;
+}
+void MatchSession::refreshInputDeadline(Time now) {
+    if (host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
+        return;
+    }
+    observeInputTime(now);
+    if (!m_deadlineAnchor) {
+        return;
+    }
+    const u64 ahead = deadlineAdvance() + inputLead();
+    const u64 room = std::numeric_limits<u64>::max() - m_deadlineAnchor->tick;
+    const u64 deadline = m_deadlineAnchor->tick + std::min(ahead, room);
+    // Only future samples move. Previously transmitted history is immutable,
+    // including an unsent congestion retry and any retained discrete edge.
+    m_nextInput = std::max(m_nextInput, deadline);
+}
+void MatchSession::recordActionReceipt(const CombatSnapshot& state, Time now) {
+    for (usize seat = 0; seat < state.players.size(); ++seat) {
+        const auto& pose = state.motion.players[seat];
+        const auto& player = state.players[seat];
+        if (m_context.owners[seat] == 0 && !pose && !player) {
+            continue;
+        }
+        ActionReceipt receipt;
+        receipt.receivedAt = now;
+        receipt.epoch = state.motion.epoch;
+        receipt.tick = state.motion.tick;
+        receipt.seat = static_cast<u8>(seat);
+        receipt.grant = pose ? pose->grant : m_context.grants[seat];
+        receipt.continuity = pose ? pose->continuity : 0;
+        receipt.present = pose && player;
+        if (player) {
+            receipt.life = player->life;
+            receipt.portalPhase = player->portalPhase.has_value();
+            receipt.rollback = player->rollback.has_value();
+            receipt.action = player->rollback ? static_cast<u32>(player->rollback->action)
+                                              : player->animation.action;
+            receipt.generation = player->rollback ? player->rollback->animation.generation
+                                                  : player->animation.generation;
+            receipt.actualInput = player->rollbackInput ? player->rollbackInput->tick : 0;
+            receipt.receivedInput = player->movement.receivedInput;
+            receipt.lateInputs = player->movement.lateInputs;
+            receipt.reaction = player->reaction;
+            receipt.enabled = player->movement.enabled;
+            receipt.current = player->movement.current;
+            receipt.ranged = player->movement.ranged;
+            receipt.weapon = player->weapon.has_value();
+            receipt.melee = player->melee.has_value();
+            receipt.turbo = player->turbo.has_value();
+            receipt.released = player->rollback && player->rollback->released;
+        }
+        if (m_actionReceipts.size() == kActionReceipts) {
+            m_actionReceipts.pop_front();
+            ++m_droppedActionReceipts;
+        }
+        m_actionReceipts.push_back(receipt);
+    }
 }
 bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party,
                            const ShopSetup* shop, bool challengeWon) {
@@ -426,7 +586,8 @@ void MatchSession::disconnected(PacketTransport::Connection connection) {
     m_states[peer] = {};
     stop(MatchStop::Disconnected, host());
 }
-void MatchSession::update(f64 seconds) {
+void MatchSession::update(f64 seconds, Time now) {
+    refreshInputDeadline(now);
     if (host() && m_phase == Phase::Running && std::isfinite(seconds) && seconds > 0) {
         for (auto& delivery : m_states) {
             for (auto& batch : delivery.batches) {
@@ -557,7 +718,8 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
     return Admission::Invalid;
 }
 MatchSession::Admission MatchSession::receive(PacketTransport::Connection connection,
-                                              std::span<const u8> bytes) {
+                                              std::span<const u8> bytes, std::optional<Time> now) {
+    const auto inputAt = now.value_or(Clock::now());
     const auto peer = peerOf(connection);
     if (peer == 0) {
         return Admission::WrongPeer;
@@ -654,7 +816,20 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     case CombatReplica::Admission::Committed:
         m_receipt = m_playback.receipt();
         if (const auto* state = m_playback.latest()) {
+            const auto receivedAt = observeInputTime(inputAt);
+            m_deadlineAnchor = DeadlineAnchor{state->motion.tick, receivedAt};
+            // Keep input pacing's existing packet-arrival anchor. Diagnostics
+            // instead stamp completed validation, before local replay/rendering.
+            recordActionReceipt(*state, now ? receivedAt : Clock::now());
             m_latency.checkpoint(*state);
+            // Calibrate all local seats before adapting their shared safety
+            // margin, so a newly calibrated seat cannot erase another's raise.
+            for (usize seat = 0; seat < state->players.size(); ++seat) {
+                if (m_context.owners[seat] == m_local && state->players[seat] &&
+                    state->players[seat]->movement.receivedInput > m_feedbackInput[seat]) {
+                    calibrateInputDeadline(*state, seat);
+                }
+            }
             bool allFresh = true;
             std::optional<s32> margin;
             std::optional<s32> raisedLead;
@@ -662,7 +837,8 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
                 if (m_context.owners[seat] != m_local) {
                     continue;
                 }
-                if (!state->players[seat]) {
+                if (!state->players[seat] || !state->motion.players[seat] ||
+                    state->motion.players[seat]->grant != m_context.grants[seat]) {
                     allFresh = false;
                     continue;
                 }
@@ -681,13 +857,13 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
                     s32 needed = inputLead() + 2 - feedback.arrivalMargin;
                     const auto sent =
                         std::ranges::find(m_sentInputs, feedback.receivedInput, &SentInput::tick);
-                    if (sent != m_sentInputs.end()) {
+                    if (!m_admissionAnchor && sent != m_sentInputs.end()) {
                         // Receipt feedback traverses both directions, including the
                         // checkpoint cadence. Cover that measured interval at once,
                         // rather than converging over several long-distance round trips.
-                        needed = std::max(needed,
-                                          2 + static_cast<s32>(std::min<u64>(
-                                                  kMaxInputLead, m_sampleClock - sent->sampled)));
+                        needed = std::max(needed, 2 + static_cast<s32>(elapsedTicks(
+                                                          sent->sampled, receivedAt,
+                                                          m_context.tickRate, kMaxInputLead)));
                     }
                     raisedLead = raisedLead ? std::max(*raisedLead, needed) : needed;
                 }
@@ -724,11 +900,7 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
                 }
             }
         }
-        if (const auto* state = m_playback.latest();
-            state != nullptr &&
-            state->motion.tick <= std::numeric_limits<u64>::max() - inputLead()) {
-            m_nextInput = std::max(m_nextInput, state->motion.tick + inputLead());
-        }
+        refreshInputDeadline(inputAt);
         return Admission::Accepted;
     case CombatReplica::Admission::Pending:
     case CombatReplica::Admission::Duplicate: return Admission::Accepted;
@@ -749,9 +921,11 @@ bool MatchSession::inputReady() const {
     }
     const auto* latest = m_playback.latest();
     const u64 confirmed = latest == nullptr ? 0 : latest->motion.tick;
-    return m_nextInput <= confirmed || m_nextInput - confirmed <= inputLead() + kInputSlack;
+    const u64 budget =
+        std::min(kMaxUnconfirmedTicks, deadlineAdvance() + inputLead() + kInputSlack);
+    return m_nextInput <= confirmed || m_nextInput - confirmed <= budget;
 }
-bool MatchSession::sample(std::span<const InputCommand> frame) {
+bool MatchSession::sample(std::span<const InputCommand> frame, Time now) {
     m_sampled.clear();
     if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
         inputTick() == std::numeric_limits<u64>::max() ||
@@ -768,6 +942,7 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
         }
         seen[command.seat] = true;
     }
+    const auto sampledAt = observeInputTime(now);
     if (!inputReady()) {
         for (const auto& command : frame) {
             m_pendingPress[command.seat] |= command.pressedButtons;
@@ -802,7 +977,7 @@ bool MatchSession::sample(std::span<const InputCommand> frame) {
             return false;
         }
         m_input = *bytes;
-        m_sentInputs.push_back({m_nextInput, m_sampleClock});
+        m_sentInputs.push_back({m_nextInput, sampledAt});
         if (m_sentInputs.size() > InputTimeline::kMaxAhead) {
             m_sentInputs.pop_front();
         }
@@ -903,10 +1078,9 @@ bool MatchSession::publish(const CombatPacket::Prepared& state) {
     m_published = state.motion().tick;
     return true;
 }
-void MatchSession::flush(PacketTransport& transport) {
+void MatchSession::flush(PacketTransport& transport, Time now) {
     if (!host() && m_phase == Phase::Running) {
-        const auto now = LatencyTelemetry::Clock::now();
-        if (now - m_statisticsAt >= std::chrono::seconds(1)) {
+        if (elapsedTicks(m_statisticsAt, now, 1, 1) >= 1) {
             m_statisticsAt = now;
             if (const auto stats = transport.statistics(m_links[1])) {
                 m_latency.network(*stats);
@@ -967,6 +1141,13 @@ void MatchSession::flush(PacketTransport& transport) {
         const auto result =
             transport.send(m_links[1], m_input, PacketTransport::Delivery::Unreliable);
         if (result == PacketTransport::SendResult::Sent) {
+            const auto sentAt = observeInputTime(now);
+            for (const auto& command : m_history.commands()) {
+                const auto entry = std::ranges::find(m_sentInputs, command.tick, &SentInput::tick);
+                if (entry != m_sentInputs.end() && !entry->firstSent) {
+                    entry->firstSent = sentAt;
+                }
+            }
             m_latency.sent(m_history.commands());
             m_input.clear();
         } else if (result != PacketTransport::SendResult::Congested) {

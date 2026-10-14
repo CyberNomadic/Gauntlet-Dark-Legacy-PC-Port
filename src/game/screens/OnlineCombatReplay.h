@@ -8,6 +8,7 @@
 #include "game/netplay/CombatPlayback.h"
 #include "game/netplay/RollbackInputHistory.h"
 #include "game/screens/CombatPrediction.h"
+#include "game/screens/StageReplayPresentation.h"
 
 namespace gdl::game {
 class StageParticlePresentation;
@@ -106,18 +107,24 @@ public:
         u64 restorePasses = 0;
         u64 appendPasses = 0;
         u64 reusedPasses = 0;
+        u64 promotionAttempts = 0;
+        u64 promotedPasses = 0;
         u64 attemptedTicks = 0;
         u64 maximumTicksPerPass = 0;
         Timing passCost;
         Timing seedCost;
         Timing decodeCost;
         Timing restoreCost;
+        Timing promotionCost;
+        Timing agreementRecordCost;
         Timing advanceCost;
         Timing captureCost;
         Timing prepareCost;
         Timing postconditionCost;
         std::array<Timing, static_cast<usize>(OrdinaryCombatCheckpoint::CaptureOwner::Count)>
             postconditionOwners{};
+        std::array<Timing, static_cast<usize>(LevelWorldCheckpoint::CaptureOwner::Count)>
+            postconditionWorld{};
         Timing pictureCost;
         std::array<u64, static_cast<usize>(Refusal::Count)> reasons{};
         // Rendering also asks after a refused update. Inactive fallback is not
@@ -128,6 +135,8 @@ public:
         std::array<u64, static_cast<usize>(OrdinaryCombatTick::Refusal::Count)> tickRefusals{};
         std::array<u64, static_cast<usize>(OrdinaryCombatTick::PartyRefusal::Count)>
             partyRefusals{};
+        std::array<u64, static_cast<usize>(OrdinaryProjectilePhase::Refusal::Count)>
+            projectileRefusals{};
         std::array<u64, OrdinaryCombatTick::kActionCount> refusedActions{};
         std::array<u64, static_cast<usize>(OrdinaryCombatTick::TargetFamily::Count)>
             refusedTargets{};
@@ -143,6 +152,10 @@ public:
     bool active() const;
     bool staged() const;
     bool present(CombatSnapshot& shown, EnemyPresentation& presentation, f32 blend);
+    /** Explicit bounded copy for transfer to a detached Stage presenter. No
+     * native owner pointer is retained; legacy replay has no publication here.
+     * Call only on the simulation owner's thread after update() completes. */
+    std::shared_ptr<const StageReplayPresentation::Publication> publication() const;
     u64 tick() const;
     const Diagnostics& diagnostics() const { return *m_diagnostics; }
 

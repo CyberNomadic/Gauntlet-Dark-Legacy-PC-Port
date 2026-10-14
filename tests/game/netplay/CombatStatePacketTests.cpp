@@ -288,6 +288,11 @@ void decorate(Packet::State& state) {
         {effectId, 0, false, {1, 2, 3}, "ROOT", {4, 5, 6}, true, {0.1f, 0.2f}, 3});
     adapter.moveEffects.push_back({effectId, 0, false});
     adapter.barrelRams.push_back({7, 3.5f});
+    adapter.carried[0] = 0;
+    adapter.carried.back() = 41;
+    adapter.bags.push_back({7, {}, {3, 7, 9}, -2.5f, 0.75f, -0.125f, 0.5f, effectId, true});
+    adapter.bags.push_back(
+        {std::nullopt, "GARGEAGL", {-3, 5, -9}, 17, 0.125f, 0.25f, 1.125f, effectId, false});
     adapter.critters.actors[0].parts[0].actor.moveTimes = {-std::numeric_limits<f32>::infinity(),
                                                            -0.0f, 12.5f};
     adapter.critters.actors[0].parts[0].actor.patternTimes = {0, 9.5f};
@@ -380,7 +385,7 @@ TEST_CASE("combat packet round trips complete nonempty native owners and adapter
     CHECK((*encoded)[1] == 'B');
     CHECK((*encoded)[2] == 'S');
     CHECK((*encoded)[3] == 'T');
-    CHECK((*encoded)[4] == 4);
+    CHECK((*encoded)[4] == 5);
     const auto decoded = Packet::decode(*encoded);
     REQUIRE(decoded);
     CHECK(*decoded == state);
@@ -427,6 +432,71 @@ TEST_CASE("decoded combat packet restores real attack continuation without repla
         CHECK(fixture.state().combat == expected[tick]);
     }
     CHECK(fixture.native.device.texturesCreated == uploads);
+}
+
+TEST_CASE("combat loot fields enforce canonical indices scalars strings and allocation bounds",
+          "[netplay][combat-state-packet][opponent-loot-checkpoint]") {
+    auto state = emptyState();
+    state.combat.effects.nextId = 8;
+    state.adapter.carried.front() = 0;
+    state.adapter.carried.back() = 65535;
+    state.adapter.bags.push_back(
+        {42, {}, {731.125f, -113.25f, 91.5f}, -17.75f, 0.8125f, -0.375f, 0.5625f, 7, true});
+    state.adapter.bags.push_back({std::nullopt, "GARGEAGL", {}, 20, 0, 0, 0.5f, 6, false});
+    const auto encoded = Packet::encode(state);
+    REQUIRE(encoded);
+    REQUIRE(Packet::decode(*encoded) == state);
+    const auto locate = [&](std::initializer_list<u32> words) {
+        std::vector<u8> pattern(words.size() * 4);
+        usize offset = 0;
+        for (const u32 value : words) {
+            word(pattern, offset, value);
+            offset += 4;
+        }
+        const auto found =
+            std::search(encoded->begin(), encoded->end(), pattern.begin(), pattern.end());
+        REQUIRE(found != encoded->end());
+        REQUIRE(std::search(found + 1, encoded->end(), pattern.begin(), pattern.end()) ==
+                encoded->end());
+        return static_cast<usize>(found - encoded->begin());
+    };
+    SECTION("nonfinite flight scalar") {
+        auto bytes = *encoded;
+        word(bytes, locate({std::bit_cast<u32>(731.125f), std::bit_cast<u32>(-113.25f)}),
+             0x7FC00000);
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("noncanonical landed boolean") {
+        auto bytes = *encoded;
+        const usize location = locate({std::bit_cast<u32>(0.5625f), 7});
+        bytes[location + 8] = 2;
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("unknown effect identifier") {
+        auto bytes = *encoded;
+        word(bytes, locate({std::bit_cast<u32>(0.5625f), 7}) + 4, state.combat.effects.nextId);
+        CHECK_FALSE(Packet::decode(bytes));
+    }
+    SECTION("bounded reward name") {
+        state.adapter.bags.back().name.assign(65, 'G');
+        CHECK_FALSE(Packet::encode(state));
+        state.adapter.bags.back().name = std::string{"GARG\0EAGL", 9};
+        CHECK_FALSE(Packet::encode(state));
+    }
+    SECTION("wire record cap never truncates a valid native bag queue") {
+        state.adapter.bags.resize(Packet::kMaxRecords + 1, state.adapter.bags.front());
+        REQUIRE(state.adapter.valid());
+        CHECK_FALSE(Packet::encode(state));
+    }
+    SECTION("truncated final bag never becomes an empty queue") {
+        for (usize tail = 1; tail <= 40; ++tail) {
+            const usize size = encoded->size() - tail;
+            auto bytes = std::vector<u8>{encoded->begin(),
+                                         encoded->begin() + static_cast<std::ptrdiff_t>(size)};
+            word(bytes, 8, static_cast<u32>(size));
+            CHECK_FALSE(Packet::decode(bytes));
+        }
+    }
 }
 
 TEST_CASE("combat packet rejects every truncation trailing data and header disagreement",
@@ -480,7 +550,8 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
     auto baseline = fixture.state();
     decorate(baseline);
     auto bad = baseline;
-    const s32 mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+    const s32 mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                                  19, 20, 21, 22, 23);
     CAPTURE(mutation);
     switch (mutation) {
     case 0: bad.adapter.generatorRewards[0].player = 0; break;
@@ -517,6 +588,12 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
     case 17:
         bad.combat.attacks.shields[0].marks.push_back(bad.combat.attacks.shields[0].marks[0]);
         break;
+    case 18: bad.adapter.carried[0] = OpponentCombatCheckpoint::State::kMaxRecords + 1; break;
+    case 19: bad.adapter.bags[0].effect = bad.combat.effects.nextId; break;
+    case 20: bad.adapter.bags[0].name = "GARGEAGL"; break;
+    case 21: bad.adapter.bags[1].name.clear(); break;
+    case 22: bad.adapter.bags[0].age = 3; break;
+    case 23: bad.adapter.bags[1].pitch = std::numeric_limits<f32>::infinity(); break;
     }
     CHECK_FALSE(Packet::encode(bad));
     CHECK(Packet::encode(baseline));

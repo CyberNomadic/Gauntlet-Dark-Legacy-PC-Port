@@ -145,7 +145,8 @@ public:
     /** The same native contact, with generator presentation supplied by a
      * transaction-local publisher. A refusal requires complete caller undo. */
     bool melee(usize index, std::span<PlayerRuntime> players, const Targets& targets,
-               const LevelOpponents::GeneratorPublisher& generators);
+               const LevelOpponents::GeneratorPublisher& generators,
+               const LevelFixtures::BarrelPublisher& barrels = {});
     const MoveStrikes& strikes() const { return m_strikes; }
     usize shieldCount() const { return m_shields.size(); }
     /** Persistent outgoing damage not owned by ordinary-opponent replay. A
@@ -159,6 +160,7 @@ public:
     f32 meleeDamageOf(usize index, std::span<const PlayerRuntime> players) const;
 
 private:
+    friend struct PlayerAttacksTestPeer;
     friend class PlayerAttacksCheckpoint;
     friend class CombatRollbackCheckpoint;
     friend class OrdinaryCombatTick;
@@ -182,7 +184,8 @@ private:
     bool dispatchProjectileImpact(
         const MissileImpact& impact, std::span<PlayerRuntime> players, const Targets& targets,
         const std::function<void(const MissileImpact&, f32)>& presentation = {},
-        const LevelOpponents::GeneratorPublisher& generators = {});
+        const LevelOpponents::GeneratorPublisher& generators = {},
+        const LevelFixtures::BarrelPublisher& barrels = {});
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
                       std::span<PlayerRuntime> players, const Targets& targets);
     struct ItemArea {

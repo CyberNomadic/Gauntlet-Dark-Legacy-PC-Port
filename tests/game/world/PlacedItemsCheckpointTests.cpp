@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <type_traits>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -15,6 +17,7 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+static_assert(std::is_aggregate_v<PlacedItemsCheckpoint::State>);
 
 struct Fixture {
     test::FakeRenderDevice device;
@@ -160,6 +163,9 @@ TEST_CASE(
     REQUIRE(changed != baseline);
     REQUIRE(changed.items[0].presentationPose); // cached old COIN pose survives native replacement
     REQUIRE(changed.items[0].presentationPose->resource != changed.items[0].resource);
+    CHECK(changed.figures[changed.items[0].presentationPose->resource].name == "COIN");
+    CHECK(changed.figures[changed.items[0].resource].name == "TREAS_JUNK");
+    CHECK(changed.items[0].presentationPose == baseline.items[0].presentationPose);
     REQUIRE(fixture.owner.canCommit(*undo));
     REQUIRE(fixture.owner.commitRestore(std::move(*undo)));
     CHECK(fixture.state() == baseline);
@@ -298,6 +304,262 @@ TEST_CASE("pickup checkpoint limits refuse the complete seed without truncation"
     state.definitions.resize(PlacedItemsCheckpoint::State::kMaxItems + 1);
     CHECK_FALSE(state.valid());
     CHECK_FALSE(fixture.owner.restore(state));
+}
+
+TEST_CASE("pickup capture retains full public identity and live mutable validation",
+          "[placed-items-checkpoint][pickup-capture-validation]") {
+    Fixture fixture("pickup-capture-validation");
+    fixture.items.update(1.0f / 30);
+    fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.5f);
+    const auto baseline = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    for (s32 mutation = 0; mutation < 9; ++mutation) {
+        CAPTURE(mutation);
+        auto malformed = baseline;
+        switch (mutation) {
+        case 0: malformed.definitions[0].radius = nan; break;
+        case 1: malformed.placements[0].position.x = nan; break;
+        case 2:
+            malformed.placements[0].collision.emplace_back();
+            malformed.placements[0].collision.back().normal.x = nan;
+            break;
+        case 3: malformed.figures[0].name.clear(); break;
+        case 4:
+            REQUIRE_FALSE(malformed.bursts.empty());
+            malformed.bursts[0].archive = static_cast<u32>(malformed.archives.size());
+            break;
+        case 5: malformed.archives.clear(); break;
+        case 6: malformed.layout = false; break;
+        case 7: malformed.figures.push_back(malformed.figures.front()); break;
+        case 8: malformed.items[0].velocity.x = nan; break;
+        }
+        CHECK_FALSE(malformed.valid());
+        CHECK_FALSE(fixture.owner.prepareRestore(malformed));
+        CHECK_FALSE(fixture.owner.restore(malformed));
+        CHECK(fixture.state() == baseline);
+    }
+
+    // Capture may trust only its immutable catalog, never mutable native rows.
+    auto& item = const_cast<PlacedItems::Item&>(fixture.items.item(0));
+    const auto velocity = std::exchange(item.velocity.x, nan);
+    CHECK_FALSE(fixture.owner.checkpoint());
+    item.velocity.x = velocity;
+    const auto subtype = std::exchange(item.subtype, item.subtype + 1);
+    CHECK_FALSE(fixture.owner.checkpoint());
+    item.subtype = subtype;
+    CHECK(fixture.state() == baseline);
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+}
+
+TEST_CASE("pickup presentation candidate filtering retains topology and composed matrix checks",
+          "[placed-items-checkpoint][pickup-capture-validation]") {
+    Fixture fixture("pickup-presentation-candidate-validation");
+    fixture.items.update(1.0f / 30);
+    fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.5f);
+    const auto baseline = fixture.state();
+    const auto& item = fixture.items.item(0);
+    REQUIRE(item.figure);
+    REQUIRE(baseline.items[0].presentationPose);
+    REQUIRE(item.presentationPose.size() == 2);
+    auto changedTree = *item.figure;
+    const s32 mutation = GENERATE(0, 1, 2, 3);
+    switch (mutation) {
+    case 0:
+        changedTree.name = "FOREIGN";
+        item.presentationPose.rest(changedTree);
+        break;
+    case 1:
+        changedTree.nodes.pop_back();
+        item.presentationPose.rest(changedTree);
+        break;
+    case 2:
+        changedTree.nodes[1].position.x += 1;
+        item.presentationPose.rest(changedTree);
+        break;
+    case 3:
+        // Each local scalar remains valid, but the child inherits a 4,000,000
+        // scale. A name/count-only acceptance would silently lose this guard.
+        for (usize node = 0; node < 2; ++node) {
+            auto pose = item.presentationPose.poses()[node];
+            pose.scale = Vec3{2000};
+            item.presentationPose.setNodePose(node, pose);
+        }
+        CHECK(item.presentationPose.matrices()[1][0][0] > TreePose::Checkpoint::kMaxMagnitude);
+        break;
+    }
+    CAPTURE(mutation);
+    const auto captured = item.presentationPose.checkpoint();
+    REQUIRE(captured);
+    REQUIRE(captured->valid());
+    TreePose independent;
+    CHECK_FALSE(independent.restore(*item.figure, *captured));
+    CHECK_FALSE(fixture.owner.checkpoint());
+    auto scratch = baseline;
+    CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+
+    auto malformed = baseline;
+    malformed.items[0].presentationPose->pose = *captured;
+    REQUIRE(malformed.valid()); // Resource-bound restore supplies the stronger checks.
+    CHECK_FALSE(fixture.owner.prepareRestore(malformed));
+    REQUIRE(fixture.owner.restore(baseline));
+    CHECK(fixture.state() == baseline);
+}
+
+TEST_CASE("pickup capture consumes catalog storage while recapturing all native changes",
+          "[placed-items-checkpoint][pickup-capture-reuse]") {
+    Fixture fixture("pickup-capture-reuse");
+    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
+    fixture.items.update(seconds);
+    fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.5f);
+    const auto retained = fixture.state();
+    auto scratch = retained;
+    const auto* definitions = scratch.definitions.data();
+    const auto* placements = scratch.placements.data();
+    const auto* figures = scratch.figures.data();
+    const auto* bursts = scratch.bursts.data();
+    const auto textures = fixture.device.texturesCreated;
+    const auto uploads = fixture.device.textureUpdates;
+    bool activeBurst = false, retiredBurst = false;
+    for (s32 tick = 0; tick < 90; ++tick) {
+        CAPTURE(tick, seconds);
+        fixture.items.capturePresentation();
+        if (tick == 1) {
+            REQUIRE(fixture.items.throwItem(fixture.device, "COIN", {4, 5, 0}, {1, 2, 3},
+                                            &fixture.collision, 0.4f));
+        }
+        if (tick == 3) {
+            REQUIRE(fixture.items.blast(fixture.device, fixture.items.item(0).position, 2, 100)
+                        .size() == 1);
+        }
+        if (tick == 5) {
+            fixture.takeGem(1);
+        }
+        fixture.items.update(seconds);
+        const auto expected = fixture.state();
+        auto next = fixture.owner.checkpoint(std::move(scratch));
+        REQUIRE(next);
+        CHECK(next->valid());
+        CHECK(*next == expected);
+        CHECK(next->definitions.data() == definitions);
+        CHECK(next->placements.data() == placements);
+        CHECK(next->figures.data() == figures);
+        CHECK(next->bursts.data() == bursts);
+        if (tick >= 3) {
+            REQUIRE(next->items[0].presentationPose);
+            CHECK(next->items[0].presentationPose == retained.items[0].presentationPose);
+            CHECK(next->items[0].presentationPose->resource != next->items[0].resource);
+        }
+        activeBurst |= !next->effects.empty();
+        retiredBurst |= activeBurst && next->effects.empty();
+        scratch = std::move(*next);
+    }
+    CHECK(activeBurst);
+    CHECK(retiredBurst);
+    CHECK(fixture.device.texturesCreated == textures);
+    CHECK(fixture.device.textureUpdates == uploads);
+    // Separate published value images and preallocated undo remain independent.
+    REQUIRE(fixture.owner.restore(retained));
+    CHECK(fixture.state() == retained);
+}
+
+TEST_CASE("pickup scratch capture authenticates exact identity but never trusts old live values",
+          "[placed-items-checkpoint][pickup-capture-reuse]") {
+    Fixture fixture("pickup-capture-reuse-validation");
+    const auto baseline = fixture.state();
+    const auto nan = std::numeric_limits<f32>::quiet_NaN();
+    for (s32 mutation = 0; mutation < 9; ++mutation) {
+        CAPTURE(mutation);
+        auto scratch = baseline;
+        switch (mutation) {
+        case 0: scratch.definitions[0].value += 1; break;
+        case 1: scratch.definitions[0].collisionOffset.x = -0.0f; break;
+        case 2: scratch.definitions[0].choices.push_back(1); break;
+        case 3: scratch.placements[0].position.x = -0.0f; break;
+        case 4: scratch.placements[0].collision.emplace_back(); break;
+        case 5: scratch.figures[0].name += "_FOREIGN"; break;
+        case 6: scratch.bursts.clear(); break;
+        case 7: scratch.archives[0] = false; break;
+        case 8: scratch.layout = false; break;
+        }
+        CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+        CHECK(fixture.state() == baseline);
+    }
+
+    auto scratch = baseline;
+    scratch.items[0].velocity.x = nan;
+    scratch.items[0].resource = std::numeric_limits<u32>::max();
+    scratch.effects.emplace_back();
+    scratch.particles.entries.emplace_back();
+    scratch.particleResources.push_back(std::numeric_limits<u32>::max());
+    scratch.textures.clear();
+    scratch.players = -1;
+    scratch.revealTime = nan;
+    scratch.revealing = !baseline.revealing;
+    scratch.capturePending = !baseline.capturePending;
+    scratch.burstsAdvanced = !baseline.burstsAdvanced;
+    scratch.collision = !baseline.collision;
+    CHECK_FALSE(scratch.valid());
+    CHECK_FALSE(fixture.owner.prepareRestore(scratch));
+    auto fresh = fixture.owner.checkpoint(std::move(scratch));
+    REQUIRE(fresh);
+    CHECK(*fresh == baseline);
+    CHECK(fixture.state() == baseline);
+
+    // Invalid current state cannot be repaired by valid stale scratch.
+    auto undo = fixture.owner.prepareRestore(baseline);
+    REQUIRE(undo);
+    auto& item = const_cast<PlacedItems::Item&>(fixture.items.item(0));
+    item.velocity.x = nan;
+    scratch = baseline;
+    CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
+    CHECK_FALSE(fixture.owner.checkpoint());
+    REQUIRE(fixture.owner.canCommit(*undo));
+    REQUIRE(fixture.owner.commitRestore(std::move(*undo)));
+    CHECK(fixture.state() == baseline);
+}
+
+TEST_CASE("pickup scratch requires current bindings and permits independently equal catalogs",
+          "[placed-items-checkpoint][pickup-capture-reuse]") {
+    Fixture first("pickup-capture-reuse-bind-a");
+    Fixture second("pickup-capture-reuse-bind-b");
+    const auto baseline = first.state();
+    auto scratch = baseline;
+    auto independent = second.owner.checkpoint(std::move(scratch));
+    REQUIRE(independent);
+    CHECK(*independent == second.state());
+    first.owner.clearResources();
+    scratch = baseline;
+    CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
+    REQUIRE(first.owner.bindResources(first.device));
+    scratch = baseline;
+    CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{baseline});
+
+    // A native rebind invalidates the old wrapper even when value rows agree.
+    REQUIRE(
+        first.items.bind(first.device, first.layout, &first.collision, std::array{&first.archive}));
+    first.items.setPlayerCount(2);
+    scratch = baseline;
+    CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
+    REQUIRE(first.owner.bindResources(first.device));
+    scratch = baseline;
+    REQUIRE(first.owner.checkpoint(std::move(scratch)));
+
+    // Explicitly rebinding a changed authored catalog must not recycle old data.
+    auto& infos = const_cast<std::vector<ItemInfo>&>(first.layout.itemInfos());
+    ++infos[0].value;
+    REQUIRE(
+        first.items.bind(first.device, first.layout, &first.collision, std::array{&first.archive}));
+    first.items.setPlayerCount(2);
+    REQUIRE(first.owner.bindResources(first.device));
+    const auto changed = first.state();
+    scratch = baseline;
+    CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
+    CHECK(first.state() == changed);
+    scratch = changed;
+    CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{changed});
 }
 
 TEST_CASE("native pickup catalog includes inactive level resources and resumes collection bursts",

@@ -9,12 +9,70 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from netplay_latency import (REPLAY_COUNTERS, REPLAY_REFUSALS, attack_response, evaluate,
-                            evaluate_stage, evaluate_stage_replay, launch, main, stage_replay_coverage,
+from netplay_latency import (REPLAY_COUNTERS, REPLAY_REFUSALS, WORKER_COUNTERS, attack_response, evaluate,
+                            evaluate_stage, evaluate_stage_replay, input_admission_report, launch, main, stage_replay_coverage,
                             throw_diagnostics)
 
 
 class LatencyReportTests(unittest.TestCase):
+    def test_input_trace_requires_exact_identity_and_payload(self):
+        request = {"epoch": 2, "seat": 1, "grant": 3, "tick": 100,
+                   "sampled_held_buttons": 1, "sampled_pressed_buttons": 16}
+        guest = {"throw_diagnostics": {"requests": [request]}}
+        entry = {"epoch": 2, "seat": 1, "grant": 3, "tick": 100,
+                 "held_buttons": 1, "pressed_buttons": 16, "received_tick": 98,
+                 "admission": "accepted", "executed_tick": 100, "concealed_ticks": 6}
+        host = {"host_input_trace": {"schema": 1, "dropped": 0, "entries": [entry]}}
+        result = input_admission_report(guest, host)
+        self.assertEqual(result["requests"][0]["status"], "executed")
+        self.assertIn("not-an-attack", result["scope"])
+        for field in ("epoch", "seat", "grant", "tick"):
+            with self.subTest(field=field):
+                changed = deepcopy(host)
+                changed["host_input_trace"]["entries"][0][field] += 1
+                self.assertEqual(input_admission_report(guest, changed)["requests"][0]["status"],
+                                 "unobserved")
+        for field in ("held_buttons", "pressed_buttons"):
+            with self.subTest(field=field):
+                changed = deepcopy(host)
+                changed["host_input_trace"]["entries"][0][field] = 0
+                self.assertEqual(input_admission_report(guest, changed)["requests"][0]["status"],
+                                 "payload_mismatch")
+
+    def test_input_trace_distinguishes_late_missing_and_unexecuted(self):
+        request = {"epoch": 2, "seat": 1, "grant": 1, "tick": 10,
+                   "sampled_held_buttons": 1, "sampled_pressed_buttons": 16}
+        guest = {"throw_diagnostics": {"requests": [request]}}
+        entry = {"epoch": 2, "seat": 1, "grant": 1, "tick": 10,
+                 "held_buttons": 1, "pressed_buttons": 16, "received_tick": 12,
+                 "admission": "too_late", "executed_tick": None, "concealed_ticks": 0}
+        host = {"host_input_trace": {"schema": 1, "dropped": 4, "entries": [entry]}}
+        result = input_admission_report(guest, host)
+        self.assertEqual(result["requests"][0]["status"], "too_late")
+        self.assertEqual(result["dropped"], 4)
+        for admission, executed, expected in (
+                ("accepted", None, "accepted_not_executed"),
+                ("accepted", 11, "inconsistent_trace"),
+                ("too_late", 10, "inconsistent_trace")):
+            with self.subTest(admission=admission, executed=executed):
+                entry.update(admission=admission, executed_tick=executed)
+                self.assertEqual(input_admission_report(guest, host)["requests"][0]["status"], expected)
+        host["host_input_trace"]["entries"].append(dict(entry))
+        self.assertEqual(input_admission_report(guest, host)["requests"][0]["status"], "ambiguous_trace")
+        host["host_input_trace"]["entries"] = []
+        result = input_admission_report(guest, host)
+        self.assertEqual(result["requests"][0]["status"], "unobserved")
+        self.assertIn("not-proof-of-packet-loss", result["unobserved_meaning"])
+        self.assertIsNone(input_admission_report(guest, {}))
+
+    def test_input_trace_missing_or_malformed_sections_are_unavailable(self):
+        host = {"host_input_trace": {"schema": 1, "entries": []}}
+        for diagnostics in (None, False, {}, {"requests": None}):
+            self.assertIsNone(input_admission_report({"throw_diagnostics": diagnostics}, host))
+        for schema in (None, True, "1", 2):
+            host["host_input_trace"]["schema"] = schema
+            self.assertIsNone(input_admission_report({"throw_diagnostics": {"requests": []}}, host))
+
     def test_throw_diagnostics_are_absent_without_observations(self):
         self.assertIsNone(throw_diagnostics(self.report()))
 
@@ -312,6 +370,74 @@ class LatencyReportTests(unittest.TestCase):
         self.assertEqual(report, unchanged)
         # Real refusals are retained, not erased to pass an admission assertion.
         self.assertEqual(report["combat_replay"]["stage"]["refusals"], 3)
+
+    def worker_report(self):
+        report = self.stage_replay_report()
+        report["combat_replay"]["stage"].update(presents=97, present_refusals=3)
+        report["combat_worker"] = {
+            "schema": 1, "counter_resets": 0, "stage": True, "running": True,
+            "in_flight": False, "pending": False, "retained_commands": 3,
+            **dict.fromkeys(WORKER_COUNTERS, 0),
+        }
+        report["combat_worker"].update(submitted=100, executed=100, superseded=3,
+                                        publications=97, adoptions=97, presents=97,
+                                        present_refusals=3)
+        return report
+
+    def test_worker_success_requires_displayed_replay_not_only_completed_jobs(self):
+        report = self.worker_report()
+        self.assertEqual(evaluate_stage_replay(report, True), [])
+        report["combat_worker"].update(presents=1, present_refusals=99)
+        report["combat_replay"]["stage"].update(presents=1, present_refusals=99)
+        self.assertEqual(evaluate_stage_replay(report), [])
+        reasons = evaluate_stage_replay(report, True)
+        self.assertTrue(any("displayed-frame coverage 1/100" in reason for reason in reasons))
+        self.assertEqual(stage_replay_coverage(report)["coverage"], 0.97)
+
+    def test_worker_diagnostics_reject_malformed_or_reset_evidence(self):
+        for key in (*WORKER_COUNTERS, "retained_commands"):
+            for invalid in (None, True, -1, 1.5, "1", 1 << 64):
+                report = self.worker_report()
+                report["combat_worker"][key] = invalid
+                self.assertTrue(evaluate_stage_replay(report), (key, invalid))
+        for key, invalid in (("schema", True), ("schema", 2), ("counter_resets", 1),
+                             ("stage", 1), ("running", None), ("in_flight", 0),
+                             ("pending", "no"), ("retained_commands", 481)):
+            report = self.worker_report()
+            report["combat_worker"][key] = invalid
+            self.assertTrue(evaluate_stage_replay(report), (key, invalid))
+        report = self.worker_report()
+        report["combat_worker"] = []
+        self.assertTrue(evaluate_stage_replay(report))
+        for invalid in (None, [], 3):
+            report = self.worker_report()
+            report["combat_replay"]["stage"] = invalid
+            self.assertTrue(evaluate_stage_replay(report))
+
+    def test_worker_presentation_and_publication_accounting_must_agree(self):
+        for change in ({"adoptions": 96}, {"superseded": 101}, {"presents": 96},
+                       {"present_refusals": 4}):
+            report = self.worker_report()
+            report["combat_worker"].update(change)
+            self.assertTrue(evaluate_stage_replay(report), change)
+        # A job may begin before the measurement window: executed is not bounded
+        # by submissions made during that same window.
+        report = self.worker_report()
+        report["combat_worker"]["submitted"] = 99
+        self.assertEqual(evaluate_stage_replay(report, True), [])
+
+    def test_strict_worker_admission_rejects_shutdown_and_input_refusal(self):
+        for change in ({"stage": False}, {"running": False}, {"errors": 1},
+                       {"submission_refusals": 1}):
+            report = self.worker_report()
+            report["combat_worker"].update(change)
+            self.assertEqual(evaluate_stage_replay(report), [], change)
+            self.assertTrue(evaluate_stage_replay(report, True), change)
+        report = self.worker_report()
+        for evidence in (report["combat_worker"], report["combat_replay"]["stage"]):
+            evidence.update(presents=0, present_refusals=0)
+        self.assertIn("No measured combat worker presentation attempts",
+                      evaluate_stage_replay(report, True))
 
     def test_stage_replay_cannot_be_proved_by_legacy_passes_or_failed_prefix_ticks(self):
         report = self.stage_replay_report()

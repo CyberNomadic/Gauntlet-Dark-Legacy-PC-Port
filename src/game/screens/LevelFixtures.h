@@ -113,6 +113,22 @@ public:
     void shootScenery(const Vec3& position, f32 radius);
     void strikeBarrel(usize barrel, f32 power, s32 byPlayer, std::span<PlayerRuntime> players,
                       const Events& events);
+    /** Replaces the native post-strike outputs, not the strike itself. A false
+     * result may follow health/animation/drop-choice changes and requires the
+     * caller's complete fixture/world rewind. No callback is retained. */
+    using BarrelPublisher = std::function<bool(const BreakableStrike&, std::string_view sound)>;
+    bool strikeBarrel(usize barrel, f32 power, s32 byPlayer, std::span<PlayerRuntime> players,
+                      const Events& events, const BarrelPublisher& publish);
+    /** Shared post-strike contents dispatch: first release an enemy, otherwise
+     * place one pickup with the native record/count, then ask the hitter's help
+     * callback only when something was released. A prepared pickup publisher
+     * returns nullopt to refuse, false for a native no-op, or true for a birth.
+     * Refusal can follow earlier native mutations and requires caller-owned undo. */
+    using BarrelPickupPublisher =
+        std::function<std::optional<bool>(s32 record, const Vec3& position, s32 count)>;
+    bool releaseBarrelContents(const BreakableStrike& struck, s32 byPlayer,
+                               std::span<PlayerRuntime> players, const Events& events,
+                               const BarrelPickupPublisher& pickup = {});
     /** An explosion: a ring over its effect's `seconds` (StartExplosion, ProcessEffects mode
      * 1) growing from a third of `radius` to the whole as its harm falls from one and a half
      * times `damage` (a third of the way in) to nothing two thirds through, reaching each
@@ -153,7 +169,10 @@ public:
     static constexpr f32 kBarrelWarning = 9.0f;  ///< a player this near a spent barrel is told
 
 private:
+    friend class OrdinaryBarrelEmission;
+    friend class OrdinaryPickupPhase;
     friend class OrdinaryCombatTick;
+    friend class OrdinaryProjectilePhase;
     friend class OrdinaryFixturePhase;
     friend class LevelFixturesCheckpoint;
     Phase updatePhase(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,

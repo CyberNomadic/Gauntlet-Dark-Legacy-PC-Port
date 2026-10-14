@@ -6,17 +6,19 @@
 #include "engine/core/Error.h"
 #include "engine/io/ByteReader.h"
 
+#include "game/netplay/CanonicalDigestSink.h"
+
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDEM");
 constexpr u32 kVersion = 1;
 
-void word(std::vector<u8>& bytes, u32 value) {
+template <class Output> void word(Output& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
     }
 }
-void wide(std::vector<u8>& bytes, u64 value) {
+template <class Output> void wide(Output& bytes, u64 value) {
     word(bytes, static_cast<u32>(value));
     word(bytes, static_cast<u32>(value >> 32));
 }
@@ -24,16 +26,16 @@ u64 wide(ByteReader& reader) {
     const u64 low = reader.readU32();
     return low | (u64{reader.readU32()} << 32);
 }
-void integer(std::vector<u8>& bytes, s32 value) {
+template <class Output> void integer(Output& bytes, s32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
-void real(std::vector<u8>& bytes, f32 value) {
+template <class Output> void real(Output& bytes, f32 value) {
     word(bytes, std::bit_cast<u32>(value));
 }
 f32 real(ByteReader& reader) {
     return std::bit_cast<f32>(reader.readU32());
 }
-void vector(std::vector<u8>& bytes, const Vec3& value) {
+template <class Output> void vector(Output& bytes, const Vec3& value) {
     real(bytes, value.x);
     real(bytes, value.y);
     real(bytes, value.z);
@@ -88,17 +90,17 @@ std::optional<usize> encodedSize(const EnemyMissiles::Checkpoint& state) {
 }
 } // namespace
 
-std::optional<std::vector<u8>>
-EnemyMissilesCheckpoint::encode(const EnemyMissiles::Checkpoint& state) {
+namespace {
+template <class Output>
+bool writeCanonical(Output& bytes, const EnemyMissiles::Checkpoint& state, bool validate) {
     const auto size = encodedSize(state);
-    if (!size || !state.valid()) {
-        return std::nullopt;
+    if (!size || (validate && !state.valid())) {
+        return false;
     }
     const auto random = RandomCheckpoint::encode(state.random);
     if (!random) {
-        return std::nullopt;
+        return false;
     }
-    std::vector<u8> bytes;
     bytes.reserve(*size);
     word(bytes, kMagic);
     word(bytes, kVersion);
@@ -110,7 +112,9 @@ EnemyMissilesCheckpoint::encode(const EnemyMissiles::Checkpoint& state) {
     word(bytes, static_cast<u32>(state.hits.size()));
     word(bytes, static_cast<u32>(state.rockHits.size()));
     word(bytes, static_cast<u32>(state.pickupBlasts.size()));
-    bytes.insert(bytes.end(), random->begin(), random->end());
+    for (const u8 value : *random) {
+        bytes.push_back(value);
+    }
     for (const auto& flight : state.missiles) {
         wide(bytes, flight.instance);
         word(bytes, flight.continuity);
@@ -190,7 +194,20 @@ EnemyMissilesCheckpoint::encode(const EnemyMissiles::Checkpoint& state) {
         real(bytes, blast.damage);
         word(bytes, blast.flags);
     }
-    return bytes;
+    return true;
+}
+} // namespace
+
+std::optional<std::vector<u8>>
+EnemyMissilesCheckpoint::encode(const EnemyMissiles::Checkpoint& state) {
+    std::vector<u8> bytes;
+    return writeCanonical(bytes, state, true) ? std::optional{std::move(bytes)} : std::nullopt;
+}
+
+std::optional<std::array<u8, 32>>
+EnemyMissilesCheckpoint::canonicalDigest(const EnemyMissiles::Checkpoint& state) {
+    CanonicalDigestSink sink;
+    return writeCanonical(sink, state, false) ? std::optional{sink.finish()} : std::nullopt;
 }
 
 std::optional<EnemyMissiles::Checkpoint>

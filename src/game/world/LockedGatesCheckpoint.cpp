@@ -165,7 +165,7 @@ std::optional<LockedGatesCheckpoint::State> LockedGatesCheckpoint::checkpoint() 
             static_cast<usize>(placement.info) >= m_owner.m_layout->itemInfos().size()) {
             return std::nullopt;
         }
-        const auto figure = ItemFigureCheckpoint::capture(source->figure);
+        auto figure = ItemFigureCheckpoint::capture(source->figure);
         if (!figure) {
             return std::nullopt;
         }
@@ -181,7 +181,7 @@ std::optional<LockedGatesCheckpoint::State> LockedGatesCheckpoint::checkpoint() 
              source->minPlayers,
              source->shown,
              source->blocksPassage,
-             *figure,
+             std::move(*figure),
              source->box,
              {support.m_object, support.m_local, support.m_boxOffset, support.m_boxYaw}});
     }

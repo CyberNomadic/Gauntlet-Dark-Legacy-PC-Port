@@ -152,7 +152,9 @@ TEST_CASE("checkpoint timing observes a single native capture without changing i
     const auto baseline = fixture.state();
     Boundary::CaptureTimings timing;
     timing.fill(123);
-    const auto measured = fixture.boundary.checkpoint(&timing);
+    LevelWorldCheckpoint::CaptureTimings worldTiming;
+    worldTiming.fill(456);
+    const auto measured = fixture.boundary.checkpoint(&timing, &worldTiming);
     REQUIRE(measured);
     CHECK(static_cast<bool>(*measured == baseline));
     CHECK(timing[static_cast<usize>(Boundary::CaptureOwner::Bindings)]);
@@ -165,6 +167,7 @@ TEST_CASE("checkpoint timing observes a single native capture without changing i
     CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Camera)]);
     CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Portals)]);
     CHECK_FALSE(timing[static_cast<usize>(Boundary::CaptureOwner::Transporters)]);
+    CHECK(std::ranges::none_of(worldTiming, [](const auto& value) { return value.has_value(); }));
     CHECK(static_cast<bool>(fixture.state() == baseline));
 }
 

@@ -769,6 +769,90 @@ TEST_CASE("private native combat replay commits and corrects the complete ordere
     }
 }
 
+TEST_CASE("private combat seeds are caller-independent while accepted ticks remain fenced",
+          "[rollback][combat-prediction][combat-seed-lifetime][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const bool includeStage = GENERATE(false, true);
+    CAPTURE(includeStage);
+    const auto directory = test::sampleLevel("private-combat-seed-lifetime");
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"FLOOR","position":[0,0,0],"flags":4}]})");
+    writeTextFile(directory / "collision.json", R"({"objects":[
+      {"object":0,"normals":[0,1,0,0,1,0],"vertices":[
+      -200,0,-200,200,0,-200,200,0,200,-200,0,-200,200,0,200,-200,0,200]}]})");
+    test::FakeRenderDevice device;
+    MatchContext context;
+    context.epoch = 3;
+    context.scene = 1;
+    context.tickRate = 60;
+    context.owners = {0, 1, 0, 0};
+    context.grants = {0, 2, 0, 0};
+    CharacterSave save;
+    save.name = "TEST";
+    save.character = 0;
+    save.color = 1;
+    save.autoAttack = false;
+    PartyBootstrap::Party profiles;
+    profiles[1] = CharacterProfile::capture(save);
+    CombatPrediction prediction;
+    const LevelRef level{.name = "TEST", .directory = directory.string(), .items = "ITEMS/levelG"};
+    REQUIRE(prediction.open(device, root, level, context, profiles, 1));
+    auto seed = checkpoint(prediction, includeStage);
+    REQUIRE(seed);
+    REQUIRE(seed->combat.players.size() == 1);
+    seed->combat.players[0].actor.position = {0, 0, 0};
+
+    // A rejected first seed cannot establish an authority floor.
+    auto malformed = std::make_unique<NativeState>(*seed);
+    malformed->combat.players.clear();
+    CHECK_FALSE(prediction.begin(context.epoch, 500, *malformed));
+    REQUIRE(prediction.begin(context.epoch, 100, *seed));
+    const auto accepted = checkpoint(prediction);
+    REQUIRE(accepted);
+    REQUIRE(*accepted == *seed);
+    seed->combat.players.clear();
+    if (seed->stage) {
+        seed->stage->world.core.catalog[0] ^= 1;
+    }
+    seed.reset();
+    CHECK(matches(prediction, *accepted));
+
+    OrdinaryCombatTick::Frame frame;
+    frame.camera.position = {0, 35, -50};
+    frame.camera.pitch = 0.6f;
+    frame.projection.horizontalFov = 1.6f;
+    frame.projection.aspect = 2;
+    SessionInputs::Frame inputs{};
+    inputs[1].move.direction = {1, 0};
+    inputs[1].move.magnitude = 0.5f;
+    REQUIRE(prediction.advance(101, inputs, frame).status == OrdinaryCombatTick::Status::Advanced);
+    CHECK(prediction.players()[0].actor.position() != accepted->combat.players[0].actor.position);
+    prediction.resetReplay();
+    CHECK_FALSE(prediction.active());
+    CHECK(prediction.tick() == 100);
+    CHECK(matches(prediction, *accepted));
+
+    // Failed future corrections neither erase nor raise the accepted tick fence.
+    CHECK_FALSE(prediction.begin(context.epoch, 500, *malformed));
+    CHECK_FALSE(prediction.begin(context.epoch, 99, *accepted));
+    CHECK(matches(prediction, *accepted));
+    REQUIRE(prediction.begin(context.epoch, 100, *accepted));
+    REQUIRE(prediction.begin(context.epoch, 101, *accepted));
+    CHECK_FALSE(prediction.begin(context.epoch, 100, *accepted));
+    CHECK(prediction.tick() == 101);
+    CHECK(matches(prediction, *accepted));
+
+    auto resumed = context;
+    ++resumed.epoch;
+    resumed.transition = MatchTransition::Resume;
+    REQUIRE(prediction.resume(resumed));
+    CHECK_FALSE(prediction.active());
+    CHECK(prediction.tick() == 0);
+    CHECK_FALSE(prediction.begin(context.epoch, 0, *accepted));
+    REQUIRE(prediction.begin(resumed.epoch, 0, *accepted));
+    CHECK(matches(prediction, *accepted));
+}
+
 TEST_CASE("private combat loading preserves native level and ordered party ownership",
           "[rollback][combat-prediction][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();

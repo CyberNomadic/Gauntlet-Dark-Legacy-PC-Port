@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
@@ -92,12 +93,12 @@ bool ItemFigure::Checkpoint::valid() const {
 }
 
 std::optional<ItemFigure::Checkpoint> ItemFigure::checkpoint() const {
-    const auto pose = m_pose.checkpoint();
+    auto pose = m_pose.checkpoint();
     if (m_tree == nullptr || m_archive == nullptr || !pose) {
         return std::nullopt;
     }
     Checkpoint state{m_player.checkpoint(),
-                     *pose,
+                     std::move(*pose),
                      m_presentationPose.checkpoint(),
                      m_textures.checkpoint(),
                      m_particles.checkpoint(),

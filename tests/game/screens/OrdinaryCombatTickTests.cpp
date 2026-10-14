@@ -16,6 +16,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/players/ItemPickup.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/screens/CombatResources.h"
@@ -25,6 +26,7 @@
 #include "game/screens/OpponentResources.h"
 #include "game/screens/OrdinaryCombatTick.h"
 #include "game/screens/PartyFigures.h"
+#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PartyNames.h"
 #include "game/screens/PartyPickups.h"
 #include "game/screens/PartyRecords.h"
@@ -413,7 +415,8 @@ struct Fixture {
     }
     // Independent native composition: use the public fixture/opponent phases,
     // not the runner's staged pool phase or PartyDamage::stageBlows.
-    void native(std::span<const PlayInput> inputs, const Tick::Frame& suppliedFrame) {
+    void native(std::span<const PlayInput> inputs, const Tick::Frame& suppliedFrame,
+                bool currency = false) {
         auto frame = suppliedFrame;
         if (stage) {
             frame.camera = camera.camera();
@@ -608,11 +611,18 @@ struct Fixture {
                              .hud = hud,
                              .audio = audio,
                              .classes = classes,
-                             .help = [](s32, usize) {
+                             .help = [&](s32 id, usize recipient) {
+                                 if (currency) {
+                                     REQUIRE(
+                                         PartyHelpAdmission::suppressed(id, recipient, players));
+                                     return false;
+                                 }
                                  FAIL_CHECK("unexpected native pickup lesson");
                                  return false;
                              }});
-            REQUIRE(hud.pickups().cards().empty());
+            if (!currency) {
+                REQUIRE(hud.pickups().cards().empty());
+            }
             std::vector<TriggerVisitor> visitors;
             for (usize index = 0; index < players.size(); ++index) {
                 const auto& actor = players[index].actor;
@@ -889,7 +899,8 @@ TEST_CASE("stage combat refuses a real G1 pickup without spending or publishing 
     bool touched = false;
     for (usize index = 0; index < fixture->world.placedItems().size(); ++index) {
         const auto& item = fixture->world.placedItems().item(index);
-        if (!item.takeable()) {
+        if (!item.takeable() || item.subtype == ItemInfo::kGold ||
+            item.subtype == static_cast<s32>(ItemKind::Keys)) {
             continue;
         }
         const auto floor = fixture->world.collision().floorAt(item.position, 4, 10);
@@ -2011,7 +2022,7 @@ TEST_CASE("ordinary combat runner refuses prospective special placements before 
     CHECK(fixture.device.texturesCreated == uploads);
 }
 
-TEST_CASE("stage combat preserves native capped gold contacts and undoes a later real pickup",
+TEST_CASE("stage combat preserves capped gold then collects it with native Pick continuation",
           "[ordinary-combat-tick][ordinary-stage-tick][pickup-admission][assets]") {
     const s32 ticks = GENERATE(1, 2);
     auto fixture = std::make_unique<Fixture>(false, false, false, 0, false, true);
@@ -2058,17 +2069,33 @@ TEST_CASE("stage combat preserves native capped gold contacts and undoes a later
         CHECK_FALSE(fixture->world.placedItems().item(item).taken);
     }
     fixture->players[0].actor.save().gold = 0;
+    // Currency pickup may ask the native treasure lesson; keep this scene's
+    // lesson already read so collection itself is the transaction under test.
+    for (auto& player : fixture->players) {
+        player.actor.save().helpSeen.push_back(17);
+    }
     REQUIRE_FALSE(PartyPickups::collectionUnchanged(fixture->players, fixture->world,
                                                     fixture->fixtures.chests(), fixture->classes));
-    const auto before = fixture->state();
-    const auto result = fixture->runner->step(fixture->players, {}, Fixture::frame(6, ticks));
-    CHECK(result.status == Tick::Status::Unsupported);
-    CHECK(result.refusal == Tick::Refusal::Pickups);
-    CHECK(result.subjects.empty());
-    CHECK(result.damage.empty());
-    CHECK(result.throws.empty());
-    CHECK(result.feedback.empty());
-    CHECK(fixture->state() == before);
+    const auto baseline = fixture->state();
+    for (s32 step = 6; step < 30; ++step) {
+        const auto before = fixture->state();
+        const auto frame = Fixture::frame(step, ticks);
+        fixture->native({}, frame, true);
+        const auto expected = fixture->state();
+        REQUIRE(fixture->boundary->restore(before));
+        const auto result = fixture->runner->step(fixture->players, {}, frame);
+        INFO(Tick::kRefusals[static_cast<usize>(result.refusal)]);
+        REQUIRE(result.status == Tick::Status::Advanced);
+        CHECK(fixture->state() == expected);
+        CHECK(fixture->world.placedItems().item(item).taken);
+        if (step == 6) {
+            CHECK_FALSE(result.pickups.empty());
+        } else {
+            CHECK(result.pickups.empty());
+        }
+    }
+    REQUIRE(fixture->boundary->restore(baseline));
+    CHECK(fixture->state() == baseline);
     CHECK(fixture->device.texturesCreated == textures);
     CHECK(fixture->device.textureUpdates == uploads);
 }

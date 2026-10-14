@@ -3,6 +3,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/world/SampleLevel.h"
+
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/players/CursorAim.h"
@@ -36,6 +38,144 @@ TEST_CASE("replica viewport uses the local display without host aspect masks",
         CHECK_FALSE(ReplicaView::viewport(800, bad));
     }
     CHECK_FALSE(ReplicaView::viewport(65537, 600));
+}
+
+TEST_CASE("replica Stage lights shade the complete draw and revoke to borrowed world lighting",
+          "[netplay][replica-view][stage-point-lights]") {
+    const auto directory = test::sampleLevel("replica-stage-point-lights");
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"LIT","position":[0,0,0],"flags":2}]})");
+    writeTextFile(directory / "animations.json", R"({"trees":[
+      {"name":"FIGURE","nodes":[{"name":"ROOT","object":"WALL","parent":-1,
+        "position":[0,0,0]}],"sequences":[{"name":"STILL","frames":1,"frameRate":30}]}]})");
+    test::FakeRenderDevice device;
+    LevelRef info;
+    info.name = "TEST";
+    info.directory = ".";
+    LevelWorld world;
+    REQUIRE(world.load(device, directory, info));
+    const std::array baselineLights{PointLight{{0, 3, 0}, {0, .4f, 0}, 20, 2}};
+    world.setPointLights(baselineLights);
+    world.setAmbientOffset(-.1f);
+    ItemArchive archive;
+    REQUIRE(archive.load(directory));
+    const auto tree = archive.trees.find("FIGURE");
+    REQUIRE(tree);
+    TreeModel model;
+    REQUIRE(model.bind(archive.trees.tree(*tree), archive.models, archive.textures, device));
+    ProjectileResources shots;
+    REQUIRE(shots.addModel(1, model));
+    PickupResources pickups;
+    REQUIRE(pickups.bind(device, std::array{&archive}));
+    Enemies enemies;
+    FixtureResources fixtures;
+    MatchContext context;
+    context.epoch = context.scene = 1;
+    context.owners = {1, 0, 0, 0};
+    context.grants = {1, 0, 0, 0};
+    auto view = std::make_unique<ReplicaView>();
+    REQUIRE(view->begin(context, world, enemies, shots, pickups, fixtures));
+    auto snapshot = std::make_unique<CombatSnapshot>();
+    snapshot->motion.epoch = snapshot->motion.cameraContinuity = 1;
+    snapshot->motion.tick = 10;
+    snapshot->motion.camera = {{0, 10, -20}, .3f, 0, 0};
+    snapshot->motion.players[0] = SeatMotion{1, 1, {}, 0};
+    snapshot->players[0] = PlayerCombatState{};
+    snapshot->players[0]->life = ReplicaPlayerLife::InTower;
+    snapshot->geometry = world.scene().geometry();
+    auto& shot = snapshot->projectiles.emplace_back();
+    shot.instance = shot.resource = 1;
+    shot.placement = glm::translate(Mat4{1}, Vec3{4, 0, 0});
+    auto& pickup = snapshot->pickups.emplace_back();
+    pickup.instance = pickup.resource = 1;
+    pickup.placement = glm::translate(Mat4{1}, Vec3{2, 0, 0});
+    REQUIRE(snapshot->valid());
+    REQUIRE(view->show(*snapshot));
+    const GameConfig video;
+    const auto camera = CameraFrame::of(snapshot->motion.camera);
+    const auto clip =
+        snapshot->motion.camera.clipTransform(video.horizontalFovRadians(), 640, 448, Mat4{1});
+    const auto expected = [&](std::span<const PointLight> points) {
+        auto geometry = world.scene();
+        geometry.setPointLights(points);
+        auto lit = world.lighting();
+        auto full = world.fullLighting();
+        lit.points.assign(points.begin(), points.end());
+        full.points.assign(points.begin(), points.end());
+        device.draws.clear();
+        geometry.drawOpaque(device, clip, camera, -1, 0);
+        pickups.draw(device, pickup, clip, lit, camera, TreeModel::Pass::Opaque);
+        shots.draw(device, shot, clip, full, camera, TreeModel::Pass::Opaque);
+        REQUIRE(device.draws.size() == 3);
+        return device.draws;
+    };
+    const auto checkDraw = [&](const std::vector<test::RecordedDraw>& native) {
+        device.draws.clear();
+        view->draw(device, Mat4{1}, 640, 448, 0);
+        REQUIRE(device.draws.size() == native.size());
+        for (usize row = 0; row < native.size(); ++row) {
+            CAPTURE(row);
+            CHECK(device.draws[row].vertices == native[row].vertices);
+            CHECK(device.draws[row].texture == native[row].texture);
+            CHECK(device.draws[row].transform == native[row].transform);
+        }
+    };
+    const auto baseline = expected(baselineLights);
+    checkDraw(baseline);
+    EffectTrees projectiles, effects;
+    std::shared_ptr<const void> lifetime = std::make_shared<const u8>(0);
+    std::vector<PointLight> predicted{{{2, 3, 0}, {1, 0, 0}, 20, 2}};
+    StageParticlePresentation::Sources sources{world, projectiles, effects};
+    sources.lights = predicted;
+    EnemyPresentation presentation;
+    presentation.epoch = snapshot->motion.epoch;
+    presentation.tick = snapshot->motion.tick;
+    presentation.shownGeometry = snapshot->geometry;
+    presentation.particleTick = snapshot->motion.tick + 1;
+    presentation.particles = StageParticlePresentation::capture(
+        presentation.epoch, presentation.particleTick, lifetime, sources);
+    REQUIRE(presentation.particles);
+    const auto illuminated = expected(predicted);
+    for (usize row = 0; row < illuminated.size(); ++row) {
+        CAPTURE(row);
+        REQUIRE(illuminated[row].vertices != baseline[row].vertices);
+    }
+    const auto textures = device.texturesCreated;
+    const auto uploads = device.textureUpdates;
+    predicted.front().position = {100, 100, 100};
+    predicted.clear(); // the accepted endpoint has its own copy
+    for (const f32 alpha : {0.0f, .5f, 1.0f, .25f}) {
+        presentation.particleBlend = alpha;
+        REQUIRE(view->show(*snapshot, &presentation));
+        checkDraw(illuminated);
+    }
+    CHECK(world.lighting().points.front().position == baselineLights.front().position);
+    CHECK(world.lighting().points.front().color == baselineLights.front().color);
+    CHECK(world.fullLighting().points.front().color == baselineLights.front().color);
+    // Both explicit authoritative replacement and marker expiry remove the
+    // speculative illumination before any subsequent geometry/actor draws.
+    REQUIRE(view->show(*snapshot));
+    checkDraw(baseline);
+    REQUIRE(view->show(*snapshot, &presentation));
+    checkDraw(illuminated);
+    ++presentation.particleTick;
+    CHECK_FALSE(view->show(*snapshot, &presentation));
+    --presentation.particleTick;
+    checkDraw(illuminated); // rejected input cannot partially replace the picture
+    lifetime.reset();
+    CHECK_FALSE(view->show(*snapshot, &presentation));
+    checkDraw(baseline);
+    lifetime = std::make_shared<const u8>(0);
+    sources.lights = {};
+    presentation.particles = StageParticlePresentation::capture(
+        presentation.epoch, presentation.particleTick, lifetime, sources);
+    REQUIRE(presentation.particles);
+    REQUIRE(view->show(*snapshot, &presentation));
+    checkDraw(expected({})); // empty is a complete current list, not fallback
+    REQUIRE(view->show(*snapshot));
+    checkDraw(baseline);
+    CHECK(device.texturesCreated == textures);
+    CHECK(device.textureUpdates == uploads);
 }
 
 TEST_CASE("guest level textures advance with host time and hold without new simulation",
