@@ -37,6 +37,7 @@ target_link_libraries(game_diagnostics PUBLIC gdl::game PRIVATE lz4::lz4)
 gdl_apply_compiler_options(game_diagnostics)
 
 add_executable(tests
+    game/netplay/NativeProbeTimingTests.cpp
     engine/app/ApplicationTimingTests.cpp
     engine/math/Mt19937Tests.cpp
     game/netplay/HostedRoomTests.cpp
@@ -617,6 +618,7 @@ if(GDL_ENABLE_NETPLAY)
         game/screens/NativePlayDriverTests.cpp game/screens/NativePlaySetupTests.cpp
         game/world/SpeechTimingTests.cpp)
     add_executable(simulationtests game/screens/SimulationSeedTests.cpp
+        game/netplay/NativeProbeTimingTests.cpp
         game/screens/SimulationObserver.cpp game/screens/SimulationObserverBindings.cpp
         game/screens/NativePresentationReadinessTests.cpp
         engine/app/ApplicationTimingTests.cpp

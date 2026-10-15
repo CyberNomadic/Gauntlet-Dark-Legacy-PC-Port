@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -22,6 +23,7 @@
 
 #include "FakeRenderDevice.h"
 #include "NativeProbeLink.h"
+#include "NativeProbeTiming.h"
 #include "game/app/NativeOnlineIdentity.h"
 #include "game/netplay/AssetDigest.h"
 #include "game/netplay/InputCommand.h"
@@ -36,6 +38,8 @@ using Json = nlohmann::json;
 
 struct Options {
     std::filesystem::path report;
+    std::filesystem::path timings;
+    u32 timingWarmup = 0;
     std::filesystem::path assets = GDL_TEST_ASSET_DIR;
     std::filesystem::path data = GDL_TEST_DATA_DIR;
     std::string stage = "G1";
@@ -72,6 +76,10 @@ Options parse(std::span<char*> args) {
         const std::string_view value = args[++index];
         if (key == "--report") {
             result.report = value;
+        } else if (key == "--timings") {
+            result.timings = value;
+        } else if (key == "--timing-warmup") {
+            result.timingWarmup = number(value);
         } else if (key == "--assets") {
             result.assets = value;
         } else if (key == "--data") {
@@ -105,6 +113,15 @@ Options parse(std::span<char*> args) {
     require(!result.report.empty(), "--report is required");
     require(!std::filesystem::exists(result.report), "Report exists; choose a new path");
     require(result.ticks > 0 && result.ticks <= 36'000, "Ticks must be 1..36000");
+    require(!result.timings.empty() || result.timingWarmup == 0,
+            "Timing warmup requires --timings");
+    require(result.timingWarmup < result.ticks, "Timing warmup must leave measured ticks");
+    if (!result.timings.empty()) {
+        require(!std::filesystem::exists(result.timings), "Timings exist; choose a new path");
+        require(std::filesystem::weakly_canonical(result.timings) !=
+                    std::filesystem::weakly_canonical(result.report),
+                "Timing and observation reports must be distinct");
+    }
     require(result.players >= 1 && result.players <= 4, "Players must be 1..4");
     require(result.renderEvery <= 60, "Render interval must be 0..60 ticks");
     require(result.perturbTick <= result.ticks, "Perturbation is outside the run");
@@ -257,7 +274,24 @@ void run(const Options& options) {
     u32 movedTicks = 0;
     usize mostEnemies = 0;
     usize mostProjectiles = 0;
+    std::vector<f64> updateTimes, observationTimes, renderTimes;
+    if (!options.timings.empty()) {
+        updateTimes.reserve(options.ticks);
+        observationTimes.reserve(options.ticks);
+        renderTimes.reserve(options.ticks);
+    }
     for (u32 tick = 1; tick <= options.ticks; ++tick) {
+        const auto measure = [&](std::vector<f64>& samples, const auto& operation) {
+            if (options.timings.empty() || tick <= options.timingWarmup) {
+                operation();
+                return;
+            }
+            const auto started = std::chrono::steady_clock::now();
+            operation();
+            const f64 elapsed = std::chrono::duration<f64, std::milli>(
+                                    std::chrono::steady_clock::now() - started).count();
+            samples.push_back(elapsed);
+        };
         const auto commands = network ? network->frame([&](u64 inputTick, u8 seat) {
             return journal(options, static_cast<u32>(inputTick))[seat];
         })
@@ -269,7 +303,9 @@ void run(const Options& options) {
             inputs[command.seat] = SessionInputs::playInput(command);
         }
         const Vec3 before = scene.actor(0)->position();
-        require(scene.update(1.0 / 60, inputs) == PlayOutcome::Running,
+        PlayOutcome outcome = PlayOutcome::Running;
+        measure(updateTimes, [&] { outcome = scene.update(1.0 / 60, inputs); });
+        require(outcome == PlayOutcome::Running,
                 "Scene requested travel or ended; campaign transitions are not exercised yet");
         if (network) {
             network->frameCompleted(tick % MatchSession::kNativeAgreementPeriod == 0
@@ -281,11 +317,14 @@ void run(const Options& options) {
         mostEnemies = std::max(mostEnemies, scene.enemies().count());
         mostProjectiles = std::max(mostProjectiles, scene.missiles().count());
         if (options.renderEvery != 0 && tick % options.renderEvery == 0) {
-            require(device.beginFrame(), "Headless frame refused");
-            scene.render(device, projection, 640, 448, false, 0.5f);
-            device.endFrame();
+            measure(renderTimes, [&] {
+                require(device.beginFrame(), "Headless frame refused");
+                scene.render(device, projection, 640, 448, false, 0.5f);
+                device.endFrame();
+            });
         }
-        auto observation = observer.observe();
+        SimulationObservation observation;
+        measure(observationTimes, [&] { observation = observer.observe(); });
         std::ranges::sort(observation.subsystems, {}, &SimulationObservation::Subsystem::name);
         if (tick == 1) {
             std::vector<std::string> names;
@@ -333,6 +372,39 @@ void run(const Options& options) {
     if (network) {
         network->finish();
     }
+    if (!options.timings.empty()) {
+        const auto summary = [](std::span<const f64> samples) -> Json {
+            const auto value = test::summarizeNativeTimings(samples);
+            if (!value) {
+                require(samples.empty(), "Invalid measured timing");
+                return nullptr;
+            }
+            return {{"samples", value->samples}, {"mean", value->mean},
+                    {"p50", value->p50}, {"p95", value->p95}, {"p99", value->p99},
+                    {"maximum", value->maximum}};
+        };
+        const Json timings{{"schema", 1}, {"units", "milliseconds"},
+                           {"simulation", "PlayScene::update"}, {"tick_rate", 60},
+                           {"stage", options.stage}, {"players", options.players},
+                           {"workload", options.workload},
+                           {"input_delivery", network ? "iroh-lockstep" : "local"},
+                           {"assets_digest", assetsDigest}, {"data_digest", dataDigest},
+                           {"config_digest", configDigest},
+                           {"ticks", options.ticks}, {"warmup_ticks", options.timingWarmup},
+                           {"render_every", options.renderEvery}, {"headless", true},
+                           {"ready_ticks", readyTicks}, {"moved_ticks", movedTicks},
+                           {"most_enemies", mostEnemies}, {"most_projectiles", mostProjectiles},
+                           {"update", summary(updateTimes)},
+                           {"diagnostic_observation", summary(observationTimes)},
+                           {"headless_render", summary(renderTimes)},
+                           {"save", nullptr}, {"restore", nullptr}, {"replay", nullptr},
+                           {"complete_rewind", false}};
+        std::ofstream timingReport(options.timings, std::ios::binary);
+        require(timingReport.is_open(), "Could not open timing report");
+        timingReport << timings.dump(2) << '\n';
+        timingReport.close();
+        require(!timingReport.fail(), "Could not finish timing report");
+    }
     scene.close();
     std::cout << "Native simulation report: " << options.report << '\n';
     std::cout << "Native workload: ready_ticks=" << readyTicks << " moved_ticks=" << movedTicks
@@ -351,6 +423,7 @@ int main(int argc, char** argv) {
             std::cout << "nativeprobe --report path.jsonl [--stage G1|tower|...] [--ticks 600] "
                          "[--players 1..4] [--render-every 0..60] [--workload idle|combat] "
                          "[--assets path] [--data path] [--perturb-tick tick] "
+                         "[--timings timings.json --timing-warmup ticks] "
                          "[--network-role host|guest --network-peer 1..4 --ticket path "
                          "--input-delay 0..6]\n"
                          "No desktop control, audio device, or persisted saves. "
