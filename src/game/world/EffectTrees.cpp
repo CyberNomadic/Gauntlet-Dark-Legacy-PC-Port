@@ -834,6 +834,10 @@ void EffectTrees::update(f32 seconds) {
             effect->then.clear();
             effect->repeats = true;
             if (nextTree != nullptr && effect->device != nullptr) {
+                // A replacement tree starts a new pose, even when it reuses the
+                // same artwork. Do not interpolate through the previous phase.
+                ++effect->continuity;
+                effect->presentationCaptured = false;
                 const TreeInfo& tree = *nextTree;
                 effect->tree = &tree;
                 effect->name = name;

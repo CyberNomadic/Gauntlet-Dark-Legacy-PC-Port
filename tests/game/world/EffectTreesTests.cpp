@@ -99,14 +99,17 @@ TEST_CASE("effect provenance is caller-owned and survives visual restore morph a
     CHECK_FALSE(effects.tag(id, {2, 0, 3, 5}));
     CHECK_FALSE(effects.tag(id + 1, origin));
     effects.update(1.0f / 60);
+    CHECK(effects.effect(0).continuity == before->continuity);
     REQUIRE(effects.restore(id, *before));
     CHECK(effects.effect(0).provenance == origin);
     const auto instance = effects.effect(0).instance;
     effects.update(0.2f);
     REQUIRE(effects.count() == 1);
-    CHECK(effects.effect(0).continuity > before->continuity);
+    CHECK(effects.effect(0).continuity == before->continuity + 1);
     CHECK(effects.effect(0).instance == instance);
     CHECK(effects.effect(0).provenance == origin);
+    effects.update(1.0f / 60);
+    CHECK(effects.effect(0).continuity == before->continuity + 1);
     effects.finish(id);
     CHECK(effects.effect(0).retiring);
     CHECK(effects.effect(0).provenance == origin);
