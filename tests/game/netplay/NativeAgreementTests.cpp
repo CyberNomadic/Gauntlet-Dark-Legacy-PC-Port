@@ -1,0 +1,584 @@
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include "game/netplay/NativeAgreement.h"
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+using Admission = NativeAgreement::Admission;
+using Failure = NativeAgreement::Failure;
+using Digest = NativeAgreement::Digest;
+using Time = NativeAgreement::Time;
+constexpr u64 kEpoch = 17;
+constexpr PacketTransport::Connection kHost = 99;
+constexpr u32 kPeriod = 60;
+
+Digest digest(u64 tick) {
+    Digest value{};
+    for (usize index = 0; index < value.size(); ++index) {
+        value[index] = static_cast<u8>(tick + 11 * index);
+    }
+    return value;
+}
+std::vector<u8> packet(u8 kind, u64 epoch, u64 tick, const Digest& value,
+                       Failure reason = Failure::None) {
+    std::vector<u8> bytes{
+        'G', 'D', 'N', 'A', NativeAgreement::kVersion, kind, static_cast<u8>(reason), 0};
+    for (const u64 wide : {epoch, tick}) {
+        for (u32 shift = 0; shift < 64; shift += 8) {
+            bytes.push_back(static_cast<u8>(wide >> shift));
+        }
+    }
+    bytes.insert(bytes.end(), value.begin(), value.end());
+    return bytes;
+}
+
+struct Wire final : PacketTransport {
+    struct Packet {
+        Connection connection;
+        std::vector<u8> bytes;
+        Delivery delivery;
+    };
+    SendResult result = SendResult::Sent;
+    Connection faultConnection = 0; // zero applies result to all connections
+    usize budget = std::numeric_limits<usize>::max();
+    usize attempts = 0;
+    std::vector<Packet> sent;
+    SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
+        ++attempts;
+        if (result != SendResult::Sent && (faultConnection == 0 || faultConnection == connection)) {
+            return result;
+        }
+        if (budget == 0) {
+            return SendResult::Congested;
+        }
+        --budget;
+        sent.push_back({connection, {bytes.begin(), bytes.end()}, delivery});
+        return SendResult::Sent;
+    }
+    std::vector<Event> poll() override { return {}; }
+    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
+    void close(Connection) override {}
+};
+
+struct Room {
+    NativeAgreement::Owners owners;
+    std::array<NativeAgreement, 5> streams;
+    std::array<Wire, 5> wires;
+    Time now{};
+    u32 period;
+    explicit Room(NativeAgreement::Owners roster = {1, 2, 0, 0}, u32 cadence = kPeriod)
+        : owners(roster), period(cadence) {
+        std::vector<NativeAgreement::Link> links;
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            if (present(peer)) {
+                links.push_back({peer, connection(peer)});
+                const std::array host{NativeAgreement::Link{1, kHost}};
+                REQUIRE(streams[peer].open(peer, kEpoch, owners, host, period, now));
+            }
+        }
+        REQUIRE(streams[1].open(1, kEpoch, owners, links, period, now));
+    }
+    static PacketTransport::Connection connection(u8 peer) { return 100 + peer; }
+    bool present(u8 peer) const { return std::ranges::find(owners, peer) != owners.end(); }
+    void deliver(u8 source) {
+        auto sent = std::move(wires[source].sent);
+        wires[source].sent.clear();
+        for (const auto& message : sent) {
+            CHECK(message.delivery == PacketTransport::Delivery::Reliable);
+            CHECK(message.bytes.size() == NativeAgreement::kPacketBytes);
+            const auto target = source == 1 ? static_cast<u8>(message.connection - 100) : u8{1};
+            const auto sender = source == 1 ? kHost : connection(source);
+            const auto result = streams[target].receive(sender, message.bytes, now);
+            CHECK((result == Admission::Accepted || result == Admission::Duplicate ||
+                   result == Admission::Failed));
+        }
+    }
+    void pump() {
+        for (u8 pass = 0; pass < 3; ++pass) {
+            for (u8 peer = 1; peer <= 4; ++peer) {
+                if (present(peer)) {
+                    const bool flushed = streams[peer].flush(wires[peer], now);
+                    CHECK(flushed == !streams[peer].failed());
+                    deliver(peer);
+                }
+            }
+        }
+    }
+    void submitAll(u64 tick, const Digest& value) {
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(streams[peer].submit(tick, value, now) == Admission::Accepted);
+            }
+        }
+    }
+};
+} // namespace
+
+TEST_CASE("native agreement validates the exact authenticated frozen star",
+          "[netplay][native-agreement]") {
+    const auto mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    NativeAgreement stream;
+    u8 local = 1;
+    u64 epoch = kEpoch;
+    NativeAgreement::Owners owners{1, 2, 0, 0};
+    std::vector<NativeAgreement::Link> links{{2, 102}};
+    u32 period = kPeriod;
+    switch (mutation) {
+    case 0: local = 0; break;
+    case 1: local = 5; break;
+    case 2: epoch = 0; break;
+    case 3: owners = {2, 2, 0, 0}; break;
+    case 4: owners[3] = 5; break;
+    case 5: links.clear(); break;
+    case 6: links[0].connection = 0; break;
+    case 7: links.push_back(links.front()); break;
+    case 8: links[0].peer = 3; break;
+    case 9: period = 0; break;
+    case 10: period = NativeAgreement::kMaxPeriod + 1; break;
+    case 11:
+        owners[2] = 3;
+        links.push_back({3, 102});
+        break;
+    case 12:
+        local = 2;
+        links = {{1, kHost}, {3, 103}};
+        owners[2] = 3;
+        break;
+    }
+    CHECK_FALSE(stream.open(local, epoch, owners, links, period, Time{}));
+    CHECK_FALSE(stream.canSubmit());
+    CHECK(stream.pendingTicks() == 0);
+    CHECK(stream.queuedPackets() == 0);
+    const std::array validLinks{NativeAgreement::Link{2, 102}};
+    REQUIRE(stream.open(1, kEpoch, {1, 2, 0, 0}, validLinks, kPeriod, Time{}));
+    CHECK_FALSE(stream.open(1, kEpoch + 1, {1, 2, 0, 0}, validLinks, kPeriod, Time{}));
+}
+
+TEST_CASE("native agreement requires every peer including the host once per scheduled tick",
+          "[netplay][native-agreement]") {
+    const auto roster =
+        GENERATE((NativeAgreement::Owners{1, 2, 0, 0}), (NativeAgreement::Owners{1, 2, 3, 0}),
+                 (NativeAgreement::Owners{1, 2, 3, 4}), (NativeAgreement::Owners{2, 1, 2, 4}));
+    Room room(roster);
+    for (u64 sequence = 1; sequence <= 40; ++sequence) {
+        const u64 tick = sequence * kPeriod;
+        const auto value = sequence == 1 ? Digest{} : digest(tick);
+        // All remote reports cannot agree without the host's own observation.
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            if (room.present(peer)) {
+                REQUIRE(room.streams[peer].submit(tick, value, room.now) == Admission::Accepted);
+            }
+        }
+        room.pump();
+        CHECK(room.streams[1].agreedTick() == tick - kPeriod);
+        REQUIRE(room.streams[1].submit(tick, value, room.now) == Admission::Accepted);
+        room.pump();
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (room.present(peer)) {
+                CHECK(room.streams[peer].agreedTick() == tick);
+                CHECK(room.streams[peer].submitTick() == tick + kPeriod);
+                CHECK(room.streams[peer].pendingTicks() == 0);
+                CHECK(room.streams[peer].queuedPackets() == 0);
+                CHECK(room.streams[peer].canSubmit());
+            }
+        }
+    }
+}
+
+TEST_CASE("native agreement does not compare a partial peer roster",
+          "[netplay][native-agreement]") {
+    Room room({1, 2, 3, 4});
+    REQUIRE(room.streams[1].submit(kPeriod, digest(1), room.now) == Admission::Accepted);
+    REQUIRE(room.streams[2].submit(kPeriod, digest(2), room.now) == Admission::Accepted);
+    REQUIRE(room.streams[3].submit(kPeriod, digest(1), room.now) == Admission::Accepted);
+    room.pump();
+    CHECK_FALSE(room.streams[1].failed());
+    CHECK(room.streams[1].agreedTick() == 0);
+    REQUIRE(room.streams[4].submit(kPeriod, digest(1), room.now) == Admission::Accepted);
+    room.pump();
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        CHECK(room.streams[peer].failure() == Failure::Mismatch);
+        CHECK(room.streams[peer].failureTick() == kPeriod);
+        CHECK(room.streams[peer].agreedTick() == 0);
+        CHECK_FALSE(room.streams[peer].canSubmit());
+        CHECK(room.streams[peer].pendingTicks() == 0);
+    }
+}
+
+TEST_CASE("native agreement compares all digest bytes and never repairs a mismatch",
+          "[netplay][native-agreement]") {
+    for (usize index = 0; index < Digest{}.size(); ++index) {
+        CAPTURE(index);
+        Room room;
+        auto changed = digest(kPeriod);
+        changed[index] ^= 0x80;
+        REQUIRE(room.streams[1].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+        REQUIRE(room.streams[2].submit(kPeriod, changed, room.now) == Admission::Accepted);
+        room.pump();
+        CHECK(room.streams[1].failure() == Failure::Mismatch);
+        CHECK(room.streams[2].failure() == Failure::Mismatch);
+        CHECK(room.streams[1].submit(kPeriod, changed, room.now) == Admission::Failed);
+        CHECK(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Failed);
+    }
+}
+
+TEST_CASE("native agreement retains exact duplicates and rejects conflicting duplicates",
+          "[netplay][native-agreement]") {
+    const bool completed = GENERATE(false, true);
+    const bool local = GENERATE(false, true);
+    Room room;
+    const auto report = packet(1, kEpoch, kPeriod, digest(kPeriod));
+    REQUIRE(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+    CHECK(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Duplicate);
+    CHECK(room.streams[2].queuedPackets() == 1);
+    REQUIRE(room.streams[1].receive(102, report, room.now) == Admission::Accepted);
+    CHECK(room.streams[1].receive(102, report, room.now) == Admission::Duplicate);
+    if (completed) {
+        REQUIRE(room.streams[1].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+        room.pump();
+        CHECK(room.streams[1].agreedTick() == kPeriod);
+    }
+    if (local) {
+        CHECK(room.streams[2].submit(kPeriod, digest(kPeriod + 1), room.now) == Admission::Failed);
+    } else {
+        CHECK(room.streams[1].receive(102, packet(1, kEpoch, kPeriod, digest(kPeriod + 1)),
+                                      room.now) == Admission::Failed);
+    }
+    room.pump();
+    CHECK(room.streams[1].failure() == Failure::Conflict);
+    CHECK(room.streams[2].failure() == Failure::Conflict);
+}
+
+TEST_CASE("native agreement handles reordered reports and verdicts without skipping intervals",
+          "[netplay][native-agreement]") {
+    Room room;
+    for (u64 tick : {u64{kPeriod}, u64{2 * kPeriod}}) {
+        room.submitAll(tick, digest(tick));
+    }
+    REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+    REQUIRE(room.wires[2].sent.size() == 2);
+    const auto reports = room.wires[2].sent;
+    room.wires[2].sent.clear();
+    CHECK(room.streams[1].receive(102, reports[1].bytes, room.now) == Admission::Accepted);
+    CHECK(room.streams[1].agreedTick() == 0);
+    CHECK(room.streams[1].receive(102, reports[0].bytes, room.now) == Admission::Accepted);
+    CHECK(room.streams[1].agreedTick() == 2 * kPeriod);
+    REQUIRE(room.streams[1].flush(room.wires[1], room.now));
+    REQUIRE(room.wires[1].sent.size() == 2);
+    const auto verdicts = room.wires[1].sent;
+    CHECK(room.streams[2].receive(kHost, verdicts[1].bytes, room.now) == Admission::Accepted);
+    CHECK(room.streams[2].agreedTick() == 0);
+    CHECK(room.streams[2].receive(kHost, verdicts[1].bytes, room.now) == Admission::Duplicate);
+    CHECK(room.streams[2].receive(kHost, verdicts[0].bytes, room.now) == Admission::Accepted);
+    CHECK(room.streams[2].agreedTick() == 2 * kPeriod);
+    CHECK(room.streams[2].receive(kHost, verdicts[0].bytes, room.now) == Admission::Duplicate);
+}
+
+TEST_CASE("native agreement authenticates report and verdict roles and rejects stale epochs",
+          "[netplay][native-agreement]") {
+    Room room;
+    room.submitAll(kPeriod, digest(kPeriod));
+    const auto report = packet(1, kEpoch, kPeriod, digest(kPeriod));
+    const auto accepted = packet(2, kEpoch, kPeriod, digest(kPeriod));
+    CHECK(room.streams[1].receive(999, report, Time::max()) == Admission::WrongPeer);
+    CHECK(room.streams[2].receive(999, accepted, Time::max()) == Admission::WrongPeer);
+    CHECK(room.streams[1].receive(0, report, Time::max()) == Admission::WrongPeer);
+    CHECK(room.streams[1].receive(102, packet(1, kEpoch - 1, kPeriod, digest(kPeriod)),
+                                  Time::max()) == Admission::Stale);
+    CHECK(room.streams[2].receive(kHost, packet(3, kEpoch + 1, 0, {}, Failure::Timeout),
+                                  Time::max()) == Admission::Stale);
+    CHECK_FALSE(room.streams[1].failed());
+    CHECK_FALSE(room.streams[2].failed());
+    room.pump();
+    CHECK(room.streams[2].agreedTick() == kPeriod);
+    SECTION("a guest cannot issue host acceptance") {
+        CHECK(room.streams[1].receive(102, accepted, room.now) == Admission::Invalid);
+        CHECK(room.streams[1].failure() == Failure::Protocol);
+    }
+    SECTION("a host cannot relay reports as a guest verdict") {
+        CHECK(room.streams[2].receive(kHost, report, room.now) == Admission::Invalid);
+        CHECK(room.streams[2].failure() == Failure::Protocol);
+    }
+}
+
+TEST_CASE("native agreement wire is exact bounded canonical little endian",
+          "[netplay][native-agreement]") {
+    Room room;
+    REQUIRE(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+    REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+    REQUIRE(room.wires[2].sent.size() == 1);
+    const auto& actual = room.wires[2].sent.front().bytes;
+    CHECK(actual == packet(1, kEpoch, kPeriod, digest(kPeriod)));
+    CHECK(NativeAgreement::recognizes(actual));
+    CHECK(NativeAgreement::recognizes(std::span{actual}.first(4)));
+    CHECK_FALSE(NativeAgreement::recognizes(std::span{actual}.first(3)));
+    for (usize size = 0; size < actual.size(); ++size) {
+        Room truncated;
+        CHECK(truncated.streams[1].receive(102, std::span{actual}.first(size), Time{}) ==
+              Admission::Invalid);
+        CHECK(truncated.streams[1].failure() == Failure::Protocol);
+    }
+    auto oversized = actual;
+    oversized.push_back(0);
+    CHECK(room.streams[1].receive(102, oversized, room.now) == Admission::Invalid);
+    CHECK(room.streams[1].failure() == Failure::Protocol);
+}
+
+TEST_CASE("native agreement refuses malformed flags and noncanonical terminal messages",
+          "[netplay][native-agreement]") {
+    const auto mutation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    Room room;
+    auto bytes = packet(1, kEpoch, kPeriod, digest(kPeriod));
+    switch (mutation) {
+    case 0: bytes[0] ^= 1; break;
+    case 1: bytes[4] = NativeAgreement::kVersion + 1; break;
+    case 2: bytes[5] = 0; break;
+    case 3: bytes[5] = 4; break;
+    case 4: bytes[6] = 255; break;
+    case 5: bytes[7] = 1; break;
+    case 6: bytes = packet(1, 0, kPeriod, digest(kPeriod)); break;
+    case 7: bytes = packet(1, kEpoch, 0, digest(kPeriod)); break;
+    case 8: bytes = packet(1, kEpoch, kPeriod + 1, digest(kPeriod)); break;
+    case 9: bytes = packet(3, kEpoch, kPeriod, {}, Failure::None); break;
+    case 10: bytes = packet(3, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
+    case 11: bytes = packet(1, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
+    }
+    CHECK(room.streams[1].receive(102, bytes, room.now) == Admission::Invalid);
+    CHECK(room.streams[1].failure() == Failure::Protocol);
+    CHECK(room.streams[1].agreedTick() == 0);
+    CHECK(room.streams[1].pendingTicks() == 0);
+    CHECK(room.streams[1].queuedPackets() == 1);
+}
+
+TEST_CASE("native agreement submission cannot omit ticks or claim an unsubmitted verdict",
+          "[netplay][native-agreement]") {
+    Room room;
+    CHECK(room.streams[2].submit(0, {}, room.now) == Admission::Invalid);
+    CHECK(room.streams[2].submit(kPeriod + 1, {}, room.now) == Admission::Invalid);
+    CHECK(room.streams[2].submit(2 * kPeriod, {}, room.now) == Admission::Invalid);
+    CHECK(room.streams[2].submitTick() == kPeriod);
+    CHECK(room.streams[2].queuedPackets() == 0);
+    CHECK(room.streams[2].receive(kHost, packet(2, kEpoch, kPeriod, {}), room.now) ==
+          Admission::Invalid);
+    CHECK(room.streams[2].failure() == Failure::Protocol);
+}
+
+TEST_CASE("native agreement guests verify the exact host-accepted digest",
+          "[netplay][native-agreement]") {
+    Room room({1, 2, 3, 4});
+    REQUIRE(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+    CHECK(room.streams[2].receive(kHost, packet(2, kEpoch, kPeriod, digest(kPeriod + 1)),
+                                  room.now) == Admission::Failed);
+    CHECK(room.streams[2].failure() == Failure::Mismatch);
+    CHECK(room.streams[2].agreedTick() == 0);
+    room.pump();
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        CHECK(room.streams[peer].failure() == Failure::Mismatch);
+        CHECK(room.streams[peer].failureTick() == kPeriod);
+    }
+}
+
+TEST_CASE("native agreement bounds pending reports and preserves congested delivery exactly",
+          "[netplay][native-agreement]") {
+    Room room;
+    room.wires[2].result = PacketTransport::SendResult::Congested;
+    for (u64 index = 1; index <= NativeAgreement::kWindow; ++index) {
+        REQUIRE(room.streams[2].submit(index * kPeriod, digest(index), room.now) ==
+                Admission::Accepted);
+    }
+    CHECK_FALSE(room.streams[2].canSubmit());
+    CHECK(room.streams[2].pendingTicks() == NativeAgreement::kWindow);
+    CHECK(room.streams[2].queuedPackets() == NativeAgreement::kQueuedPackets);
+    for (u32 attempt = 0; attempt < 100; ++attempt) {
+        CHECK(room.streams[2].submit((NativeAgreement::kWindow + 1) * kPeriod, {}, room.now) ==
+              Admission::Full);
+        REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+        CHECK(room.streams[2].queuedPackets() == NativeAgreement::kQueuedPackets);
+    }
+    CHECK(room.wires[2].sent.empty());
+    room.wires[2].result = PacketTransport::SendResult::Sent;
+    room.wires[2].budget = 3;
+    REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+    CHECK(room.streams[2].queuedPackets() == NativeAgreement::kQueuedPackets - 3);
+    for (usize index = 0; index < room.wires[2].sent.size(); ++index) {
+        CHECK(room.wires[2].sent[index].bytes ==
+              packet(1, kEpoch, (index + 1) * kPeriod, digest(index + 1)));
+    }
+    room.deliver(2);
+    room.wires[2].budget = std::numeric_limits<usize>::max();
+    for (u64 index = 1; index <= NativeAgreement::kWindow; ++index) {
+        REQUIRE(room.streams[1].submit(index * kPeriod, digest(index), room.now) ==
+                Admission::Accepted);
+    }
+    room.pump();
+    CHECK(room.streams[2].agreedTick() == NativeAgreement::kWindow * kPeriod);
+    CHECK(room.streams[2].canSubmit());
+    CHECK(room.streams[2].submit((NativeAgreement::kWindow + 1) * kPeriod, {}, room.now) ==
+          Admission::Accepted);
+}
+
+TEST_CASE("native agreement bounds host verdict queues and fails overflowing remote windows",
+          "[netplay][native-agreement]") {
+    SECTION("host verdict congestion stalls local submission without losing verdicts") {
+        Room room;
+        room.wires[1].result = PacketTransport::SendResult::Congested;
+        for (u64 index = 1; index <= NativeAgreement::kQueuedPackets; ++index) {
+            const auto tick = index * kPeriod;
+            room.submitAll(tick, digest(tick));
+            room.pump();
+        }
+        CHECK(room.streams[1].queuedPackets() == NativeAgreement::kQueuedPackets);
+        CHECK(room.streams[1].agreedTick() == NativeAgreement::kQueuedPackets * kPeriod);
+        CHECK(room.streams[1].pendingTicks() == 0);
+        CHECK_FALSE(room.streams[1].canSubmit());
+        CHECK(room.streams[1].submit((NativeAgreement::kQueuedPackets + 1) * kPeriod, {},
+                                     room.now) == Admission::Full);
+        room.wires[1].result = PacketTransport::SendResult::Sent;
+        room.pump();
+        CHECK(room.streams[1].canSubmit());
+        CHECK(room.streams[2].agreedTick() == NativeAgreement::kQueuedPackets * kPeriod);
+    }
+    SECTION("remote overflow is a terminal refusal, never silent report loss") {
+        Room room({1, 2, 3, 4}, 1);
+        CHECK(room.streams[1].receive(102, packet(1, kEpoch, std::numeric_limits<u64>::max(), {}),
+                                      room.now) == Admission::Full);
+        CHECK(room.streams[1].failure() == Failure::Window);
+        CHECK(room.streams[1].pendingTicks() == 0);
+        CHECK(room.streams[1].queuedPackets() == 3);
+    }
+}
+
+TEST_CASE("native agreement real-time deadlines do not renew on traffic or congestion",
+          "[netplay][native-agreement]") {
+    const auto mode = GENERATE(0, 1, 2);
+    Room room;
+    if (mode == 0) {
+        REQUIRE(room.streams[1].submit(kPeriod, {}, room.now) == Admission::Accepted);
+    } else if (mode == 1) {
+        REQUIRE(room.streams[2].submit(kPeriod, {}, room.now) == Admission::Accepted);
+        REQUIRE(room.streams[2].flush(room.wires[2], room.now)); // awaiting host verdict
+    } else {
+        room.submitAll(kPeriod, {});
+        REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+        room.deliver(2); // host has agreed; its outgoing verdict still has a deadline
+        CHECK(room.streams[1].pendingTicks() == 0);
+    }
+    auto& stream = room.streams[mode == 1 ? 2 : 1];
+    CHECK(stream.update(Time{} + std::chrono::seconds{9}));
+    CHECK(stream.update(Time::min()));
+    CHECK(stream.submit(kPeriod, {}, Time{} + std::chrono::seconds{9}) == Admission::Duplicate);
+    CHECK_FALSE(stream.update(Time{} + NativeAgreement::kTimeout));
+    CHECK(stream.failure() == Failure::Timeout);
+    CHECK(stream.failureTick() == kPeriod);
+    room.now = Time{} + NativeAgreement::kTimeout;
+    room.pump();
+    CHECK(room.streams[1].failed());
+    CHECK(room.streams[2].failed());
+}
+
+TEST_CASE("native agreement idle time and extreme injected clocks cannot invent expiry",
+          "[netplay][native-agreement]") {
+    SECTION("no reports and no queued delivery means no timeout") {
+        Room room;
+        CHECK(room.streams[1].update(Time::max()));
+        CHECK(room.streams[2].update(Time::max()));
+        CHECK_FALSE(room.streams[1].failed());
+        CHECK_FALSE(room.streams[2].failed());
+    }
+    SECTION("pending reports expire across the complete signed clock range") {
+        NativeAgreement stream;
+        const std::array links{NativeAgreement::Link{2, 102}};
+        REQUIRE(stream.open(1, kEpoch, {1, 2, 0, 0}, links, kPeriod, Time::min()));
+        REQUIRE(stream.submit(kPeriod, {}, Time::min()) == Admission::Accepted);
+        CHECK_FALSE(stream.update(Time::max()));
+        CHECK(stream.failure() == Failure::Timeout);
+    }
+    SECTION("a start near max cannot overflow its timeout into the past") {
+        NativeAgreement stream;
+        const std::array links{NativeAgreement::Link{2, 102}};
+        const auto start = Time::max() - std::chrono::seconds{1};
+        REQUIRE(stream.open(1, kEpoch, {1, 2, 0, 0}, links, kPeriod, start));
+        REQUIRE(stream.submit(kPeriod, {}, start) == Admission::Accepted);
+        CHECK(stream.update(Time::max()));
+    }
+}
+
+TEST_CASE("native agreement terminal failures have reserved bounded reliable capacity",
+          "[netplay][native-agreement]") {
+    Room room({1, 2, 3, 4});
+    room.wires[1].result = PacketTransport::SendResult::Congested;
+    for (u64 index = 1; index <= NativeAgreement::kQueuedPackets; ++index) {
+        room.submitAll(index * kPeriod, digest(index));
+        room.pump();
+    }
+    REQUIRE(room.streams[1].queuedPackets() == 3 * NativeAgreement::kQueuedPackets);
+    CHECK(room.streams[1].receive(102, packet(1, kEpoch, kPeriod, digest(999)), room.now) ==
+          Admission::Failed);
+    CHECK(room.streams[1].failure() == Failure::Conflict);
+    for (u32 retry = 0; retry < 100; ++retry) {
+        CHECK_FALSE(room.streams[1].flush(room.wires[1], room.now));
+        CHECK(room.streams[1].queuedPackets() == 3);
+    }
+    room.wires[1].result = PacketTransport::SendResult::Sent;
+    room.pump();
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        CHECK(room.streams[peer].failure() == Failure::Conflict);
+        CHECK(room.streams[peer].failureTick() == kPeriod);
+        CHECK(room.streams[peer].queuedPackets() == 0);
+    }
+}
+
+TEST_CASE("native agreement disconnect and fatal send notify surviving peers without neutral "
+          "substitution",
+          "[netplay][native-agreement]") {
+    const auto mode = GENERATE(0, 1, 2);
+    Room room({1, 2, 3, 4});
+    room.streams[1].disconnected(999);
+    room.streams[1].disconnected(0);
+    CHECK_FALSE(room.streams[1].failed());
+    if (mode == 0) {
+        room.streams[1].disconnected(102);
+    } else {
+        room.submitAll(kPeriod, {});
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            REQUIRE(room.streams[peer].flush(room.wires[peer], room.now));
+            room.deliver(peer);
+        }
+        room.wires[1].faultConnection = 102;
+        room.wires[1].result = mode == 1 ? PacketTransport::SendResult::Disconnected
+                                         : PacketTransport::SendResult::Invalid;
+        CHECK_FALSE(room.streams[1].flush(room.wires[1], room.now));
+    }
+    room.pump();
+    const auto reason = mode == 0 ? Failure::Disconnected : Failure::Transport;
+    CHECK(room.streams[1].failure() == reason);
+    CHECK(room.streams[3].failure() == reason);
+    CHECK(room.streams[4].failure() == reason);
+    CHECK_FALSE(room.streams[2].failed()); // its independent transport must report disconnection
+    room.streams[2].disconnected(kHost);
+    CHECK(room.streams[2].failure() == Failure::Disconnected);
+}
+
+TEST_CASE("native agreement retains a bounded duplicate history and does not revive old epochs",
+          "[netplay][native-agreement]") {
+    Room room;
+    for (u64 sequence = 1; sequence <= NativeAgreement::kHistory + 2; ++sequence) {
+        room.submitAll(sequence * kPeriod, digest(sequence));
+        room.pump();
+    }
+    CHECK(room.streams[1].receive(102, packet(1, kEpoch, kPeriod, digest(999)), room.now) ==
+          Admission::Stale);
+    CHECK(room.streams[2].submit(kPeriod, digest(999), room.now) == Admission::Stale);
+    CHECK_FALSE(room.streams[1].failed());
+    const auto latest = (NativeAgreement::kHistory + 2) * kPeriod;
+    CHECK(room.streams[1].receive(102, packet(1, kEpoch, latest, digest(999)), room.now) ==
+          Admission::Failed);
+    CHECK(room.streams[1].failure() == Failure::Conflict);
+}

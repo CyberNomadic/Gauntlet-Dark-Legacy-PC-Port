@@ -79,6 +79,7 @@ private:
     void updateJourney(f64 deltaSeconds);
     bool updateCompletion(f64 deltaSeconds);
     void autoSave(std::span<PartyMember> party);
+    bool saveLocalParty(std::span<PartyMember> party);
     bool startTower(std::span<const PartyMember> party, const PlayOptions& options = {});
     /** Loads `level` and brings the party into it. */
     bool startLevel(const LevelRef& level, std::span<const PartyMember> party,

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <span>
 #include <vector>
 
 #include "engine/assets/SoundSet.h"
 #include "engine/audio/SoundPlayer.h"
 #include "engine/core/Types.h"
+
+#include "game/world/SpeechTiming.h"
 
 namespace gdl::game {
 
@@ -22,7 +25,8 @@ public:
     void bind(SoundPlayer* output) { m_output = output; }
     /** Whether a line willing to wait `maxWait` seconds may be queued now. */
     bool room(f32 maxWait) const;
-    /** Queues a sequence behind the rest at `volume`; kNoSound when held or full. */
+    /** Queues a sequence behind the rest at `volume`; kNoSound when inaudible,
+     * held or full. Logical admission does not depend on playback succeeding. */
     SoundHandle queue(const SoundSequence& sequence, f32 volume);
     /** While held nothing more is let in: the good wizard has the floor. */
     void hold(bool held) { m_held = held; }
@@ -31,6 +35,8 @@ public:
     void update(f32 seconds);
     /** Seconds of queued lines still to come. */
     f64 backlog() const;
+    /** Pointer-free logical state, including silently admitted lines. */
+    std::span<const SpeechTiming> timing() const { return m_lines; }
     /** Forgets what was queued without stopping it. */
     void clear();
     /** How long a sequence plays, in seconds. */
@@ -38,8 +44,7 @@ public:
 
 private:
     SoundPlayer* m_output = nullptr;
-    f64 m_clock = 0.0;
-    std::vector<f64> m_ends; ///< when each queued line not yet over will end
+    std::vector<SpeechTiming> m_lines;
     SoundHandle m_tail = kNoSound;
     bool m_held = false;
 };

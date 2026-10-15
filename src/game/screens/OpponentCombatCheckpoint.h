@@ -144,9 +144,14 @@ public:
     bool restore(const State& state, const EffectTrees::PoolCheckpoint& effects);
 
 private:
+    friend class SimulationCheckpointObserver;
     struct CaptureResources;
     static bool unused(const Combatant& actor);
     bool supported() const;
+    /** Local observation may capture these represented values while separately
+     * observing native cloud/Death transitions. This is not a complete restore
+     * point: public checkpoint/prepareRestore still require supported(). */
+    std::optional<State> captureValues(const EffectTrees::PoolCheckpoint& effects) const;
     LevelOpponents& m_owner;
     std::vector<EffectTrees::PoolResource> m_effectResources;
     mutable std::unique_ptr<CaptureResources> m_captureResources;

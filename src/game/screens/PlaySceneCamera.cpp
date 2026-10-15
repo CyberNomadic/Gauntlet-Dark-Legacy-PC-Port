@@ -67,15 +67,11 @@ BossCameraSubject PlayScene::bossSubject() const {
     return subject;
 }
 
-/** Whether any party member's player pressed a button this frame. */
+/** Canonical gameplay projection for camera fitting, visibility, party limits and
+ * transporter selection. Local FOV/aspect belong only to render() and its
+ * presented cursor projection; they must not change the next native update. */
 CameraView PlayScene::cameraView() const {
-    CameraView view;
-    if (m_context.config != nullptr) {
-        view.horizontalFov = m_context.config->horizontalFovRadians();
-        view.aspect = static_cast<f32>(m_context.config->display.frameWidth) /
-                      static_cast<f32>(m_context.config->display.frameHeight);
-    }
-    return view;
+    return {};
 }
 
 } // namespace gdl::game

@@ -1,5 +1,7 @@
 #pragma once
 #include <array>
+#include <optional>
+#include <random>
 #include <span>
 #include <vector>
 
@@ -75,9 +77,12 @@ struct ShopLane {
 class ShopSession {
 public:
     using Inputs = std::array<MenuInput, 4>;
+    /** A supplied seed owns this visit's reproducible potion stream (including
+     * seed zero). Otherwise entropy is requested lazily on its first native
+     * potion attempt. update's supplied colours always bypass this stream. */
     void start(std::span<const PartyMember> party, std::span<const LevelResults> results,
                const std::array<s32, 3>& maxima, const ClassDataSet& classes, ShopCatalog catalog,
-               ShopVisit visit = ShopVisit::Level);
+               ShopVisit visit = ShopVisit::Level, std::optional<u32> potionSeed = std::nullopt);
     void update(f64 seconds, const Inputs& inputs, const std::array<s32, 4>* potions = nullptr);
     /** Focus a visible mouse-picked row; transactions still use update's ordinary rules. */
     bool focus(s32 player, usize row);
@@ -96,5 +101,6 @@ private:
     std::vector<ShopLane> m_lanes;
     std::vector<ShopEvent> m_events;
     ShopVisit m_visit = ShopVisit::Level;
+    std::optional<std::mt19937> m_potionRandom;
 };
 } // namespace gdl::game

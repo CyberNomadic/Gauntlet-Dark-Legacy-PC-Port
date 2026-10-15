@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/RandomDistribution.h"
 
 #include "game/combat/Damage.h"
 #include "game/combat/DamageTypes.h"
@@ -45,8 +46,10 @@ void Combatant::setArenaAnchors(std::span<const Mat4> anchors) {
 void Combatant::setArenaTargets(std::span<const CombatArenaTarget> targets) {
     m_actor.arenaTargets.assign(targets.begin(), targets.end());
     if (!m_actor.arenaCollected && !targets.empty()) {
-        std::uniform_int_distribution<s32> choose{0, static_cast<s32>(targets.size()) - 1};
-        m_actor.lastArenaTarget = choose(m_arenaRandom);
+        // The ordered native roster selects an index, not a library-specific
+        // distribution. Its engine and accepted/rejected draw counts stay intact.
+        m_actor.lastArenaTarget = static_cast<s32>(
+            random_distribution::boundedIndex(m_arenaRandom, targets.size()).value());
         m_actor.arenaCollected = true;
     }
 }

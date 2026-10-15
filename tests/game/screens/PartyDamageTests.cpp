@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -18,8 +17,15 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
-using Output = PartyDamage::Output;
-using OutputKind = PartyDamage::OutputKind;
+enum class OutputKind { Sound, Cry, Named, Rumble, Block };
+struct Output {
+    OutputKind kind;
+    s32 player;
+    std::string name;
+    f32 seconds = 0;
+    s32 frames = 0;
+    bool operator==(const Output&) const = default;
+};
 constexpr f32 kStep = 1.0f / 60;
 
 struct Fixture {
@@ -150,6 +156,24 @@ struct Fixture {
             }
         }
     }
+    void dispatch(std::span<const EnemyBlow> blows, const PartyDamage::Context& context,
+                  std::span<const LevelEnemy> roster = {}) {
+        for (const auto& blow : blows) {
+            for (usize index = 0; index < players.size(); ++index) {
+                auto& player = players[index];
+                const auto impact = PartyDamage::enemy(blow, player, roster);
+                if (!impact) {
+                    continue;
+                }
+                if (impact->sound) {
+                    outputs.push_back({OutputKind::Sound, blow.player, *impact->sound});
+                }
+                PartyDamage::hurt(health, player, blow.damage, impact->kind, true, context,
+                                  events(index, context), impact->impact,
+                                  classes.stats(player.actor.save().character));
+            }
+        }
+    }
     void tick(s32 tick, bool defend = false) {
         std::array<PlayInput, 4> input{};
         for (const auto& player : players) {
@@ -174,8 +198,8 @@ struct Fixture {
     }
 };
 
-TEST_CASE("ordinary native enemy blows rewind complete party damage and the following motion",
-          "[rollback][party-damage][assets]") {
+TEST_CASE("native enemy damage dispatch preserves party damage and following motion",
+          "[diagnostics][party-damage][assets]") {
     Fixture fixture;
     Enemies enemies;
     enemies.open(fixture.device, fixture.root, &fixture.floor, 8, {}, 79);
@@ -225,11 +249,9 @@ TEST_CASE("ordinary native enemy blows rewind complete party damage and the foll
     REQUIRE(continuation.back()[0].actor.position != before[0].actor.position);
     fixture.restore(before, random);
     fixture.actions.clear();
-    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
-                                                 fixture.classes, {}, context);
-    REQUIRE(replay.status == PartyDamage::Status::Applied);
-    CHECK(replay.outputs == outputs);
-    CHECK(fixture.outputs == outputs); // private phase dispatched no native callbacks
+    fixture.outputs.clear();
+    fixture.dispatch(blows, context);
+    CHECK(fixture.outputs == outputs);
     CHECK(fixture.state() == afterDamage);
     CHECK(fixture.health.checkpoint() == afterRandom);
     for (s32 tick = 0; tick < 90; ++tick) {
@@ -242,8 +264,8 @@ TEST_CASE("ordinary native enemy blows rewind complete party damage and the foll
     CHECK(fixture.device.texturesCreated == uploads);
 }
 
-TEST_CASE("private guard damage preserves block state fractions and global cue RNG order",
-          "[rollback][party-damage][assets]") {
+TEST_CASE("native guard damage preserves block state fractions and global cue RNG order",
+          "[diagnostics][party-damage][assets]") {
     const bool defend = GENERATE(false, true);
     Fixture fixture;
     if (defend) {
@@ -280,42 +302,15 @@ TEST_CASE("private guard damage preserves block state fractions and global cue R
         CHECK(std::ranges::count(cues, OutputKind::Block, &Output::kind) == 2);
     }
     fixture.restore(before, random);
-    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
-                                                 fixture.classes, {}, context);
-    REQUIRE(replay.status == PartyDamage::Status::Applied);
-    CHECK(replay.outputs == cues);
+    fixture.outputs.clear();
+    fixture.dispatch(blows, context);
+    CHECK(fixture.outputs == cues);
     CHECK(fixture.state() == expected);
     CHECK(fixture.health.checkpoint() == expectedRandom);
 }
 
-TEST_CASE("late rejected blows atomically undo earlier players RNG and discarded outputs",
-          "[rollback][party-damage][assets]") {
-    const s32 refusal = GENERATE(0, 1, 2);
-    Fixture fixture;
-    fixture.players[0].actor.save().progress().health = 51;
-    std::array blows{EnemyBlow{.player = 3, .kind = 0, .damage = 10},
-                     EnemyBlow{.player = 1, .kind = 0, .damage = 20000}};
-    if (refusal == 1) {
-        blows[1].ward = EnemyMeleeWard::HealthVamp;
-    } else if (refusal == 2) {
-        blows[1].flags = PlayerImpact::kKnockDown;
-    }
-    const auto before = fixture.state();
-    const auto random = fixture.health.checkpoint();
-    const auto uploads = fixture.device.texturesCreated;
-    const auto replay =
-        PartyDamage::replayBlows(blows, fixture.players, fixture.health, fixture.classes, {}, {});
-    CHECK(replay.status == PartyDamage::Status::Unsupported);
-    CHECK(replay.outputs.empty());
-    CHECK(fixture.state() == before);
-    CHECK(fixture.health.checkpoint() == random);
-    CHECK(fixture.outputs.empty());
-    CHECK(fixture.effects.count() == 0);
-    CHECK(fixture.device.texturesCreated == uploads);
-}
-
 TEST_CASE("ordinary knockback retains native damage and reaction without requesting guard lessons",
-          "[rollback][party-damage][help-admission][assets]") {
+          "[diagnostics][party-damage][help-admission][assets]") {
     const bool known = GENERATE(false, true);
     Fixture fixture;
     if (known) {
@@ -345,10 +340,9 @@ TEST_CASE("ordinary knockback retains native damage and reaction without request
     fixture.tick(0);
     const auto following = fixture.state();
     fixture.restore(before, random);
-    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
-                                                 fixture.classes, {}, context);
-    REQUIRE(replay.status == PartyDamage::Status::Applied);
-    CHECK(replay.outputs == outputs);
+    fixture.outputs.clear();
+    fixture.dispatch(blows, context);
+    CHECK(fixture.outputs == outputs);
     CHECK(fixture.state() == expected);
     CHECK(fixture.health.checkpoint() == expectedRandom);
     fixture.tick(0);
@@ -356,8 +350,8 @@ TEST_CASE("ordinary knockback retains native damage and reaction without request
     CHECK(fixture.lessons == 0);
 }
 
-TEST_CASE("native heavy guard lessons do not admit unsupported knockdowns even when already known",
-          "[rollback][party-damage][help-admission][assets]") {
+TEST_CASE("native heavy damage preserves knockdowns and guard lesson routing",
+          "[diagnostics][party-damage][help-admission][assets]") {
     const bool known = GENERATE(false, true);
     Fixture fixture;
     if (known) {
@@ -375,6 +369,9 @@ TEST_CASE("native heavy guard lessons do not admit unsupported knockdowns even w
     REQUIRE(fixture.lessons == 1);
     REQUIRE(fixture.players[0].actor.save().health() < before[0].save.health());
     REQUIRE(fixture.players[0].reaction != PlayerDeed::None);
+    const auto expected = fixture.state();
+    const auto expectedRandom = fixture.health.checkpoint();
+    const auto outputs = fixture.outputs;
     MessageTable strings;
     REQUIRE(strings.load(fixture.root / "TEXT/english.rom"));
     HelpMessages help;
@@ -388,42 +385,16 @@ TEST_CASE("native heavy guard lessons do not admit unsupported knockdowns even w
     CHECK(help.showing() == !known);
     fixture.restore(before, random);
     fixture.outputs.clear();
-    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
-                                                 fixture.classes, {}, context);
-    REQUIRE(replay.status == PartyDamage::Status::Unsupported);
-    CHECK(replay.outputs.empty());
-    CHECK(fixture.state() == before);
-    CHECK(fixture.health.checkpoint() == random);
-    CHECK(fixture.outputs.empty());
+    fixture.lessons = 0;
+    fixture.dispatch(blows, context);
+    CHECK(fixture.state() == expected);
+    CHECK(fixture.health.checkpoint() == expectedRandom);
+    CHECK(fixture.outputs == outputs);
     CHECK(fixture.lessons == 1);
 }
 
-TEST_CASE("caller owned damage staging leaves outer prepared runtime undo valid",
-          "[rollback][party-damage][assets]") {
-    Fixture fixture;
-    const auto before = fixture.state();
-    const auto random = fixture.health.checkpoint();
-    auto first = fixture.owners[0]->prepareRestore(before[0]);
-    auto second = fixture.owners[1]->prepareRestore(before[1]);
-    REQUIRE(first);
-    REQUIRE(second);
-    const std::array blows{EnemyBlow{.player = 3, .kind = 0, .damage = 70.25f},
-                           EnemyBlow{.player = 1, .kind = 0, .damage = 20000}};
-    const auto staged =
-        PartyDamage::stageBlows(blows, fixture.players, fixture.health, fixture.classes, {}, {});
-    REQUIRE(staged.status == PartyDamage::Status::Unsupported);
-    CHECK(staged.outputs.empty());
-    REQUIRE(fixture.state() != before);
-    REQUIRE(fixture.owners[0]->canCommit(*first));
-    REQUIRE(fixture.owners[1]->canCommit(*second));
-    REQUIRE(fixture.owners[0]->commitRestore(std::move(*first)));
-    REQUIRE(fixture.owners[1]->commitRestore(std::move(*second)));
-    REQUIRE(fixture.health.restore(random));
-    CHECK(fixture.state() == before);
-}
-
 TEST_CASE("native impact cue optionality and locks are retained before damage dispatch",
-          "[rollback][party-damage][assets]") {
+          "[diagnostics][party-damage][assets]") {
     const s32 lock = GENERATE(0, 1, 2);
     Fixture fixture;
     const std::array blows{EnemyBlow{.player = 0, .kind = kGruntKind, .damage = 9},
@@ -442,10 +413,9 @@ TEST_CASE("native impact cue optionality and locks are retained before damage di
     const auto expected = fixture.state();
     const auto cues = fixture.outputs;
     fixture.restore(before, random);
-    const auto replay = PartyDamage::replayBlows(blows, fixture.players, fixture.health,
-                                                 fixture.classes, {}, context);
-    REQUIRE(replay.status == PartyDamage::Status::Applied);
-    CHECK(replay.outputs == cues);
+    fixture.outputs.clear();
+    fixture.dispatch(blows, context);
+    CHECK(fixture.outputs == cues);
     CHECK(fixture.state() == expected);
     if (lock != 0) {
         CHECK(expected == before);
@@ -456,21 +426,8 @@ TEST_CASE("native impact cue optionality and locks are retained before damage di
     }
 }
 
-TEST_CASE("damage phase refuses malformed input without changing native participants",
-          "[rollback][party-damage][assets]") {
-    Fixture fixture;
-    const auto before = fixture.state();
-    const auto random = fixture.health.checkpoint();
-    std::array blows{EnemyBlow{.player = 3, .kind = kGruntKind, .damage = 7}};
-    blows[0].direction.x = std::numeric_limits<f32>::quiet_NaN();
-    CHECK(PartyDamage::replayBlows(blows, fixture.players, fixture.health, fixture.classes, {}, {})
-              .status == PartyDamage::Status::Invalid);
-    CHECK(fixture.state() == before);
-    CHECK(fixture.health.checkpoint() == random);
-}
-
 TEST_CASE("shared scene hurt preserves the strict lesson threshold and last level death record",
-          "[rollback][party-damage][assets]") {
+          "[diagnostics][party-damage][assets]") {
     const f32 elapsed = GENERATE(60.0f, 60.01f);
     Fixture fixture;
     const PartyDamage::Context context{.lastRealmLevel = true, .realm = 1, .playSeconds = elapsed};

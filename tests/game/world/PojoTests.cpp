@@ -18,7 +18,6 @@
 #include "game/screens/PlayScene.h"
 #include "game/screens/PlayerAttacks.h"
 #include "game/screens/PlayerHealth.h"
-#include "game/screens/ReplicaCompanions.h"
 #include "game/world/PlayerArsenal.h"
 #include "game/world/PlayerFigure.h"
 
@@ -157,7 +156,7 @@ TEST_CASE("Pojo is present before the entrance camera and throughout its pan",
     }
 }
 
-TEST_CASE("Pojo feather atlas stays clamped at base level on local and guest models",
+TEST_CASE("Pojo feather atlas stays clamped at base level during the native fire animation",
           "[pojo][materials][assets]") {
     const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
     test::FakeRenderDevice device;
@@ -175,23 +174,12 @@ TEST_CASE("Pojo feather atlas stays clamped at base level on local and guest mod
     const auto* feathers = &archive.textures.texture(device, slot);
     PowerupCompanion local;
     local.choose(device, PowerupCompanion::Kind::Pojo, archive, &weapons);
-    CompanionResources guest;
-    REQUIRE(guest.bindPowerups(device, archive, &weapons));
     const auto camera = CameraFrame::at({0, 15, 20});
-    for (const bool remote : {false, true}) {
-        CAPTURE(remote);
+    for (s32 tick = 0; tick < 2; ++tick) {
+        CAPTURE(tick);
         device.draws.clear();
         local.update(1.0f / 30, PlayerAnimator::Action::Breathe, false, false);
-        if (remote) {
-            CompanionState state;
-            state.form = static_cast<u32>(PowerupCompanion::Kind::Pojo);
-            state.animation.sequence = PowerupCompanion::kPower;
-            state.animation.frame = 1;
-            state.animation.generation = 1;
-            guest.draw(device, 1, state, Mat4{1}, {}, camera, TreeModel::Pass::All);
-        } else {
-            local.draw(device, Mat4{1}, Mat4{1}, {}, 1, &camera);
-        }
+        local.draw(device, Mat4{1}, Mat4{1}, {}, 1, &camera);
         usize wings = 0;
         usize body = 0;
         for (const auto& draw : device.draws) {

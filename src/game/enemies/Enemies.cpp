@@ -1175,7 +1175,7 @@ void Enemies::generatorGone(s32 generator) {
 
 void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                      std::span<const Obstacle> obstacles, EnemyMissiles* missiles,
-                     f32 missileSpeedScale, bool timeStopped, EnemyMissileWork* missileWork) {
+                     f32 missileSpeedScale, bool timeStopped) {
     for (auto& stock : m_stocks) {
         stock->textures.advance(timeStopped ? 0.0f : seconds);
     }
@@ -1209,8 +1209,7 @@ void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
         ++m_pendingTicks;
         m_pendingSeconds += secondsPerTick;
         if (m_pendingTicks == 2) {
-            step(m_pendingSeconds, players, obstacles, missiles, missileSpeedScale, timeStopped,
-                 missileWork);
+            step(m_pendingSeconds, players, obstacles, missiles, missileSpeedScale, timeStopped);
             m_pendingTicks = 0;
             m_pendingSeconds = 0;
         }
@@ -1219,7 +1218,7 @@ void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
 
 void Enemies::step(f32 seconds, std::span<const EnemyView> players,
                    std::span<const Obstacle> obstacles, EnemyMissiles* missiles,
-                   f32 missileSpeedScale, bool timeStopped, EnemyMissileWork* missileWork) {
+                   f32 missileSpeedScale, bool timeStopped) {
     constexpr s32 kMotionTicks = 2;
     const f32 kMotionSeconds = seconds;
     for (Enemy& enemy : m_enemies) {
@@ -1301,7 +1300,7 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
         // instead (fn_8004DF58).
         if (castsNow(enemy) && enemy.contact < 0) {
             if (missiles != nullptr) {
-                shoot(enemy, i, players, *missiles, missileSpeedScale, obstacles, missileWork);
+                shoot(enemy, i, players, *missiles, missileSpeedScale, obstacles);
             }
             enemy.attackIndex = -1;
         } else {
@@ -1360,7 +1359,7 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
             veil(enemy, kMotionTicks);
         }
         if (enemy.animator.threw() && missiles != nullptr) {
-            shoot(enemy, i, players, *missiles, missileSpeedScale, obstacles, missileWork);
+            shoot(enemy, i, players, *missiles, missileSpeedScale, obstacles);
         }
         decayPush(enemy, kMotionSeconds);
         touchHazards(enemy, i);
@@ -2299,8 +2298,7 @@ std::vector<EnemyFeedback> Enemies::takeFeedback() {
 /** A shot or a lob at the player it is after, aimed from its middle at theirs (or twenty
  * ahead with nobody), with the launch sound of what goes (fn_8004E448). */
 void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
-                    EnemyMissiles& missiles, f32 speedScale, std::span<const Obstacle> items,
-                    EnemyMissileWork* work) {
+                    EnemyMissiles& missiles, f32 speedScale, std::span<const Obstacle> items) {
     constexpr f32 kBlindReach = 20.0f;
     Stock* stock = stockOf(enemy.kind);
     if (stock == nullptr) {
@@ -2338,7 +2336,7 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
     launch.aimError = m_scales.missileAim;
     launch.model = model;
     launch.shooter = slot;
-    if (!missiles.launch(what, launch, m_collision, items, work)) {
+    if (!missiles.launch(what, launch, m_collision, items)) {
         return;
     }
     // The arrow's and the bolt's go off as they leave; a lob goes quietly.

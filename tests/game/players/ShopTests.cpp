@@ -1,5 +1,6 @@
 #include <array>
 #include <limits>
+#include <random>
 #include <string>
 
 #include <catch2/catch_approx.hpp>
@@ -412,6 +413,140 @@ TEST_CASE("tower shop starts shopping without tallying a fictitious level", "[sh
     REQUIRE(session.lanes()[0].phase == ShopPhase::Shopping);
     REQUIRE(session.party()[0].save.gold == party[0].save.gold);
     REQUIRE(session.party()[0].save.experience() == party[0].save.experience());
+}
+
+TEST_CASE("seeded shop visits reproduce native lane-order potion choices independently",
+          "[shop][shop-random]") {
+    const u32 seed = GENERATE(0U, 5489U, 0xffffffffU);
+    CAPTURE(seed);
+    const auto data = classes();
+    // Native lane order, not seat sorting, owns the order of draws.
+    const std::array<PartyMember, 2> party{{{3, shopper()}, {1, shopper()}}};
+    ShopSession first;
+    ShopSession second;
+    ShopSession unrelated;
+    first.start(party, {}, {}, data, catalog(), ShopVisit::Shop, seed);
+    second.start(party, {}, {}, data, catalog(), ShopVisit::Shop, seed);
+    unrelated.start(party, {}, {}, data, catalog(), ShopVisit::Shop, seed ^ 0x12345678U);
+    for (auto* session : {&first, &second, &unrelated}) {
+        REQUIRE(session->focus(3, 2));
+        REQUIRE(session->focus(1, 2));
+    }
+    ShopSession::Inputs buy{};
+    buy[3].select = buy[1].select = true;
+    std::mt19937 oracle(seed);
+    for (usize purchase = 0; purchase < 4; ++purchase) {
+        CAPTURE(purchase);
+        first.update(1.0 / 60, buy);
+        unrelated.update(1.0 / 60, buy);
+        second.update(1.0 / 60, buy);
+        for (usize lane = 0; lane < party.size(); ++lane) {
+            const s32 expected = 1 + static_cast<s32>(static_cast<u32>(oracle()) >> 30);
+            CHECK(first.lanes()[lane].member.save.progress().inventory.potions.back() == expected);
+            CHECK(first.lanes()[lane].feedback == ShopResult::Bought);
+            CHECK(first.lanes()[lane].member.save.toJson() ==
+                  second.lanes()[lane].member.save.toJson());
+        }
+        CHECK(first.takeEvents() == second.takeEvents());
+    }
+
+    // Restarting the same owner is a new visit, not continuation of its old RNG.
+    first.start(party, {}, {}, data, catalog(), ShopVisit::Shop, seed);
+    REQUIRE(first.focus(3, 2));
+    REQUIRE(first.focus(1, 2));
+    first.update(0, buy);
+    oracle.seed(seed);
+    for (const auto& lane : first.lanes()) {
+        const s32 expected = 1 + static_cast<s32>(static_cast<u32>(oracle()) >> 30);
+        REQUIRE(lane.member.save.progress().inventory.potions == std::vector<s32>{expected});
+    }
+}
+
+TEST_CASE("shop committed colours and non-potion actions never consume the seeded stream",
+          "[shop][shop-random]") {
+    const auto data = classes();
+    const std::array<PartyMember, 1> party{{{3, shopper()}}};
+    ShopSession session;
+    session.start(party, {}, {}, data, catalog(), ShopVisit::Shop, 5489U);
+    ShopSession::Inputs input{};
+    input[3].select = true;
+    REQUIRE(session.focus(3, 1));
+    session.update(0, input); // Buying a key does not draw a potion colour.
+    REQUIRE(session.lanes()[0].feedback == ShopResult::Bought);
+    input = {};
+    input[3].back = true;
+    session.update(0, input);
+    REQUIRE(session.lanes()[0].feedback == ShopResult::Sold);
+
+    REQUIRE(session.focus(3, 2));
+    input = {};
+    input[3].select = true;
+    std::array<s32, 4> colours{4, 4, 4, 2};
+    session.update(0, input, &colours);
+    REQUIRE(session.lanes()[0].feedback == ShopResult::Bought);
+    REQUIRE(session.lanes()[0].member.save.progress().inventory.potions == std::vector<s32>{2});
+    colours[3] = 0;
+    session.update(0, input, &colours);
+    REQUIRE(session.lanes()[0].feedback == ShopResult::Invalid);
+    session.update(5, {});
+    session.update(std::numeric_limits<f64>::quiet_NaN(), input);
+    session.update(-1, input);
+    session.update(0, input);
+    session.update(0, input);
+    // The default MT seed starts with raw high-bit colours 4, 1. Neither the
+    // supplied purchase/refusal nor keys, sales, idle or invalid time consumed them.
+    CHECK(session.lanes()[0].member.save.progress().inventory.potions == std::vector<s32>{2, 4, 1});
+}
+
+TEST_CASE("refused native potion attempts retain their original RNG consumption",
+          "[shop][shop-random]") {
+    const bool full = GENERATE(false, true);
+    CAPTURE(full);
+    auto save = shopper();
+    save.gold = full ? 5000 : 0;
+    save.progress().inventory.addPotions(2, full ? Inventory::kMostPotions : 2);
+    const std::array<PartyMember, 1> party{{{0, save}}};
+    ShopSession session;
+    session.start(party, {}, {}, classes(), catalog(), ShopVisit::Shop, 5489U);
+    REQUIRE(session.focus(0, 2)); // Owned potions keep the otherwise unbuyable row selectable.
+    ShopSession::Inputs input{};
+    input[0].select = true;
+    session.update(0, input);
+    REQUIRE(session.lanes()[0].feedback ==
+            (full ? ShopResult::Full : ShopResult::InsufficientGold));
+    REQUIRE(session.lanes()[0].member.save.toJson() == save.toJson());
+
+    input = {};
+    input[0].back = true;
+    for (s32 sale = 0; sale < (full ? 1 : 2); ++sale) {
+        REQUIRE(session.focus(0, 2));
+        session.update(0, input);
+        REQUIRE(session.lanes()[0].feedback == ShopResult::Sold);
+    }
+    REQUIRE(session.focus(0, 2));
+    input = {};
+    input[0].select = true;
+    session.update(0, input);
+    REQUIRE(session.lanes()[0].feedback == ShopResult::Bought);
+    // The failed attempt consumed colour 4; selling consumes none; the next is 1.
+    CHECK(session.lanes()[0].member.save.progress().inventory.potions.back() == 1);
+}
+
+TEST_CASE("offline shop visits still accept host-selected colours without a local seed",
+          "[shop][shop-random]") {
+    const auto data = classes();
+    const std::array<PartyMember, 1> party{{{2, shopper()}}};
+    ShopSession session;
+    session.start(party, {}, {}, data, catalog(), ShopVisit::Shop);
+    REQUIRE(session.focus(2, 2));
+    ShopSession::Inputs input{};
+    input[2].select = true;
+    for (const s32 colour : {1, 4, 2, 3}) {
+        const std::array<s32, 4> colours{0, 0, colour, 0};
+        session.update(0, input, &colours);
+        REQUIRE(session.lanes()[0].feedback == ShopResult::Bought);
+        CHECK(session.lanes()[0].member.save.progress().inventory.potions.back() == colour);
+    }
 }
 
 TEST_CASE("confirm reveals a player's tally without advancing or awarding totals twice",

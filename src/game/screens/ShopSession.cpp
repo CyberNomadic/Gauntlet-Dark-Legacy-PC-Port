@@ -7,6 +7,7 @@
 
 #include "engine/core/Error.h"
 #include "engine/core/Types.h"
+#include "engine/math/RandomDistribution.h"
 namespace gdl::game {
 namespace {
 constexpr f64 kTickRate = 60.0;
@@ -100,11 +101,15 @@ void ShopLane::rememberShopEntry() {
 }
 void ShopSession::start(std::span<const PartyMember> party, std::span<const LevelResults> results,
                         const std::array<s32, 3>& maxima, const ClassDataSet& classes,
-                        ShopCatalog catalog, ShopVisit visit) {
+                        ShopCatalog catalog, ShopVisit visit, std::optional<u32> potionSeed) {
     m_lanes.clear();
     m_events.clear();
     m_catalog = std::move(catalog);
     m_visit = visit;
+    m_potionRandom.reset();
+    if (potionSeed) {
+        m_potionRandom.emplace(*potionSeed);
+    }
     if (party.empty() || party.size() > 4 || m_catalog.items().empty()) {
         throw FormatError("shop: missing party or catalog");
     }
@@ -246,13 +251,17 @@ void ShopSession::update(f64 seconds, const Inputs& inputs, const std::array<s32
             }
             const auto& item = m_catalog.items()[lane.cursor];
             if (input.select) {
-                // Only potion purchases need entropy, and never during deterministic tallying.
+                // Keep the native draw before purchase eligibility: a refused potion
+                // attempt still advances the stream, but supplied colours never do.
                 s32 potion = 1;
                 if (potions != nullptr) {
                     potion = (*potions)[static_cast<usize>(lane.member.player)];
                 } else if (item.type == 3) {
-                    static std::mt19937 random(std::random_device{}());
-                    potion = std::uniform_int_distribution<s32>(1, 4)(random);
+                    if (!m_potionRandom) {
+                        m_potionRandom.emplace(std::random_device{}());
+                    }
+                    potion = 1 + static_cast<s32>(
+                                     random_distribution::boundedIndex(*m_potionRandom, 4).value());
                 }
                 lane.feedback = buyShopItem(lane.member.save, lane.stats, item, potion);
                 lane.transacted = true;

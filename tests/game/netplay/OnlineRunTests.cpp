@@ -15,8 +15,10 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/app/NativeOnlineIdentity.h"
 #include "game/app/OnlineRun.h"
 #include "game/screens/GameContext.h"
+#include "game/screens/PlayScene.h"
 
 namespace {
 using namespace gdl;
@@ -29,6 +31,9 @@ void exerciseLobby(RenderDevice& hostDevice, RenderDevice& guestDevice,
     LevelCatalog levels;
     REQUIRE(levels.load(root));
     GameContext context;
+    StringTable strings;
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    context.strings = &strings;
     context.config = &config;
     context.levels = &levels;
     context.unpackedRoot = root;
@@ -109,6 +114,7 @@ void exerciseLobby(RenderDevice& hostDevice, RenderDevice& guestDevice,
 
 TEST_CASE("menu-created iroh rooms select characters ready and enter the shared tower",
           "[netplay][online-lobby][assets]") {
+    REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
     const bool threaded = GENERATE(false, true);
     auto hostBackend = std::make_unique<test::FakeRenderDevice>();
     auto guestBackend = std::make_unique<test::FakeRenderDevice>();
@@ -134,6 +140,7 @@ TEST_CASE("menu-created iroh rooms select characters ready and enter the shared 
 
 TEST_CASE("online lobby starts and resumes on host and guest Vulkan renderers",
           "[netplay][online-lobby-gpu][gpu][assets]") {
+    REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
     (void)test::assetOrSkip("WEAPONS/ANIM.PS2");
     const bool threaded = GENERATE(false, true);
     REQUIRE(glfwInit() == GLFW_TRUE);
@@ -155,5 +162,69 @@ TEST_CASE("online lobby starts and resumes on host and guest Vulkan renderers",
             std::make_unique<ThreadedRenderDevice>(std::move(guestRenderer), Extent2D{640, 448});
     }
     exerciseLobby(*hostRenderer, *guestRenderer, [&] { hostWindow->pollEvents(); });
+}
+TEST_CASE("development iroh launcher retains explicit native setup and automatic start",
+          "[netplay][online-native-launch][assets]") {
+    REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    const auto directory = test::scratchDirectory("online-native-launch");
+    const auto invitation = directory / "invitation.txt";
+    GameConfig config;
+    StringTable strings;
+    LevelCatalog levels;
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    REQUIRE(levels.load(root));
+    const auto initial = levels.byName("G1");
+    REQUIRE(initial);
+    GameContext context;
+    context.config = &config;
+    context.strings = &strings;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    PartyMember first;
+    first.player = 0;
+    first.save.name = "HOST";
+    first.save.progress().health = 1000;
+    auto second = first;
+    second.player = 2;
+    second.save.name = "GUEST";
+    second.save.color = 1;
+    PlayOptions options;
+    options.welcome = false;
+    options.yaw = 0.25f;
+    auto hostDevice = std::make_unique<test::FakeRenderDevice>();
+    auto guestDevice = std::make_unique<test::FakeRenderDevice>();
+    hostDevice->recordDraws = guestDevice->recordDraws = false;
+    OnlineRun host, guest;
+    REQUIRE(host.open(*hostDevice, context, "local", {}, "test", std::string(64, 'a'),
+                      std::array{first}, *initial, options, true, invitation));
+    bool joined = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+    while (std::chrono::steady_clock::now() < deadline) {
+        host.update({}, {});
+        if (!joined && std::filesystem::exists(invitation)) {
+            REQUIRE(std::filesystem::file_size(invitation) > 0);
+            REQUIRE(guest.open(*guestDevice, context, "local", invitation.string(), "test",
+                               std::string(64, 'a'), std::array{second}, *initial, options, true));
+            joined = true;
+        }
+        guest.update({}, {});
+        REQUIRE(host.lobby().page != NetplayMenu::Page::Finished);
+        REQUIRE(guest.lobby().page != NetplayMenu::Page::Finished);
+        host.render(*hostDevice, Mat4{1}, 640, 448, 1.0 / 60, 1);
+        guest.render(*guestDevice, Mat4{1}, 640, 448, 1.0 / 60, 1);
+        if (joined && host.playing() && guest.playing() && host.status().empty() &&
+            guest.status().empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(joined);
+    CHECK(host.playing());
+    CHECK(guest.playing());
+    CHECK(host.status().empty());
+    CHECK(guest.status().empty());
+    host.close();
+    guest.close();
 }
 } // namespace

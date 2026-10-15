@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/Mt19937.h"
 
 namespace gdl::game {
 
@@ -24,7 +25,6 @@ Vec3 BossCoins::yawed(const Vec3& v, f32 angle) {
 std::vector<SpewedCoin> BossCoins::spray(s32 realm, s32 players, const Vec3& velocity,
                                          f32 halfAngle, std::mt19937& random) {
     std::vector<SpewedCoin> coins;
-    std::uniform_real_distribution<f32> spread(0.0f, kPaceSpread);
     const std::array<s32, kKinds> counts = countsOf(realm);
     for (usize kind = 0; kind < kKinds; ++kind) {
         const s32 n = std::max(players, 0) * counts[kind];
@@ -34,7 +34,8 @@ std::vector<SpewedCoin> BossCoins::spray(s32 realm, s32 players, const Vec3& vel
         const f32 step = 2.0f * halfAngle / static_cast<f32>(n);
         f32 angle = -halfAngle + 0.5f * step;
         for (s32 i = 0; i < n && coins.size() < static_cast<usize>(kMost); ++i) {
-            const f32 pace = kPace[kind] + spread(random);
+            const f32 spread = Mt19937::float24(static_cast<u32>(random())) * kPaceSpread;
+            const f32 pace = kPace[kind] + spread;
             coins.push_back(SpewedCoin{kNames[kind], kValues[kind], yawed(velocity * pace, angle)});
             angle += step;
         }

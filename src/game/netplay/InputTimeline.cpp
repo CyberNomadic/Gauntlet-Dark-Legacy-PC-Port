@@ -100,7 +100,7 @@ InputTimeline::Admission InputTimeline::submit(Peer sender, const InputCommand& 
 }
 
 void InputTimeline::traceAdmission(Peer sender, const InputCommand& command, Admission admission) {
-    if (command.heldButtons == 0 && command.pressedButtons == 0) {
+    if (command.heldButtons == 0 && command.pressedButtons == 0 && command.hintTopic == 0) {
         return;
     }
     const auto found = std::ranges::find_if(m_commandTrace, [&](const CommandTrace& trace) {
@@ -124,7 +124,7 @@ void InputTimeline::traceAdmission(Peer sender, const InputCommand& command, Adm
 }
 
 void InputTimeline::traceExecution(Peer sender, const InputCommand& command, bool concealed) {
-    if (command.heldButtons == 0 && command.pressedButtons == 0) {
+    if (command.heldButtons == 0 && command.pressedButtons == 0 && command.hintTopic == 0) {
         return;
     }
     const auto found = std::ranges::find_if(m_commandTrace, [&](const CommandTrace& trace) {
@@ -151,6 +151,8 @@ InputCommand InputTimeline::heldOrNeutral(const std::optional<InputCommand>& pre
         // A potion toss charges continuously during its wind-up. Retain its
         // held level like Attack; UsePotion and other one-shot presses do not repeat.
         command.pressedButtons = 0;
+        command.hintTopic = 0;
+        command.hintRevision = 0;
     }
     command.epoch = epoch;
     command.tick = tick;

@@ -127,10 +127,16 @@ bool AfterLevelScene::open(RenderDevice& device, const GameContext& context,
         close();
         return false;
     }
+    // Confirmation and spoken-phrase durations participate in shop completion,
+    // including on peers without an audio device. Music and tally loops do not.
+    try {
+        m_common.load(context.unpackedRoot / kSoundDirectory / "COMMON");
+        loadVoices(party);
+    } catch (const std::exception& e) {
+        log::warn("Shop sound sources: {}", e.what());
+    }
     if (m_context.sounds != nullptr) {
         try {
-            m_common.load(context.unpackedRoot / kSoundDirectory / "COMMON");
-            loadVoices(party);
             const std::string bank = std::format("SHOP_{}", shopMusicRealm(levelName));
             if (m_musicBank.load(context.unpackedRoot / kSoundDirectory / bank)) {
                 m_tallyCue = m_musicBank.find(std::format("S_TALLYSFX{}", bank.back()));
@@ -165,6 +171,12 @@ void AfterLevelScene::loadVoices(std::span<const PartyMember> party) {
     }
 }
 void AfterLevelScene::close() {
+    if (m_context.sounds != nullptr) {
+        for (const auto handle : m_outputEffects) {
+            m_context.sounds->stop(handle);
+        }
+    }
+    m_outputEffects.clear();
     if (m_context.sounds != nullptr && m_tallySound != kNoSound) {
         m_context.sounds->stop(m_tallySound);
     }
@@ -200,34 +212,49 @@ const Texture* AfterLevelScene::texture(std::string_view name) {
     }
     return nullptr;
 }
-SoundHandle AfterLevelScene::effect(SoundSet& bank, std::string_view name, SoundHandle after) {
+AfterLevelScene::Effect AfterLevelScene::effect(SoundSet& bank, std::string_view name) {
+    return effect(bank, name, Effect{});
+}
+AfterLevelScene::Effect AfterLevelScene::effect(SoundSet& bank, std::string_view name,
+                                                const Effect& after) {
     m_lastSounds.emplace_back(name);
-    if (m_context.sounds == nullptr) {
-        return after;
-    }
     const auto index = bank.find(name);
     if (!index.has_value()) {
         return after;
     }
+    SoundSequence sequence;
     try {
-        const SoundHandle handle = m_context.sounds->playAfter(after, bank.sequence(*index));
-        if (handle != kNoSound) {
-            m_effects.push_back(handle);
-        }
-        return handle;
+        sequence = bank.sequence(*index);
     } catch (const std::exception& e) {
-        log::warn("Shop sound {}: {}", name, e.what());
+        log::warn("Shop sound source {}: {}", name, e.what());
         return after;
     }
-}
-bool AfterLevelScene::effectsPlaying() {
-    if (m_context.sounds == nullptr) {
-        m_effects.clear();
-        return false;
+    Effect result = after;
+    result.timing.append(SpeechTiming::of(sequence));
+    if (result.timing.playing()) {
+        m_effects.push_back(result.timing);
     }
-    std::erase_if(m_effects,
-                  [this](SoundHandle handle) { return !m_context.sounds->isPlaying(handle); });
-    return !m_effects.empty();
+    if (m_context.sounds != nullptr) {
+        try {
+            result.handle = m_context.sounds->playAfter(after.handle, sequence);
+            if (result.handle != kNoSound) {
+                m_outputEffects.push_back(result.handle);
+            }
+        } catch (const std::exception& e) {
+            log::warn("Shop sound playback {}: {}", name, e.what());
+        }
+    }
+    return result;
+}
+void AfterLevelScene::advanceEffects(f64 seconds) {
+    for (auto& effect : m_effects) {
+        effect.advance(seconds);
+    }
+    std::erase_if(m_effects, [](const SpeechTiming& effect) { return !effect.playing(); });
+    if (m_context.sounds != nullptr) {
+        std::erase_if(m_outputEffects,
+                      [this](SoundHandle handle) { return !m_context.sounds->isPlaying(handle); });
+    }
 }
 void AfterLevelScene::announceLevel(s32 player) {
     // AudioWithName: the character's name from its own bank (Pojo's while it carries him),
@@ -238,7 +265,7 @@ void AfterLevelScene::announceLevel(s32 player) {
         return;
     }
     const CharacterSave& save = lane->member.save;
-    SoundHandle after = kNoSound;
+    Effect after;
     if (PickupVoices::carriesPojo(save)) {
         after = effect(m_narratorSecond.find(kPojoName) ? m_narratorSecond : m_narrator, kPojoName);
     } else {
@@ -267,6 +294,7 @@ bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs,
     if (!m_open || !std::isfinite(seconds) || seconds < 0) {
         return false;
     }
+    advanceEffects(seconds);
     m_lastSounds.clear();
     m_time = std::fmod(m_time + seconds, 85.0 / 60.0);
     m_frameTime = std::fmod(m_frameTime + seconds, 2.5);
@@ -319,9 +347,9 @@ bool AfterLevelScene::update(f64 seconds, const ShopSession::Inputs& inputs,
     for (const auto& event : m_session.takeEvents()) {
         playCue(event);
     }
-    // The original leaves the shop only once its effects have died away (do_shop's
-    // sndFxUpdate test), so the last confirmation is heard whole.
-    return m_session.finished() && !effectsPlaying();
+    // Retain do_shop's final-effect wait, but measure native clip durations in
+    // simulation time. A slow, absent or failed output device cannot hold travel.
+    return m_session.finished() && m_effects.empty();
 }
 
 std::optional<usize> AfterLevelScene::captureOnlinePointer(s32 seat, MenuInput& input) {

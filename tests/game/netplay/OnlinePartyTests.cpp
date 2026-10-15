@@ -110,8 +110,13 @@ TEST_CASE("online party keeps physical devices and save slots local while remapp
     pair.pump();
     for (usize tick = 0; tick <= pair.host.context().inputLead; ++tick) {
         REQUIRE(MatchInputs::sample(pair.host, {}));
+        pair.pump();
+        const u64 executedTick = pair.host.tick();
         const auto inputs = MatchInputs::advance(pair.host);
         REQUIRE(inputs);
+        REQUIRE(MatchInputs::advance(pair.guest));
+        REQUIRE(pair.host.completedNativeTick(executedTick));
+        REQUIRE(pair.guest.completedNativeTick(executedTick));
         CHECK_FALSE((*inputs)[0].attack);
         CHECK((*inputs)[0].move.magnitude == 0);
         CHECK_FALSE((*inputs)[1].attack);
@@ -193,8 +198,13 @@ TEST_CASE("two plus two local parties compact sparse device IDs without crossing
     pair.pump();
     for (usize tick = 0; tick <= pair.host.context().inputLead; ++tick) {
         REQUIRE(MatchInputs::sample(pair.host, {}));
+        pair.pump();
+        const u64 executedTick = pair.host.tick();
         const auto inputs = MatchInputs::advance(pair.host);
         REQUIRE(inputs);
+        REQUIRE(MatchInputs::advance(pair.guest));
+        REQUIRE(pair.host.completedNativeTick(executedTick));
+        REQUIRE(pair.guest.completedNativeTick(executedTick));
         for (const auto& input : *inputs) {
             CHECK_FALSE(input.attack);
         }

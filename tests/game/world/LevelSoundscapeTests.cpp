@@ -5,6 +5,7 @@
 #include <format>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -165,6 +166,74 @@ void writeSecondBank(const std::filesystem::path& root, std::string_view bank,
                               index++, name);
     }
     test::writeNativeSoundBank(directory, std::format(R"({{"sounds":[{}]}})", sounds), samples);
+}
+
+TEST_CASE("speech output failures preserve decoded native timing and chained waits",
+          "[soundscape][speech-timing][determinism]") {
+    const auto root = test::scratchDirectory("speech-output-failure");
+    writeSecondBank(root, "COMMON", {"NAMED"});
+    writeSecondBank(root, "WIZTOWER", {"PROMOTION"});
+    writeSecondBank(root, "VOICE1", {"NARRATION"});
+    writeSecondBank(root, "CHARACTER", {"NAME"});
+    writeBank(root, "LOOPING", {"LOOP"});
+    SoundSet character;
+    SoundSet looping;
+    REQUIRE(character.load(root / "audio/CHARACTER"));
+    REQUIRE(looping.load(root / "audio/LOOPING"));
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape audible;
+    LevelSoundscape silent;
+    audible.open(root, &output, nullptr);
+    silent.open(root, nullptr, nullptr);
+    const auto after = silent.speechNamed("NAMED");
+    REQUIRE(after.timing.remainingSeconds == Catch::Approx(1));
+    usize failures = 0;
+    std::array<LevelSoundscape::Speech, 5> failed;
+    {
+        // Exercise an exception from the real optional output call, after its
+        // source has decoded. No failure is injected into gameplay timing.
+        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+            if (event.kind == SoundPlayer::Event::Kind::Play) {
+                ++failures;
+                throw std::runtime_error("test audio output failure");
+            }
+        });
+        REQUIRE_NOTHROW(failed[0] = audible.speechNamed("NAMED", after));
+        REQUIRE_NOTHROW(failed[1] = audible.speechPromotion("PROMOTION", after));
+        REQUIRE_NOTHROW(failed[2] = audible.speechNarration("NARRATION"));
+        REQUIRE_NOTHROW(failed[3] = audible.speechFrom(character, "NAME"));
+        REQUIRE_NOTHROW(failed[4] = audible.speechFrom(looping, "LOOP"));
+    }
+    REQUIRE(failures == failed.size());
+    std::array<LevelSoundscape::Speech, 5> expected{
+        silent.speechNamed("NAMED", after), silent.speechPromotion("PROMOTION", after),
+        silent.speechNarration("NARRATION"), silent.speechFrom(character, "NAME"),
+        silent.speechFrom(looping, "LOOP")};
+    for (usize index = 0; index < failed.size(); ++index) {
+        CAPTURE(index);
+        CHECK(failed[index].timing == expected[index].timing);
+        CHECK(failed[index].timing.playing());
+    }
+    REQUIRE(failed[0].timing.remainingSeconds == Catch::Approx(2));
+    REQUIRE(failed[4].timing.looping);
+    for (s32 tick = 0; tick < 180; ++tick) {
+        for (usize index = 0; index < failed.size(); ++index) {
+            failed[index].timing.advance(1.0 / 60);
+            expected[index].timing.advance(1.0 / 60);
+            REQUIRE(failed[index].timing == expected[index].timing);
+        }
+    }
+    for (usize index = 0; index < failed.size() - 1; ++index) {
+        CHECK_FALSE(failed[index].timing.playing());
+    }
+    CHECK(failed.back().timing.playing());
+    CHECK(audible.speechNamed("MISSING", after).timing == after.timing);
+    // The observer throws after SoundPlayer has started a voice. Its output-only
+    // cleanup is explicit; no partially started voice drives the logical clock.
+    output.stopAll();
+    audible.close();
+    silent.close();
 }
 
 TEST_CASE("a narrator line the tower's ambience keeps is queued from there",
@@ -385,8 +454,12 @@ TEST_CASE("the narrator's queue plays lines in turn and turns away what would wa
     REQUIRE_FALSE(soundscape.narrationRoom(LevelSoundscape::kAlwaysRoom));
     REQUIRE(soundscape.queueNarration("LINE") == kNoSound);
     REQUIRE(soundscape.queueNarration("MISSING") == kNoSound);
-    // Lines stopped from elsewhere no longer hold anything up.
+    // A device stop cannot change gameplay admission or the game-over wait.
     player.stopAll();
+    REQUIRE(soundscape.narrationBacklog() == LevelSoundscape::kMostNarration);
+    REQUIRE_FALSE(soundscape.narrationRoom(0.5f));
+    // The owning level explicitly cancels the logical queue when suspended.
+    soundscape.suspend();
     REQUIRE(soundscape.narrationBacklog() == 0.0);
     REQUIRE(soundscape.narrationRoom(0.5f));
     REQUIRE(soundscape.queueNarration("LINE") != kNoSound);
@@ -425,6 +498,59 @@ TEST_CASE("an announcement by name is let in whole or not at all, and the wizard
     soundscape.holdNarration(false);
     REQUIRE(soundscape.queueNarration("LINE") != kNoSound);
     soundscape.close();
+}
+
+TEST_CASE("failed voice output preserves the complete announcement and logical backlog",
+          "[soundscape][voice-queue][speech-timing][determinism]") {
+    const auto root = test::scratchDirectory("soundscape-phrase-output-failure");
+    writeSecondBank(root, "VOICE1", {"LINE", "OTHER"});
+    writeSecondBank(root, "CHARACTER", {"NAME"});
+    SoundSet character;
+    REQUIRE(character.load(root / "audio/CHARACTER"));
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape failing;
+    LevelSoundscape silent;
+    failing.open(root, &output, nullptr);
+    silent.open(root, nullptr, nullptr);
+    const std::array lines{std::string_view{"LINE"}, std::string_view{"OTHER"}};
+    usize failures = 0;
+    {
+        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+            if (event.kind == SoundPlayer::Event::Kind::Play) {
+                ++failures;
+                throw std::runtime_error("test queued audio output failure");
+            }
+        });
+        REQUIRE(failing.announce(character, "NAME", false, lines, 0.5f));
+        REQUIRE(silent.announce(character, "NAME", false, lines, 0.5f));
+        REQUIRE(failures == 3); // The name's output failure must not skip either line.
+        REQUIRE(failing.narrationBacklog() == Catch::Approx(3));
+        REQUIRE(silent.narrationBacklog() == Catch::Approx(3));
+        REQUIRE_FALSE(failing.announce(character, "NAME", false, lines, 0.5f));
+        REQUIRE_FALSE(silent.announce(character, "NAME", false, lines, 0.5f));
+        CHECK(failures == 3);
+    }
+    for (s32 tick = 0; tick <= 180; ++tick) {
+        CAPTURE(tick);
+        const auto actual = failing.narrationTiming();
+        const auto expected = silent.narrationTiming();
+        REQUIRE(actual.size() == expected.size());
+        for (usize line = 0; line < actual.size(); ++line) {
+            CHECK(actual[line] == expected[line]);
+        }
+        CHECK(failing.narrationBacklog() == silent.narrationBacklog());
+        CHECK(failing.narrationRoom(0.5f) == silent.narrationRoom(0.5f));
+        failing.updateNarration(1.0f / 60);
+        silent.updateNarration(1.0f / 60);
+    }
+    CHECK(failing.narrationBacklog() == 0);
+    CHECK(silent.narrationBacklog() == 0);
+    // The injected observer may fail after an output voice starts; its lifetime
+    // is independent from the logical queue and is explicitly ended here.
+    output.stopAll();
+    failing.close();
+    silent.close();
 }
 
 TEST_CASE("level narration selects its bank and queues after the character name",

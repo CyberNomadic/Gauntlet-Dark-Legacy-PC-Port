@@ -45,6 +45,8 @@ public:
     bool playing() const;
     bool pause(s32 device);
     void resume();
+    bool hasCompletedProgress() const;
+    bool saveCompletedProgress();
     std::optional<Vec3> cursorAim(s32 device, Vec2 cursor) const;
     void render(RenderDevice& device, const Mat4& projection, f32 width, f32 height, f64 seconds,
                 f32 frameBlend);

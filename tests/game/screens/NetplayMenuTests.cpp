@@ -77,3 +77,33 @@ TEST_CASE("online menu mouse hitboxes honor letterboxing and disabled actions",
     menu.show(device, view);
     CHECK(menu.update(confirm).action == NetplayMenu::Action::Back);
 }
+
+TEST_CASE("online completed progress and terminal return are explicit local actions",
+          "[netplay][netplay-menu][native-save]") {
+    test::FakeRenderDevice device;
+    NetplayMenu menu;
+    NetplayMenu::View view;
+    view.page = NetplayMenu::Page::Finished;
+    menu.show(device, view);
+    CHECK(menu.rows() == 2);
+    MenuInput confirm;
+    confirm.select = true;
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::ReturnTitle);
+    view.canSaveCompletedProgress = true;
+    menu.show(device, view);
+    MenuInput up;
+    up.up = true;
+    menu.update(up);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::SaveCompletedProgress);
+    MenuInput down;
+    down.down = true;
+    menu.update(down);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::ReturnTitle);
+    view.page = NetplayMenu::Page::Pause;
+    menu.show(device, view);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::Resume);
+    menu.update(down);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::SaveCompletedProgress);
+    menu.update(down);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::Leave);
+}

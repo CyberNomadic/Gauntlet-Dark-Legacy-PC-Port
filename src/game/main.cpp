@@ -2,6 +2,7 @@
 #include <exception>
 #include <filesystem>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "game/app/AssetRoots.h"
 #include "game/app/CommandLine.h"
 #include "game/app/Gauntlet.h"
+#include "game/app/NativeOnlineIdentity.h"
 #include "game/config/GameConfig.h"
 
 #ifndef GDL_DEFAULT_ASSET_DIR
@@ -86,6 +88,12 @@ int runGauntlet(std::span<char*> rawArgs) {
 
 int main(int argc, char* argv[]) {
     try {
+        std::string numericError;
+        if (!gdl::game::NativeOnlineIdentity::prepareProcessNumeric(&numericError)) {
+            std::fputs(numericError.c_str(), stderr);
+            std::fputs("\n", stderr);
+            return 1;
+        }
         return runGauntlet(std::span<char*>(argv, static_cast<gdl::usize>(argc)));
     } catch (const std::exception& e) {
         std::fputs(e.what(), stderr);

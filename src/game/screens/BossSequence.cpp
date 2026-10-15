@@ -38,7 +38,7 @@ void BossSequence::clear() {
             m_resources->audio.stop(voice);
         }
     }
-    m_victoryVoice = kNoSound;
+    m_victoryVoice = {};
     m_victoryVoices.clear();
     m_legend.reset(); // stops its loop while audio and effects remain available
     m_victory.clear();
@@ -205,14 +205,14 @@ bool BossSequence::advanceVictory(s32 ticks, f32 seconds, std::span<const Player
     }
     auto& r = *m_resources;
     const auto result = m_victory.update(ticks, seconds, r.world.goldLeft(), strings,
-                                         r.audio.isPlaying(m_victoryVoice));
+                                         m_victoryVoice.timing.playing());
     for (const VictoryVoice& voice : result.voices) {
         // Wizard speech is serialized even if a caption is absent or finishes early.
-        const SoundHandle next = r.audio.playNamed(voice.sound, 1.0f, m_victoryVoice);
-        if (next != kNoSound) {
-            m_victoryVoice = next;
-            m_victoryVoices.push_back(next);
+        const auto next = r.audio.speechNamed(voice.sound, m_victoryVoice);
+        if (next.handle != kNoSound && next.handle != m_victoryVoice.handle) {
+            m_victoryVoices.push_back(next.handle);
         }
+        m_victoryVoice = next;
     }
     if (result.sparkle) {
         if (r.weapons.loaded()) {

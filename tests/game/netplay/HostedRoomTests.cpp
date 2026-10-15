@@ -3,9 +3,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "game/netplay/CombatReplica.h"
 #include "game/netplay/HostedRoom.h"
+#include "game/netplay/InputCommand.h"
 #include "game/netplay/OnlineSession.h"
+#include "game/screens/NativePlaySetup.h"
 
 namespace {
 using namespace gdl;
@@ -36,13 +37,20 @@ struct Pair {
     Pair(u8 hostPlayers = 1, u8 guestPlayers = 1, std::string version = "test",
          std::string content = std::string(64, 'a'))
         : hostRoom(a, true, hostPlayers, "test", std::string(64, 'a')),
-          guestRoom(b, false, guestPlayers, std::move(version), std::move(content)),
+          guestRoom(b, false, guestPlayers, version, content),
           host(hostRoom, hostRoom.transport(), true, hostPlayers),
           guest(guestRoom, guestRoom.transport(), false, guestPlayers) {
         a.remote = &b;
         b.remote = &a;
         a.incoming.push_back({PacketTransport::EventType::Connected, 7, {}, {}});
         b.incoming.push_back({PacketTransport::EventType::Connected, 7, {}, {}});
+        const OnlineSession::NativeIdentity identity{"test", "test-runtime", std::string(64, 'a'),
+                                                     std::string(64, 'b'), "en"};
+        OnlineSession::NativeRules rules;
+        rules.scene = 1;
+        REQUIRE(host.configureNative(identity, rules));
+        REQUIRE(guest.configureNative(
+            {version, identity.runtime, content, identity.data, identity.language}));
         CharacterProfile profile;
         profile.name = "TEST";
         REQUIRE(host.select(std::vector<CharacterProfile>(hostPlayers, profile)));
@@ -64,6 +72,23 @@ struct Pair {
         for (s32 i = 0; i < 10; ++i) {
             host.update(0);
             guest.update(0);
+            for (auto* session : {&host, &guest}) {
+                if (!session->nativeSetupPending()) {
+                    continue;
+                }
+                const auto& agreed = *session->nativeContract();
+                const NativePlaySetup::Contract contract{agreed.rules.scene,
+                                                         agreed.rules.autoMelee,
+                                                         agreed.rules.autoActivateItems,
+                                                         agreed.rules.expandedShop,
+                                                         agreed.identity.build,
+                                                         agreed.identity.content,
+                                                         agreed.identity.data};
+                const auto setup = NativePlaySetup::create(GameConfig{}, session->room()->settings,
+                                                           *session->party(), {}, contract);
+                REQUIRE(setup);
+                REQUIRE(session->confirmNativeSetup(setup->digest()));
+            }
         }
     }
 };
@@ -90,8 +115,7 @@ TEST_CASE("peers missing replay capabilities cannot join even with the same buil
     }
 }
 
-TEST_CASE("hosted combat data and repair packets fit a single provider fragment",
-          "[netplay][hosted-room][snapshot-repair]") {
+TEST_CASE("hosted exact-input packets fit a single provider fragment", "[netplay][hosted-room]") {
     Pair pair;
     pair.pump();
     REQUIRE(pair.host.ready());
@@ -102,31 +126,21 @@ TEST_CASE("hosted combat data and repair packets fit a single provider fragment"
     REQUIRE(pair.host.phase() == OnlineSession::Phase::Active);
     REQUIRE(pair.b.incoming.empty());
 
-    CombatSnapshot state;
-    state.motion.epoch = 1;
-    state.motion.cameraContinuity = 1;
-    state.geometry = SceneGeometry{1, 100, 0, {}};
-    for (u32 index = 0; index < 100; ++index) {
-        state.geometry->objects.push_back(
-            {index, 1, glm::translate(Mat4{1}, Vec3{static_cast<f32>(index), 5, 7})});
+    std::vector<InputCommand> inputs(InputPacket::kMaxCommands);
+    for (usize index = 0; index < inputs.size(); ++index) {
+        inputs[index].epoch = 1;
+        inputs[index].tick = index + 1;
+        inputs[index].grant = 1;
     }
-    const auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::None,
-                                                CombatReplica::Recovery::SingleLoss);
-    REQUIRE(packets);
-    REQUIRE(packets->size() > 4);
-    usize maximum = 0;
-    for (const auto& packet : *packets) {
-        REQUIRE(pair.hostRoom.transport().send(7, packet, PacketTransport::Delivery::Unreliable) ==
-                PacketTransport::SendResult::Sent);
-        REQUIRE(pair.b.incoming.size() == 1);
-        const auto& wrapped = pair.b.incoming.front().bytes;
-        CHECK(wrapped.size() == packet.size() + 1);
-        CHECK(std::equal(packet.begin(), packet.end(), wrapped.begin() + 1));
-        CHECK(wrapped.size() <= 1000); // Iroh's application-fragment payload, before its header.
-        maximum = std::max(maximum, wrapped.size());
-        pair.b.incoming.clear();
-    }
-    CHECK(maximum == 997);
+    const auto packet = InputPacket::encode(inputs);
+    REQUIRE(packet);
+    REQUIRE(pair.hostRoom.transport().send(7, *packet, PacketTransport::Delivery::Reliable) ==
+            PacketTransport::SendResult::Sent);
+    REQUIRE(pair.b.incoming.size() == 1);
+    const auto& wrapped = pair.b.incoming.front().bytes;
+    CHECK(wrapped.size() == packet->size() + 1);
+    CHECK(std::equal(packet->begin(), packet->end(), wrapped.begin() + 1));
+    CHECK(wrapped.size() <= 1000);
 }
 
 TEST_CASE("self hosted admission starts existing online gameplay without a room server",
@@ -149,6 +163,8 @@ TEST_CASE("self hosted admission starts existing online gameplay without a room 
         pair.pump();
         REQUIRE(pair.host.phase() == OnlineSession::Phase::Active);
         REQUIRE(pair.guest.phase() == OnlineSession::Phase::Active);
+        REQUIRE_FALSE(pair.host.confirmedNativeSetup().empty());
+        CHECK(pair.host.confirmedNativeSetup() == pair.guest.confirmedNativeSetup());
         REQUIRE(pair.host.match().prepare(1));
         pair.pump();
         REQUIRE(pair.guest.match().phase() == MatchSession::Phase::Loading);

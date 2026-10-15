@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/menu/MenuInput.h"
+#include "game/players/PickupVoices.h"
 #include "game/screens/AfterLevelScene.h"
 #include "game/screens/ShopFrameLight.h"
 #include "game/screens/ShopLayout.h"
@@ -305,6 +308,120 @@ TEST_CASE("after-level screen fails safely without its portable catalog", "[shop
     REQUIRE_FALSE(scene.isOpen());
     scene.close();
     scene.close();
+}
+
+TEST_CASE("shop completion follows native phrase durations without a draining audio device",
+          "[shop][screens][audio][speech-timing][determinism][assets]") {
+    const s32 rate = GENERATE(30, 60);
+    const bool throwOutput = GENERATE(false, true);
+    const auto root = test::assetOrSkip("SHPDATA/SHOP.WAD").parent_path().parent_path();
+    test::assetOrSkip("AUDIO/COMMON.VBK");
+    test::assetOrSkip("AUDIO/VOICE1.VBK");
+    test::assetOrSkip("AUDIO/VOICE2.VBK");
+    test::assetOrSkip("AUDIO/WAR.VBK");
+    test::FakeRenderDevice device;
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    GameContext context;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "SHOP";
+    save.progress().health = 100;
+    save.progress().experience = levelExperience(2);
+    const std::array<PartyMember, 1> party{{{0, save}}};
+    const std::array<LevelResults, 1> results{{{0, {0, 0, levelExperience(2)}}}};
+    AfterLevelScene silent;
+    AfterLevelScene audible;
+    REQUIRE(silent.open(device, context, party, results, {1, 1, levelExperience(2)}, "G1"));
+    context.sounds = &output;
+    REQUIRE(audible.open(device, context, party, results, {1, 1, levelExperience(2)}, "G1"));
+
+    SoundSet common;
+    SoundSet character;
+    SoundSet narrator;
+    SoundSet secondNarrator;
+    REQUIRE(common.load(root / "audio/COMMON"));
+    REQUIRE(character.load(root / "audio/WAR"));
+    REQUIRE(narrator.load(root / "audio/VOICE1"));
+    REQUIRE(secondNarrator.load(root / "audio/VOICE2"));
+    const auto duration = [](SoundSet& bank, std::string_view name) {
+        const auto found = bank.find(name);
+        REQUIRE(found);
+        const auto timing = SpeechTiming::of(bank.sequence(*found));
+        REQUIRE_FALSE(timing.looping);
+        REQUIRE(timing.remainingSeconds > 0);
+        return timing.remainingSeconds;
+    };
+    f64 phraseSeconds = duration(character, PickupVoices::nameOf(save.character, save.color));
+    for (const auto name : {"S_HAS", "S_GAINEDLEVEL"}) {
+        phraseSeconds += duration(secondNarrator.find(name) ? secondNarrator : narrator, name);
+    }
+    const f64 longestEffect = std::max(
+        {phraseSeconds, duration(common, "S_OPTMENUSEL"), duration(common, "S_STNDGLASS")});
+    REQUIRE(longestEffect < 30); // The fixture's exact authored completion bound, not hardware.
+    REQUIRE_FALSE(silent.update(10, {}));
+    REQUIRE_FALSE(audible.update(10, {}));
+    REQUIRE(silent.session().lanes()[0].tally.finished());
+    ShopSession::Inputs accept{};
+    accept[0].select = true;
+    std::vector<SoundHandle> attempted;
+    {
+        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+            if (event.kind == SoundPlayer::Event::Kind::Play) {
+                attempted.push_back(event.handle);
+                if (throwOutput) {
+                    throw std::runtime_error("shop output unavailable");
+                }
+            }
+        });
+        REQUIRE_FALSE(silent.update(0, accept));
+        REQUIRE_FALSE(audible.update(0, accept));
+        REQUIRE(audible.session().lanes()[0].phase == ShopPhase::BeforeStats);
+        REQUIRE(audible.lastSounds() == silent.lastSounds());
+        REQUIRE(audible.lastSounds().size() == 4); // Select, name, has, gained-level.
+        // Native confirmation can skip stat reveals and the inventory entrance.
+        // Keep every cue at this boundary so the full chained duration is observable.
+        for (s32 press = 0; press < 16 && silent.session().lanes()[0].inventory.phase() !=
+                                              InventoryPanel::Phase::Leaving;
+             ++press) {
+            REQUIRE_FALSE(silent.update(0, accept));
+            REQUIRE_FALSE(audible.update(0, accept));
+            REQUIRE(audible.session().lanes()[0].phase == silent.session().lanes()[0].phase);
+            REQUIRE(audible.lastSounds() == silent.lastSounds());
+        }
+        REQUIRE(silent.session().lanes()[0].inventory.phase() == InventoryPanel::Phase::Leaving);
+        REQUIRE_FALSE(attempted.empty());
+        SpeechTiming remaining{longestEffect, false};
+        bool completed = false;
+        const f64 seconds = 1.0 / rate;
+        const auto bound = static_cast<s32>(std::ceil(std::max(longestEffect, 0.25) * rate)) + 2;
+        for (s32 tick = 1; tick <= bound; ++tick) {
+            CAPTURE(rate, throwOutput, tick, longestEffect);
+            remaining.advance(seconds);
+            const bool expected = silent.update(seconds, {});
+            const bool actual = audible.update(seconds, {});
+            REQUIRE(actual == expected);
+            CHECK(actual == (silent.session().finished() && !remaining.playing()));
+            // Deliberately never call mixer.mix: the non-null output cannot drain.
+            output.update();
+            if (actual) {
+                completed = true;
+                break;
+            }
+        }
+        REQUIRE(completed);
+        CHECK(std::ranges::any_of(attempted,
+                                  [&](SoundHandle handle) { return output.isPlaying(handle); }));
+    }
+    audible.close();
+    if (!throwOutput) {
+        CHECK(std::ranges::none_of(attempted,
+                                   [&](SoundHandle handle) { return output.isPlaying(handle); }));
+    }
+    // A throwing observer can fail after starting a voice but before returning
+    // its output-only handle; explicitly clean that injected fault up as well.
+    output.stopAll();
+    silent.close();
 }
 TEST_CASE("shop lane borders retain retail brightness and opacity in every column",
           "[shop][screens][assets]") {
@@ -964,7 +1081,27 @@ TEST_CASE("after-level screen renders every phase with retail assets", "[shop][s
     REQUIRE(test::minCorner(*artworkDraws("FANGS")[0]) == Vec2{312, 116});
     REQUIRE_FALSE(scene.update(0, input));
     REQUIRE(scene.lastSounds() == std::vector<std::string>{"S_OPTMENUSEL"});
-    REQUIRE(scene.update(0.25, {}));
+    SoundSet confirmation;
+    REQUIRE(confirmation.load(root / "audio/COMMON"));
+    const auto confirm = confirmation.find("S_OPTMENUSEL");
+    REQUIRE(confirm);
+    const auto confirmTiming = SpeechTiming::of(confirmation.sequence(*confirm));
+    REQUIRE_FALSE(confirmTiming.looping);
+    const auto glass = confirmation.find("S_STNDGLASS");
+    REQUIRE(glass);
+    auto glassTiming = SpeechTiming::of(confirmation.sequence(*glass));
+    REQUIRE_FALSE(glassTiming.looping);
+    // The inventory cue began two simulation seconds before this confirmation.
+    // Its authored 3.42-second sound outlasts the shorter confirmation and the
+    // 15-tick panel exit, so both must remain part of the completion oracle.
+    glassTiming.advance(2);
+    const f64 confirmationWait = std::max(0.25, confirmTiming.remainingSeconds);
+    CAPTURE(confirmTiming.remainingSeconds, glassTiming.remainingSeconds);
+    REQUIRE(glassTiming.remainingSeconds > confirmationWait);
+    REQUIRE_FALSE(scene.update(confirmationWait, {}));
+    REQUIRE(scene.session().finished());
+    glassTiming.advance(confirmationWait);
+    REQUIRE(scene.update(glassTiming.remainingSeconds, {}));
     scene.render(device, projection, 512, 384);
     REQUIRE(scene.session().party()[0].save.gold == 5000);
     CHECK_FALSE(prompted);

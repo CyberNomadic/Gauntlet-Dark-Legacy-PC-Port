@@ -52,6 +52,7 @@ bool HintMenu::open(const TextPainter& painter, const MenuScreen& screen, HintMe
     m_screen = screen;
     m_painter = &painter;
     m_topics.open(topicsDefinition(true), painter, screen);
+    ++m_revision;
     return true;
 }
 
@@ -66,12 +67,14 @@ void HintMenu::read(const TextPainter& painter, std::string title,
     menu.bodyGap = gap;
     menu.backdropFades = false; // the scroll is already out
     m_page.open(menu, painter, m_screen);
+    ++m_revision;
 }
 
 void HintMenu::close() {
     m_topics = OptionMenu{};
     m_page = OptionMenu{};
     m_fire.reset();
+    ++m_revision;
 }
 
 /** Backing out of the list hands the scroll to the flames while the words fade. */
@@ -82,9 +85,27 @@ void HintMenu::leave(RenderDevice& device) {
         m_topics.releaseBackdrop();
     }
     m_topics.close();
+    ++m_revision;
 }
 
-HintMenuEvent HintMenu::update(RenderDevice& device, const MenuInput& input, s32 ticks) {
+bool HintMenu::acceptsTopic(u8 topic, u8 revision) const {
+    return topic != 0 && topic <= 4 && revision == m_revision && m_topics.isOpen() &&
+           !m_topics.closing() && !m_page.isOpen() && !m_fire.active() &&
+           topic <= m_topics.definition().items.size() &&
+           m_topics.definition().items[topic - 1].enabled;
+}
+
+u8 HintMenu::captureTopic(const MenuInput& input) const {
+    const auto choice = m_topics.pointerChoice(input);
+    if (!choice || *choice >= 4) {
+        return 0;
+    }
+    const auto topic = static_cast<u8>(*choice + 1);
+    return acceptsTopic(topic, m_revision) ? topic : 0;
+}
+
+HintMenuEvent HintMenu::update(RenderDevice& device, const MenuInput& input, s32 ticks, u8 topic,
+                               u8 revision) {
     // Nothing answers while the scroll burns, as the original blanks the controls.
     const bool burning = m_fire.active();
     m_fire.step(ticks);
@@ -96,6 +117,7 @@ HintMenuEvent HintMenu::update(RenderDevice& device, const MenuInput& input, s32
             const s32 selection = m_topics.selection();
             m_page = OptionMenu{};
             m_topics.open(topicsDefinition(false), *m_painter, m_screen, selection);
+            ++m_revision;
             return HintMenuEvent{HintMenuEvent::Kind::Returned, 0};
         }
         return {};
@@ -103,7 +125,10 @@ HintMenuEvent HintMenu::update(RenderDevice& device, const MenuInput& input, s32
     if (!m_topics.isOpen()) {
         return {};
     }
-    const MenuEvent event = m_topics.update(heard, ticks);
+    const auto choice = acceptsTopic(topic, revision)
+                            ? std::optional<usize>{static_cast<usize>(topic - 1)}
+                            : std::nullopt;
+    const MenuEvent event = m_topics.update(heard, ticks, choice);
     switch (event.action) {
     case MenuAction::Moved: return HintMenuEvent{HintMenuEvent::Kind::Moved, 0};
     case MenuAction::Choice: return HintMenuEvent{HintMenuEvent::Kind::Asked, event.code};

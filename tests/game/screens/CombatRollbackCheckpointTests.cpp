@@ -370,10 +370,16 @@ TEST_CASE("combat rewind undoes native damage random progression and attack upda
         .kind = kGruntKind,
         .damage = armorDefense(*stats, player.actor.save().progress()) + 10,
     }};
-    const auto damage = PartyDamage::stageBlows(blows, fixture.native.players, fixture.health,
-                                                fixture.native.classes, {}, {});
-    REQUIRE(damage.status == PartyDamage::Status::Applied);
-    REQUIRE_FALSE(damage.outputs.empty());
+    usize sounds = 0;
+    const auto impact = PartyDamage::enemy(blows[0], player, {});
+    REQUIRE(impact);
+    PartyDamage::hurt(fixture.health, player, blows[0].damage, impact->kind, true, {},
+                      {.sound = [&](std::string_view) { ++sounds; },
+                       .cry = [&](std::string_view) { ++sounds; },
+                       .named = [&](std::string_view, f32) { ++sounds; },
+                       .logDeaths = false},
+                      impact->impact, stats);
+    REQUIRE(sounds > 0);
     REQUIRE(player.actor.save().health() < 50);
     REQUIRE(fixture.health.checkpoint() != baseline.health);
     PartyRecords::award(fixture.native.players, 3,

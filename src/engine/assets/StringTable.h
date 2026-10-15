@@ -24,6 +24,11 @@ public:
     usize size() const { return m_entries.size(); }
     const std::string& language() const { return m_language; }
 
+    /** SHA-256 of the effective language and ordered key/value bytes, including
+     * fallback entries. File paths, JSON formatting and map iteration are not
+     * part of the identity. This is a content check, not authentication. */
+    std::string digest() const;
+
     /** The text for an identifier, or the identifier itself when it is unknown. */
     std::string_view get(std::string_view id) const;
     bool has(std::string_view id) const { return m_entries.contains(std::string(id)); }

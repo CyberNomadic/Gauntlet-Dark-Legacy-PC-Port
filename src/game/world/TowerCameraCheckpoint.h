@@ -73,8 +73,6 @@ public:
     bool restore(const State& state);
 
 private:
-    friend class OrdinaryCombatCheckpoint;
-    friend class OrdinaryCombatTick;
     bool bound() const;
     bool matches(const State& state) const;
     TowerCamera& m_owner;

@@ -5,12 +5,13 @@
     python scripts/netplay_scene.py --scenario level-g1 --build
     python scripts/netplay_scene.py --seconds 45
 
-The host runs gameplay; the guest renders its checkpoints and sends input. This
-supports tower portals and direct boss entrances, but not the post-level
-results/shop flow. Add --internet to enable public relay connectivity.
+Both peers run the actual gameplay scene from the same agreed inputs at 60 Hz.
+The native campaign owns travel, secret returns and the post-level tally/shop.
+Add --internet to enable public relay connectivity; a same-machine run does not
+establish Internet latency or cross-router compatibility.
 The host accepts keyboard/controller input; the guest uses keyboard/mouse only
 so one controller cannot drive both windows. Click a window to steer its player.
-Start/Enter pauses either window; only the host resumes. Escape closes the run.
+Start/Enter opens a local menu; simulation continues for everyone. Escape exits.
 Settings and unsaved test characters are isolated under build/netplay/scene-*.
 """
 
@@ -34,7 +35,6 @@ import netplay_test
 import scenario
 
 ROOT = devenv.ROOT
-PLAYING = "Online scene test - Start pauses"
 
 
 def asset_digest(root: pathlib.Path) -> str:
@@ -103,14 +103,12 @@ def test_config(source: dict, guest: bool, fps: int, mixed_video: bool = False) 
         result["display"].update(windowWidth=960, windowHeight=540, maxFrameRate=60,
                                  bloom=True, ambientOcclusion=True, depthOfField=True,
                                  sampleCount=4)
+        result["timing"]["gameplayFrameRate"] = 60
         result["camera"]["horizontalFovDegrees"] = 80
     result["controls"]["players"] = [
         {"device": "keyboard" if guest else "", "rumble": not guest},
         *[{"device": "none"} for _ in range(3)],
     ]
-    # The guest audio event renderer is still separate work; do not double music.
-    if guest:
-        result["audio"]["masterVolume"] = 0
     return result
 
 
@@ -136,33 +134,43 @@ def healthy(process: subprocess.Popen, path: pathlib.Path) -> str:
     return text
 
 
-def playing(text: str, expected_level: str = "") -> bool:
-    if not expected_level:
-        return PLAYING in text
-    stages = list(re.finditer(r"Online stage loaded: ([A-Z][0-9]+) \(epoch [0-9]+, (?:host|guest)\)",
-                              text))
-    return bool(stages and stages[-1][1] == expected_level and
-                PLAYING in text[stages[-1].end():])
+def stage(text: str) -> tuple[str, int] | None:
+    stages = list(re.finditer(r"Native online stage loaded: ([A-Z][0-9]+) "
+                              r"\(epoch ([0-9]+), peer [0-9]+\)", text))
+    if not stages or int(stages[-1][2]) == 0:
+        return None
+    return stages[-1][1], int(stages[-1][2])
 
 
-def checkpoint(text: str) -> tuple[int, int] | None:
-    """Return only progress from the current stage, never an old scene's ticks."""
-    stages = list(re.finditer(r"Online stage loaded: [A-Z][0-9]+ \(epoch ([0-9]+), (?:host|guest)\)",
-                              text))
+def progress(text: str) -> tuple[int, int] | None:
+    """Actual completed native ticks in the latest loaded stage, not snapshots."""
+    stages = list(re.finditer(r"Native online stage loaded: [A-Z][0-9]+ "
+                              r"\(epoch ([0-9]+), peer [0-9]+\)", text))
     if not stages:
         return None
-    stage = stages[-1]
-    samples = list(re.finditer(r"Online checkpoint progress: epoch ([0-9]+) tick ([0-9]+) "
-                               r"\((?:host|guest)\)", text[stage.end():]))
-    if not samples or int(samples[-1][1]) != int(stage[1]):
+    loaded = stages[-1]
+    samples = list(re.finditer(r"Native online progress: epoch ([0-9]+) tick ([0-9]+) "
+                               r"\((?:host|guest)\)", text[loaded.end():]))
+    if not samples or int(loaded[1]) == 0 or int(samples[-1][1]) != int(loaded[1]):
         return None
     return int(samples[-1][1]), int(samples[-1][2])
 
 
+def playing(text: str, expected_level: str = "") -> bool:
+    loaded, completed = stage(text), progress(text)
+    return bool(loaded and completed and completed[1] > 0 and
+                (not expected_level or loaded[0] == expected_level))
+
+
+def ready_pair(texts: list[str], expected_level: str = "") -> bool:
+    return (len(texts) == 2 and all(playing(text, expected_level) for text in texts) and
+            stage(texts[0]) == stage(texts[1]))
+
+
 def advancing(first: tuple[int, int] | None, latest: tuple[int, int] | None) -> bool:
-    # A later scene still has to render enough snapshots to produce a progress
-    # entry; merely emitting a "stage loaded" line cannot satisfy this check.
-    return first is not None and latest is not None and latest > first
+    # A later scene still has to execute a native tick. Loading a new epoch or
+    # showing its first frame does not establish simulation progress.
+    return first is not None and latest is not None and latest[1] > 0 and latest > first
 
 
 def run(executable: pathlib.Path, assets: pathlib.Path, directory: pathlib.Path,
@@ -211,14 +219,14 @@ def run(executable: pathlib.Path, assets: pathlib.Path, directory: pathlib.Path,
         deadline = time.monotonic() + 90
         while True:
             texts = [healthy(*child) for child in (host, guest)]
-            if all(playing(text, expected_level) and checkpoint(text) is not None for text in texts):
-                initial = [checkpoint(text) for text in texts]
+            if ready_pair(texts, expected_level):
+                initial = [progress(text) for text in texts]
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"Stage loading timed out: {directory}")
             time.sleep(0.1)
-        print("Both windows are playing. Enter pauses; Enter in HOST resumes. Escape exits.\n"
-              "Tower portals and direct boss entrances work; results/shop still stop the test.\n"
+        print("Both native scenes are advancing. Enter opens a local menu; the game continues.\n"
+              "Escape exits. Campaign travel, secret returns and tally/shop use the native flow.\n"
               "No character saves are written.", flush=True)
         deadline = time.monotonic() + seconds if seconds else None
         while deadline is None or time.monotonic() < deadline:
@@ -232,10 +240,10 @@ def run(executable: pathlib.Path, assets: pathlib.Path, directory: pathlib.Path,
             for child in (host, guest):
                 healthy(*child)
             time.sleep(0.1)
-        final = [checkpoint(healthy(*child)) for child in (host, guest)]
+        final = [progress(healthy(*child)) for child in (host, guest)]
         if not all(advancing(first, latest) for first, latest in zip(initial, final)):
-            raise RuntimeError(f"Host/guest checkpoints did not advance: {initial} -> {final}")
-        print(f"Completed {seconds}s of live host/guest presentation; checkpoints {initial} -> {final}.",
+            raise RuntimeError(f"Host/guest native ticks did not advance: {initial} -> {final}")
+        print(f"Completed {seconds}s of live native gameplay; completed ticks {initial} -> {final}.",
               flush=True)
 
 

@@ -42,7 +42,8 @@ bool InputCommand::valid() const {
            std::isfinite(direction.y) && std::isfinite(magnitude) && magnitude >= 0 &&
            magnitude <= 1 && lengthSquared <= 1.00001f &&
            (magnitude == 0 || lengthSquared >= 0.99999f) && (heldButtons & ~kHeldMask) == 0 &&
-           (pressedButtons & ~kPressMask) == 0 && (!aimDirection || validAim(*aimDirection));
+           (pressedButtons & ~kPressMask) == 0 && (!aimDirection || validAim(*aimDirection)) &&
+           hintTopic <= 4 && (hintTopic != 0 || hintRevision == 0);
 }
 
 std::optional<std::vector<u8>> InputPacket::encode(std::span<const InputCommand> commands) {
@@ -63,8 +64,8 @@ std::optional<std::vector<u8>> InputPacket::encode(std::span<const InputCommand>
         writeU32(bytes, command.grant);
         bytes.push_back(command.seat);
         bytes.push_back(command.aimDirection ? 1 : 0);
-        bytes.push_back(0);
-        bytes.push_back(0);
+        bytes.push_back(command.hintTopic);
+        bytes.push_back(command.hintRevision);
         const Vec3 aim = command.aimDirection.value_or(Vec3{0});
         for (const f32 value :
              {command.direction.x, command.direction.y, command.magnitude, aim.x, aim.y, aim.z}) {
@@ -98,7 +99,9 @@ std::optional<std::vector<InputCommand>> InputPacket::decode(std::span<const u8>
         command.grant = reader.readU32();
         command.seat = reader.readU8();
         const u8 aimPresent = reader.readU8();
-        if (aimPresent > 1 || reader.readU16() != 0) {
+        command.hintTopic = reader.readU8();
+        command.hintRevision = reader.readU8();
+        if (aimPresent > 1) {
             return std::nullopt;
         }
         command.direction.x = std::bit_cast<f32>(reader.readU32());

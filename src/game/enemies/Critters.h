@@ -146,7 +146,6 @@ public:
 private:
     friend class OpponentCombatCheckpoint;
     friend class CrittersCheckpoint;
-    friend class OrdinaryCritterPhase;
     std::optional<s32> spawn(const CombatantDefinition& definition, const Vec3& position, f32 yaw,
                              f32 sight = 0.0f);
     CombatantAssets* stockFor(const CombatantDefinition& definition);

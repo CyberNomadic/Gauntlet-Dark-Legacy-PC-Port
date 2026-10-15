@@ -8,9 +8,8 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "game/netplay/OpponentCheckpoint.h"
+#include "game/screens/OpponentCheckpoint.h"
 #include "game/screens/OpponentResources.h"
-#include "game/screens/OpponentSimulation.h"
 
 namespace {
 using namespace gdl;
@@ -22,7 +21,7 @@ struct NativePools {
     Enemies enemies;
     Generators generators;
     EnemyMissiles missiles{813};
-    OpponentSimulation simulation{generators, enemies, missiles};
+    OpponentCheckpoint simulation{generators, enemies, missiles};
 
     explicit NativePools(std::span<const s32> kinds, s32 most = Enemies::kMost) {
         const auto root =
@@ -121,12 +120,7 @@ TEST_CASE("native opponent resource manifests restore independent owners in reve
     const auto expected = host.capture();
     REQUIRE(expected.missiles.missiles.size() == resources.size() + 1);
     CHECK(expected.missiles.missiles.back().resource == 0);
-    const auto bytes = OpponentCheckpoint::encode(expected);
-    REQUIRE(bytes);
-    const auto decoded = OpponentCheckpoint::decode(*bytes);
-    REQUIRE(decoded);
-    CHECK(*decoded == expected);
-    REQUIRE(guest.simulation.restore(*decoded, peerResources));
+    REQUIRE(guest.simulation.restore(expected, peerResources));
     CHECK(guest.capture() == expected);
     for (usize flight = 0; flight < resources.size(); ++flight) {
         CHECK(guest.missiles.missile(flight).model == peerResources[flight].model);

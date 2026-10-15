@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/Mt19937.h"
 
 #include "game/world/ItemFigure.h"
 
@@ -71,7 +72,7 @@ void SkorneArena::cue(const Vec3& boss) {
         constexpr std::array<f32, 3> kSpreads{10, 15, 100};
         const f32 base = kLifts[static_cast<usize>(m_phase - 1)];
         const f32 spread = kSpreads[static_cast<usize>(m_phase - 1)];
-        motion.velocity.y = base + std::uniform_real_distribution<f32>{0, spread}(m_random);
+        motion.velocity.y = base + Mt19937::float24(static_cast<u32>(m_random())) * spread;
     }
 }
 void SkorneArena::update(f32 seconds) {

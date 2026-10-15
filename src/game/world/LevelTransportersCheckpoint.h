@@ -74,7 +74,6 @@ public:
     bool restore(const State& state);
 
 private:
-    friend class OrdinaryCombatTick;
     struct Resources;
     bool bound() const;
     LevelTransporters& m_owner;

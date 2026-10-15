@@ -163,9 +163,6 @@ private:
     friend struct PlayerAttacksTestPeer;
     friend class PlayerAttacksCheckpoint;
     friend class CombatRollbackCheckpoint;
-    friend class OrdinaryCombatTick;
-    friend class OrdinaryProjectilePhase;
-    friend class OrdinaryStrongPhase;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,

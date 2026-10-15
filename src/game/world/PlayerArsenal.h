@@ -156,9 +156,6 @@ public:
 private:
     friend class PlayerArsenalCheckpoint;
     friend class CombatRollbackCheckpoint;
-    friend class OrdinaryCombatTick;
-    friend class OrdinaryWeaponEmission;
-    friend class OrdinaryProjectilePhase;
     MissileStreak weaponStreak(const PlayerActor& actor, const Texture* texture,
                                bool superShot = false) const;
     void bindWeaponAppearance(const PlayerActor& actor, PlayerFigure& figure,

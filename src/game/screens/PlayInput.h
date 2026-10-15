@@ -28,6 +28,8 @@ struct PlayInput {
     bool attackPressed = false;      ///< the attack button went down this frame
     bool turboAttackPressed = false; ///< resolved same-device chord, not two merged buttons
     SelectorInput selector;          ///< this frame's presses for the powerup selector
+    u8 hintTopic = 0;                ///< captured Sumner row + 1; never a pointer coordinate
+    u8 hintRevision = 0;             ///< menu revision observed when the row was clicked
 };
 
 } // namespace gdl::game

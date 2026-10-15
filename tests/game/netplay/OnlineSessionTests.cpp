@@ -18,6 +18,13 @@ using EventType = PacketTransport::EventType;
 const std::string kHost(32, 'a');
 const std::string kGuest(32, 'b');
 const std::string kOther(32, 'c');
+OnlineSession::NativeIdentity nativeIdentity() {
+    return {"test-executable", "test-runtime", std::string(64, 'a'), std::string(64, 'b'), "en"};
+}
+bool nativeBootstrap(std::span<const u8> bytes) {
+    return bytes.size() >= 8 && bytes[0] == 'G' && bytes[1] == 'D' && bytes[2] == 'N' &&
+           bytes[3] == 'B';
+}
 
 struct Service final : RoomService {
     Update next;
@@ -117,6 +124,10 @@ struct Client {
     explicit Client(bool host = true, u8 localPlayers = 1)
         : session(service, wire, host, localPlayers) {
         if (localPlayers > 0 && localPlayers <= 4) {
+            OnlineSession::NativeRules rules;
+            rules.scene = 7;
+            REQUIRE(session.configureNative(nativeIdentity(),
+                                            host ? std::optional{rules} : std::nullopt));
             std::vector<CharacterProfile> profiles(localPlayers);
             for (auto& profile : profiles) {
                 profile.name = "TEST";
@@ -124,36 +135,102 @@ struct Client {
             REQUIRE(session.select(profiles));
         }
     }
-    void finishParty(const RoomSnapshot& snapshot) {
+    void finishParty(const RoomSnapshot& snapshot, bool retainNative = false) {
         if (!snapshot.started || session.phase() != Phase::Starting || !session.connected()) {
             return;
         }
-        for (const auto& member : snapshot.members) {
-            if (session.host() && member.peer == kHost) {
-                continue;
+        // The early-relay fixture may have already delivered the complete party
+        // and its one-shot seal before the local room-start notification.
+        if (session.party() == nullptr) {
+            for (const auto& member : snapshot.members) {
+                if (session.host() && member.peer == kHost) {
+                    continue;
+                }
+                const auto link = std::ranges::find_if(wire.peers, [&](const auto& row) {
+                    return row.second == (session.host() ? member.peer : kHost);
+                });
+                REQUIRE(link != wire.peers.end());
+                for (const u8 seat : member.seats) {
+                    wire.message(link->first, partyPacket(0, seat));
+                }
             }
-            const auto link = std::ranges::find_if(wire.peers, [&](const auto& row) {
-                return row.second == (session.host() ? member.peer : kHost);
-            });
-            REQUIRE(link != wire.peers.end());
-            for (const u8 seat : member.seats) {
-                wire.message(link->first, partyPacket(0, seat));
+            session.update(0);
+            if (session.phase() == Phase::Failed) {
+                return;
+            }
+            if (session.host()) {
+                for (const auto& [connection, peer] : wire.peers) {
+                    if (std::ranges::find(snapshot.members, peer, &RoomMember::peer) !=
+                        snapshot.members.end()) {
+                        wire.message(connection, partyPacket(2));
+                    }
+                }
+            } else {
+                wire.message(99, partyPacket(1));
+            }
+            session.update(0);
+            if (session.phase() == Phase::Failed) {
+                return;
             }
         }
-        session.update(0);
+        // These lifecycle tests use a fixed valid setup digest; the separate
+        // native-bootstrap suite compares the complete resolved gameplay setup.
+        const std::string setup(64, 'c');
         if (session.host()) {
+            REQUIRE(session.nativeSetupPending());
+            REQUIRE(session.confirmNativeSetup(setup));
+            session.update(0);
+            const auto seal = std::ranges::find_if(wire.sent, [](const auto& sent) {
+                return nativeBootstrap(sent.bytes) && sent.bytes[5] == 1;
+            });
+            REQUIRE(seal != wire.sent.end());
+            auto acknowledgment = seal->bytes;
+            acknowledgment[5] = 2;
             for (const auto& [connection, peer] : wire.peers) {
                 if (std::ranges::find(snapshot.members, peer, &RoomMember::peer) !=
                     snapshot.members.end()) {
-                    wire.message(connection, partyPacket(2));
+                    wire.message(connection, acknowledgment);
                 }
             }
+            session.update(0);
         } else {
-            wire.message(99, partyPacket(1));
+            // Produce the authenticated offer/seal/commit through the real host
+            // bootstrap, not a parallel room-scope hash implementation.
+            const auto host = std::ranges::find(snapshot.members, kHost, &RoomMember::peer);
+            REQUIRE(host != snapshot.members.end());
+            Client authority(true, static_cast<u8>(host->seats.size()));
+            auto lobby = snapshot;
+            lobby.started = false;
+            authority.publish(lobby);
+            Connection connection = 1;
+            for (const auto& member : snapshot.members) {
+                if (member.peer != kHost) {
+                    authority.wire.connect(member.peer, connection++);
+                }
+            }
+            authority.session.update(0);
+            authority.service.next = {snapshot, kHost, {}, false};
+            authority.session.update(0);
+            authority.finishParty(snapshot, true);
+            for (u8 kind : std::array<u8, 3>{0, 1, 3}) {
+                const auto packet =
+                    std::ranges::find_if(authority.wire.sent, [kind](const auto& sent) {
+                        return nativeBootstrap(sent.bytes) && sent.bytes[5] == kind;
+                    });
+                REQUIRE(packet != authority.wire.sent.end());
+                wire.message(99, packet->bytes);
+                session.update(0);
+                if (kind == 0) {
+                    REQUIRE(session.nativeSetupPending());
+                    REQUIRE(session.confirmNativeSetup(setup));
+                }
+            }
         }
-        session.update(0);
-        std::erase_if(wire.sent,
-                      [](const auto& sent) { return PartyBootstrap::recognizes(sent.bytes); });
+        REQUIRE(session.phase() == Phase::Active);
+        std::erase_if(wire.sent, [retainNative](const auto& sent) {
+            return PartyBootstrap::recognizes(sent.bytes) ||
+                   (!retainNative && nativeBootstrap(sent.bytes));
+        });
     }
     void publish(RoomSnapshot snapshot) {
         service.next = {snapshot, session.host() ? kHost : kGuest, {}, false};
@@ -289,163 +366,136 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
     }
 }
 
-TEST_CASE("guest input flushes preserve sampled history through congestion without resampling",
-          "[netplay][online-session][latency][early-input-flush]") {
-    std::vector<std::vector<u8>> attempts;
-    bool congested = false;
+TEST_CASE("native guest flush preserves every exact sampled frame through congestion",
+          "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair{{}, true, 2, 2};
     pair.prepare();
     pair.ready();
+    std::vector<std::vector<u8>> attempts;
+    bool congested = true;
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
         if (InputPacket::decode(bytes)) {
-            CHECK(delivery == PacketTransport::Delivery::Unreliable);
+            CHECK(delivery == PacketTransport::Delivery::Reliable);
             attempts.emplace_back(bytes.begin(), bytes.end());
             return congested ? PacketTransport::SendResult::Congested
                              : PacketTransport::SendResult::Sent;
         }
         return PacketTransport::SendResult::Sent;
     };
-    const auto hostPolls = pair.hostWire.polls;
-    const auto guestPolls = pair.guestWire.polls;
-    const auto epoch = pair.guest.context().epoch;
+    constexpr u64 count = 7;
     const auto firstTick = pair.guest.inputTick();
-    std::vector<InputCommand> history;
-    for (u64 tick = 0; tick < InputHistory::kTicks; ++tick) {
-        const auto frame = inputs(pair.guest, tick == 0);
-        REQUIRE(frame.size() == 2);
+    const auto polls = pair.guestWire.polls;
+    // Local sampling stays at most inputLead ahead of the next simulation tick.
+    // Only the agreed neutral startup frames can execute before input delivery.
+    const u64 buffered = static_cast<u64>(pair.guest.context().inputLead) + 1;
+    REQUIRE(buffered < count);
+    REQUIRE(firstTick == buffered);
+    std::vector<std::vector<u8>> expected;
+    std::array<u32, InputCommand::kSeats> presses{};
+    u64 tick = 1;
+    const auto consume = [&] {
+        const auto host = pair.host.advance();
+        const auto guest = pair.guest.advance();
+        REQUIRE(host);
+        REQUIRE(guest);
+        CHECK(InputPacket::encode(*host) == InputPacket::encode(*guest));
+        for (usize seat = 0; seat < host->size(); ++seat) {
+            CHECK((*host)[seat].tick == tick);
+            presses[seat] += (*host)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
+            if (tick < firstTick) {
+                CHECK((*host)[seat].magnitude == 0);
+                CHECK((*host)[seat].pressedButtons == 0);
+            }
+        }
+        REQUIRE(pair.host.completedNativeTick(tick));
+        REQUIRE(pair.guest.completedNativeTick(tick));
+        ++tick;
+    };
+    const auto sample = [&](u64 index) {
+        const auto frame = inputs(pair.guest, index == 0);
         REQUIRE(pair.guest.sample(frame));
-        history.insert(history.end(), frame.begin(), frame.end());
-        if (tick + 1 < InputHistory::kTicks) {
-            REQUIRE(pair.guestSession.flush());
-            REQUIRE(pair.guestSession.flush());
-            CHECK(attempts.size() == tick + 1);
+        REQUIRE(pair.host.sample(inputs(pair.host)));
+        const auto bytes = InputPacket::encode(frame);
+        REQUIRE(bytes);
+        expected.push_back(*bytes);
+    };
+    for (u64 index = 0; index < buffered; ++index) {
+        sample(index);
+        if (index + 1 < buffered) {
+            consume();
         }
     }
+    CHECK_FALSE(pair.guest.inputReady());
+    CHECK_FALSE(pair.guest.sample(inputs(pair.guest, true)));
+    CHECK_FALSE(pair.host.advance());
+    CHECK_FALSE(pair.guest.advance());
+    pair.guestService.closed = true; // Flush must not poll or resample.
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(pair.guestSession.flush());
+    REQUIRE(attempts.size() == 2);
+    CHECK(attempts[0] == expected[0]);
+    CHECK(attempts[1] == expected[0]);
     attempts.clear();
-    const auto sentBefore = pair.guest.latency().sendQueue().summary().count;
-    REQUIRE(sentBefore == 6);
-    const auto latestSample = InputPacket::encode(pair.guest.sampledInputs());
-    REQUIRE(latestSample);
-    const auto expected = InputPacket::encode(history);
-    REQUIRE(expected);
-    congested = true;
-    pair.guestService.closed = true; // Any accidental poll would fail the session.
-    REQUIRE(pair.guestSession.flush());
-    REQUIRE(pair.guestSession.flush());
-    CHECK(pair.guest.latency().sendQueue().summary().count == sentBefore);
     congested = false;
     REQUIRE(pair.guestSession.flush());
     REQUIRE(pair.guestSession.flush());
-    REQUIRE(attempts.size() == 3);
-    for (const auto& attempt : attempts) {
-        CHECK(attempt == *expected);
-    }
-    CHECK(InputPacket::encode(pair.guest.sampledInputs()) == latestSample);
-    CHECK(pair.guest.inputTick() == firstTick + InputHistory::kTicks);
-    CHECK(pair.guest.context().epoch == epoch);
+    CHECK(attempts == expected);
+    CHECK(pair.guest.inputTick() == firstTick + buffered);
+    CHECK(pair.guestWire.polls == polls);
     CHECK(pair.guestSession.phase() == Phase::Active);
-    CHECK(pair.guest.latency().sendQueue().summary().count == sentBefore + 2);
-    CHECK(pair.hostWire.polls == hostPolls);
-    CHECK(pair.guestWire.polls == guestPolls);
-    CHECK(pair.host.tick() == 0);
     pair.guestService.closed = false;
-    pair.guestWire.beforeSend = {};
-
-    // Redundant receipt still resolves each edge once at its original input tick.
-    pair.hostSession.update(0);
-    std::array<u32, InputCommand::kSeats> presses{};
-    for (u64 tick = 0; tick < firstTick + InputHistory::kTicks; ++tick) {
-        const auto frame = pair.host.advance();
-        REQUIRE(frame);
-        for (usize seat = 0; seat < frame->size(); ++seat) {
-            presses[seat] += (*frame)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
-        }
+    pair.pump();
+    while (tick < firstTick + buffered) {
+        consume();
     }
+    for (u64 index = buffered; index < count; ++index) {
+        sample(index);
+        REQUIRE(pair.guestSession.flush());
+        REQUIRE(pair.guestSession.flush());
+        pair.pump();
+        consume();
+    }
+    CHECK(attempts == expected);
+    CHECK(attempts.size() == count);
+    CHECK(pair.guest.inputTick() == firstTick + count);
+    CHECK(tick == firstTick + count);
     CHECK(presses == std::array<u32, 4>{0, 0, 1, 1});
-}
-
-TEST_CASE("pending guest input cannot survive a pause or travel between flush attempts",
-          "[netplay][online-session][latency][early-input-flush]") {
-    usize attempts = 0;
-    test::OnlinePair pair;
-    pair.prepare();
-    pair.ready();
-    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
-        if (InputPacket::decode(bytes)) {
-            ++attempts;
-            return PacketTransport::SendResult::Congested;
-        }
-        return PacketTransport::SendResult::Sent;
-    };
-    REQUIRE(pair.guest.sample(inputs(pair.guest, true)));
-    REQUIRE(pair.guestSession.flush());
-    REQUIRE(attempts == 1);
-    const auto oldEpoch = pair.guest.context().epoch;
-    SECTION("pause") {
-        REQUIRE(pair.host.requestPause());
-        REQUIRE(pair.hostSession.flush());
-        pair.guestSession.update(0);
-        REQUIRE(pair.guest.phase() == MatchSession::Phase::Paused);
-        REQUIRE(pair.guestSession.flush());
-        CHECK(attempts == 1);
-        pair.prepare(MatchTransition::Resume);
-    }
-    SECTION("travel") {
-        REQUIRE(pair.hostSession.party());
-        REQUIRE(pair.host.prepare(2, MatchTransition::Travel, pair.hostSession.party()));
-        REQUIRE(pair.hostSession.flush());
-        pair.guestSession.update(0);
-        REQUIRE(pair.guest.phase() == MatchSession::Phase::Loading);
-        REQUIRE(pair.guestSession.flush());
-        CHECK(attempts == 1);
-    }
-    pair.ready();
-    CHECK(attempts == 1);
-    CHECK(pair.guest.context().epoch > oldEpoch);
+    CHECK_FALSE(pair.host.advance());
+    CHECK_FALSE(pair.guest.advance());
     pair.guestWire.beforeSend = {};
-    REQUIRE(pair.guest.sample(inputs(pair.guest)));
-    REQUIRE(pair.guestSession.flush());
-    REQUIRE(pair.guestSession.flush());
-    pair.hostSession.update(0);
-    for (u64 tick = 0; tick <= pair.guest.context().inputLead; ++tick) {
-        const auto frame = pair.host.advance();
-        REQUIRE(frame);
-        CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
-    }
 }
 
-TEST_CASE("flushing throttled guest input neither invents a tick nor repeats a sent packet",
-          "[netplay][online-session][latency][early-input-flush]") {
-    usize attempts = 0;
+TEST_CASE("native backpressure never invents or repeats an unsampled input tick",
+          "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair;
     pair.prepare();
     pair.ready();
-    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
+    usize sends = 0;
+    pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
         if (InputPacket::decode(bytes)) {
-            ++attempts;
+            CHECK(delivery == PacketTransport::Delivery::Reliable);
+            ++sends;
         }
         return PacketTransport::SendResult::Sent;
     };
-    for (usize sample = 0; sample < InputTimeline::kMaxAhead && pair.guest.inputReady(); ++sample) {
+    for (usize sample = 0; sample < LockstepInputs::kWindow && pair.guest.inputReady(); ++sample) {
         REQUIRE(pair.guest.sample(inputs(pair.guest)));
         REQUIRE(pair.guestSession.flush());
         REQUIRE(pair.guestSession.flush());
-        CHECK(attempts == sample + 1);
+        CHECK(sends == sample + 1);
     }
     REQUIRE_FALSE(pair.guest.inputReady());
     const auto pendingTick = pair.guest.inputTick();
-    const auto sentBefore = attempts;
+    const auto sentBefore = sends;
     const auto polls = pair.guestWire.polls;
     for (usize sample = 0; sample < 3; ++sample) {
-        REQUIRE(pair.guest.sample(inputs(pair.guest, sample == 0)));
-        CHECK(pair.guest.sampledInputs().empty());
-        REQUIRE(pair.guestSession.flush());
+        CHECK_FALSE(pair.guest.sample(inputs(pair.guest, sample == 0)));
         REQUIRE(pair.guestSession.flush());
         CHECK(pair.guest.inputTick() == pendingTick);
-        CHECK(attempts == sentBefore);
+        CHECK(sends == sentBefore);
     }
     CHECK(pair.guestWire.polls == polls);
-    CHECK(pair.host.tick() == 0);
+    CHECK(pair.host.tick() == 1);
     pair.guestWire.beforeSend = {};
 }
 
@@ -510,8 +560,10 @@ TEST_CASE("online sessions handle split local seats, sparse rosters and unordere
     guest.session.update(0);
     CHECK(host.session.match().phase() == MatchSession::Phase::Running);
     CHECK(guest.session.match().phase() == MatchSession::Phase::Running);
-    CHECK_FALSE(guest.session.match().advance());
-    CHECK(host.session.match().advance());
+    REQUIRE(guest.session.match().advance());
+    REQUIRE(host.session.match().advance());
+    CHECK(guest.session.match().completedNativeTick(1));
+    CHECK(host.session.match().completedNativeTick(1));
 }
 
 TEST_CASE("online host has peer one even when it does not occupy seat zero",
@@ -529,7 +581,7 @@ TEST_CASE("online host has peer one even when it does not occupy seat zero",
     CHECK(host.session.match().context().owners == MatchOwners{2, 3, 0, 1});
 }
 
-TEST_CASE("an early host prepare waits for the started roster and is not lost on a newer revision",
+TEST_CASE("an early host prepare cannot bypass native setup agreement on any roster revision",
           "[netplay][online-session]") {
     Client guest(false);
     guest.publish(room());
@@ -544,13 +596,13 @@ TEST_CASE("an early host prepare waits for the started roster and is not lost on
     }
     guest.wire.message(99, prepare(owners));
     guest.session.update(0);
+    CHECK(guest.session.failure() == Failure::Protocol);
     CHECK(guest.session.match().phase() == MatchSession::Phase::Offline);
     CHECK_FALSE(guest.session.match().loaded());
     snapshot.started = true;
     guest.publish(snapshot);
-    REQUIRE(guest.session.phase() == Phase::Active);
-    CHECK(guest.session.match().phase() == MatchSession::Phase::Loading);
-    CHECK(guest.session.match().context().owners == owners);
+    CHECK(guest.session.phase() == Phase::Failed);
+    CHECK(guest.session.match().phase() == MatchSession::Phase::Offline);
 }
 
 TEST_CASE("early match data cannot bypass room start or the admitted owners",
@@ -669,11 +721,11 @@ TEST_CASE("authoritative stop wins over stale gameplay in the same online receiv
     Client guest(false);
     guest.publish(room());
     guest.connect();
-    guest.wire.message(99, prepare());
-    guest.session.update(0);
     auto snapshot = room();
     snapshot.started = true;
     guest.publish(snapshot);
+    guest.wire.message(99, prepare());
+    guest.session.update(0);
     REQUIRE(guest.session.match().phase() == MatchSession::Phase::Loading);
     const auto stop = MatchControlPacket::encode(
         {MatchControlKind::Stop, MatchStop::Left, guest.session.match().context()});
@@ -893,6 +945,8 @@ TEST_CASE("online readiness requires valid selections and freezes them while rea
     CharacterProfile selected;
     selected.name = "LOCAL";
     REQUIRE(session.select(std::array{selected}));
+    CHECK_FALSE(session.ready());
+    REQUIRE(session.configureNative(nativeIdentity(), OnlineSession::NativeRules{}));
     REQUIRE(session.ready());
     selected.name = "EDITED";
     CHECK_FALSE(session.select(std::array{selected}));
@@ -914,7 +968,7 @@ TEST_CASE("online readiness requires valid selections and freezes them while rea
     CHECK(session.party() == nullptr);
     CHECK_FALSE(session.match().prepare(1));
 }
-TEST_CASE("early character relay and prepare survive a delayed room start reply",
+TEST_CASE("early character relay survives a delayed room start before native setup agreement",
           "[netplay][online-session]") {
     Client guest(false);
     guest.publish(room());
@@ -922,7 +976,6 @@ TEST_CASE("early character relay and prepare survive a delayed room start reply"
     guest.wire.message(99, partyPacket(0, 0));
     guest.wire.message(99, partyPacket(0, 1));
     guest.wire.message(99, partyPacket(1));
-    guest.wire.message(99, prepare());
     guest.session.update(0);
     CHECK(guest.session.party() == nullptr);
     CHECK(guest.session.match().phase() == MatchSession::Phase::Offline);
@@ -932,6 +985,9 @@ TEST_CASE("early character relay and prepare survive a delayed room start reply"
     REQUIRE(guest.session.phase() == Phase::Active);
     REQUIRE(guest.session.party());
     CHECK((*guest.session.party())[1]->name == "TEST");
+    CHECK(guest.session.match().phase() == MatchSession::Phase::Lobby);
+    guest.wire.message(99, prepare());
+    guest.session.update(0);
     CHECK(guest.session.match().phase() == MatchSession::Phase::Loading);
 }
 TEST_CASE("missing party acknowledgements time out without exposing simulation authority",

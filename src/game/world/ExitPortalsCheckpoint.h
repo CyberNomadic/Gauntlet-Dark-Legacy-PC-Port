@@ -91,8 +91,6 @@ public:
     bool restore(const State& state);
 
 private:
-    friend class OrdinaryCombatCheckpoint;
-    friend class OrdinaryCombatTick;
     struct Resources;
     bool bound() const;
     s32 archiveId(const ItemArchive* archive) const;

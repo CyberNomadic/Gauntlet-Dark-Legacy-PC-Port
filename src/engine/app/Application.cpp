@@ -44,6 +44,15 @@ Application::Application(ApplicationDesc desc) : m_desc(std::move(desc)) {}
 
 Application::~Application() = default;
 
+void Application::setUpdateRate(u32 rate) {
+    if (rate != m_desc.updateRate) {
+        m_desc.updateRate = rate;
+        // A fraction accumulated in an offline clock must not become a burst
+        // of online updates (or vice versa) when entering/leaving a room.
+        m_updateClock = {};
+    }
+}
+
 s32 Application::run() {
     try {
         log::info("Starting {}", m_desc.window.title);
@@ -91,11 +100,15 @@ s32 Application::run() {
                 ++timing.updates;
             } else {
                 m_updateInput.accumulate(m_window->input());
-                const u32 ticks = m_updateClock.advance(m_clock.deltaSeconds(), m_desc.updateRate);
+                const u32 rate = m_desc.updateRate;
+                const u32 ticks = m_updateClock.advance(m_clock.deltaSeconds(), rate);
                 for (u32 tick = 0; tick < ticks && !m_quitRequested; ++tick) {
-                    onUpdate(1.0 / m_desc.updateRate);
+                    onUpdate(1.0 / rate);
                     m_updateInput.beginPoll();
                     ++timing.updates;
+                    if (m_desc.updateRate != rate) {
+                        break; // The remaining ticks belonged to the previous clock.
+                    }
                 }
             }
             measure(FrameTimingPhase::Update);

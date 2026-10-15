@@ -92,6 +92,7 @@ void Gauntlet::onInit() {
     m_smokeTest.init(renderDevice());
 
     if (!m_options.netplayTest.empty()) {
+        setUpdateRate(60);
         m_online = std::make_unique<OnlineRun>();
         try {
             const auto scenario = Scenario::load(m_options.scenario);
@@ -250,6 +251,9 @@ GameContext Gauntlet::context() {
     };
     context.stopVibration = [this] { window().stopRumble(); };
     context.saveLocalParty = [this](std::span<PartyMember> party) { autoSave(party); };
+    context.manualSaveLocalParty = [this](std::span<PartyMember> party) {
+        return saveLocalParty(party);
+    };
     // Only newly earned rewards invoke this callback; preloaded scenario relics do not.
     context.unlockClasses = [this](u16 mask) {
         if (m_saves.opened() || m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
@@ -1074,17 +1078,24 @@ void Gauntlet::renderScene(RenderDevice& device) {
 }
 
 void Gauntlet::autoSave(std::span<PartyMember> party) {
-    if (!m_config.game.autoSave || !m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
-        return;
+    if (m_config.game.autoSave) {
+        saveLocalParty(party);
+    }
+}
+
+bool Gauntlet::saveLocalParty(std::span<PartyMember> party) {
+    if (party.empty() || !m_saves.open(m_config.saveDirectory(), m_config.save.slots)) {
+        return false;
     }
     const auto result = autoSaveParty(m_saves, party);
     if (result.written > 0) {
         m_autoSaveIcon.show();
     }
     if (result.failed > 0 || result.unavailable > 0) {
-        log::warn("Auto-save: {} saved, {} failed, {} without an available slot", result.written,
+        log::warn("Local save: {} saved, {} failed, {} without an available slot", result.written,
                   result.failed, result.unavailable);
     }
+    return result.written == party.size() && result.failed == 0 && result.unavailable == 0;
 }
 
 void Gauntlet::onShutdown() {

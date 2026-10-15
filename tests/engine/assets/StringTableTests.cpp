@@ -61,4 +61,46 @@ TEST_CASE("the shipped English table names the title screen text", "[assets][tex
     REQUIRE(table.get("menu.player") == "Player {}");
 }
 
+TEST_CASE("text identity hashes resolved entries not JSON formatting or insertion order",
+          "[assets][text][native-online-identity]") {
+    const auto firstDirectory = test::scratchDirectory("string-identity-first");
+    const auto secondDirectory = test::scratchDirectory("string-identity-second");
+    writeTextFile(firstDirectory / "en.json", R"({"a":"first","b":"fallback"})");
+    writeTextFile(firstDirectory / "fr.json", R"({"a":"translation"})");
+    writeTextFile(secondDirectory / "en.json", R"({"b":"fallback","a":"unused"})");
+    writeTextFile(secondDirectory / "fr.json", R"({ "a" : "translation" })");
+    StringTable first;
+    StringTable second;
+    REQUIRE(first.load(firstDirectory, "fr"));
+    REQUIRE(second.load(secondDirectory, "fr"));
+    CHECK(first.digest().size() == 64);
+    CHECK(first.digest() == second.digest());
+
+    writeTextFile(secondDirectory / "en.json", R"({"b":"changed","a":"unused"})");
+    REQUIRE(second.load(secondDirectory, "fr"));
+    CHECK(first.digest() != second.digest());
+    writeTextFile(secondDirectory / "en.json", R"({"b":"fallback","a":"translation"})");
+    REQUIRE(second.load(secondDirectory, "en"));
+    CHECK(first.get("a") == second.get("a"));
+    CHECK(first.get("b") == second.get("b"));
+    CHECK(first.digest() != second.digest());
+}
+
+TEST_CASE(
+    "text identity length-prefixes keys and values and hashes the effective fallback language",
+    "[assets][text][native-online-identity]") {
+    const auto directory = test::scratchDirectory("string-identity-lengths");
+    writeTextFile(directory / "en.json", R"({"ab":"c"})");
+    StringTable first;
+    REQUIRE(first.load(directory, "en"));
+    StringTable fallback;
+    REQUIRE(fallback.load(directory, "missing"));
+    CHECK(fallback.language() == "en");
+    CHECK(fallback.digest() == first.digest());
+    writeTextFile(directory / "en.json", R"({"a":"bc"})");
+    StringTable second;
+    REQUIRE(second.load(directory, "en"));
+    CHECK(second.digest() != first.digest());
+}
+
 } // namespace

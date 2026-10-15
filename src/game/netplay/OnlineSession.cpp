@@ -5,6 +5,8 @@
 #include <set>
 
 #include "engine/core/Log.h"
+#include "engine/io/ByteReader.h"
+#include "engine/io/Sha256.h"
 
 namespace gdl::game {
 namespace {
@@ -48,7 +50,171 @@ bool sameRoster(const RoomSnapshot& a, const RoomSnapshot& b) {
         return x.peer == y.peer && x.seats == y.seats;
     });
 }
+constexpr u32 kNativeMagic = fourcc("GDNB");
+constexpr u8 kNativeVersion = 1;
+constexpr u8 kNativeInitialization = 1; // canonical NativePlaySetup initialization
+constexpr u8 kNativeInputMode = 1;      // reliable complete-frame simulation, never snapshots
+constexpr usize kNativeQueue = 12;      // offer, seal and commit for at most three guests
+enum class NativeKind : u8 { Offer, Seal, Acknowledge, Commit };
+bool digest(const std::string& value) {
+    return value.size() == 64 && std::ranges::all_of(value, [](char c) {
+               return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+           });
+}
+bool text(const std::string& value, usize limit) {
+    return !value.empty() && value.size() <= limit &&
+           std::ranges::all_of(value, [](unsigned char c) { return c >= 32 && c <= 126; });
+}
+void word(std::vector<u8>& bytes, u32 value) {
+    for (u32 shift = 0; shift < 32; shift += 8) {
+        bytes.push_back(static_cast<u8>(value >> shift));
+    }
+}
+void string(std::vector<u8>& bytes, const std::string& value) {
+    word(bytes, static_cast<u32>(value.size()));
+    bytes.insert(bytes.end(), value.begin(), value.end());
+}
+std::string string(ByteReader& reader, usize limit) {
+    const usize size = reader.readU32();
+    if (size == 0 || size > limit) {
+        throw FormatError("invalid native bootstrap string length");
+    }
+    const auto bytes = reader.readBytes(size);
+    return {bytes.begin(), bytes.end()};
+}
+std::string roomDigest(const RoomSnapshot& room) {
+    // Canonical admitted roster order, not JSON ordering or local socket IDs.
+    // Readiness is intentionally excluded: it changes without a new revision.
+    std::vector<u8> bytes;
+    string(bytes, "gdl-native-room-v1");
+    string(bytes, room.code);
+    string(bytes, room.host);
+    word(bytes, static_cast<u32>(room.revision));
+    word(bytes, static_cast<u32>(room.revision >> 32));
+    bytes.insert(bytes.end(), {room.settings.maxPlayers, room.settings.difficulty,
+                               room.settings.friendlyFire, static_cast<u8>(room.members.size())});
+    for (const auto& row : room.members) {
+        string(bytes, row.peer);
+        bytes.push_back(static_cast<u8>(row.seats.size()));
+        bytes.insert(bytes.end(), row.seats.begin(), row.seats.end());
+    }
+    Sha256 hash;
+    hash.update(bytes);
+    return hash.hex();
+}
+struct NativeMessage {
+    NativeKind kind;
+    std::string scope;
+    std::optional<OnlineSession::NativeContract> contract;
+    std::string setup;
+};
+bool nativePacket(std::span<const u8> bytes) {
+    return bytes.size() >= 4 && readU32LE(bytes, 0) == kNativeMagic;
+}
+std::optional<NativeMessage> decodeNative(std::span<const u8> bytes) {
+    if (bytes.size() < 72 || bytes.size() > OnlineSession::kNativePacketBytes) {
+        return std::nullopt;
+    }
+    try {
+        ByteReader reader(bytes);
+        if (reader.readU32() != kNativeMagic || reader.readU8() != kNativeVersion) {
+            return std::nullopt;
+        }
+        const auto kind = reader.readU8();
+        if (kind > static_cast<u8>(NativeKind::Commit) || reader.readU8() != kNativeInputMode ||
+            reader.readU8() != 0) {
+            return std::nullopt;
+        }
+        const auto scope = reader.readBytes(64);
+        NativeMessage result{static_cast<NativeKind>(kind), {scope.begin(), scope.end()}, {}, {}};
+        if (!digest(result.scope)) {
+            return std::nullopt;
+        }
+        if (result.kind == NativeKind::Offer) {
+            OnlineSession::NativeContract contract;
+            contract.rules.scene = reader.readU32();
+            const u8 flags = reader.readU8();
+            contract.rules.startupDelay = reader.readU8();
+            if ((flags & ~7U) != 0 || reader.readU8() != kNativeInitialization ||
+                reader.readU8() != 0) {
+                return std::nullopt;
+            }
+            contract.rules.autoMelee = (flags & 1U) != 0;
+            contract.rules.autoActivateItems = (flags & 2U) != 0;
+            contract.rules.expandedShop = (flags & 4U) != 0;
+            contract.identity.build = string(reader, 256);
+            contract.identity.runtime = string(reader, 256);
+            contract.identity.content = string(reader, 64);
+            contract.identity.data = string(reader, 64);
+            contract.identity.language = string(reader, 32);
+            if (!contract.identity.valid() || !contract.rules.valid()) {
+                return std::nullopt;
+            }
+            result.contract = std::move(contract);
+        } else {
+            const auto setup = reader.readBytes(64);
+            result.setup.assign(setup.begin(), setup.end());
+            if (!digest(result.setup)) {
+                return std::nullopt;
+            }
+        }
+        return reader.atEnd() ? std::optional{std::move(result)} : std::nullopt;
+    } catch (const FormatError&) {
+        return std::nullopt;
+    }
+}
+std::vector<u8> nativeBytes(NativeKind kind, const std::string& scope,
+                            const OnlineSession::NativeContract& contract,
+                            const std::string& setup = {}) {
+    std::vector<u8> bytes;
+    word(bytes, kNativeMagic);
+    bytes.insert(bytes.end(), {kNativeVersion, static_cast<u8>(kind), kNativeInputMode, 0});
+    bytes.insert(bytes.end(), scope.begin(), scope.end());
+    if (kind == NativeKind::Offer) {
+        const auto& rules = contract.rules;
+        word(bytes, rules.scene);
+        const auto flags = static_cast<u8>(static_cast<u8>(rules.autoMelee) |
+                                           (static_cast<u8>(rules.autoActivateItems) << 1U) |
+                                           (static_cast<u8>(rules.expandedShop) << 2U));
+        bytes.insert(bytes.end(), {flags, rules.startupDelay, kNativeInitialization, 0});
+        string(bytes, contract.identity.build);
+        string(bytes, contract.identity.runtime);
+        string(bytes, contract.identity.content);
+        string(bytes, contract.identity.data);
+        string(bytes, contract.identity.language);
+    } else {
+        bytes.insert(bytes.end(), setup.begin(), setup.end());
+    }
+    return bytes;
+}
 } // namespace
+
+struct OnlineSession::NativeBootstrap {
+    NativeIdentity local;
+    std::optional<NativeRules> hostRules;
+    std::optional<NativeContract> contract;
+    std::string scope;
+    std::string localSetup;
+    std::string sealedSetup;
+    std::set<Connection> acknowledged;
+    bool acknowledgmentQueued = false;
+    bool committed = false;
+    std::vector<PacketTransport::Event> early;
+    struct Delivery {
+        Connection connection;
+        std::vector<u8> bytes;
+    };
+    std::deque<Delivery> outgoing;
+};
+
+bool OnlineSession::NativeIdentity::valid() const {
+    return text(build, 256) && text(runtime, 256) && digest(content) && digest(data) &&
+           text(language, 32);
+}
+bool OnlineSession::NativeRules::valid() const {
+    return scene > 0 && scene <= 65535 && scene % 256 != 0 &&
+           startupDelay <= LockstepInputs::kMaxDelay;
+}
 
 OnlineSession::OnlineSession(RoomService& service, PeerTransport& transport, bool host,
                              u8 localPlayers)
@@ -59,6 +225,192 @@ OnlineSession::OnlineSession(RoomService& service, PeerTransport& transport, boo
 }
 OnlineSession::~OnlineSession() {
     leave();
+}
+
+bool OnlineSession::configureNative(const NativeIdentity& local,
+                                    std::optional<NativeRules> hostRules) {
+    if ((m_phase != Phase::Joining && m_phase != Phase::Lobby) || m_native || m_ready ||
+        (m_room && member(*m_room, m_peer)->ready) || !local.valid() ||
+        m_host != hostRules.has_value() || (hostRules && !hostRules->valid())) {
+        return false;
+    }
+    m_native = std::make_unique<NativeBootstrap>();
+    m_native->local = local;
+    m_native->hostRules = hostRules;
+    return true;
+}
+const OnlineSession::NativeContract* OnlineSession::nativeContract() const {
+    return m_native && m_native->contract ? &*m_native->contract : nullptr;
+}
+bool OnlineSession::nativeSetupPending() const {
+    return m_phase == Phase::Starting && m_party.complete() && nativeContract() != nullptr &&
+           m_native->localSetup.empty();
+}
+std::string_view OnlineSession::confirmedNativeSetup() const {
+    return m_native && m_native->committed && m_phase == Phase::Active
+               ? std::string_view{m_native->localSetup}
+               : std::string_view{};
+}
+bool OnlineSession::confirmNativeSetup(const std::string& setup) {
+    if (m_phase != Phase::Starting || !m_party.complete() || !nativeContract() || !digest(setup)) {
+        return false;
+    }
+    if ((!m_native->localSetup.empty() && m_native->localSetup != setup) ||
+        (!m_native->sealedSetup.empty() && m_native->sealedSetup != setup)) {
+        m_failureDetail = "Native simulation initial setup differs";
+        fail(Failure::Protocol);
+        return false;
+    }
+    m_native->localSetup = setup;
+    return true;
+}
+
+bool OnlineSession::nativeMessage(Connection connection, std::span<const u8> bytes) {
+    const auto message = decodeNative(bytes);
+    if (!m_native || !message) {
+        m_failureDetail = "Native simulation mode or bootstrap packet differs";
+        return false;
+    }
+    const auto link = std::ranges::find_if(
+        m_links, [&](const auto& value) { return value.second == connection; });
+    if (link == m_links.end() || (!m_host && link->first != m_room->host) ||
+        (m_host && message->kind != NativeKind::Acknowledge) ||
+        (!m_host && message->kind == NativeKind::Acknowledge)) {
+        return false;
+    }
+    if (m_native->scope.empty()) {
+        if (m_host || (message->kind != NativeKind::Offer && message->kind != NativeKind::Seal)) {
+            return false;
+        }
+        for (const auto& pending : m_native->early) {
+            if (pending.bytes[5] == bytes[5]) {
+                return std::ranges::equal(pending.bytes, bytes);
+            }
+        }
+        if (m_native->early.size() >= 2) {
+            return false;
+        }
+        m_native->early.push_back(
+            {PacketTransport::EventType::Message, connection, {bytes.begin(), bytes.end()}, {}});
+        return true;
+    }
+    if (message->scope != m_native->scope) {
+        m_failureDetail = "Native simulation room scope differs";
+        return false;
+    }
+    if (message->kind == NativeKind::Offer) {
+        if (!message->contract || message->contract->identity != m_native->local) {
+            m_failureDetail = "Native simulation executable, runtime, content or language differs";
+            return false;
+        }
+        if (m_native->contract) {
+            return *m_native->contract == *message->contract;
+        }
+        m_native->contract = message->contract;
+        return true;
+    }
+    if (!m_native->contract) {
+        return false;
+    }
+    if (message->kind == NativeKind::Seal) {
+        if ((!m_native->sealedSetup.empty() && m_native->sealedSetup != message->setup) ||
+            (!m_native->localSetup.empty() && m_native->localSetup != message->setup)) {
+            m_failureDetail = "Native simulation initial setup differs";
+            return false;
+        }
+        m_native->sealedSetup = message->setup;
+        return true;
+    }
+    if (m_native->sealedSetup != message->setup || m_native->localSetup != message->setup) {
+        return false;
+    }
+    if (message->kind == NativeKind::Acknowledge) {
+        m_native->acknowledged.insert(connection);
+        return true;
+    }
+    if (!m_party.complete() || !m_native->acknowledgmentQueued) {
+        return false;
+    }
+    m_native->committed = true;
+    return true;
+}
+
+bool OnlineSession::advanceNativeBootstrap() {
+    if (!m_native) {
+        return false;
+    }
+    const auto queue = [&](NativeKind kind, bool broadcast) {
+        const auto count = broadcast ? m_links.size() : usize{1};
+        if (!m_native->contract || m_native->outgoing.size() + count > kNativeQueue) {
+            return false;
+        }
+        const auto bytes =
+            nativeBytes(kind, m_native->scope, *m_native->contract, m_native->localSetup);
+        for (const auto& [peer, connection] : m_links) {
+            if (broadcast || peer == m_room->host) {
+                m_native->outgoing.push_back({connection, bytes});
+            }
+        }
+        return true;
+    };
+    if (m_native->scope.empty()) {
+        m_native->scope = roomDigest(*m_room);
+        if (m_host) {
+            m_native->contract = NativeContract{m_native->local, *m_native->hostRules};
+            if (!queue(NativeKind::Offer, true)) {
+                return false;
+            }
+        }
+        auto early = std::move(m_native->early);
+        m_native->early.clear();
+        for (const auto& packet : early) {
+            if (!nativeMessage(packet.connection, packet.bytes)) {
+                return false;
+            }
+        }
+    }
+    if (!m_party.complete() || !m_native->contract || m_native->localSetup.empty()) {
+        return true;
+    }
+    if (m_host) {
+        if (m_native->sealedSetup.empty()) {
+            if (!queue(NativeKind::Seal, true)) {
+                return false;
+            }
+            m_native->sealedSetup = m_native->localSetup;
+        }
+        if (!m_native->committed && m_native->acknowledged.size() == m_links.size()) {
+            if (!queue(NativeKind::Commit, true)) {
+                return false;
+            }
+            m_native->committed = true;
+        }
+    } else if (!m_native->sealedSetup.empty() && !m_native->acknowledgmentQueued) {
+        if (m_native->sealedSetup != m_native->localSetup ||
+            !queue(NativeKind::Acknowledge, false)) {
+            return false;
+        }
+        m_native->acknowledgmentQueued = true;
+    }
+    return true;
+}
+bool OnlineSession::flushNativeBootstrap() {
+    if (!m_native) {
+        return true;
+    }
+    while (!m_native->outgoing.empty()) {
+        const auto& next = m_native->outgoing.front();
+        const auto result =
+            m_transport.send(next.connection, next.bytes, PacketTransport::Delivery::Reliable);
+        if (result == PacketTransport::SendResult::Congested) {
+            return true;
+        }
+        if (result != PacketTransport::SendResult::Sent) {
+            return false;
+        }
+        m_native->outgoing.pop_front();
+    }
+    return true;
 }
 
 std::vector<std::string> OnlineSession::allowed() const {
@@ -90,6 +442,10 @@ void OnlineSession::closeLinks() {
     m_connecting.reset();
     m_prepare.reset();
     m_earlyParty.clear();
+    if (m_native) {
+        m_native->early.clear();
+        m_native->outgoing.clear();
+    }
 }
 void OnlineSession::fail(Failure reason) {
     if (m_phase == Phase::Failed || m_phase == Phase::Closed) {
@@ -235,6 +591,24 @@ void OnlineSession::event(const PacketTransport::Event& event) {
     if (link == m_links.end()) {
         return;
     }
+    if (nativePacket(event.bytes)) {
+        if (!nativeMessage(event.connection, event.bytes)) {
+            fail(Failure::Protocol);
+        }
+        return;
+    }
+    {
+        const auto control = MatchControlPacket::decode(event.bytes);
+        if (control && control->kind == MatchControlKind::Prepare &&
+            control->context.transition == MatchTransition::Start &&
+            (!m_native || !m_native->committed || !m_native->contract ||
+             control->context.scene != m_native->contract->rules.scene ||
+             control->context.inputLead != m_native->contract->rules.startupDelay)) {
+            m_failureDetail = "Native simulation start differs from the agreed contract";
+            fail(Failure::Protocol);
+            return;
+        }
+    }
     if (PartyBootstrap::recognizes(event.bytes)) {
         if (!m_party.opened()) {
             // The peer's reliable party can overtake our room start update.
@@ -256,7 +630,8 @@ void OnlineSession::event(const PacketTransport::Event& event) {
         const auto control = MatchControlPacket::decode(event.bytes);
         if (!m_host && control && control->kind == MatchControlKind::Prepare &&
             control->context.transition == MatchTransition::Start) {
-            if (m_prepare && m_prepare->bytes != event.bytes) {
+            if (!m_native || !m_native->committed ||
+                (m_prepare && m_prepare->bytes != event.bytes)) {
                 fail(Failure::Protocol);
             } else {
                 m_prepare = event;
@@ -277,6 +652,11 @@ void OnlineSession::event(const PacketTransport::Event& event) {
 void OnlineSession::openMatch() {
     if (!m_room || !m_room->started || !connected() ||
         m_match.phase() != MatchSession::Phase::Offline) {
+        return;
+    }
+    if (!m_native) {
+        m_failureDetail = "Native simulation identity was not configured before room start";
+        fail(Failure::Protocol);
         return;
     }
     MatchOwners owners{};
@@ -308,10 +688,14 @@ void OnlineSession::openMatch() {
             }
         }
     }
-    if (!m_party.complete()) {
+    if (!advanceNativeBootstrap()) {
+        fail(Failure::Protocol);
         return;
     }
-    if (!m_match.open(local, owners, links)) {
+    if (!m_party.complete() || !m_native->committed) {
+        return;
+    }
+    if (!m_match.open(local, owners, links, m_native->contract->rules.startupDelay)) {
         fail(Failure::Protocol);
         return;
     }
@@ -381,7 +765,22 @@ bool OnlineSession::flush() {
     if (m_phase == Phase::Failed || m_phase == Phase::Closed) {
         return false;
     }
+    if (!flushNativeBootstrap()) {
+        fail(Failure::Transport);
+        return false;
+    }
+    if (m_native && !m_native->outgoing.empty()) {
+        return true; // Commit must precede any native Prepare on the same reliable link.
+    }
     if (m_phase == Phase::Active) {
+        if (m_native && m_match.context().epoch != 0 &&
+            m_match.context().transition == MatchTransition::Start &&
+            (m_match.context().scene != m_native->contract->rules.scene ||
+             m_match.context().inputLead != m_native->contract->rules.startupDelay)) {
+            m_failureDetail = "Native simulation start differs from the agreed contract";
+            fail(Failure::Protocol);
+            return false;
+        }
         m_match.flush(m_transport);
         if (m_match.phase() == MatchSession::Phase::Stopped) {
             fail(Failure::Match);
@@ -403,7 +802,7 @@ bool OnlineSession::select(std::span<const CharacterProfile> selections) {
 }
 bool OnlineSession::ready(bool value) {
     if (m_phase != Phase::Lobby || !m_room || !connected() ||
-        (value && m_selections.size() != m_localPlayers)) {
+        (value && (!m_native || m_selections.size() != m_localPlayers))) {
         return false;
     }
     if (m_ready) {
@@ -419,7 +818,7 @@ bool OnlineSession::ready(bool value) {
     return true;
 }
 bool OnlineSession::start() {
-    if (m_phase != Phase::Lobby || !m_host || !connected() || !m_room || m_ready ||
+    if (m_phase != Phase::Lobby || !m_host || !connected() || !m_room || !m_native || m_ready ||
         m_selections.size() != m_localPlayers ||
         !std::ranges::all_of(m_room->members, [](const auto& row) { return row.ready; }) ||
         !m_service.start(m_room->revision)) {

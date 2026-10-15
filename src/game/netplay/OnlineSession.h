@@ -1,6 +1,8 @@
 #pragma once
 
 #include <map>
+#include <memory>
+#include <string_view>
 
 #include "engine/net/PeerTransport.h"
 
@@ -31,6 +33,34 @@ public:
     static constexpr f64 kConnectionTimeout = 20;
     static constexpr f64 kStartTimeout = 30;
     static constexpr f64 kLeaveTimeout = 5;
+    // Menu sessions start a new Tower campaign with default PlayOptions. The
+    // development launcher may agree another catalog scene; explicit local
+    // scenario options are still compared by the exact setup digest.
+    static constexpr u32 kNativeTowerScene = 14 * 256 + 1;
+    static constexpr usize kNativePacketBytes = 1024;
+    struct NativeIdentity {
+        std::string build;   ///< executable compatibility identity, not a display version
+        std::string runtime; ///< exact platform/compiler/numeric runtime; cross-OS is unproven
+        std::string content; ///< SHA-256 of the native asset tree
+        std::string data;    ///< SHA-256 of the resolved gameplay/text data tree
+        std::string language;
+        bool valid() const;
+        bool operator==(const NativeIdentity&) const = default;
+    };
+    struct NativeRules {
+        u32 scene = kNativeTowerScene;
+        bool autoMelee = false;
+        bool autoActivateItems = true;
+        bool expandedShop = false;
+        u8 startupDelay = 3;
+        bool valid() const;
+        bool operator==(const NativeRules&) const = default;
+    };
+    struct NativeContract {
+        NativeIdentity identity;
+        NativeRules rules;
+        bool operator==(const NativeContract&) const = default;
+    };
 
     OnlineSession(RoomService& service, PeerTransport& transport, bool host, u8 localPlayers);
     ~OnlineSession();
@@ -40,7 +70,7 @@ public:
     OnlineSession& operator=(OnlineSession&&) = delete;
 
     void update(f64 seconds);
-    /** Send newly sampled input/checkpoints after gameplay, without another poll,
+    /** Send newly sampled input after gameplay, without another poll,
      * simulation step or clock advance. Congestion retains pending output. */
     bool flush();
     /** Local-device order, mapped to the room's assigned seats on start. Select
@@ -48,6 +78,20 @@ public:
     bool select(std::span<const CharacterProfile> selections);
     bool ready(bool value = true);
     bool start();
+    /** Required before readiness. Only the host supplies rules; guests verify
+     * their local content/runtime identity against its offer. No match opens
+     * until every peer confirms the complete resolved native setup. */
+    bool configureNative(const NativeIdentity& identity,
+                         std::optional<NativeRules> hostRules = std::nullopt);
+    bool nativeRequested() const { return m_native != nullptr; }
+    /** Available while Starting, before Active/openMatch. The application builds
+     * and retains its canonical setup from this contract + party(), then confirms
+     * that setup's exact digest. This class never loads scenes or reads config. */
+    const NativeContract* nativeContract() const;
+    bool nativeSetupPending() const;
+    bool confirmNativeSetup(const std::string& digest);
+    /** Empty until the exact setup has completed the native bootstrap agreement. */
+    std::string_view confirmedNativeSetup() const;
     void leave();
     Phase phase() const { return m_phase; }
     Failure failure() const { return m_failure; }
@@ -71,6 +115,9 @@ private:
     bool admit(RoomSnapshot room, const std::string& peer);
     void event(const PacketTransport::Event& event);
     void openMatch();
+    bool nativeMessage(Connection connection, std::span<const u8> bytes);
+    bool advanceNativeBootstrap();
+    bool flushNativeBootstrap();
     void fail(Failure reason);
     void closeLinks();
     std::vector<std::string> allowed() const;
@@ -92,6 +139,8 @@ private:
     std::vector<PacketTransport::Event> m_earlyParty;
     std::vector<CharacterProfile> m_selections;
     PartyBootstrap m_party;
+    struct NativeBootstrap;
+    std::unique_ptr<NativeBootstrap> m_native;
     f64 m_wait = 0;
     MatchSession m_match;
 };

@@ -7,7 +7,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "game/screens/ReplicaCompanions.h"
+#include "game/world/PlayerFigure.h"
 #include "game/world/PowerupCompanion.h"
 
 namespace {
@@ -17,8 +17,9 @@ using Catch::Approx;
 using Kind = PowerupCompanion::Kind;
 using Action = PlayerAnimator::Action;
 
-TEST_CASE("native levitation wings follow the animated back on local and replicated figures",
-          "[game][world][companion][levitation][netplay][assets]") {
+TEST_CASE(
+    "native levitation wings follow the animated back without render calls advancing its pose",
+    "[game][world][companion][levitation][netplay][assets]") {
     const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
     test::FakeRenderDevice device;
     ItemArchive powerups;
@@ -57,8 +58,6 @@ TEST_CASE("native levitation wings follow the animated back on local and replica
     REQUIRE(figure->companion().shown());
     REQUIRE(figure->companion().kind() == Kind::Wings);
     REQUIRE(figure->familiarTier() == 0);
-    CompanionResources guest;
-    REQUIRE(guest.bindPowerups(device, powerups, &weapons));
     const Mat4 body = PlayerFigure::bodyPlacement(Mat4{1}, save, PowerupEffects::of(inventory));
     const auto camera = CameraFrame::at({0, 15, 20});
     const auto first = figure->companionVisuals(body, 1)[1];
@@ -77,17 +76,8 @@ TEST_CASE("native levitation wings follow the animated back on local and replica
         figure->drawCompanions(device, Mat4{1}, body, {}, 1, &camera, 1, TreeModel::Pass::All);
         const auto local = device.draws;
         REQUIRE_FALSE(local.empty());
-        CompanionState state;
-        state.form = visual->form;
-        state.placement = visual->placement;
-        state.animation.sequence = visual->sequence;
-        state.animation.generation = visual->generation;
-        state.animation.frame = visual->frame;
-        state.textureClock = visual->textureClock;
-        state.alpha = visual->alpha;
-        REQUIRE(guest.accepts(1, state));
         device.draws.clear();
-        guest.draw(device, 1, state, Mat4{1}, {}, camera, TreeModel::Pass::All);
+        figure->drawCompanions(device, Mat4{1}, body, {}, 1, &camera, 1, TreeModel::Pass::All);
         REQUIRE(device.draws.size() == local.size());
         for (usize draw = 0; draw < local.size(); ++draw) {
             REQUIRE(device.draws[draw].vertices.size() == local[draw].vertices.size());

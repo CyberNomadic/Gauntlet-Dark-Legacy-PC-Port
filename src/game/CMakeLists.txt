@@ -5,89 +5,37 @@
 # attract flow). A module only includes those below it.
 # netplay contains transport-independent commands/timelines and bounded selected-character
 # data from players; screens adapts them to gameplay, and app owns the input boundary.
-find_package(lz4 CONFIG REQUIRED)
 add_library(game STATIC
     netplay/AssetDigest.cpp
     screens/NetplayMenu.cpp
     netplay/HostedRoom.cpp
-    netplay/SnapshotBlock.cpp
     netplay/InputCommand.cpp
     netplay/InputTimeline.cpp
-    netplay/RollbackInputHistory.cpp
+    netplay/LockstepInputs.cpp
+    netplay/NativeAgreement.cpp
     netplay/ShotIdentity.cpp
     netplay/EffectIdentity.cpp
     netplay/PotionIdentity.cpp
-    netplay/PlayerLocomotionCheckpoint.cpp
-    netplay/PlayerRuntimePacket.cpp
-    netplay/CombatStatePacket.cpp
-    netplay/PlayerHealthCheckpoint.cpp
-    netplay/PlayerPoseCheckpoint.cpp
-    netplay/PlayerPotionCheckpoint.cpp
-    netplay/TurboEffectCheckpoint.cpp
-    netplay/PredictedShotLedger.cpp
-    netplay/PlayerActionCheckpoint.cpp
-    netplay/AnimationCheckpoint.cpp
-    netplay/RandomCheckpoint.cpp
-    netplay/EnemyMissilesCheckpoint.cpp
-    netplay/EnemyPoolCheckpoint.cpp
-    netplay/GeneratorCheckpoint.cpp
-    netplay/OpponentCheckpoint.cpp
-    netplay/PlacedEnemyCheckpoint.cpp
-    netplay/PlatformCheckpoint.cpp
     world/WorldMotion.cpp
     screens/TurboEmission.cpp
     screens/TurboEffectResources.cpp
-    screens/TurboEffectSimulation.cpp
-    screens/PotionSimulation.cpp
-    screens/LocalTurboEffectPrediction.cpp
-    screens/FireShieldPresentation.cpp
-    netplay/PlayerMeleeCheckpoint.cpp
-    netplay/PlayerTurboCheckpoint.cpp
     combat/MeleeGeometry.cpp
-    netplay/PlayerKnockbackCheckpoint.cpp
     netplay/MatchSession.cpp
-    netplay/LatencyTelemetry.cpp
     netplay/ShopSync.cpp
-    netplay/FeedbackSync.cpp
-    netplay/AudioSync.cpp
-    screens/ReplicaAudio.cpp
-    netplay/ClientClock.cpp
     netplay/OnlineSession.cpp
     netplay/CharacterProfile.cpp
     netplay/PartyCheckpoint.cpp
     netplay/PartyBootstrap.cpp
     screens/MatchInputs.cpp
+    screens/NativePlayDriver.cpp
+    screens/NativePlaySetup.cpp
+    screens/NativeOnlinePlay.cpp
     screens/OnlineParty.cpp
-    screens/OnlinePlay.cpp
     screens/OnlineLevelEntry.cpp
     screens/OnlineCompletion.cpp
     app/OnlineRun.cpp
-    screens/PlayReplication.cpp
-    screens/ReplicaView.cpp
-    screens/ReplicaStage.cpp
-    screens/StageResources.cpp
-    netplay/MotionSnapshot.cpp
-    netplay/SnapshotPlayback.cpp
-    netplay/CombatSnapshot.cpp
-    netplay/HudSnapshot.cpp
-    screens/ReplicaHud.cpp
-    netplay/FighterSnapshot.cpp
-    screens/ReplicaFighters.cpp
-    netplay/CombatReplica.cpp
-    netplay/CombatPlayback.cpp
-    netplay/ReplicaPose.cpp
-    screens/ReplicaActors.cpp
-    screens/ReplicaCompanions.cpp
-    screens/ReplicaProjectiles.cpp
-    screens/ReplicaProjectileParticles.cpp
-    screens/PlayerProjectileResources.cpp
-    screens/PlaySceneReplication.cpp
-    screens/ReplicaPickups.cpp
-    screens/ReplicaFixtures.cpp
-    screens/CombatCapture.cpp
-    screens/LocalMovementPrediction.cpp
-    screens/LocalProjectilePrediction.cpp
-    screens/LocalPotionPrediction.cpp
+    app/NativeOnlineIdentity.cpp
+    screens/PlaySceneSimulation.cpp
     screens/PlayInput.h
     screens/SessionInputs.cpp
     world/StaticScenery.cpp
@@ -415,45 +363,17 @@ add_library(game STATIC
     screens/LevelFixtures.cpp
     screens/LevelOpponents.cpp
     screens/OpponentSimulation.cpp
-    screens/OpponentResources.cpp
-    screens/OpponentPrediction.cpp
     screens/OpponentPlacements.cpp
-    screens/OnlineOpponentReplay.cpp
-    screens/OnlineCombatReplay.cpp
-    netplay/OpponentFrame.cpp
-    enemies/OpponentState.cpp
     screens/PlayerAttacks.cpp
     screens/PlayerAttacksCheckpoint.cpp
-    screens/PlayerRuntimeCheckpoint.cpp
-    screens/CombatRollbackCheckpoint.cpp
     screens/OpponentCombatCheckpoint.cpp
-    screens/OrdinaryCombatCheckpoint.cpp
-    screens/OrdinaryCombatTick.cpp
-    screens/CombatPrediction.cpp
-    screens/CombatAgreement.cpp
-    screens/CombatReplayWorker.cpp
-    screens/OrdinaryBarrelEmission.cpp
-    screens/OrdinaryPickupPhase.cpp
-    screens/OrdinaryCritterPhase.cpp
-    screens/OrdinaryEnemyMissilePhase.cpp
+    screens/EnemyMissileEmission.cpp
     screens/CritterCueEmission.cpp
     screens/PartyLighting.cpp
-    screens/CombatResources.cpp
     screens/EnemyFeedbackEmission.cpp
-    screens/OrdinaryProjectilePhase.cpp
-    screens/OrdinaryFixturePhase.cpp
-    screens/OrdinaryFloorSupport.cpp
-    screens/StageCombatPresentation.cpp
-    screens/StageParticlePresentation.cpp
-    screens/StageReplayPresentation.cpp
-    screens/StageSnapshotSampling.cpp
-    netplay/StageStatePacket.cpp
-    screens/OrdinaryWeaponEmission.cpp
-    screens/OrdinaryStrongPhase.cpp
     screens/LevelFixturesCheckpoint.cpp
     world/LevelWorldCheckpoint.cpp
     screens/PartyDamage.cpp
-    screens/PartyHelpAdmission.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp
     players/HeadGem.cpp
@@ -476,7 +396,7 @@ add_library(gdl::game ALIAS game)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
-target_link_libraries(game PUBLIC gdl::engine PRIVATE gdl::formats nlohmann_json::nlohmann_json lz4::lz4)
+target_link_libraries(game PUBLIC gdl::engine PRIVATE gdl::formats nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
 if(GDL_ENABLE_NETPLAY)
     target_link_libraries(game PRIVATE gdl::engine_net)
 endif()

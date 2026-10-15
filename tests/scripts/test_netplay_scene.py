@@ -78,7 +78,9 @@ class PlayableSceneTests(unittest.TestCase):
             self.assertTrue(config["display"]["vsync"])
             self.assertEqual(config["display"]["windowMode"], "windowed")
             self.assertEqual(config["timing"]["tickRate"], 60)
+            self.assertEqual(config["timing"]["gameplayFrameRate"], 30)
             self.assertEqual(config["display"]["maxFrameRate"], 30)
+            self.assertEqual(config["audio"], defaults["audio"])
             self.assertEqual(config["controls"]["players"][0]["device"], "keyboard" if guest else "")
             self.assertTrue(all(p["device"] == "none" for p in config["controls"]["players"][1:]))
         self.assertEqual(defaults, original)
@@ -88,7 +90,10 @@ class PlayableSceneTests(unittest.TestCase):
         host = netplay_scene.test_config(defaults, False, 30, True)
         guest = netplay_scene.test_config(defaults, True, 30, True)
         self.assertEqual(host, netplay_scene.test_config(defaults, False, 30))
-        self.assertEqual(host["timing"], guest["timing"])
+        self.assertEqual(host["timing"]["tickRate"], 60)
+        self.assertEqual(guest["timing"]["tickRate"], 60)
+        self.assertEqual(host["timing"]["gameplayFrameRate"], 30)
+        self.assertEqual(guest["timing"]["gameplayFrameRate"], 60)
         self.assertEqual(guest["display"]["maxFrameRate"], 60)
         self.assertEqual(guest["display"]["sampleCount"], 4)
         self.assertEqual(guest["display"]["windowWidth"], 960)
@@ -98,48 +103,88 @@ class PlayableSceneTests(unittest.TestCase):
             self.assertTrue(guest["display"][effect])
             self.assertFalse(host["display"][effect])
 
+    def test_requested_frame_cap_controls_gameplay_and_menu_not_simulation(self):
+        defaults = json.loads((netplay_scene.ROOT / "data/config.json").read_text(encoding="utf-8"))
+        for fps in (30, 60):
+            for guest in (False, True):
+                with self.subTest(fps=fps, guest=guest):
+                    config = netplay_scene.test_config(defaults, guest, fps)
+                    self.assertEqual(config["timing"]["tickRate"], 60)
+                    self.assertEqual(config["timing"]["gameplayFrameRate"], fps)
+                    self.assertEqual(config["display"]["maxFrameRate"], fps)
+
     def test_runtime_errors_and_crashes_are_not_successful_visual_checks(self):
         log = self.root / "game.log"
         child = mock.Mock()
         child.poll.return_value = None
         log.write_text("still loading", encoding="utf-8")
-        self.assertNotIn(netplay_scene.PLAYING, netplay_scene.healthy(child, log))
+        self.assertFalse(netplay_scene.playing(netplay_scene.healthy(child, log)))
         for line in ("ERROR ASSERTION FAILED", "Connection failed (3)", "Online scene stopped (1)"):
             log.write_text(line, encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 netplay_scene.healthy(child, log)
-        log.write_text(netplay_scene.PLAYING, encoding="utf-8")
+        log.write_text("Native online stage loaded: L1 (epoch 2, peer 1)\n"
+                       "Native online progress: epoch 2 tick 300 (host)\n", encoding="utf-8")
         child.poll.return_value = 1
         with self.assertRaises(RuntimeError):
             netplay_scene.healthy(child, log)
 
     def test_expected_level_requires_its_own_completed_loading_barrier(self):
-        first = "Online stage loaded: L1 (epoch 2, host)\n" + netplay_scene.PLAYING
+        first = ("Native online stage loaded: L1 (epoch 2, peer 1)\n"
+                 "Native online progress: epoch 2 tick 300 (host)\n")
         self.assertTrue(netplay_scene.playing(first))
         self.assertTrue(netplay_scene.playing(first, "L1"))
         self.assertFalse(netplay_scene.playing(first, "G1"))
-        pending = first + "\nOnline stage loaded: G1 (epoch 3, host)\n"
+        pending = first + "Native online stage loaded: G1 (epoch 3, peer 1)\n"
         self.assertFalse(netplay_scene.playing(pending, "G1"))
-        final = pending + netplay_scene.PLAYING
+        started = pending + "Native online progress: epoch 3 tick 0 (host)\n"
+        self.assertFalse(netplay_scene.playing(started, "G1"))
+        final = started + "Native online progress: epoch 3 tick 1 (host)\n"
         self.assertTrue(netplay_scene.playing(final, "G1"))
         self.assertFalse(netplay_scene.playing(final, "L1"))
 
-    def test_smoke_test_requires_advancing_checkpoints_in_the_loaded_stage(self):
-        first = ("Online stage loaded: L1 (epoch 2, host)\n"
-                 "Online checkpoint progress: epoch 2 tick 600 (host)\n")
-        self.assertEqual(netplay_scene.checkpoint(first), (2, 600))
-        pending = first + "Online stage loaded: G1 (epoch 3, host)\n"
-        self.assertIsNone(netplay_scene.checkpoint(pending))
-        self.assertIsNone(netplay_scene.checkpoint(
-            pending + "Online checkpoint progress: epoch 2 tick 900 (host)\n"))
-        started = pending + "Online checkpoint progress: epoch 3 tick 0 (host)\n"
-        self.assertEqual(netplay_scene.checkpoint(started), (3, 0))
-        final = started + "Online checkpoint progress: epoch 3 tick 300 (host)\n"
-        self.assertEqual(netplay_scene.checkpoint(final), (3, 300))
-        self.assertTrue(netplay_scene.advancing((3, 0), netplay_scene.checkpoint(final)))
+    def test_smoke_test_requires_completed_native_ticks_in_the_loaded_stage(self):
+        first = ("Native online stage loaded: L1 (epoch 2, peer 1)\n"
+                 "Native online progress: epoch 2 tick 600 (host)\n")
+        self.assertEqual(netplay_scene.progress(first), (2, 600))
+        pending = first + "Native online stage loaded: G1 (epoch 3, peer 1)\n"
+        self.assertIsNone(netplay_scene.progress(pending))
+        self.assertIsNone(netplay_scene.progress(
+            pending + "Native online progress: epoch 2 tick 900 (host)\n"))
+        started = pending + "Native online progress: epoch 3 tick 0 (host)\n"
+        self.assertEqual(netplay_scene.progress(started), (3, 0))
+        final = started + "Native online progress: epoch 3 tick 300 (host)\n"
+        self.assertEqual(netplay_scene.progress(final), (3, 300))
+        self.assertTrue(netplay_scene.advancing((3, 0), netplay_scene.progress(final)))
         for original, latest in ((None, (3, 300)), ((3, 0), None), ((3, 300), (3, 300)),
-                                 ((3, 300), (2, 600)), ((3, 300), (3, 100))):
+                                 ((3, 300), (2, 600)), ((3, 300), (3, 100)),
+                                 ((3, 300), (4, 0))):
             self.assertFalse(netplay_scene.advancing(original, latest))
+
+    def test_old_replica_progress_does_not_satisfy_native_admission(self):
+        old = ("Online stage loaded: G1 (epoch 3, host)\n"
+               "Online scene test - Start pauses\n"
+               "Online checkpoint progress: epoch 3 tick 600 (host)\n")
+        self.assertIsNone(netplay_scene.stage(old))
+        self.assertIsNone(netplay_scene.progress(old))
+        self.assertFalse(netplay_scene.playing(old))
+        self.assertFalse(netplay_scene.playing(
+            "Native online stage loaded: G1 (epoch 3, peer 1)\n" + old))
+
+    def test_startup_requires_both_native_peers_in_the_same_loaded_epoch(self):
+        host = ("Native online stage loaded: G1 (epoch 3, peer 1)\n"
+                "Native online progress: epoch 3 tick 300 (host)\n")
+        guest = ("Native online stage loaded: G1 (epoch 3, peer 2)\n"
+                 "Native online progress: epoch 3 tick 297 (guest)\n")
+        self.assertTrue(netplay_scene.ready_pair([host, guest], "G1"))
+        self.assertFalse(netplay_scene.ready_pair([host], "G1"))
+        self.assertFalse(netplay_scene.ready_pair([host, guest], "L1"))
+        for changed in (guest.replace("G1", "L1"), guest.replace("epoch 3", "epoch 4"),
+                        guest.replace("tick 297", "tick 0")):
+            self.assertFalse(netplay_scene.ready_pair([host, changed]))
+        for changed in (guest.replace("epoch 3", "epoch 0"), ""):
+            self.assertIsNone(netplay_scene.stage(changed))
+            self.assertFalse(netplay_scene.ready_pair([host, changed]))
 
 
 if __name__ == "__main__":

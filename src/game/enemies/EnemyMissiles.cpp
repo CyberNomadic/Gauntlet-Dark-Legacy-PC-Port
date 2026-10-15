@@ -92,38 +92,6 @@ bool checkpointCount(usize amount, usize& used, usize most) {
     return true;
 }
 
-bool reserveLaunch(EnemyMissileWork& work, const Vec3& start, const Vec3& from,
-                   const Vec3& velocity, f32 radius, bool world, usize items) {
-    // Use the native f32 sample-count expression, but check it before converting
-    // to s32. An almost vertical lob can otherwise overflow that conversion or
-    // spend unbounded time sweeping its three-heading-unit launch offset.
-    if (work.exhausted || !checkpointPoint(start) || !checkpointPoint(from) ||
-        !checkpointPoint(velocity) || !std::isfinite(glm::length(velocity)) ||
-        !std::isfinite(radius) || radius <= 0 || items > work.itemTests) {
-        work.exhausted = true;
-        return false;
-    }
-    usize samples = 0;
-    if (world) {
-        const f32 length = glm::distance(start, from);
-        const f32 stride = std::max(radius * 0.5f, kLeastSpatialStep);
-        const f32 count = std::ceil(length / stride);
-        if (!std::isfinite(count) || count < 0 ||
-            count > static_cast<f32>(EnemyMissileWork::kPerLaunchSamples)) {
-            work.exhausted = true;
-            return false;
-        }
-        samples = std::max(usize{1}, static_cast<usize>(count));
-        if (samples > work.sweepSamples) {
-            work.exhausted = true;
-            return false;
-        }
-    }
-    work.sweepSamples -= samples;
-    work.itemTests -= items;
-    return true;
-}
-
 } // namespace
 
 bool EnemyMissiles::Checkpoint::valid() const {
@@ -579,13 +547,9 @@ EnemyMissileKind EnemyMissiles::thrown(const EnemyMissileKind& kind) const {
 }
 
 bool EnemyMissiles::launch(const EnemyMissileKind& kind, const EnemyMissileLaunch& launch,
-                           const WorldCollision* collision, std::span<const Obstacle> items,
-                           EnemyMissileWork* work) {
+                           const WorldCollision* collision, std::span<const Obstacle> items) {
     if (m_nextInstance == 0) {
         return false;
-    }
-    if (work != nullptr && work->exhausted) {
-        return false; // The owning private tick is already destined to be restored.
     }
     const f32 speed = kind.speed * std::max(launch.speedScale, 0.01f);
     // Pin the distribution as well as the raw stream across standard libraries.
@@ -602,10 +566,6 @@ bool EnemyMissiles::launch(const EnemyMissileKind& kind, const EnemyMissileLaunc
     start += Vec3{way.x, 0.0f, way.z} * launch.point.shift;
     const Vec3 from = start + way * kLead;
     const f32 radius = std::max(kind.radius, 0.01f);
-    if (work != nullptr && !reserveLaunch(*work, start, from, way * speed, radius,
-                                          collision != nullptr, items.size())) {
-        return false;
-    }
     if (collision != nullptr && walled(*collision, start, from, radius)) {
         return false;
     }

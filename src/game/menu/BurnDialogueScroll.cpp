@@ -15,6 +15,26 @@ f32 lerp(f32 a, f32 b, f32 t) {
 
 } // namespace
 
+bool BurnDialogueScroll::ready(const Image* scroll, std::span<const Image* const> masks,
+                               std::span<const Texture* const> ring) {
+    const auto image = [](const Image* value) {
+        return value != nullptr && value->width != 0 && value->height != 0 &&
+               value->pixels.size() % 4 == 0 &&
+               value->pixels.size() / 4 == u64{value->width} * value->height;
+    };
+    if (!image(scroll) || masks.empty() || ring.empty() || !image(masks.front())) {
+        return false;
+    }
+    return std::ranges::all_of(masks,
+                               [&](const Image* mask) {
+                                   return image(mask) && mask->width == masks.front()->width &&
+                                          mask->height == masks.front()->height;
+                               }) &&
+           std::ranges::all_of(ring, [](const Texture* texture) {
+               return texture != nullptr && texture->width() != 0 && texture->height() != 0;
+           });
+}
+
 bool BurnDialogueScroll::start(RenderDevice& device, const Rect& area, const Image& scroll,
                                std::vector<const Image*> masks, std::vector<const Texture*> ring) {
     reset();

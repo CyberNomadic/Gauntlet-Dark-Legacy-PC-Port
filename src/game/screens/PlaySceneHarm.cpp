@@ -115,7 +115,7 @@ void PlayScene::updateHazardSurfaces(f32 seconds) {
  * `line` after: what the original's announcements by name do. */
 void PlayScene::sayWithName(usize index, std::string_view line, f32 wait) {
     PlayerFigure* body = index < m_players.size() ? m_players[index].figure.get() : nullptr;
-    if (body == nullptr || m_context.sounds == nullptr) {
+    if (body == nullptr) {
         return;
     }
     const CharacterSave& save = m_players[index].actor.save();

@@ -54,7 +54,7 @@ TEST_CASE("voice queues serialize clips and reject excess waiting without silenc
     CHECK(queue.room(0));
 }
 
-TEST_CASE("voice queues cap pending clips and recover when their playback is stopped",
+TEST_CASE("voice queues cap pending clips until simulation completion or explicit clear",
           "[game][voice-queue]") {
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
@@ -66,6 +66,8 @@ TEST_CASE("voice queues cap pending clips and recover when their playback is sto
     sequence.steps.push_back({&clip, false, false});
     VoiceQueue queue;
     CHECK(queue.queue(sequence, 1) == kNoSound);
+    CHECK(queue.backlog() == 1);
+    queue.clear();
     queue.bind(&player);
     SoundHandle tail = kNoSound;
     for (usize i = 0; i < VoiceQueue::kMost; ++i) {
@@ -75,6 +77,9 @@ TEST_CASE("voice queues cap pending clips and recover when their playback is sto
     CHECK_FALSE(queue.room(-1));
     CHECK(queue.queue(sequence, 1) == kNoSound);
     player.stop(tail);
+    CHECK(queue.backlog() == VoiceQueue::kMost);
+    CHECK(queue.queue(sequence, 1) == kNoSound);
+    queue.update(static_cast<f32>(VoiceQueue::kMost));
     CHECK(queue.backlog() == 0);
     CHECK(queue.queue(sequence, 1) != kNoSound);
     queue.hold(true);

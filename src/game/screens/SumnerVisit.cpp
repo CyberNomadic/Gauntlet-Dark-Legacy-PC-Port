@@ -157,7 +157,18 @@ void SumnerVisit::open(s32 player, const TextPainter& text, const GameConfig* co
 }
 
 HintMenuEvent SumnerVisit::update(RenderDevice& device, const MenuInput& input, s32 ticks) {
-    const HintMenuEvent event = m_menu.update(device, input, ticks);
+    return updateNative(device, m_owner, input, ticks, 0, 0);
+}
+
+u8 SumnerVisit::captureTopic(s32 player, const MenuInput& input) const {
+    return player == m_owner && player >= 0 ? m_menu.captureTopic(input) : 0;
+}
+
+HintMenuEvent SumnerVisit::updateNative(RenderDevice& device, s32 player, const MenuInput& input,
+                                        s32 ticks, u8 topic, u8 revision) {
+    const bool owned = player >= 0 && player == m_owner;
+    const HintMenuEvent event =
+        m_menu.update(device, owned ? input : MenuInput{}, ticks, owned ? topic : 0, revision);
     if (!m_menu.active()) {
         m_owner = -1;
     }

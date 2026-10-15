@@ -55,6 +55,9 @@ public:
     bool advanceVictory(s32 ticks, f32 seconds, std::span<const PlayerRuntime> players,
                         const MessageTable& strings);
     const BossVictoryPresentation& victory() const { return m_victory; }
+    /** Once per native scene update, including updates held by other scene phases. */
+    void advanceAudio(f32 seconds) { m_victoryVoice.timing.advance(seconds); }
+    const SpeechTiming& speechTiming() const { return m_victoryVoice.timing; }
     void capturePresentation() { m_victory.capturePresentation(); }
     BossCameraSubject victorySubject() const;
     const Texture* frozenTexture() const {
@@ -69,7 +72,7 @@ private:
     std::optional<Resources> m_resources;
     std::mt19937 m_coinRandom{0xC01Eu};
     BossVictoryPresentation m_victory;
-    SoundHandle m_victoryVoice = kNoSound;
+    LevelSoundscape::Speech m_victoryVoice;
     std::vector<SoundHandle> m_victoryVoices;
     Vec3 m_shardPosition{0};
     std::unique_ptr<LegendPresentation> m_legend;

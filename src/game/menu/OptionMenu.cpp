@@ -194,7 +194,20 @@ void OptionMenu::closeWithFade() {
     close();
 }
 
-MenuEvent OptionMenu::update(const MenuInput& input, s32 ticks) {
+std::optional<usize> OptionMenu::pointerChoice(const MenuInput& input) const {
+    if (!m_open || closing() || input.pointerNormalized || !input.pointer ||
+        !input.pointerPressed) {
+        return std::nullopt;
+    }
+    for (usize i = 0; i < m_itemAreas.size(); ++i) {
+        if (m_definition.items[i].enabled && contains(m_itemAreas[i], *input.pointer)) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+MenuEvent OptionMenu::update(const MenuInput& input, s32 ticks, std::optional<usize> itemChoice) {
     if (!m_open) {
         return {};
     }
@@ -215,6 +228,13 @@ MenuEvent OptionMenu::update(const MenuInput& input, s32 ticks) {
         return input.back ? MenuEvent{MenuAction::Back, 0} : MenuEvent{};
     }
     const s32 previous = m_selection;
+    if (itemChoice && *itemChoice < m_definition.items.size() &&
+        m_definition.items[*itemChoice].enabled) {
+        m_lastPointer.reset();
+        m_hoverPart = 0;
+        focus(*itemChoice);
+        return {MenuAction::Choice, m_definition.items[*itemChoice].code};
+    }
     if (!input.pointerNormalized && input.pointer) {
         const bool moved = !m_lastPointer || *m_lastPointer != *input.pointer;
         m_lastPointer = input.pointer;

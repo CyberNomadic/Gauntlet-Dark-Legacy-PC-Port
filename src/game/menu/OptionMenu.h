@@ -158,7 +158,12 @@ public:
     bool backdropReleased() const { return m_backdropReleased; }
 
     /** Applies one frame of input; `ticks` is the elapsed tick count. */
-    MenuEvent update(const MenuInput& input, s32 ticks);
+    /** A previously resolved item choice takes the native pointer-choice path,
+     * after this tick's cursor animation. No pointer or device is required. */
+    MenuEvent update(const MenuInput& input, s32 ticks,
+                     std::optional<usize> itemChoice = std::nullopt);
+    /** Read-only local hit test against this menu's actual enabled item areas. */
+    std::optional<usize> pointerChoice(const MenuInput& input) const;
 
     void draw(Canvas& canvas, const TextPainter& painter, const MenuTextures& textures) const;
 

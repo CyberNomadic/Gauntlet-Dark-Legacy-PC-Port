@@ -7,9 +7,9 @@
 
 namespace gdl::game {
 
-/** The listen host's input boundary. Offline play owns all four seats locally.
- * A remote peer can own multiple seats, without knowing that machine's device IDs.
- * This does not run on a replica client: snapshots, not this class, drive replicas.
+/** Offline input boundary and shared PlayInput/command conversion. Offline play
+ * owns all four seats locally. Native online matches use MatchInputs and exact
+ * LockstepInputs frames on every peer, retaining only these conversion helpers.
  * Character selection/shop transactions and room discovery are separate protocols. */
 class SessionInputs {
 public:

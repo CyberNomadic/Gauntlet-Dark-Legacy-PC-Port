@@ -2,11 +2,26 @@
 
 #include "game/netplay/OnlinePair.h"
 #include "game/netplay/ShopSync.h"
+#include "game/screens/MatchInputs.h"
 
 namespace {
 using namespace gdl;
 using namespace gdl::game;
 using Admission = ShopSync::Admission;
+
+u64 completeStartupFrame(test::OnlinePair& pair) {
+    REQUIRE(MatchInputs::sample(pair.host, {}));
+    REQUIRE(MatchInputs::sample(pair.guest, {}));
+    pair.pump();
+    const u64 tick = pair.host.tick();
+    REQUIRE(pair.guest.tick() == tick);
+    REQUIRE(MatchInputs::advance(pair.host));
+    REQUIRE(MatchInputs::advance(pair.guest));
+    REQUIRE(pair.host.completedNativeTick(tick));
+    REQUIRE(pair.guest.completedNativeTick(tick));
+    return tick;
+}
+
 struct Shops {
     ShopSync host;
     ShopSync guest;
@@ -89,6 +104,34 @@ TEST_CASE("shop wire rejects malformed packets and bounds congestion", "[netplay
     CHECK_FALSE(shops.host.advance());
     CHECK(shops.host.outgoing().size() <= ShopSync::kBudget);
 }
+TEST_CASE("shop colours remain authenticated host outcomes rather than guest RNG draws",
+          "[netplay][online-shop][shop-random]") {
+    Shops shops;
+    for (u64 tick = 0; tick < 8; ++tick) {
+        CHECK_FALSE(shops.guest.advance());
+        auto step = shops.host.advance();
+        REQUIRE(step);
+        REQUIRE(step->tick == tick);
+        for (const s32 colour : step->potions) {
+            REQUIRE(colour >= 1);
+            REQUIRE(colour <= 4);
+        }
+        // Ordered publication, not agreement between independently seeded engines,
+        // decides the guest's colours, including idle and unowned seat slots.
+        step->potions =
+            tick % 2 == 0 ? std::array<s32, 4>{1, 2, 3, 4} : std::array<s32, 4>{4, 3, 2, 1};
+        REQUIRE(shops.host.publish(*step));
+        const auto packet = shops.host.outgoing().front().bytes;
+        REQUIRE(shops.guest.receive(1, packet) == Admission::Accepted);
+        CHECK(shops.guest.receive(1, packet) == Admission::Stale);
+        shops.host.sent();
+        const auto committed = shops.guest.take();
+        REQUIRE(committed);
+        CHECK(committed->tick == tick);
+        CHECK(committed->potions == step->potions);
+        CHECK_FALSE(shops.guest.take());
+    }
+}
 TEST_CASE("shop setup authenticates the ending flag and rejects old or undefined wire flags",
           "[netplay][online-shop][online-completion]") {
     ShopSync host;
@@ -116,10 +159,12 @@ TEST_CASE("a two-peer post-level epoch waits for profiles setup and every shop c
     test::OnlinePair pair;
     pair.prepare();
     pair.ready();
+    const u64 terminalTick = completeStartupFrame(pair);
     const auto party = *pair.hostSession.party();
     const ShopSetup setup{1, 3585, true, 0, {1000, 100, 1000}, {}};
     REQUIRE(pair.host.prepare(1, MatchTransition::Shop, &party, &setup));
     pair.pump();
+    REQUIRE(pair.guest.completedNativeTick(terminalTick));
     REQUIRE(pair.host.travelParty());
     REQUIRE(pair.guest.travelParty());
     REQUIRE(pair.guest.shop().setup());
@@ -153,10 +198,12 @@ TEST_CASE("disconnect discards pending shop transactions without releasing the s
     test::OnlinePair pair;
     pair.prepare();
     pair.ready();
+    const u64 terminalTick = completeStartupFrame(pair);
     const auto party = *pair.hostSession.party();
     const ShopSetup setup{1, 3585, false, 0, {1000, 100, 1000}, {}};
     REQUIRE(pair.host.prepare(1, MatchTransition::Shop, &party, &setup));
     pair.pump();
+    REQUIRE(pair.guest.completedNativeTick(terminalTick));
     pair.ready();
     MenuInput buy;
     buy.select = true;

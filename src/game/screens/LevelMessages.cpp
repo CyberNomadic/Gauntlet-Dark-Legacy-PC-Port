@@ -82,8 +82,6 @@ void LevelMessages::load(RenderDevice& device, TextureSet& textures,
 void LevelMessages::clear() {
     m_message.reset();
     m_firstPage = 0;
-    m_replicaPages.clear();
-    m_replicaPrompt.clear();
     m_controlLabels = {};
     m_scroll.close();
     m_scroll.setArt({});
@@ -125,40 +123,6 @@ std::optional<LevelMessages::Look> LevelMessages::look() const {
     }
     return Look{*m_message, m_firstPage + static_cast<u32>(m_scroll.page()), m_scroll.burnFrame(),
                 m_scroll.promptAlpha()};
-}
-
-bool LevelMessages::preloadReplica(RenderDevice& device, const StringTable* strings) {
-    m_replicaPages.clear();
-    if (!m_text.ready() || !m_scrollText.loaded()) {
-        return false;
-    }
-    m_replicaPrompt =
-        strings != nullptr ? std::string(strings->get("scroll.pressButton")) : std::string{};
-    m_scroll.preloadBurn(device);
-    m_replicaPages.reserve(m_scrollText.size());
-    for (usize i = 0; i < m_scrollText.size(); ++i) {
-        const auto& message = m_scrollText.message(static_cast<u32>(i));
-        std::vector<ScrollBox::PageLayout> pages;
-        pages.reserve(message.pages.size());
-        for (const auto& page : message.pages) {
-            pages.push_back(m_scroll.layout(page, message.scale, m_replicaPrompt));
-        }
-        m_replicaPages.push_back(std::move(pages));
-    }
-    return m_scroll.acceptsFrame(-1);
-}
-
-bool LevelMessages::accepts(const Look& look) const {
-    return look.message < m_replicaPages.size() &&
-           look.page < m_replicaPages[look.message].size() && m_scroll.acceptsFrame(look.burnFrame);
-}
-
-void LevelMessages::drawReplica(Canvas& canvas, const Look& look) const {
-    if (accepts(look)) {
-        m_scroll.drawPage(canvas, m_replicaPages[look.message][look.page],
-                          m_scrollText.message(look.message).scale, m_replicaPrompt,
-                          look.promptAlpha, look.burnFrame);
-    }
 }
 
 LevelMessages::Cues LevelMessages::step(s32 ticks, u32 accepted) {

@@ -45,6 +45,9 @@ struct GameContext {
     std::function<void(u16)> unlockClasses;
     /** Shop or successful challenge checkpoint, containing only locally owned characters. */
     std::function<void(std::span<PartyMember>)> saveLocalParty;
+    /** Explicit user request for a completed local checkpoint, independent of
+     * Auto Save. May assign free local slots; false reports an incomplete save. */
+    std::function<bool(std::span<PartyMember>)> manualSaveLocalParty;
 };
 
 } // namespace gdl::game

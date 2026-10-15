@@ -756,4 +756,106 @@ TEST_CASE("golden idol pieces reward every living participant once and show pers
     }
 }
 
+TEST_CASE("native food selection and logical barks agree without an audio device",
+          "[pickups][speech-timing][determinism][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    auto world = std::make_unique<LevelWorld>();
+    REQUIRE(world->load(device, root, *levels.byName("G1")));
+    const auto& records = world->layout().itemInfos();
+    const auto record = std::ranges::find_if(records, [](const ItemInfo& info) {
+        return info.type == ItemInfo::kPowerup &&
+               info.subtype == static_cast<s32>(ItemKind::Food) && info.armor != -1;
+    });
+    REQUIRE(record != records.end());
+    const auto recordIndex = static_cast<s32>(std::distance(records.begin(), record));
+    const auto voiceRoot = test::scratchDirectory("pickup-logical-voices");
+    const std::array<test::NativeSoundSample, 3> samples{{{48000, std::vector<s16>(12000)},
+                                                          {48000, std::vector<s16>(36000)},
+                                                          {48000, std::vector<s16>(24000)}}};
+    test::writeNativeSoundBank(voiceRoot / "audio/WAR", R"({"sounds":[
+        {"index":0,"name":"S_WAREATSFX","sequence":[{"sample":0}]},
+        {"index":1,"name":"S_WAREAT","sequence":[{"sample":1}]},
+        {"index":2,"name":"S_WARPOISON","sequence":[{"sample":2}]}]})",
+                               samples);
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    struct CollectorState {
+        LevelSoundscape audio;
+        LevelFixtures fixtures;
+        PartyHud hud;
+        PartyPickups pickups;
+        std::array<PlayerRuntime, 1> players;
+    };
+    std::array<std::unique_ptr<CollectorState>, 2> collectors;
+    for (usize profile = 0; profile < collectors.size(); ++profile) {
+        collectors[profile] = std::make_unique<CollectorState>();
+        auto& collector = *collectors[profile];
+        collector.audio.open(voiceRoot, profile == 0 ? &output : nullptr, nullptr);
+        auto& player = collector.players[0];
+        player.actor.spawn(3, {}, nullptr,
+                           {1000.0f + 100.0f * static_cast<f32>(profile), 1000, 1000}, 0);
+        player.figure = std::make_unique<PlayerFigure>();
+        REQUIRE(player.figure->voice().load(voiceRoot / "audio/WAR"));
+    }
+    const ClassDataSet classes;
+    bool heardEating = false;
+    bool heardSpoken = false;
+    // Distinct clip lengths expose the selected random branch without a test-only
+    // random accessor. Interspersed gagging must not consume a good-food choice.
+    for (s32 offer = 0; offer < 36; ++offer) {
+        const bool poisoned = offer % 9 == 4;
+        CAPTURE(offer, poisoned);
+        for (usize profile = 0; profile < collectors.size(); ++profile) {
+            auto& collector = *collectors[profile];
+            auto& player = collector.players[0];
+            collector.audio.updateNarration(10);
+            REQUIRE(collector.audio.barkTiming().empty());
+            player.actor.save().progress().health = 200;
+            REQUIRE(world->placeItemRecord(device, recordIndex, player.actor.position(), 10));
+            const usize item = world->placedItems().size() - 1;
+            // Negative placeItemRecord amounts mean "use the authored value",
+            // not poison. Gas supplies the actual native bad-food transformation.
+            const s32 amount = poisoned ? (record->hitPoints == 2 ? -100 : -50) : 10;
+            if (poisoned) {
+                REQUIRE(world->poisonFood(device, player.actor.position(), 6.5f, 10.0f) == 1);
+            }
+            REQUIRE(world->placedItems().item(item).value == amount);
+            const PartyPickups::Services services{.world = *world,
+                                                  .fixtures = collector.fixtures,
+                                                  .hud = collector.hud,
+                                                  .audio = collector.audio,
+                                                  .classes = classes,
+                                                  .sounds = profile == 0 ? &output : nullptr,
+                                                  .help = {},
+                                                  .openMessage = {},
+                                                  .challengeCoin = {}};
+            collector.pickups.collect(device, collector.players, services);
+            REQUIRE(world->placedItems().item(item).taken);
+            CHECK(player.actor.save().health() == 200 + amount);
+            CHECK(player.gesture == (poisoned ? PlayerDeed::Gag : PlayerDeed::Pick));
+            REQUIRE(collector.audio.barkTiming().size() == 1);
+        }
+        REQUIRE(std::ranges::equal(collectors[0]->audio.barkTiming(),
+                                   collectors[1]->audio.barkTiming()));
+        const f64 duration = collectors[0]->audio.barkBacklog();
+        if (poisoned) {
+            CHECK(duration == 0.5);
+        } else {
+            CHECK((duration == 0.25 || duration == 0.75));
+            heardEating |= duration == 0.25;
+            heardSpoken |= duration == 0.75;
+        }
+        output.stopAll(); // Playback completion cannot reset either logical queue.
+    }
+    CHECK(heardEating);
+    CHECK(heardSpoken);
+    for (auto& collector : collectors) {
+        collector->audio.close();
+    }
+}
+
 } // namespace

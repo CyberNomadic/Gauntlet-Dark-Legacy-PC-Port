@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -7,6 +8,7 @@
 
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/OnlineSession.h"
+#include "game/screens/NativePlaySetup.h"
 
 namespace {
 using namespace gdl;
@@ -28,16 +30,92 @@ std::unique_ptr<SessionTransport> open(const std::string& invitation = {}) {
     REQUIRE(transport->phase() == SessionTransport::Phase::Ready);
     return transport;
 }
+void configure(OnlineSession& session) {
+    const OnlineSession::NativeIdentity identity{"adapter-test", "adapter-runtime",
+                                                 std::string(64, 'a'), std::string(64, 'b'), "en"};
+    OnlineSession::NativeRules rules;
+    rules.scene = 1;
+    rules.startupDelay = 0;
+    REQUIRE(
+        session.configureNative(identity, session.host() ? std::optional{rules} : std::nullopt));
+}
+void confirm(OnlineSession& session) {
+    if (!session.nativeSetupPending()) {
+        return;
+    }
+    const auto& agreed = *session.nativeContract();
+    const NativePlaySetup::Contract contract{
+        agreed.rules.scene,        agreed.rules.autoMelee, agreed.rules.autoActivateItems,
+        agreed.rules.expandedShop, agreed.identity.build,  agreed.identity.content,
+        agreed.identity.data};
+    const auto setup = NativePlaySetup::create(GameConfig{}, session.room()->settings,
+                                               *session.party(), {}, contract);
+    REQUIRE(setup);
+    REQUIRE(session.confirmNativeSetup(setup->digest()));
+}
+template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessions, Step pump) {
+    for (u64 tick = 1; tick <= 32; ++tick) {
+        for (auto* session : sessions) {
+            std::vector<InputCommand> commands;
+            for (const auto seat : session->seats()) {
+                InputCommand command;
+                command.epoch = session->match().context().epoch;
+                command.tick = tick;
+                command.grant = session->match().context().grants[seat];
+                command.seat = seat;
+                command.direction = {1, 0};
+                command.magnitude = 1;
+                command.pressedButtons = tick % 3 == 0 ? static_cast<u32>(CommandPress::Attack) : 0;
+                commands.push_back(command);
+            }
+            REQUIRE(session->match().sample(commands));
+            REQUIRE(session->flush());
+        }
+        std::vector<std::optional<LockstepInputs::Frame>> frames(sessions.size());
+        until(
+            [&] {
+                return std::ranges::all_of(frames,
+                                           [](const auto& frame) { return frame.has_value(); });
+            },
+            [&] {
+                pump();
+                for (usize i = 0; i < sessions.size(); ++i) {
+                    if (!frames[i]) {
+                        frames[i] = sessions[i]->match().advance();
+                    }
+                }
+            });
+        for (usize i = 0; i < sessions.size(); ++i) {
+            for (u8 seat = 0; seat < InputCommand::kSeats; ++seat) {
+                if (sessions.front()->match().context().owners[seat] == 0) {
+                    continue;
+                }
+                const auto& command = (*frames[i])[seat];
+                CHECK(command.tick == tick);
+                CHECK(command.seat == seat);
+                CHECK(command.direction == Vec2{1, 0});
+                CHECK(command.pressed(CommandPress::Attack) == (tick % 3 == 0));
+                const auto bytes = InputPacket::encode(std::span(&command, 1));
+                REQUIRE(bytes);
+                CHECK(bytes == InputPacket::encode(std::span(&(*frames.front())[seat], 1)));
+            }
+            REQUIRE(sessions[i]->match().completedNativeTick(tick));
+        }
+    }
+}
 } // namespace
 
-TEST_CASE("provider adapter carries room admission party loading pause and departure",
-          "[netplay][iroh]") {
+TEST_CASE(
+    "provider adapter carries native admission loading inputs and departure without global pause",
+    "[netplay][iroh]") {
     auto wire = open();
     auto remote = open(wire->invitation());
     HostedRoom a(*wire, true, 2, "adapter-test", std::string(64, 'a'));
     HostedRoom b(*remote, false, 2, "adapter-test", std::string(64, 'a'));
     OnlineSession host(a, a.transport(), true, 2);
     OnlineSession guest(b, b.transport(), false, 2);
+    configure(host);
+    configure(guest);
     CharacterProfile profile;
     profile.name = "TEST";
     REQUIRE(host.select(std::vector<CharacterProfile>(2, profile)));
@@ -45,6 +123,8 @@ TEST_CASE("provider adapter carries room admission party loading pause and depar
     const auto pump = [&] {
         host.update(0.002);
         guest.update(0.002);
+        confirm(host);
+        confirm(guest);
         REQUIRE(host.phase() != OnlineSession::Phase::Failed);
         REQUIRE(guest.phase() != OnlineSession::Phase::Failed);
     };
@@ -81,13 +161,11 @@ TEST_CASE("provider adapter carries room admission party loading pause and depar
                    host.match().phase() == MatchSession::Phase::Running;
         },
         pump);
-    REQUIRE(guest.match().requestPause());
-    until(
-        [&] {
-            return host.match().phase() == MatchSession::Phase::Paused &&
-                   guest.match().phase() == MatchSession::Phase::Paused;
-        },
-        pump);
+    CHECK_FALSE(guest.match().requestPause());
+    const std::array sessions{&host, &guest};
+    exchangeFrames(sessions, pump);
+    CHECK(host.match().phase() == MatchSession::Phase::Running);
+    CHECK(guest.match().phase() == MatchSession::Phase::Running);
     guest.leave();
     until([&] { return host.phase() == OnlineSession::Phase::Failed; },
           [&] {
@@ -120,6 +198,8 @@ TEST_CASE("three independent provider peers admit a late third player and start 
     HostedRoom b(*remote, false, 1, "adapter-test", std::string(64, 'a'));
     OnlineSession host(a, a.transport(), true, 1);
     OnlineSession first(b, b.transport(), false, 1);
+    configure(host);
+    configure(first);
     CharacterProfile profile;
     profile.name = "TEST";
     REQUIRE(host.select(std::array{profile}));
@@ -127,6 +207,8 @@ TEST_CASE("three independent provider peers admit a late third player and start 
     const auto pumpPair = [&] {
         host.update(0.002);
         first.update(0.002);
+        confirm(host);
+        confirm(first);
         REQUIRE(host.phase() != OnlineSession::Phase::Failed);
         REQUIRE(first.phase() != OnlineSession::Phase::Failed);
     };
@@ -137,6 +219,7 @@ TEST_CASE("three independent provider peers admit a late third player and start 
     auto thirdWire = open(wire->invitation());
     HostedRoom c(*thirdWire, false, 1, "adapter-test", std::string(64, 'a'));
     OnlineSession second(c, c.transport(), false, 1);
+    configure(second);
     REQUIRE(second.select(std::array{profile}));
     usize steps = 0;
     const auto pump = [&] {
@@ -144,6 +227,7 @@ TEST_CASE("three independent provider peers admit a late third player and start 
         // Unequal receive cadence, as when a distant guest batches incoming traffic.
         if (++steps % 5 == 0) {
             second.update(0.010);
+            confirm(second);
         }
         INFO(second.failureDetail());
         REQUIRE(second.phase() != OnlineSession::Phase::Failed);
@@ -191,4 +275,6 @@ TEST_CASE("three independent provider peers admit a late third player and start 
                    second.match().phase() == MatchSession::Phase::Running;
         },
         pump);
+    const std::array sessions{&host, &first, &second};
+    exchangeFrames(sessions, pump);
 }

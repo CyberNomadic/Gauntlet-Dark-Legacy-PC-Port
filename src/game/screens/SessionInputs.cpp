@@ -106,12 +106,17 @@ InputCommand SessionInputs::command(const PlayInput& input, u64 epoch, u64 tick,
     result.direction = input.move.direction;
     result.magnitude = input.move.magnitude;
     result.aimDirection = input.aimDirection;
+    result.hintTopic = input.hintTopic;
+    result.hintRevision = input.hintRevision;
     result.heldButtons = pack(input, kPlayHeld) | pack(input.menu, kMenuHeld);
     result.pressedButtons = pack(input, kPlayPress) | pack(input.selector, kSelectorPress) |
                             pack(input.menu, kMenuPress);
     // Scroll dismissal accepts any action, including a mouse click. Pointer positions
-    // and text remain local; remote menu selection needs semantic transactions later.
-    if (input.menu.pointerPressed || input.menu.pointerBack) {
+    // and text remain local. A captured topic is its own one-shot transaction,
+    // not a generic dismissal that could affect a different, later scroll.
+    if (input.hintTopic != 0) {
+        result.pressedButtons &= ~static_cast<u32>(CommandPress::MenuAny);
+    } else if (input.menu.pointerPressed || input.menu.pointerBack) {
         result.pressedButtons |= static_cast<u32>(CommandPress::MenuAny);
     }
     return result;
@@ -121,6 +126,8 @@ PlayInput SessionInputs::playInput(const InputCommand& command) {
     PlayInput result;
     result.move = {command.direction, command.magnitude};
     result.aimDirection = command.aimDirection;
+    result.hintTopic = command.hintTopic;
+    result.hintRevision = command.hintRevision;
     unpack(result, command.heldButtons, kPlayHeld);
     unpack(result, command.pressedButtons, kPlayPress);
     unpack(result.selector, command.pressedButtons, kSelectorPress);

@@ -18,14 +18,6 @@
 #include "engine/world/WorldCamera.h"
 
 #include "game/menu/CompassHud.h"
-#include "game/netplay/CombatStatePacket.h"
-#include "game/netplay/OpponentFrame.h"
-#include "game/netplay/PlayerLocomotionCheckpoint.h"
-#include "game/netplay/PlayerMeleeCheckpoint.h"
-#include "game/netplay/PlayerPotionCheckpoint.h"
-#include "game/netplay/PlayerTurboCheckpoint.h"
-#include "game/netplay/StageStatePacket.h"
-#include "game/netplay/TurboEffectCheckpoint.h"
 #include "game/players/CharacterSave.h"
 #include "game/players/ClassData.h"
 #include "game/players/LevelResults.h"
@@ -36,14 +28,12 @@
 #include "game/players/TurboMeter.h"
 #include "game/screens/BossSequence.h"
 #include "game/screens/ChallengeHud.h"
-#include "game/screens/CombatResources.h"
 #include "game/screens/GameContext.h"
 #include "game/screens/GameOver.h"
 #include "game/screens/LevelArrivalPresentation.h"
 #include "game/screens/LevelFixtures.h"
 #include "game/screens/LevelMessages.h"
 #include "game/screens/LevelOpponents.h"
-#include "game/screens/OrdinaryCombatTick.h"
 #include "game/screens/PartyFigures.h"
 #include "game/screens/PartyHud.h"
 #include "game/screens/PartyMotion.h"
@@ -53,6 +43,7 @@
 #include "game/screens/PlayerHealth.h"
 #include "game/screens/PortalDeparture.h"
 #include "game/screens/RuneMeter.h"
+#include "game/screens/SimulationObservation.h"
 #include "game/screens/SumnerVisit.h"
 #include "game/screens/SwitchCutscene.h"
 #include "game/screens/TowerPromotion.h"
@@ -66,7 +57,6 @@
 #include "game/world/ExitPortals.h"
 #include "game/world/LevelSoundscape.h"
 #include "game/world/LevelTransporters.h"
-#include "game/world/LevelTransportersCheckpoint.h"
 #include "game/world/LevelWorld.h"
 #include "game/world/PlayerArsenal.h"
 #include "game/world/PlayerFigure.h"
@@ -77,11 +67,6 @@
 #include "game/world/TowerCamera.h"
 
 namespace gdl::game {
-
-class ProjectileResources;
-class PickupResources;
-class FixtureResources;
-struct PlayerWeaponModifiers;
 
 /** An item dropped into the level by one of its item records' names. */
 struct DroppedItem {
@@ -154,6 +139,9 @@ public:
     bool isOpen() const { return m_open; }
 
     PlayOutcome update(f64 deltaSeconds, const Inputs& inputs);
+    /** Resolve a local pointer against the currently presented Sumner menu.
+     * Read-only: only the bounded semantic choice enters shared native input. */
+    PlayInput captureNativeInput(s32 player, PlayInput input) const;
     /** Silence ambience and drain loops before the options menu stops gameplay updates. */
     void pauseGameplaySounds();
     /** The pause menu holds the level's sounds and speech where they are, and lets them go. */
@@ -165,32 +153,16 @@ public:
     usize actorCount() const { return m_players.size(); }
     /** Read-only end-of-tick observation; callers must not retain the span across open/close. */
     std::span<const PlayerRuntime> participants() const { return m_players; }
-    /** Exact end-of-tick outside observations for the three opponent pools.
-     * initialPlayers must be their original bound EnemyScales::players value.
-     * No queues are consumed, assets loaded, or simulation phases advanced. */
-    std::optional<OpponentFrame> opponentFrame(u32 initialPlayers) const;
-    /** Complete native owners at the current post-step boundary. Unknown artwork
-     * bindings refuse the supplement; no retained effect clocks are discarded. */
-    std::optional<CombatStatePacket::State> combatState();
-    /** Local-only profiling of existing capture calls, never part of a seed or
-     * simulation state. Cumulative for this scene object's lifetime. */
-    struct CombatCaptureCosts {
-        struct Cost {
-            u64 count = 0;
-            u64 nanoseconds = 0;
-            u64 maximumNanoseconds = 0;
-        };
-        Cost total;
-        Cost capture;
-        Cost encode;
-        u64 accepted = 0;
-    };
-    const CombatCaptureCosts& combatCaptureCosts() const { return m_combatCaptureCosts; }
-    /** Exact gameplay (not shaken display) camera and next-step damage context. */
-    std::optional<OrdinaryCombatTick::Frame> combatFrame() const;
+    /** Periodic native agreement watchdog, without replica bindings or state
+     * transfer. Observes party outcomes/motion, opponent pools and scene control;
+     * it is not a complete serialization of every hidden simulation owner. */
+    std::optional<SimulationObservation::Digest> nativeAgreementDigest();
+    /** Read-only native load-barrier preflight for message/hint resources whose
+     * absence changes simulation holds. Does not change offline optional art. */
+    bool nativePresentationReady() const;
     const LevelWorld* world() const { return m_world; }
     CameraView cameraView() const;
-    /** Same hard-cut rule used by local rendering and remote snapshot capture. */
+    /** Hard-cut rule used by local render interpolation. */
     bool cameraContinuous() const;
     u32 simulationTickRate() const {
         return m_context.config != nullptr ? m_context.config->timing.tickRate : 60;
@@ -228,16 +200,6 @@ public:
         return {&m_arsenal, std::move(observer)};
     }
     bool projectilesAdvanced() const { return m_projectilesAdvanced; }
-    /** Load-time replication registry for this party's weapon/effect meshes.
-     * Does not start attacks or emit audio/particles; scene assets must outlive it. */
-    bool bindPlayerProjectiles(ProjectileResources& resources);
-    /** Bind the currently loaded scene's players, swarm and stage/fighter effects.
-     * Future spawned families must be preloaded before this fixed catalog is made. */
-    bool bindSceneProjectiles(ProjectileResources& resources);
-    /** Online loading only: preload later encounters, then atomically bind the
-     * same native catalogs as ReplicaStage. Call before PlayReplication::bind. */
-    bool bindReplicationResources(ProjectileResources& projectiles, PickupResources& pickups,
-                                  FixtureResources& fixtures);
     const ExitPortals& portals() const { return m_portals; }
     const LevelTransporters& transporters() const { return m_transporters; }
     const PortalDeparture& departure() const { return m_departure; }
@@ -344,42 +306,6 @@ public:
     /** Whether the party is still materialising: held under the level's title until the start
      * camera has ridden in, or for the effect's life when there is no start camera. */
     bool spawning() const { return m_arrival.active(); }
-    bool movementPredictable() const;
-    /** Continue an already-moving support without guessing new contacts or carrying
-     * authoritative actors/items along with the locally replayed world subtree. */
-    bool platformPredictable(s32 seat, const WorldMotion::State& motion, u32 ticks) const;
-    /** Ordered native contact observations for ordinary, static-ground movement.
-     * Other actors remain frozen host observations, never guest-owned simulation. */
-    std::optional<PlayerLocomotionState> locomotionPreview(s32 seat);
-    /** Native coloured potion stack and tuning for the same static contact prefix.
-     * Shared unspecified-colour resolution and inventory ownership stay on the host. */
-    std::optional<PlayerPotionState> potionPreview(s32 seat,
-                                                   const PlayerLocomotionState& contacts) const;
-    /** Equipment whose movement/ordinary actions use the supported native replay paths. */
-    bool itemsPredictable(s32 seat) const;
-    /** The ordinary throw path also supports native elemental amulet riders. */
-    bool rangedItemsPredictable(s32 seat) const;
-    /** The next native movement step's effective pace, including post-motion pickups;
-     * absent when the current modifiers cannot certify even ordinary locomotion. */
-    std::optional<f32> predictionSpeed(s32 seat) const;
-    /** Read-only authorisation for replaying ordinary ranged actions. */
-    bool rangedPredictable(s32 seat);
-    /** Ordinary weapon modifiers and Speed remain unchanged throughout this prefix.
-     * The private inventory copy never consumes or toggles the live character's items. */
-    std::optional<PlayerWeaponModifiers> weaponModifiers(s32 seat) const;
-    /** Ordinary melee geometry without damage or event authority. */
-    std::optional<PlayerMeleeState> meleePreview(s32 seat);
-    /** Static movement context for plain turbo actions, also in empty areas. */
-    std::optional<PlayerMeleeState> turboGeometry(s32 seat);
-    std::optional<PlayerTurboState> turboPreview(s32 seat) const;
-    std::optional<TurboEffectState> turboEffectPreview(s32 seat) const;
-    /** Excludes charge damage to raw fixtures throughout an already certified
-     * static movement region. Enemy ram contact is still checked on each replay step. */
-    bool shovePredictable(s32 seat, const PlayerMeleeState& region) const;
-    /** Safe prefix for replaying an already-confirmed ground reaction without world callbacks. */
-    u32 knockbackPreview(s32 seat) const;
-    /** Plain native launch description for isolated visual replay. */
-    std::optional<PlayerMissiles::WeaponThrow> weaponPreview(s32 seat);
     MissileStreak weaponStreak(const PlayerActor& actor) { return m_arsenal.weaponStreak(actor); }
     std::optional<f32> weaponTextureFrame(const PlayerFigure& figure) const {
         return m_arsenal.weaponTextureFrame(figure);
@@ -406,7 +332,10 @@ public:
     s32 familiarTier(s32 player) const;
 
 private:
-    std::optional<PlayerMeleeState> attackPreview(s32 seat, bool requireClose);
+    friend class SimulationObserver; // test-only read access, no restoration interface
+    u64 m_openGeneration = 0;
+    SimulationObservation::Digest simulationControlDigest() const;
+    SimulationObservation::Digest opponentFollowupDigest() const;
     /** The bodies' shadows, after all of the level's floors (some of which are translucent). */
     PartyFigures::Scene figureScene(f32 frameBlend = 1.0f);
     void drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& eye, f32 frameBlend,
@@ -479,6 +408,7 @@ private:
     Canvas m_canvas;
     TowerCamera m_camera;
     std::optional<Mat4> m_presentedClip;
+    std::optional<Mat4> m_presentedCanvas; ///< local pointer mapping, never simulation state
     std::optional<WorldCamera> m_previousCamera;
     bool m_previousBossCamera = false;
     BossCamera m_bossCamera;
@@ -496,14 +426,6 @@ private:
     SumnerFigure m_sumner;
     TextureSet m_staticTextures;
     LevelMessages m_messages;
-    std::unique_ptr<CombatResources> m_combatResources;
-    std::unique_ptr<LevelWorldCheckpoint> m_combatWorld;
-    std::unique_ptr<LevelFixturesCheckpoint> m_combatFixtures;
-    std::unique_ptr<TowerCameraCheckpoint> m_combatCamera;
-    std::unique_ptr<ExitPortalsCheckpoint> m_combatPortals;
-    std::unique_ptr<LevelTransportersCheckpoint> m_combatTransporters;
-    StageStatePacket::Catalog m_combatStageCatalog;
-    CombatCaptureCosts m_combatCaptureCosts;
     PlayerArsenal m_arsenal;
     ExitPortals m_portals;
     LevelTransporters m_transporters;
@@ -527,8 +449,8 @@ private:
     SumnerVisit m_sumnerVisit;
     TowerPromotion m_promotion;
     TowerRelics m_towerRelics;
-    SoundHandle m_relicVoice = kNoSound;
-    SoundHandle m_promotionVoice = kNoSound;
+    LevelSoundscape::Speech m_relicVoice;
+    LevelSoundscape::Speech m_promotionVoice;
     TriggerCues m_triggerCues;
     std::vector<std::unique_ptr<PlayerFigure>>
         m_promotionFigures; ///< retain borrowed voice/effect clips until close

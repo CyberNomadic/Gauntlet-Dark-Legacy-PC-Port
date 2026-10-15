@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "engine/core/Types.h"
@@ -21,6 +22,12 @@ class BurnDialogueScroll {
 public:
     static constexpr s32 kFrameCount = 21;
     static constexpr s32 kTicksPerFrame = 2;
+
+    /** Read-only native-load preflight; performs no upload or animation step.
+     * Short nonempty frame lists are valid: native playback repeats their last
+     * entry over the same fixed hold. Does not guarantee future device allocation. */
+    static bool ready(const Image* scroll, std::span<const Image* const> masks,
+                      std::span<const Texture* const> ring);
 
     /**
      * Starts burning `scroll` over `area`. `masks` are the burn frames (alpha zero is burnt),

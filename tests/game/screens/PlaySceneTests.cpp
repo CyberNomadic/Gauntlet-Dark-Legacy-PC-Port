@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <set>
@@ -538,8 +540,14 @@ TEST_CASE("Temple organist remains audible over three loops in the scenario scen
     REQUIRE(floor);
     CAPTURE(floor->y);
     options.position->y = floor->y;
+    auto party = scenario.partyMembers();
+    // This is an 80-second ambience test in an active enemy level. Keep the
+    // listener alive through the native inventory rule, not a stalled death cue.
+    for (auto& member : party) {
+        member.save.progress().inventory.addPowerup(powerup::kArmor, powerup::kInvulnerable, 0, -1);
+    }
     PlayScene scene;
-    REQUIRE(scene.open(device, context, world, scenario.partyMembers(), options));
+    REQUIRE(scene.open(device, context, world, party, options));
     usize organ = scene.ambience().size();
     for (usize i = 0; i < scene.ambience().size(); ++i) {
         const auto& emitter = scene.ambience().emitter(i);
@@ -572,6 +580,7 @@ TEST_CASE("Temple organist remains audible over three loops in the scenario scen
         }
     };
     listenFor(80);
+    CHECK_FALSE(scene.fallen(0));
     scene.close();
 }
 
@@ -3155,6 +3164,10 @@ TEST_CASE("the fields' zombies are bred from their generators, chase the party, 
     REQUIRE(scene.generators().tierOf(nearest) == 2);
     REQUIRE(scene.generators().mostOf(nearest) == 3); // five, at the level's three quarters
     REQUIRE(scene.generators().healthOf(nearest) == Approx(15.0f));
+    // G1's LEVL initialization limit is thirteen, but camera_mode_level replaces
+    // it with CAMS' gameplay capacity before any of these scene ticks breed enemies.
+    REQUIRE(world.level() != nullptr);
+    REQUIRE(world.level()->maxEnemies == 25);
     // Grunts are bred for the party near them, come round to it and strike it.
     const s32 health = scene.actor(0)->save().health();
     usize most = 0;
@@ -3162,13 +3175,14 @@ TEST_CASE("the fields' zombies are bred from their generators, chase the party, 
     for (s32 i = 0; i < 900; ++i) {
         scene.update(1.0 / 60.0, still);
         most = std::max(most, scene.enemies().count());
+        REQUIRE(scene.generators().livingOf(nearest) <= scene.generators().mostOf(nearest));
         if (bitten < 0 && scene.actor(0)->save().health() < health) {
             bitten = i;
         }
     }
     REQUIRE(scene.generators().bredOf(nearest) >= 1);
     REQUIRE(most >= 3);
-    REQUIRE(most <= 13);
+    REQUIRE(most <= static_cast<usize>(world.level()->maxEnemies));
     REQUIRE(bitten > 0);
     REQUIRE(scene.actor(0)->save().health() < health);
     // Weapons thrown into them hurt and kill them, worth experience to the thrower; what
@@ -3466,8 +3480,9 @@ TEST_CASE("in the town's crypt the lich rises for the party, its meter over the 
     REQUIRE(std::abs(scene.viewCamera().pitch - approachPitch) < 0.05f);
     // It wakes for the party within its threshold, its look panning to it, and backs off
     // under its speed until the boss and the party both fit, the pitch easing all the while.
-    for (s32 i = 0; i < 900 && (!scene.bosses().view().awake || scene.bossCamera().margin() < 0.0f ||
-                                 scene.viewCamera().pitch >= approachPitch);
+    for (s32 i = 0;
+         i < 900 && (!scene.bosses().view().awake || scene.bossCamera().margin() < 0.0f ||
+                     scene.viewCamera().pitch >= approachPitch);
          ++i) {
         const f32 before = scene.viewCamera().pitch;
         scene.update(1.0 / 60.0, still);
@@ -4025,6 +4040,79 @@ TEST_CASE("in the mountain's lair the ice axe is held in the hand, thrown with t
     scene.close();
 }
 
+TEST_CASE("native low-health narration advances identically with absent and stopped audio",
+          "[game][screens][speech-timing][determinism][assets]") {
+    const auto root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
+    GameConfig config;
+    config.timing.tickRate = 60;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    struct SceneState {
+        LevelWorld world;
+        PlayScene scene;
+    };
+    std::array<std::unique_ptr<SceneState>, 2> fixtures;
+    CharacterSave save;
+    save.name = "AB";
+    save.progress().health = 2000;
+    const std::array party{PartyMember{3, save}};
+    for (usize profile = 0; profile < fixtures.size(); ++profile) {
+        fixtures[profile] = std::make_unique<SceneState>();
+        auto& fixture = *fixtures[profile];
+        REQUIRE(fixture.world.load(device, root, *levels.byName("G1")));
+        GameContext context;
+        context.config = &config;
+        context.sounds = profile == 0 ? &sounds : nullptr;
+        context.tower = &fixture.world;
+        context.levels = &levels;
+        context.unpackedRoot = root;
+        PlayOptions options;
+        options.welcome = false;
+        options.position = Vec3{10.7f, 10.2f, -60.5f};
+        REQUIRE(fixture.scene.open(device, context, fixture.world, party, options));
+    }
+    for (s32 tick = 0; tick < 520; ++tick) {
+        for (auto& fixture : fixtures) {
+            REQUIRE(fixture->scene.update(1.0 / 60, {}) == PlayOutcome::Running);
+        }
+    }
+    for (auto& fixture : fixtures) {
+        auto& scene = fixture->scene;
+        REQUIRE_FALSE(awaitingEntrance(scene));
+        REQUIRE(scene.soundscape().narrationTiming().empty());
+        REQUIRE(scene.actor(3));
+        const s32 health = scene.actor(3)->save().health();
+        REQUIRE(health > 150);
+        scene.harm(3, static_cast<f32>(health - 140), HurtKind::Burn);
+        REQUIRE(scene.actor(3)->save().health() <= 150);
+        REQUIRE(scene.actor(3)->save().health() > 50);
+        REQUIRE(scene.soundscape().narrationTiming().size() == 2);
+        REQUIRE(scene.soundscape().narrationBacklog() > 0);
+    }
+    const auto compare = [&] {
+        const auto& first = fixtures[0]->scene.soundscape();
+        const auto& second = fixtures[1]->scene.soundscape();
+        CHECK(std::ranges::equal(first.narrationTiming(), second.narrationTiming()));
+        CHECK(std::ranges::equal(first.barkTiming(), second.barkTiming()));
+        CHECK(first.narrationRoom(1) == second.narrationRoom(1));
+    };
+    compare();
+    sounds.stopAll();
+    for (s32 tick = 0; tick < 60; ++tick) {
+        for (auto& fixture : fixtures) {
+            REQUIRE(fixture->scene.update(1.0 / 60, {}) == PlayOutcome::Running);
+        }
+        compare();
+    }
+    for (auto& fixture : fixtures) {
+        fixture->scene.close();
+    }
+}
+
 TEST_CASE("a character hurt cries out by the original's rules: at once for a burn or a heavy "
           "blow, once lesser blows add up, and is named as its health runs low",
           "[game][screens][assets]") {
@@ -4067,14 +4155,21 @@ TEST_CASE("a character hurt cries out by the original's rules: at once for a bur
         sounds.update();
         return sounds.voiceCount();
     };
-    sounds.stopAll();
+    const auto finishSpeech = [&] {
+        sounds.stopAll();
+        // These are isolated damage-driver cases with no intervening scene ticks.
+        // Device completion no longer consumes the simulation's voice backlog.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): this fixture owns the scene.
+        const_cast<LevelSoundscape&>(scene.soundscape()).updateNarration(100);
+    };
+    finishSpeech();
     // A light blow is felt (the hit sounds) but not cried over; enough of them are: once
     // thirty of harm has been taken, counted before the health is rounded (pain_accum), so
     // what the level and the armour leave of each blow decides which one it is.
     const s32 whole = scene.actor(0)->save().health();
     scene.harm(0, 5.0f, HurtKind::Blow);
     REQUIRE(live() == 1);
-    sounds.stopAll();
+    finishSpeech();
     REQUIRE(live() == 0);
     const s32 perBlow = whole - scene.actor(0)->save().health();
     REQUIRE(perBlow > 0);
@@ -4089,17 +4184,17 @@ TEST_CASE("a character hurt cries out by the original's rules: at once for a bur
     const s32 lost = whole - scene.actor(0)->save().health();
     CHECK(lost >= 30 - perBlow);
     CHECK(lost <= 30 + 2 * perBlow);
-    sounds.stopAll();
+    finishSpeech();
     // A heavy blow, or a burn, is cried over at once.
     scene.harm(0, 61.0f, HurtKind::Blow);
     REQUIRE(live() == 1);
-    sounds.stopAll();
+    finishSpeech();
     // (A burn the armour takes whole is not felt at all.)
     scene.harm(0, 1.5f, HurtKind::Burn);
     REQUIRE(live() == 0);
     scene.harm(0, 5.0f, HurtKind::Burn);
     REQUIRE(live() == 1);
-    sounds.stopAll();
+    finishSpeech();
     // Down past a hundred and fifty the narrator names the character instead.
     const s32 health = scene.actor(0)->save().health();
     REQUIRE(health > 150);
@@ -4107,7 +4202,7 @@ TEST_CASE("a character hurt cries out by the original's rules: at once for a bur
     REQUIRE(scene.actor(0)->save().health() <= 150); // less what the armour takes
     REQUIRE(scene.actor(0)->save().health() > 50);
     REQUIRE(live() >= 1); // the name, the line queued after it
-    sounds.stopAll();
+    finishSpeech();
     scene.harm(0, 100.0f, HurtKind::Burn);
     REQUIRE(scene.actor(0)->save().health() <= 50);
     REQUIRE(scene.actor(0)->save().health() > 0);
@@ -5009,9 +5104,10 @@ TEST_CASE("fully unlocked character walks both tower wing gates in both directio
     const auto scenario = Scenario::load(test::dataDirectory().parent_path() /
                                          "tests/scenarios/tower-fully-unlocked.json");
     auto party = scenario.partyMembers();
-    // This is a traversal test, not the unacknowledged crystal-unlock scroll.
-    // Bank the scenario's completed realms with TowerCheckMessages' sentinel.
+    // This is a traversal test, not the unacknowledged wing/crystal scrolls.
+    // Bank the scenario's completed records with TowerCheckMessages' sentinel.
     for (auto& member : party) {
+        member.save.progress().relics.gargoylePieces.fill(-1);
         for (usize realm = 1; realm < 8; ++realm) {
             member.save.progress().crystals[realm] = -1;
         }

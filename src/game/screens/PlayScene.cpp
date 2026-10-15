@@ -242,12 +242,14 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
 }
 
 void PlayScene::close() {
+    ++m_openGeneration;
     if (m_context.stopVibration) {
         m_context.stopVibration();
     }
     m_context.stopVibration = {};
     m_context.vibrate = {};
     m_presentedClip.reset();
+    m_presentedCanvas.reset();
     m_previousCamera.reset();
     m_runeMeter.clear();
     m_runeItem.reset();
@@ -261,22 +263,16 @@ void PlayScene::close() {
     m_sumnerVisit.clear();
     m_promotion.clear();
     m_towerRelics.clear();
-    m_relicVoice = kNoSound;
-    m_promotionVoice = kNoSound;
+    m_relicVoice = {};
+    m_promotionVoice = {};
     m_messages.clear();
     if (m_world != nullptr) {
         m_world->setPlayerCount(0);
     }
     m_sumner.clear();
-    m_combatPortals.reset();
     m_portals.clear();
-    m_combatTransporters.reset();
     m_transporters.clear();
     m_switchCutscene.clear();
-    m_combatFixtures.reset();
-    m_combatCamera.reset();
-    m_combatWorld.reset();
-    m_combatStageCatalog = {};
     m_fixtures.clear();
     m_transition.release();
     m_departure.clear();
@@ -286,8 +282,7 @@ void PlayScene::close() {
     m_attacks.clear();
     m_arsenal.clear(); // before the figures whose models they fly
     m_bossSequence.clear();
-    m_effects.clear();         // and before the archive whose trees they play
-    m_combatResources.reset(); // after borrowers, before opponent and player archives
+    m_effects.clear(); // and before the archive whose trees they play
     m_opponents.close();
     m_opponentsAdvanced = false;
     m_projectilesAdvanced = false;
@@ -585,39 +580,6 @@ void PlayScene::updateEnemies(s32 ticks, f32 seconds) {
     }
 }
 
-std::optional<OpponentFrame> PlayScene::opponentFrame(u32 initialPlayers) const {
-    if (!m_open || m_world == nullptr || simulationTickRate() != 60 ||
-        m_opponents.pendingPlacements() > OpponentFrame::kMaxPendingPlacements) {
-        return std::nullopt;
-    }
-    OpponentFrame frame;
-    frame.initialPlayers = initialPlayers;
-    frame.difficultyGain = m_opponents.difficultyGain();
-    frame.pendingPlacements = static_cast<u32>(m_opponents.pendingPlacements());
-    frame.held = !m_opponentsAdvanced;
-    frame.timeStopped = PlayerPowerups::timeStopped(m_players);
-    const LevelInfo* level = m_world->level();
-    frame.unsupportedCombatants =
-        m_opponents.hasUncapturedState() || m_attacks.pendingGameplay() ||
-        missiles().count() != 0 ||
-        PlayerPowerups::enemyShrink(m_players, level != nullptr && level->bossType >= 0) !=
-            EnemyShrink::kWhole;
-    if (level != nullptr) {
-        frame.missileSpeed = level->tuning.enemyMissileSpeed;
-    }
-    const auto views = LevelOpponents::enemyViews(m_players);
-    frame.players.reserve(views.size());
-    for (const auto& view : views) {
-        if (view.player < 0 || view.player >= static_cast<s32>(OpponentFrame::kMaxPlayers)) {
-            return std::nullopt;
-        }
-        frame.players.push_back({static_cast<u8>(view.player), view});
-    }
-    frame.fixtures = m_fixtures.obstacles();
-    frame.stops = m_fixtures.missileStops();
-    return frame.valid() ? std::optional{std::move(frame)} : std::nullopt;
-}
-
 /** What the enemies count as on screen is what the view shows, and the placed ones it comes
  * to see stand. */
 void PlayScene::watchOpponents() {
@@ -759,8 +721,10 @@ void PlayScene::updateSumnerVisit(f32 seconds) {
 /** The scene routes the scroll owner's input and applies its sound/gesture cues. */
 void PlayScene::updateHints(const Inputs& inputs, s32 ticks) {
     const auto player = static_cast<usize>(std::max(m_sumnerVisit.owner(), 0));
-    const MenuInput input = player < inputs.size() ? inputs[player].menu : MenuInput{};
-    const HintMenuEvent event = m_sumnerVisit.update(*m_device, input, ticks);
+    const PlayInput input = player < inputs.size() ? inputs[player] : PlayInput{};
+    const HintMenuEvent event =
+        m_sumnerVisit.updateNative(*m_device, static_cast<s32>(player), input.menu, ticks,
+                                   input.hintTopic, input.hintRevision);
     switch (event.kind) {
     case HintMenuEvent::Kind::Moved: m_audio.playNamed(kMenuMoveSound); break;
     case HintMenuEvent::Kind::Asked: {
@@ -781,6 +745,27 @@ void PlayScene::updateHints(const Inputs& inputs, s32 ticks) {
         break;
     case HintMenuEvent::Kind::None: break;
     }
+}
+
+PlayInput PlayScene::captureNativeInput(s32 player, PlayInput input) const {
+    input.hintTopic = 0;
+    input.hintRevision = 0;
+    if (!m_open || player < 0 || player != m_sumnerVisit.owner() || !m_sumnerVisit.active()) {
+        return input;
+    }
+    MenuInput pointer = input.menu;
+    if (pointer.pointerNormalized) {
+        if (!m_presentedCanvas) {
+            return input;
+        }
+        pointer = mapMenuPointer(std::move(pointer), *m_presentedCanvas);
+    }
+    input.menu.back |= pointer.pointerBack;
+    input.hintTopic = m_sumnerVisit.captureTopic(player, pointer);
+    if (input.hintTopic != 0) {
+        input.hintRevision = m_sumnerVisit.menu().revision();
+    }
+    return input;
 }
 
 /** A bit per party member whose player pressed their button this frame. */
@@ -840,6 +825,9 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     m_world->setPlayerCount(joinedPlayers);
     m_audio.setPlayerCount(joinedPlayers);
     m_audio.updateNarration(seconds);
+    m_promotionVoice.timing.advance(seconds);
+    m_relicVoice.timing.advance(seconds);
+    m_bossSequence.advanceAudio(seconds);
     // The music's areas: the boss waking asks for the second, the zones for theirs.
     m_audio.bossAwake(m_opponents.bosses().view().awake);
     m_audio.updateMusic(seconds);
@@ -1386,6 +1374,7 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     const auto height = static_cast<f32>(config.display.virtualHeight);
     const Mat4 canvasProjection =
         makeVirtualScreenTransform(frameProjection, width, height, frameWidth, frameHeight);
+    m_presentedCanvas = canvasProjection;
     m_canvas.begin(device, canvasProjection);
     if (m_gameOver.active()) {
         m_gameOver.draw(m_canvas, m_messages.text(), width);

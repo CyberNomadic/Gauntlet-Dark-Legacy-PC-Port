@@ -41,6 +41,10 @@ public:
                const GameConfig* config, const StringTable* strings);
     /** The caller routes only owner()'s menu input. Returns sound/gesture cues. */
     HintMenuEvent update(RenderDevice& device, const MenuInput& input, s32 ticks);
+    /** Semantic topic input is checked again against the actual scroll owner. */
+    HintMenuEvent updateNative(RenderDevice& device, s32 player, const MenuInput& input, s32 ticks,
+                               u8 topic, u8 revision);
+    u8 captureTopic(s32 player, const MenuInput& input) const;
     /** Responds to Asked with a fresh party snapshot; no party scan is needed otherwise. */
     void answer(s32 topic, const TextPainter& text, const StringTable* strings,
                 const HintKnowledge& knowledge);
@@ -48,6 +52,9 @@ public:
     void draw(Canvas& canvas, const TextPainter& text) const { m_menu.draw(canvas, text); }
 
     bool active() const { return m_menu.active(); }
+    bool nativeReady(const TextPainter& text) const {
+        return m_hints.loaded() && text.ready() && m_menu.burnReady();
+    }
     s32 owner() const { return m_owner; }
     const HintMenu& menu() const { return m_menu; }
     const SumnerHints& texts() const { return m_hints; }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <future>
 
 #include "engine/core/Log.h"
 #include "engine/io/File.h"
@@ -11,8 +12,10 @@
 #if GDL_ENABLE_NETPLAY
 #include "engine/net/SessionTransport.h"
 
+#include "game/app/NativeOnlineIdentity.h"
 #include "game/netplay/HostedRoom.h"
-#include "game/screens/OnlinePlay.h"
+#include "game/screens/NativeOnlinePlay.h"
+#include "game/screens/OnlineParty.h"
 #endif
 
 namespace gdl::game {
@@ -29,13 +32,18 @@ struct OnlineRun::Impl {
     std::filesystem::path invitationOutput;
     bool invitationWritten = false;
     OnlineParty selection;
-    OnlinePlay play;
+    NativeOnlinePlay nativePlay;
+    std::unique_ptr<NativePlaySetup> nativeSetup;
+    std::optional<NativeOnlineIdentity::Inputs> identityInputs;
+    std::future<std::optional<NativeOnlineIdentity::Result>> identityResult;
+    std::string build;
+    std::string content;
+    bool nativeConfigured = false;
     bool autoStart = false;
     bool interactive = false;
     bool selected = false;
     u8 localPlayers = 1;
     bool finished = false;
-    bool reportedCheckpoint = false;
     u64 reportedEpoch = 0;
     u64 reportedTick = 0;
 #endif
@@ -137,8 +145,22 @@ bool OnlineRun::connect(RenderDevice& device, const GameContext& context, bool l
     next->config = context.config != nullptr ? *context.config : GameConfig{};
     next->context.config = &next->config;
     next->initial = LevelRef::tower();
-    next->options.welcome = false;
     next->localPlayers = localPlayers;
+    if (context.strings == nullptr || context.levels == nullptr || !context.levels->loaded()) {
+        status(device, "Online simulation requires loaded game text and levels.");
+        return false;
+    }
+    std::string identityError;
+    next->identityInputs = NativeOnlineIdentity::snapshot(*context.strings, &identityError);
+    if (!next->identityInputs) {
+        status(device, "Online compatibility check failed: " + identityError);
+        return false;
+    }
+    next->build = build;
+    next->content = content;
+    next->identityResult = std::async(std::launch::async, [inputs = *next->identityInputs] {
+        return NativeOnlineIdentity::capture(inputs);
+    });
     std::string error;
     next->transport = openSessionTransport({localOnly, invitation}, error);
     if (!next->transport) {
@@ -188,7 +210,7 @@ bool OnlineRun::select(std::span<const PartyMember> local) {
 }
 bool OnlineRun::ready(bool value) {
 #if GDL_ENABLE_NETPLAY
-    return m_impl && m_impl->session->ready(value);
+    return m_impl && m_impl->nativeConfigured && m_impl->session->ready(value);
 #else
     (void)value;
     return false;
@@ -215,10 +237,18 @@ NetplayMenu::View OnlineRun::lobby() const {
 #if GDL_ENABLE_NETPLAY
     if (m_impl) {
         const auto& run = *m_impl;
+        view.canSaveCompletedProgress = run.nativePlay.hasCompletedProgress();
+        if (run.finished || run.nativePlay.phase() == NativeOnlinePlay::Phase::Finished ||
+            run.nativePlay.phase() == NativeOnlinePlay::Phase::Failed ||
+            run.session->phase() == OnlineSession::Phase::Failed) {
+            view.page = NetplayMenu::Page::Finished;
+            return view;
+        }
         view.page = run.session->host() ? NetplayMenu::Page::Host : NetplayMenu::Page::Guest;
         view.localPlayers = run.localPlayers;
         view.selected = run.selected;
-        view.connected = run.session->phase() == OnlineSession::Phase::Lobby;
+        view.connected =
+            run.session->phase() == OnlineSession::Phase::Lobby && run.nativeConfigured;
         if (run.session->host() && run.transport->phase() == SessionTransport::Phase::Ready) {
             view.invitation = run.transport->invitation();
         }
@@ -241,17 +271,21 @@ NetplayMenu::View OnlineRun::lobby() const {
 }
 bool OnlineRun::playing() const {
 #if GDL_ENABLE_NETPLAY
-    return m_impl && (m_impl->play.phase() == OnlinePlay::Phase::Loading ||
-                      m_impl->play.phase() == OnlinePlay::Phase::Playing ||
-                      m_impl->play.phase() == OnlinePlay::Phase::Shopping ||
-                      m_impl->play.phase() == OnlinePlay::Phase::Paused);
+    if (m_impl && !m_impl->finished) {
+        const auto phase = m_impl->nativePlay.phase();
+        return phase == NativeOnlinePlay::Phase::Loading ||
+               phase == NativeOnlinePlay::Phase::Playing ||
+               phase == NativeOnlinePlay::Phase::Shopping ||
+               phase == NativeOnlinePlay::Phase::Paused;
+    }
+    return false;
 #else
     return false;
 #endif
 }
 bool OnlineRun::pause(s32 device) {
 #if GDL_ENABLE_NETPLAY
-    return m_impl && m_impl->play.pause(device);
+    return m_impl && m_impl->nativePlay.pause(device);
 #else
     (void)device;
     return false;
@@ -260,8 +294,22 @@ bool OnlineRun::pause(s32 device) {
 void OnlineRun::resume() {
 #if GDL_ENABLE_NETPLAY
     if (m_impl) {
-        m_impl->play.resume();
+        m_impl->nativePlay.resume();
     }
+#endif
+}
+bool OnlineRun::hasCompletedProgress() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl && m_impl->nativePlay.hasCompletedProgress();
+#else
+    return false;
+#endif
+}
+bool OnlineRun::saveCompletedProgress() {
+#if GDL_ENABLE_NETPLAY
+    return m_impl && m_impl->nativePlay.saveCompletedProgress();
+#else
+    return false;
 #endif
 }
 void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& menu) {
@@ -277,6 +325,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
     if (run.transport->phase() == SessionTransport::Phase::Failed) {
         status(*run.device, "Connection failed: " + run.transport->error());
         session.leave();
+        run.finished = true;
         return;
     }
     if (!run.finished && session.host() && !run.invitationWritten &&
@@ -297,8 +346,64 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         session.update(1.0 / 60);
         return;
     }
-    if (run.play.phase() == OnlinePlay::Phase::Closed) {
+    const bool closed = run.nativePlay.phase() == NativeOnlinePlay::Phase::Closed;
+    if (closed) {
         session.update(1.0 / 60);
+        if (!run.nativeConfigured) {
+            if (!run.identityResult.valid() ||
+                run.identityResult.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                status(*run.device, "Checking simulation compatibility...");
+                return;
+            }
+            const auto identity = run.identityResult.get();
+            std::optional<OnlineSession::NativeRules> rules;
+            if (session.host()) {
+                rules = OnlineSession::NativeRules{};
+                const auto scene = NativeOnlinePlay::sceneId(*run.context.levels, run.initial);
+                if (!scene) {
+                    status(*run.device, "Online initial stage is not in the native catalog.");
+                    session.leave();
+                    run.finished = true;
+                    return;
+                }
+                rules->scene = *scene;
+                rules->autoMelee = run.config.combat.autoMelee;
+                rules->autoActivateItems = run.config.combat.autoActivateItems;
+                rules->expandedShop = run.config.game.expandedShop;
+            }
+            if (!identity || !run.identityInputs ||
+                !NativeOnlineIdentity::numericMatches(*run.identityInputs) ||
+                !session.configureNative(
+                    {run.build, identity->runtime, run.content, identity->data, identity->language},
+                    rules)) {
+                status(*run.device, "Online simulation compatibility check failed. Escape exits.");
+                session.leave();
+                run.finished = true;
+                return;
+            }
+            run.nativeConfigured = true;
+        }
+        if (session.nativeSetupPending()) {
+            const auto* contract = session.nativeContract();
+            const auto* profiles = session.party();
+            if (contract != nullptr && profiles != nullptr && session.room() != nullptr) {
+                const auto& rules = contract->rules;
+                const auto& identity = contract->identity;
+                // The loaded text may have fallen back from the requested locale.
+                // Agreement binds the resolved table, not an unavailable preference.
+                run.config.text.language = identity.language;
+                run.nativeSetup = NativePlaySetup::create(
+                    run.config, session.room()->settings, *profiles, run.options,
+                    {rules.scene, rules.autoMelee, rules.autoActivateItems, rules.expandedShop,
+                     identity.build, identity.content, identity.data});
+            }
+            if (!run.nativeSetup || !session.confirmNativeSetup(run.nativeSetup->digest())) {
+                status(*run.device, "Online party setup disagrees. Escape exits.");
+                session.leave();
+                run.finished = true;
+                return;
+            }
+        }
         if (session.phase() == OnlineSession::Phase::Lobby) {
             const auto* room = session.room();
             if (room != nullptr) {
@@ -330,69 +435,57 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             const auto rules = session.room()->settings;
             run.config.difficulty.level = DifficultyConfig::kNames[rules.difficulty];
             run.config.multiplayer.mode = static_cast<MultiplayerMode>(rules.friendlyFire);
-            if (!run.play.open(*run.device, run.context, session, run.selection, run.initial,
-                               run.options)) {
+            const bool opened = run.identityInputs &&
+                                NativeOnlineIdentity::numericMatches(*run.identityInputs) &&
+                                run.nativePlay.open(*run.device, run.context, session,
+                                                    run.selection, std::move(run.nativeSetup));
+            if (!opened) {
                 status(*run.device, "Online scene setup failed. Escape exits.");
                 session.leave();
+                run.finished = true;
             } else {
                 status(*run.device, "Loading the shared stage...");
             }
         }
     } else {
         if (!run.interactive && menu.start) {
-            if (run.play.phase() == OnlinePlay::Phase::Paused) {
-                run.play.resume();
+            if (run.nativePlay.phase() == NativeOnlinePlay::Phase::Paused) {
+                run.nativePlay.resume();
             } else {
-                run.play.pause();
+                run.nativePlay.pause();
             }
         }
-        const auto phase = run.play.update(devices);
+        const auto phase = run.nativePlay.update(devices);
+        const auto completed = run.nativePlay.completedTick();
+        const auto epoch = session.match().context().epoch;
+        if ((phase == NativeOnlinePlay::Phase::Playing ||
+             phase == NativeOnlinePlay::Phase::Paused) &&
+            completed > 0 &&
+            (epoch != run.reportedEpoch || completed / 300 > run.reportedTick / 300)) {
+            run.reportedEpoch = epoch;
+            run.reportedTick = completed;
+            log::info("Native online progress: epoch {} tick {} ({})", epoch, completed,
+                      session.host() ? "host" : "guest");
+        }
         switch (phase) {
-        case OnlinePlay::Phase::Loading:
+        case NativeOnlinePlay::Phase::Loading:
             status(*run.device, "Loading the shared stage...");
-            run.reportedCheckpoint = false;
             break;
-        case OnlinePlay::Phase::Playing:
-            if (const auto* shown = run.play.shown();
-                shown != nullptr && (shown->motion.epoch != run.reportedEpoch ||
-                                     shown->motion.tick / 300 > run.reportedTick / 300)) {
-                // Test-mode telemetry proves that both simulation and guest
-                // presentation continue advancing after a loading barrier.
-                run.reportedEpoch = shown->motion.epoch;
-                run.reportedTick = shown->motion.tick;
-                log::info("Online checkpoint progress: epoch {} tick {} ({})", run.reportedEpoch,
-                          run.reportedTick, session.host() ? "host" : "guest");
-            }
-            if (session.host() && !run.reportedCheckpoint && run.play.shown() != nullptr) {
-                if (const auto packets = CombatReplica::packets(
-                        *run.play.shown(), SnapshotBlock::Compression::Automatic,
-                        CombatReplica::Recovery::SingleLoss)) {
-                    usize bytes = 0;
-                    for (const auto& packet : *packets) {
-                        bytes += packet.size();
-                    }
-                    log::info("Online initial checkpoint: {} datagrams, {} bytes including repair",
-                              packets->size(), bytes);
-                    run.reportedCheckpoint = true;
-                }
-            }
-            status(*run.device, run.interactive ? ""
-                                                : "Online scene test - Start opens a local menu; "
-                                                  "Escape exits.");
-            break;
-        case OnlinePlay::Phase::Shopping: status(*run.device, ""); break;
-        case OnlinePlay::Phase::Paused:
+        case NativeOnlinePlay::Phase::Playing:
+        case NativeOnlinePlay::Phase::Shopping: status(*run.device, ""); break;
+        case NativeOnlinePlay::Phase::Paused:
             status(*run.device, "Local menu open - the game continues for everyone.");
             break;
-        case OnlinePlay::Phase::Finished:
-            // Do not fall through into local post-level menus or reset guest progress.
-            status(*run.device, "This online transition is not supported. Escape exits.");
-            session.leave();
-            run.finished = true;
+        case NativeOnlinePlay::Phase::Finished:
+            // Keep the final input relay alive until the user leaves. Another
+            // peer may still be executing this campaign's final native tick.
+            status(*run.device, run.nativePlay.outcome() == NativePlayDriver::Result::Leave
+                                    ? "A player left. Online session ended. Escape exits."
+                                    : "Online game finished. Escape exits.");
             break;
-        case OnlinePlay::Phase::Failed:
+        case NativeOnlinePlay::Phase::Failed:
             status(*run.device, std::format("Online scene stopped ({}). Escape exits.",
-                                            static_cast<u32>(run.play.failure())));
+                                            static_cast<u32>(run.nativePlay.failure())));
             run.finished = true;
             break;
         default: break;
@@ -419,12 +512,10 @@ std::optional<Vec3> OnlineRun::cursorAim(s32 device, Vec2 cursor) const {
         if (run.selection.device(*run.session, seat) != device) {
             continue;
         }
-        if (const auto* scene = run.play.hostScene()) {
+        if (const auto* scene = run.nativePlay.scene()) {
             if (const auto* actor = scene->actor(seat)) {
                 return scene->cursorAim(cursor, actor->position());
             }
-        } else if (const auto* view = run.play.replica()) {
-            return view->cursorAim(seat, cursor);
         }
     }
 #else
@@ -437,8 +528,8 @@ void OnlineRun::render(RenderDevice& device, const Mat4& projection, f32 width, 
                        f64 seconds, f32 frameBlend) {
 #if GDL_ENABLE_NETPLAY
     if (m_impl) {
-        m_impl->play.render(device, projection, width, height, seconds, frameBlend);
-        if (m_impl->play.entryVisible()) {
+        m_impl->nativePlay.render(device, projection, width, height, seconds, frameBlend);
+        if (m_impl->nativePlay.entryVisible()) {
             return;
         }
     }

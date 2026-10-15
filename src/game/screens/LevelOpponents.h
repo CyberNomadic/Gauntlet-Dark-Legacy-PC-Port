@@ -27,7 +27,6 @@ struct EnemyFeedbackEmission;
 struct EnemyBirthEmission;
 struct GeneratorFeedbackEmission;
 struct CritterCueEmission;
-struct EnemyMissileEmission;
 /** Level enemy population, damage/reward routing and following combat cues.
  * Owns enemy archives, missiles, generators and the boss meter. Borrowed level services
  * must outlive close(). Phase hooks synchronously interleave scene-level rites,
@@ -156,22 +155,15 @@ public:
     static f32 attenuation(const Vec3& at, std::span<const Vec3> hearers);
 
 private:
+    friend class SimulationObserver;
     friend class OpponentCombatCheckpoint;
-    friend class OrdinaryCombatCheckpoint;
-    friend class OrdinaryCombatTick;
-    friend class OrdinaryCritterPhase;
-    friend class OrdinaryEnemyMissilePhase;
     // Identifies the lifetime of the borrowed level services, not gameplay state.
     u64 m_bindingGeneration = 1;
     /** Plays `name` at `level` of 255 as heard from where the players stand. */
     SoundHandle playAt(std::string_view name, f32 level, const Vec3& at);
     void landEnemyMissiles(std::span<PlayerRuntime> players, const Events& events);
-    using MissilePublisher = std::function<std::optional<u32>(const EnemyMissileEmission&)>;
-    /** One native landing, in its original world/target/effect/sound/hurt/burst
-     * order. A private publisher replaces only effect creation/audio; refusal
-     * requires its caller's complete combat undo. Native callers omit it. */
-    bool dispatchEnemyMissileHit(const EnemyMissileHit&, std::span<PlayerRuntime>, const Events&,
-                                 const MissilePublisher& publish = {});
+    /** One native landing in world/target/effect/sound/hurt/burst order. */
+    bool dispatchEnemyMissileHit(const EnemyMissileHit&, std::span<PlayerRuntime>, const Events&);
     void playEnemyCues();
     std::vector<MissileTarget> swarmTargets() const;
     void strikeSwarm(s32 id, f32 damage, u32 flags, const Vec3& direction,

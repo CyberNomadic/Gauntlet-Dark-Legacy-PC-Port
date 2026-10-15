@@ -48,13 +48,15 @@ public:
     void draw(Canvas& canvas) const { m_scroll.draw(canvas); }
 
     bool active() const { return m_scroll.active(); }
+    /** Native peers must not choose different gameplay holds due to optional
+     * font or burn-art load failures. Offline callers may still omit this check. */
+    bool nativeReady() const {
+        return m_scrollText.loaded() && m_text.ready() && m_scroll.burnReady();
+    }
     const ScrollBox& scroll() const { return m_scroll; }
     const TextPainter& text() const { return m_text; }
     const MessageTable& strings() const { return m_scrollText; }
     std::optional<Look> look() const;
-    bool preloadReplica(RenderDevice& device, const StringTable* strings);
-    bool accepts(const Look& look) const;
-    void drawReplica(Canvas& canvas, const Look& look) const;
 
 private:
     BitmapFont m_font32;
@@ -64,8 +66,6 @@ private:
     ScrollBox m_scroll; ///< references our painter, so this owner must not move
     std::optional<u32> m_message;
     u32 m_firstPage = 0;
-    std::string m_replicaPrompt;
-    std::vector<std::vector<ScrollBox::PageLayout>> m_replicaPages;
 };
 
 } // namespace gdl::game

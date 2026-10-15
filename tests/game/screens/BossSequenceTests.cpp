@@ -1,7 +1,9 @@
 #include <array>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <type_traits>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -48,10 +50,9 @@ struct Fixture {
                       std::format(R"({{"realm":7,"prefix":"levelG","levels":[
             {{"name":"G5","bossType":{},"rune":1}},{{"name":"G1","rune":2}}]}})",
                                   bossType));
-        writeTextFile(level / "world.json",
-                      std::format(R"({{"objects":[
+        writeTextFile(level / "world.json", std::format(R"({{"objects":[
             {{"name":"FLOOR","object":0,"parent":-1,"position":[0,0,0]}}]{}}})",
-                                  items));
+                                                        items));
         writeTextFile(level / "objects.json",
                       R"({"objects":[{"name":"FLOOR","file":"mesh.obj","meshTriangles":1}]})");
         writeTextFile(level / "mesh.obj",
@@ -236,7 +237,7 @@ TEST_CASE("the boss's death blast breaks the arena's cover before its coins fly"
     CHECK(fixtures.safeRocks().obstacles().size() == 1);
 }
 
-TEST_CASE("boss victory queues rune speech and waits for audio before departing",
+TEST_CASE("boss victory queues rune speech and honors authored speech loops",
           "[game][screens][boss-sequence][victory]") {
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
@@ -247,8 +248,8 @@ TEST_CASE("boss victory queues rune speech and waits for audio before departing"
     std::filesystem::create_directories(bank);
     const std::array<s16, 4> pcm{8192, 8192, 8192, 8192};
     const std::array<test::NativeSoundSample, 1> bankSamples{{{48000, {pcm.begin(), pcm.end()}}}};
-    // Keep the first voice playing while simulation advances. This proves the second
-    // waits for playback, rather than relying on a predicted clip length or text length.
+    // An authored loop has no logical completion. The second line remains
+    // serialized, even if a device independently stops or loses its first voice.
     test::writeNativeSoundBank(bank, R"({"sounds":[
         {"index":0,"name":"S_DEFEATVOXG","sequence":[
             {"sample":0,"loopStart":true,"loopBack":true}]},
@@ -276,11 +277,75 @@ TEST_CASE("boss victory queues rune speech and waits for audio before departing"
         output.update();
         REQUIRE(output.voiceCount() == 0);
     }
-    SECTION("finishing audio releases the departure countdown") {
+    SECTION("device stop cannot release the departure countdown") {
         output.stopAll();
         f.sequence.advanceVictory(85, 85.0f / 60, f.players, f.strings);
-        REQUIRE(f.sequence.victory().state().sparkling());
-        REQUIRE(f.sequence.advanceVictory(35, 35.0f / 60, f.players, f.strings));
+        REQUIRE_FALSE(f.sequence.victory().state().sparkling());
+        REQUIRE_FALSE(f.sequence.advanceVictory(35, 35.0f / 60, f.players, f.strings));
+        CHECK(f.sequence.speechTiming().looping);
+        f.sequence.clear();
+        CHECK_FALSE(f.sequence.speechTiming().playing());
+    }
+}
+
+TEST_CASE("native boss victory completes on clip time with stalled stopped or absent audio",
+          "[game][screens][boss-sequence][speech-timing][determinism]") {
+    struct Observation {
+        BossVictory::Stage stage;
+        SpeechTiming speech;
+        bool sparkling;
+        bool finished;
+        bool operator==(const Observation&) const = default;
+    };
+    for (const s32 rate : {30, 60}) {
+        CAPTURE(rate);
+        std::vector<Observation> reference;
+        for (const s32 deviceMode : {0, 1, 2}) {
+            CAPTURE(deviceMode);
+            AudioMixer mixer(48000);
+            SoundPlayer output(mixer);
+            auto fixture = std::make_unique<Fixture>();
+            fixture->loadLevel();
+            const auto root = test::scratchDirectory("boss-victory-logical-speech");
+            const std::array<test::NativeSoundSample, 1> samples{
+                {{8000, std::vector<s16>(40000, 8192)}}};
+            test::writeNativeSoundBank(root / "audio/COMMON", R"({"sounds":[
+                {"index":0,"name":"S_DEFEATVOXG","sequence":[{"sample":0}]},
+                {"index":1,"name":"S_RUNEVOX0G","sequence":[{"sample":0}]}]})",
+                                       samples);
+            fixture->audio.open(root, deviceMode == 2 ? nullptr : &output, nullptr);
+            fixture->sequence.fallen(Vec3{0}, fixture->bosses, fixture->players);
+            std::vector<Observation> observed;
+            bool waitedForSpeech = false;
+            bool complete = false;
+            for (s32 tick = 0; tick < 2400 && !complete; ++tick) {
+                const f32 seconds = 1.0f / static_cast<f32>(rate);
+                fixture->sequence.advanceAudio(seconds);
+                complete = fixture->sequence.advanceVictory(1, seconds, fixture->players,
+                                                            fixture->strings);
+                const auto& state = fixture->sequence.victory().state();
+                observed.push_back(
+                    {state.stage(), fixture->sequence.speechTiming(), state.sparkling(), complete});
+                waitedForSpeech |= state.stage() == BossVictory::Stage::Leaving &&
+                                   fixture->sequence.speechTiming().playing() && !state.sparkling();
+                if (deviceMode == 1) {
+                    output.stopAll();
+                    output.update();
+                }
+            }
+            REQUIRE(complete);
+            REQUIRE(waitedForSpeech);
+            REQUIRE(observed.back().sparkling);
+            REQUIRE_FALSE(observed.back().speech.playing());
+            if (deviceMode == 0) {
+                reference = observed;
+            } else {
+                REQUIRE((observed == reference));
+            }
+            fixture->sequence.clear();
+            CHECK_FALSE(fixture->sequence.speechTiming().playing());
+            fixture->audio.close();
+        }
     }
 }
 } // namespace

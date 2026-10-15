@@ -506,7 +506,8 @@ void LevelFixtures::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> play
 
 LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
                                                 std::span<PlayerRuntime> players,
-                                                const Events* events, const GatePublisher& gate) {
+                                                const Events* events, const GatePublisher& gate,
+                                                const ChestPublisher& publishChest) {
     if (!m_resources.has_value()) {
         return {Boundary::Unbound};
     }
@@ -596,55 +597,11 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
         // Chests::update only changes its bound figure and value state. The
         // dispatch below can place new item resources, so refusal precedes it.
         if (events == nullptr) {
-            return {Boundary::Chest, event.chest};
-        }
-        PlayerActor& actor = players[event.visitor].actor;
-        switch (event.kind) {
-        case ChestEvent::Kind::Unlocked:
-            if (m_chests.chest(event.chest).locked) {
-                actor.save().progress().inventory.spendKey();
+            if (!publishChest || !publishChest(event)) {
+                return {Boundary::Chest, event.chest};
             }
-            m_resources->audio.playNamed(kChestSound);
-            if (m_chests.chest(event.chest).subtype == Chests::kTrappedChest) {
-                m_resources->audio.playNamed(kChestFuseSound, kChestFuseVolume);
-            }
-            if (events->releaseEnemy && events->releaseEnemy(event.contents, event.position,
-                                                             m_chests.chest(event.chest).count)) {
-                break;
-            }
-            if (event.contents >= 0 && m_resources->world.placeItemRecord(
-                                           m_resources->device, event.contents, event.position,
-                                           m_chests.chest(event.chest).count)) {
-                const usize held = m_resources->world.placedItems().size() - 1;
-                m_chests.hold(event.chest, static_cast<s32>(held));
-                m_resources->world.setItemOpener(held, actor.player());
-            }
-            break;
-        case ChestEvent::Kind::Opened:
-            if (event.explodes) {
-                detonateChest(event.chest, event.visitor, players, *events);
-            } else if (m_chests.chest(event.chest).held < 0 &&
-                       m_chests.chest(event.chest).subtype != Chests::kGoldChest) {
-                // Native item_update checks the live pickup link, not the authored
-                // contents record. A released Death leaves no pickup in the chest.
-                m_chests.remove(event.chest);
-            }
-            break;
-        case ChestEvent::Kind::Collected:
-            takeItem(actor.save(), ItemOffer{static_cast<s32>(ItemKind::Gold), event.gold});
-            events->card(actor.player(), "GOLD");
-            m_resources->audio.playNamed(kPickupSound);
-            if (event.gold >= 25 && events->help) {
-                events->help(17, event.visitor); // ItemTouch's COLLECTGOLD lesson
-            }
-            break;
-        case ChestEvent::Kind::Refused:
-            // A silver chest's own hint is given once the key lesson has nothing to add.
-            if (!events->help(HelpMessages::kChestNeedsKey, event.visitor) &&
-                m_chests.chest(event.chest).subtype == Chests::kRandomChest) {
-                events->help(HelpMessages::kRandomChest, event.visitor);
-            }
-            break;
+        } else {
+            dispatchChestEvent(event, players, *events);
         }
     }
     // updateXray can bind a previously unseen preview before returning its cue.
@@ -1417,6 +1374,80 @@ void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
         }
     }
     std::erase_if(m_clouds, [](const GasCloud& cloud) { return cloud.secondsLeft <= 0.0f; });
+}
+
+/** The original chest event order, with output and birth seams for a caller-owned rewind. */
+bool LevelFixtures::dispatchChestEvent(const ChestEvent& event, std::span<PlayerRuntime> players,
+                                       const Events& events, const ChestPickupPublisher& pickup,
+                                       const NamedPublisher& sound) {
+    const auto play = [&](std::string_view name, f32 volume = 1) {
+        if (sound) {
+            sound(name, volume);
+        } else {
+            m_resources->audio.playNamed(name, volume);
+        }
+    };
+    PlayerActor& actor = players[event.visitor].actor;
+    switch (event.kind) {
+    case ChestEvent::Kind::Unlocked: {
+        if (m_chests.chest(event.chest).locked) {
+            actor.save().progress().inventory.spendKey();
+        }
+        play(kChestSound);
+        if (m_chests.chest(event.chest).subtype == Chests::kTrappedChest) {
+            play(kChestFuseSound, kChestFuseVolume);
+        }
+        if (events.releaseEnemy && events.releaseEnemy(event.contents, event.position,
+                                                       m_chests.chest(event.chest).count)) {
+            break;
+        }
+        if (event.contents < 0) {
+            break;
+        }
+        std::optional<usize> held;
+        if (pickup) {
+            held = pickup(event.contents, event.position, m_chests.chest(event.chest).count);
+            if (!held) {
+                return false;
+            }
+        } else if (m_resources->world.placeItemRecord(m_resources->device, event.contents,
+                                                      event.position,
+                                                      m_chests.chest(event.chest).count)) {
+            held = m_resources->world.placedItems().size() - 1;
+        }
+        if (held) {
+            m_chests.hold(event.chest, static_cast<s32>(*held));
+            m_resources->world.setItemOpener(*held, actor.player());
+        }
+        break;
+    }
+    case ChestEvent::Kind::Opened:
+        if (event.explodes) {
+            detonateChest(event.chest, event.visitor, players, events);
+        } else if (m_chests.chest(event.chest).held < 0 &&
+                   m_chests.chest(event.chest).subtype != Chests::kGoldChest) {
+            // Native item_update checks the live pickup link, not the authored
+            // contents record. A released Death leaves no pickup in the chest.
+            m_chests.remove(event.chest);
+        }
+        break;
+    case ChestEvent::Kind::Collected:
+        takeItem(actor.save(), ItemOffer{static_cast<s32>(ItemKind::Gold), event.gold});
+        events.card(actor.player(), "GOLD");
+        play(kPickupSound);
+        if (event.gold >= 25 && events.help) {
+            events.help(17, event.visitor); // ItemTouch's COLLECTGOLD lesson
+        }
+        break;
+    case ChestEvent::Kind::Refused:
+        // A silver chest's own hint is given once the key lesson has nothing to add.
+        if (!events.help(HelpMessages::kChestNeedsKey, event.visitor) &&
+            m_chests.chest(event.chest).subtype == Chests::kRandomChest) {
+            events.help(HelpMessages::kRandomChest, event.visitor);
+        }
+        break;
+    }
+    return true;
 }
 
 /** A gate's opening sounds from the realm's own bank, named after the level's letter. */

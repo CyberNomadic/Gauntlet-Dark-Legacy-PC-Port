@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "engine/io/ByteReader.h"
+#include "engine/math/RandomDistribution.h"
 
 namespace gdl::game {
 namespace {
@@ -283,7 +284,10 @@ std::optional<ShopStep> ShopSync::advance() {
         }
         m_held[seat] = bits & kHeld;
         step.inputs[seat] = menu(bits);
-        step.potions[seat] = std::uniform_int_distribution<s32>(1, 4)(m_random);
+        // This remains a host-authored outcome, not shared lockstep RNG state.
+        // Preserve all four draws even for idle or unowned seats.
+        step.potions[seat] =
+            1 + static_cast<s32>(random_distribution::boundedIndex(m_random, 4).value());
     }
     return step;
 }

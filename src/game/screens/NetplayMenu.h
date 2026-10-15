@@ -15,7 +15,7 @@ namespace gdl::game {
  * never changes simulation state; the application consumes its explicit actions. */
 class NetplayMenu {
 public:
-    enum class Page : u8 { Choose, Host, Join, Guest, Pause, Leave };
+    enum class Page : u8 { Choose, Host, Join, Guest, Pause, Leave, Finished };
     enum class Action : u8 {
         None,
         Host,
@@ -32,6 +32,8 @@ public:
         Difficulty,
         FriendlyFire,
         Resume,
+        SaveCompletedProgress,
+        ReturnTitle,
         Leave,
         Back
     };
@@ -45,6 +47,7 @@ public:
         bool selected = false;
         bool ready = false;
         bool canStart = false;
+        bool canSaveCompletedProgress = false;
         std::string invitation;
         std::string status;
         bool operator==(const View&) const = default;

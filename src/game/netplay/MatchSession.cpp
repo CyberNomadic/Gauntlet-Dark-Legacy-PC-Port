@@ -3,36 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <type_traits>
 
+#include "engine/core/Log.h"
 #include "engine/io/ByteReader.h"
-
-#include "game/netplay/RollbackInputHistory.h"
 
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLT");
-static_assert(MatchSession::kMaxUnconfirmedTicks <= RollbackInputHistory::kHistory);
-
-u64 elapsedTicks(MatchSession::Time first, MatchSession::Time last, u16 rate, u64 limit) {
-    if (last <= first) {
-        return 0;
-    }
-    // Ordered unsigned subtraction can represent the entire signed clock range,
-    // including min() to max(). Split whole seconds before multiplying by rate
-    // so neither a long-running calibration nor injected extremes overflow.
-    using Count = std::make_unsigned_t<MatchSession::Clock::duration::rep>;
-    using Duration = std::chrono::duration<Count, MatchSession::Clock::period>;
-    const Duration elapsed{static_cast<Count>(last.time_since_epoch().count()) -
-                           static_cast<Count>(first.time_since_epoch().count())};
-    const auto seconds = std::chrono::duration_cast<std::chrono::duration<Count>>(elapsed);
-    if (seconds.count() > limit / rate) {
-        return limit;
-    }
-    const u64 whole = static_cast<u64>(seconds.count()) * rate;
-    const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed - seconds);
-    return whole + std::min(limit - whole, static_cast<u64>(nanos.count()) * rate / 1'000'000'000);
-}
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
@@ -62,12 +39,31 @@ bool checkpointed(MatchTransition transition) {
 bool hasEntryMovie(MatchTransition transition) {
     return transition == MatchTransition::Start || transition == MatchTransition::Travel;
 }
+std::string_view agreementReason(NativeAgreement::Failure reason) {
+    switch (reason) {
+    case NativeAgreement::Failure::None: return "none";
+    case NativeAgreement::Failure::Mismatch: return "mismatch";
+    case NativeAgreement::Failure::Conflict: return "conflicting digest";
+    case NativeAgreement::Failure::Timeout: return "timeout";
+    case NativeAgreement::Failure::Window: return "bounded window exhausted";
+    case NativeAgreement::Failure::Protocol: return "invalid agreement protocol";
+    case NativeAgreement::Failure::Disconnected: return "disconnected";
+    case NativeAgreement::Failure::Transport: return "transport failure";
+    }
+    return "unknown";
+}
 } // namespace
 
 bool MatchContext::valid() const {
-    if (epoch == 0 || scene == 0 || scene > 65535 || tickRate != 60 || inputLead > 12 ||
+    if (epoch == 0 || scene == 0 || scene > 65535 || tickRate != 60 ||
+        inputLead > LockstepInputs::kMaxDelay || transition == MatchTransition::Resume ||
         static_cast<u8>(transition) > 5 || !validOwners(owners) ||
         (challengeWon && transition != MatchTransition::SecretReturn)) {
+        return false;
+    }
+    const bool fenced = checkpointed(transition);
+    if (fenced ? (sourceEpoch == 0 || sourceEpoch != epoch - 1)
+               : (sourceEpoch != 0 || sourceTick != 0)) {
         return false;
     }
     for (usize seat = 0; seat < owners.size(); ++seat) {
@@ -82,7 +78,8 @@ bool MatchControl::valid() const {
     return context.valid() && static_cast<u8>(kind) <= 6 && static_cast<u8>(stop) <= 4 &&
            ((kind == MatchControlKind::Stop) == (stop != MatchStop::None)) &&
            (vote == (movieSkipVotes != 0)) && (movieSkipVotes & ~seatsOf(context.owners)) == 0 &&
-           (!vote || hasEntryMovie(context.transition));
+           (!vote || hasEntryMovie(context.transition)) && kind != MatchControlKind::Pause &&
+           kind != MatchControlKind::RequestPause;
 }
 std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& control) {
     if (!control.valid()) {
@@ -91,8 +88,8 @@ std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& co
     std::vector<u8> bytes;
     bytes.reserve(kBytes);
     word(bytes, kMagic);
-    bytes.insert(bytes.end(), {4, static_cast<u8>(control.kind), static_cast<u8>(control.stop),
-                               control.movieSkipVotes});
+    bytes.insert(bytes.end(), {kVersion, static_cast<u8>(control.kind),
+                               static_cast<u8>(control.stop), control.movieSkipVotes});
     const auto& context = control.context;
     word(bytes, static_cast<u32>(context.epoch));
     word(bytes, static_cast<u32>(context.epoch >> 32U));
@@ -105,6 +102,10 @@ std::optional<std::vector<u8>> MatchControlPacket::encode(const MatchControl& co
         word(bytes, grant);
     }
     word(bytes, static_cast<u32>(context.challengeWon));
+    word(bytes, static_cast<u32>(context.sourceEpoch));
+    word(bytes, static_cast<u32>(context.sourceEpoch >> 32U));
+    word(bytes, static_cast<u32>(context.sourceTick));
+    word(bytes, static_cast<u32>(context.sourceTick >> 32U));
     return bytes;
 }
 std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes) {
@@ -112,7 +113,7 @@ std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes
         return std::nullopt;
     }
     ByteReader reader(bytes);
-    if (reader.readU32() != kMagic || reader.readU8() != 4) {
+    if (reader.readU32() != kMagic || reader.readU8() != kVersion) {
         return std::nullopt;
     }
     MatchControl control;
@@ -137,11 +138,17 @@ std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes
         return std::nullopt;
     }
     context.challengeWon = challengeWon != 0;
+    context.sourceEpoch = reader.readU32();
+    context.sourceEpoch |= static_cast<u64>(reader.readU32()) << 32U;
+    context.sourceTick = reader.readU32();
+    context.sourceTick |= static_cast<u64>(reader.readU32()) << 32U;
     return control.valid() ? std::optional{control} : std::nullopt;
 }
 
-bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links) {
-    if (m_phase != Phase::Offline || !validOwners(owners) || !belongs(owners, localPeer)) {
+bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links,
+                        u8 startupDelay) {
+    if (m_phase != Phase::Offline || !validOwners(owners) || !belongs(owners, localPeer) ||
+        startupDelay > LockstepInputs::kMaxDelay) {
         return false;
     }
     std::array<PacketTransport::Connection, 5> connections{};
@@ -162,11 +169,7 @@ bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const
     m_local = localPeer;
     m_owners = owners;
     m_links = connections;
-    for (usize seat = 0; seat < owners.size(); ++seat) {
-        if (owners[seat] != 0) {
-            m_timeline.assign(seat, owners[seat]);
-        }
-    }
+    m_startupDelay = startupDelay;
     m_phase = Phase::Lobby;
     return true;
 }
@@ -206,178 +209,115 @@ bool MatchSession::broadcast(MatchControlKind kind, MatchStop reason, u8 votes) 
     return true;
 }
 void MatchSession::discardGameplay() {
-    m_latency.begin(m_context.epoch);
-    m_statisticsAt = {};
-    m_adaptiveLead = 0;
-    m_feedbackInput = {};
-    m_leadFeedbackFloor = 0;
-    resetLeadRecovery();
-    m_sampleClock = 0;
-    m_inputTime.reset();
-    m_deadlineAnchor.reset();
-    m_admissionAnchor.reset();
-    m_sentInputs.clear();
-    m_actionReceipts.clear();
-    m_droppedActionReceipts = 0;
-    m_audio.clear();
-    m_feedback.clear();
-    m_history.clear();
+    m_lockstep.reset();
+    m_nativeAgreement.reset();
+    m_nativeResolved = {};
+    m_nativeCompleted = 0;
+    m_nativeInFlight.reset();
+    m_pendingNativeContext.reset();
+    m_pendingNativeParty = {};
+    m_pendingNativeShop.reset();
+    m_pendingNativeMovieVotes = 0;
+    m_drainingInputs.reset();
+    m_drainingContext.reset();
     m_sampled.clear();
-    m_pendingPress = {};
-    m_input.clear();
-    m_states = {};
-    m_receipt.reset();
-    m_published.reset();
 }
-void MatchSession::resetLeadRecovery() {
-    m_healthyLeadSince.reset();
-    m_healthyLeadSamples = 0;
-    m_healthyLeadMargin = 0;
-}
-MatchSession::Time MatchSession::observeInputTime(Time now) {
-    if (!m_inputTime || now > *m_inputTime) {
-        m_inputTime = now;
+bool MatchSession::beginNativeInputs() {
+    if (m_context.transition == MatchTransition::Shop) {
+        return true;
     }
-    return *m_inputTime;
-}
-u64 MatchSession::deadlineAdvance() const {
-    if (!m_deadlineAnchor || !m_inputTime) {
-        return 0;
-    }
-    u64 advance = elapsedTicks(m_deadlineAnchor->received, *m_inputTime, m_context.tickRate,
-                               kMaxDeadlineAdvance);
-    if (m_admissionAnchor) {
-        const u64 ceiling =
-            m_deadlineAnchor->tick +
-            std::min(kMaxDeadlineAdvance, std::numeric_limits<u64>::max() - m_deadlineAnchor->tick);
-        const u64 allowance =
-            ceiling > m_admissionAnchor->tick ? ceiling - m_admissionAnchor->tick : 0;
-        const u64 elapsed =
-            elapsedTicks(m_admissionAnchor->received, *m_inputTime, m_context.tickRate, allowance);
-        const u64 estimate = std::min(ceiling, m_admissionAnchor->tick) + elapsed;
-        if (estimate > m_deadlineAnchor->tick) {
-            advance =
-                std::max(advance, std::min(kMaxDeadlineAdvance, estimate - m_deadlineAnchor->tick));
+    auto inputs = std::make_unique<LockstepInputs>();
+    std::vector<LockstepInputs::Link> links;
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        if (m_links[peer] != 0) {
+            links.push_back({peer, m_links[peer]});
         }
     }
-    return advance;
-}
-bool MatchSession::calibrateInputDeadline(const CombatSnapshot& state, usize seat) {
-    if (!state.players[seat] || !state.motion.players[seat] ||
-        state.motion.players[seat]->grant != m_context.grants[seat]) {
+    if (!inputs->open(m_local, m_context.epoch, m_owners, m_context.grants, m_context.inputLead,
+                      links)) {
         return false;
     }
-    const auto& feedback = state.players[seat]->movement;
-    const auto sent = std::ranges::find(m_sentInputs, feedback.receivedInput, &SentInput::tick);
-    // The negative margin saturates in InputTimeline; a saturated value cannot
-    // identify the admission tick. Unsent, forgotten or foreign inputs cannot
-    // establish a clock either. Epoch changes clear the entire local history.
-    if (sent == m_sentInputs.end() || !sent->firstSent ||
-        feedback.arrivalMargin <= -static_cast<s32>(InputTimeline::kMaxAhead) ||
-        feedback.arrivalMargin > static_cast<s32>(InputTimeline::kMaxAhead)) {
-        return false;
-    }
-    u64 admitted = feedback.receivedInput;
-    if (feedback.arrivalMargin >= 0) {
-        const auto margin = static_cast<u64>(feedback.arrivalMargin);
-        if (margin > admitted) {
-            return false;
-        }
-        admitted -= margin;
-    } else {
-        const auto late = static_cast<u64>(-feedback.arrivalMargin);
-        if (late > std::numeric_limits<u64>::max() - admitted) {
-            return false;
-        }
-        admitted += late;
-    }
-    if (admitted > state.motion.tick && admitted - state.motion.tick > 1) {
-        return false;
-    }
-    if (!m_admissionAnchor || *sent->firstSent > m_admissionAnchor->received ||
-        (*sent->firstSent == m_admissionAnchor->received && admitted > m_admissionAnchor->tick)) {
-        if (!m_admissionAnchor) {
-            // The old lead included snapshot age. Do not add that age again on
-            // top of the newly calibrated host clock. Already sent ticks remain
-            // immutable; inputReady coalesces until that old lead is consumed.
-            m_adaptiveLead = m_context.inputLead;
-            m_leadFeedbackFloor = m_nextInput;
-            resetLeadRecovery();
-        }
-        m_admissionAnchor = DeadlineAnchor{admitted, *sent->firstSent};
-    }
+    m_lockstep = std::move(inputs);
     return true;
 }
-void MatchSession::refreshInputDeadline(Time now) {
-    if (host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
-        return;
+bool MatchSession::ensureNativeAgreement(Time now) {
+    if (m_nativeAgreement) {
+        return true;
     }
-    observeInputTime(now);
-    if (!m_deadlineAnchor) {
-        return;
+    auto agreement = std::make_unique<NativeAgreement>();
+    std::vector<NativeAgreement::Link> links;
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        if (m_links[peer] != 0) {
+            links.push_back({peer, m_links[peer]});
+        }
     }
-    const u64 ahead = deadlineAdvance() + inputLead();
-    const u64 room = std::numeric_limits<u64>::max() - m_deadlineAnchor->tick;
-    const u64 deadline = m_deadlineAnchor->tick + std::min(ahead, room);
-    // Only future samples move. Previously transmitted history is immutable,
-    // including an unsent congestion retry and any retained discrete edge.
-    m_nextInput = std::max(m_nextInput, deadline);
+    if (!agreement->open(m_local, m_context.epoch, m_owners, links, kNativeAgreementPeriod, now)) {
+        failNativeAgreement(NativeAgreement::Failure::Protocol);
+        return false;
+    }
+    m_nativeAgreement = std::move(agreement);
+    return true;
 }
-void MatchSession::recordActionReceipt(const CombatSnapshot& state, Time now) {
-    for (usize seat = 0; seat < state.players.size(); ++seat) {
-        const auto& pose = state.motion.players[seat];
-        const auto& player = state.players[seat];
-        if (m_context.owners[seat] == 0 && !pose && !player) {
-            continue;
-        }
-        ActionReceipt receipt;
-        receipt.receivedAt = now;
-        receipt.epoch = state.motion.epoch;
-        receipt.tick = state.motion.tick;
-        receipt.seat = static_cast<u8>(seat);
-        receipt.grant = pose ? pose->grant : m_context.grants[seat];
-        receipt.continuity = pose ? pose->continuity : 0;
-        receipt.present = pose && player;
-        if (player) {
-            receipt.life = player->life;
-            receipt.portalPhase = player->portalPhase.has_value();
-            receipt.rollback = player->rollback.has_value();
-            receipt.action = player->rollback ? static_cast<u32>(player->rollback->action)
-                                              : player->animation.action;
-            receipt.generation = player->rollback ? player->rollback->animation.generation
-                                                  : player->animation.generation;
-            receipt.actualInput = player->rollbackInput ? player->rollbackInput->tick : 0;
-            receipt.receivedInput = player->movement.receivedInput;
-            receipt.lateInputs = player->movement.lateInputs;
-            receipt.reaction = player->reaction;
-            receipt.enabled = player->movement.enabled;
-            receipt.current = player->movement.current;
-            receipt.ranged = player->movement.ranged;
-            receipt.weapon = player->weapon.has_value();
-            receipt.melee = player->melee.has_value();
-            receipt.turbo = player->turbo.has_value();
-            receipt.released = player->rollback && player->rollback->released;
-        }
-        if (m_actionReceipts.size() == kActionReceipts) {
-            m_actionReceipts.pop_front();
-            ++m_droppedActionReceipts;
-        }
-        m_actionReceipts.push_back(receipt);
+void MatchSession::failNativeAgreement(NativeAgreement::Failure fallback, u64 tick) {
+    const auto reason =
+        m_nativeAgreement && m_nativeAgreement->failed() ? m_nativeAgreement->failure() : fallback;
+    if (m_nativeAgreement && m_nativeAgreement->failed()) {
+        tick = m_nativeAgreement->failureTick();
     }
+    log::error("Native observation agreement failed: {} (epoch {}, tick {}, peer {})",
+               agreementReason(reason), m_context.epoch, tick, m_local);
+    // The existing shared Stop supersedes queued observation packets and is
+    // reliably retained even when a normal output queue is congested.
+    stop(MatchStop::TransportFailure, true);
+}
+bool MatchSession::acceptPreparedContext(const MatchContext& context, MatchParty party) {
+    m_context = context;
+    m_travelParty = std::move(party);
+    m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
+    discardGameplay();
+    if (!beginNativeInputs()) {
+        stop(MatchStop::TransportFailure, false);
+        return false;
+    }
+    m_loaded = {};
+    m_movieSkipVotes = 0;
+    m_movieSkipRequests = 0;
+    m_loadingSeconds = 0;
+    m_phase = Phase::Loading;
+    return true;
+}
+bool MatchSession::finishNativeDrain() {
+    if (!m_pendingNativeContext || m_nativeInFlight ||
+        m_nativeCompleted != m_pendingNativeContext->sourceTick) {
+        return false;
+    }
+    const auto context = *m_pendingNativeContext;
+    auto party = std::move(m_pendingNativeParty);
+    auto shop = std::move(m_pendingNativeShop);
+    const auto votes = m_pendingNativeMovieVotes;
+    if (!acceptPreparedContext(context, std::move(party))) {
+        return false;
+    }
+    if (shop) {
+        m_shop = std::move(*shop);
+    }
+    m_movieSkipVotes = votes;
+    return true;
 }
 bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchParty* party,
                            const ShopSetup* shop, bool challengeWon) {
     const bool withCheckpoint = checkpointed(transition);
     const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-                         (withCheckpoint && m_phase == Phase::Running) ||
-                         (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
-                          scene == m_context.scene);
-    if (!host() || !allowed || scene == 0 || scene > 65535 ||
+                         (withCheckpoint && m_phase == Phase::Running);
+    if (!host() || !allowed || scene == 0 || scene > 65535 || m_nativeInFlight ||
+        m_pendingNativeContext ||
+        (withCheckpoint && m_context.transition != MatchTransition::Shop &&
+         m_nativeCompleted == 0) ||
         withCheckpoint != (party != nullptr) ||
         (challengeWon && transition != MatchTransition::SecretReturn) ||
         (transition == MatchTransition::Shop) != (shop != nullptr) ||
         (shop != nullptr && (!shop->valid() || shop->source != scene)) ||
-        m_timeline.epoch() == std::numeric_limits<u64>::max()) {
+        m_context.epoch == std::numeric_limits<u64>::max()) {
         return false;
     }
     if (m_context.transition == MatchTransition::Shop &&
@@ -392,7 +332,7 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
             }
             if ((*party)[seat]) {
                 auto packet = PartyCheckpointPacket::encode(
-                    {m_timeline.epoch() + 1, static_cast<u8>(seat), *(*party)[seat]});
+                    {m_context.epoch + 1, static_cast<u8>(seat), *(*party)[seat]});
                 if (!packet) {
                     return false;
                 }
@@ -407,20 +347,35 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
     }
     // Copy before replacing internal storage: callers may reuse travelParty().
     MatchParty nextParty = party != nullptr ? *party : MatchParty{};
-    m_timeline.beginEpoch();
+    const auto previousContext = m_context;
+    const auto finalTick = m_nativeCompleted;
+    auto drainingInputs = withCheckpoint ? std::move(m_lockstep) : nullptr;
     m_context = {};
-    m_context.epoch = m_timeline.epoch();
+    m_context.epoch = previousContext.epoch + 1;
     m_context.scene = scene;
     m_context.transition = transition;
     m_context.challengeWon = challengeWon;
     m_context.owners = m_owners;
+    m_context.inputLead = m_startupDelay;
+    if (withCheckpoint) {
+        m_context.sourceEpoch = previousContext.epoch;
+        m_context.sourceTick = finalTick;
+    }
     m_travelParty = std::move(nextParty);
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
-        m_context.grants[seat] = m_owners[seat] == 0 ? 0 : m_timeline.grant(seat);
+        // Membership is fixed for this transport lifetime. Epochs, not grant
+        // changes, isolate successive scenes; the original assigned grant is 1.
+        m_context.grants[seat] = m_owners[seat] == 0 ? 0 : 1;
     }
     discardGameplay();
-    m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
-    m_audio.begin(m_context.epoch, m_local, m_owners);
+    if (!beginNativeInputs()) {
+        stop(MatchStop::TransportFailure, true);
+        return false;
+    }
+    m_drainingInputs = std::move(drainingInputs);
+    if (m_drainingInputs) {
+        m_drainingContext = previousContext;
+    }
     m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants, shop);
     m_loaded = {};
     m_movieSkipVotes = 0;
@@ -442,7 +397,7 @@ bool MatchSession::prepare(u32 scene, MatchTransition transition, const MatchPar
 }
 const MatchParty* MatchSession::travelParty() const {
     if (!checkpointed(m_context.transition) ||
-        (m_phase != Phase::Loading && m_phase != Phase::Running && m_phase != Phase::Paused)) {
+        (m_phase != Phase::Loading && m_phase != Phase::Running)) {
         return nullptr;
     }
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
@@ -455,6 +410,20 @@ const MatchParty* MatchSession::travelParty() const {
 MatchSession::Admission MatchSession::checkpoint(u8 peer, const PartyCheckpoint& message) {
     if (host() || peer != 1) {
         return Admission::WrongPeer;
+    }
+    if (m_pendingNativeContext && message.epoch == m_pendingNativeContext->epoch) {
+        if (m_owners[message.seat] == 0) {
+            return Admission::Invalid;
+        }
+        auto& profile = m_pendingNativeParty[message.seat];
+        if (profile) {
+            return CharacterProfilePacket::encode(*profile) ==
+                           CharacterProfilePacket::encode(message.profile)
+                       ? Admission::Accepted
+                       : Admission::Invalid;
+        }
+        profile = message.profile;
+        return Admission::Accepted;
     }
     if (message.epoch < m_context.epoch) {
         return Admission::Stale;
@@ -489,6 +458,8 @@ void MatchSession::tryCommit() {
         stop(MatchStop::TransportFailure, true);
         return;
     }
+    m_drainingInputs.reset();
+    m_drainingContext.reset();
     m_phase = Phase::Running;
 }
 bool MatchSession::loaded() {
@@ -532,28 +503,6 @@ bool MatchSession::movieSkipReady() const {
     return m_phase == Phase::Loading && hasEntryMovie(m_context.transition) && required != 0 &&
            m_movieSkipVotes == required;
 }
-bool MatchSession::requestPause() {
-    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
-        return false;
-    }
-    if (!host()) {
-        // One outstanding request per epoch is enough; keep its reliable delivery.
-        if (std::ranges::any_of(m_controls, [](const auto& pending) {
-                const auto control = MatchControlPacket::decode(pending.bytes);
-                return control && control->kind == MatchControlKind::RequestPause;
-            })) {
-            return true;
-        }
-        return queue(1, MatchControlKind::RequestPause);
-    }
-    discardGameplay();
-    m_phase = Phase::Paused;
-    if (!broadcast(MatchControlKind::Pause)) {
-        stop(MatchStop::TransportFailure, true);
-        return false;
-    }
-    return true;
-}
 void MatchSession::stop(MatchStop reason, bool notify) {
     if (m_phase == Phase::Offline || m_phase == Phase::Stopped) {
         return;
@@ -561,7 +510,6 @@ void MatchSession::stop(MatchStop reason, bool notify) {
     discardGameplay();
     m_controls.clear();
     m_shop.begin(0, 0, {}, {});
-    m_playback.clear();
     m_phase = Phase::Stopped;
     m_stop = reason;
     if (notify && m_context.valid()) {
@@ -580,26 +528,24 @@ void MatchSession::disconnected(PacketTransport::Connection connection) {
     if (peer == 0) {
         return;
     }
+    if (m_nativeAgreement) {
+        m_nativeAgreement->disconnected(connection);
+    }
     m_links[peer] = 0;
-    m_timeline.disconnect(peer);
     std::erase_if(m_controls, [&](const auto& queued) { return queued.connection == connection; });
-    m_states[peer] = {};
-    stop(MatchStop::Disconnected, host());
+    if (m_nativeAgreement) {
+        failNativeAgreement(NativeAgreement::Failure::Disconnected);
+    } else {
+        stop(MatchStop::Disconnected, host());
+    }
 }
 void MatchSession::update(f64 seconds, Time now) {
-    refreshInputDeadline(now);
-    if (host() && m_phase == Phase::Running && std::isfinite(seconds) && seconds > 0) {
-        for (auto& delivery : m_states) {
-            for (auto& batch : delivery.batches) {
-                if (!batch.packets) {
-                    batch.remaining -= std::min(seconds, kPublicationTimeout);
-                }
-            }
-            std::erase_if(delivery.batches,
-                          [](const auto& batch) { return !batch.packets && batch.remaining <= 0; });
-        }
+    if (m_nativeAgreement && !m_nativeAgreement->update(now)) {
+        failNativeAgreement(NativeAgreement::Failure::Timeout);
+        return;
     }
-    if (m_phase == Phase::Loading && std::isfinite(seconds) && seconds > 0) {
+    if ((m_phase == Phase::Loading || m_pendingNativeContext) && std::isfinite(seconds) &&
+        seconds > 0) {
         m_loadingSeconds += seconds;
         if (m_loadingSeconds >= kLoadTimeout) {
             stop(MatchStop::LoadTimeout, true);
@@ -607,11 +553,21 @@ void MatchSession::update(f64 seconds, Time now) {
     }
 }
 MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& message) {
+    if (message.context.inputLead != m_startupDelay) {
+        return Admission::Invalid;
+    }
     // A host can abort before its queued Prepare reaches a guest. Stop is final,
     // not a request to start that future epoch or load its scene.
     if (!host() && peer == 1 && message.kind == MatchControlKind::Stop &&
         message.context.owners == m_owners && message.context.epoch >= m_context.epoch) {
         stop(message.stop, false);
+        return Admission::Accepted;
+    }
+    if (host() && m_drainingContext && message.kind == MatchControlKind::Stop &&
+        message.context == *m_drainingContext) {
+        stop(message.stop == MatchStop::TransportFailure ? MatchStop::TransportFailure
+                                                         : MatchStop::Left,
+             true);
         return Admission::Accepted;
     }
     if (message.kind == MatchControlKind::Prepare) {
@@ -624,30 +580,47 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
         if (message.context.owners != m_owners) {
             return Admission::Invalid;
         }
+        if (m_pendingNativeContext) {
+            return message.context == *m_pendingNativeContext ? Admission::Stale
+                                                              : Admission::Invalid;
+        }
         const auto transition = message.context.transition;
         const bool allowed = (transition == MatchTransition::Start && m_phase == Phase::Lobby) ||
-                             (checkpointed(transition) && m_phase == Phase::Running) ||
-                             (transition == MatchTransition::Resume && m_phase == Phase::Paused &&
-                              message.context.scene == m_context.scene);
+                             (checkpointed(transition) && m_phase == Phase::Running);
         if (!allowed || (m_context.transition == MatchTransition::Shop &&
                          transition != MatchTransition::Travel)) {
             return Admission::WrongPhase;
         }
-        m_context = message.context;
-        m_travelParty = {};
-        m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
-        discardGameplay();
-        m_feedback.begin(m_context.epoch, m_local, m_owners, m_context.grants);
-        m_audio.begin(m_context.epoch, m_local, m_owners);
-        m_loaded = {};
-        m_movieSkipVotes = 0;
-        m_movieSkipRequests = 0;
-        m_loadingSeconds = 0;
-        m_nextInput = m_context.inputLead;
-        if (!m_playback.begin(m_links[1], m_context.epoch)) {
-            return Admission::Invalid;
+        if (checkpointed(transition)) {
+            if (message.context.sourceEpoch != m_context.epoch ||
+                message.context.sourceTick < m_nativeCompleted ||
+                message.context.sourceTick - m_nativeCompleted > LockstepInputs::kWindow ||
+                (m_context.transition == MatchTransition::Shop ? message.context.sourceTick != 0
+                                                               : message.context.sourceTick == 0) ||
+                (m_nativeInFlight && *m_nativeInFlight > message.context.sourceTick)) {
+                return Admission::Invalid;
+            }
+            m_pendingNativeContext = message.context;
+            m_pendingNativeParty = {};
+            m_loadingSeconds = 0;
+            if (transition == MatchTransition::Shop) {
+                m_pendingNativeShop = std::make_unique<ShopSync>();
+                m_pendingNativeShop->begin(message.context.epoch, m_local, m_owners,
+                                           message.context.grants);
+            }
+            // Even an already-executed boundary needs the scene adapter's
+            // terminal-outcome check before acknowledging travel. A Shop has
+            // no native scene to execute and retains its ordinary barrier.
+            if (m_context.transition == MatchTransition::Shop) {
+                return finishNativeDrain() ? Admission::Accepted : Admission::Invalid;
+            }
+            return Admission::Accepted;
         }
-        m_phase = Phase::Loading;
+        return acceptPreparedContext(message.context) ? Admission::Accepted : Admission::Invalid;
+    }
+    if (m_pendingNativeContext && message.context == *m_pendingNativeContext && peer == 1 &&
+        message.kind == MatchControlKind::MovieSkipVote) {
+        m_pendingNativeMovieVotes |= message.movieSkipVotes;
         return Admission::Accepted;
     }
     if (message.context != m_context) {
@@ -691,27 +664,10 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
         m_phase = Phase::Running;
         return Admission::Accepted;
     case MatchControlKind::Pause:
-        if (host() || peer != 1) {
-            return Admission::WrongPeer;
-        }
-        if (m_phase != Phase::Running) {
-            return Admission::WrongPhase;
-        }
-        discardGameplay();
-        m_phase = Phase::Paused;
-        return Admission::Accepted;
-    case MatchControlKind::RequestPause:
-        if (!host()) {
-            return Admission::WrongPeer;
-        }
-        // Different guests can request the same pause before either receives the
-        // host's Pause. Their independent reliable channels do not order together.
-        if (m_phase == Phase::Paused) {
-            return Admission::Stale;
-        }
-        return requestPause() ? Admission::Accepted : Admission::WrongPhase;
+    case MatchControlKind::RequestPause: return Admission::Invalid;
     case MatchControlKind::Stop:
-        stop(host() ? MatchStop::Left : message.stop, host());
+        stop(host() && message.stop != MatchStop::TransportFailure ? MatchStop::Left : message.stop,
+             host());
         return Admission::Accepted;
     case MatchControlKind::Prepare: break;
     }
@@ -731,379 +687,181 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         const auto message = MatchControlPacket::decode(bytes);
         return message ? control(peer, *message) : Admission::Invalid;
     }
+    if (NativeAgreement::recognizes(bytes)) {
+        if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
+            return Admission::Stale;
+        }
+        const bool fresh = !m_nativeAgreement;
+        if (!ensureNativeAgreement(inputAt)) {
+            return Admission::Invalid;
+        }
+        const auto result = m_nativeAgreement->receive(connection, bytes, inputAt);
+        if (m_nativeAgreement->failed()) {
+            failNativeAgreement(NativeAgreement::Failure::Protocol);
+            // A validated divergence notification is handled, not a request for
+            // repair. Stop is already queued to terminate the whole shared match.
+            return result == NativeAgreement::Admission::Invalid ? Admission::Invalid
+                                                                 : Admission::Accepted;
+        }
+        switch (result) {
+        case NativeAgreement::Admission::Accepted:
+        case NativeAgreement::Admission::Duplicate: return Admission::Accepted;
+        case NativeAgreement::Admission::Stale:
+            if (fresh) {
+                m_nativeAgreement.reset(); // late old epochs do not enable this epoch's observer
+            }
+            return Admission::Stale;
+        case NativeAgreement::Admission::WrongPeer: return Admission::WrongPeer;
+        case NativeAgreement::Admission::Full:
+        case NativeAgreement::Admission::Failed:
+            failNativeAgreement(NativeAgreement::Failure::Window);
+            return Admission::Invalid;
+        case NativeAgreement::Admission::Invalid: return Admission::Invalid;
+        }
+        return Admission::Invalid;
+    }
     if (PartyCheckpointPacket::recognizes(bytes)) {
         const auto message = PartyCheckpointPacket::decode(bytes);
         return message ? checkpoint(peer, *message) : Admission::Invalid;
     }
     if (ShopSync::recognizes(bytes)) {
-        if (m_context.transition != MatchTransition::Shop) {
+        if (!m_pendingNativeShop && m_context.transition != MatchTransition::Shop) {
             return Admission::Stale;
         }
-        switch (m_shop.receive(peer, bytes)) {
+        // A future setup may follow Prepare while the old scene still drains.
+        // The separate bounded ShopSync cannot mutate its profiles or gameplay.
+        auto& shop = m_pendingNativeShop ? *m_pendingNativeShop : m_shop;
+        switch (shop.receive(peer, bytes)) {
         case ShopSync::Admission::Accepted: return Admission::Accepted;
         case ShopSync::Admission::Stale: return Admission::Stale;
         case ShopSync::Admission::WrongPeer: return Admission::WrongPeer;
         case ShopSync::Admission::Invalid: return Admission::Invalid;
         }
     }
-    if (FeedbackSync::recognizes(bytes)) {
-        if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop) {
-            return Admission::Stale;
-        }
-        switch (m_feedback.receive(peer, bytes)) {
-        case FeedbackSync::Admission::Accepted: return Admission::Accepted;
-        case FeedbackSync::Admission::Stale: return Admission::Stale;
-        case FeedbackSync::Admission::WrongPeer: return Admission::WrongPeer;
-        case FeedbackSync::Admission::Invalid: return Admission::Invalid;
-        }
-    }
-    if (AudioSync::recognizes(bytes)) {
-        if ((m_phase != Phase::Running && m_phase != Phase::Loading) ||
-            m_context.transition == MatchTransition::Shop) {
-            return Admission::Stale;
-        }
-        switch (m_audio.receive(peer, bytes)) {
-        case AudioSync::Admission::Accepted: return Admission::Accepted;
-        case AudioSync::Admission::Stale: return Admission::Stale;
-        case AudioSync::Admission::WrongPeer: return Admission::WrongPeer;
-        case AudioSync::Admission::Invalid: return Admission::Invalid;
-        }
-    }
-    if (m_context.transition == MatchTransition::Shop) {
-        return Admission::Stale;
-    }
-    if (m_phase != Phase::Running) {
-        // Reliable control and unreliable gameplay are not ordered together.
-        // A snapshot can overtake Commit/Prepare, or old inputs can trail Pause.
-        // Discard those datagrams without decoding, queueing or advancing state;
-        // only the reliable control above is allowed to cross a phase boundary.
-        return Admission::Stale;
-    }
-    if (host()) {
-        if (CombatReplica::recognizesReceipt(bytes)) {
-            const auto message = CombatReplica::decodeReceipt(bytes);
-            return message ? receipt(peer, *message) : Admission::Invalid;
-        }
+    {
         const auto commands = InputPacket::decode(bytes);
         if (!commands) {
             return Admission::Invalid;
         }
-        // Validate the whole packet before admission, so a spoofed trailing seat
-        // cannot leave an earlier command partially applied.
+        auto* inputs = m_lockstep.get();
+        const auto* context = &m_context;
+        std::optional<u64> endTick = nativeEndTick();
+        if (host() && m_drainingInputs && m_drainingContext && !commands->empty() &&
+            commands->front().epoch == m_drainingContext->epoch) {
+            inputs = m_drainingInputs.get();
+            context = &*m_drainingContext;
+            endTick = m_context.sourceTick;
+        } else if (!inputs || m_context.transition == MatchTransition::Shop ||
+                   (m_phase != Phase::Running &&
+                    !(m_phase == Phase::Loading && m_loaded[m_local]))) {
+            return Admission::Stale;
+        }
         for (const auto& command : *commands) {
-            if (command.epoch != m_context.epoch) {
+            if (command.epoch != context->epoch || (endTick && command.tick > *endTick)) {
                 return Admission::Stale;
             }
-            if (m_context.owners[command.seat] != peer ||
-                command.grant != m_context.grants[command.seat]) {
-                return Admission::WrongPeer;
-            }
-            if (command.tick > m_timeline.tick() &&
-                command.tick - m_timeline.tick() > InputTimeline::kMaxAhead) {
-                return Admission::Invalid;
-            }
         }
-        for (const auto& command : *commands) {
-            m_timeline.submit(peer, command);
+        // Ready/Commit deliveries on different peer connections need not be
+        // polled together. Retain current-epoch inputs after this peer loaded;
+        // only Commit opens advance(). Never discard an accepted reliable edge.
+        switch (inputs->receive(connection, bytes)) {
+        case LockstepInputs::Admission::Accepted:
+        case LockstepInputs::Admission::Duplicate: return Admission::Accepted;
+        case LockstepInputs::Admission::Stale: return Admission::Stale;
+        case LockstepInputs::Admission::WrongPeer: return Admission::WrongPeer;
+        case LockstepInputs::Admission::Full:
+        case LockstepInputs::Admission::Conflict:
+            // A reliable message has already left the transport. Silently
+            // dropping it on capacity/conflict would create an endless stall.
+            stop(MatchStop::TransportFailure, true);
+            return Admission::Invalid;
+        case LockstepInputs::Admission::Invalid:
+        case LockstepInputs::Admission::TooEarly: return Admission::Invalid;
         }
-        return Admission::Accepted;
+        return Admission::Invalid;
     }
-    if (CombatReplica::recognizesReceipt(bytes)) {
-        return Admission::WrongPeer;
-    }
-    const auto admission = m_playback.receive(connection, bytes);
-    switch (admission) {
-    case CombatReplica::Admission::Committed:
-        m_receipt = m_playback.receipt();
-        if (const auto* state = m_playback.latest()) {
-            const auto receivedAt = observeInputTime(inputAt);
-            m_deadlineAnchor = DeadlineAnchor{state->motion.tick, receivedAt};
-            // Keep input pacing's existing packet-arrival anchor. Diagnostics
-            // instead stamp completed validation, before local replay/rendering.
-            recordActionReceipt(*state, now ? receivedAt : Clock::now());
-            m_latency.checkpoint(*state);
-            // Calibrate all local seats before adapting their shared safety
-            // margin, so a newly calibrated seat cannot erase another's raise.
-            for (usize seat = 0; seat < state->players.size(); ++seat) {
-                if (m_context.owners[seat] == m_local && state->players[seat] &&
-                    state->players[seat]->movement.receivedInput > m_feedbackInput[seat]) {
-                    calibrateInputDeadline(*state, seat);
-                }
-            }
-            bool allFresh = true;
-            std::optional<s32> margin;
-            std::optional<s32> raisedLead;
-            for (usize seat = 0; seat < state->players.size(); ++seat) {
-                if (m_context.owners[seat] != m_local) {
-                    continue;
-                }
-                if (!state->players[seat] || !state->motion.players[seat] ||
-                    state->motion.players[seat]->grant != m_context.grants[seat]) {
-                    allFresh = false;
-                    continue;
-                }
-                const auto& feedback = state->players[seat]->movement;
-                if (feedback.receivedInput <= m_feedbackInput[seat]) {
-                    allFresh = false;
-                    continue;
-                }
-                m_feedbackInput[seat] = feedback.receivedInput;
-                allFresh = allFresh && feedback.receivedInput > m_leadFeedbackFloor;
-                margin =
-                    margin ? std::min(*margin, feedback.arrivalMargin) : feedback.arrivalMargin;
-                if (feedback.arrivalMargin < 2 && feedback.receivedInput > m_leadFeedbackFloor) {
-                    // Measure actual admission deadlines, not an assumed LAN RTT. Wait
-                    // for commands sampled after this adjustment before adjusting again.
-                    s32 needed = inputLead() + 2 - feedback.arrivalMargin;
-                    const auto sent =
-                        std::ranges::find(m_sentInputs, feedback.receivedInput, &SentInput::tick);
-                    if (!m_admissionAnchor && sent != m_sentInputs.end()) {
-                        // Receipt feedback traverses both directions, including the
-                        // checkpoint cadence. Cover that measured interval at once,
-                        // rather than converging over several long-distance round trips.
-                        needed = std::max(needed, 2 + static_cast<s32>(elapsedTicks(
-                                                          sent->sampled, receivedAt,
-                                                          m_context.tickRate, kMaxInputLead)));
-                    }
-                    raisedLead = raisedLead ? std::max(*raisedLead, needed) : needed;
-                }
-            }
-            if (raisedLead) {
-                // Evaluate every local seat against the same adjustment floor.
-                // A second seat's worse margin must not depend on seat order.
-                m_adaptiveLead = static_cast<u8>(std::min<s32>(kMaxInputLead, *raisedLead));
-                m_leadFeedbackFloor = m_nextInput;
-            }
-            // A temporary stall must not permanently leave commands half a
-            // second ahead. Recover only from fresh admission evidence for all
-            // local seats, retaining three ticks of the worst measured margin.
-            // Command timestamps never move backwards: inputReady coalesces
-            // edges until the host catches up with any already-sent lead.
-            if (raisedLead || !allFresh || (margin && *margin < 4)) {
-                resetLeadRecovery();
-            } else if (allFresh && margin && inputLead() > m_context.inputLead) {
-                if (!m_healthyLeadSince) {
-                    m_healthyLeadSince = state->motion.tick;
-                    m_healthyLeadMargin = *margin;
-                } else {
-                    m_healthyLeadMargin = std::min(m_healthyLeadMargin, *margin);
-                }
-                ++m_healthyLeadSamples;
-                if (state->motion.tick - *m_healthyLeadSince >= m_context.tickRate &&
-                    m_healthyLeadSamples >= 8) {
-                    const s32 reduction =
-                        std::min({3, m_healthyLeadMargin - 3,
-                                  static_cast<s32>(inputLead() - m_context.inputLead)});
-                    m_adaptiveLead = static_cast<u8>(inputLead() - reduction);
-                    m_leadFeedbackFloor = m_nextInput;
-                    resetLeadRecovery();
-                }
-            }
-        }
-        refreshInputDeadline(inputAt);
-        return Admission::Accepted;
-    case CombatReplica::Admission::Pending:
-    case CombatReplica::Admission::Duplicate: return Admission::Accepted;
-    case CombatReplica::Admission::Stale:
-    case CombatReplica::Admission::WrongEpoch: return Admission::Stale;
-    case CombatReplica::Admission::WrongHost: return Admission::WrongPeer;
-    case CombatReplica::Admission::Invalid: return Admission::Invalid;
-    }
-    return Admission::Invalid;
 }
 bool MatchSession::inputReady() const {
     if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
         inputTick() == std::numeric_limits<u64>::max()) {
         return false;
     }
-    if (host()) {
-        return true;
-    }
-    const auto* latest = m_playback.latest();
-    const u64 confirmed = latest == nullptr ? 0 : latest->motion.tick;
-    const u64 budget =
-        std::min(kMaxUnconfirmedTicks, deadlineAdvance() + inputLead() + kInputSlack);
-    return m_nextInput <= confirmed || m_nextInput - confirmed <= budget;
+    return !m_pendingNativeContext && !m_nativeInFlight && m_lockstep && m_lockstep->sampleReady();
 }
-bool MatchSession::sample(std::span<const InputCommand> frame, Time now) {
+bool MatchSession::sample(std::span<const InputCommand> frame) {
     m_sampled.clear();
     if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
         inputTick() == std::numeric_limits<u64>::max() ||
         frame.size() != static_cast<usize>(std::ranges::count(m_owners, m_local))) {
         return false;
     }
-    ++m_sampleClock;
-    std::array<bool, InputCommand::kSeats> seen{};
-    for (const auto& command : frame) {
-        if (!command.valid() || command.epoch != m_context.epoch || command.tick != inputTick() ||
-            m_owners[command.seat] != m_local || command.grant != m_context.grants[command.seat] ||
-            seen[command.seat]) {
-            return false;
-        }
-        seen[command.seat] = true;
-    }
-    const auto sampledAt = observeInputTime(now);
-    if (!inputReady()) {
-        for (const auto& command : frame) {
-            m_pendingPress[command.seat] |= command.pressedButtons;
-        }
-        return true;
-    }
-    std::vector<InputCommand> pending(frame.begin(), frame.end());
-    for (auto& command : pending) {
-        const u32 pressed = m_pendingPress[command.seat];
-        command.pressedButtons |= pressed;
-        // Native PartyMotion starts an ordinary attack from its held level,
-        // not attackPressed alone. Preserve one coalesced tap across sampling
-        // backpressure without replaying stale held inputs or movement.
-        if ((pressed & static_cast<u32>(CommandPress::Attack)) != 0) {
-            command.heldButtons |= static_cast<u32>(CommandHeld::Attack);
-        }
-    }
-    if (!m_history.record(pending)) {
+    if (!inputReady() || !m_lockstep->sample(frame)) {
         return false;
     }
-    m_sampled = std::move(pending);
-    if (!host()) {
-        m_latency.sampled(m_sampled);
-    }
-    if (host()) {
-        for (const auto& command : frame) {
-            m_timeline.submit(m_local, command);
-        }
-    } else {
-        const auto bytes = InputPacket::encode(m_history.commands());
-        if (!bytes) {
-            return false;
-        }
-        m_input = *bytes;
-        m_sentInputs.push_back({m_nextInput, sampledAt});
-        if (m_sentInputs.size() > InputTimeline::kMaxAhead) {
-            m_sentInputs.pop_front();
-        }
-        ++m_nextInput;
-    }
-    m_pendingPress = {};
+    m_sampled.assign(frame.begin(), frame.end());
     return true;
 }
-std::optional<InputTimeline::Frame> MatchSession::advance() {
-    if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
-        m_timeline.tick() == std::numeric_limits<u64>::max()) {
+std::optional<LockstepInputs::Frame> MatchSession::advance() {
+    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop || !m_lockstep ||
+        m_nativeInFlight ||
+        (m_pendingNativeContext && m_lockstep->tick() > m_pendingNativeContext->sourceTick)) {
         return std::nullopt;
     }
-    return m_timeline.advance();
-}
-MatchSession::Admission MatchSession::receipt(u8 peer, const CombatReplica::Receipt& message) {
-    if (message.epoch != m_context.epoch) {
-        return Admission::Stale;
-    }
-    auto& batches = m_states[peer].batches;
-    const auto found = std::ranges::find_if(
-        batches, [&](const auto& batch) { return batch.identity.tick == message.tick; });
-    if (found == batches.end()) {
-        return m_published && message.tick <= *m_published ? Admission::Stale : Admission::Invalid;
-    }
-    if (found->identity != message || found->next == 0) {
-        return Admission::Invalid;
-    }
-    // A committed newer full snapshot supersedes older assemblies too. Never
-    // truncate a started batch: a receipt can precede its final repair packets.
-    for (auto& batch : batches) {
-        if (batch.identity.tick <= message.tick) {
-            batch.acknowledged = true;
-        }
-    }
-    std::erase_if(batches, [](const auto& batch) { return batch.acknowledged && !batch.packets; });
-    return Admission::Accepted;
-}
-bool MatchSession::publicationReady() const {
-    if (!host() || m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
-        m_timeline.tick() == 0 || (m_published && m_timeline.tick() - 1 <= *m_published)) {
-        return false;
-    }
-    bool remote = false;
-    for (u8 peer = 1; peer <= 4; ++peer) {
-        if (m_links[peer] != 0) {
-            remote = true;
-            if (m_states[peer].ready()) {
-                return true;
+    const auto tick = m_lockstep->tick();
+    auto frame = m_lockstep->advance();
+    if (frame) {
+        m_nativeInFlight = tick;
+        for (usize seat = 0; seat < m_owners.size(); ++seat) {
+            if (m_owners[seat] != 0) {
+                m_nativeResolved[seat] = (*frame)[seat];
             }
         }
     }
-    return !remote;
+    return frame;
 }
-bool MatchSession::canPublish(const MotionSnapshot& motion) const {
-    if (!publicationReady() || motion.epoch != m_context.epoch ||
-        motion.tick != m_timeline.tick() - 1) {
+bool MatchSession::completedNativeTick(u64 tick) {
+    if (m_phase != Phase::Running) {
         return false;
     }
-    for (usize seat = 0; seat < m_owners.size(); ++seat) {
-        const auto& player = motion.players[seat];
-        if (player.has_value() != (m_owners[seat] != 0) ||
-            (player && player->grant != m_context.grants[seat])) {
+    if (m_nativeInFlight) {
+        if (*m_nativeInFlight != tick || m_nativeCompleted == std::numeric_limits<u64>::max() ||
+            tick != m_nativeCompleted + 1) {
             return false;
         }
+        m_nativeInFlight.reset();
+        m_nativeCompleted = tick;
+    } else if (!m_pendingNativeContext || m_nativeCompleted != tick ||
+               m_pendingNativeContext->sourceTick != tick) {
+        return false;
     }
-    return true;
+    return !m_pendingNativeContext || tick != m_pendingNativeContext->sourceTick ||
+           finishNativeDrain();
 }
-bool MatchSession::publish(const CombatSnapshot& state) {
-    if (!canPublish(state.motion)) {
+bool MatchSession::observeNative(u64 tick, const NativeAgreement::Digest& digest, Time now) {
+    if (m_phase != Phase::Running || m_context.transition == MatchTransition::Shop ||
+        m_nativeInFlight || tick == 0 || tick != m_nativeCompleted ||
+        tick % kNativeAgreementPeriod != 0) {
         return false;
     }
-    const auto prepared = CombatPacket::prepare(state);
-    return prepared && publish(*prepared);
-}
-bool MatchSession::publish(const CombatPacket::Prepared& state) {
-    if (!canPublish(state.motion())) {
+    if (!ensureNativeAgreement(now)) {
         return false;
     }
-    CombatReplica::Receipt identity;
-    auto packets = CombatReplica::packets(state, SnapshotBlock::Compression::Automatic,
-                                          CombatReplica::Recovery::SingleLoss, &identity);
-    if (!packets) {
+    switch (m_nativeAgreement->submit(tick, digest, now)) {
+    case NativeAgreement::Admission::Accepted:
+    case NativeAgreement::Admission::Duplicate: return true;
+    case NativeAgreement::Admission::Full:
+        failNativeAgreement(NativeAgreement::Failure::Window, tick);
+        return false;
+    case NativeAgreement::Admission::Failed:
+    case NativeAgreement::Admission::Stale:
+    case NativeAgreement::Admission::WrongPeer:
+    case NativeAgreement::Admission::Invalid:
+        failNativeAgreement(NativeAgreement::Failure::Protocol, tick);
         return false;
     }
-    const auto encoded = std::make_shared<const CombatReplica::Packets>(std::move(*packets));
-    for (u8 peer = 1; peer <= 4; ++peer) {
-        if (m_links[peer] != 0) {
-            auto& delivery = m_states[peer];
-            if (delivery.ready()) {
-                if (!delivery.batches.empty() && delivery.batches.back().next == 0) {
-                    delivery.batches.pop_back();
-                }
-                delivery.batches.push_back({encoded, identity});
-            }
-        }
-    }
-    m_published = state.motion().tick;
-    return true;
+    return false;
 }
 void MatchSession::flush(PacketTransport& transport, Time now) {
-    if (!host() && m_phase == Phase::Running) {
-        if (elapsedTicks(m_statisticsAt, now, 1, 1) >= 1) {
-            m_statisticsAt = now;
-            if (const auto stats = transport.statistics(m_links[1])) {
-                m_latency.network(*stats);
-                if (m_sampleClock == 0 && stats->pingMs >= 0) {
-                    // Seed the first commands of each scene from the already
-                    // established transport, before receipt feedback is possible.
-                    // A command follows a delayed host clock and then travels back,
-                    // so cover the round trip, not just the outbound half.
-                    const u32 maxRoundTrip =
-                        static_cast<u32>(kMaxInputLead) * 1000 / m_context.tickRate;
-                    const auto roundTrip = std::min(static_cast<u32>(stats->pingMs), maxRoundTrip);
-                    const u32 ticks = (roundTrip * m_context.tickRate + 999) / 1000;
-                    m_adaptiveLead =
-                        static_cast<u8>(std::min<u32>(kMaxInputLead, m_context.inputLead + ticks));
-                    const auto* latest = m_playback.latest();
-                    const u64 tick = latest != nullptr ? latest->motion.tick : 0;
-                    if (tick <= std::numeric_limits<u64>::max() - inputLead()) {
-                        m_nextInput = std::max(m_nextInput, tick + inputLead());
-                    }
-                }
-            }
-        }
-    }
     while (!m_controls.empty()) {
         const auto& control = m_controls.front();
         const auto result =
@@ -1117,6 +875,13 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
             return;
         }
         m_controls.pop_front();
+    }
+    // Prepare may reach a guest before old input deliveries. Retain and drain
+    // the source relay throughout Loading; Ready acknowledges execution of its
+    // terminal tick, so tryCommit() is the only successful retirement boundary.
+    if (m_drainingInputs && !m_drainingInputs->flush(transport)) {
+        stop(MatchStop::TransportFailure, true);
+        return;
     }
     if (m_context.transition == MatchTransition::Shop) {
         while (!m_shop.outgoing().empty()) {
@@ -1137,97 +902,16 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
     if (m_phase != Phase::Running) {
         return;
     }
-    if (!host() && !m_input.empty()) {
-        const auto result =
-            transport.send(m_links[1], m_input, PacketTransport::Delivery::Unreliable);
-        if (result == PacketTransport::SendResult::Sent) {
-            const auto sentAt = observeInputTime(now);
-            for (const auto& command : m_history.commands()) {
-                const auto entry = std::ranges::find(m_sentInputs, command.tick, &SentInput::tick);
-                if (entry != m_sentInputs.end() && !entry->firstSent) {
-                    entry->firstSent = sentAt;
-                }
-            }
-            m_latency.sent(m_history.commands());
-            m_input.clear();
-        } else if (result != PacketTransport::SendResult::Congested) {
-            stop(MatchStop::TransportFailure, false);
-            return;
-        }
-    }
-    if (!host() && m_receipt) {
-        const auto bytes = CombatReplica::encodeReceipt(*m_receipt);
-        const auto result = transport.send(m_links[1], *bytes, PacketTransport::Delivery::Reliable);
-        if (result == PacketTransport::SendResult::Sent) {
-            m_receipt.reset();
-        } else if (result != PacketTransport::SendResult::Congested) {
-            stop(MatchStop::TransportFailure, false);
-            return;
-        }
-    }
-    if (m_audio.failed()) {
+    // In particular, a congested Commit above must reach this destination
+    // before any reliable frame. Native peers produce their own local audio
+    // and presentation; no host snapshots or duplicate cue stream is sent.
+    if (!m_lockstep || !m_lockstep->flush(transport)) {
         stop(MatchStop::TransportFailure, true);
         return;
     }
-    while (!m_audio.outgoing().empty()) {
-        const auto& delivery = m_audio.outgoing().front();
-        const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
-                                           PacketTransport::Delivery::Reliable);
-        if (result == PacketTransport::SendResult::Congested) {
-            break;
-        }
-        if (result != PacketTransport::SendResult::Sent) {
-            disconnected(m_links[delivery.peer]);
-            return;
-        }
-        m_audio.sent();
+    if (m_nativeAgreement && !m_nativeAgreement->flush(transport, now)) {
+        failNativeAgreement(NativeAgreement::Failure::Transport);
     }
-    while (!m_feedback.outgoing().empty()) {
-        const auto& delivery = m_feedback.outgoing().front();
-        const auto result = transport.send(m_links[delivery.peer], delivery.bytes,
-                                           PacketTransport::Delivery::Reliable);
-        if (result == PacketTransport::SendResult::Congested) {
-            break; // Optional feedback must not stall gameplay on another channel.
-        }
-        if (result != PacketTransport::SendResult::Sent) {
-            disconnected(m_links[delivery.peer]);
-            return;
-        }
-        m_feedback.sent();
-    }
-    for (u8 peer = 1; host() && peer <= 4; ++peer) {
-        auto& state = m_states[peer];
-        usize budget = kPublicationBurst;
-        for (auto& batch : state.batches) {
-            if (!batch.packets) {
-                continue;
-            }
-            while (budget > 0 && batch.next < batch.packets->size()) {
-                const auto result = transport.send(m_links[peer], (*batch.packets)[batch.next],
-                                                   PacketTransport::Delivery::Unreliable);
-                if (result == PacketTransport::SendResult::Congested) {
-                    budget = 0;
-                    break;
-                }
-                if (result != PacketTransport::SendResult::Sent) {
-                    disconnected(m_links[peer]);
-                    return;
-                }
-                ++batch.next;
-                --budget;
-            }
-            if (batch.next == batch.packets->size()) {
-                // Keep only the bounded identity/timeout after transmission, not
-                // megabytes of already-sent chunks. Timers never extend repairs.
-                batch.packets.reset();
-                batch.remaining = kPublicationTimeout;
-            }
-            if (budget == 0) {
-                break;
-            }
-        }
-        std::erase_if(state.batches,
-                      [](const auto& batch) { return batch.acknowledged && !batch.packets; });
-    }
+    return;
 }
 } // namespace gdl::game

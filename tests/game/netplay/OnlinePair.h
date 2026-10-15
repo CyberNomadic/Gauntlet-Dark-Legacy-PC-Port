@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "game/netplay/OnlineSession.h"
+#include "game/screens/NativePlaySetup.h"
 
 namespace gdl::test {
 /** In-memory authenticated transport for native gameplay tests. The separate
@@ -135,6 +136,12 @@ struct OnlinePair {
         }
         hostWire.remote = &guestWire;
         guestWire.remote = &hostWire;
+        const game::OnlineSession::NativeIdentity identity{
+            "test-executable", "test-runtime", std::string(64, 'a'), std::string(64, 'b'), "en"};
+        game::OnlineSession::NativeRules rules;
+        rules.scene = 1;
+        REQUIRE(hostSession.configureNative(identity, rules));
+        REQUIRE(guestSession.configureNative(identity));
         game::CharacterProfile selection;
         selection.name = "HOST";
         REQUIRE(hostSession.select(std::vector<game::CharacterProfile>(
@@ -154,8 +161,10 @@ struct OnlinePair {
         REQUIRE(guestSession.ready());
         pump();
         REQUIRE(hostSession.start());
-        pump();
-        pump(); // Party relay and acknowledgement precede the scene-load barrier.
+        for (u32 round = 0;
+             round < 12 && guestSession.phase() != game::OnlineSession::Phase::Active; ++round) {
+            pump();
+        }
         REQUIRE(host.phase() == game::MatchSession::Phase::Lobby);
         REQUIRE(guest.phase() == game::MatchSession::Phase::Lobby);
     }
@@ -163,6 +172,23 @@ struct OnlinePair {
         for (s32 i = 0; i < 3; ++i) {
             hostSession.update(0);
             guestSession.update(0);
+            for (auto* session : {&hostSession, &guestSession}) {
+                if (session->nativeSetupPending()) {
+                    const auto& agreed = *session->nativeContract();
+                    const game::NativePlaySetup::Contract contract{agreed.rules.scene,
+                                                                   agreed.rules.autoMelee,
+                                                                   agreed.rules.autoActivateItems,
+                                                                   agreed.rules.expandedShop,
+                                                                   agreed.identity.build,
+                                                                   agreed.identity.content,
+                                                                   agreed.identity.data};
+                    const auto setup =
+                        game::NativePlaySetup::create(game::GameConfig{}, session->room()->settings,
+                                                      *session->party(), {}, contract);
+                    REQUIRE(setup);
+                    REQUIRE(session->confirmNativeSetup(setup->digest()));
+                }
+            }
             REQUIRE(hostSession.phase() != game::OnlineSession::Phase::Failed);
             REQUIRE(guestSession.phase() != game::OnlineSession::Phase::Failed);
         }

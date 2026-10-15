@@ -11,7 +11,6 @@
 #include "game/players/NameCheats.h"
 #include "game/players/PowerupEffects.h"
 #include "game/screens/HelpMessages.h"
-#include "game/screens/PartyHelpAdmission.h"
 #include "game/screens/PickupHud.h"
 
 namespace gdl::game {
@@ -122,61 +121,6 @@ std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> p
         result.push_back(Collector{from, actor.reach(), actor.height() * 0.5f});
     }
     return result;
-}
-
-bool PartyPickups::touchesPickup(std::span<const PlayerRuntime> players, const LevelWorld& world,
-                                 const Chests& chests) {
-    const auto visitors = collectors(players, world, chests);
-    const auto& items = world.placedItems();
-    for (usize index = 0; index < items.size(); ++index) {
-        const auto& item = items.item(index);
-        if (item.takeable() && std::ranges::any_of(visitors, [&](const auto& visitor) {
-                return item.touchedBy(visitor);
-            })) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool PartyPickups::collectionUnchanged(std::span<const PlayerRuntime> players,
-                                       const LevelWorld& world, const Chests& chests,
-                                       const ClassDataSet& classes) {
-    const auto visitors = collectors(players, world, chests);
-    const auto& items = world.placedItems();
-    for (usize index = 0; index < items.size(); ++index) {
-        const auto pickup = items.pickupFor(index, visitors);
-        if (!pickup) {
-            continue;
-        }
-        if (!offerUnchanged(*pickup, players, world, classes)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool PartyPickups::offerUnchanged(const Pickup& pickup, std::span<const PlayerRuntime> players,
-                                  const LevelWorld& world, const ClassDataSet& classes) {
-    // Crystals use the separate shared-party path. Powerups always produce
-    // pickup feedback, even when their inventory write changes nothing;
-    // their selector auto-activation policy is not part of this domain.
-    const auto kind = static_cast<ItemKind>(pickup.subtype);
-    if (pickup.realm > 0 || pickup.collector >= players.size() ||
-        (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup)) {
-        return false;
-    }
-    const auto& saved = players[pickup.collector].actor.save();
-    if (saved.character < 0 || static_cast<usize>(saved.character) >= saved.classes.size()) {
-        return false;
-    }
-    auto candidate = saved;
-    const auto taking = judgePickup(candidate, pickup, world, classes, false);
-    if (taking.took()) {
-        return false;
-    }
-    const auto help = refusalHelp(taking.outcome);
-    return !help || PartyHelpAdmission::suppressed(*help, pickup.collector, players);
 }
 
 PickupDecision PartyPickups::takeCurrency(const Pickup& pickup, std::span<PlayerRuntime> players,
@@ -416,7 +360,7 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     if (!taking.sound.empty()) {
         services.audio.playNamed(taking.sound);
     } else if (PlayerFigure* figure = runtime.figure.get();
-               (taking.ate || taking.hurt) && figure != nullptr && services.sounds != nullptr) {
+               (taking.ate || taking.hurt) && figure != nullptr) {
         const bool pojo = PickupVoices::carriesPojo(actor.save());
         const PickupVoice cue = m_pickupVoices.food(
             actor.save().character, world.placedItems().item(pickup.item).name, taking.hurt, pojo);

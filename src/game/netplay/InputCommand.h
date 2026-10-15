@@ -64,6 +64,8 @@ struct InputCommand {
     std::optional<Vec3> aimDirection;
     u32 heldButtons = 0;
     u32 pressedButtons = 0;
+    u8 hintTopic = 0;    ///< one-shot Sumner topic row + 1; zero means absent
+    u8 hintRevision = 0; ///< observed menu revision; zero when no topic is present
 
     bool held(CommandHeld button) const { return (heldButtons & static_cast<u32>(button)) != 0; }
     bool pressed(CommandPress button) const {
@@ -78,7 +80,7 @@ struct InputCommand {
  * The transport must authenticate the sender separately; a packet cannot name its peer. */
 class InputPacket {
 public:
-    static constexpr u16 kVersion = 3;
+    static constexpr u16 kVersion = 4;
     static constexpr usize kMaxCommands = 16;
     static constexpr usize kHeaderBytes = 8;
     static constexpr usize kCommandBytes = 56;

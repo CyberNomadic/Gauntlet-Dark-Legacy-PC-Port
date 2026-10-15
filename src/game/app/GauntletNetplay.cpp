@@ -6,6 +6,7 @@
 
 namespace gdl::game {
 void Gauntlet::connectNetplay() {
+    setUpdateRate(60); // Shared native inputs advance at 60 Hz; video remains local.
     auto& ui = *m_netplay;
     ui.notice.clear();
     ui.view.status = "Checking native assets...";
@@ -35,6 +36,7 @@ void Gauntlet::leaveNetplay() {
     m_online.reset();
     m_netplay.reset();
     resetPlayInput();
+    setUpdateRate(m_config.timing.tickRate);
     setMaxFrameRate(m_config.display.maxFrameRate);
     if (!m_title.isOpen()) {
         startTitleScreen();
@@ -69,6 +71,7 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
         }
         m_online->update(m_select.isOpen() ? SessionInputs::Frame{} : readPlayInputs(deltaSeconds),
                          {});
+        ui.view.canSaveCompletedProgress = m_online->hasCompletedProgress();
         if (m_select.isOpen()) {
             updateSelect(deltaSeconds);
             return;
@@ -88,7 +91,9 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
         ui.view.status = ui.notice;
     }
     if (ui.view.page == Page::Pause) {
-        ui.view.status = "Only your controls are paused. Your character can still be hurt.";
+        if (ui.notice.empty()) {
+            ui.view.status = "Only your controls are paused. Your character can still be hurt.";
+        }
         ui.view.invitation.clear();
     }
     ui.menu.show(renderDevice(), ui.view);
@@ -175,6 +180,12 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
         ui.overlay = false;
         resetPlayInput();
         break;
+    case Action::SaveCompletedProgress:
+        ui.notice = m_online && m_online->saveCompletedProgress()
+                        ? "Completed progress saved on this device."
+                        : "Could not save all completed progress. Check available save slots.";
+        break;
+    case Action::ReturnTitle: leaveNetplay(); return;
     case Action::Leave:
         if (ui.view.page == Page::Leave) {
             leaveNetplay();
@@ -186,7 +197,10 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
                                               : "Disconnect from this game?";
         break;
     case Action::Back:
-        if (ui.view.page == Page::Pause) {
+        if (ui.view.page == Page::Finished) {
+            leaveNetplay();
+            return;
+        } else if (ui.view.page == Page::Pause) {
             if (m_online) {
                 m_online->resume();
             }

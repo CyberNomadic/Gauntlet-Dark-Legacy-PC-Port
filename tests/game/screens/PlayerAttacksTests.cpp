@@ -1208,7 +1208,10 @@ TEST_CASE("an elemental weapon's throw carries its effect, the wizard's the effe
 }
 
 TEST_CASE("gas damage queues pain without overlapping direct choking voices",
-          "[game][player-attacks][gas-feedback]") {
+          "[game][player-attacks][gas-feedback][speech-timing][determinism]") {
+    const bool audible = GENERATE(false, true);
+    const bool pojo = GENERATE(false, true);
+    CAPTURE(audible, pojo);
     const auto root = turboAssets();
     const auto bank = root / "audio/WAR";
     std::filesystem::create_directories(bank);
@@ -1224,16 +1227,24 @@ TEST_CASE("gas damage queues pain without overlapping direct choking voices",
       {"index":4,"name":"S_WARPAIN3","id":4,"volume":127,"sequence":[{"sample":0}]},
       {"index":5,"name":"S_WARPAIN4","id":5,"volume":127,"sequence":[{"sample":0}]}]})",
                                bankSamples);
+    test::writeNativeSoundBank(root / "audio/COMMON", R"({"sounds":[
+      {"index":0,"name":"S_POJOPAIN","sequence":[{"sample":0}]},
+      {"index":1,"name":"S_POJOPOISON","sequence":[{"sample":0}]}]})",
+                               bankSamples);
     AudioMixer mixer(48000);
     SoundPlayer sounds(mixer);
     Fixture f;
-    f.audio.open(root, &sounds, nullptr);
-    f.attacks.bind({f.device, f.classes, f.world, f.weapons, f.effects, f.audio, &sounds, f.arsenal,
-                    f.dimmer, &f.shake});
+    f.audio.open(root, audible ? &sounds : nullptr, nullptr);
+    f.attacks.bind({f.device, f.classes, f.world, f.weapons, f.effects, f.audio,
+                    audible ? &sounds : nullptr, f.arsenal, f.dimmer, &f.shake});
     auto& player = f.players[0];
     player.actor.save().progress().health = 1000;
     player.figure = PlayerFigure::load(f.device, root, player.actor.save(), false);
     REQUIRE(player.figure);
+    if (pojo) {
+        player.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0,
+                                                            30);
+    }
     PlayerHealth health;
     PlayerHealth::Events events;
     events.cry = [&](std::string_view cue) { f.attacks.cry(0, cue, f.players); };
@@ -1241,11 +1252,17 @@ TEST_CASE("gas damage queues pain without overlapping direct choking voices",
         health.hurt(player, 10, HurtKind::Gas, true, false, 1, events);
     }
     CHECK(player.actor.save().health() == 940);
-    CHECK(sounds.voiceCount() == 1); // The two-second bark occupies the bounded queue.
+    CHECK(sounds.voiceCount() == (audible ? 1 : 0));
+    // The two-second bark occupies the bounded logical queue, even with no output.
     CHECK(f.audio.barkBacklog() == Approx(2));
     health.hurt(player, 10, HurtKind::Pierce, true, false, 1, events);
-    CHECK(sounds.voiceCount() == 2); // A spike groan is direct, not dropped by the bark queue.
+    CHECK(sounds.voiceCount() == (audible ? 2 : 0)); // A spike groan is direct.
     CHECK(f.audio.barkBacklog() == Approx(2));
+    sounds.stopAll();
+    for (s32 tick = 0; tick < 120; ++tick) {
+        f.audio.updateNarration(1.0f / 60.0f);
+    }
+    CHECK(f.audio.barkTiming().empty());
     f.attacks.clear();
     f.audio.close();
 }

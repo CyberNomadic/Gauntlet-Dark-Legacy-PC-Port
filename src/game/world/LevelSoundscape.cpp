@@ -477,38 +477,104 @@ SoundHandle LevelSoundscape::playFrom(SoundSet& bank, std::string_view name, f32
 }
 
 SoundHandle LevelSoundscape::playPromotion(std::string_view name, SoundHandle after) {
-    if (m_output != nullptr) {
-        if (const auto found = m_promotions.find(name); found.has_value()) {
-            return track(m_output->playAfter(after, m_promotions.sequence(*found), 1.0f,
-                                             SoundCategory::Effects));
-        }
-    }
     u32 sound = 0;
     if (m_output != nullptr) {
-        if (SoundSet* bank = bankOf(name, sound)) {
+        if (SoundSet* bank = promotionBankOf(name, sound)) {
             return track(
                 m_output->playAfter(after, bank->sequence(sound), 1.0f, SoundCategory::Effects));
         }
     }
-    // The shared level-99 speech is in the main narrator bank, not WIZTOWER.
-    const SoundHandle shared = narrate(name, Narrator::Primary, after);
-    return shared != kNoSound ? shared : after;
+    return after;
 }
 
 SoundHandle LevelSoundscape::narrate(std::string_view name, Narrator which, SoundHandle after) {
     if (m_output == nullptr) {
         return kNoSound;
     }
+    u32 sound = 0;
+    if (SoundSet* bank = narrationBankOf(name, which, sound)) {
+        return track(
+            m_output->playAfter(after, bank->sequence(sound), 1.0f, SoundCategory::Effects));
+    }
+    return kNoSound;
+}
+
+SoundSet* LevelSoundscape::narrationBankOf(std::string_view name, Narrator which, u32& sound) {
     for (SoundSet* bank : {&m_narrator, &m_narratorSecond}) {
         if (const auto found = bank->find(name); found.has_value()) {
-            return track(
-                m_output->playAfter(after, bank->sequence(*found), 1.0f, SoundCategory::Effects));
+            sound = *found;
+            return bank;
         }
         if (which == Narrator::Primary) {
             break;
         }
     }
-    return kNoSound;
+    return nullptr;
+}
+
+SoundSet* LevelSoundscape::promotionBankOf(std::string_view name, u32& sound) {
+    if (const auto found = m_promotions.find(name)) {
+        sound = *found;
+        return &m_promotions;
+    }
+    if (SoundSet* bank = bankOf(name, sound)) {
+        return bank;
+    }
+    // The shared level-99 speech is in the main narrator bank, not WIZTOWER.
+    return narrationBankOf(name, Narrator::Primary, sound);
+}
+
+LevelSoundscape::Speech LevelSoundscape::speech(SoundSet& bank, u32 sound, const Speech& after) {
+    const auto sequence = bank.sequence(sound);
+    Speech result = after;
+    result.timing.append(SpeechTiming::of(sequence));
+    if (m_output != nullptr) {
+        // Optional playback must not erase a decoded line's gameplay duration.
+        // Keep source decoding outside this catch: an invalid bank is not an
+        // audio-device failure, and retains the caller's existing error policy.
+        try {
+            const auto handle =
+                m_output->playAfter(after.handle, sequence, 1.0f, SoundCategory::Effects);
+            if (handle != kNoSound) {
+                result.handle = handle;
+            }
+            track(handle);
+        } catch (const std::exception& e) {
+            log::warn("Tower: speech output: {}", e.what());
+        }
+    }
+    return result;
+}
+
+LevelSoundscape::Speech LevelSoundscape::speechNamed(std::string_view name, const Speech& after) {
+    u32 sound = 0;
+    SoundSet* bank = bankOf(name, sound);
+    if (bank != nullptr) {
+        try {
+            return speech(*bank, sound, after);
+        } catch (const std::exception& e) {
+            log::warn("Tower: sound {}: {}", name, e.what());
+        }
+    }
+    return after;
+}
+
+LevelSoundscape::Speech LevelSoundscape::speechFrom(SoundSet& bank, std::string_view name) {
+    const auto found = bank.find(name);
+    return found ? speech(bank, *found, {}) : Speech{};
+}
+
+LevelSoundscape::Speech LevelSoundscape::speechPromotion(std::string_view name,
+                                                         const Speech& after) {
+    u32 sound = 0;
+    SoundSet* bank = promotionBankOf(name, sound);
+    return bank != nullptr ? speech(*bank, sound, after) : after;
+}
+
+LevelSoundscape::Speech LevelSoundscape::speechNarration(std::string_view name, Narrator which) {
+    u32 sound = 0;
+    SoundSet* bank = narrationBankOf(name, which, sound);
+    return bank != nullptr ? speech(*bank, sound, {}) : Speech{};
 }
 
 bool LevelSoundscape::narrationRoom(f32 maxWait) const {
@@ -661,7 +727,7 @@ SoundHandle LevelSoundscape::announceRune(bool nearby, const Vec3& attention,
                                           const AmbientEar& ear) {
     constexpr f32 kWait = 3.0f;
     constexpr f32 kVolume = 224.0f / 255.0f;
-    if (!narrationRoom(kWait) || m_output == nullptr) {
+    if (!narrationRoom(kWait)) {
         return kNoSound;
     }
     const auto sound = m_narrator.find(nearby ? "S_RUNENEAR" : "S_UGETCLOSER");
@@ -669,7 +735,7 @@ SoundHandle LevelSoundscape::announceRune(bool nearby, const Vec3& attention,
         return kNoSound;
     }
     const auto handle = track(m_narration.queue(m_narrator.sequence(*sound), kVolume));
-    if (handle != kNoSound) {
+    if (m_output != nullptr && handle != kNoSound) {
         m_output->setPan(handle, AmbientSounds::panOf(attention, ear));
     }
     return handle;

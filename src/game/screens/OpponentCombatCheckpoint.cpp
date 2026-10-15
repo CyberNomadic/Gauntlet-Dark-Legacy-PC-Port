@@ -291,6 +291,14 @@ OpponentCombatCheckpoint::checkpoint(const EffectTrees::PoolCheckpoint& effects)
     if (!supported()) {
         return std::nullopt;
     }
+    return captureValues(effects);
+}
+
+std::optional<OpponentCombatCheckpoint::State>
+OpponentCombatCheckpoint::captureValues(const EffectTrees::PoolCheckpoint& effects) const {
+    if (!m_owner.m_resources || m_owner.m_bindingGeneration == 0) {
+        return std::nullopt;
+    }
     const auto bindCapture = [&] {
         auto resources = std::make_unique<CaptureResources>(
             m_owner.m_bindingGeneration, m_owner.m_critters, m_owner.m_combatantProjectiles,

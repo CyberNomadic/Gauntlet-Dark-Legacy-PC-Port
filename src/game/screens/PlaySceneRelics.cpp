@@ -80,10 +80,9 @@ void PlayScene::updateTowerRelics(s32 ticks, f32 seconds) {
     if (entering) {
         return;
     }
-    const auto cue = m_towerRelics.update(
-        ticks, seconds, m_context.sounds != nullptr && m_context.sounds->isPlaying(m_relicVoice));
+    const auto cue = m_towerRelics.update(ticks, seconds, m_relicVoice.timing.playing());
     if (!cue.voice.empty()) {
-        m_relicVoice = m_audio.playPromotion(cue.voice);
+        m_relicVoice = m_audio.speechPromotion(cue.voice);
     }
     if (!cue.sound.empty()) {
         m_audio.playPromotion(cue.sound);

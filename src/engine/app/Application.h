@@ -59,6 +59,10 @@ protected:
     /** Caps frames from the next frame on, never above the monitor; 0 uses monitor refresh. */
     void setMaxFrameRate(u32 rate) { m_desc.maxFrameRate = rate; }
     u32 maxFrameRate() const { return m_desc.maxFrameRate; }
+    /** Changes the simulation clock without changing presentation or saved settings.
+     * A request during onUpdate ends the old-rate batch after that callback. */
+    void setUpdateRate(u32 rate);
+    u32 updateRate() const { return m_desc.updateRate; }
 
 private:
     void checkAssetDirectory() const;

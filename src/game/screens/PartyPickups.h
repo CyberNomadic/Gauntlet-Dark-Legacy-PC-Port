@@ -56,20 +56,6 @@ public:
     /** Exact native reach, including an opened container's held pickup anchor. */
     static std::vector<Collector> collectors(std::span<const PlayerRuntime> players,
                                              const LevelWorld& world, const Chests& chests);
-    /** Refusal preflight: a touch may produce help even when nothing can be taken.
-     * Does not judge pickups, spend inventory, or create collection artwork. */
-    static bool touchesPickup(std::span<const PlayerRuntime> players, const LevelWorld& world,
-                              const Chests& chests);
-    /** True only when every native first-collector offer leaves the item and
-     * party unchanged, including help suppressed by existing repeat histories.
-     * No live inventory, HUD, audio or collection artwork is touched. */
-    static bool collectionUnchanged(std::span<const PlayerRuntime> players, const LevelWorld& world,
-                                    const Chests& chests, const ClassDataSet& classes);
-    /** The same no-op judgment for one native first-collector offer. This is
-     * evaluated against the current party after all earlier ordered offers. */
-    static bool offerUnchanged(const Pickup& pickup, std::span<const PlayerRuntime> players,
-                               const LevelWorld& world, const ClassDataSet& classes);
-
     struct CurrencyEvent {
         enum class Kind { Help, ChallengeCoin, Card, NamedSound, CharacterBark };
         Kind kind = Kind::Help;

@@ -1312,7 +1312,7 @@ void PlayerAttacks::cry(usize index, std::string_view which, std::span<PlayerRun
         return;
     }
     PlayerFigure* body = index < players.size() ? players[index].figure.get() : nullptr;
-    if (body == nullptr || m_resources->sounds == nullptr) {
+    if (body == nullptr) {
         return;
     }
     const bool pain = which.starts_with("PAIN");

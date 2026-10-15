@@ -1,25 +1,24 @@
 #pragma once
 
+#include <chrono>
 #include <deque>
 #include <memory>
 
-#include "game/netplay/AudioSync.h"
-#include "game/netplay/CombatPlayback.h"
-#include "game/netplay/FeedbackSync.h"
-#include "game/netplay/InputTimeline.h"
-#include "game/netplay/LatencyTelemetry.h"
+#include "game/netplay/LockstepInputs.h"
+#include "game/netplay/NativeAgreement.h"
 #include "game/netplay/PartyCheckpoint.h"
 #include "game/netplay/ShopSync.h"
 
 namespace gdl::game {
 
-/** Frozen, room-admitted roster. Peer 1 is the host; these small IDs are NOT socket
- * handles. In particular the first remote socket can be 1 without owning the host's seats. */
+/** Frozen, room-admitted roster. Peer 1 is the host; these IDs are not socket handles. */
 using MatchOwners = std::array<u8, InputCommand::kSeats>;
 struct MatchLink {
     u8 peer = 0;
     PacketTransport::Connection connection = 0;
 };
+// Resume and the pause controls retain their old numeric values only so malformed
+// obsolete requests can be rejected explicitly. Local menus never pause the shared clock.
 enum class MatchTransition : u8 { Start, Travel, Resume, Shop, SecretEnter, SecretReturn };
 enum class MatchStop : u8 { None, Left, Disconnected, LoadTimeout, TransportFailure };
 enum class MatchControlKind : u8 {
@@ -33,15 +32,17 @@ enum class MatchControlKind : u8 {
 };
 struct MatchContext {
     u64 epoch = 0;
-    u32 scene = 0; // trusted build's scene roster, never a path supplied by a peer
+    u32 scene = 0; // trusted build's scene roster, never a peer-supplied path
     u16 tickRate = 60;
-    // Start one checkpoint interval ahead. Admission feedback raises this on
-    // slower/jittery paths; a local connection need not pay a fixed 100 ms lead.
-    u8 inputLead = 3;
+    u8 inputLead = 3; // fixed negotiated startup delay, never an adaptive clock
     MatchTransition transition = MatchTransition::Start;
     MatchOwners owners{};
     std::array<u32, InputCommand::kSeats> grants{};
-    bool challengeWon = false; ///< authenticated completion only on SecretReturn
+    bool challengeWon = false;
+    // Travel adopts the next context only after the actual source scene executes
+    // this terminal boundary. Both are zero on the initial Start context.
+    u64 sourceEpoch = 0;
+    u64 sourceTick = 0;
     bool valid() const;
     bool operator==(const MatchContext&) const = default;
 };
@@ -49,170 +50,97 @@ struct MatchControl {
     MatchControlKind kind = MatchControlKind::Prepare;
     MatchStop stop = MatchStop::None;
     MatchContext context;
-    u8 movieSkipVotes = 0; // one bit per occupied seat, never one bit per machine
+    u8 movieSkipVotes = 0; // occupied seat bits, never machine bits
     bool valid() const;
 };
 class MatchControlPacket {
 public:
-    static constexpr usize kBytes = 48;
+    static constexpr u8 kVersion = 6;
+    static constexpr usize kBytes = 64;
     static std::optional<std::vector<u8>> encode(const MatchControl& control);
     static std::optional<MatchControl> decode(std::span<const u8> bytes);
 };
 
-/** Simulation-thread match lifecycle and packet routing, independent of HTTP/UI/assets.
- * open() takes only an authenticated frozen room roster. The host prepares a scene;
- * each machine explicitly confirms it has loaded before any simulation may advance.
- * Reliable control is retained on congestion. Completed-checkpoint receipts bound
- * each peer's independent publication window; unsent captures coalesce in place.
- * No host migration, mid-match joins or save writes.
- * The scene adapter must call advance() before stepping gameplay; clients never get a frame. */
+/** Native shared-simulation lifecycle and reliable input routing.
+ * Every peer executes the same complete frame. No missing-input concealment,
+ * snapshots, replicated audio, host migration, mid-match joins or save writes.
+ * The scene adapter acknowledges each issued frame only after executing it.
+ * Load, movie, shop and source-terminal barriers retain reliable messages under
+ * congestion; wall time can time out a peer but never advances gameplay. */
 class MatchSession {
 public:
-    using Clock = LatencyTelemetry::Clock;
+    using Clock = std::chrono::steady_clock;
     using Time = Clock::time_point;
-    /** Compact completed-checkpoint evidence, not an input execution or hit ACK.
-     * Native action clocks take precedence over independently sampled artwork. */
-    struct ActionReceipt {
-        Time receivedAt;
-        u64 epoch = 0;
-        u64 tick = 0;
-        u64 generation = 0;
-        u64 actualInput = 0;
-        u64 receivedInput = 0;
-        u32 grant = 0;
-        u32 continuity = 0;
-        u32 action = 0;
-        u32 lateInputs = 0;
-        u8 seat = 0;
-        ReplicaPlayerLife life = ReplicaPlayerLife::Standing;
-        PlayerDeed reaction = PlayerDeed::None;
-        bool present = false;
-        bool portalPhase = false;
-        bool rollback = false;
-        bool enabled = false;
-        bool current = false;
-        bool ranged = false;
-        bool weapon = false;
-        bool melee = false;
-        bool turbo = false;
-        bool released = false;
-        bool operator==(const ActionReceipt&) const = default;
-    };
-    static constexpr usize kActionReceipts = 256; // sixty-four complete four-seat checkpoints
-    enum class Phase : u8 { Offline, Lobby, Loading, Running, Paused, Stopped };
+    enum class Phase : u8 { Offline, Lobby, Loading, Running, Stopped };
     enum class Admission : u8 { Accepted, Stale, WrongPeer, WrongPhase, Invalid };
-    // Includes the native route/preview and encounter movie before asset readiness.
-    // Peers keep pumping transport throughout; an absent viewer still times out.
     static constexpr f64 kLoadTimeout = 120;
     static constexpr usize kControlBudget = 16;
-    static constexpr usize kPublicationWindow = 2;
-    static constexpr usize kPublicationBurst = 64;
-    static constexpr f64 kPublicationTimeout = 1;
-    // Two 20 Hz snapshot intervals of slack beyond the negotiated input lead.
-    // A quiet/stalled host must never let client input numbering run away.
-    static constexpr u64 kInputSlack = 6;
-    static constexpr u8 kMaxInputLead = 30;
-    // A received checkpoint can age while this process is busy. Estimate only
-    // this bounded amount of host progress; a stalled host cannot replenish it.
-    static constexpr u64 kMaxDeadlineAdvance = kMaxInputLead;
-    static constexpr u64 kMaxUnconfirmedTicks = kMaxDeadlineAdvance + kMaxInputLead + kInputSlack;
-    static_assert(kMaxUnconfirmedTicks <= InputTimeline::kMaxAhead);
+    static constexpr u32 kNativeAgreementPeriod = 60;
 
-    bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links);
+    bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links,
+              u8 startupDelay = 3);
     /** A new transport/room lifetime is required before opening again after clear(). */
     void clear();
-    /** Travel/Shop/SecretEnter/SecretReturn require a complete host checkpoint;
-     * Shop also requires its setup, and only SecretReturn may carry challengeWon.
-     * Start/Resume take neither. A shop cannot travel before every peer finishes.
+    /** Checkpointed transitions require a complete host party; Shop also its setup.
      * Invalid or congested preparation leaves the current epoch unchanged. */
     bool prepare(u32 scene, MatchTransition transition = MatchTransition::Start,
                  const MatchParty* party = nullptr, const ShopSetup* shop = nullptr,
                  bool challengeWon = false);
     ShopSync& shop() { return m_shop; }
     const ShopSync& shop() const { return m_shop; }
-    FeedbackSync& feedback() { return m_feedback; }
-    AudioSync& audio() { return m_audio; }
-    const FeedbackSync& feedback() const { return m_feedback; }
-    /** Complete travel/shop profiles only, never a partially received roster. */
     const MatchParty* travelParty() const;
     bool loaded();
-    /** Entry movies may skip only after the host acknowledges every occupied seat.
-     * Votes are reliable, idempotent and scoped to this Start/Travel epoch. */
     bool requestMovieSkip(u8 seat);
     bool movieSkipReady() const;
     u8 movieSkipVotes() const { return m_movieSkipVotes; }
-    bool requestPause();
+    /** Global pause has no shared tick boundary and is deliberately unsupported. */
+    bool requestPause() { return false; }
     void leave();
     void disconnected(PacketTransport::Connection connection);
-    /** seconds is simulation/lifecycle time; now is independent monotonic time. */
+    /** seconds is lifecycle elapsed time; now is independent monotonic watchdog time. */
     void update(f64 seconds, Time now = Clock::now());
-    /** Out-of-phase gameplay datagrams are discarded as Stale. They may overtake
-     * reliable start/travel control or arrive late after pause; neither is fatal. */
     Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
                       std::optional<Time> now = std::nullopt);
     void flush(PacketTransport& transport, Time now = Clock::now());
 
-    /** One complete local frame per 60 Hz local update, without UI pointers.
-     * Guests ahead of the latest host checkpoint coalesce into one pending frame:
-     * latest held state/aim plus one pending edge per action, not a replay backlog.
-     * Acceptance need not advance inputTick() when the host has fallen behind. */
-    bool sample(std::span<const InputCommand> frame, Time now = Clock::now());
-    /** Exact last accepted sample, including coalesced edges; empty while throttled. */
+    /** Exact local frame, accepted once without coalescing. The input adapter must
+     * retain edges while inputReady() reports backpressure. */
+    bool sample(std::span<const InputCommand> frame);
     std::span<const InputCommand> sampledInputs() const { return m_sampled; }
     bool inputReady() const;
-    std::optional<InputTimeline::Frame> advance();
-    /** Check before expensive capture/encoding. Full peers skip publications;
-     * one ready peer is sufficient. Timeout credit comes only from update(). */
-    bool publicationReady() const;
-    bool publish(const CombatSnapshot& state);
-    bool publish(const CombatPacket::Prepared& state);
-    u64 inputTick() const { return host() ? m_timeline.tick() : m_nextInput; }
-    u64 tick() const { return m_timeline.tick(); }
+    std::optional<LockstepInputs::Frame> advance();
+    /** Acknowledge actual execution, not dequeue. At a pending travel fence this
+     * adopts the new Loading context after the adapter verifies its local outcome. */
+    bool completedNativeTick(u64 tick);
+    /** Optional observed-state diagnostic, not a repair stream or full-state proof. */
+    bool observeNative(u64 tick, const NativeAgreement::Digest& digest, Time now = Clock::now());
+    const NativeAgreement* nativeAgreement() const { return m_nativeAgreement.get(); }
+    bool nativeDraining() const { return m_pendingNativeContext.has_value(); }
+    const MatchContext* pendingNativeContext() const {
+        return m_pendingNativeContext ? &*m_pendingNativeContext : nullptr;
+    }
+    std::optional<u64> nativeEndTick() const {
+        return m_pendingNativeContext ? std::optional{m_pendingNativeContext->sourceTick}
+                                      : std::nullopt;
+    }
+    u64 inputTick() const { return m_lockstep ? m_lockstep->sampleTick() : 0; }
+    u64 tick() const { return m_lockstep ? m_lockstep->tick() : 0; }
+    bool nativeInputs() const { return m_phase != Phase::Offline; }
     bool host() const { return m_local == 1; }
     u8 localPeer() const { return m_local; }
     const MatchContext& context() const { return m_context; }
     Phase phase() const { return m_phase; }
     MatchStop stopReason() const { return m_stop; }
-    const CombatPlayback& playback() const { return m_playback; }
-    const InputTimeline::Diagnostics& inputDiagnostics(usize seat) const {
-        return m_timeline.diagnostics(seat);
-    }
-    /** Bounded, local host action-input evidence; never serialized to peers. */
-    const std::deque<InputTimeline::CommandTrace>& commandTrace() const {
-        return m_timeline.commandTrace();
-    }
-    u64 droppedCommandTraces() const { return m_timeline.droppedCommandTraces(); }
-    /** Guest-only, bounded receipt history. Read timestamps before doing expensive
-     * replay/render work; rendering must retain its independent observation time.
-     * Missing occupied seats are retained as present=false interruption evidence. */
-    const std::deque<ActionReceipt>& actionReceipts() const { return m_actionReceipts; }
-    u64 droppedActionReceipts() const { return m_droppedActionReceipts; }
     const std::optional<InputCommand>& resolvedInput(usize seat) const {
-        return m_timeline.previous(seat);
+        return m_nativeResolved.at(seat);
     }
-    u8 inputLead() const { return std::max(m_context.inputLead, m_adaptiveLead); }
-    LatencyTelemetry& latency() { return m_latency; }
-    const LatencyTelemetry& latency() const { return m_latency; }
+    u8 inputLead() const { return m_startupDelay; }
     usize queuedControls() const { return m_controls.size(); }
 
 private:
-    bool canPublish(const MotionSnapshot& motion) const;
     struct ControlDelivery {
         PacketTransport::Connection connection;
         std::vector<u8> bytes;
-    };
-    struct StateBatch {
-        std::shared_ptr<const CombatReplica::Packets> packets;
-        CombatReplica::Receipt identity;
-        usize next = 0;
-        f64 remaining = kPublicationTimeout;
-        bool acknowledged = false;
-    };
-    struct StateDelivery {
-        std::deque<StateBatch> batches;
-        bool ready() const {
-            return batches.size() < kPublicationWindow || batches.back().next == 0;
-        }
     };
     u8 peerOf(PacketTransport::Connection connection) const;
     bool queue(u8 peer, MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0);
@@ -220,15 +148,13 @@ private:
     void tryCommit();
     void stop(MatchStop reason, bool notify);
     void discardGameplay();
+    bool beginNativeInputs();
+    bool ensureNativeAgreement(Time now);
+    void failNativeAgreement(NativeAgreement::Failure fallback, u64 tick = 0);
+    bool acceptPreparedContext(const MatchContext& context, MatchParty party = {});
+    bool finishNativeDrain();
     Admission control(u8 peer, const MatchControl& message);
     Admission checkpoint(u8 peer, const PartyCheckpoint& message);
-    Admission receipt(u8 peer, const CombatReplica::Receipt& message);
-    void resetLeadRecovery();
-    Time observeInputTime(Time now);
-    u64 deadlineAdvance() const;
-    void refreshInputDeadline(Time now);
-    bool calibrateInputDeadline(const CombatSnapshot& state, usize seat);
-    void recordActionReceipt(const CombatSnapshot& state, Time now);
 
     Phase m_phase = Phase::Offline;
     MatchStop m_stop = MatchStop::None;
@@ -239,47 +165,24 @@ private:
     u8 m_movieSkipVotes = 0;
     u8 m_movieSkipRequests = 0;
     MatchContext m_context;
+    u8 m_startupDelay = 3;
+    std::unique_ptr<LockstepInputs> m_lockstep;
+    std::unique_ptr<NativeAgreement> m_nativeAgreement;
+    std::array<std::optional<InputCommand>, InputCommand::kSeats> m_nativeResolved;
+    u64 m_nativeCompleted = 0;
+    std::optional<u64> m_nativeInFlight;
+    std::optional<MatchContext> m_pendingNativeContext;
+    MatchParty m_pendingNativeParty;
+    std::unique_ptr<ShopSync> m_pendingNativeShop;
+    u8 m_pendingNativeMovieVotes = 0;
+    // Only the old relay survives loading, not another scene. Ready acknowledges
+    // execution through its fence; tryCommit retires this relay.
+    std::unique_ptr<LockstepInputs> m_drainingInputs;
+    std::optional<MatchContext> m_drainingContext;
     MatchParty m_travelParty;
     ShopSync m_shop;
-    FeedbackSync m_feedback;
-    AudioSync m_audio;
-    InputTimeline m_timeline;
-    InputHistory m_history;
     std::vector<InputCommand> m_sampled;
-    CombatPlayback m_playback;
-    u64 m_nextInput = 0;
-    u8 m_adaptiveLead = 0;
-    u64 m_leadFeedbackFloor = 0;
-    std::optional<u64> m_healthyLeadSince;
-    u32 m_healthyLeadSamples = 0;
-    s32 m_healthyLeadMargin = 0;
-    u64 m_sampleClock = 0;
-    std::optional<Time> m_inputTime;
-    struct DeadlineAnchor {
-        u64 tick = 0;
-        Time received;
-    };
-    std::optional<DeadlineAnchor> m_deadlineAnchor;
-    // Pair a host admission tick with our first successful send, not with the
-    // later snapshot receipt. This removes snapshot age from the safety lead.
-    std::optional<DeadlineAnchor> m_admissionAnchor;
-    struct SentInput {
-        u64 tick;
-        Time sampled;
-        std::optional<Time> firstSent;
-    };
-    std::deque<SentInput> m_sentInputs;
-    std::deque<ActionReceipt> m_actionReceipts;
-    u64 m_droppedActionReceipts = 0;
-    std::array<u64, InputCommand::kSeats> m_feedbackInput{};
-    std::array<u32, InputCommand::kSeats> m_pendingPress{};
-    std::optional<u64> m_published;
     f64 m_loadingSeconds = 0;
     std::deque<ControlDelivery> m_controls;
-    std::vector<u8> m_input;
-    std::array<StateDelivery, 5> m_states;
-    std::optional<CombatReplica::Receipt> m_receipt;
-    LatencyTelemetry m_latency;
-    LatencyTelemetry::Time m_statisticsAt;
 };
 } // namespace gdl::game

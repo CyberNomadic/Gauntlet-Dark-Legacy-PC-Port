@@ -31,10 +31,10 @@ TEST_CASE("input packets have a fixed endian and version independent of C++ layo
     const auto encoded = InputPacket::encode(commands);
     REQUIRE(encoded);
     const std::vector<u8> expected{
-        0x47, 0x44, 0x4c, 0x49, 3,    0,    1,    0,                   // header
-        1,    0,    0,    0,    0,    0,    0,    0,                   // epoch
-        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,                // tick
-        4,    3,    2,    1,    2,    1,    0,    0,                   // grant, seat, aim, reserved
+        0x47, 0x44, 0x4c, 0x49, 4,    0,    1,    0,    // header
+        1,    0,    0,    0,    0,    0,    0,    0,    // epoch
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // tick
+        4,    3,    2,    1,    2,    1,    0,    0,    // grant, seat, aim, topic/revision
         0,    0,    0,    0,    0,    0,    0x80, 0x3f, 0, 0, 0, 0x3f, // direction, magnitude
         0,    0,    0x80, 0x3f, 0,    0,    0,    0,    0, 0, 0, 0,    // aim
         1,    0,    0,    0,    1,    0,    0,    0};                  // held, pressed

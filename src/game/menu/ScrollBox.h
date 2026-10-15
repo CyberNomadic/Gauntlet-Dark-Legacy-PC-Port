@@ -73,6 +73,10 @@ public:
 
     bool active() const { return m_active; }
     bool burning() const { return m_fire.active(); }
+    /** Native-load check only; offline open/finish fallback behavior is unchanged. */
+    bool burnReady() const {
+        return BurnDialogueScroll::ready(m_art.backdropImage, m_art.burnMasks, m_art.burnRing);
+    }
     usize page() const { return m_page; }
     usize pageCount() const { return m_pages.size(); }
     /** The scroll's rectangle for the current page. */

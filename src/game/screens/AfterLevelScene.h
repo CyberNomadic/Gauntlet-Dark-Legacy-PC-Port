@@ -14,6 +14,7 @@
 #include "game/screens/GameContext.h"
 #include "game/screens/ShopSession.h"
 #include "game/screens/StatusBox.h"
+#include "game/world/SpeechTiming.h"
 
 namespace gdl::game {
 /** Presentation and sound for the tally/shop; ShopSession owns transactions and flow. */
@@ -24,7 +25,7 @@ public:
               std::string_view levelName, ShopVisit visit = ShopVisit::Level);
     void close();
     bool isOpen() const { return m_open; }
-    /** True once every lane is done and the effects it set off have died away. */
+    /** True once every lane is done and its effects' simulation-time durations have elapsed. */
     bool update(f64 seconds, const ShopSession::Inputs& inputs,
                 const std::array<s32, 4>* potions = nullptr,
                 ShopSession::Inputs* accepted = nullptr, bool committed = false);
@@ -38,6 +39,10 @@ public:
     const std::vector<std::string>& lastSounds() const { return m_lastSounds; }
 
 private:
+    struct Effect {
+        SoundHandle handle = kNoSound;
+        SpeechTiming timing;
+    };
     enum class PointerAction : u8 { Buy, Sell, Previous, Next, Continue };
     struct PointerTarget {
         s32 player = 0;
@@ -71,9 +76,10 @@ private:
     void loadVoices(std::span<const PartyMember> party);
     void playCue(const ShopEvent& event);
     void announceLevel(s32 player);
-    /** Plays a bank's sound by name after `after` and keeps its handle among the effects. */
-    SoundHandle effect(SoundSet& bank, std::string_view name, SoundHandle after = kNoSound);
-    bool effectsPlaying();
+    /** Admits a native duration regardless of optional playback, preserving phrase order. */
+    Effect effect(SoundSet& bank, std::string_view name);
+    Effect effect(SoundSet& bank, std::string_view name, const Effect& after);
+    void advanceEffects(f64 seconds);
     void updateTallySound();
     bool m_open = false;
     GameContext m_context;
@@ -104,7 +110,8 @@ private:
     SoundHandle m_music = kNoSound;
     SoundHandle m_tallySound = kNoSound;
     std::optional<u32> m_tallyCue;
-    std::vector<SoundHandle> m_effects;
+    std::vector<SpeechTiming> m_effects;
+    std::vector<SoundHandle> m_outputEffects; ///< stopped before their borrowed banks are replaced
     std::vector<std::string> m_lastSounds;
 };
 } // namespace gdl::game

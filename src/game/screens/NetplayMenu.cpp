@@ -91,7 +91,15 @@ void NetplayMenu::show(RenderDevice& device, const View& view) {
     case Page::Pause:
         title = "Online Menu - game continues";
         row("Resume", Action::Resume);
+        row("Save Completed Progress", Action::SaveCompletedProgress,
+            view.canSaveCompletedProgress);
         row("Leave Game", Action::Leave);
+        break;
+    case Page::Finished:
+        title = "Online Session Ended";
+        row("Save Completed Progress", Action::SaveCompletedProgress,
+            view.canSaveCompletedProgress);
+        row("Return to Title", Action::ReturnTitle);
         break;
     case Page::Leave:
         title = "Leave the online game?";

@@ -112,11 +112,24 @@ public:
     static constexpr f32 kSplashLevel = 180.0f; ///< byte volume of a projectile's water impact
     SoundHandle playFrom(SoundSet& bank, std::string_view name, f32 volume = 1.0f);
     SoundHandle playPromotion(std::string_view name, SoundHandle after = kNoSound);
+    /** A gameplay wait paired with optional audible playback. Never poll the
+     * handle for simulation decisions; missing or failed output still retains
+     * timing once the source line was decoded successfully. */
+    struct Speech {
+        SoundHandle handle = kNoSound;
+        SpeechTiming timing;
+    };
+    Speech speechNamed(std::string_view name) { return speechNamed(name, Speech{}); }
+    Speech speechNamed(std::string_view name, const Speech& after);
+    Speech speechFrom(SoundSet& bank, std::string_view name);
+    Speech speechPromotion(std::string_view name) { return speechPromotion(name, Speech{}); }
+    Speech speechPromotion(std::string_view name, const Speech& after);
     /** How long a named sound of the level's banks plays, in seconds; nought when unknown. */
     f32 lengthOf(std::string_view name);
     enum class Narrator : u8 { Primary, Either };
     SoundHandle narrate(std::string_view name, Narrator which = Narrator::Either,
                         SoundHandle after = kNoSound);
+    Speech speechNarration(std::string_view name, Narrator which = Narrator::Either);
 
     /** The narrator's queue (sndFxQueAddEx's second mode): lines play one after another, at
      * most sixteen waiting. An announcement asks for room first, giving how long it is
@@ -142,6 +155,9 @@ public:
     void updateNarration(f32 seconds);
     /** Seconds of queued narration still to come. */
     f64 narrationBacklog() const;
+    std::span<const SpeechTiming> narrationTiming() const { return m_narration.timing(); }
+    std::span<const SpeechTiming> barkTiming() const { return m_barks.timing(); }
+    bool narrationHeld() const { return m_narration.held(); }
 
     /** The characters' queue (sndFxQueAddEx's first mode, sndfx.c 241): the pain,
      * eating and theft cries wait their turn behind one another, each willing to wait a
@@ -235,6 +251,9 @@ private:
     void playMotion(s32 slot, s32 target, bool settled);
     /** The bank of the level's own that holds `name`, if one does: level, common, ambient. */
     SoundSet* bankOf(std::string_view name, u32& sound);
+    SoundSet* promotionBankOf(std::string_view name, u32& sound);
+    SoundSet* narrationBankOf(std::string_view name, Narrator which, u32& sound);
+    Speech speech(SoundSet& bank, u32 sound, const Speech& after);
     SoundHandle queue(SoundSet& bank, u32 sound);
     /** The stream's file name for an area's part: the stem, the area's letter past one area,
      * the part's number past one part. */

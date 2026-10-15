@@ -285,8 +285,7 @@ public:
      * Moving-floor attachment is refreshed even when no full step is due. */
     void update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                 std::span<const Obstacle> obstacles = {}, class EnemyMissiles* missiles = nullptr,
-                f32 missileSpeedScale = 1.0f, bool timeStopped = false,
-                struct EnemyMissileWork* missileWork = nullptr);
+                f32 missileSpeedScale = 1.0f, bool timeStopped = false);
     std::vector<EnemyBlow> takeBlows();
     std::vector<EnemyLoss> takeLosses();
     std::vector<EnemyBurst> takeBursts();
@@ -602,8 +601,7 @@ private:
     void chooseTarget(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
                       std::span<f32> crowding);
     void step(f32 seconds, std::span<const EnemyView> players, std::span<const Obstacle> obstacles,
-              EnemyMissiles* missiles, f32 missileSpeedScale, bool timeStopped,
-              EnemyMissileWork* missileWork);
+              EnemyMissiles* missiles, f32 missileSpeedScale, bool timeStopped);
     /** Whether the swing it has just landed casts its missile rather than striking. */
     static bool castsNow(const Enemy& enemy);
     void resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> players);
@@ -618,7 +616,7 @@ private:
     void think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView> players,
                std::span<const Obstacle> obstacles);
     void shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players, EnemyMissiles& missiles,
-               f32 speedScale, std::span<const Obstacle> items, EnemyMissileWork* work);
+               f32 speedScale, std::span<const Obstacle> items);
     struct Figure {
         TreeModel* model = nullptr;
         const TreeInfo* tree = nullptr;

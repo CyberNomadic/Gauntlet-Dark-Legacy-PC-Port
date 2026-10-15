@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <exception>
 #include <format>
-#include <functional>
 #include <limits>
 #include <utility>
 
@@ -20,12 +19,13 @@
 #include "game/players/Progression.h"
 #include "game/screens/CritterCueEmission.h"
 #include "game/screens/EnemyFeedbackEmission.h"
+#include "game/screens/EnemyMissileEmission.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentPlacements.h"
 #include "game/screens/OpponentSimulation.h"
-#include "game/screens/OrdinaryEnemyMissilePhase.h"
 #include "game/screens/PartyDamage.h"
 #include "game/screens/PlayerPowerups.h"
+#include "game/screens/SimulationSeed.h"
 #include "game/world/BodyCollision.h"
 #include "game/world/DynamicLights.h"
 namespace gdl::game {
@@ -179,8 +179,8 @@ void LevelOpponents::landEnemyMissiles(std::span<PlayerRuntime> players, const E
 }
 
 bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
-                                             std::span<PlayerRuntime> players, const Events& events,
-                                             const MissilePublisher& publish) {
+                                             std::span<PlayerRuntime> players,
+                                             const Events& events) {
     if (!m_resources) {
         return false;
     }
@@ -192,25 +192,14 @@ bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
     }
     const auto emission = EnemyMissileEmission::resolve(hit, m_resources->weapons);
     u32 effect = 0;
-    if (publish) {
-        const auto started = publish(emission);
-        if (!started) {
-            return false;
-        }
-        effect = *started;
-    } else if (!hit.ricochet && !hit.effect().empty() && m_resources->weapons.loaded()) {
-        // Keep the native attempt (including a missing-tree refusal) exactly;
-        // private preparation separately distinguishes absent art from an
-        // available tree omitted from its trusted resource catalog.
+    if (!hit.ricochet && !hit.effect().empty() && m_resources->weapons.loaded()) {
         effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
                                                hit.effect(), hit.position, emission.setting);
     }
     if (effect != 0) {
         m_cueEffects.push_back(effect);
     }
-    if (!publish) {
-        playAt(emission.sound, emission.level, hit.position);
-    }
+    playAt(emission.sound, emission.level, hit.position);
     if (hit.ricochet) {
         return true;
     }
@@ -482,7 +471,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
         breeding.most = level->tuning.generatorMostScale(gain);
         most = level->maxEnemies;
     }
-    const auto seed = static_cast<u32>(std::hash<std::string>{}(world.ref().name));
+    const u32 seed = simulationSeed(world.ref().name);
     m_enemies.open(device, resources.root, &world.collision(), most, scales, seed);
     m_enemies.setContactGridBounds(world.layout().minBounds(), world.layout().maxBounds());
     m_statues.setContactGridBounds(world.layout().minBounds(), world.layout().maxBounds());

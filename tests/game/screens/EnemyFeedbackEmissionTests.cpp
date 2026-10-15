@@ -16,6 +16,8 @@
 #include "game/enemies/Enemies.h"
 #include "game/screens/CombatResources.h"
 #include "game/screens/EnemyFeedbackEmission.h"
+#include "game/screens/EnemyMissileEmission.h"
+#include "game/world/LevelSoundscape.h"
 
 namespace {
 using namespace gdl;
@@ -115,6 +117,53 @@ TEST_CASE("swarm feedback resolves native archive priority opacity and sound ind
     CHECK(emission.archive == nullptr); // neither native bank supplies FIREHIT
     CHECK(emission.tree.empty());
     CHECK(emission.sound == "S_EGRUNT2HIT1CL");
+}
+
+TEST_CASE("native missile impacts retain artwork opacity and splash volume",
+          "[enemy-missile-emission]") {
+    Fixture fixture;
+    EnemyMissileHit hit;
+    hit.position = {2, 3, 4};
+    hit.worldContact = true;
+    hit.flags = 2;
+    auto emission = EnemyMissileEmission::resolve(hit, fixture.weapons);
+    CHECK(emission.archive == &fixture.weapons);
+    CHECK(emission.tree == "HITCOL");
+    CHECK(emission.position == hit.position);
+    CHECK(emission.setting.unlit);
+    CHECK_FALSE(emission.setting.depthWrite);
+    CHECK(emission.setting.tint.a == 96);
+    CHECK(emission.sound.empty());
+    CHECK(emission.level == 224);
+
+    hit.liquid = true;
+    emission = EnemyMissileEmission::resolve(hit, fixture.weapons);
+    CHECK(emission.sound == "S_SPLASH");
+    CHECK(emission.level == LevelSoundscape::kSplashLevel);
+    hit.liquid = false;
+    hit.burstRadius = 3;
+    emission = EnemyMissileEmission::resolve(hit, fixture.weapons);
+    CHECK(emission.archive == nullptr); // This fixture deliberately lacks EXPSMALL.
+    CHECK(emission.tree.empty());
+    CHECK(emission.setting.tint.a == 255);
+    CHECK(emission.sound == "S_LOBBER_BOMB");
+    CHECK(fixture.device.texturesCreated == 0); // Resolution never uploads or starts VFX.
+}
+
+TEST_CASE("native ricochets retain their sound without adding landing artwork",
+          "[enemy-missile-emission]") {
+    ItemArchive weapons;
+    EnemyMissileHit hit;
+    hit.position = {2, 3, 4};
+    hit.ricochet = true;
+    hit.liquid = true;
+    hit.burstRadius = 3;
+    const auto emission = EnemyMissileEmission::resolve(hit, weapons);
+    CHECK(emission.position == hit.position);
+    CHECK(emission.sound == "S_RICOCHET");
+    CHECK(emission.level == 127);
+    CHECK(emission.archive == nullptr);
+    CHECK(emission.tree.empty());
 }
 
 TEST_CASE("swarm feedback preparation requires the exact archive and ordered lender binding",

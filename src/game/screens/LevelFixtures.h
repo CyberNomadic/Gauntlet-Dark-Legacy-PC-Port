@@ -68,17 +68,20 @@ public:
         Cloud,
         Blast
     };
-    struct NamedSound {
+    struct Output {
+        enum class Kind { NamedSound, Card };
+        Kind kind = Kind::NamedSound;
         std::string name;
         f32 volume = 1;
-        bool operator==(const NamedSound&) const = default;
+        s32 player = -1; ///< input slot for a card, never a party-array index
+        bool operator==(const Output&) const = default;
     };
     struct Phase {
         std::optional<Boundary> refusal;
         usize index = 0;
         /** Buffered private outputs, valid only after the enclosing tick commits.
-         * These are named, non-positional sounds: no distance attenuation. */
-        std::vector<NamedSound> sounds;
+         * Native order spans chest cards and named, non-positional sounds. */
+        std::vector<Output> outputs;
     };
     void bind(const Resources& resources);
     void clear();
@@ -178,16 +181,22 @@ public:
     static constexpr f32 kBarrelWarning = 9.0f;  ///< a player this near a spent barrel is told
 
 private:
-    friend class OrdinaryBarrelEmission;
-    friend class OrdinaryPickupPhase;
-    friend class OrdinaryCombatTick;
-    friend class OrdinaryProjectilePhase;
-    friend class OrdinaryFixturePhase;
     friend class LevelFixturesCheckpoint;
     using GatePublisher = std::function<bool(const GateEvent&)>;
+    using ChestPublisher = std::function<bool(const ChestEvent&)>;
+    using ChestPickupPublisher =
+        std::function<std::optional<usize>(s32 record, const Vec3& position, s32 count)>;
     using NamedPublisher = std::function<void(std::string_view, f32)>;
     Phase updatePhase(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
-                      const Events* events, const GatePublisher& gate = {});
+                      const Events* events, const GatePublisher& gate = {},
+                      const ChestPublisher& publishChest = {});
+    /** Shared native chest dispatch. A supplied pickup publisher returns the
+     * actual appended item index, or refuses the enclosing transaction. The
+     * ordinary native path retains placeItemRecord's missing-art no-op. Key
+     * consumption, enemy-before-pickup ordering and contents links are shared. */
+    bool dispatchChestEvent(const ChestEvent&, std::span<PlayerRuntime>, const Events&,
+                            const ChestPickupPublisher& pickup = {},
+                            const NamedPublisher& sound = {});
     /** Shared native post-selection dispatch. The publisher replaces only audio;
      * selected key consumption and help ordering remain the native operations. */
     void dispatchGateEvent(const GateEvent&, std::span<PlayerRuntime>, const Events&,

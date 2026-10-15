@@ -3,6 +3,7 @@
 #include <format>
 
 #include "engine/core/Types.h"
+#include "engine/math/RandomDistribution.h"
 
 #include "game/players/ClassData.h"
 #include "game/players/PowerupEffects.h"
@@ -10,7 +11,7 @@
 namespace gdl::game {
 
 PickupVoice PickupVoices::food(s32 character, std::string_view name, bool poisoned, bool pojo) {
-    const bool spoken = !poisoned && std::uniform_int_distribution<s32>(0, 3)(m_random) == 0;
+    const bool spoken = !poisoned && random_distribution::boundedIndex(m_random, 4).value() == 0;
     return foodChoice(character, name, poisoned, pojo, spoken);
 }
 

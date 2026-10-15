@@ -40,17 +40,16 @@ void PlayScene::updatePromotion(s32 ticks, f32 seconds) {
     }
     auto& runtime = m_players[entry->player];
     auto& save = runtime.actor.save();
-    const auto cue = m_promotion.update(ticks, m_context.sounds != nullptr &&
-                                                   m_context.sounds->isPlaying(m_promotionVoice));
+    const auto cue = m_promotion.update(ticks, m_promotionVoice.timing.playing());
     if (cue.voice) {
-        SoundHandle name = kNoSound;
+        LevelSoundscape::Speech name;
         if (PickupVoices::carriesPojo(save)) {
-            name = m_audio.narrate(LevelSoundscape::kPojoName);
+            name = m_audio.speechNarration(LevelSoundscape::kPojoName);
         } else if (runtime.figure != nullptr) {
-            name = m_audio.playFrom(runtime.figure->voice(),
-                                    PickupVoices::nameOf(save.character, save.color));
+            name = m_audio.speechFrom(runtime.figure->voice(),
+                                      PickupVoices::nameOf(save.character, save.color));
         }
-        m_promotionVoice = m_audio.playPromotion(entry->voice, name);
+        m_promotionVoice = m_audio.speechPromotion(entry->voice, name);
     }
     if (cue.award) {
         save.progress().promotedLevel = entry->level;

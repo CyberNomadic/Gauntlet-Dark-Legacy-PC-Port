@@ -72,11 +72,20 @@ public:
     bool active() const { return m_topics.isOpen() || m_page.isOpen() || m_fire.active(); }
     bool reading() const { return m_page.isOpen() && !m_page.closing(); }
     bool burning() const { return m_fire.active(); }
+    /** Native-load check only; offline missing-art fallback remains supported. */
+    bool burnReady() const {
+        return BurnDialogueScroll::ready(m_art.scroll, m_art.burnMasks, m_art.burnRing);
+    }
     const OptionMenu& topics() const { return m_topics; }
     const OptionMenu& page() const { return m_page; }
+    u8 revision() const { return m_revision; }
+    /** Wire row zero is absent; the four native topics occupy rows one to four. */
+    u8 captureTopic(const MenuInput& input) const;
+    bool acceptsTopic(u8 topic, u8 revision) const;
 
     /** Steps the scroll with its player's input. */
-    HintMenuEvent update(RenderDevice& device, const MenuInput& input, s32 ticks);
+    HintMenuEvent update(RenderDevice& device, const MenuInput& input, s32 ticks, u8 topic = 0,
+                         u8 revision = 0);
 
     /** Uploads the burn frame when the scroll is burning; call after beginFrame. */
     void prepare(RenderDevice& device);
@@ -93,6 +102,7 @@ private:
     OptionMenu m_topics;
     OptionMenu m_page;
     BurnDialogueScroll m_fire;
+    u8 m_revision = 0; ///< bounded input window is shorter than a complete revision cycle
 };
 
 } // namespace gdl::game
