@@ -532,7 +532,7 @@ TEST_CASE("combat packet bounds allocations before reading nested records",
     REQUIRE(encoded);
     // No player leaves the fixed RNG immediately after the first vector count.
     constexpr usize levels = Packet::kHeaderBytes + 4 + PlayerHealthCheckpoint::kBytes;
-    const usize offset = GENERATE(Packet::kHeaderBytes, levels, levels + 8, levels + 12);
+    const usize offset = GENERATE_COPY(Packet::kHeaderBytes, levels, levels + 8, levels + 12);
     auto bytes = *encoded;
     word(bytes, offset, 0xFFFFFFFF);
     CHECK_FALSE(Packet::decode(bytes));
