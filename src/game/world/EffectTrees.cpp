@@ -3,17 +3,75 @@
 #include <algorithm>
 #include <cmath>
 #include <ranges>
+#include <utility>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/world/DynamicLights.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 namespace {
 // Larger than a normal single-tick projectile/attachment step. A discontinuous
 // caller relocation should appear at its destination, not streak across the level.
 constexpr f32 kPresentationCutDistance = 32.0f;
+
+void appendLenders(NativeStateDigest& digest, std::span<TextureSet* const> lenders) {
+    digest.wide(lenders.size());
+    for (const auto* lender : lenders) {
+        digest.resource(lender);
+    }
+}
+
+void appendEffect(NativeStateDigest& digest, const EffectTrees::EffectState& effect,
+                  std::vector<const EffectTrees::EffectState*>& ancestors) {
+    if (std::ranges::find(ancestors, &effect) != ancestors.end()) {
+        digest.invalidate(); // A malformed retained prototype must not recurse forever.
+        return;
+    }
+    ancestors.push_back(&effect);
+    const auto& [instance, continuity, name, id, position, scale, stretch, fadeSeconds, yaw,
+                 velocity, repeats, timed, persistent, emitParticles, missingObjectsAreEmpty,
+                 additive, then, morphIn, holdForMorph, shrinks, retiring, device, tree, archive,
+                 lenders, model, pose, player, secondsLeft, unlit, depthWrite, tint, alpha,
+                 playbackRate, light, lived, trails, particles, attachment, flightDirection,
+                 particleTextureSlot, previousTransform, previousDirection, previousTree,
+                 previousGeneration, previousFrame, presentationCaptured, provenance,
+                 morphPrototype] = effect;
+    digest.values(instance, continuity, name, id, position, scale, stretch, fadeSeconds, yaw,
+                  velocity, repeats, timed, persistent, emitParticles, missingObjectsAreEmpty,
+                  additive, then, morphIn, holdForMorph, shrinks, retiring);
+    // Device identity and the shared model's last draw sample are not native
+    // state. The model is derived from tree/archive/lenders and sparse-bind flags;
+    // device presence is retained because a future morph checks that capability.
+    digest.flag(device != nullptr);
+    digest.resource(tree);
+    digest.resource(archive);
+    appendLenders(digest, lenders);
+    digest.flag(model != nullptr);
+    digest.values(pose, player, secondsLeft, unlit, depthWrite, tint, alpha, playbackRate);
+    digest.flag(light.has_value());
+    if (light) {
+        digest.fields<3>(*light);
+    }
+    digest.values(lived, trails, particles, attachment, flightDirection, particleTextureSlot,
+                  previousTransform, previousDirection);
+    digest.resource(previousTree);
+    digest.values(previousGeneration, previousFrame, presentationCaptured);
+    digest.flag(provenance.has_value());
+    if (provenance) {
+        digest.fields<4>(*provenance);
+    }
+    digest.flag(morphPrototype != nullptr);
+    if (morphPrototype) {
+        // Diagnostic preparations can retain a CPU birth prototype. It is an
+        // actual future native branch, not an address or an omitted cache.
+        appendEffect(digest, *morphPrototype, ancestors);
+    }
+    ancestors.pop_back();
+}
 
 Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
     Mat3 from{previous};
@@ -47,7 +105,30 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
 }
 } // namespace
 
-Mat4 EffectTrees::Effect::transform() const {
+EffectTrees::EffectTrees(EffectTrees&& other) noexcept {
+    *this = std::move(other);
+}
+EffectTrees& EffectTrees::operator=(EffectTrees&& other) noexcept {
+    if (this != &other) {
+        // Owner tokens stay with their addresses. A move away and back must not
+        // resurrect an earlier preparation against replaced borrowed resources.
+        ++m_restoreGeneration;
+        ++other.m_restoreGeneration;
+        m_effects = std::move(other.m_effects);
+        m_motions = std::move(other.m_motions);
+        m_motionCache = std::move(other.m_motionCache);
+        m_visualCache = std::move(other.m_visualCache);
+        ++m_localEpoch;
+        ++other.m_localEpoch;
+        m_lenders = std::move(other.m_lenders);
+        m_presentationAdvanced = std::exchange(other.m_presentationAdvanced, false);
+        m_nextId = std::exchange(other.m_nextId, 1);
+        m_nextInstance = other.m_nextInstance;
+    }
+    return *this;
+}
+
+Mat4 EffectTrees::EffectState::transform() const {
     Mat4 basis = attachment.value_or(glm::rotate(Mat4{1.0f}, yaw, Vec3{0, 1, 0}));
     basis[3] = Vec4{position, 1.0f};
     const f32 remaining = secondsLeftOf(*this);
@@ -55,7 +136,7 @@ Mat4 EffectTrees::Effect::transform() const {
     return glm::scale(basis, Vec3{scale * shrink} * stretch);
 }
 
-f32 EffectTrees::Effect::opacity() const {
+f32 EffectTrees::EffectState::opacity() const {
     return alpha *
            (fadeSeconds > 0 ? std::clamp(secondsLeftOf(*this) / fadeSeconds, 0.0f, 1.0f) : 1);
 }
@@ -107,7 +188,7 @@ std::optional<EffectTrees::Checkpoint> EffectTrees::checkpoint(u32 id) const {
     return std::nullopt;
 }
 
-EffectTrees::Checkpoint EffectTrees::captureEffect(const Effect& effect) {
+EffectTrees::Checkpoint EffectTrees::captureEffect(const EffectState& effect) {
     Checkpoint state;
     state.name = effect.name;
     state.tree = effect.tree != nullptr;
@@ -221,14 +302,16 @@ bool EffectTrees::restore(u32 id, const Checkpoint& state) {
         effect->attachment = state.attachment;
         effect->flightDirection = state.flightDirection;
         effect->presentationCaptured = false;
-        effect->model.setAppearance(s.unlit, s.tint, s.depthWrite, s.additive);
-        effect->model.setFrame(player.sequence(), static_cast<s32>(player.frame()));
+        if (effect->model) {
+            effect->model->setAppearance(s.unlit, s.tint, s.depthWrite, s.additive);
+            effect->model->setFrame(player.sequence(), static_cast<s32>(player.frame()));
+        }
         for (const auto& motion : m_motions) {
             if (motion->archive != effect->archive || motion->lenders != effect->lenders) {
                 continue;
             }
             if (effect->tree != nullptr) {
-                motion->animator.apply(effect->model, *effect->tree, player.sequence(),
+                motion->animator.apply(*effect->model, *effect->tree, player.sequence(),
                                        player.frame());
                 motion->animator.apply(effect->particles, *effect->tree, player.sequence(),
                                        player.frame());
@@ -353,14 +436,27 @@ bool EffectTrees::bindVisuals(Effect& effect) {
             return false;
         }
         effect.model = prototype.model;
-        effect.model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
         if (effect.emitParticles) {
             effect.particles = prototype.particles;
             effect.particles.setLocalScales(effect.pose.poses());
             effect.particles.step(0, effect.transform(), effect.pose.matrices());
         }
-        return effect.model.bound() || effect.particles.field().size() > 0;
+        return effect.model->bound() || effect.particles.field().size() > 0;
     }
+    const auto cached = std::ranges::find_if(m_visualCache, [&](const Visual& visual) {
+        return visual.archive == effect.archive && visual.device == effect.device &&
+               visual.tree == effect.tree && visual.lenders == effect.lenders &&
+               visual.missingObjectsAreEmpty == effect.missingObjectsAreEmpty &&
+               visual.emitParticles == effect.emitParticles;
+    });
+    if (cached != m_visualCache.end()) {
+        effect.model = cached->model;
+        effect.particles = cached->particles;
+        effect.particles.setLocalScales(effect.pose.poses());
+        effect.particles.step(0, effect.transform(), effect.pose.matrices());
+        return effect.model->bound() || effect.particles.field().size() > 0;
+    }
+    effect.model = std::make_shared<TreeModel>();
     std::optional<TreeInfo> sparseTree;
     if (effect.missingObjectsAreEmpty) {
         // AtreeNodeInit -> MBOX_ReallyFindObject(create=1) substitutes AAANULLOBJ.
@@ -374,8 +470,8 @@ bool EffectTrees::bindVisuals(Effect& effect) {
         }
     }
     const auto& geometry = sparseTree ? *sparseTree : *effect.tree;
-    const bool mesh = effect.model.bind(geometry, effect.archive->models, effect.archive->textures,
-                                        *effect.device, effect.lenders);
+    const bool mesh = effect.model->bind(geometry, effect.archive->models, effect.archive->textures,
+                                         *effect.device, effect.lenders);
     const bool wantsMesh = std::ranges::any_of(geometry.nodes, [](const TreeNodeInfo& node) {
         return !node.object.empty() || std::ranges::any_of(node.objectFrames, [](const auto& run) {
             return !run.object.empty();
@@ -384,13 +480,214 @@ bool EffectTrees::bindVisuals(Effect& effect) {
     if (wantsMesh && !mesh) {
         return false;
     }
-    effect.model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
     if (effect.emitParticles) {
         effect.particles.bind(*effect.tree, *effect.archive, *effect.device, effect.transform(),
                               effect.pose.matrices(), effect.lenders);
         effect.particles.setLocalScales(effect.pose.poses());
     }
-    return mesh || effect.particles.field().size() > 0;
+    if (!mesh && effect.particles.field().size() == 0) {
+        return false;
+    }
+    m_visualCache.push_back({effect.device, effect.archive, effect.tree, effect.lenders,
+                             effect.missingObjectsAreEmpty, effect.emitParticles, effect.model,
+                             effect.particles});
+    return true;
+}
+
+EffectTrees::Motion& EffectTrees::nativeBank(RenderDevice& device, ItemArchive& archive,
+                                             std::span<TextureSet* const> lenders) {
+    const auto matches = [&](const auto& motion) {
+        return motion->archive == &archive && std::ranges::equal(motion->lenders, lenders);
+    };
+    if (const auto active = std::ranges::find_if(m_motions, matches); active != m_motions.end()) {
+        return **active;
+    }
+    auto cached = std::ranges::find_if(m_motionCache, matches);
+    if (cached == m_motionCache.end()) {
+        auto motion = std::make_unique<Motion>();
+        motion->archive = &archive;
+        motion->lenders.assign(lenders.begin(), lenders.end());
+        motion->animator.bind(archive.trees.textureAnimations(), archive.textures, device, lenders);
+        m_motionCache.push_back(std::move(motion));
+        cached = std::prev(m_motionCache.end());
+    } else {
+        // A rewind can precede the first use of this bank. Its resources stay
+        // cached, but it begins again at the original native zero clock.
+        (*cached)->animator.restoreClock({});
+    }
+    m_motions.push_back(cached->get());
+    return **cached;
+}
+
+void EffectTrees::saveLocal(LocalSnapshot& state) const {
+    state.owner.reset();
+    state.effects.resize(m_effects.size());
+    for (usize i = 0; i < m_effects.size(); ++i) {
+        state.effects[i] = *m_effects[i];
+    }
+    state.motions = m_motions;
+    state.clocks.resize(m_motions.size());
+    for (usize i = 0; i < m_motions.size(); ++i) {
+        state.clocks[i] = m_motions[i]->animator.clock();
+    }
+    state.lenders = m_lenders;
+    state.presentationAdvanced = m_presentationAdvanced;
+    state.nextId = m_nextId;
+    state.nextInstance = m_nextInstance;
+    state.epoch = m_localEpoch;
+    state.owner = m_restoreOwner;
+}
+
+bool EffectTrees::canRestoreLocal(const LocalSnapshot& state) const {
+    return !state.owner.expired() && state.owner.lock() == m_restoreOwner &&
+           state.epoch == m_localEpoch;
+}
+
+bool EffectTrees::restoreLocal(const LocalSnapshot& state) {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    m_effects.resize(state.effects.size());
+    for (usize i = 0; i < state.effects.size(); ++i) {
+        if (!m_effects[i]) {
+            m_effects[i] = std::make_unique<Effect>();
+        }
+        static_cast<EffectState&>(*m_effects[i]) = state.effects[i];
+    }
+    m_motions = state.motions;
+    for (usize i = 0; i < m_motions.size(); ++i) {
+        m_motions[i]->animator.restoreClock(state.clocks[i]);
+    }
+    m_lenders = state.lenders;
+    m_presentationAdvanced = state.presentationAdvanced;
+    m_nextId = state.nextId;
+    m_nextInstance = state.nextInstance;
+    ++m_restoreGeneration;
+    return true;
+}
+
+void EffectTrees::appendMotionDigest(NativeStateDigest& digest, const Motion& motion,
+                                      const TextureAnimator::Clock& clock) {
+    const auto& [archive, lenders, animator] = motion;
+    digest.resource(archive);
+    appendLenders(digest, lenders);
+    animator.appendBindingDigest(digest);
+    digest.fields<3>(clock);
+}
+
+bool EffectTrees::appendNativeDigest(NativeStateDigest& digest) const {
+    const auto& [effects, motions, motionCache, visualCache, lenders, advanced, nextId,
+                 nextInstance, restoreOwner, restoreGeneration, localEpoch] = *this;
+    digest.string("EffectTrees.1");
+    digest.wide(effects.size());
+    std::vector<const EffectState*> ancestors;
+    for (const auto& effect : effects) {
+        if (!effect) {
+            digest.invalidate();
+            return false;
+        }
+        appendEffect(digest, *effect, ancestors);
+    }
+    digest.wide(motions.size());
+    for (const auto* motion : motions) {
+        if (!motion) {
+            digest.invalidate();
+            return false;
+        }
+        appendMotionDigest(digest, *motion, motion->animator.clock());
+    }
+    appendLenders(digest, lenders);
+    digest.values(advanced, nextId, nextInstance);
+    // Retained binding caches survive rewind and are not active lifetimes.
+    // Their resources are authenticated by registerNativeResources, not hashed
+    // by speculative cache insertion order. Owner/epoch only guard local saves.
+    static_cast<void>(motionCache);
+    static_cast<void>(visualCache);
+    static_cast<void>(restoreOwner);
+    static_cast<void>(restoreGeneration);
+    static_cast<void>(localEpoch);
+    return digest.good();
+}
+
+bool EffectTrees::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const {
+    if (!canRestoreLocal(state) || state.motions.size() != state.clocks.size()) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [effects, motions, clocks, lenders, advanced, nextId, nextInstance, owner,
+                 epoch] = state;
+    digest.string("EffectTrees.1");
+    digest.wide(effects.size());
+    std::vector<const EffectState*> ancestors;
+    for (const auto& effect : effects) {
+        appendEffect(digest, effect, ancestors);
+    }
+    digest.wide(motions.size());
+    for (usize index = 0; index < motions.size(); ++index) {
+        if (!motions[index]) {
+            digest.invalidate();
+            return false;
+        }
+        appendMotionDigest(digest, *motions[index], clocks[index]);
+    }
+    appendLenders(digest, lenders);
+    digest.values(advanced, nextId, nextInstance);
+    static_cast<void>(owner);
+    static_cast<void>(epoch);
+    return digest.good();
+}
+
+bool EffectTrees::registerNativeResources(NativeStateResources& registry) const {
+    std::vector<const ItemArchive*> archives;
+    std::vector<const TextureSet*> banks;
+    const auto refreshArchive = [&](const ItemArchive* archive) {
+        if (!archive || std::ranges::find(archives, archive) != archives.end()) {
+            return true;
+        }
+        archives.push_back(archive);
+        return registry.refreshArchive(*archive);
+    };
+    const auto refreshLenders = [&](std::span<TextureSet* const> lenders) {
+        for (const auto* lender : lenders) {
+            if (lender && std::ranges::find(banks, lender) == banks.end()) {
+                banks.push_back(lender);
+                if (!registry.refreshTextures(*lender)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    if (!refreshLenders(m_lenders)) {
+        return false;
+    }
+    for (const auto& motion : m_motionCache) {
+        if (!motion || !refreshArchive(motion->archive) || !refreshLenders(motion->lenders)) {
+            return false;
+        }
+    }
+    for (const auto& visual : m_visualCache) {
+        if (!refreshArchive(visual.archive) || !refreshLenders(visual.lenders)) {
+            return false;
+        }
+    }
+    std::vector<const EffectState*> ancestors;
+    const auto refreshEffect = [&](const auto& self, const EffectState& effect) -> bool {
+        if (std::ranges::find(ancestors, &effect) != ancestors.end() ||
+            !refreshArchive(effect.archive) || !refreshLenders(effect.lenders)) {
+            return false;
+        }
+        ancestors.push_back(&effect);
+        const bool valid = !effect.morphPrototype || self(self, *effect.morphPrototype);
+        ancestors.pop_back();
+        return valid;
+    };
+    for (const auto& effect : m_effects) {
+        if (!effect || !refreshEffect(refreshEffect, *effect)) {
+            return false;
+        }
+    }
+    return registry.good();
 }
 
 void EffectTrees::stop(u32 id) {
@@ -444,7 +741,7 @@ bool EffectTrees::playing(u32 id) const {
         m_effects, [id](const std::unique_ptr<Effect>& effect) { return effect->id == id; });
 }
 
-f32 EffectTrees::secondsLeftOf(const Effect& effect) {
+f32 EffectTrees::secondsLeftOf(const EffectState& effect) {
     return effect.timed || effect.tree == nullptr || effect.tree->sequences.empty()
                ? effect.secondsLeft
                : (static_cast<f32>(effect.player.frameCount()) - effect.player.frame()) *
@@ -501,15 +798,7 @@ u32 EffectTrees::startParticles(RenderDevice& device, ItemArchive& archive,
     effect->archive = &archive;
     initializeParticles(*effect, descriptor, archive.textures.texture(device, textureSlot),
                         textureSlot, attachment, effect->id);
-    const bool known = std::ranges::any_of(m_motions, [&](const auto& motion) {
-        return motion->archive == &archive && motion->lenders.empty();
-    });
-    if (!known) {
-        auto motion = std::make_unique<Motion>();
-        motion->archive = &archive;
-        motion->animator.bind(archive.trees.textureAnimations(), archive.textures, device);
-        m_motions.push_back(std::move(motion));
-    }
+    nativeBank(device, archive, {});
     const u32 id = effect->id;
     m_effects.push_back(std::move(effect));
     return id;
@@ -597,22 +886,12 @@ u32 EffectTrees::startSet(RenderDevice& device, ItemArchive& archive, std::strin
     if (!bindVisuals(*effect)) {
         return 0;
     }
-    effect->model.setFrame(0, static_cast<s32>(effect->player.frame()));
-    const bool known = std::ranges::any_of(m_motions, [&](const std::unique_ptr<Motion>& motion) {
-        return motion->archive == &archive && motion->lenders == effect->lenders;
-    });
-    if (!known) {
-        auto motion = std::make_unique<Motion>();
-        motion->archive = &archive;
-        motion->lenders = effect->lenders;
-        motion->animator.bind(archive.trees.textureAnimations(), archive.textures, device,
-                              effect->lenders);
-        m_motions.push_back(std::move(motion));
-    }
+    effect->model->setFrame(0, static_cast<s32>(effect->player.frame()));
+    nativeBank(device, archive, effect->lenders);
     const u32 id = effect->id;
     for (const auto& motion : m_motions) {
         if (motion->archive == &archive && motion->lenders == effect->lenders) {
-            motion->animator.apply(effect->model, *effect->tree, 0,
+            motion->animator.apply(*effect->model, *effect->tree, 0,
                                    static_cast<s32>(effect->player.frame()));
             motion->animator.apply(effect->particles, *effect->tree, 0,
                                    static_cast<s32>(effect->player.frame()));
@@ -644,10 +923,10 @@ u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
         effect->name = prepared.tree->name;
         effect->position = position;
         initializeTree(*effect, setting);
-        effect->model = *prepared.model;
-        effect->model.setAppearance(effect->unlit, effect->tint, effect->depthWrite,
-                                    effect->additive);
-        effect->model.setFrame(0, static_cast<s32>(effect->player.frame()));
+        effect->model = std::make_shared<TreeModel>(*prepared.model);
+        effect->model->setAppearance(effect->unlit, effect->tint, effect->depthWrite,
+                                     effect->additive);
+        effect->model->setFrame(0, static_cast<s32>(effect->player.frame()));
         if (effect->emitParticles) {
             effect->particles = *prepared.particles;
             // The prototype has not advanced. Updating its nodes at zero seconds
@@ -655,7 +934,7 @@ u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
             effect->particles.setLocalScales(effect->pose.poses());
             effect->particles.step(0, effect->transform(), effect->pose.matrices());
         }
-        if (!effect->model.bound() && effect->particles.field().size() == 0) {
+        if (!effect->model->bound() && effect->particles.field().size() == 0) {
             return 0;
         }
     } else {
@@ -672,7 +951,7 @@ u32 EffectTrees::startPrepared(const Prepared& prepared, const Vec3& position,
     if (effect->tree != nullptr) {
         for (const auto& motion : m_motions) {
             if (motion->archive == effect->archive && motion->lenders == effect->lenders) {
-                motion->animator.apply(effect->model, *effect->tree, 0, effect->player.frame());
+                motion->animator.apply(*effect->model, *effect->tree, 0, effect->player.frame());
                 motion->animator.apply(effect->particles, *effect->tree, 0, effect->player.frame());
             }
         }
@@ -700,11 +979,21 @@ bool EffectTrees::prepareBank(const Prepared& prepared) {
                std::ranges::equal(motion->lenders, prepared.lenders);
     });
     if (!known) {
+        const auto cached = std::ranges::find_if(m_motionCache, [&](const auto& motion) {
+            return motion->archive == prepared.archive &&
+                   std::ranges::equal(motion->lenders, prepared.lenders);
+        });
+        if (cached != m_motionCache.end()) {
+            (*cached)->animator.restoreClock(prepared.textures->clock());
+            m_motions.push_back(cached->get());
+            return true;
+        }
         auto motion = std::make_unique<Motion>();
         motion->archive = prepared.archive;
         motion->lenders.assign(prepared.lenders.begin(), prepared.lenders.end());
         motion->animator = *prepared.textures;
-        m_motions.push_back(std::move(motion));
+        m_motions.push_back(motion.get());
+        m_motionCache.push_back(std::move(motion));
     }
     return true;
 }
@@ -761,7 +1050,7 @@ void EffectTrees::snapPresentation(u32 id) {
 
 void EffectTrees::update(f32 seconds) {
     m_presentationAdvanced = seconds > 0;
-    for (const std::unique_ptr<Motion>& motion : m_motions) {
+    for (auto* motion : m_motions) {
         motion->animator.advance(seconds);
     }
     for (const std::unique_ptr<Effect>& effect : m_effects) {
@@ -855,19 +1144,19 @@ void EffectTrees::update(f32 seconds) {
         if (!effect->tree->sequences.empty()) {
             effect->player.advance(animationSeconds * effect->playbackRate, effect->repeats);
             effect->pose.evaluate(*effect->tree, effect->player.sequence(), effect->player.frame());
-            effect->model.setFrame(effect->player.sequence(),
-                                   static_cast<s32>(effect->player.frame()));
+            effect->model->setFrame(effect->player.sequence(),
+                                    static_cast<s32>(effect->player.frame()));
             if (effect->persistent && !effect->repeats && effect->player.finished()) {
                 effect->particles.stop();
             }
         }
         effect->particles.setLocalScales(effect->pose.poses());
         effect->particles.step(seconds, effect->transform(), effect->pose.matrices());
-        for (const std::unique_ptr<Motion>& motion : m_motions) {
+        for (const auto* motion : m_motions) {
             if (motion->archive != effect->archive || motion->lenders != effect->lenders) {
                 continue;
             }
-            motion->animator.apply(effect->model, *effect->tree, effect->player.sequence(),
+            motion->animator.apply(*effect->model, *effect->tree, effect->player.sequence(),
                                    static_cast<s32>(effect->player.frame()));
             motion->animator.apply(effect->particles, *effect->tree, effect->player.sequence(),
                                    static_cast<s32>(effect->player.frame()));
@@ -920,10 +1209,13 @@ void EffectTrees::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
         }
         const Mat4 placed = direction.has_value() ? frame.along(placement, *direction) : placement;
         if (!effect->retiring && effect->tree != nullptr) {
-            effect->model.setPresentationFrame(effect->player.sequence(), visualFrame);
+            effect->model->resetTextures();
+            effect->model->setAppearance(effect->unlit, effect->tint, effect->depthWrite,
+                                         effect->additive);
+            effect->model->setPresentationFrame(effect->player.sequence(), visualFrame);
             for (const auto& motion : m_motions) {
                 if (motion->archive == effect->archive && motion->lenders == effect->lenders) {
-                    motion->animator.apply(effect->model, *effect->tree, effect->player.sequence(),
+                    motion->animator.apply(*effect->model, *effect->tree, effect->player.sequence(),
                                            visualFrame,
                                            motion->animator.presentationOffset(frameBlend));
                 }
@@ -935,10 +1227,10 @@ void EffectTrees::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
                 // other local transform. Facing only the final mesh loses
                 // offsets/rotations under Garm's laser-ribbon effect nodes.
                 const auto matrices = pose->drawMatrices(placed, *camera);
-                effect->model.draw(device, clip, Mat4{1}, lighting, matrices, nullptr, alpha);
+                effect->model->draw(device, clip, Mat4{1}, lighting, matrices, nullptr, alpha);
             } else {
-                effect->model.draw(device, clip, placed, lighting, pose->matrices(), nullptr,
-                                   alpha);
+                effect->model->draw(device, clip, placed, lighting, pose->matrices(), nullptr,
+                                    alpha);
             }
         }
         const f32 particleBlend = m_presentationAdvanced ? frameBlend : -1.0f;
@@ -971,13 +1263,20 @@ void EffectTrees::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
     }
 }
 
-void EffectTrees::clear() {
+void EffectTrees::reset() {
     ++m_restoreGeneration;
     m_effects.clear();
     m_motions.clear();
     m_lenders.clear();
     m_presentationAdvanced = false;
     m_nextId = 1;
+}
+
+void EffectTrees::clear() {
+    reset();
+    ++m_localEpoch;
+    m_motionCache.clear();
+    m_visualCache.clear();
 }
 
 } // namespace gdl::game

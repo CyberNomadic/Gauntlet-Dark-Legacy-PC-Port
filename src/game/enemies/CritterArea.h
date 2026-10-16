@@ -4,6 +4,7 @@
 #include <string>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "game/enemies/Enemies.h"
@@ -24,6 +25,10 @@ struct CritterArea {
     f32 secondsLeft = 0.0f;
     f32 lifetime = 0.0f;
     bool expanding = false;
+    bool operator==(const CritterArea&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const CritterArea& state) {
+        digest.fields<12>(state);
+    }
 
     /** The effect's translation is not rotated by its own directional angles. */
     static Mat4 placement(const Mat4& parent, const Vec3& offset, const Vec2& pitchYaw);

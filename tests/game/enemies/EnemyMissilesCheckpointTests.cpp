@@ -230,6 +230,11 @@ TEST_CASE(
     REQUIRE(pool.restore(blocked));
     REQUIRE(pool.launch(EnemyMissileKind::arrow(), launch));
     CHECK(capture(pool) == forward);
+    pool.blast({.position = {70, 3, 0}, .stages = {1}});
+    const auto afterBlast = capture(pool);
+    CHECK(afterBlast.random == forward.random);
+    CHECK(afterBlast.bursts.back().instance == forward.nextInstance);
+    CHECK(afterBlast.nextInstance == forward.nextInstance + 1);
     pool.setShrink(0.5f);
     const auto beforeClear = capture(pool);
     pool.clear();
@@ -516,4 +521,175 @@ TEST_CASE("enemy missile resources survive shooter recycling and resolve origina
     CHECK(capture(pool, resources) == forward);
     pool.clear(); // before the stock owner releases its resources
 }
+
+TEST_CASE("native enemy missile rewind discards wrong flight branches and preserves pending hits",
+          "[enemy-missiles-local-rewind]") {
+    Battle reference, predicted;
+    EnemyMissiles::LocalSnapshot saved;
+    reference.advance(0.173f);
+    predicted.advance(0.173f);
+    bool sawHits = false, sawBursts = false, sawReflections = false;
+    s32 tick = 0;
+    for (s32 window = 0; window < 48; ++window) {
+        CAPTURE(window, tick);
+        const s32 distance = 1 + window % 8;
+        const auto before = capture(predicted.pool);
+        predicted.pool.saveLocal(saved);
+        auto diagnostic = predicted.pool.prepareRestore(before);
+        REQUIRE(diagnostic);
+        for (s32 step = 0; step < distance; ++step) {
+            predicted.step(tick + step + 999, 1.0f / 30);
+        }
+        predicted.pool.takeHits();
+        predicted.pool.takeRockHits();
+        predicted.pool.takePickupBlasts();
+        const auto callbacks = predicted.callbacks;
+        REQUIRE(predicted.pool.restoreLocal(saved));
+        CHECK(predicted.callbacks == callbacks);
+        CHECK_FALSE(predicted.pool.canCommit(*diagnostic));
+        CHECK(capture(predicted.pool) == before);
+        for (s32 step = 0; step < distance; ++step, ++tick) {
+            reference.step(tick, 1.0f / 60);
+            predicted.step(tick, 1.0f / 60);
+            const auto expected = capture(reference.pool);
+            CHECK(capture(predicted.pool) == expected);
+            sawHits |= !expected.hits.empty();
+            sawBursts |= !expected.bursts.empty();
+            sawReflections |=
+                std::ranges::any_of(expected.missiles, [](const auto& m) { return m.reflected; });
+        }
+        REQUIRE(predicted.pool.canRestoreLocal(saved));
+    }
+    CHECK(sawHits);
+    CHECK(sawBursts);
+    CHECK(sawReflections);
+}
+
+TEST_CASE("native enemy missile history refuses foreign and replaced bindings",
+          "[enemy-missiles-local-rewind]") {
+    Battle first, other;
+    EnemyMissiles::LocalSnapshot saved;
+    CHECK_FALSE(first.pool.restoreLocal(saved));
+    CHECK_FALSE(first.pool.equalLocal(saved, saved));
+    first.pool.saveLocal(saved);
+    CHECK(first.pool.equalLocal(saved, saved));
+    const auto untouched = capture(other.pool);
+    CHECK_FALSE(other.pool.restoreLocal(saved));
+    CHECK_FALSE(other.pool.equalLocal(saved, saved));
+    CHECK(capture(other.pool) == untouched);
+    REQUIRE(first.pool.restoreLocal(saved));
+    REQUIRE(first.pool.restoreLocal(saved));
+    REQUIRE(first.pool.restore(capture(first.pool)));
+    CHECK_FALSE(first.pool.restoreLocal(saved));
+    CHECK_FALSE(first.pool.equalLocal(saved, saved));
+    first.pool.saveLocal(saved);
+    first.pool.clear();
+    CHECK_FALSE(first.pool.restoreLocal(saved));
+    CHECK_FALSE(first.pool.equalLocal(saved, saved));
+}
+
+TEST_CASE(
+    "native enemy missile equality covers hidden contacts timers identity and borrowed models",
+    "[enemy-missiles-local-rewind][native-state-equality]") {
+    Battle battle;
+    battle.advance(0.173f);
+    EnemyMissiles::LocalSnapshot saved, changed;
+    battle.pool.saveLocal(saved);
+    battle.pool.saveLocal(changed);
+    REQUIRE(battle.pool.equalLocal(saved, changed));
+    const auto distinct = [&](const auto& mutate) {
+        REQUIRE(battle.pool.restoreLocal(saved));
+        mutate();
+        battle.pool.saveLocal(changed);
+        CHECK_FALSE(battle.pool.equalLocal(saved, changed));
+        REQUIRE(battle.pool.restoreLocal(saved));
+        battle.pool.saveLocal(changed);
+        CHECK(battle.pool.equalLocal(saved, changed));
+    };
+    const auto flight = [&]() -> EnemyMissile& {
+        // This mutable pool owns the value; only its public observation is const.
+        return const_cast<EnemyMissile&>(battle.pool.missile(0));
+    };
+    REQUIRE_FALSE(flight().pierced.empty());
+    distinct([&] { flight().pierced[0].second *= 0.5f; });
+    distinct([&] { ++flight().pierced[0].first; });
+    distinct([&] { flight().heldLeft *= 0.5f; });
+    distinct([&] { flight().secondsLeft *= 0.5f; });
+    distinct([&] { flight().lived += 0.01f; });
+    distinct([&] { ++flight().instance; });
+    distinct([&] { ++flight().continuity; });
+    distinct([&] { flight().reflected = !flight().reflected; });
+    distinct([&] { flight().shooter = 17; });
+    distinct([&] { flight().kind.damage += 1; });
+    TreeModel otherBinding;
+    distinct([&] { flight().model = &otherBinding; });
+    distinct([&] { battle.pool.setShrink(0.5f); });
+    distinct([&] { battle.pool.takeHits(); });
+    distinct([&] { battle.pool.takePickupBlasts(); });
+    distinct([&] {
+        // Rejected throws still consume native RNG, without adding a body.
+        const auto count = battle.pool.count();
+        REQUIRE_FALSE(battle.pool.launch(
+            EnemyMissileKind::bomb(),
+            {.body = {50, 3, 0}, .target = {50, 3, 20}, .facing = kPi, .aimError = 0.35f}));
+        REQUIRE(battle.pool.count() == count);
+    });
+    distinct([&] { battle.advance(1.0f / 60); }); // gas holds, stage and ricochet timers
+}
+
+TEST_CASE("enemy flight and lingering blast impacts retain births through compaction and rewind",
+          "[enemy-missiles-local-rewind][native-combat-audio]") {
+    EnemyMissiles pool;
+    const auto kind = EnemyMissileKind::bolt(20, 25, 0.3f, 0, 0);
+    pool.launch(kind, {0, 3, 0}, {0, 3, 20}, 1, nullptr, 0);
+    const u64 flight = pool.missile(0).instance;
+    pool.blast({.position = {20, 3, 0},
+                .radius = 7.5f,
+                .damage = 10,
+                .flags = EnemyBlast::kGas,
+                .stages = {2}});
+    const auto initial = capture(pool);
+    REQUIRE(initial.bursts.size() == 1);
+    const u64 blast = initial.bursts[0].instance;
+    REQUIRE(blast != 0);
+    REQUIRE(blast != flight);
+    const std::array views{player({0, 0, 0.5f}, 0), player({20, 0, 0}, 1)};
+    EnemyMissiles::LocalSnapshot saved, expectedNative, actualNative;
+    pool.saveLocal(saved);
+    const auto run = [&] {
+        pool.update(1.0f / 60, nullptr, views);
+        REQUIRE(pool.count() == 0);
+        pool.launch(kind, {40, 3, 0}, {40, 3, 20}, 1, nullptr, 0);
+        const u64 replacement = pool.missile(0).instance;
+        REQUIRE(replacement != flight);
+        REQUIRE(replacement != blast);
+        const auto hits = pool.takeHits();
+        REQUIRE(hits.size() == 2);
+        CHECK(hits[0].fromBurst);
+        CHECK(hits[0].instance == blast);
+        CHECK_FALSE(hits[1].fromBurst);
+        CHECK(hits[1].instance == flight);
+        pool.update(0.51f, nullptr, views);
+        const auto later = pool.takeHits();
+        REQUIRE(later.size() == 1);
+        CHECK(later[0].fromBurst);
+        CHECK(later[0].instance == blast);
+        return capture(pool);
+    };
+    const auto expected = run();
+    pool.saveLocal(expectedNative);
+    for (s32 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        REQUIRE(pool.restoreLocal(saved));
+        for (s32 tick = 0; tick < distance; ++tick) {
+            pool.blast({.position = {80, 3, 0}, .stages = {1}});
+            pool.update(1.0f / 60, nullptr, {});
+        }
+        REQUIRE(pool.restoreLocal(saved));
+        CHECK(run() == expected);
+        pool.saveLocal(actualNative);
+        CHECK(pool.equalLocal(expectedNative, actualNative));
+    }
+}
+
 } // namespace

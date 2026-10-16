@@ -9,17 +9,88 @@
 #include "engine/core/Log.h"
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/render/HeatDistortion.h"
 #include "engine/world/ThermalMaterial.h"
 #include "engine/world/WorldScene.h"
 
 namespace gdl {
 
+void visitNativeState(NativeStateDigest& digest, const ParticleField& state) {
+    const auto& [entries, remainder, advance, heat] = state.m_state;
+    digest.values(remainder, advance, heat);
+    digest.wide(entries.size());
+    // bind() batches authored markers by texture address, which differs across
+    // independently loaded peers. Canonicalize only those marker slots. Entries
+    // made by start() retain their native indices (TreeParticles addresses them
+    // through its node-to-emitter table), including in a mixed field.
+    std::vector<const ParticleField::Entry*> authored;
+    for (const auto& entry : entries) {
+        if (entry.sourceObject >= 0) {
+            authored.push_back(&entry);
+        } else if (entry.sourceObject != -1) {
+            digest.invalidate();
+        }
+    }
+    std::ranges::sort(authored, {}, &ParticleField::Entry::sourceObject);
+    for (usize index = 1; index < authored.size(); ++index) {
+        if (authored[index - 1]->sourceObject == authored[index]->sourceObject) {
+            digest.invalidate(); // A layout marker cannot identify two emitters.
+        }
+    }
+    const auto append = [&](const auto& entry) {
+        const auto& [emitter, sourceObject, worldObject, texture, draw, presentedTexture,
+                     nextTexture, textureBlend, steppedTexture] = entry;
+        digest.values(emitter, sourceObject, worldObject);
+        digest.resource(texture);
+        const auto& [blend, lightmap, masked, next, fraction, scale, offset, alpha, cull,
+                     depthWrite, depthTest, mipmaps, clamp, coverage, smooth, darken, colorScale] =
+            draw;
+        digest.value(blend);
+        digest.resource(lightmap);
+        digest.resource(masked);
+        digest.resource(next);
+        digest.values(fraction, scale, offset, alpha, cull, depthWrite, depthTest, mipmaps, clamp,
+                      coverage, smooth, darken, colorScale);
+        // Only these four per-draw samples and m_batch are excluded: draw()
+        // recomputes them from native texture clocks and interpolation alpha.
+        static_cast<void>(presentedTexture);
+        static_cast<void>(nextTexture);
+        static_cast<void>(textureBlend);
+        static_cast<void>(steppedTexture);
+    };
+    usize marker = 0;
+    for (const auto& entry : entries) {
+        append(entry.sourceObject >= 0 ? *authored[marker++] : entry);
+    }
+}
+
+bool ParticleField::equalLocal(const ParticleField& other) const {
+    if (m_state.frameRemainder != other.m_state.frameRemainder ||
+        m_state.lastAdvance != other.m_state.lastAdvance ||
+        m_state.heatFrames != other.m_state.heatFrames ||
+        m_state.entries.size() != other.m_state.entries.size()) {
+        return false;
+    }
+    for (usize index = 0; index < m_state.entries.size(); ++index) {
+        const auto& a = m_state.entries[index];
+        const auto& b = other.m_state.entries[index];
+        if (a.sourceObject != b.sourceObject || a.worldObject != b.worldObject ||
+            a.texture != b.texture || a.state != b.state || !a.emitter.equalLocal(b.emitter)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ParticleField::Checkpoint::valid() const {
-    return entries.size() <= 256 && std::isfinite(frameRemainder) && frameRemainder >= 0 &&
-           frameRemainder < 1 && std::isfinite(lastAdvance) && lastAdvance >= 0 &&
-           lastAdvance <= 450 && std::isfinite(heatFrames) && heatFrames >= 0 &&
-           heatFrames <= 30.0 * 24 * 60 * 60 * 30 &&
+    return entries.size() <= 256 && validValues();
+}
+
+bool ParticleField::Checkpoint::validValues() const {
+    return std::isfinite(frameRemainder) && frameRemainder >= 0 && frameRemainder < 1 &&
+           std::isfinite(lastAdvance) && lastAdvance >= 0 && lastAdvance <= 450 &&
+           std::isfinite(heatFrames) && heatFrames >= 0 && heatFrames <= 30.0 * 24 * 60 * 60 * 30 &&
            std::ranges::all_of(entries, [](const Entry& entry) {
                return entry.worldObject >= -1 && entry.worldObject <= 1'000'000 &&
                       entry.emitter.valid();
@@ -28,23 +99,23 @@ bool ParticleField::Checkpoint::valid() const {
 
 ParticleField::Checkpoint ParticleField::checkpoint() const {
     Checkpoint state;
-    state.frameRemainder = m_frameRemainder;
-    state.lastAdvance = m_lastAdvance;
-    state.heatFrames = m_heatFrames;
-    state.entries.reserve(m_entries.size());
-    for (const auto& entry : m_entries) {
+    state.frameRemainder = m_state.frameRemainder;
+    state.lastAdvance = m_state.lastAdvance;
+    state.heatFrames = m_state.heatFrames;
+    state.entries.reserve(m_state.entries.size());
+    for (const auto& entry : m_state.entries) {
         state.entries.push_back({entry.emitter.checkpoint(), entry.worldObject});
     }
     return state;
 }
 
 bool ParticleField::canRestore(const Checkpoint& state) const {
-    if (!state.valid() || state.entries.size() != m_entries.size()) {
+    if (!state.valid() || state.entries.size() != m_state.entries.size()) {
         return false;
     }
-    for (usize i = 0; i < m_entries.size(); ++i) {
-        if (state.entries[i].worldObject != m_entries[i].worldObject ||
-            !m_entries[i].emitter.canRestore(state.entries[i].emitter)) {
+    for (usize i = 0; i < m_state.entries.size(); ++i) {
+        if (state.entries[i].worldObject != m_state.entries[i].worldObject ||
+            !m_state.entries[i].emitter.canRestore(state.entries[i].emitter)) {
             return false;
         }
     }
@@ -55,16 +126,16 @@ bool ParticleField::restore(const Checkpoint& state) {
     if (!canRestore(state)) {
         return false;
     }
-    auto entries = m_entries;
+    auto entries = m_state.entries;
     for (usize i = 0; i < entries.size(); ++i) {
         if (!entries[i].emitter.restore(state.entries[i].emitter)) {
             return false;
         }
     }
-    m_entries = std::move(entries);
-    m_frameRemainder = state.frameRemainder;
-    m_lastAdvance = state.lastAdvance;
-    m_heatFrames = state.heatFrames;
+    m_state.entries = std::move(entries);
+    m_state.frameRemainder = state.frameRemainder;
+    m_state.lastAdvance = state.lastAdvance;
+    m_state.heatFrames = state.heatFrames;
     clearTextureBlends();
     m_batch.clear();
     return true;
@@ -159,19 +230,20 @@ void ParticleField::bind(const WorldLayout& layout, TextureSet& textures, Render
         entry.state.alphaTest = WorldScene::kAlphaTest;
         entry.state.depthWrite = descriptor.depthWrite;
         entry.state.depthTest = descriptor.depthTest;
-        m_entries.push_back(std::move(entry));
+        m_state.entries.push_back(std::move(entry));
     }
     // Emitters sharing a texture and state draw as one.
-    std::stable_sort(m_entries.begin(), m_entries.end(), [](const Entry& a, const Entry& b) {
-        return std::less<const Texture*>{}(a.texture, b.texture);
-    });
+    std::stable_sort(m_state.entries.begin(), m_state.entries.end(),
+                     [](const Entry& a, const Entry& b) {
+                         return std::less<const Texture*>{}(a.texture, b.texture);
+                     });
 }
 
 void ParticleField::clear() {
-    m_heatFrames = 0.0;
-    m_entries.clear();
-    m_frameRemainder = 0.0f;
-    m_lastAdvance = 0.0f;
+    m_state.heatFrames = 0.0;
+    m_state.entries.clear();
+    m_state.frameRemainder = 0.0f;
+    m_state.lastAdvance = 0.0f;
 }
 
 usize ParticleField::start(const ParticleDescriptor& descriptor, const Mat4& node,
@@ -183,18 +255,18 @@ usize ParticleField::start(const ParticleDescriptor& descriptor, const Mat4& nod
     entry.state.alphaTest = WorldScene::kAlphaTest;
     entry.state.depthWrite = descriptor.depthWrite;
     entry.state.depthTest = descriptor.depthTest;
-    m_entries.push_back(std::move(entry));
-    return m_entries.size() - 1;
+    m_state.entries.push_back(std::move(entry));
+    return m_state.entries.size() - 1;
 }
 
 void ParticleField::setNode(usize index, const Mat4& node) {
-    if (index < m_entries.size()) {
-        m_entries[index].emitter.setNode(node);
+    if (index < m_state.entries.size()) {
+        m_state.entries[index].emitter.setNode(node);
     }
 }
 
 void ParticleField::syncNodes(const WorldScene& scene) {
-    for (Entry& entry : m_entries) {
+    for (Entry& entry : m_state.entries) {
         if (entry.worldObject >= 0) {
             entry.emitter.setNode(scene.worldTransform(static_cast<usize>(entry.worldObject)));
         }
@@ -202,55 +274,58 @@ void ParticleField::syncNodes(const WorldScene& scene) {
 }
 
 void ParticleField::setTexture(usize index, const Texture& texture) {
-    if (index < m_entries.size()) {
-        m_entries[index].texture = &texture;
-        m_entries[index].presentedTexture = nullptr;
+    if (index < m_state.entries.size()) {
+        m_state.entries[index].texture = &texture;
+        m_state.entries[index].presentedTexture = nullptr;
+        m_state.entries[index].steppedTexture = false;
     }
 }
 
 void ParticleField::setTextureBlend(usize index, const Texture& current, const Texture* next,
-                                    f32 blend) {
-    if (index < m_entries.size()) {
-        auto& entry = m_entries[index];
+                                    f32 blend, bool stepped) {
+    if (index < m_state.entries.size()) {
+        auto& entry = m_state.entries[index];
         entry.presentedTexture = &current;
         entry.nextTexture = next;
         entry.textureBlend = blend;
+        entry.steppedTexture = stepped;
     }
 }
 
 void ParticleField::clearTextureBlends() {
-    for (Entry& entry : m_entries) {
+    for (Entry& entry : m_state.entries) {
         entry.presentedTexture = nullptr;
         entry.nextTexture = nullptr;
         entry.textureBlend = 0.0f;
+        entry.steppedTexture = false;
     }
 }
 
 void ParticleField::setEmitting(usize index, bool emitting) {
-    if (index < m_entries.size()) {
-        m_entries[index].emitter.setEmitting(emitting);
+    if (index < m_state.entries.size()) {
+        m_state.entries[index].emitter.setEmitting(emitting);
     }
 }
 
 void ParticleField::setSpriteScale(usize index, f32 scale) {
-    if (index < m_entries.size()) {
-        m_entries[index].emitter.setSpriteScale(scale);
+    if (index < m_state.entries.size()) {
+        m_state.entries[index].emitter.setSpriteScale(scale);
     }
 }
 
 void ParticleField::stop(usize index) {
-    if (index < m_entries.size()) {
-        m_entries[index].emitter.finish();
+    if (index < m_state.entries.size()) {
+        m_state.entries[index].emitter.finish();
     }
 }
 
 void ParticleField::prune() {
-    std::erase_if(m_entries, [](const Entry& entry) { return !entry.emitter.active(); });
+    std::erase_if(m_state.entries, [](const Entry& entry) { return !entry.emitter.active(); });
 }
 
 usize ParticleField::particleCount() const {
     usize count = 0;
-    for (const Entry& entry : m_entries) {
+    for (const Entry& entry : m_state.entries) {
         count += entry.emitter.particles().size();
     }
     return count;
@@ -258,16 +333,16 @@ usize ParticleField::particleCount() const {
 
 void ParticleField::step(f32 seconds) {
     clearTextureBlends();
-    m_lastAdvance = std::max(seconds, 0.0f) * kFrameRate;
-    m_frameRemainder += m_lastAdvance;
-    const f32 whole = std::floor(m_frameRemainder);
-    m_frameRemainder -= whole;
+    m_state.lastAdvance = std::max(seconds, 0.0f) * kFrameRate;
+    m_state.frameRemainder += m_state.lastAdvance;
+    const f32 whole = std::floor(m_state.frameRemainder);
+    m_state.frameRemainder -= whole;
     const auto frames = static_cast<u32>(whole);
-    m_heatFrames += static_cast<f64>(frames);
+    m_state.heatFrames += static_cast<f64>(frames);
     if (frames == 0) {
         return;
     }
-    for (Entry& entry : m_entries) {
+    for (Entry& entry : m_state.entries) {
         entry.emitter.step(frames);
     }
 }
@@ -277,8 +352,9 @@ void ParticleField::draw(RenderDevice& device, const Mat4& clip, const Vec3& rig
     const f32 frameOffset =
         presentationAlpha < 0.0f
             ? 0.0f
-            : std::clamp(m_frameRemainder -
-                             m_lastAdvance * (1.0f - std::clamp(presentationAlpha, 0.0f, 1.0f)),
+            : std::clamp(m_state.frameRemainder -
+                             m_state.lastAdvance *
+                                 (1.0f - std::clamp(presentationAlpha, 0.0f, 1.0f)),
                          -1.0f, 1.0f);
     const Texture* texture = nullptr;
     DrawState state;
@@ -292,19 +368,21 @@ void ParticleField::draw(RenderDevice& device, const Mat4& clip, const Vec3& rig
             open = false;
         }
     };
-    for (const Entry& entry : m_entries) {
+    for (const Entry& entry : m_state.entries) {
         if (entry.emitter.particles().empty()) {
             continue;
         }
         submitHeat(device, entry.emitter, clip, right, up, frameOffset,
-                   static_cast<f32>((m_heatFrames + frameOffset) / kFrameRate));
+                   static_cast<f32>((m_state.heatFrames + frameOffset) / kFrameRate));
         const Texture* presentedTexture = entry.texture;
         DrawState presentedState = entry.state;
-        if (presentationAlpha >= 0.0f && entry.presentedTexture != nullptr &&
-            (entry.state.blend == BlendMode::Additive || !entry.state.depthWrite)) {
+        if (entry.presentedTexture != nullptr &&
+            (entry.steppedTexture ||
+             (presentationAlpha >= 0.0f &&
+              (entry.state.blend == BlendMode::Additive || !entry.state.depthWrite)))) {
             presentedTexture = entry.presentedTexture;
-            presentedState.nextTexture = entry.nextTexture;
-            presentedState.textureBlend = entry.textureBlend;
+            presentedState.nextTexture = entry.steppedTexture ? nullptr : entry.nextTexture;
+            presentedState.textureBlend = entry.steppedTexture ? 0.0f : entry.textureBlend;
         }
         if (!open || presentedTexture != texture || !(presentedState == state)) {
             flush();

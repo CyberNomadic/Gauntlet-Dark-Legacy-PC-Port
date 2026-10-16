@@ -295,8 +295,8 @@ TEST_CASE("the eagle gargoyle breathes fire on a player near and throws its fire
     EffectTrees effects;
     CombatantProjectiles projectiles;
     std::vector<std::string> sounds;
-    const CombatantProjectiles::PlaySound sound = [&](std::string_view name) {
-        sounds.emplace_back(name);
+    const CombatantProjectiles::PlaySound sound = [&](const CombatantProjectiles::SoundCue& cue) {
+        sounds.emplace_back(cue.name);
     };
     projectiles.launch(shots[0], *archive, device, effects, sound);
     REQUIRE(projectiles.count() == 1);

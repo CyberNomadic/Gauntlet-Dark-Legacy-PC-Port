@@ -9,6 +9,10 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 /** A successful swarm hit, captured before its actor can die or its slot be recycled. */
 struct EnemyFeedback {
@@ -21,6 +25,8 @@ struct EnemyFeedback {
     Vec3 position{0};
     f32 yaw = 0;
     f32 halfHeight = 0;
+    s32 enemy = -1;
+    u64 instance = 0; ///< captured before the source slot can be recycled
     bool operator==(const EnemyFeedback&) const = default;
 
     std::string sound(std::span<const LevelEnemy> roster, s32 bossType = -1) const;
@@ -33,4 +39,5 @@ struct EnemyFeedback {
     std::string_view deathSkin() const;
     s32 deathSkinFrames() const;
 };
+void visitNativeState(NativeStateDigest& digest, const EnemyFeedback& value);
 } // namespace gdl::game

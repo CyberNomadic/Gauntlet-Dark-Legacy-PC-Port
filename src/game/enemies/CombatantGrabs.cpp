@@ -16,9 +16,9 @@ void Combatant::grab(Actor& actor, const MoveDefinition& move, const AttackDefin
             }
             // CritterReleasePlayer uses the body's forward, with Y replaced by -0.1.
             const Vec3 direction{std::sin(actor.yaw), -0.1f, std::cos(actor.yaw)};
-            m_grabs.push_back({actor.grabbed, m_id, std::nullopt,
+            m_sim.grabs.push_back({actor.grabbed, m_sim.id, std::nullopt,
                                glm::normalize(direction) * damage.speed,
-                               damage.damage * m_scales.damage});
+                               damage.damage * m_sim.scales.damage});
             actor.grabbed = -1;
         }
         return;
@@ -54,7 +54,7 @@ void Combatant::grab(Actor& actor, const MoveDefinition& move, const AttackDefin
         actor.grabNode = move.colnode;
         actor.grabOffset = damage.offset;
         if (damage.hitSound >= 0) {
-            cue(actor, m_id, damage.hitSound, centre, std::nullopt, nullptr, actor.grabbed);
+            cue(actor, m_sim.id, damage.hitSound, centre, std::nullopt, nullptr, actor.grabbed);
         }
     }
 }
@@ -64,11 +64,11 @@ void Combatant::carryGrab(Actor& actor, std::span<const EnemyView> players) {
     }
     const EnemyView* player = viewOf(players, actor.grabbed);
     if (player == nullptr || player->hidden || actor.state != State::Active) {
-        m_grabs.push_back({actor.grabbed, m_id, std::nullopt, Vec3{0}, 0});
+        m_sim.grabs.push_back({actor.grabbed, m_sim.id, std::nullopt, Vec3{0}, 0});
         actor.grabbed = -1;
         return;
     }
-    m_grabs.push_back({actor.grabbed, m_id,
+    m_sim.grabs.push_back({actor.grabbed, m_sim.id,
                        glm::translate(attachmentTransform(actor, actor.grabNode), actor.grabOffset),
                        Vec3{0}, 0});
 }

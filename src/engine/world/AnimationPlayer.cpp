@@ -5,8 +5,17 @@
 #include <limits>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl {
+
+void visitNativeState(NativeStateDigest& digest, const AnimationPlayer& state) {
+    const auto& [sequence, index, generation, period, time, frame, speed, transitionLength,
+                 transitionTime, finished, held, smooth] = state;
+    digest.resource(sequence);
+    digest.values(index, generation, period, time, frame, speed, transitionLength, transitionTime,
+                  finished, held, smooth);
+}
 namespace {
 constexpr f32 kTimeSlack = 0.000001f;
 }

@@ -74,6 +74,91 @@ bool cloudRealm(const std::string& level) {
 
 } // namespace
 
+void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simulation& values) {
+    const auto& [clouds, deathShots, carried, bags, bagSeed, barrelRams, rockHits, hitStreak,
+                 lessons, critterEffects, moveEffects, cueEffects, deathEffects, deathContact,
+                 deathSound, yells, yellClocks, hearers, shrink, critterExperienceOwed,
+                 generatorRewards] = values;
+    const auto rows = [&digest]<usize N>(const auto& list) {
+        digest.wide(list.size());
+        for (const auto& row : list) {
+            digest.fields<N>(row);
+        }
+    };
+    const auto cue = [&digest](const SoundCueToken& token) {
+        const auto& [event] = token;
+        const auto& [epoch, tick, emitter, kind, occurrence] = event;
+        digest.values(epoch, tick);
+        digest.fields<4>(emitter);
+        digest.values(kind, occurrence);
+    };
+    rows.template operator()<3>(clouds);
+    rows.template operator()<5>(deathShots);
+    digest.value(carried);
+    rows.template operator()<9>(bags);
+    digest.value(bagSeed);
+    rows.template operator()<2>(barrelRams);
+    digest.values(rockHits, hitStreak, lessons);
+    rows.template operator()<9>(critterEffects);
+    rows.template operator()<3>(moveEffects);
+    digest.values(cueEffects, deathEffects, deathContact);
+    cue(deathSound);
+    digest.wide(yells.size());
+    for (const auto& yell : yells) {
+        const auto& [emitter, instance, start, timing, volume, pan] = yell;
+        digest.fields<4>(emitter);
+        digest.value(instance);
+        cue(start);
+        digest.fields<2>(timing);
+        digest.values(volume, pan);
+    }
+    rows.template operator()<2>(yellClocks);
+    digest.values(hearers, shrink, critterExperienceOwed);
+    rows.template operator()<3>(generatorRewards);
+}
+
+bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const {
+    appendFollowupValues(digest, m_sim);
+    return digest.good();
+}
+
+bool LevelOpponents::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("LevelOpponents.native.1");
+    return m_generators.appendNativeDigest(digest) && m_enemyMissiles.appendNativeDigest(digest) &&
+           m_combatantProjectiles.appendNativeDigest(digest) && m_enemies.appendNativeDigest(digest) &&
+           m_placements.appendNativeDigest(digest) && m_statues.appendNativeDigest(digest) &&
+           m_critters.appendNativeDigest(digest) && m_bosses.appendNativeDigest(digest) &&
+           m_bossMeter.appendNativeDigest(digest) && appendNativeFollowupDigest(digest);
+}
+
+bool LevelOpponents::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("LevelOpponents.native.1");
+    return m_generators.appendLocalDigest(digest, saved.m_generators) &&
+           m_enemyMissiles.appendLocalDigest(digest, saved.m_missiles) &&
+           m_combatantProjectiles.appendLocalDigest(digest, saved.m_projectiles) &&
+           m_enemies.appendLocalDigest(digest, saved.m_enemies) &&
+           m_placements.appendLocalDigest(digest, saved.m_placements) &&
+           m_statues.appendLocalDigest(digest, saved.m_statues) &&
+           m_critters.appendLocalDigest(digest, saved.m_critters) &&
+           m_bosses.appendLocalDigest(digest, saved.m_bosses) &&
+           m_bossMeter.appendLocalDigest(digest, saved.m_meter) &&
+           appendLocalFollowupDigest(digest, saved);
+}
+
+bool LevelOpponents::appendLocalFollowupDigest(NativeStateDigest& digest,
+                                               const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    appendFollowupValues(digest, saved.m_values);
+    return digest.good();
+}
+
 f32 LevelOpponents::attenuation(const Vec3& at, std::span<const Vec3> hearers) {
     if (hearers.empty()) {
         return 1.0f;
@@ -86,10 +171,10 @@ f32 LevelOpponents::attenuation(const Vec3& at, std::span<const Vec3> hearers) {
 }
 
 void LevelOpponents::hearFrom(std::span<const PlayerRuntime> players) {
-    m_hearers.clear();
+    m_sim.hearers.clear();
     for (const PlayerRuntime& runtime : players) {
         if (runtime.life == PlayerLife::Standing) {
-            m_hearers.push_back(runtime.actor.position());
+            m_sim.hearers.push_back(runtime.actor.position());
         }
     }
 }
@@ -98,7 +183,7 @@ SoundHandle LevelOpponents::playAt(std::string_view name, f32 level, const Vec3&
     if (!m_resources.has_value() || name.empty()) {
         return kNoSound;
     }
-    const f32 heard = attenuation(at, m_hearers);
+    const f32 heard = attenuation(at, m_sim.hearers);
     if (heard <= 0.0f) {
         return kNoSound;
     }
@@ -118,6 +203,13 @@ void LevelOpponents::playEnemyCues() {
         return;
     }
     for (const EnemyCue& cue : m_enemies.takeCues()) {
+        auto& audio = m_resources->audio;
+        if (audio.recordingSounds() &&
+            (cue.enemy < 0 || cue.enemy >= Enemies::kMost || cue.instance == 0)) {
+            audio.recorder()->unsupported("enemy cue without its source lifetime");
+        }
+        const FrameEventEmitter emitter{20, static_cast<u64>(std::max(cue.enemy, 0)), cue.instance};
+        auto scope = audio.soundScope(emitter, static_cast<u32>(cue.kind) + 1);
         switch (cue.kind) {
         case EnemyCue::Kind::Arrow: playAt(kArrowSound, kQuietSound, cue.position); break;
         case EnemyCue::Kind::Bolt:
@@ -133,9 +225,29 @@ void LevelOpponents::playEnemyCues() {
             }
             break;
         case EnemyCue::Kind::Yell:
-            if (const SoundHandle yell = playAt(kSuicideYellSound, kLoudSound, cue.position);
-                yell != kNoSound) {
-                m_yells.push_back(yell);
+            if (audio.recordingSounds()) {
+                const f32 volume =
+                    kLoudSound / kFullLevel * attenuation(cue.position, m_sim.hearers);
+                if (volume > 0) {
+                    const auto start = audio.beginNamedCue(kSuicideYellSound);
+                    if (start) {
+                        auto& clock = m_sim.yellClocks[static_cast<usize>(cue.enemy)];
+                        if (clock.source != cue.instance) {
+                            clock = {cue.instance, 1};
+                        }
+                        if (clock.next == 0) {
+                            audio.recorder()->unsupported("exhausted bomber cry lifetimes");
+                        }
+                        m_sim.yells.push_back({emitter, clock.next++, start,
+                                               audio.namedTiming(kSuicideYellSound), volume,
+                                               audio.panAt(cue.position)});
+                    }
+                }
+            } else {
+                if (const SoundHandle yell = playAt(kSuicideYellSound, kLoudSound, cue.position);
+                    yell != kNoSound) {
+                    m_yells.push_back(yell);
+                }
             }
             break;
         }
@@ -184,6 +296,16 @@ bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
     if (!m_resources) {
         return false;
     }
+    if (m_resources->audio.recordingSounds() && hit.instance == 0) {
+        m_resources->audio.recorder()->unsupported("enemy missile hit without its source lifetime");
+    }
+    // The shooter or flight vector may already have been recycled. A piercing
+    // shot's distinct victims also keep separate identities if contacts reorder.
+    const u64 target = hit.target >= 0 ? static_cast<u64>(hit.target) + 1 : 0;
+    const u8 seat = hit.player >= 0 && hit.player < 4 ? static_cast<u8>(hit.player)
+                                                    : FrameEventEmitter::kNoSeat;
+    const u32 cue = hit.ricochet ? 1 : hit.fromBurst ? 2 : hit.liquid ? 3 : 4;
+    auto soundScope = m_resources->audio.soundScope({22, target, hit.instance, seat}, cue);
     if (hit.worldObject >= 0) {
         m_resources->world.explodeObject(hit.worldObject, hit.position);
     }
@@ -197,7 +319,7 @@ bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
                                                hit.effect(), hit.position, emission.setting);
     }
     if (effect != 0) {
-        m_cueEffects.push_back(effect);
+        m_sim.cueEffects.push_back(effect);
     }
     playAt(emission.sound, emission.level, hit.position);
     if (hit.ricochet) {
@@ -238,7 +360,7 @@ void LevelOpponents::explodeSuicide(const EnemyBurst& burst) {
         const u32 id =
             m_resources->effects.startSet(m_resources->device, weapons, tree, at, setting);
         if (id != 0) {
-            m_cueEffects.push_back(id);
+            m_sim.cueEffects.push_back(id);
         }
         return id;
     };
@@ -247,7 +369,7 @@ void LevelOpponents::explodeSuicide(const EnemyBurst& burst) {
         setting.stretch = kCloudStretch;
         const Vec3 at = burst.position - Vec3{0.0f, kCloudDrop, 0.0f};
         const u32 first = start(kSuicideCloud[0], at, setting);
-        m_clouds.push_back(Cloud{first, 1, at});
+        m_sim.clouds.push_back(Cloud{first, 1, at});
         blast.radius = kCloudRadius;
         blast.flags = EnemyBlast::kGas;
         blast.stages = {m_resources->effects.remaining(first).value_or(kCloudSeconds), kCloudHold};
@@ -281,7 +403,7 @@ void LevelOpponents::explodeSuicide(const EnemyBurst& burst) {
         const u32 id = m_resources->effects.startSet(m_resources->device, *fragments,
                                                      kSuicideFragments, burst.position, setting);
         if (id != 0) {
-            m_cueEffects.push_back(id);
+            m_sim.cueEffects.push_back(id);
         }
     }
     m_enemyMissiles.blast(std::move(blast));
@@ -294,7 +416,7 @@ void LevelOpponents::advanceClouds() {
         return;
     }
     ItemArchive& weapons = m_resources->weapons;
-    for (Cloud& cloud : m_clouds) {
+    for (Cloud& cloud : m_sim.clouds) {
         if (cloud.effect != 0 && m_resources->effects.playing(cloud.effect)) {
             continue;
         }
@@ -312,11 +434,11 @@ void LevelOpponents::advanceClouds() {
         cloud.effect = m_resources->effects.startSet(
             m_resources->device, weapons, kSuicideCloud[cloud.stage], cloud.position, setting);
         if (cloud.effect != 0) {
-            m_cueEffects.push_back(cloud.effect);
+            m_sim.cueEffects.push_back(cloud.effect);
         }
         ++cloud.stage;
     }
-    std::erase_if(m_clouds, [](const Cloud& cloud) {
+    std::erase_if(m_sim.clouds, [](const Cloud& cloud) {
         return cloud.effect == 0 && cloud.stage >= kSuicideCloud.size();
     });
 }
@@ -341,12 +463,12 @@ void LevelOpponents::fireDeathShot(const EnemyDeathShot& shot) {
         pending.burst = m_resources->effects.startSet(m_resources->device, *archive, kDeathBurst,
                                                       shot.position, setting);
         if (pending.burst != 0) {
-            m_cueEffects.push_back(pending.burst);
+            m_sim.cueEffects.push_back(pending.burst);
             kind.held = m_resources->effects.remaining(pending.burst).value_or(0.0f);
         }
     }
     m_enemyMissiles.launch(kind, shot.position, shot.position + shot.direction, 1.0f, nullptr, -1);
-    m_deathShots.push_back(pending);
+    m_sim.deathShots.push_back(pending);
 }
 
 /** Once a death shot's burst has played out, its shot flies on from where it was, holding its
@@ -355,7 +477,7 @@ void LevelOpponents::advanceDeathShots() {
     if (!m_resources.has_value()) {
         return;
     }
-    for (DeathShot& shot : m_deathShots) {
+    for (DeathShot& shot : m_sim.deathShots) {
         if (shot.burst != 0 && m_resources->effects.playing(shot.burst)) {
             continue;
         }
@@ -374,10 +496,10 @@ void LevelOpponents::advanceDeathShots() {
         const u32 id = m_resources->effects.startSet(m_resources->device, *archive, kDeathShot,
                                                      shot.position, setting);
         if (id != 0) {
-            m_cueEffects.push_back(id);
+            m_sim.cueEffects.push_back(id);
         }
     }
-    std::erase_if(m_deathShots, [](const DeathShot& shot) { return shot.flying; });
+    std::erase_if(m_sim.deathShots, [](const DeathShot& shot) { return shot.flying; });
 }
 
 Vec3 LevelOpponents::resolveMovement(const PlayerActor& player, const Vec3& from,
@@ -400,7 +522,71 @@ Vec3 LevelOpponents::resolveMovement(const PlayerActor& player, const Vec3& from
                                           m_resources ? &m_resources->world.collision() : nullptr);
 }
 
+bool LevelOpponents::saveLocal(LocalSnapshot& saved) const {
+    saved.m_owner.reset();
+    saved.m_epoch = 0;
+    if (!m_resources || !m_enemies.saveLocal(saved.m_enemies) ||
+        !m_critters.saveLocal(saved.m_critters) || !m_bosses.saveLocal(saved.m_bosses)) {
+        return false;
+    }
+    saved.m_values = m_sim;
+    m_placements.saveLocal(saved.m_placements);
+    m_statues.saveLocal(saved.m_statues);
+    m_generators.saveLocal(saved.m_generators);
+    m_bossMeter.saveLocal(saved.m_meter);
+    m_enemyMissiles.saveLocal(saved.m_missiles);
+    m_combatantProjectiles.saveLocal(saved.m_projectiles);
+    saved.m_owner = m_lifetime;
+    saved.m_epoch = m_localEpoch;
+    return true;
+}
+bool LevelOpponents::canRestoreLocal(const LocalSnapshot& saved) const {
+    return m_resources && saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch &&
+           m_enemies.canRestoreLocal(saved.m_enemies) &&
+           m_critters.canRestoreLocal(saved.m_critters) &&
+           m_bosses.canRestoreLocal(saved.m_bosses) &&
+           m_placements.canRestoreLocal(saved.m_placements) &&
+           m_statues.canRestoreLocal(saved.m_statues) &&
+           m_generators.canRestoreLocal(saved.m_generators) &&
+           m_bossMeter.canRestoreLocal(saved.m_meter) &&
+           m_enemyMissiles.canRestoreLocal(saved.m_missiles) &&
+           m_combatantProjectiles.canRestoreLocal(saved.m_projectiles);
+}
+bool LevelOpponents::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    // All owners have been checked before mutation. Native copies never dispatch
+    // events or stop/restart audio already submitted to the presentation mixer.
+    m_enemies.restoreLocal(saved.m_enemies);
+    m_critters.restoreLocal(saved.m_critters);
+    m_bosses.restoreLocal(saved.m_bosses);
+    m_placements.restoreLocal(saved.m_placements);
+    m_statues.restoreLocal(saved.m_statues);
+    m_generators.restoreLocal(saved.m_generators);
+    m_bossMeter.restoreLocal(saved.m_meter);
+    m_enemyMissiles.restoreLocal(saved.m_missiles);
+    m_combatantProjectiles.restoreLocal(saved.m_projectiles);
+    m_sim = saved.m_values;
+    ++m_bindingGeneration; // any prepared diagnostic transaction is now stale
+    return true;
+}
+
+bool LevelOpponents::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.m_values == b.m_values &&
+           m_placements.equalLocal(a.m_placements, b.m_placements) &&
+           m_statues.equalLocal(a.m_statues, b.m_statues) &&
+           m_enemies.equalLocal(a.m_enemies, b.m_enemies) &&
+           m_generators.equalLocal(a.m_generators, b.m_generators) &&
+           m_critters.equalLocal(a.m_critters, b.m_critters) &&
+           m_bosses.equalLocal(a.m_bosses, b.m_bosses) &&
+           m_bossMeter.equalLocal(a.m_meter, b.m_meter) &&
+           m_enemyMissiles.equalLocal(a.m_missiles, b.m_missiles) &&
+           m_combatantProjectiles.equalLocal(a.m_projectiles, b.m_projectiles);
+}
+
 void LevelOpponents::close() {
+    ++m_localEpoch;
     if (m_bindingGeneration != 0) {
         ++m_bindingGeneration; // zero permanently refuses preparations after exhaustion
     }
@@ -409,30 +595,32 @@ void LevelOpponents::close() {
     clearDeaths();
     if (m_resources.has_value()) {
         m_combatantProjectiles.clear(m_resources->effects);
-        for (const Bag& bag : m_bags) {
+        for (const Bag& bag : m_sim.bags) {
             m_resources->effects.stop(bag.effect);
         }
-        for (const CritterEffect& cue : m_critterEffects) {
+        for (const CritterEffect& cue : m_sim.critterEffects) {
             m_resources->effects.stop(cue.effect);
         }
-        for (const u32 effect : m_cueEffects) {
+        for (const u32 effect : m_sim.cueEffects) {
             m_resources->effects.stop(effect);
         }
     }
-    m_critterEffects.clear();
-    m_bags.clear();
-    m_moveEffects.clear();
-    m_cueEffects.clear();
+    m_sim.critterEffects.clear();
+    m_sim.bags.clear();
+    m_sim.moveEffects.clear();
+    m_sim.cueEffects.clear();
     m_generators.clear();
-    m_generatorRewards.clear();
+    m_sim.generatorRewards.clear();
     m_enemyMissiles.clear();
-    m_rockHits.clear();
-    m_clouds.clear();
-    m_deathShots.clear();
+    m_sim.rockHits.clear();
+    m_sim.clouds.clear();
+    m_sim.deathShots.clear();
     m_yells.clear();
-    m_hearers.clear();
-    m_lessons.clear();
-    m_hitStreak.fill(0); // load_player resets the new party's hit_streak
+    m_sim.yells.clear();
+    m_sim.yellClocks.fill({});
+    m_sim.hearers.clear();
+    m_sim.lessons.clear();
+    m_sim.hitStreak.fill(0); // load_player resets the new party's hit_streak
     m_critters.close();
     m_bossMeter.clear();
     m_bosses.close();
@@ -448,7 +636,7 @@ void LevelOpponents::close() {
 void LevelOpponents::open(const Resources& resources, std::span<const PlayerRuntime> players) {
     close();
     m_resources.emplace(resources);
-    m_shrink = EnemyShrink::kWhole;
+    m_sim.shrink = EnemyShrink::kWhole;
     RenderDevice& device = resources.device;
     LevelWorld& world = resources.world;
     const LevelInfo* level = world.level();
@@ -502,7 +690,7 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
             log::warn("Critter hit skin {}: {}", kHitFlashSkin, e.what());
         }
     }
-    m_critterExperienceOwed.fill(0.0f);
+    m_sim.critterExperienceOwed.fill(0.0f);
     const auto playerCount = static_cast<s32>(std::ranges::count_if(
         players, [](const PlayerRuntime& player) { return !player.departed; }));
     const std::array generatorTextures{&world.textures(), &world.items().textures,
@@ -557,8 +745,8 @@ void LevelOpponents::watch(const ViewVolume& view, const Vec3& attention) {
 
 bool LevelOpponents::hasUncapturedState() const {
     return m_critters.count() != 0 || m_bosses.present() || m_statues.count() != 0 ||
-           m_combatantProjectiles.count() != 0 || !m_bags.empty() || !m_clouds.empty() ||
-           !m_deathShots.empty() || m_shrink != EnemyShrink::kWhole;
+           m_combatantProjectiles.count() != 0 || !m_sim.bags.empty() || !m_sim.clouds.empty() ||
+           !m_sim.deathShots.empty() || m_sim.shrink != EnemyShrink::kWhole;
 }
 
 bool LevelOpponents::inView(const Vec3& at, f32 radius) const {
@@ -607,7 +795,7 @@ bool LevelOpponents::playBirths(const BirthPublisher& publish) {
             return false; // The complete combat caller owns the queue/effect undo.
         }
         if (*effect != 0) {
-            m_cueEffects.push_back(*effect);
+            m_sim.cueEffects.push_back(*effect);
         }
     }
     return true;
@@ -658,8 +846,8 @@ void LevelOpponents::standPlacements(std::optional<ViewVolume> view, const Vec3&
 void LevelOpponents::stand(const Placement& placement) {
     const Vec3& at = placement.spawn.position;
     const auto carry = [&](std::optional<s32> id) {
-        if (id.has_value() && *id >= 0 && static_cast<usize>(*id) < m_carried.size()) {
-            m_carried[static_cast<usize>(*id)] = placement.carried;
+        if (id.has_value() && *id >= 0 && static_cast<usize>(*id) < m_sim.carried.size()) {
+            m_sim.carried[static_cast<usize>(*id)] = placement.carried;
         }
     };
     switch (placement.kind) {
@@ -681,10 +869,10 @@ void LevelOpponents::shrinkOpponents(std::span<const PlayerRuntime> players) {
     const LevelInfo* level = m_resources->world.level();
     const f32 scale =
         PlayerPowerups::enemyShrink(players, level != nullptr && level->bossType >= 0);
-    if (EnemyShrink::rises(m_shrink, scale)) {
+    if (EnemyShrink::rises(m_sim.shrink, scale)) {
         m_resources->audio.playNamed(EnemyShrink::kUnshrinkSound);
     }
-    m_shrink = scale;
+    m_sim.shrink = scale;
     m_enemies.setShrink(scale);
     m_critters.setShrink(scale);
     m_enemyMissiles.setShrink(scale);
@@ -764,7 +952,7 @@ void LevelOpponents::applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRunti
             const u32 effect = m_resources->effects.startSet(
                 m_resources->device, archive, "GETGEMORANGE", player.actor.followPoint(), {});
             if (effect != 0) {
-                m_cueEffects.push_back(effect);
+                m_sim.cueEffects.push_back(effect);
             }
         }
     }
@@ -858,6 +1046,10 @@ void LevelOpponents::syncFloors() {
 }
 
 void LevelOpponents::beginOrdinaryFrame(f32 seconds, std::span<PlayerRuntime> players) {
+    for (auto& yell : m_sim.yells) {
+        yell.timing.advance(seconds);
+    }
+    std::erase_if(m_sim.yells, [](const Yell& yell) { return !yell.timing.playing(); });
     for (PlayerRuntime& player : players) {
         player.breathGap = std::max(0.0f, player.breathGap - std::max(seconds, 0.0f));
         player.effectGap = std::max(0.0f, player.effectGap - std::max(seconds, 0.0f));
@@ -915,11 +1107,21 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     // What blows itself up goes up with the bomb's bang; one struck down stops crying out
     // (enemy_dies, AudioKillBySound).
     for (const EnemyBurst& burst : m_enemies.takeBursts()) {
+        auto& audio = m_resources->audio;
+        if (audio.recordingSounds() &&
+            (burst.enemy < 0 || burst.enemy >= Enemies::kMost || burst.instance == 0)) {
+            audio.recorder()->unsupported("bomber burst without its source lifetime");
+        }
+        auto scope = audio.soundScope(
+            {20, static_cast<u64>(std::max(burst.enemy, 0)), burst.instance}, 48);
         if (burst.silencesYell) {
-            for (const SoundHandle yell : m_yells) {
-                m_resources->audio.stop(yell);
+            if (!m_resources->audio.recordingSounds()) {
+                for (const SoundHandle yell : m_yells) {
+                    m_resources->audio.stop(yell);
+                }
+                m_yells.clear();
             }
-            m_yells.clear();
+            m_sim.yells.clear();
         }
         playAt(kSuicideBombSound, kLoudSound, burst.position);
         explodeSuicide(burst);
@@ -936,7 +1138,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         if (ram.id >= kGeneratorRamBase) {
             strikeGenerator(ram.id - kGeneratorRamBase, ram.damage, -1, players);
         } else {
-            m_barrelRams.push_back(ram);
+            m_sim.barrelRams.push_back(ram);
         }
     }
     // Boss AI is independent of Stop Time; fired missiles likewise keep moving.
@@ -964,7 +1166,15 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
             events.activateArena(activation);
         }
     }
-    const auto shotSound = [&](std::string_view name) { m_resources->audio.playNamed(name); };
+    const auto shotSound = [&](const CombatantProjectiles::SoundCue& cue) {
+        auto& audio = m_resources->audio;
+        if (audio.recordingSounds() && (cue.instance == 0 || cue.effect < 0)) {
+            audio.recorder()->unsupported("combatant projectile cue without its source lifetime");
+        }
+        auto scope = audio.soundScope(
+            {23, static_cast<u64>(cue.effect) + 1, cue.instance}, static_cast<u32>(cue.phase));
+        audio.playNamed(cue.name);
+    };
     for (const CombatShot& shot : m_bosses.takeShots()) {
         if (ItemArchive* archive = m_bosses.archive(); archive != nullptr) {
             m_combatantProjectiles.launch(shot, *archive, m_resources->device, m_resources->effects,
@@ -978,7 +1188,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         }
     }
     const auto swarmHits = m_enemyMissiles.takeRockHits();
-    m_rockHits.insert(m_rockHits.end(), swarmHits.begin(), swarmHits.end());
+    m_sim.rockHits.insert(m_sim.rockHits.end(), swarmHits.begin(), swarmHits.end());
     for (MissileStop& item : inTheWay) {
         for (const RockHit& hit : swarmHits) {
             if (item.rock >= 0 && static_cast<usize>(item.rock) == hit.rock) {
@@ -991,12 +1201,18 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
                                   m_resources->device, m_resources->effects, shotSound, inTheWay,
                                   swarmTargets());
     const auto combatantHits = m_combatantProjectiles.takeRockHits();
-    m_rockHits.insert(m_rockHits.end(), combatantHits.begin(), combatantHits.end());
+    m_sim.rockHits.insert(m_sim.rockHits.end(), combatantHits.begin(), combatantHits.end());
     for (const CombatantWorldHit& hit : m_combatantProjectiles.takeWorldHits()) {
+        if (m_resources->audio.recordingSounds() && hit.instance == 0) {
+            m_resources->audio.recorder()->unsupported(
+                "combatant world impact without its source lifetime");
+        }
         if (hit.object >= 0) {
             m_resources->world.explodeObject(hit.object, hit.position);
         }
         if (hit.splash) {
+            auto scope = m_resources->audio.soundScope(
+                {23, 0, hit.instance}, static_cast<u32>(CombatantProjectiles::SoundPhase::Splash));
             playAt("S_SPLASH", LevelSoundscape::kSplashLevel, hit.position);
         }
     }
@@ -1032,6 +1248,14 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         }
     }
     for (const CombatantProjectileHit& hit : m_combatantProjectiles.takeHits()) {
+        if (m_resources->audio.recordingSounds() && hit.instance == 0) {
+            m_resources->audio.recorder()->unsupported(
+                "combatant projectile impact without its source lifetime");
+        }
+        auto scope = m_resources->audio.soundScope(
+            {23, 0, hit.instance},
+            static_cast<u32>(hit.ricochet ? CombatantProjectiles::SoundPhase::Ricochet
+                                        : CombatantProjectiles::SoundPhase::Impact));
         if (hit.ricochet) {
             playAt(kRicochetSound, kQuietSound, hit.position);
             continue;
@@ -1130,7 +1354,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
 void LevelOpponents::deliverLessons(std::span<const PlayerRuntime> players, const Events& events) {
     // PlayerDamagedEnemy posts message22 during combat. A queued hit must reach
     // the next normal update, not wait for the portal's final reward settlement.
-    for (const auto& [lesson, player] : std::exchange(m_lessons, {})) {
+    for (const auto& [lesson, player] : std::exchange(m_sim.lessons, {})) {
         for (usize i = 0; i < players.size() && events.help; ++i) {
             if (players[i].actor.player() == player) {
                 events.help(lesson, i);
@@ -1156,6 +1380,16 @@ bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublis
         return true;
     }
     for (const EnemyFeedback& feedback : m_enemies.takeFeedback()) {
+        auto& audio = m_resources->audio;
+        if (audio.recordingSounds() &&
+            (feedback.enemy < 0 || feedback.enemy >= Enemies::kMost || feedback.instance == 0)) {
+            audio.recorder()->unsupported("enemy impact without its source lifetime");
+        }
+        // Hurt and death are different semantic cues, including when a corrected
+        // hit becomes lethal. Other enemies never renumber this source's events.
+        auto scope = audio.soundScope(
+            {20, static_cast<u64>(std::max(feedback.enemy, 0)), feedback.instance},
+            feedback.killed ? 17 : 16);
         const auto emission =
             EnemyFeedbackEmission::resolve(feedback, m_enemies.archive(feedback.kind),
                                            m_resources->weapons, m_resources->world.level());
@@ -1175,20 +1409,20 @@ bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublis
             }
         }
         if (effect != 0) {
-            m_cueEffects.push_back(effect);
+            m_sim.cueEffects.push_back(effect);
         }
     }
     for (const EnemyLoss& loss : m_enemies.takeLosses()) {
         events.award(loss.player, loss.experience, loss.killed);
     }
-    for (const GeneratorReward& reward : m_generatorRewards) {
+    for (const GeneratorReward& reward : m_sim.generatorRewards) {
         // combat.c awards generator experience with AddExp's kill flag clear.
         events.award(reward.player, reward.experience, false);
         if (reward.destroyed && events.destroyedGenerator) {
             events.destroyedGenerator(reward.player);
         }
     }
-    m_generatorRewards.clear();
+    m_sim.generatorRewards.clear();
     return true;
 }
 
@@ -1219,11 +1453,11 @@ f32 LevelOpponents::strikeEnemy(s32 id, f32 power, u32 flags, const Vec3& direct
     // A player hitting what generators breed is taught, the tenth time, to go for them
     // instead (combat.c:307; not where a boss is fought).
     const LevelInfo* level = m_resources->world.level();
-    if (byPlayer >= 0 && static_cast<usize>(byPlayer) < m_hitStreak.size() && m_enemies.bred(id) &&
-        before > 0.0f && m_enemies.healthOf(id) < before &&
+    if (byPlayer >= 0 && static_cast<usize>(byPlayer) < m_sim.hitStreak.size() &&
+        m_enemies.bred(id) && before > 0.0f && m_enemies.healthOf(id) < before &&
         (level == nullptr || level->bossType < 0) &&
-        ++m_hitStreak[static_cast<usize>(byPlayer)] >= kStreakLesson) {
-        m_lessons.emplace_back(HelpMessages::kDestroyGenerators, byPlayer);
+        ++m_sim.hitStreak[static_cast<usize>(byPlayer)] >= kStreakLesson) {
+        m_sim.lessons.emplace_back(HelpMessages::kDestroyGenerators, byPlayer);
     }
     return credited;
 }
@@ -1358,19 +1592,25 @@ bool LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
         }
     }
     if (effect != 0) {
-        m_cueEffects.push_back(effect);
+        m_sim.cueEffects.push_back(effect);
     }
     if (!publish && !emission.sound.empty()) {
+        // Slots are append-only for a loaded level; the native birth serial
+        // distinguishes generated lifetimes and is restored with their state.
+        const auto audioScope = m_resources->audio.soundScope(
+            {46, static_cast<u64>(event->generator), event->instance}, event->destroyed      ? 3
+                                                                       : event->stateChanged ? 2
+                                                                                             : 1);
         m_resources->audio.playNamed(emission.sound);
     }
     if (byPlayer >= 0) {
-        m_generatorRewards.push_back(
+        m_sim.generatorRewards.push_back(
             {byPlayer, generatorExperience(event->kind, event->destroyed), event->destroyed});
     }
     if (event->destroyed) {
         m_enemies.generatorGone(id);
-        if (byPlayer >= 0 && static_cast<usize>(byPlayer) < m_hitStreak.size()) {
-            m_hitStreak[static_cast<usize>(byPlayer)] = 0;
+        if (byPlayer >= 0 && static_cast<usize>(byPlayer) < m_sim.hitStreak.size()) {
+            m_sim.hitStreak[static_cast<usize>(byPlayer)] = 0;
         }
     }
     return true;
@@ -1385,7 +1625,7 @@ bool LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
         return true;
     }
     if (cue.stopMoveEffect) {
-        std::erase_if(m_moveEffects, [&](const MoveEffect& previous) {
+        std::erase_if(m_sim.moveEffects, [&](const MoveEffect& previous) {
             if (previous.critter != cue.critter || previous.ofBoss != ofBoss) {
                 return false;
             }
@@ -1414,9 +1654,9 @@ bool LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
         }
         const u32 effect = *issued;
         if (effect != 0) {
-            m_cueEffects.push_back(effect);
+            m_sim.cueEffects.push_back(effect);
             if (cue.untilNextMove) {
-                m_moveEffects.push_back({effect, cue.critter, ofBoss});
+                m_sim.moveEffects.push_back({effect, cue.critter, ofBoss});
             }
         }
         if (effect != 0 && cue.placement.has_value()) {
@@ -1424,7 +1664,7 @@ bool LevelOpponents::showCritterCue(const CombatCue& cue, ItemArchive* archive, 
         }
         if (effect != 0 && cue.follows) {
             const Vec3* at = ofBoss ? m_bosses.position() : &m_critters.positionOf(cue.critter);
-            m_critterEffects.push_back(CritterEffect{
+            m_sim.critterEffects.push_back(CritterEffect{
                 effect, cue.critter, ofBoss,
                 at != nullptr ? cue.position - *at : Vec3{0.0f, 0.0f, 0.0f}, cue.node,
                 cue.nodeOffset, cue.rootAttachment, cue.pitchYaw, cue.playerAttachment});
@@ -1475,13 +1715,13 @@ void LevelOpponents::followCritterEffects(std::span<const PlayerRuntime> players
     if (!m_resources.has_value()) {
         return;
     }
-    std::erase_if(m_cueEffects,
+    std::erase_if(m_sim.cueEffects,
                   [this](u32 effect) { return !m_resources->effects.playing(effect); });
-    std::erase_if(m_moveEffects, [this](const MoveEffect& effect) {
+    std::erase_if(m_sim.moveEffects, [this](const MoveEffect& effect) {
         return !m_resources->effects.playing(effect.effect);
     });
-    for (usize i = 0; i < m_critterEffects.size();) {
-        const CritterEffect& riding = m_critterEffects[i];
+    for (usize i = 0; i < m_sim.critterEffects.size();) {
+        const CritterEffect& riding = m_sim.critterEffects[i];
         if (riding.playerAttachment.has_value()) {
             const auto player = std::ranges::find_if(players, [&](const PlayerRuntime& runtime) {
                 return runtime.actor.player() == *riding.playerAttachment &&
@@ -1489,7 +1729,8 @@ void LevelOpponents::followCritterEffects(std::span<const PlayerRuntime> players
             });
             if (player == players.end() || !m_resources->effects.playing(riding.effect)) {
                 m_resources->effects.stop(riding.effect);
-                m_critterEffects.erase(m_critterEffects.begin() + static_cast<std::ptrdiff_t>(i));
+                m_sim.critterEffects.erase(m_sim.critterEffects.begin() +
+                                           static_cast<std::ptrdiff_t>(i));
                 continue;
             }
             m_resources->effects.placeAt(
@@ -1506,7 +1747,8 @@ void LevelOpponents::followCritterEffects(std::span<const PlayerRuntime> players
             if (!alive && (riding.node.has_value() || riding.rootAttachment)) {
                 m_resources->effects.stop(riding.effect);
             }
-            m_critterEffects.erase(m_critterEffects.begin() + static_cast<std::ptrdiff_t>(i));
+            m_sim.critterEffects.erase(m_sim.critterEffects.begin() +
+                                       static_cast<std::ptrdiff_t>(i));
             continue;
         }
         const Vec3* at =
@@ -1553,10 +1795,10 @@ void LevelOpponents::awardBossLosses(std::span<const PlayerRuntime> players, con
             const PlayerActor& actor = runtime.actor;
             const s32 player = actor.player();
             if ((loss.player >= 0 && loss.player != player) || player < 0 ||
-                static_cast<usize>(player) >= m_critterExperienceOwed.size()) {
+                static_cast<usize>(player) >= m_sim.critterExperienceOwed.size()) {
                 continue;
             }
-            f32& owed = m_critterExperienceOwed[static_cast<usize>(player)];
+            f32& owed = m_sim.critterExperienceOwed[static_cast<usize>(player)];
             owed += loss.experience;
             const auto whole = static_cast<s32>(std::floor(owed));
             if (whole > 0 || loss.killed) {
@@ -1574,8 +1816,8 @@ void LevelOpponents::dropCarried(const CombatLoss& loss, std::span<const PlayerR
     }
     Bag bag;
     bag.position = loss.position;
-    if (loss.critter >= 0 && static_cast<usize>(loss.critter) < m_carried.size()) {
-        std::optional<usize>& carried = m_carried[static_cast<usize>(loss.critter)];
+    if (loss.critter >= 0 && static_cast<usize>(loss.critter) < m_sim.carried.size()) {
+        std::optional<usize>& carried = m_sim.carried[static_cast<usize>(loss.critter)];
         if (carried.has_value()) {
             bag.item = carried;
             carried.reset();
@@ -1592,12 +1834,12 @@ void LevelOpponents::dropCarried(const CombatLoss& loss, std::span<const PlayerR
     settings.seconds = 3;
     bag.effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
                                                "BAG_THROW", bag.position, settings);
-    m_bagSeed = m_bagSeed * 1664525U + 1013904223U;
+    m_sim.bagSeed = m_sim.bagSeed * 1664525U + 1013904223U;
     constexpr f32 kMinSpin = 0.261799388f;
     constexpr f32 kSpinRange = 1.04719758f;
-    bag.spin = kMinSpin + kSpinRange * static_cast<f32>(m_bagSeed >> 8) / 16777216.0f;
+    bag.spin = kMinSpin + kSpinRange * static_cast<f32>(m_sim.bagSeed >> 8) / 16777216.0f;
     if (bag.effect != 0) {
-        m_bags.push_back(std::move(bag));
+        m_sim.bags.push_back(std::move(bag));
     } else {
         releaseBag(bag); // Missing optional artwork must not lose the reward.
     }
@@ -1638,10 +1880,10 @@ void LevelOpponents::awardCritterLosses(std::span<const PlayerRuntime> players,
             if (loss.player >= 0 && loss.player != player) {
                 continue;
             }
-            if (player < 0 || static_cast<usize>(player) >= m_critterExperienceOwed.size()) {
+            if (player < 0 || static_cast<usize>(player) >= m_sim.critterExperienceOwed.size()) {
                 continue;
             }
-            f32& owed = m_critterExperienceOwed[static_cast<usize>(player)];
+            f32& owed = m_sim.critterExperienceOwed[static_cast<usize>(player)];
             owed += loss.experience;
             const auto whole = static_cast<s32>(std::floor(owed));
             if (whole > 0 || loss.killed) {

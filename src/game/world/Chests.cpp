@@ -6,6 +6,8 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 #include "game/world/ItemSupport.h"
 
@@ -20,6 +22,66 @@ s16 paramS16(const ItemInstance& instance, usize at) {
 }
 
 } // namespace
+
+bool Chests::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("Chests.native.1");
+    // These immutable binding inputs remain fixed until clear/bind invalidates
+    // history. Mutable collision values are visited by the enclosing world owner.
+    digest.resource(m_layout);
+    digest.resource(m_collision);
+    digest.wide(m_infos.size());
+    for (const auto& info : m_infos) {
+        digest.fields<19>(info);
+    }
+    digest.fields<2>(state);
+    return digest.good();
+}
+
+bool Chests::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim);
+}
+
+bool Chests::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state);
+}
+
+bool Chests::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& chest : m_sim.chests) {
+        if (!chest.figure.registerNativeResources(resources) ||
+            !chest.preview.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void Chests::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool Chests::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding;
+}
+
+bool Chests::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool Chests::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
 
 s32 Chests::contentsRecord(std::span<const ItemInfo> infos, s32 record, s32 count) {
     constexpr s32 kKey = 2;
@@ -76,17 +138,17 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, const AssetSc
         if (info.type != ItemInfo::kContainer || info.subtype == kBarrel) {
             continue;
         }
-        auto chest = std::make_unique<Chest>();
-        chest->instance = static_cast<s32>(index);
-        chest->info = instance.info;
-        chest->subtype = info.subtype;
-        chest->contents = paramS16(instance, 0);
-        chest->count = paramS16(instance, 4);
-        chest->minPlayers = instance.minPlayers;
-        chest->locked = (static_cast<u32>(info.activeType) & kLocked) != 0;
+        Chest chest;
+        chest.instance = static_cast<s32>(index);
+        chest.info = instance.info;
+        chest.subtype = info.subtype;
+        chest.contents = paramS16(instance, 0);
+        chest.count = paramS16(instance, 4);
+        chest.minPlayers = instance.minPlayers;
+        chest.locked = (static_cast<u32>(info.activeType) & kLocked) != 0;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!chest->figure.place(device, scope, name, instance,
-                                 (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
+        if (!chest.figure.place(device, scope, name, instance,
+                                (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Chests: no figure {} in the item archive", name);
         }
         const auto* support =
@@ -98,25 +160,25 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, const AssetSc
                 if (const auto placement = support->objectTransform(floor->object)) {
                     Vec3 position = instance.position;
                     position.y = floor->y + ItemFigure::kFloorLift;
-                    chest->floor =
+                    chest.floor =
                         Chest::Floor{floor->object, glm::inverse(*placement) *
                                                         itemPlacement(position, instance.rotation)};
                 }
             }
         }
-        chest->box = chest->figure.obstacle(info);
-        m_chests.push_back(std::move(chest));
+        chest.box = chest.figure.obstacle(info);
+        m_sim.chests.push_back(std::move(chest));
     }
     syncFloors();
-    return !m_chests.empty();
+    return !m_sim.chests.empty();
 }
 
 void Chests::syncFloors() {
     if (m_collision == nullptr) {
         return;
     }
-    for (const auto& entry : m_chests) {
-        Chest& chest = *entry;
+    for (auto& entry : m_sim.chests) {
+        Chest& chest = entry;
         if (!chest.floor || chest.gone) {
             continue;
         }
@@ -135,16 +197,16 @@ void Chests::syncFloors() {
 
 void Chests::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
-    m_chests.clear();
+    m_sim.chests.clear();
     m_infos.clear();
-    m_seed = 0;
+    m_sim.seed = 0;
     m_collision = nullptr;
     m_layout = nullptr;
 }
 
 void Chests::setPlayerCount(s32 players) {
-    for (const std::unique_ptr<Chest>& chest : m_chests) {
-        chest->shown = shownToParty(chest->minPlayers, players);
+    for (auto& chest : m_sim.chests) {
+        chest.shown = shownToParty(chest.minPlayers, players);
     }
 }
 
@@ -156,8 +218,8 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
     for (const auto& visitor : party) {
         goldCapacity.push_back(visitor.goldCapacity);
     }
-    for (usize index = 0; index < m_chests.size(); ++index) {
-        Chest& chest = *m_chests[index];
+    for (usize index = 0; index < m_sim.chests.size(); ++index) {
+        Chest& chest = m_sim.chests[index];
         if (!chest.shown || chest.gone) {
             continue;
         }
@@ -197,7 +259,7 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
                 chest.contents =
                     contentsRecord(m_infos,
                                    resolveContents(m_infos, chest.contents,
-                                                   static_cast<usize>(chest.instance), m_seed),
+                                                   static_cast<usize>(chest.instance), m_sim.seed),
                                    chest.count);
                 if (chest.subtype != kTrappedChest && chest.subtype != kGoldChest) {
                     event.contents = chest.contents;
@@ -245,18 +307,18 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
 }
 
 bool Chests::transmute(usize index, s32 record, f32 power) {
-    if (index >= m_chests.size()) {
+    if (index >= m_sim.chests.size()) {
         return false;
     }
-    Chest& chest = *m_chests[index];
+    Chest& chest = m_sim.chests[index];
     if (!chest.shown || chest.gone || chest.state != kShut) {
         return false;
     }
     chest.contents = record;
     chest.wobble = std::trunc(kWobblePerPower * power);
-    for (const auto& other : m_chests) {
-        if (other->info == chest.info) {
-            other->subtype = kTransmuted;
+    for (auto& other : m_sim.chests) {
+        if (other.info == chest.info) {
+            other.subtype = kTransmuted;
         }
     }
     return true;
@@ -281,10 +343,10 @@ void Chests::rock(Chest& chest, f32 seconds) {
 bool Chests::changeContents(usize index, s32 record, RenderDevice& device,
                             const WorldLayout& layout, const AssetScope& scope,
                             const WorldCollision* collision, std::string_view figure) {
-    if (index >= m_chests.size()) {
+    if (index >= m_sim.chests.size()) {
         return false;
     }
-    Chest& chest = *m_chests[index];
+    Chest& chest = m_sim.chests[index];
     if (!chest.shown || chest.gone || chest.state != kShut) {
         return false;
     }
@@ -300,28 +362,28 @@ bool Chests::changeContents(usize index, s32 record, RenderDevice& device,
 }
 
 void Chests::hold(usize chest, s32 item) {
-    if (chest < m_chests.size()) {
-        m_chests[chest]->held = item;
+    if (chest < m_sim.chests.size()) {
+        m_sim.chests[chest].held = item;
     }
 }
 
 usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArchive& powerups,
                          std::span<const ChestVisitor> party) {
-    std::vector<bool> selected(m_chests.size(), false);
+    std::vector<bool> selected(m_sim.chests.size(), false);
     for (const auto& visitor : party) {
         if (!visitor.xray) {
             continue;
         }
         f32 best = 10.0f * 10.0f;
-        usize closest = m_chests.size();
-        for (usize i = 0; i < m_chests.size(); ++i) {
-            const auto& chest = *m_chests[i];
+        usize closest = m_sim.chests.size();
+        for (usize i = 0; i < m_sim.chests.size(); ++i) {
+            const auto& chest = m_sim.chests[i];
             // ClosestChest checks visibility and action, not the container subtype:
             // X-Ray also warns about a bomb inside a trapped chest.
             if (!chest.shown || chest.gone || chest.state != kShut) {
                 continue;
             }
-            u32 seed = m_seed;
+            u32 seed = m_sim.seed;
             const s32 inside =
                 resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed);
             if (inside < 0 ||
@@ -341,11 +403,11 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
         }
     }
     usize fresh = 0;
-    for (usize i = 0; i < m_chests.size(); ++i) {
-        auto& chest = *m_chests[i];
+    for (usize i = 0; i < m_sim.chests.size(); ++i) {
+        auto& chest = m_sim.chests[i];
         if (selected[i]) {
             fresh += chest.revealed ? 0U : 1U;
-            u32 seed = m_seed; // Looking must not change what opening a random chest produces.
+            u32 seed = m_sim.seed; // Looking must not change what opening a random chest produces.
             const s32 inside = contentsRecord(
                 m_infos,
                 resolveContents(m_infos, chest.contents, static_cast<usize>(chest.instance), seed),
@@ -374,8 +436,8 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
 }
 
 s32 Chests::holdingTouchedBy(const ChestVisitor& visitor) const {
-    for (usize index = 0; index < m_chests.size(); ++index) {
-        const Chest& chest = *m_chests[index];
+    for (usize index = 0; index < m_sim.chests.size(); ++index) {
+        const Chest& chest = m_sim.chests[index];
         if (chest.shown && !chest.gone && chest.state == kOpen && chest.held >= 0 &&
             chest.box.touchedBy(visitor.position, visitor.radius)) {
             return static_cast<s32>(index);
@@ -385,45 +447,45 @@ s32 Chests::holdingTouchedBy(const ChestVisitor& visitor) const {
 }
 
 void Chests::remove(usize chest) {
-    if (chest < m_chests.size()) {
-        m_chests[chest]->gone = true;
-        m_chests[chest]->held = -1;
+    if (chest < m_sim.chests.size()) {
+        m_sim.chests[chest].gone = true;
+        m_sim.chests[chest].held = -1;
     }
 }
 
 std::vector<Obstacle> Chests::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (const std::unique_ptr<Chest>& chest : m_chests) {
+    for (auto& chest : m_sim.chests) {
         // ItemTouch (8005D730) leaves an open pickup chest passable even when a
         // full-health player cannot take its food. Open gold chests likewise stay
         // reachable without trapping someone whose wallet cannot take their gold.
         const bool holdsPickup =
-            chest->state == kOpen && (chest->held >= 0 || chest->subtype == kGoldChest);
-        if (chest->shown && !chest->gone && !holdsPickup) {
-            boxes.push_back(chest->box);
+            chest.state == kOpen && (chest.held >= 0 || chest.subtype == kGoldChest);
+        if (chest.shown && !chest.gone && !holdsPickup) {
+            boxes.push_back(chest.box);
         }
     }
     return boxes;
 }
 
 void Chests::capturePresentation() {
-    for (const auto& chest : m_chests) {
-        chest->figure.capturePresentation();
-        chest->preview.capturePresentation();
+    for (auto& chest : m_sim.chests) {
+        chest.figure.capturePresentation();
+        chest.preview.capturePresentation();
     }
 }
 
 void Chests::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                   const CameraFrame* camera, f32 presentationAlpha) const {
-    for (const std::unique_ptr<Chest>& chest : m_chests) {
-        if (chest->shown && !chest->gone) {
-            if (chest->revealed) {
+    for (auto& chest : m_sim.chests) {
+        if (chest.shown && !chest.gone) {
+            if (chest.revealed) {
                 // Retail MBTreeSetAlpha(0xC0) is transparency, not opacity.
-                chest->preview.draw(device, clip, lighting, 1.0f, 0.65f, camera,
-                                    TreeModel::Pass::All, presentationAlpha);
+                chest.preview.draw(device, clip, lighting, 1.0f, 0.65f, camera,
+                                   TreeModel::Pass::All, presentationAlpha);
             }
-            chest->figure.draw(device, clip, lighting, chest->revealed ? 63.0f / 255.0f : 1.0f,
-                               1.0f, camera, TreeModel::Pass::All, presentationAlpha);
+            chest.figure.draw(device, clip, lighting, chest.revealed ? 63.0f / 255.0f : 1.0f, 1.0f,
+                              camera, TreeModel::Pass::All, presentationAlpha);
         }
     }
 }

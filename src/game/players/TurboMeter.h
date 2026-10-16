@@ -3,6 +3,10 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** How the meter looks this tick, for whoever draws it. */
@@ -22,7 +26,10 @@ struct TurboMeterLook {
  * spend it; it starts each level, and ends each life, empty.
  */
 class TurboMeter {
+    friend void visitNativeState(NativeStateDigest&, const TurboMeter&);
+
 public:
+    bool operator==(const TurboMeter&) const = default;
     static constexpr f32 kFull = 100.0f;
     static constexpr f32 kStrongCost = 40.0f; ///< the lesser turbo attack, and what it needs
     static constexpr f32 kFullCost = 100.0f;  ///< the greater, which needs it full

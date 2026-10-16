@@ -58,9 +58,9 @@ bool Combatant::startMove(Actor& critter, usize index, bool recordUse) {
     }
     if (critter.moveEffect) {
         CombatCue stop;
-        stop.critter = m_id;
+        stop.critter = m_sim.id;
         stop.stopMoveEffect = true;
-        m_cues.push_back(stop);
+        m_sim.cues.push_back(stop);
         critter.moveEffect = false;
     }
     critter.move = static_cast<s32>(index);
@@ -151,7 +151,7 @@ void Combatant::selectFirstTarget(Actor& critter) {
 }
 
 f32 Combatant::targetClock(const Actor& critter) {
-    return critter.parent != nullptr ? critter.parent->m_actor.age : critter.age;
+    return critter.parent != nullptr ? critter.parent->m_sim.actor.age : critter.age;
 }
 
 f32 Combatant::inverseAnger(const Actor& critter, usize player) {
@@ -171,26 +171,26 @@ void Combatant::rememberDamage(f32& total, f32& lastTime, f32 now, f32 amount) {
 }
 
 void Combatant::chooseFamilyTargets(std::span<const EnemyView> players) {
-    chooseTarget(m_actor, players);
+    chooseTarget(m_sim.actor, players);
     std::array<s32, kPlayerSlots> counts{};
     const auto count = [&](const Actor& actor) {
         for (const Target& target : actor.targets) {
             ++counts[static_cast<usize>(target.player)];
         }
     };
-    count(m_actor);
-    for (auto& child : m_children) {
-        child->m_actor.position = m_actor.position;
-        child->m_actor.yaw = m_actor.yaw;
-        chooseTarget(child->m_actor, players);
-        count(child->m_actor);
+    count(m_sim.actor);
+    for (auto& child : children()) {
+        child->m_sim.actor.position = m_sim.actor.position;
+        child->m_sim.actor.yaw = m_sim.actor.yaw;
+        chooseTarget(child->m_sim.actor, players);
+        count(child->m_sim.actor);
     }
     // A pattern owns the whole chain. Otherwise limit each player's candidate memberships,
     // removing the weakest child claim first, never the root's or a child's active pattern.
-    if (m_actor.pattern >= 0) {
+    if (m_sim.actor.pattern >= 0) {
         return;
     }
-    for (const Target& target : m_actor.targets) {
+    for (const Target& target : m_sim.actor.targets) {
         s32 limit = 4;
         if (target.inverseAnger > 1) {
             limit = 2;
@@ -201,8 +201,8 @@ void Combatant::chooseFamilyTargets(std::span<const EnemyView> players) {
         while (assigned > limit) {
             Actor* weakest = nullptr;
             f32 worst = 0;
-            for (auto& child : m_children) {
-                Actor& actor = child->m_actor;
+            for (auto& child : children()) {
+                Actor& actor = child->m_sim.actor;
                 if (actor.pattern >= 0) {
                     continue;
                 }
@@ -230,7 +230,7 @@ void Combatant::chooseFamilyTargets(std::span<const EnemyView> players) {
 Vec3 Combatant::targetingOrigin(const Actor& critter) {
     const Actor* root = &critter;
     while (root->parent != nullptr) {
-        root = &root->parent->m_actor;
+        root = &root->parent->m_sim.actor;
     }
     // Child parts inherit the root's targeting centre. A head's own mesh
     // attachment and TYPE origin do not relocate its sight window.
@@ -446,7 +446,7 @@ void Combatant::chooseMove(Actor& critter, std::span<const EnemyView> players) {
     if (hurt && !reacted && (flags & (kKnockOver | kKnockedBack)) != 0) {
         reacted = cutIn(data.moveOfType(MoveDefinition::kKnockBack));
     }
-    if (!reacted && critter.roarOwed >= roarThreshold(m_scales.players) &&
+    if (!reacted && critter.roarOwed >= roarThreshold(m_sim.scales.players) &&
         cutIn(data.moveOfType(MoveDefinition::kRoar))) {
         critter.roarOwed = 0.0f;
         reacted = true;

@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -12,7 +14,9 @@
 #include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
+#include "game/netplay/NativeProbeTiming.h"
 #include "game/world/LevelWorldCheckpoint.h"
 
 namespace {
@@ -190,6 +194,180 @@ TEST_CASE("level support batches retain appended collision owners and reject sta
     fixture.world.clear();
     CHECK(fixture.owner.collisionObjects().empty());
     CHECK_FALSE(fixture.owner.hasCollisionObject(0));
+}
+
+TEST_CASE("native whole world history restores coupled platforms items destruction and triggers",
+          "[local-rewind][level-world-local-rewind]") {
+    Fixture native("world-local-native"), replay("world-local-replay");
+    std::array<LevelWorld::LocalSnapshot, 16> history;
+    std::array<LevelWorld::LocalSnapshot, 8> expected;
+    LevelWorld::LocalSnapshot observed;
+    const auto uploads = replay.device.texturesCreated;
+    s32 tick = 0;
+    for (u32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        replay.world.saveLocal(saved);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            replay.step(tick + static_cast<s32>(i), 1.0f / 60);
+            replay.world.saveLocal(expected[i]);
+        }
+        REQUIRE(replay.world.restoreLocal(saved));
+        for (u32 i = 0; i < distance; ++i) {
+            replay.world.capturePresentation();
+            replay.world.setPlayerCount(4);
+            replay.world.activateTrigger(1, true);
+            replay.world.strikeWall(0, 9999);
+            replay.world.explodeObject(3, Vec3{40, 0, 0});
+            replay.world.fallingScenery().touch({30, 0, 0}, 10);
+            REQUIRE(replay.world.throwItem(replay.device, "COIN", {3, 10, 4}, {4, 2, 1}, 0.1f));
+            replay.world.collect(replay.device, std::array{Collector{{80, 0, 0}, 1, 2}});
+            replay.world.setAmbientOffset(-0.9f);
+            replay.world.update(1.0f / 30);
+            replay.world.updateTriggers(1.0f / 30, {});
+            replay.world.takeTriggerOpenings();
+            replay.world.takeWorldExplosions();
+            replay.world.takeRotatorCues();
+        }
+        const auto legacyPlan = replay.owner.prepareRestore(replay.state());
+        REQUIRE(legacyPlan);
+        REQUIRE(replay.world.restoreLocal(saved));
+        CHECK_FALSE(replay.owner.canCommit(*legacyPlan));
+        CHECK(replay.state() == native.state());
+        for (u32 i = 0; i < distance; ++i) {
+            native.step(tick, 1.0f / 60);
+            replay.step(tick, 1.0f / 60);
+            replay.world.saveLocal(observed);
+            CHECK(replay.world.equalLocal(observed, expected[i]));
+            ++tick;
+            CHECK(replay.state() == native.state());
+            CHECK(replay.world.collision().objectTransform(0) ==
+                  native.world.collision().objectTransform(0));
+            CHECK(replay.world.placedItems().item(0).position ==
+                  native.world.placedItems().item(0).position);
+            for (f32 alpha : {-1.0f, 0.5f, 1.0f}) {
+                for (auto* fixture : {&native, &replay}) {
+                    fixture->device.draws.clear();
+                    fixture->world.drawOpaque(fixture->device, Mat4{1}, {}, alpha);
+                    fixture->world.drawDeferred(fixture->device, Mat4{1}, {}, alpha);
+                }
+                REQUIRE(replay.device.draws.size() == native.device.draws.size());
+                for (usize j = 0; j < native.device.draws.size(); ++j) {
+                    test::checkRecordedDraw(replay.device.draws[j], native.device.draws[j]);
+                }
+            }
+        }
+    }
+    CHECK(replay.device.texturesCreated == uploads);
+    CHECK(replay.device.textureUpdates == 0);
+    CHECK_FALSE(native.world.restoreLocal(history[0]));
+    CHECK_FALSE(native.world.equalLocal(history[0], history[0]));
+    replay.world.clear();
+    CHECK_FALSE(replay.world.restoreLocal(history[0]));
+    CHECK_FALSE(replay.world.equalLocal(history[0], history[0]));
+}
+
+TEST_CASE("native world equality includes pending child output and latent root controls",
+          "[local-rewind][level-world-local-rewind]") {
+    Fixture fixture("world-local-hidden-values");
+    LevelWorld::LocalSnapshot before, changed, restored;
+    fixture.world.saveLocal(before);
+    const auto position = fixture.world.placedItems().item(0).position;
+    fixture.world.setItemOpener(0, 3);
+    fixture.world.setAmbientOffset(-0.25f);
+    fixture.world.saveLocal(changed);
+    CHECK(fixture.world.placedItems().item(0).position == position);
+    CHECK_FALSE(fixture.world.equalLocal(before, changed));
+    REQUIRE(fixture.world.restoreLocal(before));
+    fixture.world.saveLocal(restored);
+    CHECK(fixture.world.equalLocal(before, restored));
+
+    REQUIRE(fixture.world.explodeObject(3, {40, 0, 0}));
+    fixture.world.saveLocal(before);
+    const auto explosions = fixture.world.takeWorldExplosions();
+    REQUIRE_FALSE(explosions.empty());
+    fixture.world.saveLocal(changed);
+    CHECK_FALSE(fixture.world.equalLocal(before, changed));
+    REQUIRE(fixture.world.restoreLocal(before));
+    fixture.world.saveLocal(restored);
+    CHECK(fixture.world.equalLocal(before, restored));
+    CHECK(fixture.world.takeWorldExplosions() == explosions);
+}
+
+TEST_CASE(
+    "loaded native worlds report complete owner history cost without diagnostic serialization",
+    "[.][assets][level-world-local-timing]") {
+    const auto name = GENERATE("G2", "G4", "L1", "D2");
+    const auto root = test::assetOrSkip(std::string{"LEVELS/LEVEL"} + name + "/WORLDS.PS2")
+                          .parent_path()
+                          .parent_path()
+                          .parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName(name);
+    REQUIRE(level);
+    test::FakeRenderDevice device;
+    device.recordDraws = false;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    world.setPlayerCount(4);
+    if (world.skorneArena().size() > 0) {
+        world.bossArenaCue({0, 0, 0});
+    }
+    std::vector<TriggerVisitor> visitors(4);
+    if (const auto* start = world.startPoint(0)) {
+        for (usize i = 0; i < visitors.size(); ++i) {
+            visitors[i].position = start->position + Vec3{static_cast<f32>(i), 0, 0};
+        }
+    }
+    const auto step = [&] {
+        world.capturePresentation();
+        world.update(1.0f / 60);
+        world.updateTriggers(1.0f / 60, visitors);
+        world.takeRotatorCues();
+        world.takeTriggerCameraCues();
+        world.takeTriggerOpenings();
+    };
+    for (usize i = 0; i < 60; ++i) {
+        step();
+    }
+    std::array<LevelWorld::LocalSnapshot, 16> history;
+    for (auto& saved : history) {
+        world.saveLocal(saved);
+    }
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](auto start) {
+        return std::chrono::duration<f64, std::milli>(Clock::now() - start).count();
+    };
+    std::array<f64, 256> saves{}, restores{}, replays{};
+    for (usize i = 0; i < saves.size(); ++i) {
+        auto& saved = history[i % history.size()];
+        auto start = Clock::now();
+        world.saveLocal(saved);
+        saves[i] = elapsed(start);
+        for (usize j = 0; j < 8; ++j) {
+            step();
+        }
+        start = Clock::now();
+        const bool restored = world.restoreLocal(saved);
+        restores[i] = elapsed(start);
+        REQUIRE(restored);
+        start = Clock::now();
+        for (usize j = 0; j < 8; ++j) {
+            step();
+        }
+        replays[i] = elapsed(start);
+    }
+    const auto report = [&](std::string_view operation, const auto& samples) {
+        const auto timing = test::summarizeNativeTimings(samples);
+        REQUIRE(timing);
+        std::cout << name << "_level_world_" << operation << " mean_ms=" << timing->mean
+                  << " p99_ms=" << timing->p99 << " max_ms=" << timing->maximum << '\n';
+    };
+    report("save", saves);
+    report("restore", restores);
+    report("replay8", replays);
 }
 
 TEST_CASE("complete level checkpoints rewind native motion destruction pickups and cue queues",

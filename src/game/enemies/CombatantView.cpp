@@ -59,9 +59,9 @@ void Combatant::capturePresentation() {
             attachment.previousGeneration = attachment.player.generation();
         }
     };
-    capture(m_actor);
-    for (auto& child : m_children) {
-        capture(child->m_actor);
+    capture(m_sim.actor);
+    for (auto& child : children()) {
+        capture(child->m_sim.actor);
     }
 }
 
@@ -141,28 +141,28 @@ Mat4 Combatant::attachmentTransform(const Actor& critter, std::string_view node)
 
 std::optional<Mat4> Combatant::nodeTransform(std::string_view node) const {
     if (present()) {
-        if (const auto index = m_actor.stock->tree->findNode(node, kCombatantNodeNameLength)) {
-            for (const auto& part : m_children) {
+        if (const auto index = m_sim.actor.stock->tree->findNode(node, kCombatantNodeNameLength)) {
+            for (const auto& part : children()) {
                 s32 ancestor = static_cast<s32>(*index);
                 while (ancestor >= 0) {
-                    if (part->m_actor.branch == static_cast<usize>(ancestor)) {
-                        return attachmentTransform(part->m_actor, node);
+                    if (part->m_sim.actor.branch == static_cast<usize>(ancestor)) {
+                        return attachmentTransform(part->m_sim.actor, node);
                     }
-                    ancestor = m_actor.stock->tree->nodes[static_cast<usize>(ancestor)].parent;
+                    ancestor = m_sim.actor.stock->tree->nodes[static_cast<usize>(ancestor)].parent;
                 }
             }
         }
     }
-    return present() ? std::optional{attachmentTransform(m_actor, node)} : std::nullopt;
+    return present() ? std::optional{attachmentTransform(m_sim.actor, node)} : std::nullopt;
 }
 std::optional<Mat4> Combatant::rootTransform() const {
-    return present() ? std::optional{attachmentTransform(m_actor, data()->rootNode())}
+    return present() ? std::optional{attachmentTransform(m_sim.actor, data()->rootNode())}
                      : std::nullopt;
 }
 std::vector<MissileTarget> Combatant::bodyTargets(bool solidOnly) const {
     auto out = ownTargets(solidOnly);
     if (alive()) {
-        for (const auto& part : m_children) {
+        for (const auto& part : children()) {
             const auto volumes = part->ownTargets(solidOnly);
             out.insert(out.end(), volumes.begin(), volumes.end());
         }
@@ -175,10 +175,10 @@ std::vector<MissileTarget> Combatant::ownTargets(bool solidOnly) const {
     // its DEATH sequence runs; CritterDelInst removes it at the final pose.
     // It is no longer a damage target. Dead child branches stay unavailable,
     // including the persistent stump effects retained under a living parent.
-    if (!present() || (!alive() && (!solidOnly || m_actor.parent != nullptr))) {
+    if (!present() || (!alive() && (!solidOnly || m_sim.actor.parent != nullptr))) {
         return out;
     }
-    const auto& actor = m_actor;
+    const auto& actor = m_sim.actor;
     for (usize i = 0; i < data()->parts().size(); ++i) {
         const auto& part = data()->parts()[i];
         if (part.radius <= 0 || (solidOnly && (part.flags & CritterPart::kSolid) == 0) ||
@@ -207,7 +207,7 @@ std::vector<MissileTarget> Combatant::ownTargets(bool solidOnly) const {
 }
 void Combatant::drawShadow(RenderDevice& device, const Mat4& clip, const Vec3& eye,
                            const WorldLighting& lighting, f32 presentationAlpha) const {
-    const Actor& critter = m_actor;
+    const Actor& critter = m_sim.actor;
     if (critter.state == State::Inactive || critter.stock == nullptr ||
         !critter.stock->shadow.bound()) {
         return;
@@ -216,8 +216,8 @@ void Combatant::drawShadow(RenderDevice& device, const Mat4& clip, const Vec3& e
     Vec3 ground = glm::mix(critter.presentation.position, critter.position,
                            presentationBlend(critter, presentationAlpha));
     Vec3 normal{0.0f, 1.0f, 0.0f};
-    if (m_collision != nullptr) {
-        if (const auto floor = m_collision->floorAt(ground, kShadowReach, kShadowReach)) {
+    if (m_sim.collision != nullptr) {
+        if (const auto floor = m_sim.collision->floorAt(ground, kShadowReach, kShadowReach)) {
             ground.y = floor->y;
             normal = floor->normal;
         }
@@ -231,7 +231,7 @@ void Combatant::drawShadow(RenderDevice& device, const Mat4& clip, const Vec3& e
  * ProcessCritter). It goes with the last of the health. */
 std::optional<std::pair<Mat4, std::vector<Mat4>>>
 Combatant::meterPose(const CameraFrame* camera, f32 presentationAlpha) const {
-    const Actor& critter = m_actor;
+    const Actor& critter = m_sim.actor;
     if (critter.state != State::Active || critter.stock == nullptr ||
         critter.stock->meterTree == nullptr || critter.health <= 0.0f ||
         critter.definition == nullptr) {
@@ -261,7 +261,7 @@ Combatant::meterPose(const CameraFrame* camera, f32 presentationAlpha) const {
 void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                      const Texture* frozenTexture, const CameraFrame* camera,
                      const Texture* hitFlash, f32 presentationAlpha, bool healthBars) const {
-    const Actor& critter = m_actor;
+    const Actor& critter = m_sim.actor;
     if (critter.state == State::Inactive || critter.stock == nullptr || critter.hidden) {
         return;
     }
@@ -305,8 +305,8 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
     }
     TreePose pose = presentationPose(critter, presentationAlpha);
     drawNodeState(critter, hitFlash);
-    for (const auto& part : m_children) {
-        const Actor& branch = part->m_actor;
+    for (const auto& part : children()) {
+        const Actor& branch = part->m_sim.actor;
         if (branch.branch.has_value()) {
             pose.overlaySubtree(presentationPose(branch, presentationAlpha), *branch.branch);
             critter.stock->body.setSubtreeFrame(*branch.branch, branch.player.sequence(),
@@ -365,8 +365,8 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
             ? frozenTexture
             : nullptr;
     drawBrokenModels(critter, device, clip, lighting, brokenFrozen, hitFlash, shownModel, pose);
-    for (const auto& part : m_children) {
-        drawBrokenModels(part->m_actor, device, clip, lighting, brokenFrozen, hitFlash, shownModel,
+    for (const auto& part : children()) {
+        drawBrokenModels(part->m_sim.actor, device, clip, lighting, brokenFrozen, hitFlash, shownModel,
                          pose);
     }
     if (const auto meter = healthBars ? meterPose(camera, presentationAlpha) : std::nullopt) {
@@ -420,22 +420,22 @@ bool Combatant::reachedBy(const Vec3& centre, f32 radius, f32 arc, const Vec3& f
     return true;
 }
 s32 Combatant::moveType() const {
-    return m_actor.move >= 0 && data() != nullptr
-               ? data()->moves()[static_cast<usize>(m_actor.move)].type
+    return m_sim.actor.move >= 0 && data() != nullptr
+               ? data()->moves()[static_cast<usize>(m_sim.actor.move)].type
                : -1;
 }
 std::string_view Combatant::moveName() const {
-    return m_actor.move >= 0 && data() != nullptr
-               ? data()->moves()[static_cast<usize>(m_actor.move)].name
+    return m_sim.actor.move >= 0 && data() != nullptr
+               ? data()->moves()[static_cast<usize>(m_sim.actor.move)].name
                : std::string_view{};
 }
 std::string Combatant::form() const {
-    return m_actor.stock != nullptr ? m_actor.stock->definition.dropForm : std::string{};
+    return m_sim.actor.stock != nullptr ? m_sim.actor.stock->definition.dropForm : std::string{};
 }
 const CritterData* Combatant::data() const {
-    return m_actor.stock != nullptr ? m_actor.definition : nullptr;
+    return m_sim.actor.stock != nullptr ? m_sim.actor.definition : nullptr;
 }
 ItemArchive* Combatant::archive() {
-    return present() ? &m_actor.stock->archive : nullptr;
+    return present() ? &m_sim.actor.stock->archive : nullptr;
 }
 } // namespace gdl::game

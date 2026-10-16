@@ -12,6 +12,7 @@
 #include "engine/render/ImmediateBatch.h"
 
 namespace gdl {
+class NativeStateDigest;
 
 /** A value over a particle's time: from its birth to its life's end, then over its fade to
  * its death. */
@@ -98,6 +99,8 @@ struct Particle {
  */
 class ParticleEmitter {
 public:
+    /** Direct native values, including RNG state and unconsumed emission credit. */
+    bool equalLocal(const ParticleEmitter& other) const { return *this == other; }
     enum class Phase : u8 { Delay, Emitting, Fading, Done };
     static constexpr u32 kMostFramesAtOnce = 15; ///< a longer gap counts as one frame
 
@@ -148,6 +151,8 @@ public:
               f32 frameOffset = 0.0f) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const ParticleEmitter&);
+    bool operator==(const ParticleEmitter&) const = default;
     void stepFrame();
     f32 rateNow();
     void emit(f32 age);

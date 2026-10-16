@@ -6,11 +6,72 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 #include "game/world/Chests.h"
 #include "game/world/TargetAssist.h"
 
 namespace gdl::game {
+
+bool Breakables::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("Breakables.native.1");
+    // These immutable binding inputs remain fixed until clear/bind invalidates
+    // history. Mutable collision values are visited by the enclosing world owner.
+    digest.resource(m_layout);
+    digest.resource(m_collision);
+    digest.wide(m_infos.size());
+    for (const auto& info : m_infos) {
+        digest.fields<19>(info);
+    }
+    digest.fields<2>(state);
+    return digest.good();
+}
+
+bool Breakables::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim);
+}
+
+bool Breakables::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state);
+}
+
+bool Breakables::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& barrel : m_sim.barrels) {
+        if (!barrel.figure.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void Breakables::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool Breakables::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding;
+}
+
+bool Breakables::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool Breakables::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
 
 namespace {
 
@@ -53,48 +114,48 @@ bool Breakables::bind(RenderDevice& device, const WorldLayout& layout, const Ass
         if (!holds && !breaks) {
             continue;
         }
-        auto barrel = std::make_unique<Barrel>();
-        barrel->instance = static_cast<s32>(index);
-        barrel->minPlayers = instance.minPlayers;
-        barrel->health = std::max<s32>(info.hitPoints, 1);
-        barrel->armor = info.armor;
-        barrel->radius = info.radius > 0.0f ? info.radius : 1.0f;
-        barrel->height = info.height > 0.0f ? info.height : 3.0f;
-        barrel->collisionOffset = info.collisionOffset;
+        Barrel barrel;
+        barrel.instance = static_cast<s32>(index);
+        barrel.minPlayers = instance.minPlayers;
+        barrel.health = std::max<s32>(info.hitPoints, 1);
+        barrel.armor = info.armor;
+        barrel.radius = info.radius > 0.0f ? info.radius : 1.0f;
+        barrel.height = info.height > 0.0f ? info.height : 3.0f;
+        barrel.collisionOffset = info.collisionOffset;
         if (holds) {
-            barrel->kind = BreakableStrike::Kind::Holding;
-            barrel->contents = paramS16(instance, 0);
-            barrel->count = paramS16(instance, 4);
+            barrel.kind = BreakableStrike::Kind::Holding;
+            barrel.contents = paramS16(instance, 0);
+            barrel.count = paramS16(instance, 4);
         } else if (info.subtype == kExploding) {
-            barrel->kind = BreakableStrike::Kind::Exploding;
+            barrel.kind = BreakableStrike::Kind::Exploding;
         } else if (info.subtype == kPoison) {
-            barrel->kind = BreakableStrike::Kind::Poison;
+            barrel.kind = BreakableStrike::Kind::Poison;
         }
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!barrel->figure.place(device, scope, name, instance,
-                                  (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
+        if (!barrel.figure.place(device, scope, name, instance,
+                                 (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Barrels: no figure {} in the item archive", name);
         }
-        barrel->box = barrel->figure.obstacle(info);
-        barrel->support.bind(instance, info, authored ? &*authored : nullptr, barrel->figure,
-                             barrel->box, collision);
-        barrel->support.sync(collision, barrel->figure, barrel->box);
-        m_barrels.push_back(std::move(barrel));
+        barrel.box = barrel.figure.obstacle(info);
+        barrel.support.bind(instance, info, authored ? &*authored : nullptr, barrel.figure,
+                            barrel.box, collision);
+        barrel.support.sync(collision, barrel.figure, barrel.box);
+        m_sim.barrels.push_back(std::move(barrel));
     }
-    return !m_barrels.empty();
+    return !m_sim.barrels.empty();
 }
 
 void Breakables::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_layout = nullptr;
     m_collision = nullptr;
-    m_barrels.clear();
+    m_sim.barrels.clear();
     m_infos.clear();
-    m_seed = kSeedStart;
+    m_sim.seed = kSeedStart;
 }
 
 MissileTarget Breakables::target(usize index, s32 id) const {
-    const auto& barrel = *m_barrels.at(index);
+    const auto& barrel = m_sim.barrels.at(index);
     MissileTarget result{id, barrel.figure.position(), barrel.radius, barrel.height};
     const bool explosive = barrel.kind == BreakableStrike::Kind::Exploding ||
                            barrel.kind == BreakableStrike::Kind::Poison;
@@ -107,35 +168,35 @@ MissileTarget Breakables::target(usize index, s32 id) const {
 }
 
 void Breakables::syncFloors() {
-    for (const auto& barrel : m_barrels) {
-        if (!barrel->gone) {
-            barrel->support.sync(m_collision, barrel->figure, barrel->box);
+    for (auto& barrel : m_sim.barrels) {
+        if (!barrel.gone) {
+            barrel.support.sync(m_collision, barrel.figure, barrel.box);
         }
     }
 }
 
 void Breakables::setPlayerCount(s32 players) {
-    for (const std::unique_ptr<Barrel>& barrel : m_barrels) {
-        barrel->shown = shownToParty(barrel->minPlayers, players);
+    for (auto& barrel : m_sim.barrels) {
+        barrel.shown = shownToParty(barrel.minPlayers, players);
     }
 }
 
 bool Breakables::standing(usize index) const {
-    if (index >= m_barrels.size()) {
+    if (index >= m_sim.barrels.size()) {
         return false;
     }
-    const Barrel& barrel = *m_barrels[index];
+    const Barrel& barrel = m_sim.barrels[index];
     return barrel.shown && !barrel.gone && barrel.state == kWhole;
 }
 
 std::optional<usize> Breakables::struckBy(const Vec3& from, const Vec3& to, f32 radius) const {
     std::optional<usize> first;
     f32 firstAlong = 2.0f;
-    for (usize index = 0; index < m_barrels.size(); ++index) {
+    for (usize index = 0; index < m_sim.barrels.size(); ++index) {
         if (!standing(index)) {
             continue;
         }
-        const Barrel& barrel = *m_barrels[index];
+        const Barrel& barrel = m_sim.barrels[index];
         const Vec3& base = barrel.figure.position();
         f32 along = 0.0f;
         if (nearestOnGround(from, to, base, along) > barrel.radius + radius) {
@@ -155,11 +216,11 @@ std::optional<usize> Breakables::struckBy(const Vec3& from, const Vec3& to, f32 
 
 std::vector<usize> Breakables::within(const Vec3& centre, f32 radius) const {
     std::vector<usize> found;
-    for (usize index = 0; index < m_barrels.size(); ++index) {
+    for (usize index = 0; index < m_sim.barrels.size(); ++index) {
         if (!standing(index)) {
             continue;
         }
-        const Barrel& barrel = *m_barrels[index];
+        const Barrel& barrel = m_sim.barrels[index];
         const Vec3 offset = barrel.figure.position() - centre;
         if (std::hypot(offset.x, offset.z) <= radius + barrel.radius &&
             std::abs(offset.y) <= radius + barrel.height) {
@@ -173,7 +234,7 @@ std::optional<BreakableStrike> Breakables::strike(usize index, f32 power) {
     if (!standing(index)) {
         return std::nullopt;
     }
-    Barrel& barrel = *m_barrels[index];
+    Barrel& barrel = m_sim.barrels[index];
     // Armour comes off the blow, which still counts for one.
     if (barrel.armor >= 0) {
         f32 felt = power - static_cast<f32>(barrel.armor);
@@ -195,7 +256,7 @@ std::optional<BreakableStrike> Breakables::strike(usize index, f32 power) {
     barrel.figure.play(kBreaking, false);
     if (barrel.kind == BreakableStrike::Kind::Holding) {
         result.contents = Chests::resolveContents(m_infos, barrel.contents,
-                                                  static_cast<usize>(barrel.instance), m_seed);
+                                                  static_cast<usize>(barrel.instance), m_sim.seed);
         result.count = barrel.count;
     }
     return result;
@@ -204,8 +265,8 @@ std::optional<BreakableStrike> Breakables::strike(usize index, f32 power) {
 std::vector<usize> Breakables::update(f32 seconds) {
     syncFloors();
     std::vector<usize> retired;
-    for (usize index = 0; index < m_barrels.size(); ++index) {
-        Barrel& barrel = *m_barrels[index];
+    for (usize index = 0; index < m_sim.barrels.size(); ++index) {
+        Barrel& barrel = m_sim.barrels[index];
         if (!barrel.shown || barrel.gone) {
             continue;
         }
@@ -231,7 +292,7 @@ std::vector<usize> Breakables::update(f32 seconds) {
 }
 
 f32 Breakables::opacityOf(usize index) const {
-    return opacity(*m_barrels[index]);
+    return opacity(m_sim.barrels[index]);
 }
 
 f32 Breakables::opacity(const Barrel& barrel) {
@@ -246,26 +307,26 @@ f32 Breakables::opacity(const Barrel& barrel) {
 
 std::vector<Obstacle> Breakables::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (const std::unique_ptr<Barrel>& barrel : m_barrels) {
-        if (barrel->shown && !barrel->gone && barrel->box.solid) {
-            boxes.push_back(barrel->box);
+    for (auto& barrel : m_sim.barrels) {
+        if (barrel.shown && !barrel.gone && barrel.box.solid) {
+            boxes.push_back(barrel.box);
         }
     }
     return boxes;
 }
 
 void Breakables::capturePresentation() {
-    for (const auto& barrel : m_barrels) {
-        barrel->figure.capturePresentation();
+    for (auto& barrel : m_sim.barrels) {
+        barrel.figure.capturePresentation();
     }
 }
 
 void Breakables::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 presentationAlpha) const {
-    for (const std::unique_ptr<Barrel>& barrel : m_barrels) {
-        if (barrel->shown && !barrel->gone) {
-            barrel->figure.draw(device, clip, lighting, opacity(*barrel), 1, nullptr,
-                                TreeModel::Pass::All, presentationAlpha);
+    for (auto& barrel : m_sim.barrels) {
+        if (barrel.shown && !barrel.gone) {
+            barrel.figure.draw(device, clip, lighting, opacity(barrel), 1, nullptr,
+                               TreeModel::Pass::All, presentationAlpha);
         }
     }
 }

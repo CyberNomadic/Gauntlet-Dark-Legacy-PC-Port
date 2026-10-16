@@ -1,13 +1,143 @@
 #include "game/enemies/Bosses.h"
 
+#include <algorithm>
 #include <cctype>
+#include <format>
 #include <memory>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+namespace {
+void appendConfiguration(NativeStateDigest& digest, const WorldCollision* collision,
+                         const EnemyScales& scales, char realm, bool open) {
+    // Immutable during one binding, but relevant before the first fighter is
+    // born. Reopening changes the local epoch and invalidates saved values.
+    digest.resource(collision);
+    digest.values(scales, realm, open);
+}
+} // namespace
+
+void Bosses::appendSimulationDigest(
+    NativeStateDigest& digest, const Simulation& state,
+    std::optional<std::span<const TextureAnimator::Clock>> savedClocks) {
+    // The same fourteen actual values are copied into local history. Assets
+    // identify retained bindings; their mutable clocks are captured separately.
+    visitNativeFields<14>(state, [&]<class... Fields>(const Fields&... fields) {
+        const auto append = [&]<class T>(const T& field) {
+            if constexpr (std::is_same_v<T, std::vector<CombatantAssets*>>) {
+                digest.wide(field.size());
+                for (usize i = 0; i < field.size(); ++i) {
+                    digest.resource(field[i]);
+                    if (field[i] == nullptr) {
+                        digest.invalidate();
+                        return;
+                    }
+                    digest.fields<3>(savedClocks ? (*savedClocks)[i] : field[i]->textures.clock());
+                }
+            } else {
+                digest.value(field);
+            }
+        };
+        (append(fields), ...);
+    });
+}
+
+bool Bosses::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("Bosses.native.1");
+    appendConfiguration(digest, m_collision, m_scales, m_realm, m_device != nullptr);
+    appendSimulationDigest(digest, m_sim);
+    return m_fighter.appendNativeDigest(digest) && digest.good();
+}
+
+bool Bosses::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("Bosses.native.1");
+    appendConfiguration(digest, m_collision, m_scales, m_realm, m_device != nullptr);
+    appendSimulationDigest(digest, saved.m_state,
+                           std::span<const TextureAnimator::Clock>{saved.m_clocks});
+    return m_fighter.appendLocalDigest(digest, saved.m_fighter) && digest.good();
+}
+
+bool Bosses::registerNativeResources(NativeStateResources& resources,
+                                       std::string_view stablePrefix) const {
+    // Discarding a speculative encounter removes it from m_sim.assets, not
+    // from history or the immutable cache its older snapshots still borrow.
+    for (const auto& stock : m_assetCache) {
+        if (!resources.registerCombatantAssets(
+                *stock, std::format("{}/{}/{}", stablePrefix,
+                                    static_cast<s32>(stock->definition.kind),
+                                    stock->definition.name))) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+bool Bosses::saveLocal(LocalSnapshot& snapshot) const {
+    snapshot.m_owner.reset();
+    if (!m_fighter.saveLocal(snapshot.m_fighter)) {
+        return false;
+    }
+    snapshot.m_state = m_sim;
+    snapshot.m_epoch = m_localEpoch;
+    snapshot.m_clocks.resize(m_sim.assets.size());
+    snapshot.m_assets.resize(m_sim.assets.size());
+    for (usize i = 0; i < m_sim.assets.size(); ++i) {
+        snapshot.m_clocks[i] = m_sim.assets[i]->textures.clock();
+        snapshot.m_assets[i] = m_sim.assets[i]->m_localBinding;
+    }
+    snapshot.m_owner = m_localOwner;
+    return true;
+}
+bool Bosses::canRestoreLocal(const LocalSnapshot& snapshot) const {
+    return snapshot.m_owner.lock() == m_localOwner && snapshot.m_epoch == m_localEpoch &&
+           snapshot.m_clocks.size() == snapshot.m_state.assets.size() &&
+           snapshot.m_assets.size() == snapshot.m_state.assets.size() &&
+           std::ranges::none_of(snapshot.m_assets,
+                                [](const auto& asset) { return asset.expired(); }) &&
+           m_fighter.canRestoreLocal(snapshot.m_fighter);
+}
+bool Bosses::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
+        return false;
+    }
+    bool equal = true;
+    const auto same = []<class T>(const T& a, const T& b) {
+        if constexpr (std::is_same_v<T, LegendRite>) {
+            return a.equalLocal(b);
+        } else {
+            return a == b;
+        }
+    };
+    visitNativeFields<14>(left.m_state, [&](const auto&... first) {
+        visitNativeFields<14>(right.m_state, [&](const auto&... second) {
+            equal = (same(first, second) && ...);
+        });
+    });
+    return equal && left.m_clocks == right.m_clocks &&
+           m_fighter.equalLocal(left.m_fighter, right.m_fighter);
+}
+bool Bosses::restoreLocal(const LocalSnapshot& snapshot) {
+    if (!canRestoreLocal(snapshot)) {
+        return false;
+    }
+    // The same scene still owns every resource and actor. No native action,
+    // legend callback or reward publication is run while restoring values.
+    m_sim = snapshot.m_state;
+    for (usize i = 0; i < m_sim.assets.size(); ++i) {
+        m_sim.assets[i]->textures.restoreClock(snapshot.m_clocks[i]);
+    }
+    return m_fighter.restoreLocal(snapshot.m_fighter);
+}
 
 void Bosses::open(RenderDevice& device, const std::filesystem::path& unpackedRoot,
                   const WorldCollision* collision, const EnemyScales& scales, char realm,
@@ -22,50 +152,53 @@ void Bosses::open(RenderDevice& device, const std::filesystem::path& unpackedRoo
 }
 
 void Bosses::close() {
+    ++m_localEpoch;
     m_fighter.clear();
-    m_assets.clear();
+    m_sim.assets.clear();
+    m_assetCache.clear();
     m_textureLenders.clear();
     m_hitFlash = nullptr;
     m_device = nullptr;
     m_collision = nullptr;
-    m_id.reset();
-    m_cameraBase.reset();
-    m_defeat.reset();
-    m_rewardOffset = Vec3{0};
-    m_kind = -1;
-    m_name.clear();
-    m_awake = false;
-    m_wakeDistance = 0.0f;
-    m_wakeClock = 0.0f;
-    m_rite.clear();
-    m_roarAsked = false;
-    m_legendStruck = false;
-    m_legendEvents.clear();
+    m_sim.id.reset();
+    m_sim.cameraBase.reset();
+    m_sim.defeat.reset();
+    m_sim.rewardOffset = Vec3{0};
+    m_sim.kind = -1;
+    m_sim.name.clear();
+    m_sim.awake = false;
+    m_sim.wakeDistance = 0.0f;
+    m_sim.wakeClock = 0.0f;
+    m_sim.rite.clear();
+    m_sim.roarAsked = false;
+    m_sim.legendStruck = false;
+    m_sim.legendEvents.clear();
 }
 
 std::vector<CombatantAssets*> Bosses::resources() {
     std::vector<CombatantAssets*> result;
-    result.reserve(m_assets.size());
-    for (auto& stock : m_assets) {
-        result.push_back(stock.get());
+    result.reserve(m_sim.assets.size());
+    for (auto& stock : m_sim.assets) {
+        result.push_back(stock);
     }
     return result;
 }
 std::vector<const CombatantAssets*> Bosses::resources() const {
     std::vector<const CombatantAssets*> result;
-    result.reserve(m_assets.size());
-    for (const auto& stock : m_assets) {
-        result.push_back(stock.get());
+    result.reserve(m_sim.assets.size());
+    for (const auto& stock : m_sim.assets) {
+        result.push_back(stock);
     }
     return result;
 }
 bool Bosses::bringLegend(s32 player) {
-    const LegendWeakness* weakness = legendWeaknessOf(m_kind);
-    if (!m_id.has_value() || weakness == nullptr || m_rite.stage() != LegendRite::Stage::None) {
+    const LegendWeakness* weakness = legendWeaknessOf(m_sim.kind);
+    if (!m_sim.id.has_value() || weakness == nullptr ||
+        m_sim.rite.stage() != LegendRite::Stage::None) {
         return false;
     }
-    m_rite.begin(player, *weakness);
-    m_roarAsked = false;
+    m_sim.rite.begin(player, *weakness);
+    m_sim.roarAsked = false;
     m_fighter.hold(true); // it keeps to its stance while the item is raised
     return true;
 }
@@ -73,49 +206,49 @@ bool Bosses::bringLegend(s32 player) {
 /** The rite goes by what the boss is doing: risen once its start is over, roared once its
  * roar is; each cue is acted on and kept for the game. */
 void Bosses::stageLegend(s32 ticks) {
-    if (!m_rite.running() || !m_id.has_value()) {
+    if (!m_sim.rite.running() || !m_sim.id.has_value()) {
         return;
     }
     const s32 moveType = m_fighter.moveType();
-    const bool risen = m_awake && moveType >= 0 && moveType != MoveDefinition::kStart;
+    const bool risen = m_sim.awake && moveType >= 0 && moveType != MoveDefinition::kStart;
     const CritterData* data = m_fighter.data();
     const bool canRoar = data != nullptr && data->moveOfType(MoveDefinition::kRoar).has_value();
-    const bool roarDone =
-        m_roarAsked && (!canRoar || (moveType == MoveDefinition::kRoar && m_fighter.moveDone()));
-    for (const LegendCue cue : m_rite.update(ticks, risen, roarDone)) {
-        if (cue == LegendCue::Thrown && m_kind != 34 && m_kind != 35 && m_kind != 36 &&
-            m_kind != 37 && m_kind != 38 && m_kind != 42) {
+    const bool roarDone = m_sim.roarAsked &&
+                          (!canRoar || (moveType == MoveDefinition::kRoar && m_fighter.moveDone()));
+    for (const LegendCue cue : m_sim.rite.update(ticks, risen, roarDone)) {
+        if (cue == LegendCue::Thrown && m_sim.kind != 34 && m_sim.kind != 35 && m_sim.kind != 36 &&
+            m_sim.kind != 37 && m_sim.kind != 38 && m_sim.kind != 42) {
             strikeWithLegend();
         } else if (cue == LegendCue::WornOff) {
             m_fighter.curb(0.0f);
-            if (m_kind == 38) {
+            if (m_sim.kind == 38) {
                 // world_update (0x8005674c) clears the initial 18000-tick
                 // blindness 29 seconds after the roar, not five minutes later.
                 m_fighter.blind(0);
                 m_fighter.replaceNodeModel(*m_device, "EYEBALL", {});
             }
         }
-        m_legendEvents.push_back(LegendEvent{cue, m_rite.player(), legendRealm()});
+        m_sim.legendEvents.push_back(LegendEvent{cue, m_sim.rite.player(), legendRealm()});
     }
-    if (m_rite.wantsRoar() && !m_roarAsked) {
-        m_roarAsked = true;
+    if (m_sim.rite.wantsRoar() && !m_sim.roarAsked) {
+        m_sim.roarAsked = true;
         m_fighter.hold(false);
         m_fighter.roar();
     }
 }
 
 void Bosses::landLegend() {
-    if (m_kind == 35 || m_kind == 37 || m_kind == 38 || m_kind == 42) {
+    if (m_sim.kind == 35 || m_sim.kind == 37 || m_sim.kind == 38 || m_sim.kind == 42) {
         // Scimitar and javelin act on impact; Bellows and Savior on cast release.
         // The roar controls lighting independently of that notification.
-        if (m_id.has_value() && m_rite.thrown() && !m_legendStruck &&
-            (m_kind != 38 || m_rite.running())) {
+        if (m_sim.id.has_value() && m_sim.rite.thrown() && !m_sim.legendStruck &&
+            (m_sim.kind != 38 || m_sim.rite.running())) {
             strikeWithLegend();
-            m_legendStruck = true;
+            m_sim.legendStruck = true;
         }
         return;
     }
-    if (!m_id.has_value() || !m_rite.finishOnImpact()) {
+    if (!m_sim.id.has_value() || !m_sim.rite.finishOnImpact()) {
         return;
     }
     strikeWithLegend();
@@ -124,8 +257,8 @@ void Bosses::landLegend() {
 
 /** The item lands: a share of its health goes at once, and its weakness is put on it. */
 void Bosses::strikeWithLegend() {
-    const LegendWeakness* weakness = m_rite.weakness();
-    if (weakness == nullptr || !m_id.has_value() || !m_fighter.alive()) {
+    const LegendWeakness* weakness = m_sim.rite.weakness();
+    if (weakness == nullptr || !m_sim.id.has_value() || !m_fighter.alive()) {
         return;
     }
     if (weakness->beheads) {
@@ -134,14 +267,14 @@ void Bosses::strikeWithLegend() {
         if (const Combatant* lion = m_fighter.child(kLion); lion != nullptr && lion->alive()) {
             EnemyHit hit;
             hit.damage = 1.5f * lion->health();
-            hit.player = m_rite.player();
+            hit.player = m_sim.rite.player();
             m_fighter.hurt(hit, kLion);
         }
     } else if (weakness->harms()) {
         EnemyHit hit;
         hit.damage =
             weakness->damage > 0.0f ? weakness->damage : weakness->healthShare * m_fighter.health();
-        hit.player = m_rite.player();
+        hit.player = m_sim.rite.player();
         m_fighter.hurt(hit);
     }
     if (weakness->frozenTicks > 0) {
@@ -150,30 +283,30 @@ void Bosses::strikeWithLegend() {
     if (weakness->blindTicks > 0) {
         m_fighter.blind(weakness->blindTicks);
     }
-    if (m_kind == 38 && !m_fighter.replaceNodeModel(*m_device, "EYEBALL", "PBOSSQEYEBALL")) {
+    if (m_sim.kind == 38 && !m_fighter.replaceNodeModel(*m_device, "EYEBALL", "PBOSSQEYEBALL")) {
         log::warn("Plague javelin: cannot bind native PBOSSQEYEBALL replacement");
     }
     if (weakness->curbs()) {
         m_fighter.curb(weakness->curbSeconds);
     }
     m_fighter.resize(weakness->scale);
-    if (m_kind == 37) {
+    if (m_sim.kind == 37) {
         m_fighter.tint(Color::rgba(64, 255, 64));
     }
 }
 
 std::vector<LegendEvent> Bosses::takeLegendEvents() {
-    return std::exchange(m_legendEvents, {});
+    return std::exchange(m_sim.legendEvents, {});
 }
 
 bool Bosses::frozen() const {
-    return m_id.has_value() && m_fighter.frozen();
+    return m_sim.id.has_value() && m_fighter.frozen();
 }
 bool Bosses::blinded() const {
-    return m_id.has_value() && m_fighter.blinded();
+    return m_sim.id.has_value() && m_fighter.blinded();
 }
 bool Bosses::curbed() const {
-    return m_id.has_value() && m_fighter.curbed();
+    return m_sim.id.has_value() && m_fighter.curbed();
 }
 
 CombatantAssets* Bosses::preload(s32 kind) {
@@ -182,19 +315,29 @@ CombatantAssets* Bosses::preload(s32 kind) {
         return nullptr;
     }
     CombatantAssets* assets = nullptr;
-    for (auto& loaded : m_assets) {
+    for (auto& loaded : m_sim.assets) {
         if (loaded->definition.name == name) {
-            assets = loaded.get();
+            assets = loaded;
             break;
         }
     }
     if (assets == nullptr) {
-        auto loaded = std::make_unique<CombatantAssets>();
-        if (!loaded->load(*m_device, m_root, bossDefinition(name), m_realm, m_textureLenders)) {
-            return nullptr;
+        for (const auto& cached : m_assetCache) {
+            if (cached->definition.name == name) {
+                assets = cached.get();
+                break;
+            }
         }
-        assets = loaded.get();
-        m_assets.push_back(std::move(loaded));
+        if (assets == nullptr) {
+            auto loaded = std::make_unique<CombatantAssets>();
+            if (!loaded->load(*m_device, m_root, bossDefinition(name), m_realm, m_textureLenders)) {
+                return nullptr;
+            }
+            assets = loaded.get();
+            m_assetCache.push_back(std::move(loaded));
+        }
+        assets->textures.restoreClock({});
+        m_sim.assets.push_back(assets);
     }
     // Keep the javelin's alternate eye in the load-time resource roster.
     if (kind == 38) {
@@ -203,7 +346,7 @@ CombatantAssets* Bosses::preload(s32 kind) {
     return assets;
 }
 bool Bosses::spawn(s32 kind, const Vec3& position, f32 yaw, f32 wakeDistance) {
-    if (m_id.has_value()) {
+    if (m_sim.id.has_value()) {
         return false;
     }
     auto* assets = preload(kind);
@@ -213,33 +356,33 @@ bool Bosses::spawn(s32 kind, const Vec3& position, f32 yaw, f32 wakeDistance) {
     if (!m_fighter.spawn(*assets, kTargetId, position, yaw, m_collision, m_scales, m_realm)) {
         return false;
     }
-    m_id = kTargetId;
-    m_kind = kind;
-    m_name = bossNameOf(kind);
-    m_awake = false;
-    m_wakeClock = 0.0f;
+    m_sim.id = kTargetId;
+    m_sim.kind = kind;
+    m_sim.name = bossNameOf(kind);
+    m_sim.awake = false;
+    m_sim.wakeClock = 0.0f;
     const CritterData* data = m_fighter.data();
-    m_wakeDistance = wakeDistance;
-    m_rewardOffset = rewardOffset();
-    m_cameraBase =
+    m_sim.wakeDistance = wakeDistance;
+    m_sim.rewardOffset = rewardOffset();
+    m_sim.cameraBase =
         m_fighter.position() + Vec3{0.0f, data != nullptr ? data->floorOffset() : 0.0f, 0.0f};
-    if (m_wakeDistance <= 0.0f && data != nullptr) {
-        m_wakeDistance = data->wakeThreshold();
+    if (m_sim.wakeDistance <= 0.0f && data != nullptr) {
+        m_sim.wakeDistance = data->wakeThreshold();
     }
     return true;
 }
 
 void Bosses::update(s32 ticks, f32 seconds, std::span<const EnemyView> players) {
-    for (const auto& assets : m_assets) {
+    for (const auto& assets : m_sim.assets) {
         assets->textures.advance(0);
     }
-    if (!m_id.has_value()) {
+    if (!m_sim.id.has_value()) {
         return;
     }
     // Asleep for two seconds at least, then until the whole party is within its threshold
     // (CritterBossAI's activation deadline and MaxPlayerDist); then it fights on until it falls.
-    if (!m_awake) {
-        m_wakeClock += seconds;
+    if (!m_sim.awake) {
+        m_sim.wakeClock += seconds;
         const Vec3* at = position();
         f32 farthest = 0.0f;
         bool anyone = false;
@@ -249,19 +392,20 @@ void Bosses::update(s32 ticks, f32 seconds, std::span<const EnemyView> players) 
                 anyone = true;
             }
         }
-        if (m_wakeClock >= kWakeArmSeconds &&
-            (m_wakeDistance <= 0.0f || (anyone && farthest <= m_wakeDistance))) {
-            m_awake = true;
+        if (m_sim.wakeClock >= kWakeArmSeconds &&
+            (m_sim.wakeDistance <= 0.0f || (anyone && farthest <= m_sim.wakeDistance))) {
+            m_sim.awake = true;
         }
-        if (!m_awake) {
+        if (!m_sim.awake) {
             return;
         }
     }
     // CritterDamage exempts the opening states 1..4, not state 5 while the
     // weakness is wearing off. Ordinary party damage scaling resumes after the roar.
-    m_fighter.takeFullHarm(m_rite.stage() == LegendRite::Stage::Carried || m_rite.darkens());
+    m_fighter.takeFullHarm(m_sim.rite.stage() == LegendRite::Stage::Carried ||
+                           m_sim.rite.darkens());
     if (ticks > 0) {
-        for (const auto& assets : m_assets) {
+        for (const auto& assets : m_sim.assets) {
             assets->textures.advance(seconds);
         }
     }
@@ -269,9 +413,9 @@ void Bosses::update(s32 ticks, f32 seconds, std::span<const EnemyView> players) 
     m_fighter.update(ticks, seconds, players);
     stageLegend(ticks);
     if (!m_fighter.present()) {
-        m_defeat = before;
-        m_id.reset();
-        m_rite.clear();
+        m_sim.defeat = before;
+        m_sim.id.reset();
+        m_sim.rite.clear();
     }
 }
 
@@ -281,7 +425,7 @@ std::vector<CombatBlow> Bosses::takeBlows() {
 
 std::vector<CombatCue> Bosses::takeCues() {
     auto cues = m_fighter.takeCues();
-    if (m_kind == 35 && m_rite.stage() != LegendRite::Stage::None) {
+    if (m_sim.kind == 35 && m_sim.rite.stage() != LegendRite::Stage::None) {
         for (auto& cue : cues) {
             if (cue.tree == "STUMPL") {
                 cue.tree = "STUMPLQ";
@@ -292,11 +436,11 @@ std::vector<CombatCue> Bosses::takeCues() {
 }
 
 std::optional<Mat4> Bosses::nodeTransform(std::string_view node) const {
-    return m_id.has_value() ? m_fighter.nodeTransform(node) : std::nullopt;
+    return m_sim.id.has_value() ? m_fighter.nodeTransform(node) : std::nullopt;
 }
 
 std::optional<Mat4> Bosses::rootTransform() const {
-    return m_id.has_value() ? m_fighter.rootTransform() : std::nullopt;
+    return m_sim.id.has_value() ? m_fighter.rootTransform() : std::nullopt;
 }
 
 std::vector<CombatLoss> Bosses::takeLosses() {
@@ -304,17 +448,17 @@ std::vector<CombatLoss> Bosses::takeLosses() {
 }
 
 std::optional<Vec3> Bosses::takeDefeat() {
-    return std::exchange(m_defeat, std::nullopt);
+    return std::exchange(m_sim.defeat, std::nullopt);
 }
 
 f32 Bosses::hurt(const EnemyHit& hit, s32 partId) {
     // Asleep it takes nothing and is not woken by it (CritterDamage: state under two).
-    if (m_id.has_value() && m_awake) {
+    if (m_sim.id.has_value() && m_sim.awake) {
         const f32 credited = m_fighter.hurt(hit, partId);
         if (!m_fighter.alive()) {
-            m_rite.clear();
+            m_sim.rite.clear();
             m_fighter.hold(false);
-            m_legendEvents.clear();
+            m_sim.legendEvents.clear();
         }
         return credited;
     }
@@ -322,7 +466,7 @@ f32 Bosses::hurt(const EnemyHit& hit, s32 partId) {
 }
 
 void Bosses::damagedPlayer(s32 player, f32 amount, s32 partId) {
-    if (m_id.has_value() && m_awake) {
+    if (m_sim.id.has_value() && m_sim.awake) {
         m_fighter.damagedPlayer(player, amount, partId);
     }
 }
@@ -353,10 +497,10 @@ void Bosses::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& l
 
 BossView Bosses::view() const {
     BossView view;
-    view.kind = m_kind;
-    view.name = m_name;
-    view.awake = m_awake;
-    if (m_id.has_value() && (m_fighter.alive() || m_fighter.dying())) {
+    view.kind = m_sim.kind;
+    view.name = m_sim.name;
+    view.awake = m_sim.awake;
+    if (m_sim.id.has_value() && (m_fighter.alive() || m_fighter.dying())) {
         view.health = m_fighter.health();
         view.maxHealth = m_fighter.maxHealth();
         view.alive = m_fighter.alive();
@@ -365,17 +509,17 @@ BossView Bosses::view() const {
 }
 
 const HealthMeterDefinition* Bosses::meter() const {
-    const CritterData* data = m_id.has_value() ? m_fighter.data() : nullptr;
+    const CritterData* data = m_sim.id.has_value() ? m_fighter.data() : nullptr;
     return data != nullptr ? &data->meter() : nullptr;
 }
 
 ItemArchive* Bosses::archive() {
-    return m_id.has_value() ? m_fighter.archive() : nullptr;
+    return m_sim.id.has_value() ? m_fighter.archive() : nullptr;
 }
 
 std::vector<HealthMeterReading> Bosses::healthMeters() const {
     std::vector<HealthMeterReading> readings;
-    if (!m_id.has_value()) {
+    if (!m_sim.id.has_value()) {
         return readings;
     }
     const auto append = [&readings](const Combatant& fighter) {
@@ -393,19 +537,19 @@ std::vector<HealthMeterReading> Bosses::healthMeters() const {
 }
 
 const Vec3* Bosses::position() const {
-    return m_id.has_value() ? &m_fighter.position() : nullptr;
+    return m_sim.id.has_value() ? &m_fighter.position() : nullptr;
 }
 
 f32 Bosses::facing() const {
-    return m_id.has_value() ? m_fighter.yaw() : 0.0f;
+    return m_sim.id.has_value() ? m_fighter.yaw() : 0.0f;
 }
 
 f32 Bosses::radius() const {
-    return m_id.has_value() ? m_fighter.radius() : 0.0f;
+    return m_sim.id.has_value() ? m_fighter.radius() : 0.0f;
 }
 
 f32 Bosses::height() const {
-    if (!m_id.has_value()) {
+    if (!m_sim.id.has_value()) {
         return 0.0f;
     }
     const CritterData* data = m_fighter.data();
@@ -417,18 +561,18 @@ f32 Bosses::height() const {
 }
 
 Vec3 Bosses::cameraOffset() const {
-    const CritterData* data = m_id.has_value() ? m_fighter.data() : nullptr;
+    const CritterData* data = m_sim.id.has_value() ? m_fighter.data() : nullptr;
     return data != nullptr ? Vec3{0.0f, data->floorOffset() + data->vertDrift(), 0.0f} : Vec3{0.0f};
 }
 
 Vec3 Bosses::rewardOffset() const {
-    const CritterData* data = m_id.has_value() ? m_fighter.data() : nullptr;
+    const CritterData* data = m_sim.id.has_value() ? m_fighter.data() : nullptr;
     return data != nullptr ? data->originOffset() + Vec3{0, data->floorOffset(), 0}
-                           : m_rewardOffset;
+                           : m_sim.rewardOffset;
 }
 
 std::string_view Bosses::moveName() const {
-    return m_id.has_value() ? m_fighter.moveName() : std::string_view{};
+    return m_sim.id.has_value() ? m_fighter.moveName() : std::string_view{};
 }
 
 } // namespace gdl::game

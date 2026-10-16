@@ -1,8 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <string_view>
 
-#include "game/screens/NativePlayDriver.h"
+#include "game/screens/NativeRollbackDriver.h"
 #include "game/screens/NativePlaySetup.h"
 #include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
@@ -13,8 +14,8 @@ class OnlineParty;
 class OnlineSession;
 
 /** Campaign owner for an agreed native-input session. Every peer owns and renders
- * the actual PlayScene; no replicated scene or speculative guest simulation is
- * involved. update() pumps transport once per 60 Hz application tick, even when
+ * the actual PlayScene, predicting missing remote controls with bounded native
+ * rewind. update() pumps transport once per 60 Hz application tick, even when
  * inputs are held, a local menu is open, or a terminal scene awaits departure.
  * The device, session, selection and borrowed context services must outlive us. */
 class NativeOnlinePlay {
@@ -48,9 +49,14 @@ public:
 
     Phase phase() const;
     Failure failure() const;
-    NativePlayDriver::Result outcome() const;
+    /** Retained after teardown; contains no room invitation or peer identifier. */
+    std::string_view failureDetail() const;
+    NativeRollbackDriver::Status outcome() const;
     const PlayScene* scene() const;
-    u64 completedTick() const;
+    /** The displayed state can be ahead of the all-seat confirmed frontier. */
+    u64 simulatedTick() const;
+    u64 confirmedTick() const;
+    NativeRollbackDriver::Statistics rollbackStatistics() const;
     OnlineLevelEntry::Phase entryPhase() const;
     bool entryVisible() const;
     const OnlineCompletion& completion() const;

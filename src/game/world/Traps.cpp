@@ -7,8 +7,69 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+
+bool Traps::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("Traps.native.1");
+    // These immutable binding inputs remain fixed until clear/bind invalidates
+    // history. Mutable collision values are visited by the enclosing world owner.
+    digest.resource(m_layout);
+    digest.resource(m_collision);
+    digest.wide(m_scope.archives().size());
+    for (const auto* archive : m_scope.archives()) {
+        digest.resource(archive);
+    }
+    digest.fields<5>(state);
+    return digest.good();
+}
+
+bool Traps::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim);
+}
+
+bool Traps::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state);
+}
+
+bool Traps::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& trap : m_sim.traps) {
+        if (!trap.figure.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void Traps::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool Traps::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding;
+}
+
+bool Traps::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool Traps::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
 
 bool Traps::bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
                  const WorldCollision* collision, u32 seed, f32 timeScale, f32 damageScale) {
@@ -17,8 +78,8 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, const AssetSco
     m_layout = &layout;
     m_scope = scope;
     const auto authored = itemSupportWorld(layout, collision);
-    m_random.seed(seed);
-    m_timeScale = timeScale;
+    m_sim.random.seed(seed);
+    m_sim.timeScale = timeScale;
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     const std::vector<ItemInstance>& instances = layout.itemInstances();
     for (usize index = 0; index < instances.size(); ++index) {
@@ -28,43 +89,43 @@ bool Traps::bind(RenderDevice& device, const WorldLayout& layout, const AssetSco
             continue;
         }
         const ItemInfo& info = infos[static_cast<usize>(instance.info)];
-        auto trap = std::make_unique<Trap>();
-        trap->instance = static_cast<s32>(index);
-        trap->minPlayers = instance.minPlayers;
+        Trap trap;
+        trap.instance = static_cast<s32>(index);
+        trap.minPlayers = instance.minPlayers;
         // An instance may set its own damage and its own rest.
         s16 ownDamage = 0;
         s16 ownRest = 0;
         std::memcpy(&ownDamage, instance.params.data(), sizeof(ownDamage));
         std::memcpy(&ownRest, &instance.params[2], sizeof(ownRest));
-        trap->damage = static_cast<f32>(ownDamage != 0 ? ownDamage : info.value) * damageScale;
-        trap->subtype = info.subtype;
-        trap->name = info.name;
-        trap->properties = info.properties;
-        trap->rectangularContact = info.collisionType == 3;
-        trap->offTime = ownRest != 0 ? -ownRest * 3 : info.activeOff;
+        trap.damage = static_cast<f32>(ownDamage != 0 ? ownDamage : info.value) * damageScale;
+        trap.subtype = info.subtype;
+        trap.name = info.name;
+        trap.properties = info.properties;
+        trap.rectangularContact = info.collisionType == 3;
+        trap.offTime = ownRest != 0 ? -ownRest * 3 : info.activeOff;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
         // SetItem preserves placements with collision flag 1 (the Courtyard tentacles
         // emerge from below the floor); their collision offset rotates with the item.
         const auto* floor = (info.collisionFlags & 1U) != 0 ? nullptr : collision;
-        if (!trap->figure.place(device, scope, name, instance, floor)) {
+        if (!trap.figure.place(device, scope, name, instance, floor)) {
             log::warn("Traps: no figure {} in the item archive", name);
         }
-        trap->box = trap->figure.obstacle(info);
+        trap.box = trap.figure.obstacle(info);
         // SetItem adds one to coloffset.y. OBJGRP flag 2 leaves vertical-only
         // offsets in world space; offsets with an X/Z component rotate with it.
         const Vec3 offset = info.collisionOffset + Vec3{0, 1, 0};
         const bool rotates = std::abs(offset.x) + std::abs(offset.z) >= 0.01f;
-        trap->box.centre = rotates ? Vec3{trap->figure.transform() * Vec4{offset, 1}}
-                                   : trap->figure.position() + offset;
-        trap->figure.gateParticlesOnSequence(true);
-        trap->box.solid = false;
-        trap->support.bind(instance, info, authored ? &*authored : nullptr, trap->figure, trap->box,
-                           collision);
-        trap->support.sync(collision, trap->figure, trap->box);
-        trap->ticksLeft = restTicks(*trap);
-        m_traps.push_back(std::move(trap));
+        trap.box.centre = rotates ? Vec3{trap.figure.transform() * Vec4{offset, 1}}
+                                  : trap.figure.position() + offset;
+        trap.figure.gateParticlesOnSequence(true);
+        trap.box.solid = false;
+        trap.support.bind(instance, info, authored ? &*authored : nullptr, trap.figure, trap.box,
+                          collision);
+        trap.support.sync(collision, trap.figure, trap.box);
+        trap.ticksLeft = restTicks(trap);
+        m_sim.traps.push_back(std::move(trap));
     }
-    return !m_traps.empty();
+    return !m_sim.traps.empty();
 }
 
 void Traps::clear() {
@@ -73,30 +134,30 @@ void Traps::clear() {
     m_layout = nullptr;
     m_scope = {};
     m_collision = nullptr;
-    m_traps.clear();
-    m_wakes.clear();
-    m_gaps.clear();
+    m_sim.traps.clear();
+    m_sim.wakes.clear();
+    m_sim.gaps.clear();
 }
 
 void Traps::syncFloors() {
-    for (const auto& trap : m_traps) {
-        if (!trap->gone) {
-            trap->support.sync(m_collision, trap->figure, trap->box);
+    for (auto& trap : m_sim.traps) {
+        if (!trap.gone) {
+            trap.support.sync(m_collision, trap.figure, trap.box);
         }
     }
 }
 
 void Traps::setPlayerCount(s32 players) {
-    for (const std::unique_ptr<Trap>& trap : m_traps) {
-        trap->shown = !trap->gone && shownToParty(trap->minPlayers, players);
+    for (auto& trap : m_sim.traps) {
+        trap.shown = !trap.gone && shownToParty(trap.minPlayers, players);
     }
 }
 
 bool Traps::stop(usize index) {
-    if (index >= m_traps.size() || !m_traps[index]->shown || m_traps[index]->disarmed) {
+    if (index >= m_sim.traps.size() || !m_sim.traps[index].shown || m_sim.traps[index].disarmed) {
         return false;
     }
-    Trap& trap = *m_traps[index];
+    Trap& trap = m_sim.traps[index];
     const bool shows = trap.ticksLeft < kStopShownUnder;
     if (trap.action != kResting) {
         trap.action = kResting;
@@ -108,10 +169,10 @@ bool Traps::stop(usize index) {
 
 bool Traps::disarm(usize index, RenderDevice& device, const WorldLayout& layout,
                    const AssetScope& scope, const WorldCollision* collision) {
-    if (index >= m_traps.size() || !m_traps[index]->shown || m_traps[index]->disarmed) {
+    if (index >= m_sim.traps.size() || !m_sim.traps[index].shown || m_sim.traps[index].disarmed) {
         return false;
     }
-    Trap& trap = *m_traps[index];
+    Trap& trap = m_sim.traps[index];
     const ItemInstance& instance = layout.itemInstances()[static_cast<usize>(trap.instance)];
     std::string name = layout.itemInfos()[static_cast<usize>(instance.info)].name;
     name += kDisarmedSuffix;
@@ -140,22 +201,22 @@ s32 Traps::restTicks(const Trap& trap) {
     }
     if (time < 0) {
         const s32 span = -time;
-        time = static_cast<s32>(m_random() % static_cast<u32>(span)) + span / 2;
+        time = static_cast<s32>(m_sim.random() % static_cast<u32>(span)) + span / 2;
     }
-    return static_cast<s32>(static_cast<f32>(time) * m_timeScale);
+    return static_cast<s32>(static_cast<f32>(time) * m_sim.timeScale);
 }
 
 std::vector<TrapHit> Traps::update(s32 ticks, f32 seconds, std::span<const TrapVictim> party,
                                    bool timeStopped) {
     std::vector<TrapHit> hits;
     syncFloors();
-    m_wakes.clear();
-    m_gaps.resize(party.size(), 0.0f);
-    for (f32& gap : m_gaps) {
+    m_sim.wakes.clear();
+    m_sim.gaps.resize(party.size(), 0.0f);
+    for (f32& gap : m_sim.gaps) {
         gap = std::max(gap - seconds, 0.0f);
     }
-    for (usize index = 0; index < m_traps.size(); ++index) {
-        Trap& trap = *m_traps[index];
+    for (usize index = 0; index < m_sim.traps.size(); ++index) {
+        Trap& trap = m_sim.traps[index];
         if (!trap.shown) {
             continue;
         }
@@ -176,7 +237,7 @@ std::vector<TrapHit> Traps::update(s32 ticks, f32 seconds, std::span<const TrapV
         trap.ticksLeft -= ticks;
         if (trap.ticksLeft <= 0) {
             if (trap.action == kResting) {
-                m_wakes.push_back(index);
+                m_sim.wakes.push_back(index);
             }
             // On to the next sequence, and from the last back to the rest.
             const auto count = static_cast<s32>(std::max<usize>(trap.figure.sequenceCount(), 3));
@@ -192,8 +253,8 @@ std::vector<TrapHit> Traps::update(s32 ticks, f32 seconds, std::span<const TrapV
             continue;
         }
         for (usize v = 0; v < party.size(); ++v) {
-            if (m_gaps[v] <= 0.0f && touches(trap, party[v])) {
-                m_gaps[v] = static_cast<f32>(trap.ticksLeft + 1) * kSecondsPerTickLeft;
+            if (m_sim.gaps[v] <= 0.0f && touches(trap, party[v])) {
+                m_sim.gaps[v] = static_cast<f32>(trap.ticksLeft + 1) * kSecondsPerTickLeft;
                 const bool pierces =
                     trap.subtype == kSpikes || trap.subtype == kBlade || trap.subtype == kBlades;
                 const u32 flags = trap.properties | PlayerImpact::kStun;
@@ -229,16 +290,16 @@ bool Traps::touches(const Trap& trap, const TrapVictim& victim) {
 }
 
 void Traps::capturePresentation() {
-    for (const auto& trap : m_traps) {
-        trap->figure.capturePresentation();
+    for (auto& trap : m_sim.traps) {
+        trap.figure.capturePresentation();
     }
 }
 
 void Traps::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                  const CameraFrame* camera, TreeModel::Pass pass, f32 presentationAlpha) const {
-    for (const std::unique_ptr<Trap>& trap : m_traps) {
-        if (trap->shown) {
-            trap->figure.draw(device, clip, lighting, 1, 1, camera, pass, presentationAlpha);
+    for (auto& trap : m_sim.traps) {
+        if (trap.shown) {
+            trap.figure.draw(device, clip, lighting, 1, 1, camera, pass, presentationAlpha);
         }
     }
 }

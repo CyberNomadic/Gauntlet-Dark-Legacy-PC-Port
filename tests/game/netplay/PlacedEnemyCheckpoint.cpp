@@ -116,13 +116,13 @@ std::optional<PlacedEnemies::Placement> placement(ByteReader& reader) {
     } else if (carried != 0) {
         return std::nullopt;
     }
-    return value.valid() ? std::optional{value} : std::nullopt;
+    return PlacedEnemiesCheckpoint::validPlacement(value) ? std::optional{value} : std::nullopt;
 }
 } // namespace
 
 namespace {
 template <class Output>
-bool writeCanonical(Output& bytes, const PlacedEnemies::Checkpoint& state, bool validate) {
+bool writeCanonical(Output& bytes, const PlacedEnemiesCheckpoint::State& state, bool validate) {
     if ((validate && !state.valid()) ||
         state.roster.size() > PlacedEnemyCheckpoint::kMaxPlacements ||
         state.pending.size() > PlacedEnemyCheckpoint::kMaxPlacements) {
@@ -151,18 +151,18 @@ bool writeCanonical(Output& bytes, const PlacedEnemies::Checkpoint& state, bool 
 } // namespace
 
 std::optional<std::vector<u8>>
-PlacedEnemyCheckpoint::encode(const PlacedEnemies::Checkpoint& state) {
+PlacedEnemyCheckpoint::encode(const PlacedEnemiesCheckpoint::State& state) {
     std::vector<u8> bytes;
     return writeCanonical(bytes, state, true) ? std::optional{std::move(bytes)} : std::nullopt;
 }
 
 std::optional<std::array<u8, 32>>
-PlacedEnemyCheckpoint::canonicalDigest(const PlacedEnemies::Checkpoint& state) {
+PlacedEnemyCheckpoint::canonicalDigest(const PlacedEnemiesCheckpoint::State& state) {
     CanonicalDigestSink sink;
     return writeCanonical(sink, state, false) ? std::optional{sink.finish()} : std::nullopt;
 }
 
-std::optional<PlacedEnemies::Checkpoint> PlacedEnemyCheckpoint::decode(std::span<const u8> bytes) {
+std::optional<PlacedEnemiesCheckpoint::State> PlacedEnemyCheckpoint::decode(std::span<const u8> bytes) {
     if (bytes.size() < kHeaderBytes || bytes.size() > kMaxBytes) {
         return std::nullopt;
     }
@@ -178,7 +178,7 @@ std::optional<PlacedEnemies::Checkpoint> PlacedEnemyCheckpoint::decode(std::span
             kHeaderBytes + (flags != 0 ? kViewBytes : 0) + count * kPlacementBytes + pending * 4) {
         return std::nullopt;
     }
-    PlacedEnemies::Checkpoint state;
+    PlacedEnemiesCheckpoint::State state;
     state.attention = vector(reader);
     if (flags != 0) {
         state.view = view(reader);

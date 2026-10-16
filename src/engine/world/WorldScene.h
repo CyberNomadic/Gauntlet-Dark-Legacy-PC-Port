@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -9,6 +10,7 @@
 #include "engine/assets/TextureSet.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 #include "engine/math/Math.h"
 #include "engine/render/ImmediateBatch.h"
 #include "engine/render/RenderDevice.h"
@@ -17,6 +19,7 @@
 #include "engine/world/WorldLighting.h"
 
 namespace gdl {
+class NativeStateDigest;
 
 /**
  * A level's geometry placed by its layout. What never moves is gathered per texture into a
@@ -129,15 +132,26 @@ public:
 private:
     friend class WorldStateCheckpoint;
     /** One of the level's texture indices as the scene draws it. */
-    struct Slot {
-        const Texture* texture = nullptr; ///< what the set (or a lender) holds for it
-        const Texture* frame = nullptr;   ///< what an animation shows instead, when set
+    struct SlotMotion {
+        const Texture* frame = nullptr; ///< what an animation shows instead, when set
         std::vector<const Texture*> cycle;
         f32 cyclePosition = 0.0f;
         f32 cycleSpeed = 0.0f;
         Vec2 offset{0.0f, 0.0f};
         Vec2 scrollPhase{0.0f};
         Vec2 scrollVelocity{0.0f};
+        bool operator==(const SlotMotion&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const SlotMotion& value) {
+            const auto& [frame, cycle, cyclePosition, cycleSpeed, offset, scrollPhase,
+                         scrollVelocity] = value;
+            digest.resource(frame);
+            digest.wide(cycle.size());
+            for (const auto* texture : cycle) digest.resource(texture);
+            digest.values(cyclePosition, cycleSpeed, offset, scrollPhase, scrollVelocity);
+        }
+    };
+    struct Slot : SlotMotion {
+        const Texture* texture = nullptr; ///< immutable archive binding
         bool usable = false;
         bool thermal = false;
 
@@ -165,12 +179,19 @@ private:
         bool additive = false;
     };
     /** An object placed every frame: animated, or drawn in depth order. */
-    struct Unit {
+    struct UnitState {
+        f32 alpha = 1.0f;
+        bool visible = true;
+        bool operator==(const UnitState&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const UnitState& value) {
+            digest.template fields<2>(value);
+        }
+    };
+    struct Unit : UnitState {
         usize object = 0;
         const Mesh* mesh = nullptr;
         std::vector<UnitPart> parts;
         f32 sortBias = 0.0f;
-        f32 alpha = 1.0f;
         u32 facing = 0;
         bool prelit = false; ///< shaded by its vertices' colours ///< turned to the camera this way
         bool chrome = false;
@@ -178,22 +199,38 @@ private:
         bool deferAlways = false; ///< a glow or sort-behind object
         bool meshAlpha = false;   ///< its mesh is marked alpha-textured
         bool background = false;  ///< depthless, far-layer scenery (e.g. A5 lightning sheets)
-        bool visible = true;
         bool depthWrite = true;
         bool depthTest = true;
 
         /** Drawn after the solids, farthest first, as the original's MBSetupObject decides. */
         bool deferred() const { return sorted && (alpha < 1.0f || deferAlways || meshAlpha); }
     };
-    struct Placement {
-        Mat4 local{1.0f};    ///< relative to the parent
-        Mat4 initial{1.0f};  ///< loaded layout, before trigger placement
-        Mat4 previous{1.0f}; ///< last fixed-update snapshot, presentation only
+    struct PlacementState {
+        Mat4 local{1.0f};
+        Mat4 previous{1.0f};
+        u32 continuity = 1;
+        bool operator==(const PlacementState&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const PlacementState& value) {
+            digest.template fields<3>(value);
+        }
+    };
+    struct Placement : PlacementState {
+        Mat4 initial{1.0f}; ///< immutable authored placement
         s32 parent = -1;
         s32 unit = -1;
-        u32 continuity = 1;
         bool moving = false;
     };
+    /** A version owns its values and their digest together. History may retain an
+     * earlier static pose after a diagnostic restore or presentation settlement. */
+    struct StaticPlacements {
+        explicit StaticPlacements(std::vector<PlacementState> states = {});
+        std::vector<PlacementState> values;
+        CanonicalDigestSink::Digest fingerprint;
+    };
+
+    /** Static placement values are shared by native history until a diagnostic
+     * restore changes them. Ordinary world updates only copy the moving roster. */
+    void captureStaticPlacements();
 
     Slot& slotFor(u32 index, TextureSet& textures, RenderDevice& device,
                   std::span<TextureSet* const> lenders);
@@ -208,10 +245,44 @@ private:
                   const CameraFrame& camera, bool plainParts, bool additiveParts, f32 alpha,
                   std::optional<f32> textureFrameOffset) const;
 
+public:
+    class LocalSnapshot {
+        friend class WorldScene;
+        std::vector<PlacementState> placements;
+        std::shared_ptr<const StaticPlacements> staticPlacements;
+        bool staticPreviousPending = false;
+        std::vector<UnitState> units;
+        std::vector<std::pair<u32, SlotMotion>> slots;
+        WorldLighting lighting;
+        f32 darken = 0;
+        u32 textureFrame = 0;
+        const WorldScene* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    /** Native values only: geometry buffers, mesh bindings, and draw scratch
+     * stay with the live scene. No resource lookup or GPU work during restore. */
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    /** Exact captured values under this binding; static catalogs compare by value,
+     * while derived composition and draw scratch are outside native history. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
+    const CanonicalDigestSink::Digest& rosterDigest() const;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::unordered_map<u32, Slot> m_slots;
     std::vector<Batch> m_batches;
     std::vector<Unit> m_units;
     std::vector<Placement> m_placements;
+    std::vector<usize> m_movingPlacements;
+    std::shared_ptr<const StaticPlacements> m_staticPlacements =
+        std::make_shared<const StaticPlacements>();
+    mutable std::optional<CanonicalDigestSink::Digest> m_rosterDigest;
+    bool m_staticPreviousPending = false;
     WorldLighting m_lighting;
     f32 m_darken = 0.0f;
     u32 m_textureFrame = 0;

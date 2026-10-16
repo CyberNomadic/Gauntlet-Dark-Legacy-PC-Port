@@ -10,6 +10,7 @@
 #include "engine/math/Math.h"
 
 namespace gdl {
+class NativeStateDigest;
 struct CameraFrame;
 
 /** One node's transform at a frame: Euler angles, offset from its rest position and scale. */
@@ -29,6 +30,10 @@ struct NodePose {
  */
 class TreePose {
 public:
+    /** Same-binding local poses and composed gameplay matrices, without
+     * serializing resource identities or rebuilding through checkpoint DTOs. */
+    bool equalLocal(const TreePose& other) const { return *this == other; }
+    bool operator==(const TreePose&) const = default;
     static constexpr f32 kHoldAngle = kHalfPi; ///< angle steps this large are not interpolated
     static constexpr f32 kKeyWindow = 0.125f;  ///< nearer a key than this shows the key itself
 
@@ -99,6 +104,7 @@ public:
     static Vec3 readAngles(const Mat4& rotation);
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const TreePose&);
     void compose();
 
     const TreeInfo* m_tree = nullptr;

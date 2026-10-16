@@ -11,8 +11,8 @@ std::optional<Vec3> PlayScene::cursorAim(Vec2 cursor, const Vec3& position) cons
 }
 
 bool PlayScene::scriptedCamera() const {
-    return m_switchCutscene.showing() || m_arrival.camera().active() ||
-           m_welcome.camera().has_value() || m_promotion.active() || relicCeremonyOn();
+    return m_sim.switchCutscene.showing() || m_arrival.camera().active() ||
+           m_sim.welcome.camera().has_value() || m_promotion.active() || relicCeremonyOn();
 }
 
 bool PlayScene::cameraContinuous() const {
@@ -21,14 +21,14 @@ bool PlayScene::cameraContinuous() const {
 }
 
 WorldCamera PlayScene::viewCamera() const {
-    if (const auto& camera = m_switchCutscene.camera();
-        m_switchCutscene.showing() && camera.has_value()) {
+    if (const auto& camera = m_sim.switchCutscene.camera();
+        m_sim.switchCutscene.showing() && camera.has_value()) {
         return *camera;
     }
     if (m_arrival.camera().active()) {
         return m_arrival.camera().camera();
     }
-    if (const auto cut = m_welcome.camera()) {
+    if (const auto cut = m_sim.welcome.camera()) {
         return *cut;
     }
     if (const auto& promotion = m_promotion.camera();
@@ -38,8 +38,8 @@ WorldCamera PlayScene::viewCamera() const {
     if (const auto& ceremony = m_towerRelics.camera(); ceremony.has_value() && relicCeremonyOn()) {
         return *ceremony;
     }
-    return bossCameraOn() ? m_shake.apply(m_bossCamera.camera(), m_bossCamera.attention())
-                          : m_shake.apply(m_camera.camera(), m_camera.attention());
+    return bossCameraOn() ? m_sim.shake.apply(m_sim.bossCamera.camera(), m_sim.bossCamera.attention())
+                          : m_sim.shake.apply(m_camera.camera(), m_camera.attention());
 }
 
 /** A boss level with a boss camera record frames the fight with it while the boss stands. */

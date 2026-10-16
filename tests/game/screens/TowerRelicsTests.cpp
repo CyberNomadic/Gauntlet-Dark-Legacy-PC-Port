@@ -9,6 +9,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/app/Scenario.h"
 #include "game/players/CharacterSave.h"
@@ -176,15 +177,20 @@ TEST_CASE("all authored tower pieces retain settled meshes at their own world an
         }
         REQUIRE(found);
         device.draws.clear();
-        effect.model.draw(device, Mat4{1}, effect.transform(), world.lighting(),
-                          effect.pose.matrices());
+        auto model = *effect.model;
+        model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
+        model.setFrame(effect.player.sequence(), static_cast<s32>(effect.player.frame()));
+        if (const auto* bank = display.figures().textureAnimator(effect.archive, effect.lenders)) {
+            bank->apply(model, *effect.tree, effect.player.sequence(), effect.player.frame());
+        }
+        model.draw(device, Mat4{1}, effect.transform(), world.lighting(), effect.pose.matrices());
         REQUIRE_FALSE(device.draws.empty());
         if (i < 12) {
             INFO(i);
             // TEXFADEIN reveals a flattened ground shadow, not an opaque shell.
             // Its parent keys Y scale to .001; check the posed geometry rather
             // than hiding the entire mesh by reversing the authored fade.
-            auto shadow = effect.model;
+            auto shadow = model;
             for (usize node = 0; node < effect.tree->nodes.size(); ++node) {
                 const auto& info = effect.tree->nodes[node];
                 bool faded = false;
@@ -447,5 +453,91 @@ TEST_CASE("Garm victory returns above the lowered battlefield bridge",
         CHECK(glm::distance(actor->position(), settled) > 5);
         scene.close();
     }
+}
+TEST_CASE("native tower relic rewind crosses speech placement and wizard resets",
+          "[local-rewind][tower-relics-local-rewind][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root));
+    std::array<Relics, 1> party;
+    party[0].addRune(0);
+    party[0].addShard(1);
+    MessageTable strings;
+    messages(strings);
+    TowerRelics actual, expected, foreign;
+    for (auto* relics : {&actual, &expected}) {
+        relics->begin(party, strings);
+        relics->bind(device, world, {});
+    }
+    const auto draw = [&](const TowerRelics& relics) {
+        device.draws.clear();
+        relics.draw(device, Mat4{1}, world.lighting(), {}, 0.37f);
+        relics.drawWizard(device, Mat4{1}, world.lighting(), {}, 0.37f);
+        return device.draws;
+    };
+    TowerRelics::LocalSnapshot saved;
+    LevelWorld::LocalSnapshot worldSaved;
+    CHECK_FALSE(actual.restoreLocal(saved));
+    s32 completions = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        CAPTURE(window);
+        const s32 distance = window % 8 + 1;
+        actual.saveLocal(saved);
+        world.saveLocal(worldSaved);
+        CHECK_FALSE(foreign.restoreLocal(saved));
+        const auto before = draw(actual);
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.capturePresentation();
+            actual.update(127, 0.4f, false);
+            actual.animate(0.4f);
+        }
+        REQUIRE(world.restoreLocal(worldSaved));
+        REQUIRE(actual.restoreLocal(saved));
+        const auto restored = draw(actual);
+        REQUIRE(restored.size() == before.size());
+        for (usize i = 0; i < before.size(); ++i) {
+            test::checkRecordedDraw(restored[i], before[i]);
+        }
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.capturePresentation();
+            expected.capturePresentation();
+            const auto a = actual.update(10, 1.0f / 30, false);
+            const auto b = expected.update(10, 1.0f / 30, false);
+            CHECK(a.voice == b.voice);
+            CHECK(a.sound == b.sound);
+            CHECK(a.placement == b.placement);
+            REQUIRE(a.completed.has_value() == b.completed.has_value());
+            if (a.completed) {
+                ++completions;
+                CHECK(a.completed->kind == b.completed->kind);
+                CHECK(a.completed->index == b.completed->index);
+            }
+            actual.animate(1.0f / 30);
+            expected.animate(1.0f / 30);
+            CHECK(actual.phase() == expected.phase());
+            CHECK(actual.caption() == expected.caption());
+            CHECK(actual.captionPage() == expected.captionPage());
+            CHECK(actual.captionLetters() == expected.captionLetters());
+            CHECK(actual.displayedRunes() == expected.displayedRunes());
+            CHECK(actual.displayedShards() == expected.displayedShards());
+        }
+        const auto reference = draw(expected);
+        const auto corrected = draw(actual);
+        REQUIRE(corrected.size() == reference.size());
+        for (usize i = 0; i < reference.size(); ++i) {
+            test::checkRecordedDraw(corrected[i], reference[i]);
+        }
+    }
+    CHECK(completions >= 2);
+    CHECK_FALSE(actual.active());
+    CHECK(device.textureUpdates == 0);
+    actual.clear();
+    CHECK_FALSE(actual.restoreLocal(saved));
+    actual.begin(party, strings);
+    actual.saveLocal(saved);
+    actual.bind(device, world, {});
+    CHECK_FALSE(actual.restoreLocal(saved));
 }
 } // namespace

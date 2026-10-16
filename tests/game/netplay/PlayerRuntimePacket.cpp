@@ -122,7 +122,7 @@ template <class A, class T, class F> void optional(A& archive, T& value, const F
     archive.number(present);
     if constexpr (A::reading) {
         if (present) {
-            value.emplace();
+            value.emplace(typename T::value_type{});
         } else {
             value.reset();
         }

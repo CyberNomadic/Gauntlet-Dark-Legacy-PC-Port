@@ -13,7 +13,13 @@ namespace gdl::game {
 /** A switch camera holds gameplay from activation through its target's completion.
  * The lead-in keeps the previous view; only the actual shot is letterboxed. */
 class SwitchCutscene {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const SwitchCutscene& value) {
+        const auto& [camera, target, lead, remaining, showing] = value;
+        visitor.values(camera, target, lead, remaining, showing);
+    }
 public:
+    bool operator==(const SwitchCutscene&) const = default;
+
     static constexpr s32 kLeadTicks = 30;
     static constexpr s32 kDefaultTicks = 40;
     static constexpr s32 kTicksPerDurationUnit = 6;

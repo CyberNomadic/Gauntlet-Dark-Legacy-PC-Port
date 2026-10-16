@@ -7,10 +7,17 @@
 
 #include "game/players/Inventory.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 /** A selector-activated, stationary distraction for the swarm, independent of the player body. */
 class MikeyDecoy {
+    friend void visitNativeState(NativeStateDigest&, const MikeyDecoy&);
+
 public:
+    bool operator==(const MikeyDecoy&) const = default;
     static constexpr s32 kFramesPerSecond = 30;
     static constexpr s32 kDespawnFrame = 300;
     static constexpr s32 kSparkleEnd = 60;

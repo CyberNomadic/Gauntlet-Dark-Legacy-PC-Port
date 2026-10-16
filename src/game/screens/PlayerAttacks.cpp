@@ -9,6 +9,7 @@
 #include "engine/audio/SoundPlayer.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/AnimationPlayer.h"
 
 #include "game/combat/Damage.h"
@@ -79,37 +80,99 @@ bool playerAreaBlocked(const Vec3& from, const Vec3& to, const LevelFixtures& fi
 }
 
 } // namespace
+void PlayerAttacks::appendBindingDigest(NativeStateDigest& digest) const {
+    digest.flag(m_resources.has_value());
+    if (m_resources) {
+        const auto& resources = *m_resources;
+        digest.resource(&resources.world.layout());
+        digest.flag(resources.weapons.loaded());
+        if (resources.weapons.loaded()) {
+            digest.resource(&resources.weapons);
+        }
+        digest.flag(resources.shake != nullptr);
+        digest.flag(resources.multiplayer != nullptr);
+        if (resources.multiplayer) {
+            digest.value(*resources.multiplayer);
+        }
+        digest.value(resources.acquisitionCone);
+    }
+}
+
+bool PlayerAttacks::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("PlayerAttacks.native.1");
+    appendBindingDigest(digest);
+    digest.value(m_sim);
+    return m_strikes.appendNativeDigest(digest) && digest.good();
+}
+
+bool PlayerAttacks::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("PlayerAttacks.native.1");
+    appendBindingDigest(digest);
+    digest.value(saved.state);
+    return m_strikes.appendLocalDigest(digest, saved.strikes) && digest.good();
+}
+
+void PlayerAttacks::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    m_strikes.saveLocal(saved.strikes);
+    saved.owner = this;
+    saved.lifetime = m_restoreOwner;
+    saved.epoch = m_localEpoch;
+}
+
+bool PlayerAttacks::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto lifetime = saved.lifetime.lock();
+    return saved.owner == this && lifetime && lifetime == m_restoreOwner &&
+           saved.epoch == m_localEpoch && m_strikes.canRestoreLocal(saved.strikes);
+}
+
+bool PlayerAttacks::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_strikes.restoreLocal(saved.strikes);
+    ++m_restoreGeneration;
+    return true;
+}
+
 void PlayerAttacks::bind(const Resources& resources) {
     clear();
     m_resources.emplace(resources);
 }
 void PlayerAttacks::clear() {
     ++m_restoreGeneration;
+    ++m_localEpoch;
     if (m_resources.has_value()) {
-        for (const auto& particle : m_particleEffects) {
+        for (const auto& particle : m_sim.particleEffects) {
             m_resources->effects.stop(particle.effect);
         }
-        for (const auto& item : m_items) {
+        for (const auto& item : m_sim.items) {
             m_resources->effects.stop(item.effect);
         }
-        for (const StrikeEffect& effect : m_strikeEffects) {
+        for (const StrikeEffect& effect : m_sim.strikeEffects) {
             m_resources->effects.stop(effect.effect);
         }
-        for (const MoveAttachment& attachment : m_moveAttachments) {
+        for (const MoveAttachment& attachment : m_sim.moveAttachments) {
             m_resources->effects.stop(attachment.effect);
         }
-        for (const PotionShield& shield : m_shields) {
+        for (const PotionShield& shield : m_sim.shields) {
             m_resources->effects.stop(shield.effect);
         }
     }
     m_strikes.clear();
-    m_particleEffects.clear();
-    m_strikeEffects.clear();
-    m_moveAttachments.clear();
-    m_strikeSources.clear();
-    m_shields.clear();
-    m_potions.clear();
-    m_items.clear();
+    m_sim.particleEffects.clear();
+    m_sim.strikeEffects.clear();
+    m_sim.moveAttachments.clear();
+    m_sim.strikeSources.clear();
+    m_sim.shields.clear();
+    m_sim.potions.clear();
+    m_sim.items.clear();
+    m_sim.deathSounds.fill(std::nullopt);
     m_resources.reset();
 }
 /** What a charge runs into is struck, once each charge. */
@@ -326,10 +389,8 @@ void PlayerAttacks::fireStrike(usize index, s32 strikeIndex, std::span<PlayerRun
             },
         .sound =
             [this, players](usize actor, usize, std::string_view sound) {
-                if (const auto call = players[actor].figure->voice().find(sound);
-                    call && m_resources->sounds != nullptr) {
-                    m_resources->sounds->play(players[actor].figure->voice().sequence(*call), 1.0f,
-                                              SoundCategory::Effects);
+                if (players[actor].figure->voice().find(sound)) {
+                    m_resources->audio.playFrom(players[actor].figure->voice(), sound);
                 } else {
                     m_resources->audio.playNamed(sound);
                 }
@@ -390,14 +451,14 @@ bool PlayerAttacks::applyStrike(usize index, const TurboEmission::Strike& prepar
     if (prepared.carrier) {
         id = m_strikes.start(prepared.volume, actor.player(), base, facing,
                              meleeDamageOf(index, players), prepared.effectSeconds);
-        m_strikeSources.push_back(StrikeSource{id,
-                                               index,
-                                               prepared.row,
-                                               {},
-                                               m_resources->multiplayer != nullptr
-                                                   ? *m_resources->multiplayer
-                                                   : MultiplayerMode::Normal,
-                                               prepared.volume.damageType});
+        m_sim.strikeSources.push_back(StrikeSource{id,
+                                                   index,
+                                                   prepared.row,
+                                                   {},
+                                                   m_resources->multiplayer != nullptr
+                                                       ? *m_resources->multiplayer
+                                                       : MultiplayerMode::Normal,
+                                                   prepared.volume.damageType});
     }
     // An effect may bring another with it.
     u32 previousEffect = 0;
@@ -443,7 +504,7 @@ bool PlayerAttacks::applyStrike(usize index, const TurboEmission::Strike& prepar
         ItemArchive* archive = moveEffectArchive(index, players, effect.tree);
         if (effect.tree.empty() || effect.tree == kNoEffectTree || archive == nullptr) {
             if (attachment && attachment->strike != 0) {
-                m_moveAttachments.push_back(*attachment);
+                m_sim.moveAttachments.push_back(*attachment);
             }
             continue;
         }
@@ -457,10 +518,10 @@ bool PlayerAttacks::applyStrike(usize index, const TurboEmission::Strike& prepar
         previousEffect = shown;
         if (attachment && (shown != 0 || attachment->strike != 0)) {
             attachment->effect = shown;
-            m_moveAttachments.push_back(*attachment);
+            m_sim.moveAttachments.push_back(*attachment);
         }
         if (shown != 0 && emission.carriesFlight) {
-            m_strikeEffects.push_back(StrikeEffect{id, shown});
+            m_sim.strikeEffects.push_back(StrikeEffect{id, shown});
         }
     }
     updateMoveAttachments(players);
@@ -471,7 +532,7 @@ void PlayerAttacks::updateMoveAttachments(std::span<PlayerRuntime> players) {
     if (!m_resources) {
         return;
     }
-    std::erase_if(m_moveAttachments, [&](const MoveAttachment& attachment) {
+    std::erase_if(m_sim.moveAttachments, [&](const MoveAttachment& attachment) {
         auto& effects = m_resources->effects;
         if (!effects.playing(attachment.effect) && m_strikes.find(attachment.strike) == nullptr) {
             return true;
@@ -538,7 +599,7 @@ u32 PlayerAttacks::startParticles(usize index, const TurboEmission::Particle& em
     }
     particle.effect = *started;
     const u32 shown = particle.effect;
-    m_particleEffects.push_back(std::move(particle));
+    m_sim.particleEffects.push_back(std::move(particle));
     updateParticles(players);
     return shown;
 }
@@ -547,7 +608,7 @@ void PlayerAttacks::updateParticles(std::span<PlayerRuntime> players) {
     if (!m_resources) {
         return;
     }
-    std::erase_if(m_particleEffects, [&](const ParticleEffect& particle) {
+    std::erase_if(m_sim.particleEffects, [&](const ParticleEffect& particle) {
         auto& effects = m_resources->effects;
         if (!effects.playing(particle.effect)) {
             return true;
@@ -627,7 +688,7 @@ std::vector<StrikeHit> PlayerAttacks::advanceStrikes(f32 seconds,
     }
     updateParticles(players);
     updateMoveAttachments(players);
-    for (auto& source : m_strikeSources) {
+    for (auto& source : m_sim.strikeSources) {
         for (auto& contact : source.contacts) {
             contact.remaining -= seconds;
         }
@@ -659,8 +720,8 @@ std::vector<MissileTarget> PlayerAttacks::strikeContacts(const StrikeHit& hit,
 
 void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRuntime> players,
                                       const Targets& targets) {
-    const auto source = std::ranges::find(m_strikeSources, hit.strike, &StrikeSource::strike);
-    if (source == m_strikeSources.end() || source->actor >= players.size()) {
+    const auto source = std::ranges::find(m_sim.strikeSources, hit.strike, &StrikeSource::strike);
+    if (source == m_sim.strikeSources.end() || source->actor >= players.size()) {
         return;
     }
     const auto& owner = players[source->actor].actor;
@@ -703,7 +764,7 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
             if (hit.swept && (armor & kReflectiveArmor) != 0) {
                 m_strikes.hitPlayer(hit.strike, true, hit.from);
                 m_resources->audio.playNamed("S_RICOCHET");
-                for (const auto& effect : m_strikeEffects) {
+                for (const auto& effect : m_sim.strikeEffects) {
                     if (effect.strike == hit.strike) {
                         m_resources->effects.redirect(effect.effect, hit.from,
                                                       -hit.facing * row.speed);
@@ -799,10 +860,10 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
 }
 
 void PlayerAttacks::finishStrikes() {
-    std::erase_if(m_strikeSources, [this](const StrikeSource& source) {
+    std::erase_if(m_sim.strikeSources, [this](const StrikeSource& source) {
         return m_strikes.find(source.strike) == nullptr;
     });
-    std::erase_if(m_strikeEffects, [this](const StrikeEffect& pair) {
+    std::erase_if(m_sim.strikeEffects, [this](const StrikeEffect& pair) {
         if (m_strikes.find(pair.strike) != nullptr) {
             return false;
         }
@@ -848,11 +909,11 @@ void PlayerAttacks::shieldPotion(usize index, std::span<PlayerRuntime> players) 
     }
     m_resources->audio.playNamed(kShieldSounds[look]);
     m_resources->audio.playNamed("S_TURBODEFENSE", LevelSoundscape::kStepVolume);
-    m_shields.push_back(shield);
+    m_sim.shields.push_back(shield);
 }
 
 void PlayerAttacks::stopDeathSounds(std::span<PlayerRuntime> players) {
-    if (!m_resources.has_value()) {
+    if (!m_resources.has_value() || m_resources->audio.recordingSounds()) {
         return;
     }
     for (auto& player : players) {
@@ -860,6 +921,20 @@ void PlayerAttacks::stopDeathSounds(std::span<PlayerRuntime> players) {
         m_resources->audio.stop(player.deathHeldCry);
         player.deathHeldSuck = kNoSound;
         player.deathHeldCry = kNoSound;
+    }
+}
+
+void PlayerAttacks::gatherLoops() const {
+    if (!m_resources || !m_resources->audio.recordingSounds()) {
+        return;
+    }
+    for (const auto& emitter : m_sim.deathSounds) {
+        if (emitter) {
+            m_resources->audio.desireNamedLoop(
+                {*emitter, 1, 1}, kDeathCry, SceneSoundPlayback::RepeatWhileDesired, kDeathVolume);
+            m_resources->audio.desireNamedLoop(
+                {*emitter, 2, 1}, kDeathSuck, SceneSoundPlayback::RepeatWhileDesired, kDeathVolume);
+        }
     }
 }
 
@@ -941,15 +1016,22 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
         return std::nullopt;
     }
     PlayerRuntime& runtime = players[index];
+    const s32 seat = runtime.actor.player();
+    auto& audio = m_resources->audio;
     runtime.deathDrainTicks -= std::max(ticks, 0);
     const auto release = [&]() -> std::optional<Vec3> {
         runtime.deathHeld = -1;
         m_resources->effects.stop(runtime.deathHeldEffect);
         runtime.deathHeldEffect = 0;
-        m_resources->audio.stop(runtime.deathHeldSuck);
-        runtime.deathHeldSuck = kNoSound;
-        m_resources->audio.stop(runtime.deathHeldCry);
-        runtime.deathHeldCry = kNoSound;
+        if (seat >= 0 && seat < FrameEventEmitter::kNoSeat) {
+            m_sim.deathSounds[static_cast<usize>(seat)].reset();
+        }
+        if (!audio.recordingSounds()) {
+            audio.stop(runtime.deathHeldSuck);
+            runtime.deathHeldSuck = kNoSound;
+            audio.stop(runtime.deathHeldCry);
+            runtime.deathHeldCry = kNoSound;
+        }
         return std::nullopt;
     };
     const PlayerActor& actor = runtime.actor;
@@ -968,6 +1050,10 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
     }
     const s32 slot = *contact;
     Enemies& enemies = targets.opponents.enemies();
+    const auto source = enemies.observe(slot);
+    const FrameEventEmitter emitter{21, static_cast<u64>(slot), source ? source->instance : 0,
+                                    static_cast<u8>(seat)};
+    auto soundScope = audio.soundScope(emitter, 1);
     if (runtime.deathHeld != slot) {
         release();
         runtime.deathHeld = slot;
@@ -988,12 +1074,19 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
     if (!enemies.alive(slot) || enemies.dying(slot)) {
         return release();
     }
-    SoundPlayer* sounds = m_resources->sounds;
-    if (sounds == nullptr || !sounds->isPlaying(runtime.deathHeldCry)) {
-        runtime.deathHeldCry = m_resources->audio.playNamed(kDeathCry, kDeathVolume);
-    }
-    if (sounds == nullptr || !sounds->isPlaying(runtime.deathHeldSuck)) {
-        runtime.deathHeldSuck = m_resources->audio.playNamed(kDeathSuck, kDeathVolume);
+    if (audio.recordingSounds()) {
+        if (!emitter.valid() || seat < 0 || seat >= FrameEventEmitter::kNoSeat) {
+            audio.recorder()->unsupported("anti-Death drain without its source lifetime");
+        }
+        m_sim.deathSounds[static_cast<usize>(seat)] = emitter;
+    } else {
+        SoundPlayer* sounds = m_resources->sounds;
+        if (sounds == nullptr || !sounds->isPlaying(runtime.deathHeldCry)) {
+            runtime.deathHeldCry = audio.playNamed(kDeathCry, kDeathVolume);
+        }
+        if (sounds == nullptr || !sounds->isPlaying(runtime.deathHeldSuck)) {
+            runtime.deathHeldSuck = audio.playNamed(kDeathSuck, kDeathVolume);
+        }
     }
     if (runtime.deathHeldEffect == 0) {
         if (ItemArchive* archive = enemies.archive(kDeathKind); archive != nullptr) {
@@ -1094,7 +1187,7 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
     if (!m_resources.has_value()) {
         return;
     }
-    for (PotionShield& shield : m_shields) {
+    for (PotionShield& shield : m_sim.shields) {
         shield.secondsLeft -= seconds;
         if (shield.secondsLeft <= 0 || shield.actor >= players.size() ||
             players[shield.actor].life != PlayerLife::Standing) {
@@ -1179,7 +1272,7 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         }
     }
     targets.fixtures.settleBlasts(players, targets.fixtureEvents);
-    std::erase_if(m_shields, [this](const PotionShield& shield) {
+    std::erase_if(m_sim.shields, [this](const PotionShield& shield) {
         if (shield.secondsLeft > 0.0f) {
             return false;
         }
@@ -1215,7 +1308,7 @@ void PlayerAttacks::showBlock(usize index, f32 taken, f32 left, std::span<Player
             m_resources->effects.startSet(m_resources->device, m_resources->weapons, kBlockEffect,
                                           players[index].actor.position(), setting);
         if (effect != 0) {
-            m_moveAttachments.push_back({index, effect, 0, Mat4{1}, true});
+            m_sim.moveAttachments.push_back({index, effect, 0, Mat4{1}, true});
             updateMoveAttachments(players);
         }
     }
@@ -2290,7 +2383,7 @@ void PlayerAttacks::beginPotion(const MissileImpact& impact) {
                                                      static_cast<f32>(sequences[0].frames));
         }
     }
-    m_potions.push_back(std::move(burst));
+    m_sim.potions.push_back(std::move(burst));
 }
 
 /** A wave of magic reaches the shut chests too, each once: one holding Death gives him up. */
@@ -2335,7 +2428,7 @@ void PlayerAttacks::bless(PotionBurst& burst, f32 radius, std::span<const Player
 
 void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                                   const Targets& targets) {
-    for (PotionBurst& burst : m_potions) {
+    for (PotionBurst& burst : m_sim.potions) {
         // ProcessEffects expands the magic wave while its damage falls. Each
         // target is struck once, not once per frame while it tries to get up.
         burst.elapsed += seconds;
@@ -2413,7 +2506,7 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
     // resolve barrel chains only after iteration over existing waves finishes.
     targets.fixtures.settleBlasts(players, targets.fixtureEvents);
     // A caster's magic that struck nothing at all is wasted, and they are told so.
-    for (const PotionBurst& burst : m_potions) {
+    for (const PotionBurst& burst : m_sim.potions) {
         if (burst.elapsed < burst.duration || burst.struck || !targets.fixtureEvents.help) {
             continue;
         }
@@ -2423,7 +2516,7 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
             }
         }
     }
-    std::erase_if(m_potions,
+    std::erase_if(m_sim.potions,
                   [](const PotionBurst& burst) { return burst.elapsed >= burst.duration; });
 }
 

@@ -14,6 +14,10 @@
 #include "TestSupport.h"
 #include "game/app/NativeOnlineIdentity.h"
 
+#if defined(_WIN32) && defined(_MSC_VER)
+#include <float.h>
+#include <windows.h>
+#endif
 #if defined(_WIN32) && defined(_M_X64)
 #include <xmmintrin.h>
 #endif
@@ -44,6 +48,21 @@ struct ErrorNumber {
     int value = errno;
     ~ErrorNumber() { errno = value; }
 };
+
+TEST_CASE("native runtime profile is selected by actual compiler linkage",
+          "[native-online-identity][determinism][native-runtime-linkage]") {
+#if defined(_WIN32) && defined(_MSC_VER) && defined(_MT) && !defined(_DLL)
+    CHECK(NativeOnlineIdentity::runtimeProfile() == "windows-msvc-static-crt-v1");
+#elif defined(_WIN32) && defined(_MSC_VER) && defined(_DLL)
+    CHECK(NativeOnlineIdentity::runtimeProfile() == "windows-msvc-dynamic-crt-v1");
+#elif defined(_WIN32)
+    CHECK(NativeOnlineIdentity::runtimeProfile() == "windows-loaded-runtime-v1");
+#elif defined(__linux__)
+    CHECK(NativeOnlineIdentity::runtimeProfile() == "linux-loaded-runtime-v1");
+#else
+    CHECK(NativeOnlineIdentity::runtimeProfile() == "unsupported-runtime");
+#endif
+}
 
 TEST_CASE("native online identity requires effective data and complete owned inputs",
           "[native-online-identity][determinism]") {
@@ -164,6 +183,79 @@ TEST_CASE("prepared numeric identity agrees on a new thread without sharing live
     CHECK(NativeOnlineIdentity::prepareProcessNumeric());
     CHECK(NativeOnlineIdentity::numericMatches(*input));
 }
+
+#if defined(_WIN32) && defined(_MSC_VER)
+TEST_CASE("native runtime linkage agrees with actual linked math and control addresses",
+          "[native-online-identity][determinism][native-runtime-linkage]") {
+    const HMODULE executable = GetModuleHandleW(nullptr);
+    REQUIRE(executable != nullptr);
+    const auto check = [executable](auto function) {
+        HMODULE owner = nullptr;
+        REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   reinterpret_cast<LPCWSTR>(function), &owner) != 0);
+#if defined(_MT) && !defined(_DLL)
+        CHECK(owner == executable);
+#elif defined(_DLL)
+        CHECK(owner != executable);
+#endif
+    };
+    check(static_cast<double (*)(double)>(&::sin));
+    check(static_cast<double (*)(double, double)>(&::pow));
+    check(&::_controlfp_s);
+#if defined(_M_X64)
+    check(&::_get_FMA3_enable);
+#endif
+    std::string error;
+    const auto input = NativeOnlineIdentity::snapshot(strings(), &error);
+    INFO(error);
+    REQUIRE(input);
+    const auto identity = NativeOnlineIdentity::capture(*input, &error);
+    INFO(error);
+    REQUIRE(identity);
+}
+
+#if defined(_MT) && !defined(_DLL)
+TEST_CASE("static runtime identity ignores an actual incidental system UCRT",
+          "[native-online-identity][determinism][native-runtime-linkage]") {
+    const auto input = NativeOnlineIdentity::snapshot(strings());
+    REQUIRE(input);
+    std::string error;
+    const auto before = NativeOnlineIdentity::capture(*input, &error);
+    INFO(error);
+    REQUIRE(before);
+    {
+        struct Module {
+            HMODULE handle;
+            ~Module() {
+                if (handle != nullptr) FreeLibrary(handle);
+            }
+        } incidental{LoadLibraryExW(L"ucrtbase.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)};
+        REQUIRE(incidental.handle != nullptr);
+        const auto externalSin = GetProcAddress(incidental.handle, "sin");
+        REQUIRE(externalSin != nullptr);
+        HMODULE externalOwner = nullptr;
+        REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   reinterpret_cast<LPCWSTR>(externalSin), &externalOwner) != 0);
+        // A real alternative math implementation is present, but it is not the
+        // statically linked function whose provenance capture() verifies.
+        CHECK(externalOwner != GetModuleHandleW(nullptr));
+        const auto during = NativeOnlineIdentity::capture(*input, &error);
+        INFO(error);
+        REQUIRE(during);
+        CHECK(during->runtime == before->runtime);
+        CHECK(during->data == before->data);
+        CHECK(NativeOnlineIdentity::numericMatches(*input));
+    }
+    const auto after = NativeOnlineIdentity::capture(*input, &error);
+    INFO(error);
+    REQUIRE(after);
+    CHECK(after->runtime == before->runtime);
+    CHECK(NativeOnlineIdentity::numericMatches(*input));
+}
+#endif
+#endif
 
 #if defined(_WIN32) && defined(_M_X64)
 TEST_CASE("Windows numeric policy rejects flushing and exception-mask drift without repair",

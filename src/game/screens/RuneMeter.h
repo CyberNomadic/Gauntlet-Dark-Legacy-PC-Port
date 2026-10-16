@@ -14,7 +14,13 @@ namespace gdl::game {
  * Skorne (or by beating the battlefield's third level while in that realm).
  * Decomp PlayerHasShard names runestones; PlayerHasRune names boss victory bits. */
 class RuneMeter {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const RuneMeter& value) {
+        const auto& [position, diagonal, fill, visible, closer, nearby] = value;
+        visitor.values(position, diagonal, fill, visible, closer, nearby);
+    }
 public:
+    bool operator==(const RuneMeter&) const = default;
+
     enum class Cue : u8 { None, Closer, Nearby };
     void begin(s32 rune, const Vec3& position, const Vec3& worldSize, s32 realm,
                std::span<const PartyMember> party);

@@ -7,10 +7,59 @@
 #include <limits>
 
 #include "engine/core/Log.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/menu/ScrollBox.h"
 
 namespace gdl::game {
+void TowerPromotion::appendState(NativeStateDigest& digest, const Simulation& state,
+                                  const TextureAnimator::Clock& clock) const {
+    const auto& [entries, current, elapsed, spoken, awarded, gem, camera, transform,
+                 tree, pose, player, previousFrame, previousGeneration, advanced] = state;
+    digest.string("TowerPromotion.native.1");
+    digest.values(entries, current, elapsed, spoken, awarded, gem, camera, transform);
+    digest.resource(tree);
+    digest.values(pose, player, previousFrame, previousGeneration, advanced);
+    m_textures.appendBindingDigest(digest);
+    digest.fields<3>(clock);
+}
+
+bool TowerPromotion::appendNativeDigest(NativeStateDigest& digest) const {
+    appendState(digest, m_sim, m_textures.clock());
+    return digest.good();
+}
+
+bool TowerPromotion::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, clock, owner, binding] = saved;
+    appendState(digest, state, clock);
+    return digest.good();
+}
+
+void TowerPromotion::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+    saved.textureClock = m_textures.clock();
+}
+
+bool TowerPromotion::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding;
+}
+
+bool TowerPromotion::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_textures.restoreClock(saved.textureClock);
+    return true;
+}
+
 namespace {
 // The model bank calls the dwarf DWF; the title and promotion banks use DWA.
 std::string_view promotionClass(s32 character) {
@@ -56,27 +105,29 @@ void TowerPromotion::begin(std::span<const PlayerRuntime> players, const Message
             continue;
         }
         const s32 level = experienceLevel(save.experience());
-        m_entries.push_back({i, level, caption(save, strings),
-                             level == kMaxLevel ? "S_EXP99ALL"
-                                                : std::format("S_EXP{}0{}", level / 10,
-                                                              promotionClass(save.character))});
+        m_sim.entries.push_back({i, level, caption(save, strings),
+                                 level == kMaxLevel ? "S_EXP99ALL"
+                                                    : std::format("S_EXP{}0{}", level / 10,
+                                                                  promotionClass(save.character))});
     }
 }
 void TowerPromotion::clear() {
-    m_entries.clear();
-    m_current = 0;
-    m_elapsed = -120;
-    m_spoken = m_awarded = m_gem = false;
-    m_camera.reset();
-    m_tree = nullptr;
+    m_localBinding = std::make_shared<const u8>(0);
+    m_sim.entries.clear();
+    m_sim.current = 0;
+    m_sim.elapsed = -120;
+    m_sim.spoken = m_sim.awarded = m_sim.gem = false;
+    m_sim.camera.reset();
+    m_sim.tree = nullptr;
     m_model.clear();
-    m_player.stop();
-    m_pose = TreePose{};
+    m_sim.player.stop();
+    m_sim.pose = TreePose{};
     m_textures = TextureAnimator{};
-    m_presentationAdvanced = false;
+    m_sim.presentationAdvanced = false;
 }
 void TowerPromotion::bind(RenderDevice& device, ItemArchive& items, const WorldLayout& layout,
                           std::span<const PlayerRuntime> players) {
+    m_localBinding = std::make_shared<const u8>(0);
     if (!active() || players.empty()) {
         return;
     }
@@ -99,15 +150,15 @@ void TowerPromotion::bind(RenderDevice& device, ItemArchive& items, const WorldL
     }
     // Event headings, like Sumner's lookout and player starts, point the way
     // the figure came from. Turn back toward the party, not away from it.
-    m_transform = glm::rotate(glm::translate(Mat4{1}, nearest->position), nearest->rotation.y + kPi,
-                              Vec3{0, 1, 0});
+    m_sim.transform = glm::rotate(glm::translate(Mat4{1}, nearest->position),
+                                  nearest->rotation.y + kPi, Vec3{0, 1, 0});
     constexpr u32 kPromotionCameraBase = 240;
     if (const auto* camera =
             layout.findLocator(LocatorKind::TriggerCamera, kPromotionCameraBase + nearest->delay)) {
-        m_camera = WorldCamera{};
-        m_camera->position = camera->position;
-        m_camera->pitch = camera->rotation.x;
-        m_camera->yaw = camera->rotation.y;
+        m_sim.camera = WorldCamera{};
+        m_sim.camera->position = camera->position;
+        m_sim.camera->pitch = camera->rotation.x;
+        m_sim.camera->yaw = camera->rotation.y;
     }
     const auto index = items.trees.find("WIZARD");
     if (!index.has_value()) {
@@ -122,72 +173,73 @@ void TowerPromotion::bind(RenderDevice& device, ItemArchive& items, const WorldL
     if (tree.sequences.empty() || !m_model.bind(tree, items.models, items.textures, device)) {
         return;
     }
-    m_tree = &tree;
+    m_sim.tree = &tree;
     m_model.setAppearance(true, Color::white(), false, true);
     m_textures.bind(items.trees.textureAnimations(), items.textures, device);
-    m_player.start(tree.sequences[0], 0);
+    m_sim.player.start(tree.sequences[0], 0);
     animate(0);
 }
 usize TowerPromotion::shown() const {
-    return static_cast<usize>(std::max(m_elapsed, 0) / 2);
+    return static_cast<usize>(std::max(m_sim.elapsed, 0) / 2);
 }
 TowerPromotion::Cue TowerPromotion::update(s32 ticks, bool voicePlaying) {
     Cue cue;
     if (!active()) {
         return cue;
     }
-    m_elapsed += std::max(ticks, 0);
-    if (!m_spoken && m_elapsed >= 0) {
-        cue.voice = m_spoken = true;
+    m_sim.elapsed += std::max(ticks, 0);
+    if (!m_sim.spoken && m_sim.elapsed >= 0) {
+        cue.voice = m_sim.spoken = true;
     }
-    if (!m_awarded && m_elapsed >= 240) {
-        cue.award = m_awarded = true;
+    if (!m_sim.awarded && m_sim.elapsed >= 240) {
+        cue.award = m_sim.awarded = true;
     }
-    if (!m_gem && m_elapsed >= 270) {
-        cue.gem = m_gem = true;
+    if (!m_sim.gem && m_sim.elapsed >= 270) {
+        cue.gem = m_sim.gem = true;
     }
-    if (!cue.voice && !cue.award && !cue.gem && m_elapsed >= 360 &&
+    if (!cue.voice && !cue.award && !cue.gem && m_sim.elapsed >= 360 &&
         shown() >= current()->caption.size() && !voicePlaying) {
-        ++m_current;
-        m_elapsed = 0;
-        m_spoken = m_awarded = m_gem = false;
+        ++m_sim.current;
+        m_sim.elapsed = 0;
+        m_sim.spoken = m_sim.awarded = m_sim.gem = false;
     }
     return cue;
 }
 void TowerPromotion::animate(f32 seconds) {
-    if (m_tree == nullptr) {
+    if (m_sim.tree == nullptr) {
         return;
     }
-    m_previousFrame = m_player.presentationFrame();
-    m_previousGeneration = m_player.generation();
-    m_presentationAdvanced = seconds > 0;
-    m_player.advance(seconds, true);
-    m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
-    const auto frame = static_cast<s32>(m_player.frame());
-    m_model.setFrame(m_player.sequence(), frame);
+    m_sim.previousFrame = m_sim.player.presentationFrame();
+    m_sim.previousGeneration = m_sim.player.generation();
+    m_sim.presentationAdvanced = seconds > 0;
+    m_sim.player.advance(seconds, true);
+    m_sim.pose.evaluate(*m_sim.tree, m_sim.player.sequence(), m_sim.player.frame());
+    const auto frame = static_cast<s32>(m_sim.player.frame());
+    m_model.setFrame(m_sim.player.sequence(), frame);
     m_textures.advance(seconds);
-    m_textures.apply(m_model, *m_tree, m_player.sequence(), frame);
+    m_textures.apply(m_model, *m_sim.tree, m_sim.player.sequence(), frame);
 }
 void TowerPromotion::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                           f32 renderAlpha) const {
-    if (active() && m_tree != nullptr) {
-        const f32 blend = renderAlpha < 0 || m_presentationAdvanced ? renderAlpha : 1.0f;
-        f32 visualFrame = m_player.frame();
+    if (active() && m_sim.tree != nullptr) {
+        const f32 blend = renderAlpha < 0 || m_sim.presentationAdvanced ? renderAlpha : 1.0f;
+        f32 visualFrame = m_sim.player.frame();
         TreePose visualPose;
-        const TreePose* pose = &m_pose;
+        const TreePose* pose = &m_sim.pose;
         if (blend >= 0) {
-            visualFrame = m_previousGeneration == m_player.generation()
-                              ? std::lerp(m_previousFrame, m_player.presentationFrame(),
+            visualFrame = m_sim.previousGeneration == m_sim.player.generation()
+                              ? std::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
                                           std::clamp(blend, 0.0f, 1.0f))
-                              : m_player.presentationFrame();
-            visualPose.evaluate(*m_tree, m_player.sequence(), visualFrame, false, true);
+                              : m_sim.player.presentationFrame();
+            visualPose.evaluate(*m_sim.tree, m_sim.player.sequence(), visualFrame, false, true);
             pose = &visualPose;
         }
-        m_model.setPresentationFrame(m_player.sequence(), visualFrame);
-        m_textures.apply(m_model, *m_tree, m_player.sequence(), visualFrame,
+        m_model.setPresentationFrame(m_sim.player.sequence(), visualFrame);
+        m_textures.apply(m_model, *m_sim.tree, m_sim.player.sequence(), visualFrame,
                          m_textures.presentationOffset(blend));
-        const auto frame = m_camera.has_value() ? CameraFrame::of(*m_camera) : CameraFrame{};
-        m_model.draw(device, clip, m_transform, lighting, pose->matrices(), &frame);
+        const auto frame =
+            m_sim.camera.has_value() ? CameraFrame::of(*m_sim.camera) : CameraFrame{};
+        m_model.draw(device, clip, m_sim.transform, lighting, pose->matrices(), &frame);
     }
 }
 void TowerPromotion::drawCaption(Canvas& canvas, const TextPainter& text, f32 width,

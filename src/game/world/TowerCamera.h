@@ -6,6 +6,7 @@
 
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/world/WorldCamera.h"
 
@@ -60,6 +61,41 @@ public:
     static constexpr f32 kFarGap = 4.0f;     ///< slack added when it must go out
     static constexpr s32 kSettleLimit = 100; ///< updates a fresh start may take to settle
 
+    /** Complete native follow-camera history. This is gameplay state: it affects
+     * party bounds and visibility-gated spawning, not the local video projection. */
+    struct State {
+        WorldCamera camera;
+        Vec3 attention{0};
+        f32 distance = 0;
+        s32 marker = -1;
+        s32 aimedMarker = -1;
+        f32 yawRate = 0;
+        f32 pitchRate = 0;
+        f32 turnStep = static_cast<f32>(kTurnSteps);
+        std::array<Vec3, kRing> ringPositions{};
+        std::array<f32, kRing> ringDistances{};
+        s32 ringIndex = 0;
+        bool operator==(const State&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const State& state) {
+            const auto& [camera, attention, distance, marker, aimedMarker, yawRate, pitchRate,
+                         turnStep, ringPositions, ringDistances, ringIndex] = state;
+            digest.fields<4>(camera);
+            digest.values(attention, distance, marker, aimedMarker, yawRate, pitchRate, turnStep,
+                          ringPositions, ringDistances, ringIndex);
+        }
+    };
+    const State& localState() const { return m_state; }
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    /** State is a plain value, intentionally independent of camera ownership.
+     * The scene's history guard supplies the enclosing stage/owner boundary. */
+    static bool appendLocalDigest(NativeStateDigest& digest, const State& state);
+    static bool equalLocal(const State& left, const State& right) { return left == right; }
+    /** Trusted in-process state, copied without allocating a diagnostic identity. */
+    void restoreLocal(const State& state) noexcept {
+        m_state = state;
+        ++m_checkpointGeneration;
+    }
+
     /** Stands the camera up for `subjects` and lets it settle, like a level start. */
     void reset(std::span<const CameraSubject> subjects, std::span<const WorldLocator> markers,
                const CameraRange& range, const CameraView& view);
@@ -70,13 +106,13 @@ public:
     /** End a trigger-camera hold at the current party target, without re-aiming the view. */
     void snapAttention(std::span<const CameraSubject> subjects, const CameraRange& range);
 
-    const WorldCamera& camera() const { return m_camera; }
-    f32 yaw() const { return m_camera.yaw; }
-    f32 pitch() const { return m_camera.pitch; }
-    f32 distance() const { return m_distance; }
-    const Vec3& attention() const { return m_attention; }
-    s32 marker() const { return m_marker; }
-    bool turning() const { return m_turnStep < static_cast<f32>(kTurnSteps); }
+    const WorldCamera& camera() const { return m_state.camera; }
+    f32 yaw() const { return m_state.camera.yaw; }
+    f32 pitch() const { return m_state.camera.pitch; }
+    f32 distance() const { return m_state.distance; }
+    const Vec3& attention() const { return m_state.attention; }
+    s32 marker() const { return m_state.marker; }
+    bool turning() const { return m_state.turnStep < static_cast<f32>(kTurnSteps); }
 
     /** The angles a marker asks for: the camera looks the way the marker faces. */
     static f32 markerYaw(const WorldLocator& marker) { return marker.rotation.y; }
@@ -96,17 +132,7 @@ private:
                     const CameraView& view, const CameraRange& range, f32 current) const;
     void place();
 
-    WorldCamera m_camera;
-    Vec3 m_attention{0.0f, 0.0f, 0.0f};
-    f32 m_distance = 0.0f;
-    s32 m_marker = -1;
-    s32 m_aimedMarker = -1;
-    f32 m_yawRate = 0.0f;
-    f32 m_pitchRate = 0.0f;
-    f32 m_turnStep = static_cast<f32>(kTurnSteps);
-    std::array<Vec3, kRing> m_ringPositions{};
-    std::array<f32, kRing> m_ringDistances{};
-    s32 m_ringIndex = 0;
+    State m_state;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
 };

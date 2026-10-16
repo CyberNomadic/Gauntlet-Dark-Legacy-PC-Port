@@ -1,3 +1,5 @@
+#include <array>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -11,6 +13,81 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 using Catch::Approx;
+
+TEST_CASE("native departure history can undo lazy start and replay its skin without rebinding",
+          "[local-rewind][portal-departure-local-rewind]") {
+    test::FakeRenderDevice device;
+    TextureSet textures;
+    PortalDeparture native, replay;
+    std::array<PortalDeparture::LocalSnapshot, 16> history;
+    const Mat4 body = glm::translate(Mat4{1}, Vec3{3, 10, -2});
+    const auto compare = [&] {
+        CHECK(replay.started() == native.started());
+        CHECK(replay.finished() == native.finished());
+        CHECK(replay.phase() == native.phase());
+        CHECK(replay.displacement() == native.displacement());
+        CHECK(replay.transform(body) == native.transform(body));
+        CHECK(replay.skin() == native.skin());
+    };
+    const auto step = [&](PortalDeparture& departure, u32 tick, bool wrong) {
+        if (wrong || tick == 15 || tick == 90) {
+            departure.begin(device, textures);
+        }
+        departure.update(wrong ? 14 : 1);
+    };
+    u32 tick = 0;
+    for (u32 window = 0; window < 48; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        replay.saveLocal(saved);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        REQUIRE(replay.restoreLocal(saved));
+        compare();
+        for (u32 i = 0; i < distance; ++i) {
+            step(native, tick + i, false);
+            step(replay, tick + i, false);
+            compare();
+        }
+        tick += distance;
+    }
+    CHECK_FALSE(native.restoreLocal(history[0]));
+    TextureSet other;
+    replay.loadSkin(device, other);
+    CHECK_FALSE(replay.restoreLocal(history[0]));
+    replay.saveLocal(history[0]);
+    replay.clear();
+    CHECK_FALSE(replay.restoreLocal(history[0]));
+    CHECK(device.textureUpdates == 0);
+    CHECK(device.texturesCreated == 0);
+}
+
+TEST_CASE("native departure retains its skin resources when a start is corrected",
+          "[local-rewind][portal-departure-local-rewind][assets]") {
+    const auto path = test::assetOrSkip("WEAPONS/textures.ngc");
+    test::FakeRenderDevice device;
+    TextureSet textures;
+    REQUIRE(textures.load(path.parent_path()));
+    PortalDeparture departure;
+    PortalDeparture::LocalSnapshot before;
+    departure.saveLocal(before);
+    departure.begin(device, textures);
+    const Texture* first = departure.skin();
+    REQUIRE(first);
+    const auto uploads = device.texturesCreated;
+    for (s32 distance = 1; distance <= 8; ++distance) {
+        departure.update(distance);
+        REQUIRE(departure.restoreLocal(before));
+        CHECK_FALSE(departure.started());
+        CHECK(departure.skin() == nullptr);
+        departure.begin(device, textures);
+        CHECK(departure.skin() == first);
+        CHECK(device.texturesCreated == uploads);
+    }
+    CHECK(device.textureUpdates == 0);
+}
 
 TEST_CASE("portal departure sinks and spins for fifty ticks even without artwork",
           "[portal-departure]") {

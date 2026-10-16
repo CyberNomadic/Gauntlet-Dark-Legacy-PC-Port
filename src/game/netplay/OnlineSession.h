@@ -52,7 +52,7 @@ public:
         bool autoMelee = false;
         bool autoActivateItems = true;
         bool expandedShop = false;
-        u8 startupDelay = 3;
+        u8 startupDelay = 1;
         bool valid() const;
         bool operator==(const NativeRules&) const = default;
     };

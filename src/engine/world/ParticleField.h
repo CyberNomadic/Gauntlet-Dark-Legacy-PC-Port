@@ -23,6 +23,22 @@ class WorldScene;
  */
 class ParticleField {
 public:
+    ParticleField() = default;
+    /** Native values and borrowed textures only; generated draw vertices are scratch. */
+    ParticleField(const ParticleField& other) : m_state(other.m_state) {}
+    ParticleField& operator=(const ParticleField& other) {
+        if (this != &other) {
+            m_state = other.m_state;
+            m_batch.clear();
+        }
+        return *this;
+    }
+    ParticleField(ParticleField&&) noexcept = default;
+    ParticleField& operator=(ParticleField&&) noexcept = default;
+    /** Exact native values under the same borrowed texture bindings. Generated
+     * vertices and per-draw flipbook samples are deliberately excluded. */
+    bool equalLocal(const ParticleField& other) const;
+    bool operator==(const ParticleField& other) const { return equalLocal(other); }
     static constexpr std::string_view kTag = "PSYS";
     static constexpr f32 kFrameRate = ParticleDescriptor::kFrameRate;
 
@@ -36,6 +52,8 @@ public:
         f32 frameRemainder = 0;
         f32 lastAdvance = 0;
         f64 heatFrames = 0;
+        /** Values only: an authored level may own more than the diagnostic wire's 256 emitters. */
+        bool validValues() const;
         bool valid() const;
         bool operator==(const Checkpoint&) const = default;
     };
@@ -49,12 +67,12 @@ public:
     void bind(const WorldLayout& layout, TextureSet& textures, RenderDevice& device,
               std::span<TextureSet* const> lenders = {}, u32 seed = 1);
     void clear();
-    usize size() const { return m_entries.size(); }
-    const ParticleEmitter& emitter(usize index) const { return m_entries[index].emitter; }
-    const Texture* textureOf(usize index) const { return m_entries[index].texture; }
+    usize size() const { return m_state.entries.size(); }
+    const ParticleEmitter& emitter(usize index) const { return m_state.entries[index].emitter; }
+    const Texture* textureOf(usize index) const { return m_state.entries[index].texture; }
     /** Authored layout marker identity, independent of texture batching order.
      * Independently started effects have no layout marker and return -1. */
-    s32 sourceObject(usize index) const { return m_entries[index].sourceObject; }
+    s32 sourceObject(usize index) const { return m_state.entries[index].sourceObject; }
     /** Live particles over every emitter. */
     usize particleCount() const;
     /** Starts an emitter of its own at `node`, apart from any layout; the index addresses
@@ -70,12 +88,14 @@ public:
     void setSpriteScale(usize index, f32 scale);
     /** Replaces a sprite frame without restarting its emitter or live particles. */
     void setTexture(usize index, const Texture& texture);
-    /** Render-only flipbook pair. Native texture bindings and emission remain unchanged. */
-    void setTextureBlend(usize index, const Texture& current, const Texture* next, f32 blend);
+    /** Render-only flipbook pair. A stepped sample also replaces the drawn native
+     * frame for paused/cutout draws, without changing the native texture binding. */
+    void setTextureBlend(usize index, const Texture& current, const Texture* next, f32 blend,
+                         bool stepped = false);
     void clearTextureBlends();
     /** Ends an emitter's emission; its particles live out their time. */
     void stop(usize index);
-    bool active(usize index) const { return m_entries[index].emitter.active(); }
+    bool active(usize index) const { return m_state.entries[index].emitter.active(); }
     /** Drops emitters with nothing left to show. */
     void prune();
 
@@ -87,6 +107,7 @@ public:
               f32 presentationAlpha = -1.0f) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const ParticleField&);
     struct Entry {
         ParticleEmitter emitter;
         s32 sourceObject = -1;
@@ -96,12 +117,15 @@ private:
         const Texture* presentedTexture = nullptr;
         const Texture* nextTexture = nullptr;
         f32 textureBlend = 0.0f;
+        bool steppedTexture = false;
     };
 
-    std::vector<Entry> m_entries;
-    f32 m_frameRemainder = 0.0f;
-    f32 m_lastAdvance = 0.0f;
-    f64 m_heatFrames = 0.0;
+    struct State {
+        std::vector<Entry> entries;
+        f32 frameRemainder = 0.0f;
+        f32 lastAdvance = 0.0f;
+        f64 heatFrames = 0.0;
+    } m_state;
     mutable ImmediateBatch m_batch;
 };
 

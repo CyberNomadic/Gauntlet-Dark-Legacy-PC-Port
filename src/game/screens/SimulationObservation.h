@@ -37,8 +37,8 @@ struct SimulationObservation {
     /** Fixed names/order, including explicit failure entries on closed/unbound scenes. */
     std::vector<Subsystem> subsystems;
     /** Owners/inputs omitted even when every subsystem digest is available.
-     * scene_control contains only direct scene scalars and public projections
-     * of the listed control owners, not their hidden clocks/queues. */
+     * scene_control visits actual scene control and camera-history values, but
+     * several separately owned presentation systems remain public projections. */
     std::vector<std::string> unobserved;
     bool operator==(const SimulationObservation&) const = default;
 };

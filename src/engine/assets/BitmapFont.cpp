@@ -10,6 +10,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "formats/FontFile.h"
 
@@ -25,6 +26,7 @@ BitmapFont BitmapFont::fromGlyphs(s32 height, s32 spaceWidth, std::vector<Bitmap
 }
 
 bool BitmapFont::load(const std::filesystem::path& file, s32 spaceWidth) {
+    m_nativeContent.reset();
     m_height = 0;
     m_spaceWidth = spaceWidth;
     m_glyphs.clear();
@@ -74,6 +76,7 @@ const BitmapGlyph* BitmapFont::glyph(u8 code) const {
 }
 
 void BitmapFont::index() {
+    m_nativeContent.reset();
     m_lookup.fill(-1);
     for (usize i = 0; i < m_glyphs.size(); ++i) {
         const s32 code = m_glyphs[i].code;
@@ -82,6 +85,23 @@ void BitmapFont::index() {
             m_lookup[static_cast<usize>(code)] = static_cast<s16>(i);
         }
     }
+}
+
+void visitNativeState(NativeStateDigest& digest, const BitmapFont& font) {
+    const auto& [height, spaceWidth, glyphs, lookup, content] = font;
+    // First-occurrence lookup entries derive from the ordered glyph roster.
+    (void)lookup;
+    if (!content) {
+        NativeStateDigest identity;
+        identity.values(height, spaceWidth);
+        identity.wide(glyphs.size());
+        for (const auto& glyph : glyphs) {
+            identity.fields<4>(glyph);
+        }
+        content = identity.finish();
+    }
+    digest.string("bitmap-font/content/1");
+    digest.value(*content);
 }
 
 } // namespace gdl

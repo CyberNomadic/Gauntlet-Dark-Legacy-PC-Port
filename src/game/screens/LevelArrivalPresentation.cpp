@@ -6,6 +6,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
 namespace {
@@ -17,14 +18,85 @@ constexpr f32 kTitleSlideRate = 0.025f;
 constexpr f32 kTitleSlideEnd = 2.0f;
 } // namespace
 
+void LevelArrivalPresentation::appendState(NativeStateDigest& digest, const Simulation& state,
+                                            const TextureAnimator::Clock& textures) const {
+    digest.string("LevelArrivalPresentation.native.1");
+    digest.resource(m_archive);
+    m_textures.appendBindingDigest(digest);
+    digest.fields<4>(state);
+    digest.fields<3>(textures);
+}
+
+void LevelArrivalPresentation::appendSpawn(NativeStateDigest& digest, const SpawnState& state) {
+    const auto& [position, tree, pose, player, previousFrame, previousGeneration,
+                 presentationAdvanced] = state;
+    digest.value(position);
+    digest.resource(tree);
+    digest.values(pose, player, previousFrame, previousGeneration, presentationAdvanced);
+}
+
+bool LevelArrivalPresentation::appendNativeDigest(NativeStateDigest& digest) const {
+    appendState(digest, m_sim, m_textures.clock());
+    digest.wide(m_spawns.size());
+    for (const auto& spawn : m_spawns) {
+        appendSpawn(digest, spawn);
+    }
+    return digest.good();
+}
+
+bool LevelArrivalPresentation::appendLocalDigest(NativeStateDigest& digest,
+                                                 const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, spawns, textures, owner, binding] = saved;
+    appendState(digest, state, textures);
+    digest.wide(spawns.size());
+    for (const auto& spawn : spawns) {
+        appendSpawn(digest, spawn);
+    }
+    return digest.good();
+}
+
+void LevelArrivalPresentation::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+    saved.textures = m_textures.clock();
+    saved.spawns.resize(m_spawns.size());
+    for (usize i = 0; i < m_spawns.size(); ++i) {
+        saved.spawns[i] = m_spawns[i];
+    }
+}
+
+bool LevelArrivalPresentation::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding &&
+           saved.spawns.size() == m_spawns.size();
+}
+
+bool LevelArrivalPresentation::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_textures.restoreClock(saved.textures);
+    for (usize i = 0; i < m_spawns.size(); ++i) {
+        static_cast<SpawnState&>(m_spawns[i]) = saved.spawns[i];
+    }
+    return true;
+}
+
 void LevelArrivalPresentation::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_spawns.clear();
     m_archive = nullptr;
     m_textures.clear();
-    m_ticks = 0;
-    m_camera.stop();
-    m_titleSlide = 0.0f;
-    m_titleLanded = false;
+    m_sim.ticks = 0;
+    m_sim.camera.stop();
+    m_sim.titleSlide = 0.0f;
+    m_sim.titleLanded = false;
 }
 
 void LevelArrivalPresentation::begin(RenderDevice& device, ItemArchive& weapons,
@@ -33,8 +105,8 @@ void LevelArrivalPresentation::begin(RenderDevice& device, ItemArchive& weapons,
                                      StartCamera::Mode mode, std::optional<Vec3> cameraFocus) {
     clear();
     m_archive = &weapons;
-    m_ticks = kSpawnTicks;
-    m_titleSlide = kTitleSlideStart;
+    m_sim.ticks = kSpawnTicks;
+    m_sim.titleSlide = kTitleSlideStart;
     if (marker.has_value()) {
         Vec3 centre{0.0f};
         for (const Vec3& position : positions) {
@@ -43,7 +115,7 @@ void LevelArrivalPresentation::begin(RenderDevice& device, ItemArchive& weapons,
         if (!positions.empty()) {
             centre /= static_cast<f32>(positions.size());
         }
-        m_camera.start(*marker, cameraFocus.value_or(centre), mode);
+        m_sim.camera.start(*marker, cameraFocus.value_or(centre), mode);
     }
     const auto tree = weapons.loaded() ? weapons.trees.find(kSpawnEffect) : std::nullopt;
     if (!tree.has_value()) {
@@ -100,19 +172,19 @@ void LevelArrivalPresentation::advance(s32 ticks, bool skip, const Vec3& followP
     if (!active()) {
         return;
     }
-    m_ticks = std::max(m_ticks - ticks, 0);
-    m_camera.update(ticks, skip, followPosition, followAttention);
-    const bool sliding = m_titleSlide < kTitleSlideEnd;
-    m_titleSlide += kTitleSlideRate * static_cast<f32>(ticks);
-    if (m_camera.phase() != StartCamera::Phase::Hold || m_titleSlide > kTitleSlideEnd) {
-        m_titleSlide = kTitleSlideEnd;
+    m_sim.ticks = std::max(m_sim.ticks - ticks, 0);
+    m_sim.camera.update(ticks, skip, followPosition, followAttention);
+    const bool sliding = m_sim.titleSlide < kTitleSlideEnd;
+    m_sim.titleSlide += kTitleSlideRate * static_cast<f32>(ticks);
+    if (m_sim.camera.phase() != StartCamera::Phase::Hold || m_sim.titleSlide > kTitleSlideEnd) {
+        m_sim.titleSlide = kTitleSlideEnd;
     }
-    m_titleLanded = m_titleLanded || (sliding && m_titleSlide == kTitleSlideEnd);
+    m_sim.titleLanded = m_sim.titleLanded || (sliding && m_sim.titleSlide == kTitleSlideEnd);
 }
 
 std::optional<LevelArrivalPresentation::EffectPresentation>
 LevelArrivalPresentation::effectPresentation(usize index) const {
-    if (m_ticks <= 0 || index >= m_spawns.size()) {
+    if (m_sim.ticks <= 0 || index >= m_spawns.size()) {
         return std::nullopt;
     }
     const auto& spawn = m_spawns[index];
@@ -129,7 +201,7 @@ LevelArrivalPresentation::effectPresentation(usize index) const {
 
 void LevelArrivalPresentation::drawEffects(RenderDevice& device, const Mat4& clip,
                                            const WorldLighting& lighting, f32 frameBlend) const {
-    if (m_ticks <= 0) {
+    if (m_sim.ticks <= 0) {
         return;
     }
     for (const Spawn& spawn : m_spawns) {

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/math/Mt19937.h"
 #include "engine/render/RenderDevice.h"
@@ -64,6 +65,9 @@ struct EnemyMissileKind {
     /** Whether it goes through the players it hurts and the items in its way (the garm's). */
     bool pierces() const { return (flags & kPierces) != 0; }
     bool operator==(const EnemyMissileKind&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const EnemyMissileKind& state) {
+        digest.fields<10>(state);
+    }
 };
 
 /** What a kind throws from a slot, as the original's table has it; nullopt for a kind and
@@ -109,6 +113,14 @@ struct EnemyMissile {
     bool reflected = false; ///< sent back by a player's armour: it now strikes the swarm
     /** Players a piercing missile has hurt, and how long it leaves each alone. */
     std::vector<std::pair<s32, f32>> pierced;
+    bool operator==(const EnemyMissile&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const EnemyMissile& state) {
+        const auto& [instance, continuity, position, velocity, turned, kind, model, shooter,
+                     secondsLeft, lived, heldLeft, scale, reflected, pierced] = state;
+        digest.values(instance, continuity, position, velocity, turned, kind);
+        digest.resource(model);
+        digest.values(shooter, secondsLeft, lived, heldLeft, scale, reflected, pierced);
+    }
 };
 
 /** Where a missile ended, on a player or on the world (a lob bursts either way), or what
@@ -127,9 +139,13 @@ struct EnemyMissileHit {
     s32 target = -1;      ///< one of the swarm (by the id it was offered under) a blast reached
     s32 worldObject = -1; ///< actual collision owner, never an item or creature id
     bool liquid = false;  ///< replaces impact audio with the water cue
+    u64 instance = 0;     ///< originating flight or lingering blast, retained after retirement
     std::string_view effect() const;
     std::string_view sound() const;
     bool operator==(const EnemyMissileHit&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const EnemyMissileHit& state) {
+        digest.fields<14>(state);
+    }
 };
 
 /** An area one of the swarm's blasts harms as it grows (ProcessEffects' mode 1): in each of
@@ -147,6 +163,9 @@ struct EnemyBlast {
     s32 spared = -1;         ///< a player it never reaches: the one its lob struck
     bool lit = false;        ///< the lob's red light rides on it
     bool operator==(const EnemyBlast&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const EnemyBlast& state) {
+        digest.fields<7>(state);
+    }
 };
 
 /** Something of the level's in the way of the swarm's missiles besides the world
@@ -169,6 +188,9 @@ struct PickupBlastReach {
     f32 damage = 0.0f;
     u32 flags = 0;
     bool operator==(const PickupBlastReach&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const PickupBlastReach& state) {
+        digest.fields<4>(state);
+    }
 };
 
 /** A missile's blow on a safe rock, for the level to deal. */
@@ -176,6 +198,9 @@ struct RockHit {
     usize rock = 0;
     f32 damage = 0.0f;
     bool operator==(const RockHit&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const RockHit& state) {
+        digest.fields<2>(state);
+    }
 };
 
 /**
@@ -213,7 +238,7 @@ public:
     static constexpr f32 kGrowth = 1.0f / 3.0f;  ///< a piercing missile grows to size over this
     static constexpr f32 kSmallest = 0.01f;      ///< from this
 
-    explicit EnemyMissiles(u32 seed = 0x4D15u) : m_random(seed) {}
+    explicit EnemyMissiles(u32 seed = 0x4D15u) : m_sim{.random = Mt19937{seed}} {}
     EnemyMissiles(const EnemyMissiles&) = delete;
     EnemyMissiles& operator=(const EnemyMissiles&) = delete;
     EnemyMissiles(EnemyMissiles&&) = delete;
@@ -221,8 +246,8 @@ public:
 
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): what is thrown
      * meanwhile is that size and does half (EnemyStartMissile). */
-    void setShrink(f32 scale) { m_shrink = scale; }
-    f32 shrink() const { return m_shrink; }
+    void setShrink(f32 scale) { m_sim.shrink = scale; }
+    f32 shrink() const { return m_sim.shrink; }
 
     /** Sends one off as `launch` throws it; false when its thrower faces too far off, or a
      * wall or one of the `items` stands between it and the point it leaves from (and nothing
@@ -253,7 +278,9 @@ public:
     /** The blows on safe rocks since the last call. */
     std::vector<RockHit> takeRockHits();
     /** Where damaging blasts reached since the last call, with their original damage type. */
-    std::vector<PickupBlastReach> takePickupBlasts() { return std::exchange(m_pickupBlasts, {}); }
+    std::vector<PickupBlastReach> takePickupBlasts() {
+        return std::exchange(m_sim.pickupBlasts, {});
+    }
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera = nullptr) const;
     static Mat4 transformOf(const EnemyMissile& missile);
@@ -261,9 +288,9 @@ public:
     void lights(std::vector<PointLight>& out) const;
     void clear();
 
-    usize count() const { return m_missiles.size(); }
-    usize burstCount() const { return m_bursts.size(); }
-    const EnemyMissile& missile(usize index) const { return m_missiles[index]; }
+    usize count() const { return m_sim.missiles.size(); }
+    usize burstCount() const { return m_sim.bursts.size(); }
+    const EnemyMissile& missile(usize index) const { return m_sim.missiles[index]; }
     /** Whether the world stands between `from` and `to` for a body of `radius`. */
     static bool walled(const WorldCollision& collision, const Vec3& from, const Vec3& to,
                        f32 radius);
@@ -283,6 +310,9 @@ public:
         s32 id = -1;
         f32 secondsLeft = 0.0f;
         bool operator==(const Held&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Held& state) {
+            digest.fields<2>(state);
+        }
     };
     struct Burst {
         EnemyBlast blast;
@@ -291,7 +321,11 @@ public:
         std::vector<Held> players;
         std::vector<Held> swarm;
         std::vector<s32> scenery;
+        u64 instance = 0;
         bool operator==(const Burst&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Burst& state) {
+            digest.fields<7>(state);
+        }
     };
 
     /** Pointer-free complete pool state, including undelivered outputs. These
@@ -370,15 +404,41 @@ private:
                     std::span<const EnemyView> players, std::span<const MissileTarget> swarm,
                     const SceneryBlast& scenery);
 
-    std::vector<EnemyMissile> m_missiles;
-    u64 m_nextInstance = 1;
-    std::vector<Burst> m_bursts;
-    std::vector<EnemyMissileHit> m_hits;
-    std::vector<RockHit> m_rockHits;
-    std::vector<PickupBlastReach> m_pickupBlasts;
-    Mt19937 m_random;
-    f32 m_shrink = 1.0f;
-    f32 m_ricochetIn = 0.0f; ///< before another ricochet is heard
+    struct Simulation {
+        std::vector<EnemyMissile> missiles;
+        u64 nextInstance = 1;
+        std::vector<Burst> bursts;
+        std::vector<EnemyMissileHit> hits;
+        std::vector<RockHit> rockHits;
+        std::vector<PickupBlastReach> pickupBlasts;
+        Mt19937 random;
+        f32 shrink = 1.0f;
+        f32 ricochetIn = 0.0f; ///< before another ricochet is heard
+        bool operator==(const Simulation&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Simulation& state) {
+            digest.fields<9>(state);
+        }
+    };
+
+public:
+    /** Native flight/contact values with stable borrowed model bindings. */
+    class LocalSnapshot {
+        friend class EnemyMissiles;
+        Simulation m_values;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    /** Foreign/stale history is refused before appending any bytes. */
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    Simulation m_sim;
+    u64 m_localEpoch = 1;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
 };

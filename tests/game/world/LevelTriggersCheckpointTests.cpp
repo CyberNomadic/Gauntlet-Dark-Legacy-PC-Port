@@ -236,4 +236,189 @@ TEST_CASE("native campaign trigger owners retain their complete loaded roster an
     CHECK(owner.checkpoint() == state);
     CHECK(device.texturesCreated == uploads);
 }
+
+TEST_CASE(
+    "native trigger rewind discards a wrong branch including contacts figures and queued cues",
+    "[triggers-local-rewind]") {
+    Fixture reference("triggers-local-reference");
+    Fixture predicted("triggers-local-predicted");
+    LevelTriggers::LocalSnapshot saved;
+    std::array<LevelTriggers::LocalSnapshot, 8> expectedNative;
+    LevelTriggers::LocalSnapshot observed;
+    WorldAnimator::LocalSnapshot savedAnimator;
+    WorldScene::LocalSnapshot savedScene;
+    WorldCollision::LocalSnapshot savedCollision;
+    const auto uploads = predicted.device.texturesCreated;
+    constexpr f32 kStep = 1.0f / 60;
+    const auto advance = [&](Fixture& fixture, s32 tick) {
+        std::array<TriggerVisitor, 2> visitors{};
+        visitors[0].party = 3;
+        visitors[1].party = 1;
+        visitors[0].height = visitors[1].height = 5;
+        const s32 phase = (tick / 20) % 5;
+        visitors[0].position = {static_cast<f32>(phase * 20), 0, 0};
+        visitors[1].position = {phase == 3 && tick % 20 >= 10 ? 60.0f : 100.0f, 0, 0};
+        visitors[0].crystals[1] = tick >= 100 ? 15 : 0;
+        fixture.triggers.setPlayerCount(tick % 19 == 0 ? 1 : 2);
+        fixture.triggers.setCameraHeld(tick % 12 >= 6);
+        if (tick % 17 == 0) {
+            fixture.triggers.shoot(2);
+        }
+        fixture.step(kStep, visitors);
+        // Keep the initial refusal until the observer has seen it. Its cooldown
+        // outlasts the no-crystal branch; draining tick zero would make the
+        // coverage assertion miss the only refusal this journal produces.
+        if (tick > 0 && tick % 31 == 0) {
+            fixture.triggers.takeRefusals();
+            fixture.triggers.takeLessons();
+            fixture.triggers.takeOpenings();
+            fixture.triggers.takeSettled();
+            fixture.triggers.takeCameraCues();
+            fixture.triggers.takeWakes();
+        }
+    };
+    s32 tick = 0;
+    bool sawRefusal = false, sawWake = false, sawLesson = false, sawSettled = false;
+    for (s32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        const s32 distance = 1 + window % 8;
+        const auto before = predicted.state();
+        predicted.triggers.saveLocal(saved);
+        predicted.animator.saveLocal(savedAnimator);
+        predicted.scene.saveLocal(savedScene);
+        predicted.collision.saveLocal(savedCollision);
+        auto diagnosticPlan = predicted.triggers.prepareRestore(before);
+        REQUIRE(diagnosticPlan);
+        for (s32 step = 0; step < distance; ++step) {
+            advance(predicted, tick + step);
+            predicted.triggers.saveLocal(expectedNative[static_cast<usize>(step)]);
+        }
+        REQUIRE(predicted.triggers.restoreLocal(saved));
+        REQUIRE(predicted.animator.restoreLocal(savedAnimator));
+        REQUIRE(predicted.scene.restoreLocal(savedScene));
+        REQUIRE(predicted.collision.restoreLocal(savedCollision));
+
+        // A speculative branch can consume output and permanently activate a linked
+        // switch. Neither may escape when corrected input replaces that branch.
+        predicted.triggers.activate(8, true, predicted.animator, predicted.scene,
+                                    &predicted.collision);
+        predicted.triggers.setPlayerCount(0);
+        predicted.triggers.setCameraHeld(true);
+        for (s32 step = 0; step < distance; ++step) {
+            predicted.triggers.shoot(2);
+            predicted.step(kStep, {});
+        }
+        predicted.triggers.takeRefusals();
+        predicted.triggers.takeLessons();
+        predicted.triggers.takeOpenings();
+        predicted.triggers.takeSettled();
+        predicted.triggers.takeCameraCues();
+        predicted.triggers.takeWakes();
+        const auto wrongTransform = predicted.scene.worldTransform(1);
+        REQUIRE(predicted.triggers.restoreLocal(saved));
+        CHECK_FALSE(predicted.triggers.canCommit(*diagnosticPlan));
+        CHECK(predicted.state() == before);
+        CHECK(predicted.scene.worldTransform(1) == wrongTransform);
+        REQUIRE(predicted.animator.restoreLocal(savedAnimator));
+        REQUIRE(predicted.scene.restoreLocal(savedScene));
+        REQUIRE(predicted.collision.restoreLocal(savedCollision));
+
+        for (s32 step = 0; step < distance; ++step, ++tick) {
+            advance(reference, tick);
+            advance(predicted, tick);
+            predicted.triggers.saveLocal(observed);
+            CHECK(
+                predicted.triggers.equalLocal(observed, expectedNative[static_cast<usize>(step)]));
+            const auto expected = reference.state();
+            CHECK(predicted.state() == expected);
+            CHECK(predicted.animator.checkpoint() == reference.animator.checkpoint());
+            sawRefusal |= !expected.refusals.empty();
+            sawWake |= !expected.wakes.empty();
+            sawLesson |= !expected.lessons.empty();
+            sawSettled |= !expected.settled.empty();
+            for (usize object = 0; object < reference.layout.objects().size(); ++object) {
+                CHECK(predicted.scene.worldTransform(object) ==
+                      reference.scene.worldTransform(object));
+            }
+        }
+        reference.device.draws.clear();
+        predicted.device.draws.clear();
+        reference.triggers.draw(reference.device, Mat4{1}, {});
+        predicted.triggers.draw(predicted.device, Mat4{1}, {});
+        REQUIRE(predicted.device.draws.size() == reference.device.draws.size());
+        for (usize draw = 0; draw < reference.device.draws.size(); ++draw) {
+            CHECK(predicted.device.draws[draw].transform == reference.device.draws[draw].transform);
+            CHECK(predicted.device.draws[draw].vertices == reference.device.draws[draw].vertices);
+        }
+        REQUIRE(predicted.triggers.canRestoreLocal(saved));
+    }
+    CHECK(sawRefusal);
+    CHECK(sawWake);
+    CHECK(sawLesson);
+    CHECK(sawSettled);
+    CHECK(predicted.device.texturesCreated == uploads);
+}
+
+TEST_CASE("native trigger equality retains camera holds and undelivered refusals",
+          "[triggers-local-rewind]") {
+    Fixture fixture("triggers-local-hidden-values");
+    LevelTriggers::LocalSnapshot before, held, queued, drained, restored;
+    fixture.triggers.saveLocal(before);
+    const auto trigger = fixture.triggers.trigger(0);
+    fixture.triggers.setCameraHeld(true);
+    fixture.triggers.saveLocal(held);
+    CHECK(fixture.triggers.trigger(0) == trigger);
+    CHECK_FALSE(fixture.triggers.equalLocal(before, held));
+    REQUIRE(fixture.triggers.restoreLocal(before));
+    std::array<TriggerVisitor, 1> visitors{};
+    visitors[0].party = 1;
+    visitors[0].height = 5;
+    fixture.step(1.0f / 60, visitors);
+    fixture.triggers.saveLocal(queued);
+    const auto contact = fixture.triggers.trigger(0);
+    const auto refusals = fixture.triggers.takeRefusals();
+    REQUIRE_FALSE(refusals.empty());
+    fixture.triggers.saveLocal(drained);
+    CHECK(fixture.triggers.trigger(0) == contact);
+    CHECK_FALSE(fixture.triggers.equalLocal(queued, drained));
+    REQUIRE(fixture.triggers.restoreLocal(queued));
+    fixture.triggers.saveLocal(restored);
+    CHECK(fixture.triggers.equalLocal(queued, restored));
+    CHECK(fixture.triggers.takeRefusals() == refusals);
+}
+
+TEST_CASE("native trigger histories reject foreign owners rebinding and diagnostic replacement",
+          "[triggers-local-rewind]") {
+    Fixture first("triggers-local-guards");
+    Fixture other("triggers-local-foreign");
+    LevelTriggers::LocalSnapshot saved;
+    CHECK_FALSE(first.triggers.restoreLocal(saved));
+    CHECK_FALSE(first.triggers.equalLocal(saved, saved));
+    first.triggers.saveLocal(saved);
+    CHECK(first.triggers.equalLocal(saved, saved));
+    const auto otherBefore = other.state();
+    CHECK_FALSE(other.triggers.restoreLocal(saved));
+    CHECK_FALSE(other.triggers.equalLocal(saved, saved));
+    CHECK(other.state() == otherBefore);
+    REQUIRE(first.triggers.restoreLocal(saved));
+    REQUIRE(first.triggers.restoreLocal(saved));
+    REQUIRE(first.triggers.restoreMotion(first.triggers.motion()));
+    CHECK_FALSE(first.triggers.canRestoreLocal(saved));
+    CHECK_FALSE(first.triggers.equalLocal(saved, saved));
+    first.triggers.saveLocal(saved);
+    REQUIRE(first.triggers.restore(first.state()));
+    CHECK_FALSE(first.triggers.canRestoreLocal(saved));
+    first.triggers.saveLocal(saved);
+    first.triggers.bindFigures(first.device, first.layout, AssetScope(first.items));
+    CHECK_FALSE(first.triggers.restoreLocal(saved));
+    first.triggers.saveLocal(saved);
+    first.triggers.bind(first.layout, first.animator, &first.collision);
+    CHECK_FALSE(first.triggers.restoreLocal(saved));
+    first.triggers.saveLocal(saved);
+    first.triggers.clear();
+    CHECK_FALSE(first.triggers.restoreLocal(saved));
+    LevelTriggers empty;
+    empty.saveLocal(saved);
+    REQUIRE(empty.restoreLocal(saved));
+}
 } // namespace

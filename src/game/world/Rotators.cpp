@@ -1,5 +1,8 @@
 #include "game/world/Rotators.h"
 
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
+
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -28,11 +31,62 @@ f32 paramF32(const ItemInstance& instance, usize at) {
 
 } // namespace
 
+bool Rotators::appendDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("Rotators/1");
+    digest.resource(m_layout);
+    digest.value(state);
+    return digest.good();
+}
+
+bool Rotators::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, m_sim);
+}
+
+bool Rotators::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [state, binding, owner, epoch] = saved;
+    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    return appendDigest(digest, saved.state);
+}
+
+bool Rotators::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& rotator : m_sim.rotators) {
+        if (rotator.pad && !rotator.pad->registerNativeResources(resources)) return false;
+    }
+    return resources.good();
+}
+
+void Rotators::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+    saved.epoch = m_localEpoch;
+}
+
+bool Rotators::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding && saved.epoch == m_localEpoch;
+}
+
+bool Rotators::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool Rotators::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
+
 void Rotators::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
     m_layout = nullptr;
-    m_rotators.clear();
+    m_sim = {};
+    m_localEpoch = 0;
 }
 
 void Rotators::bind(const WorldLayout& layout) {
@@ -68,7 +122,7 @@ void Rotators::bind(const WorldLayout& layout) {
         rotator.spot = instance.position;
         rotator.radius = info.radius;
         rotator.height = info.height;
-        m_rotators.push_back(std::move(rotator));
+        m_sim.rotators.push_back(std::move(rotator));
     }
 }
 
@@ -76,7 +130,7 @@ void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout,
                            const AssetScope& scope) {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
-    for (Rotator& rotator : m_rotators) {
+    for (Rotator& rotator : m_sim.rotators) {
         rotator.pad.reset();
         if (rotator.subtype != kTurnedByPad) {
             continue;
@@ -87,8 +141,8 @@ void Rotators::bindFigures(RenderDevice& device, const WorldLayout& layout,
             continue;
         }
         const ItemInfo& info = layout.itemInfos()[static_cast<usize>(instance.info)];
-        auto pad = std::make_unique<ItemFigure>();
-        if (pad->place(device, scope, info.name, instance, nullptr)) {
+        ItemFigure pad;
+        if (pad.place(device, scope, info.name, instance, nullptr)) {
             rotator.pad = std::move(pad);
         }
     }
@@ -98,8 +152,8 @@ std::vector<RotatorCue> Rotators::update(f32 seconds, std::span<const TriggerVis
                                          WorldScene& scene) {
     std::vector<RotatorCue> cues;
     const f32 ticks = seconds * kTicksPerSecond;
-    for (usize i = 0; i < m_rotators.size(); ++i) {
-        Rotator& rotator = m_rotators[i];
+    for (usize i = 0; i < m_sim.rotators.size(); ++i) {
+        Rotator& rotator = m_sim.rotators[i];
         const Vec3 at = scene.worldTransform(static_cast<usize>(rotator.object))[3];
         if (rotator.subtype != kSpinning && !rotator.done && !rotator.started) {
             for (const TriggerVisitor& visitor : visitors) {
@@ -147,8 +201,8 @@ bool Rotators::Cursor::valid() const {
 
 std::vector<Rotators::Cursor> Rotators::checkpoint() const {
     std::vector<Cursor> result;
-    result.reserve(m_rotators.size());
-    for (const auto& rotator : m_rotators) {
+    result.reserve(m_sim.rotators.size());
+    for (const auto& rotator : m_sim.rotators) {
         result.push_back(
             {rotator.instance, rotator.object, rotator.turned, rotator.started, rotator.done});
     }
@@ -156,12 +210,12 @@ std::vector<Rotators::Cursor> Rotators::checkpoint() const {
 }
 
 bool Rotators::accepts(std::span<const Cursor> state) const {
-    if (state.size() != m_rotators.size() || state.size() > kMaxCursors) {
+    if (state.size() != m_sim.rotators.size() || state.size() > kMaxCursors) {
         return false;
     }
     for (usize index = 0; index < state.size(); ++index) {
         const auto& cursor = state[index];
-        const auto& rotator = m_rotators[index];
+        const auto& rotator = m_sim.rotators[index];
         if (!cursor.valid() || cursor.object != rotator.object ||
             cursor.instance != rotator.instance || !std::isfinite(rotator.speed) ||
             !std::isfinite(rotator.limit) ||
@@ -183,8 +237,9 @@ bool Rotators::restore(std::span<const Cursor> state) {
     } else {
         ++m_checkpointGeneration;
     }
+    ++m_localEpoch;
     for (usize index = 0; index < state.size(); ++index) {
-        auto& rotator = m_rotators[index];
+        auto& rotator = m_sim.rotators[index];
         const auto& cursor = state[index];
         rotator.turned = cursor.turned;
         rotator.started = cursor.started;
@@ -197,7 +252,7 @@ bool Rotators::advanceMotion(f32 seconds, WorldScene& scene) {
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 0.25f) {
         return false;
     }
-    for (auto& rotator : m_rotators) {
+    for (auto& rotator : m_sim.rotators) {
         advance(rotator, seconds * kTicksPerSecond, scene);
     }
     return true;
@@ -210,8 +265,8 @@ void Rotators::place(const Rotator& rotator, WorldScene& scene) {
 }
 
 void Rotators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const {
-    for (const Rotator& rotator : m_rotators) {
-        if (rotator.pad != nullptr) {
+    for (const Rotator& rotator : m_sim.rotators) {
+        if (rotator.pad) {
             rotator.pad->draw(device, clip, lighting);
         }
     }

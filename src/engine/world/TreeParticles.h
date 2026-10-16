@@ -14,6 +14,10 @@ namespace gdl {
  * each emitter follows its posed node, while particle lifetimes follow its template. */
 class TreeParticles {
 public:
+    bool equalLocal(const TreeParticles& other) const {
+        return m_nodes == other.m_nodes && m_field.equalLocal(other.m_field);
+    }
+    bool operator==(const TreeParticles& other) const { return equalLocal(other); }
     struct Binding {
         usize node = 0;
         std::optional<u32> texture;
@@ -35,7 +39,8 @@ public:
     void setLocalScales(std::span<const NodePose> poses);
     void setTextureFrame(u32 slot, const Texture& texture);
     /** Render-only sprite sampling; clear before preparing a new draw's texture clock. */
-    void setTextureBlend(u32 slot, const Texture& current, const Texture* next, f32 blend);
+    void setTextureBlend(u32 slot, const Texture& current, const Texture* next, f32 blend,
+                         bool stepped = false);
     void clearTextureBlends();
     /** Ends emission without discarding particles already in flight. */
     void stop();
@@ -44,6 +49,7 @@ public:
     const ParticleField& field() const { return m_field; }
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const TreeParticles&);
     ParticleField m_field;
     std::vector<Binding> m_nodes; ///< emitter index -> posed tree node and texture slot
 };

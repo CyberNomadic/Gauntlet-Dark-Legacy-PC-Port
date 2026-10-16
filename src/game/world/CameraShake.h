@@ -6,7 +6,13 @@
 namespace gdl::game {
 /** A priority-arbitrated horizontal shake of the attention, eye, or both. */
 class CameraShake {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const CameraShake& value) {
+        const auto& [ticks, lead, priority, radius, target] = value;
+        visitor.values(ticks, lead, priority, radius, target);
+    }
 public:
+    bool operator==(const CameraShake&) const = default;
+
     enum class Target : u8 { Attention, Eye, Both };
     void start(Target target = Target::Attention, s32 lead = 0, s32 ticks = 90, f32 radius = 0.1f,
                s32 priority = 100);

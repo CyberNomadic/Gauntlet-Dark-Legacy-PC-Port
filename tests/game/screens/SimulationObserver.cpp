@@ -3,6 +3,7 @@
 #include "game/screens/SimulationObserver.h"
 
 #include <memory>
+#include <sstream>
 #include <utility>
 
 #include "game/netplay/CanonicalDigestSink.h"
@@ -42,7 +43,7 @@ public:
     static std::optional<OpponentCombatCheckpoint::State>
     adapterValues(const OpponentCombatCheckpoint& adapter,
                   const EffectTrees::PoolCheckpoint& effects) {
-        return adapter.captureValues(effects);
+        return adapter.captureValues(effects, true);
     }
 };
 SimulationObservation SimulationObserver::observe() {
@@ -52,14 +53,11 @@ SimulationObservation SimulationObserver::observe() {
     SimulationObservation result;
     result.unobserved = {
         "PartyHud: selectors, help/message queues, pickup cards, hourglass and relic HUD clocks",
-        "PartyPickups/PickupVoices: retained voice-selection random state",
         "LevelArrivalPresentation/StartCamera: hidden hold/ride/title clocks and spawn particles",
-        "TowerWelcome, SumnerVisit/SumnerHints, SumnerFigure, TowerPromotion and TowerRelics: "
+        "SumnerVisit/SumnerHints, SumnerFigure, TowerPromotion and TowerRelics: "
         "hidden clocks, queues, figures and ceremony effects",
-        "LevelMessages/ScrollBox, SwitchCutscene, GameOver: hidden clocks and pending cues",
-        "SecretChallenge: exact remaining coin IDs (counts/clock only observed)",
-        "AmbientDimmer and CameraShake: hidden target/hold/fractional clocks",
-        "Bosses, BossSequence/LegendRite/BossMeters, BossCamera and SkorneArena owners",
+        "LevelMessages/ScrollBox: hidden clocks and pending cues",
+        "Bosses, BossSequence/LegendRite/BossMeters and SkorneArena owners",
         "LevelOpponents Death/yell playback handles and their external audio state",
         "LevelSoundscape music/ambience, TriggerCues and external sound/mixer playback, "
         "callbacks and output queues (logical speech timing is observed)",
@@ -89,8 +87,8 @@ SimulationObservation SimulationObserver::observe() {
             players.push_back(owners.back().get());
         }
         CombatRollbackCheckpoint capture{players,
-                                         m_scene.m_health,
-                                         m_scene.m_levels,
+                                         m_scene.m_sim.health,
+                                         m_scene.m_sim.levels,
                                          m_scene.m_attacks,
                                          m_scene.m_arsenal,
                                          m_scene.m_effects,
@@ -104,12 +102,46 @@ SimulationObservation SimulationObserver::observe() {
                                          m_combatResources->resources().sharedEffects};
         auto adapterState = SimulationCheckpointObserver::adapterValues(adapter, state->effects);
         if (!adapterState) {
-            return unavailable("party_combat",
-                               "represented opponent adapter values refused current native "
-                               "state, resources or cross-owner references");
+            // Distinguish an ordinary-only diagnostic contract from a broken
+            // native actor. These probes are read-only and do not broaden the
+            // old adapter's prepare/restore domain.
+            auto& opponents = m_scene.m_opponents;
+            CrittersCheckpoint critters{opponents.m_critters};
+            const auto population = critters.checkpoint();
+            CombatantProjectilesCheckpoint missiles{opponents.m_combatantProjectiles,
+                                                    m_scene.m_effects, critters.resources(),
+                                                    m_combatResources->resources().sharedEffects};
+            const auto flights = missiles.checkpoint(state->effects);
+            const auto statues = opponents.m_statues.checkpoint();
+            std::ostringstream reason;
+            reason << "represented opponent adapter refused: critters=" << bool(population)
+                   << ", projectiles=" << bool(flights) << ", statues=" << bool(statues);
+            for (usize index = 0; index < opponents.m_sim.critterEffects.size(); ++index) {
+                const auto& effect = opponents.m_sim.critterEffects[index];
+                if (effect.ofBoss) {
+                    reason << "; critterEffects[" << index
+                           << "].ofBoss=true (critter=" << effect.critter
+                           << ", effect=" << effect.effect << ") outside ordinary adapter domain";
+                    break;
+                }
+            }
+            for (usize index = 0; index < opponents.m_sim.moveEffects.size(); ++index) {
+                const auto& effect = opponents.m_sim.moveEffects[index];
+                if (effect.ofBoss) {
+                    reason << "; moveEffects[" << index
+                           << "].ofBoss=true (critter=" << effect.critter
+                           << ", effect=" << effect.effect << ") outside ordinary adapter domain";
+                    break;
+                }
+            }
+            return unavailable("party_combat", reason.str());
         }
         CombatStatePacket::State values{std::move(*state), std::move(*adapterState)};
-        if (!values.valid()) {
+        // Each trusted read-only capture validated its own leaves. Reapplying
+        // the old packet's ordinary-only admission would reject live boss
+        // effects/projectiles; keep all cross-owner checks without authorizing
+        // any wider encode/decode or restore domain.
+        if (!values.references()) {
             return unavailable("party_combat",
                                "captured combat/adapter cross-owner validation failed");
         }
@@ -137,7 +169,7 @@ SimulationObservation SimulationObserver::observe() {
         result.subsystems.push_back(captured<EnemyMissilesCheckpoint>(
             "opponent_missiles", m_scene.m_opponents.missiles().checkpoint(resources)));
         result.subsystems.push_back(captured<PlacedEnemyCheckpoint>(
-            "opponent_placements", m_scene.m_opponents.placements().checkpoint()));
+            "opponent_placements", PlacedEnemiesCheckpoint::capture(m_scene.m_opponents.placements())));
     } else {
         for (const auto name : {"opponent_generators", "opponent_swarm", "opponent_missiles",
                                 "opponent_placements"}) {
@@ -154,14 +186,14 @@ SimulationObservation SimulationObserver::observe() {
             return unavailable("stage", "load-time world/fixture/camera/portal/transporter "
                                         "checkpoint owners or trusted stage catalog are not bound");
         }
-        if (!m_combatWorld->binds(*m_scene.m_world) ||
+        if (!m_combatWorld->bindsObservation(*m_scene.m_world) ||
             !m_combatFixtures->binds(m_scene.m_fixtures) ||
             !m_combatCamera->binds(m_scene.m_camera, *m_scene.m_world) ||
             !m_combatPortals->binds(m_scene.m_portals) ||
             !m_combatTransporters->binds(m_scene.m_transporters)) {
             return unavailable("stage", "stage checkpoint owners no longer match live bindings");
         }
-        auto world = m_combatWorld->checkpoint();
+        auto world = m_combatWorld->observe();
         auto fixtures = m_combatFixtures->checkpoint();
         auto camera = m_combatCamera->checkpoint();
         auto portals = m_combatPortals->checkpoint();
@@ -186,9 +218,9 @@ SimulationObservation SimulationObserver::observe() {
         }
         StageStatePacket::State values{std::move(*world), std::move(*fixtures), std::move(*camera),
                                        std::move(*portals), std::move(*transporters)};
-        if (!values.world.valid() || !values.fixtures.valid() || !values.camera->valid() ||
-            values.camera->level != values.world.level || !values.portals->valid() ||
-            !values.transporters->valid()) {
+        if (!values.world.validObservation() || !values.fixtures.valid() ||
+            !values.camera->valid() || values.camera->level != values.world.level ||
+            !values.portals->valid() || !values.transporters->valid()) {
             return unavailable("stage", "captured stage validation failed");
         }
         const auto body = StageStatePacket::canonicalDigest(values, m_combatStageCatalog, true);

@@ -99,6 +99,102 @@ TEST_CASE("full player missile checkpoint resumes piercing contacts reflection a
     equalPools(native, replay, resources);
 }
 
+TEST_CASE("native missile history rewinds complete flight contacts effects and undelivered impacts",
+          "[local-rewind][missile-local-rewind]") {
+    test::ProjectileCheckpointFixture fixture;
+    EffectTrees riderPrototype;
+    EffectTrees::Setting riderSetting;
+    riderSetting.persistent = true;
+    riderSetting.missingObjectsAreEmpty = true;
+    REQUIRE(riderPrototype.startSet(fixture.device, fixture.archive, "FLIGHT", {}, riderSetting));
+    const std::array effects{
+        fixture.resources[0],
+        EffectTrees::PoolResource{
+            2, &fixture.archive, {}, &fixture.textures, &riderPrototype.effect(0)}};
+    PlayerMissiles native;
+    PlayerMissiles replay;
+    native.bindVisuals(fixture.device);
+    replay.bindVisuals(fixture.device);
+    const bool reflecting = GENERATE(false, true);
+    const u32 flags = GENERATE(0U, 0x100000U, 0x200000U, 0x300000U);
+    const std::array resources{PlayerMissiles::Resource{27, &MissileSpec::of(0)},
+                               PlayerMissiles::Resource{28, &MissileSpec::potion()}};
+    const std::array targets{MissileTarget{5, {0, 0, 5}, 1, 8},
+                             MissileTarget{6, {0, 0, 12}, 1, 8}};
+    const std::array players{MissilePlayer{1, {0, {0, 0, 3}, 1, 8}, reflecting},
+                             MissilePlayer{2, {0, {0, 0, 7}, 1, 8}, false}};
+    std::array<PlayerMissiles::LocalSnapshot, 16> history;
+    const auto step = [&](PlayerMissiles& pool, u32 frame, bool wrong) {
+        if (frame % 3 == 0) {
+            auto launch = fixture.launch();
+            launch.owner = 3;
+            launch.position = {0, 3, 0};
+            launch.velocity = wrong ? Vec3{8, 6, -20} : Vec3{0, 0, 20};
+            launch.flags = flags;
+            launch.damage = 17;
+            launch.multiplayer = MultiplayerMode::Hurt;
+            launch.playerHitGap = 0.3f;
+            launch.riderArchive = &fixture.archive;
+            launch.riderTree = "FLIGHT";
+            if (frame % 9 == 0) {
+                launch.release.reset();
+                launch.spec = &MissileSpec::potion();
+                launch.potion = 2;
+                launch.potency = 10;
+                launch.potionRelease = MissilePotionRelease{frame + 1};
+            }
+            REQUIRE(pool.launch(launch));
+        }
+        pool.update(1.0f / 60, nullptr, targets, players);
+    };
+    for (u32 frame = 0; frame < 64; ++frame) {
+        CAPTURE(frame, flags, reflecting);
+        auto& saved = history[frame % history.size()];
+        replay.saveLocal(saved);
+        const u32 distance = frame % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, frame + i, true);
+        }
+        (void)replay.takeImpacts();
+        REQUIRE(replay.restoreLocal(saved));
+        equalPools(native, replay, resources, effects);
+        for (u32 i = 0; i < distance; ++i) {
+            step(native, frame + i, false);
+            step(replay, frame + i, false);
+            equalPools(native, replay, resources, effects);
+        }
+        (void)native.takeImpacts();
+        (void)replay.takeImpacts();
+    }
+    CHECK(fixture.device.textureUpdates == 0);
+}
+
+TEST_CASE("native missile history rejects other pools resource teardown and stale diagnostic restores",
+          "[local-rewind][missile-local-rewind]") {
+    PlayerMissiles a, b;
+    PlayerMissiles::LocalSnapshot state;
+    CHECK_FALSE(a.restoreLocal(state));
+    a.saveLocal(state);
+    CHECK_FALSE(b.restoreLocal(state));
+    const auto diagnostic = a.checkpoint({});
+    REQUIRE(diagnostic);
+    auto prepared = a.prepareRestore(*diagnostic, {});
+    REQUIRE(prepared);
+    REQUIRE(a.restoreLocal(state));
+    CHECK_FALSE(a.canCommit(*prepared));
+    a.clear();
+    CHECK_FALSE(a.restoreLocal(state));
+    test::FakeRenderDevice device;
+    a.saveLocal(state);
+    a.bindVisuals(device);
+    CHECK_FALSE(a.restoreLocal(state));
+    {
+        PlayerMissiles temporary;
+        temporary.saveLocal(state);
+    }
+    CHECK_FALSE(a.restoreLocal(state));
+}
+
 TEST_CASE("full checkpoint retains native potion history and release metadata across retirement",
           "[player-missile-checkpoint]") {
     const s32 kind = GENERATE(1, 2, 3, 4);

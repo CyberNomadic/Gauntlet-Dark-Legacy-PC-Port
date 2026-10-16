@@ -5,6 +5,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** One powerup a character carries, the way the original keeps them. */
@@ -65,5 +69,8 @@ struct Inventory {
 
     bool operator==(const Inventory&) const = default;
 };
+
+void visitNativeState(NativeStateDigest& digest, const PowerupSlot& value);
+void visitNativeState(NativeStateDigest& digest, const Inventory& value);
 
 } // namespace gdl::game

@@ -164,7 +164,6 @@ add_library(engine STATIC
     world/TextureAnimator.cpp
     world/WorldAnimator.h
     world/WorldAnimator.cpp
-    world/WorldStateCheckpoint.cpp
     world/ParticleSystem.h
     world/ParticleSystem.cpp
     world/ParticleField.h

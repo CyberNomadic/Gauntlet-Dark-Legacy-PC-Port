@@ -1,5 +1,7 @@
 #include "game/world/WorldDestruction.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <utility>
 
 namespace gdl::game {
@@ -9,13 +11,56 @@ constexpr u32 kExplosive = 0x40000;
 constexpr u32 kLoopingCart = 0x50000;
 } // namespace
 
+bool WorldDestruction::appendDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("WorldDestruction/1");
+    digest.wide(m_objects.size());
+    for (const auto& object : m_objects) digest.fields<9>(object);
+    digest.values(m_controlled, state);
+    return digest.good();
+}
+
+bool WorldDestruction::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, m_sim);
+}
+
+bool WorldDestruction::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [state, binding, owner] = saved;
+    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    return appendDigest(digest, saved.state);
+}
+
+void WorldDestruction::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool WorldDestruction::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding;
+}
+
+bool WorldDestruction::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool WorldDestruction::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
+
 void WorldDestruction::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
     m_objects.clear();
-    m_destroyed.clear();
+    m_sim.destroyed.clear();
     m_controlled.clear();
-    m_explosions.clear();
+    m_sim.explosions.clear();
 }
 
 bool WorldDestruction::valid(s32 object) const {
@@ -36,7 +81,7 @@ bool WorldDestruction::below(usize descendant, s32 ancestor) const {
 void WorldDestruction::bind(const WorldLayout& layout) {
     clear();
     m_objects = layout.objects();
-    m_destroyed.resize(m_objects.size(), false);
+    m_sim.destroyed.resize(m_objects.size(), false);
     std::vector<bool> controlled(m_objects.size(), false);
     for (usize i = 0; i < m_objects.size(); ++i) {
         const u32 kind = m_objects[i].flags & kKindMask;
@@ -63,7 +108,7 @@ void WorldDestruction::bind(const WorldLayout& layout) {
 }
 
 bool WorldDestruction::destroyed(s32 object) const {
-    return valid(object) && m_destroyed[static_cast<usize>(object)];
+    return valid(object) && m_sim.destroyed[static_cast<usize>(object)];
 }
 
 void WorldDestruction::showSubtree(s32 object, bool visible, WorldScene& scene) {
@@ -93,10 +138,10 @@ bool WorldDestruction::explode(s32 object, const Vec3& position, WorldScene& sce
     if (!wouldExplode(object)) {
         return false;
     }
-    m_explosions.push_back(position);
+    m_sim.explosions.push_back(position);
     auto at = object;
     for (usize guard = 0; valid(at) && guard < m_objects.size(); ++guard) {
-        m_destroyed[static_cast<usize>(at)] = true;
+        m_sim.destroyed[static_cast<usize>(at)] = true;
         showSubtree(at, false, scene);
         collision.setSolid(at, false);
         at = m_objects[static_cast<usize>(at)].parent;
@@ -108,7 +153,7 @@ void WorldDestruction::update(std::span<const WorldAnimator::CycleEvent> events,
                               WorldCollision& collision) {
     // Presentation is consumed in the same frame. Menus/attract sequences that do not
     // process gameplay effects must not accumulate delayed damaging explosions.
-    m_explosions.clear();
+    m_sim.explosions.clear();
     for (const auto& event : events) {
         if (!valid(event.object)) {
             continue;
@@ -118,8 +163,8 @@ void WorldDestruction::update(std::span<const WorldAnimator::CycleEvent> events,
             if ((m_objects[index].flags & kKindMask) == kLoopingCart) {
                 explode(event.object, Vec3{scene.worldTransform(index)[3]}, scene, collision);
             }
-        } else if (m_destroyed[index]) {
-            m_destroyed[index] = false;
+        } else if (m_sim.destroyed[index]) {
+            m_sim.destroyed[index] = false;
             showSubtree(event.object, true, scene);
             collision.setSolid(event.object, true);
         }
@@ -127,6 +172,6 @@ void WorldDestruction::update(std::span<const WorldAnimator::CycleEvent> events,
 }
 
 std::vector<Vec3> WorldDestruction::takeExplosions() {
-    return std::exchange(m_explosions, {});
+    return std::exchange(m_sim.explosions, {});
 }
 } // namespace gdl::game

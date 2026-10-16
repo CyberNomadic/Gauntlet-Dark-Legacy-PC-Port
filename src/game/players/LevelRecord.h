@@ -4,6 +4,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -42,5 +46,7 @@ private:
     /** Marks the first pass, or the second when the first is already marked. */
     static void pass(std::array<u16, kPasses>& passes, s32 bit);
 };
+
+void visitNativeState(NativeStateDigest& digest, const LevelRecord& value);
 
 } // namespace gdl::game

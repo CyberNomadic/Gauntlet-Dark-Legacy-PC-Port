@@ -2,15 +2,19 @@
 
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 #include "engine/math/Math.h"
 
 namespace gdl {
+
+class NativeStateDigest;
 
 /** One collision triangle in world space. */
 struct CollisionTriangle {
@@ -24,7 +28,10 @@ struct CollisionTriangle {
 struct WallContact {
     s32 object = -1;
     Vec3 point{0.0f, 0.0f, 0.0f};
+    bool operator==(const WallContact&) const = default;
 };
+
+void visitNativeState(NativeStateDigest& digest, const WallContact& value);
 
 /** Where a downward probe met a floor. */
 struct FloorHit {
@@ -137,7 +144,28 @@ public:
     /** Nearest visible solid surface along a finite picking ray, including moving geometry. */
     std::optional<Vec3> pickSurface(const Vec3& from, const Vec3& to) const;
 
+    class LocalSnapshot {
+        friend class WorldCollision;
+        std::vector<Mat4> transforms;
+        std::vector<s32> hidden;
+        std::vector<s32> contactOnly;
+        std::vector<s32> blockedFloorExits;
+        const WorldCollision* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    /** Copies only live transforms and query masks, never the static triangles
+     * or grid. Restore rebuilds changed moving-triangle caches in place. */
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    /** Exact captured transforms and query masks, not rebuilt triangle/grid caches. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
 private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
+    const CanonicalDigestSink::Digest& geometryDigest() const;
     friend class WorldStateCheckpoint;
     std::optional<FloorHit> surfaceAt(const Vec3& position, f32 above, f32 below, bool liquid,
                                       f32 edgeReach = 0.0f, const Vec2* direction = nullptr) const;
@@ -166,8 +194,13 @@ private:
     template <typename Visit>
     void eachTriangle(f32 minX, f32 minZ, f32 maxX, f32 maxZ, const Visit& visit) const;
 
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::vector<CollisionTriangle> m_triangles;
     std::vector<MovingObject> m_moving;
+    // Geometry is immutable between build/append/setMovingObjects/clear. Local
+    // history copies only masks/transforms; this cache authenticates every
+    // original triangle once without scanning the level on each agreement tick.
+    mutable std::optional<CanonicalDigestSink::Digest> m_geometryDigest;
     std::vector<s32> m_hidden; ///< objects told not to block
     std::vector<s32> m_contactOnly;
     std::vector<s32> m_blockedFloorExits;

@@ -3,11 +3,13 @@
 #include <memory>
 #include <numbers>
 #include <random>
+#include <tuple>
 #include <type_traits>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/audio/AudioMixer.h"
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
@@ -15,6 +17,7 @@
 #include "fixtures/NativeModelFixture.h"
 #include "game/enemies/Gargoyle.h"
 #include "game/world/CombatantProjectilesCheckpoint.h"
+#include "game/world/SceneSoundEvents.h"
 
 namespace {
 using namespace gdl;
@@ -88,8 +91,9 @@ struct Fixture {
         return value;
     }
     void launch(s32 row = 0) {
-        native.launch(shot(row), stock.archive, device, effects,
-                      [&](std::string_view name) { sounds.emplace_back(name); });
+        native.launch(
+            shot(row), stock.archive, device, effects,
+            [&](const CombatantProjectiles::SoundCue& cue) { sounds.emplace_back(cue.name); });
         REQUIRE(native.count() == 1);
     }
     void step(f32 seconds, std::span<const EnemyView> players = {},
@@ -98,7 +102,8 @@ struct Fixture {
         effects.update(seconds);
         native.update(
             seconds, collision, players, device, effects,
-            [&](std::string_view name) { sounds.emplace_back(name); }, stops);
+            [&](const CombatantProjectiles::SoundCue& cue) { sounds.emplace_back(cue.name); },
+            stops);
     }
     void restorePair(const Checkpoint::State& state, const EffectTrees::PoolCheckpoint& shared) {
         auto pool = restored->prepareRestore(state, shared);
@@ -165,6 +170,115 @@ TEST_CASE("combatant projectile checkpoint validates complete values without nat
     CHECK_FALSE(bad.valid());
 }
 
+TEST_CASE("native combatant projectile history restores RNG contact phases and every output queue",
+          "[local-rewind][combatant-missile-local-rewind][native-equality]") {
+    Fixture fixture;
+    const s32 row = GENERATE(0, 1, 2, 3, 4, 5, 6);
+    const bool reflecting = GENERATE(false, true);
+    std::array<EnemyView, 2> players{EnemyView{0, {0, 0, 3}, 1, 6}, EnemyView{1, {0, 0, 6}, 1, 6}};
+    players[0].reflects = reflecting;
+    const std::array opponents{MissileTarget{32, {0, 0, -2}, 1, 8}};
+    std::array<CombatantProjectiles::LocalSnapshot, 16> history;
+    std::array<EffectTrees::LocalSnapshot, 16> visuals;
+    std::array<CombatantProjectiles::LocalSnapshot, 8> expected;
+    CombatantProjectiles::LocalSnapshot actual;
+    const auto step = [&](CombatantProjectiles& pool, EffectTrees& effects, u32 frame, bool wrong) {
+        effects.capturePresentation();
+        if (frame % 5 == 0) {
+            auto shot = fixture.shot(row);
+            shot.target = wrong ? Vec3{5, 9, -10} : Vec3{0, 3, 20};
+            pool.launch(shot, fixture.stock.archive, fixture.device, effects, {});
+        }
+        effects.update(1.0f / 60);
+        pool.update(1.0f / 60, nullptr, players, fixture.device, effects, {}, {}, opponents);
+    };
+    for (u32 frame = 0; frame < 64; ++frame) {
+        CAPTURE(frame, row, reflecting);
+        const u32 slot = frame % history.size();
+        fixture.replay.saveLocal(history[slot]);
+        fixture.replayEffects.saveLocal(visuals[slot]);
+        const u32 distance = frame % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(fixture.replay, fixture.replayEffects, frame + i, false);
+            fixture.replay.saveLocal(expected[i]);
+        }
+        REQUIRE(fixture.replay.restoreLocal(history[slot]));
+        REQUIRE(fixture.replayEffects.restoreLocal(visuals[slot]));
+        for (u32 i = 0; i < distance; ++i) {
+            step(fixture.replay, fixture.replayEffects, frame + i, true);
+        }
+        (void)fixture.replay.takeHits();
+        (void)fixture.replay.takeRockHits();
+        (void)fixture.replay.takeWorldHits();
+        (void)fixture.replay.takeGenerators();
+        (void)fixture.replay.takeSummons();
+        REQUIRE(fixture.replay.canRestoreLocal(history[slot]));
+        REQUIRE(fixture.replayEffects.canRestoreLocal(visuals[slot]));
+        REQUIRE(fixture.replay.restoreLocal(history[slot]));
+        REQUIRE(fixture.replayEffects.restoreLocal(visuals[slot]));
+        // The retained diagnostic captures observations only. Native restoration
+        // above is an ordinary value copy, not prepare/rebind/commit.
+        fixture.equal();
+        for (u32 i = 0; i < distance; ++i) {
+            step(fixture.native, fixture.effects, frame + i, false);
+            step(fixture.replay, fixture.replayEffects, frame + i, false);
+            fixture.replay.saveLocal(actual);
+            CHECK(fixture.replay.equalLocal(expected[i], actual));
+            fixture.equal();
+        }
+    }
+    CHECK(fixture.device.textureUpdates == 0);
+}
+
+TEST_CASE("native combatant projectile rewind rejects foreign owners and stale prepared restores",
+          "[local-rewind][combatant-missile-local-rewind][native-equality]") {
+    CombatantProjectiles a, b;
+    EffectTrees effects;
+    CombatantProjectiles::LocalSnapshot saved;
+    CHECK_FALSE(a.equalLocal(saved, saved));
+    CHECK_FALSE(a.restoreLocal(saved));
+    a.saveLocal(saved);
+    CHECK(a.equalLocal(saved, saved));
+    CHECK_FALSE(b.equalLocal(saved, saved));
+    CHECK_FALSE(b.restoreLocal(saved));
+    Checkpoint observer(a, effects, {}, {});
+    const auto state = observer.checkpoint();
+    const auto visual = effects.checkpointPool();
+    REQUIRE(state);
+    REQUIRE(visual);
+    auto prepared = observer.prepareRestore(*state, *visual);
+    REQUIRE(prepared);
+    REQUIRE(a.restoreLocal(saved));
+    CHECK_FALSE(observer.canCommit(*prepared));
+    a.clear(effects);
+    CHECK_FALSE(a.equalLocal(saved, saved));
+    CHECK_FALSE(a.restoreLocal(saved));
+    {
+        CombatantProjectiles temporary;
+        temporary.saveLocal(saved);
+    }
+    CHECK_FALSE(a.equalLocal(saved, saved));
+    CHECK_FALSE(a.restoreLocal(saved));
+}
+
+TEST_CASE("native combatant projectile equality retains undelivered hit queues",
+          "[local-rewind][combatant-missile-local-rewind][native-equality]") {
+    Fixture fixture;
+    fixture.launch();
+    const std::array players{EnemyView{0, {0, 0, 3}, 1, 6}};
+    fixture.step(0.3f, players);
+    CombatantProjectiles::LocalSnapshot before, after;
+    fixture.native.saveLocal(before);
+    const auto hits = fixture.native.takeHits();
+    REQUIRE_FALSE(hits.empty());
+    fixture.native.saveLocal(after);
+    CHECK_FALSE(fixture.native.equalLocal(before, after));
+    REQUIRE(fixture.native.restoreLocal(before));
+    fixture.native.saveLocal(after);
+    CHECK(fixture.native.equalLocal(before, after));
+    CHECK(fixture.native.takeHits() == hits);
+}
+
 TEST_CASE("combatant launch uses portable native float mapping and exact random draw cadence",
           "[combatant-projectiles-checkpoint]") {
     Fixture fixture;
@@ -212,6 +326,173 @@ TEST_CASE("combatant launch uses portable native float mapping and exact random 
     malformed = *fixture.owner->checkpoint();
     malformed.random.words.fill(0);
     CHECK_FALSE(malformed.valid());
+}
+
+TEST_CASE("combatant sound phases and linked SFXX rows retain their own identities",
+          "[native-combat-audio][combatant-missile-local-rewind]") {
+    Fixture fixture;
+    const auto root = test::scratchDirectory("combatant-sound-phases");
+    writeTextFile(root / "critter.json", R"({"name":"PHASES","types":[{"moveCount":1}],
+      "descriptors":[{}],"moves":[{}],"damages":[{"type":1,"behaviorFlags":9,
+      "minSpeed":30,"maxSpeed":30,"sfxIndex":0,"sfx":0,"morph":1,"morphEnd":0,
+      "morphLife":0.1}],"sounds":[
+      {"name":"SHOT","levelFormat":"S_SHARED","link":2},
+      {"name":"LOOP","levelFormat":"S_MORPH"},
+      {"name":"WHITE","flags":33570816,"life":1,"rate":5,"custom1":500,
+       "levelFormat":"S_LINK"}]})");
+    CritterData data;
+    REQUIRE(data.load(root / "critter.json"));
+    auto shot = fixture.shot();
+    shot.data = &data;
+    SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
+    const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "TEST", 1};
+    SceneSoundEvents sounds;
+    sounds.open(1, nullptr);
+    sounds.beginTick(1);
+    std::vector<std::tuple<u64, CombatantProjectiles::SoundPhase, s32, std::string>> cues;
+    const auto play = [&](const CombatantProjectiles::SoundCue& cue) {
+        cues.emplace_back(cue.instance, cue.phase, cue.effect, cue.name);
+        auto scope = sounds.scoped({23, static_cast<u64>(cue.effect) + 1, cue.instance},
+                                   static_cast<u32>(cue.phase));
+        sounds.emit(sequence);
+    };
+    fixture.native.launch(shot, fixture.stock.archive, fixture.device, fixture.effects, play);
+    fixture.effects.update(0.11f);
+    fixture.native.update(0.11f, nullptr, {}, fixture.device, fixture.effects, play);
+    fixture.effects.update(0.11f);
+    fixture.native.update(0.11f, nullptr, {}, fixture.device, fixture.effects, play);
+    const auto frame = sounds.endFrame();
+    using Phase = CombatantProjectiles::SoundPhase;
+    REQUIRE(cues.size() == 5);
+    const u64 birth = std::get<0>(cues[0]);
+    REQUIRE(birth != 0);
+    CHECK(cues[0] == std::tuple{birth, Phase::Launch, 0, std::string{"S_SHARED"}});
+    CHECK(cues[1] == std::tuple{birth, Phase::Launch, 2, std::string{"S_LINK"}});
+    CHECK(cues[2] == std::tuple{birth, Phase::Morph, 1, std::string{"S_MORPH"}});
+    CHECK(cues[3] == std::tuple{birth, Phase::End, 0, std::string{"S_SHARED"}});
+    CHECK(cues[4] == std::tuple{birth, Phase::End, 2, std::string{"S_LINK"}});
+    REQUIRE(frame.finite.events.size() == cues.size());
+    for (const auto& event : frame.finite.events) {
+        CHECK(event.id.occurrence == 0); // no unrelated phase or linked row advances this cue
+    }
+    REQUIRE(sounds.reconcileFrames(1, std::span{&frame, 1}));
+}
+
+TEST_CASE("corrected combatant impacts do not steal another flight's already presented sound",
+          "[native-combat-audio][combatant-missile-local-rewind][scene-sound-events]") {
+    Fixture fixture;
+    for (const f32 x : {0.0f, 20.0f}) {
+        auto shot = fixture.shot();
+        shot.origin.x = x;
+        shot.target->x = x;
+        fixture.native.launch(shot, fixture.stock.archive, fixture.device, fixture.effects, {});
+    }
+    const auto initial = fixture.owner->checkpoint();
+    REQUIRE(initial);
+    REQUIRE(initial->flying.size() == 2);
+    const u64 first = initial->flying[0].instance;
+    const u64 second = initial->flying[1].instance;
+    REQUIRE(first != second);
+    CombatantProjectiles::LocalSnapshot saved;
+    EffectTrees::LocalSnapshot savedEffects;
+    fixture.native.saveLocal(saved);
+    fixture.effects.saveLocal(savedEffects);
+    SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
+    const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "TEST", 1};
+    AudioMixer mixer(24000);
+    SoundPlayer player(mixer);
+    SceneSoundEvents sounds;
+    sounds.open(7, &player);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
+    const auto step = [&](u64 tick, bool both) {
+        std::array views{EnemyView{0, {0, 0, 0.5f}, 1, 6}, EnemyView{1, {20, 0, 0.5f}, 1, 6}};
+        views[0].hidden = !both;
+        sounds.beginTick(tick);
+        fixture.effects.update(1.0f / 60);
+        fixture.native.update(1.0f / 60, nullptr, views, fixture.device, fixture.effects,
+                              [&](const CombatantProjectiles::SoundCue& cue) {
+                                  auto scope = sounds.scoped(
+                                      {23, static_cast<u64>(cue.effect) + 1, cue.instance},
+                                      static_cast<u32>(cue.phase));
+                                  sounds.emit(sequence);
+                              });
+        return sounds.endFrame();
+    };
+    const auto wrong = step(1, true);
+    REQUIRE(wrong.finite.events.size() == 2);
+    CHECK(wrong.finite.events[0].id.emitter == FrameEventEmitter{23, 3, first});
+    CHECK(wrong.finite.events[1].id.emitter == FrameEventEmitter{23, 3, second});
+    CHECK(commands == 0);
+    const auto published = sounds.reconcileFrames(1, std::span{&wrong, 1});
+    REQUIRE(published);
+    sounds.dispatch(published);
+    REQUIRE(commands > 0);
+    const usize presented = commands;
+    for (u64 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        REQUIRE(fixture.native.restoreLocal(saved));
+        REQUIRE(fixture.effects.restoreLocal(savedEffects));
+        for (u64 tick = 1; tick <= distance; ++tick) {
+            step(tick, true);
+        }
+        REQUIRE(fixture.native.restoreLocal(saved));
+        REQUIRE(fixture.effects.restoreLocal(savedEffects));
+        std::vector<SceneSoundEvents::Frame> corrected;
+        for (u64 tick = 1; tick <= distance; ++tick) {
+            corrected.push_back(step(tick, false));
+        }
+        REQUIRE(corrected[0].finite.events.size() == 1);
+        CHECK(corrected[0].finite.events[0] == wrong.finite.events[1]);
+        for (usize frame = 1; frame < corrected.size(); ++frame) {
+            CHECK(corrected[frame].finite.events.empty());
+        }
+        const auto delta = sounds.reconcileFrames(1, corrected);
+        REQUIRE(delta);
+        CHECK(delta.actions.empty());
+        sounds.dispatch(delta);
+        CHECK(commands == presented);
+    }
+    CHECK(sounds.unsupportedCount() == 0);
+}
+
+TEST_CASE("combatant hit queues retain retired births when compacted slots are reused",
+          "[native-combat-audio][combatant-missile-local-rewind][native-equality]") {
+    Fixture fixture;
+    fixture.launch();
+    const auto initial = fixture.owner->checkpoint();
+    REQUIRE(initial);
+    const u64 retired = initial->flying.front().instance;
+    const std::array views{EnemyView{0, {0, 0, 0.5f}, 1, 6}};
+    fixture.step(1.0f / 60, views);
+    REQUIRE(fixture.native.count() == 0);
+    fixture.launch();
+    const auto replacement = fixture.owner->checkpoint();
+    REQUIRE(replacement);
+    REQUIRE(replacement->flying.size() == 1);
+    REQUIRE(replacement->hits.size() == 1);
+    CHECK(replacement->hits[0].instance == retired);
+    CHECK(replacement->flying[0].instance != retired);
+    CombatantProjectiles::LocalSnapshot saved, drained;
+    fixture.native.saveLocal(saved);
+    const auto queued = fixture.native.takeHits();
+    fixture.native.saveLocal(drained);
+    CHECK_FALSE(fixture.native.equalLocal(saved, drained));
+    REQUIRE(fixture.native.restoreLocal(saved));
+    CHECK(fixture.native.takeHits() == queued);
+    auto invalid = *replacement;
+    invalid.flying[0].instance = 0;
+    CHECK_FALSE(invalid.valid());
+    invalid = *replacement;
+    invalid.hits[0].instance = invalid.nextInstance;
+    CHECK_FALSE(invalid.valid());
+    invalid = *replacement;
+    invalid.worldHits.push_back({{}, -1, true, invalid.nextInstance});
+    CHECK_FALSE(invalid.valid());
+    fixture.native.clear(fixture.effects);
+    fixture.launch();
+    REQUIRE(fixture.owner->checkpoint());
+    CHECK(fixture.owner->checkpoint()->flying[0].instance > replacement->flying[0].instance);
 }
 
 TEST_CASE("combatant projectile checkpoints restore independently loaded native resources",

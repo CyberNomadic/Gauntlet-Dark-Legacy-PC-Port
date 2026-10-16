@@ -40,6 +40,11 @@ struct BreakableStrike {
  */
 class Breakables {
 public:
+    Breakables() = default;
+    Breakables(const Breakables&) = delete;
+    Breakables& operator=(const Breakables&) = delete;
+    Breakables(Breakables&&) noexcept = default;
+    Breakables& operator=(Breakables&&) noexcept = default;
     static constexpr s32 kBreakable = 10; ///< the item type of barrels and breakable walls
     static constexpr s32 kBarrel = 43;    ///< of either type
     static constexpr s32 kExploding = 44;
@@ -73,20 +78,24 @@ public:
         ItemFigure figure;
         Obstacle box;
         ItemSupport support;
+        bool operator==(const Barrel&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Barrel& value) {
+            visitor.template fields<17>(value);
+        }
     };
 
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision);
     void clear();
     void syncFloors();
-    usize size() const { return m_barrels.size(); }
+    usize size() const { return m_sim.barrels.size(); }
     /** Potion magic's perk on what a standing barrel holds (fn_8005BA1C). */
     void changeContents(usize index, s32 record) {
-        if (index < m_barrels.size() && standing(index)) {
-            m_barrels[index]->contents = record;
+        if (index < m_sim.barrels.size() && standing(index)) {
+            m_sim.barrels[index].contents = record;
         }
     }
-    const Barrel& barrel(usize index) const { return *m_barrels[index]; }
+    const Barrel& barrel(usize index) const { return m_sim.barrels[index]; }
     MissileTarget target(usize index, s32 id) const;
     void setPlayerCount(s32 players);
 
@@ -104,7 +113,7 @@ public:
     /** How solid a barrel shows: one that blew up or gassed fades out as it breaks. */
     f32 opacityOf(usize index) const;
     /** Where a barrel stands, as its figure is placed. */
-    const Mat4& transformOf(usize index) const { return m_barrels[index]->figure.transform(); }
+    const Mat4& transformOf(usize index) const { return m_sim.barrels[index].figure.transform(); }
     /** The boxes of those still in the way. */
     std::vector<Obstacle> obstacles() const;
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
@@ -115,9 +124,34 @@ private:
     friend class BreakablesCheckpoint;
     static f32 opacity(const Barrel& barrel);
 
-    std::vector<std::unique_ptr<Barrel>> m_barrels;
+    struct Simulation {
+        std::vector<Barrel> barrels;
+        u32 seed = kSeedStart;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    /** In-memory history for this owner and its current bound stage. */
+    class LocalSnapshot {
+        friend class Breakables;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const Breakables* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Complete native value equality, only within this owner's current binding. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
+    // Bound definitions are immutable; only each barrel's chosen contents and
+    // the choice RNG belong in native rewind history.
     std::vector<ItemInfo> m_infos;
-    u32 m_seed = kSeedStart;
     const WorldCollision* m_collision = nullptr;
     const WorldLayout* m_layout = nullptr;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);

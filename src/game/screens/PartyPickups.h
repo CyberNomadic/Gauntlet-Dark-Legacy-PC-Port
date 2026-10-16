@@ -31,7 +31,13 @@ namespace gdl::game {
  * whose opening is announced once. It keeps no state of its own but the food voices.
  */
 class PartyPickups {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PartyPickups& value) {
+        const auto& [pickupVoices] = value;
+        visitor.value(pickupVoices);
+    }
 public:
+    bool operator==(const PartyPickups&) const = default;
+
     /** The voice that announces each realm's gate opening, by realm. */
     static constexpr std::array<std::string_view, 9> kUnlockVoices{
         "",           "S_CRYS4TWN", "S_CRYS4MNT", "S_CRYS4CST", "S_CRYS4SKY",

@@ -46,6 +46,10 @@ public:
     void showLegend(const LegendEvent& event, const Bosses& bosses,
                     std::span<const PlayerRuntime> players);
     void advanceLegend(f32 seconds, Bosses& bosses, std::span<PlayerRuntime> players);
+    void gatherAudio() const;
+    bool hasLegacyAudio() const {
+        return m_victoryHandle != kNoSound || (m_legend != nullptr && m_legend->hasLegacyAudio());
+    }
     void fallen(const Vec3& where, const Bosses& bosses, std::span<PlayerRuntime> players);
     /** The death's blast takes the level's enemies, generators and arena cover with it
      * before the coins fly. */
@@ -56,8 +60,8 @@ public:
                         const MessageTable& strings);
     const BossVictoryPresentation& victory() const { return m_victory; }
     /** Once per native scene update, including updates held by other scene phases. */
-    void advanceAudio(f32 seconds) { m_victoryVoice.timing.advance(seconds); }
-    const SpeechTiming& speechTiming() const { return m_victoryVoice.timing; }
+    void advanceAudio(f32 seconds) { m_sim.speech.advance(seconds); }
+    const SpeechTiming& speechTiming() const { return m_sim.speech; }
     void capturePresentation() { m_victory.capturePresentation(); }
     BossCameraSubject victorySubject() const;
     const Texture* frozenTexture() const {
@@ -69,12 +73,35 @@ public:
                                                             std::span<const PlayerRuntime> players);
 
 private:
+    struct Simulation {
+        std::mt19937 coinRandom{0xC01Eu};
+        SpeechTiming speech;
+        SoundCueToken speechCue;
+        Vec3 shardPosition{0};
+    };
+
+public:
+    class LocalSnapshot {
+        friend class BossSequence;
+        Simulation state;
+        BossVictoryPresentation::LocalSnapshot victory;
+        std::optional<LegendPresentation::LocalSnapshot> legend;
+        const BossSequence* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::optional<Resources> m_resources;
-    std::mt19937 m_coinRandom{0xC01Eu};
     BossVictoryPresentation m_victory;
-    LevelSoundscape::Speech m_victoryVoice;
+    SoundHandle m_victoryHandle = kNoSound;
     std::vector<SoundHandle> m_victoryVoices;
-    Vec3 m_shardPosition{0};
     std::unique_ptr<LegendPresentation> m_legend;
 };
 } // namespace gdl::game

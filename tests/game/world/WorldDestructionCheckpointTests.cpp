@@ -1,3 +1,4 @@
+#include <array>
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -8,6 +9,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/LevelWorld.h"
 #include "game/world/WorldDestructionCheckpoint.h"
 
@@ -149,5 +151,101 @@ TEST_CASE("native destruction rosters restore between independently loaded stage
     REQUIRE(target.restore(*state));
     CHECK(target.checkpoint() == state);
     CHECK(state->objects.size() == first.layout().objects().size());
+}
+TEST_CASE("native destruction history rewinds pending events without emitting collaborator work",
+          "[local-rewind][world-destruction-local-rewind]") {
+    Fixture reference, corrected;
+    struct Snapshot {
+        WorldDestruction::LocalSnapshot destruction;
+        WorldAnimator::LocalSnapshot animator;
+        WorldScene::LocalSnapshot scene;
+        WorldCollision::LocalSnapshot collision;
+    };
+    LocalStateHistory<Snapshot> history;
+    std::array<WorldDestruction::LocalSnapshot, 8> expected;
+    WorldDestruction::LocalSnapshot observed;
+    u64 tick = 0;
+    for (u64 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(tick, [&](auto& saved) {
+            corrected.destruction.saveLocal(saved.destruction);
+            corrected.animator.saveLocal(saved.animator);
+            corrected.scene.saveLocal(saved.scene);
+            corrected.collision.saveLocal(saved.collision);
+            return true;
+        }));
+        const auto before = corrected.owner.checkpoint();
+        REQUIRE(before);
+        auto stale = corrected.owner.prepareRestore(*before);
+        REQUIRE(stale);
+        const u64 distance = 1 + window % 8;
+        const auto* saved = history.find(tick);
+        REQUIRE(saved);
+        for (u64 offset = 0; offset < distance; ++offset) {
+            corrected.step(1.0f / 60, (tick + offset) % 11 == 0);
+            corrected.destruction.saveLocal(expected[offset]);
+        }
+        REQUIRE(corrected.destruction.restoreLocal(saved->destruction));
+        REQUIRE(corrected.animator.restoreLocal(saved->animator));
+        REQUIRE(corrected.scene.restoreLocal(saved->scene));
+        REQUIRE(corrected.collision.restoreLocal(saved->collision));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            reference.step(1.0f / 60, (tick + offset) % 11 == 0);
+            corrected.step(0.13f);
+            corrected.destruction.explode(0, {30, 4, 10}, corrected.scene, corrected.collision);
+        }
+        const bool visible = corrected.scene.objectVisible(0);
+        const bool solid = corrected.collision.solid(0);
+        REQUIRE(corrected.destruction.restoreLocal(saved->destruction));
+        CHECK(corrected.scene.objectVisible(0) == visible);
+        CHECK(corrected.collision.solid(0) == solid);
+        CHECK(corrected.owner.checkpoint() == before);
+        CHECK_FALSE(corrected.owner.canCommit(*stale));
+        REQUIRE(corrected.animator.restoreLocal(saved->animator));
+        REQUIRE(corrected.scene.restoreLocal(saved->scene));
+        REQUIRE(corrected.collision.restoreLocal(saved->collision));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            corrected.step(1.0f / 60, (tick + offset) % 11 == 0);
+            corrected.destruction.saveLocal(observed);
+            CHECK(corrected.destruction.equalLocal(observed, expected[offset]));
+        }
+        CHECK(corrected.owner.checkpoint() == reference.owner.checkpoint());
+        CHECK(corrected.scene.objectVisible(0) == reference.scene.objectVisible(0));
+        CHECK(corrected.scene.worldTransform(0) == reference.scene.worldTransform(0));
+        CHECK(corrected.collision.solid(0) == reference.collision.solid(0));
+        CHECK(corrected.animator.checkpoint() == reference.animator.checkpoint());
+        if (window % 2 == 0) {
+            CHECK(corrected.destruction.takeExplosions() == reference.destruction.takeExplosions());
+        }
+        tick += distance;
+    }
+    WorldDestruction::LocalSnapshot saved;
+    corrected.destruction.saveLocal(saved);
+    CHECK_FALSE(reference.destruction.restoreLocal(saved));
+    CHECK_FALSE(reference.destruction.equalLocal(saved, saved));
+    corrected.destruction.clear();
+    CHECK_FALSE(corrected.destruction.restoreLocal(saved));
+    CHECK_FALSE(corrected.destruction.equalLocal(saved, saved));
+    corrected.destruction.bind(corrected.layout);
+    CHECK_FALSE(corrected.destruction.restoreLocal(saved));
+}
+TEST_CASE("native destruction equality includes undelivered explosions with identical geometry",
+          "[local-rewind][world-destruction-local-rewind]") {
+    Fixture fixture;
+    REQUIRE(fixture.destruction.explode(0, {10, 2, 3}, fixture.scene, fixture.collision));
+    WorldDestruction::LocalSnapshot queued, drained, restored;
+    fixture.destruction.saveLocal(queued);
+    const auto visible = fixture.scene.objectVisible(0);
+    const auto solid = fixture.collision.solid(0);
+    const auto explosions = fixture.destruction.takeExplosions();
+    REQUIRE_FALSE(explosions.empty());
+    fixture.destruction.saveLocal(drained);
+    CHECK(fixture.scene.objectVisible(0) == visible);
+    CHECK(fixture.collision.solid(0) == solid);
+    CHECK_FALSE(fixture.destruction.equalLocal(queued, drained));
+    REQUIRE(fixture.destruction.restoreLocal(queued));
+    fixture.destruction.saveLocal(restored);
+    CHECK(fixture.destruction.equalLocal(queued, restored));
+    CHECK(fixture.destruction.takeExplosions() == explosions);
 }
 } // namespace

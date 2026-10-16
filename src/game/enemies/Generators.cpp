@@ -6,12 +6,15 @@
 #include <cstring>
 #include <format>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/world/ItemSupport.h"
+#include "game/world/NativeStateResources.h"
 #include "game/world/TargetAssist.h"
 
 namespace gdl::game {
@@ -27,7 +30,129 @@ constexpr std::array<s32, kGeneratorKinds> kDestroyedWorth{1, 2, 3, 1,  2, 3,  1
                                                            1, 2, 2, 1,  2, 3,  1, 2, 3,   1, 1, 2,
                                                            3, 3, 3, 15, 0, 30, 1, 2, 300, 30};
 constexpr s32 kExperienceShare = 5;
+
+void appendSlot(NativeStateDigest& digest, const Generators::Slot& slot) {
+    // All native Slot members are decomposed, including hidden and dead slots.
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, Obstacle>) {
+            const auto& [centre, yaw, across, along, height, solid, radius, item] = field;
+            digest.values(centre, yaw, across, along, height, solid, radius);
+            digest.flag(item.has_value());
+            if (item) {
+                digest.fields<2>(*item);
+            }
+        } else {
+            digest.value(field);
+        }
+    };
+    visitNativeFields<32>(slot, [&](const auto&... fields) { (append(fields), ...); });
+}
+
+// C++ cannot decompose a record with both base and derived data members. The
+// actual Slot base is visited above; this detects another derived member before
+// the explicit two-member extension below can silently omit it.
+template <class T>
+constexpr bool kHasExtraGeneratorMember =
+    requires { T{Generators::Slot{}, std::optional<ItemFigure>{}, u64{}, {}}; };
 } // namespace
+
+void Generators::appendSimulationDigest(
+    NativeStateDigest& digest, const Simulation& state,
+    std::optional<std::span<const TextureAnimator::Clock>> savedClocks) {
+    const auto& [collision, generators, view, attention, bodies, scales, players, specialBirth,
+                 nextInstance, bound] = state;
+    digest.resource(collision);
+    digest.wide(generators.size());
+    static_assert(std::is_aggregate_v<Generator>);
+    static_assert(requires { Generator{Slot{}, std::optional<ItemFigure>{}, u64{}}; });
+    static_assert(!kHasExtraGeneratorMember<Generator>);
+    for (const auto& generator : generators) {
+        appendSlot(digest, generator);
+        digest.values(generator.bossFigure, generator.instance);
+    }
+    digest.flag(view.has_value());
+    if (view) {
+        digest.fields<8>(*view);
+    }
+    digest.value(attention);
+    digest.wide(bodies.size());
+    for (usize index = 0; index < bodies.size(); ++index) {
+        if (bodies[index] == nullptr) {
+            digest.invalidate();
+            return;
+        }
+        const auto& [kind, archive, trees, models, textures] = *bodies[index];
+        digest.value(kind);
+        digest.resource(archive);
+        for (usize body = 0; body < trees.size(); ++body) {
+            digest.resource(&trees[body]);
+            // GPU/model draw caches are not native inputs. Their immutable tree
+            // and source archive identify the artwork; availability is retained.
+            digest.flag(models[body].bound());
+        }
+        digest.resource(&textures);
+        digest.fields<3>(savedClocks ? (*savedClocks)[index] : textures.clock());
+    }
+    digest.fields<3>(scales);
+    digest.values(players, specialBirth, nextInstance, bound);
+}
+
+bool Generators::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& binding : m_bodyCache) {
+        const auto* body = binding.get();
+        if (body == nullptr || body->archive == nullptr) {
+            return false;
+        }
+        for (usize state = 0; state < body->trees.size(); ++state) {
+            if (!resources.registerGeneratedTree(
+                    body->trees[state], *body->archive,
+                    std::format("generator/{}/state/{}", body->kind, state))) {
+                return false;
+            }
+        }
+        if (!resources.registerTextureAnimator(body->textures, *body->archive,
+                                                std::format("generator/{}/textures", body->kind))) {
+            return false;
+        }
+    }
+    for (const auto& generator : m_sim.generators) {
+        if (generator.bossFigure && !generator.bossFigure->registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    // Speculative births can leave cached artwork reachable from retained
+    // history after the active generator slot is rolled back away.
+    for (const auto& prototype : m_bossPrototypes) {
+        if (!prototype.figure.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+bool Generators::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("Generators.native.1");
+    digest.wide(m_roster.size());
+    for (const auto& slot : m_roster) {
+        appendSlot(digest, slot);
+    }
+    appendSimulationDigest(digest, m_sim);
+    return digest.good();
+}
+
+bool Generators::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("Generators.native.1");
+    digest.wide(m_roster.size());
+    for (const auto& slot : m_roster) {
+        appendSlot(digest, slot);
+    }
+    appendSimulationDigest(digest, saved.state, std::span<const TextureAnimator::Clock>{saved.clocks});
+    return digest.good();
+}
 
 s32 generatorExperience(s32 kind, bool destroyed) {
     constexpr s32 kSecondUnknown = -2;
@@ -145,6 +270,57 @@ bool sameDefinition(const Generators::Slot& a, const Generators::Slot& b) {
 
 } // namespace
 
+void Generators::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.clocks.resize(m_sim.bodies.size());
+    for (usize i = 0; i < m_sim.bodies.size(); ++i) {
+        saved.clocks[i] = m_sim.bodies[i]->textures.clock();
+    }
+    saved.owner = m_localBinding;
+    saved.epoch = m_localEpoch;
+}
+
+bool Generators::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner.lock() == m_localBinding && saved.epoch == m_localEpoch &&
+           saved.clocks.size() == saved.state.bodies.size();
+}
+
+bool Generators::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
+        return false;
+    }
+    const auto& a = left.state;
+    const auto& b = right.state;
+    if (a.collision != b.collision || a.bodies != b.bodies || left.clocks != right.clocks ||
+        !sameView(a.view, b.view)) {
+        return false;
+    }
+    const auto values = [](const Simulation& value) {
+        return std::tie(value.attention, value.scales, value.players, value.specialBirth,
+                        value.nextInstance, value.bound);
+    };
+    return values(a) == values(b) &&
+           std::ranges::equal(
+               a.generators, b.generators, [](const Generator& first, const Generator& second) {
+                   return static_cast<const Slot&>(first) == static_cast<const Slot&>(second) &&
+                          first.instance == second.instance &&
+                          first.bossFigure.has_value() == second.bossFigure.has_value() &&
+                          (!first.bossFigure || first.bossFigure->equalLocal(*second.bossFigure));
+               });
+}
+
+bool Generators::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    for (usize i = 0; i < m_sim.bodies.size(); ++i) {
+        m_sim.bodies[i]->textures.restoreClock(saved.clocks[i]);
+    }
+    ++m_restoreGeneration;
+    return true;
+}
+
 bool Generators::Slot::operator==(const Slot& other) const {
     const auto values = [](const Slot& s) {
         return std::tie(s.minPlayers, s.presence, s.kind, s.tier, s.algorithm, s.most, s.interval,
@@ -199,26 +375,26 @@ bool Generators::Checkpoint::valid() const {
 }
 
 std::optional<Generators::Checkpoint> Generators::checkpoint() const {
-    if (!m_bound || std::ranges::any_of(m_generators, [](const auto& generator) {
-            return generator.boss || generator.bossFigure != nullptr;
+    if (!m_sim.bound || std::ranges::any_of(m_sim.generators, [](const auto& generator) {
+            return generator.boss || generator.bossFigure.has_value();
         })) {
         return std::nullopt;
     }
     Checkpoint result;
     result.roster = m_roster;
-    result.generators.reserve(m_generators.size());
-    for (const auto& generator : m_generators) {
+    result.generators.reserve(m_sim.generators.size());
+    for (const auto& generator : m_sim.generators) {
         result.generators.push_back(generator);
     }
-    result.bodies.reserve(m_bodies.size());
-    for (const auto& body : m_bodies) {
+    result.bodies.reserve(m_sim.bodies.size());
+    for (const auto& body : m_sim.bodies) {
         result.bodies.push_back({body->kind, body->textures.checkpoint()});
     }
-    result.scales = m_scales;
-    result.players = m_players;
-    result.specialBirth = m_specialBirth;
-    result.view = m_view;
-    result.attention = m_attention;
+    result.scales = m_sim.scales;
+    result.players = m_sim.players;
+    result.specialBirth = m_sim.specialBirth;
+    result.view = m_sim.view;
+    result.attention = m_sim.attention;
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
 
@@ -238,10 +414,11 @@ Generators::Prepared& Generators::Prepared::operator=(Prepared&&) noexcept = def
 Generators::Prepared::~Prepared() = default;
 
 std::optional<Generators::Prepared> Generators::prepareRestore(const Checkpoint& state) const {
-    if (!m_bound || !state.valid() || state.roster != m_roster ||
-        state.generators.size() != m_generators.size() || state.bodies.size() != m_bodies.size() ||
-        std::ranges::any_of(m_generators, [](const auto& generator) {
-            return generator.boss || generator.bossFigure != nullptr;
+    if (!m_sim.bound || !state.valid() || state.roster != m_roster ||
+        state.generators.size() != m_sim.generators.size() ||
+        state.bodies.size() != m_sim.bodies.size() ||
+        std::ranges::any_of(m_sim.generators, [](const auto& generator) {
+            return generator.boss || generator.bossFigure.has_value();
         })) {
         return std::nullopt;
     }
@@ -249,22 +426,25 @@ std::optional<Generators::Prepared> Generators::prepareRestore(const Checkpoint&
     data->owner = this;
     data->lifetime = m_lifetime;
     data->generation = m_restoreGeneration;
-    data->collision = m_collision;
+    data->collision = m_sim.collision;
     data->generators.resize(state.generators.size());
     for (usize index = 0; index < state.generators.size(); ++index) {
         const auto& slot = state.generators[index];
         if (slot.support >= 0 &&
-            (m_collision == nullptr || !m_collision->objectTransform(slot.support))) {
+            (m_sim.collision == nullptr || !m_sim.collision->objectTransform(slot.support))) {
             return std::nullopt;
         }
         static_cast<Slot&>(data->generators[index]) = slot;
+        // This diagnostic path accepts only the same authored roster, never
+        // dynamic births. Retain its native identities instead of rebinding them.
+        data->generators[index].instance = m_sim.generators[index].instance;
     }
-    data->textures.reserve(m_bodies.size());
-    for (usize index = 0; index < m_bodies.size(); ++index) {
-        if (state.bodies[index].kind != m_bodies[index]->kind) {
+    data->textures.reserve(m_sim.bodies.size());
+    for (usize index = 0; index < m_sim.bodies.size(); ++index) {
+        if (state.bodies[index].kind != m_sim.bodies[index]->kind) {
             return std::nullopt;
         }
-        data->textures.push_back(m_bodies[index]->textures);
+        data->textures.push_back(m_sim.bodies[index]->textures);
         if (!data->textures.back().restore(state.bodies[index].textures)) {
             return std::nullopt;
         }
@@ -275,16 +455,16 @@ std::optional<Generators::Prepared> Generators::prepareRestore(const Checkpoint&
 
 bool Generators::canCommit(const Prepared& prepared) const {
     if (!prepared.m_data || prepared.m_data->owner != this ||
-        prepared.m_data->lifetime != m_lifetime || !m_bound ||
+        prepared.m_data->lifetime != m_lifetime || !m_sim.bound ||
         prepared.m_data->generation != m_restoreGeneration ||
-        prepared.m_data->collision != m_collision ||
-        prepared.m_data->generators.size() != m_generators.size() ||
-        prepared.m_data->textures.size() != m_bodies.size()) {
+        prepared.m_data->collision != m_sim.collision ||
+        prepared.m_data->generators.size() != m_sim.generators.size() ||
+        prepared.m_data->textures.size() != m_sim.bodies.size()) {
         return false;
     }
     return std::ranges::none_of(prepared.m_data->generators, [&](const auto& slot) {
         return slot.support >= 0 &&
-               (m_collision == nullptr || !m_collision->objectTransform(slot.support));
+               (m_sim.collision == nullptr || !m_sim.collision->objectTransform(slot.support));
     });
 }
 
@@ -293,15 +473,16 @@ bool Generators::commitRestore(Prepared&& prepared) {
         return false;
     }
     auto data = std::move(prepared.m_data);
-    m_generators = std::move(data->generators);
-    for (usize index = 0; index < m_bodies.size(); ++index) {
-        m_bodies[index]->textures = std::move(data->textures[index]);
+    ++m_localEpoch;
+    m_sim.generators = std::move(data->generators);
+    for (usize index = 0; index < m_sim.bodies.size(); ++index) {
+        m_sim.bodies[index]->textures = std::move(data->textures[index]);
     }
-    m_scales = data->values.scales;
-    m_players = data->values.players;
-    m_specialBirth = data->values.specialBirth;
-    m_view = data->values.view;
-    m_attention = data->values.attention;
+    m_sim.scales = data->values.scales;
+    m_sim.players = data->values.players;
+    m_sim.specialBirth = data->values.specialBirth;
+    m_sim.view = data->values.view;
+    m_sim.attention = data->values.attention;
     ++m_restoreGeneration;
     return true;
 }
@@ -321,18 +502,18 @@ s32 Generators::paramOf(const ItemInstance& instance, usize index) {
 }
 
 Generators::Bodies* Generators::bodiesOf(s32 kind) {
-    for (auto& bodies : m_bodies) {
+    for (auto& bodies : m_sim.bodies) {
         if (bodies->kind == kind) {
-            return bodies.get();
+            return bodies;
         }
     }
     return nullptr;
 }
 
 const Generators::Bodies* Generators::bodiesOf(s32 kind) const {
-    for (const auto& bodies : m_bodies) {
+    for (const auto& bodies : m_sim.bodies) {
         if (bodies->kind == kind) {
-            return bodies.get();
+            return bodies;
         }
     }
     return nullptr;
@@ -343,6 +524,14 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
     if (bodiesOf(kind) != nullptr) {
         return true;
     }
+    for (auto& cached : m_bodyCache) {
+        if (cached->kind == kind) {
+            cached->textures.restoreClock({});
+            m_sim.bodies.push_back(cached.get());
+            ++m_restoreGeneration;
+            return true;
+        }
+    }
     if (kind >= 0 && !enemies.loadKind(kind)) {
         return false;
     }
@@ -352,6 +541,7 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
     }
     auto bodies = std::make_unique<Bodies>();
     bodies->kind = kind;
+    bodies->archive = archive;
     bodies->textures.bind(archive->trees.textureAnimations(), archive->textures, device, lenders);
     const EnemyKind& info = enemyKind(kind);
     // The state's object: "GEN_GRU3", with the authored suffixes the original retries.
@@ -380,7 +570,8 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
                                                            device, lenders);
         }
     }
-    m_bodies.push_back(std::move(bodies));
+    m_sim.bodies.push_back(bodies.get());
+    m_bodyCache.push_back(std::move(bodies));
     ++m_restoreGeneration;
     return true;
 }
@@ -390,10 +581,10 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
                       std::span<const LevelEnemy> roster, s32 realm, ItemArchive* realmItems,
                       std::span<TextureSet* const> lenders) {
     clear();
-    m_collision = collision;
+    m_sim.collision = collision;
     const auto authored = itemSupportWorld(layout, collision);
-    m_scales = scales;
-    m_players = players;
+    m_sim.scales = scales;
+    m_sim.players = players;
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     for (const ItemInstance& instance : layout.itemInstances()) {
         if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
@@ -504,14 +695,19 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
         bindSupport(generator, info, instance.position,
                     itemSupportAt(instance.position, collision, authored ? &*authored : nullptr));
         generator.countdown = 0;
-        m_generators.push_back(std::move(generator));
+        if (m_sim.nextInstance == 0) {
+            return false;
+        }
+        generator.instance = m_sim.nextInstance;
+        m_sim.generators.push_back(std::move(generator));
+        ++m_sim.nextInstance;
     }
     syncFloors();
-    m_roster.reserve(m_generators.size());
-    for (const auto& generator : m_generators) {
+    m_roster.reserve(m_sim.generators.size());
+    for (const auto& generator : m_sim.generators) {
         m_roster.push_back(generator);
     }
-    m_bound = true;
+    m_sim.bound = true;
     return true;
 }
 
@@ -537,14 +733,14 @@ void Generators::bindSupport(Generator& generator, const ItemInfo& info, const V
 }
 
 void Generators::syncFloors() {
-    if (m_collision == nullptr) {
+    if (m_sim.collision == nullptr) {
         return;
     }
-    for (Generator& generator : m_generators) {
+    for (Generator& generator : m_sim.generators) {
         if (generator.support < 0) {
             continue;
         }
-        const auto transform = m_collision->objectTransform(generator.support);
+        const auto transform = m_sim.collision->objectTransform(generator.support);
         if (!transform) {
             generator.support = -1;
             continue;
@@ -556,7 +752,7 @@ void Generators::syncFloors() {
         generator.direction = Vec3{std::sin(generator.yaw), 0, std::cos(generator.yaw)};
         generator.box.centre = Vec3{generator.placement * Vec4{generator.boxOffset, 1}};
         generator.box.yaw = generator.yaw + generator.boxYaw;
-        if (generator.bossFigure != nullptr) {
+        if (generator.bossFigure.has_value()) {
             generator.bossFigure->placeAt(generator.placement);
         }
     }
@@ -565,8 +761,8 @@ void Generators::syncFloors() {
 bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchive& items,
                            Enemies& enemies, s32 kind, const Mat4& placement,
                            const WorldCollision* collision, std::string_view tree, bool settled) {
-    if (info.type != ItemInfo::kGenerator || info.name != "BOSSGEN" || kind < 0 ||
-        kind >= kEnemyKindCount || !enemies.loadKind(kind)) {
+    if (m_sim.nextInstance == 0 || info.type != ItemInfo::kGenerator || info.name != "BOSSGEN" ||
+        kind < 0 || kind >= kEnemyKindCount || !enemies.loadKind(kind)) {
         return false;
     }
     Generator generator;
@@ -580,16 +776,16 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.countdown = 0;
     generator.viewRadius = kGeneratorViewScale * std::max(info.radius, info.height);
     generator.alwaysActive = (info.activeType & 0x40U) != 0;
-    generator.most = static_cast<s32>(static_cast<f32>(kDefaultMost[0]) * m_scales.most);
-    generator.interval = static_cast<s32>(static_cast<f32>(kDefaultInterval[0]) * m_scales.rate);
+    generator.most = static_cast<s32>(static_cast<f32>(kDefaultMost[0]) * m_sim.scales.most);
+    generator.interval =
+        static_cast<s32>(static_cast<f32>(kDefaultInterval[0]) * m_sim.scales.rate);
     generator.health = generator.threshold =
-        std::trunc(static_cast<f32>(info.hitPoints) * m_scales.health);
+        std::trunc(static_cast<f32>(info.hitPoints) * m_sim.scales.health);
     generator.armor = static_cast<f32>(info.armor);
     ItemInstance instance;
     instance.position = Vec3{placement[3]};
     const f32 yaw = std::atan2(placement[2].x, placement[2].z);
     instance.rotation.y = -yaw;
-    generator.bossFigure = std::make_unique<ItemFigure>();
     // AtreeMatchAnyHeader also searches the summoned species' loaded archive.
     // The Genie's BOSSGEN tree lives with WIND, not with DJINN or the level items.
     AssetScope scope(items);
@@ -597,8 +793,19 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
         scope.add(*brood);
     }
     ItemArchive* art = scope.archiveForTree(tree);
+    // Keep an unstarted native value with a shared artwork cache. Replaying a
+    // birth starts from the same clock/generation without resolving art again.
+    ItemArchive* archive = art != nullptr ? art : &items;
+    auto prototype = std::ranges::find_if(m_bossPrototypes, [&](const BossPrototype& value) {
+        return value.archive == archive && value.device == &device && value.tree == tree;
+    });
+    if (prototype == m_bossPrototypes.end()) {
+        m_bossPrototypes.push_back({archive, &device, std::string{tree}, {}});
+        prototype = std::prev(m_bossPrototypes.end());
+    }
+    generator.bossFigure = prototype->figure;
     // A missing BOSSGEN tree does not prevent PlaceItem from creating its gameplay object.
-    generator.bossFigure->place(device, art != nullptr ? *art : items, tree, instance, collision);
+    generator.bossFigure->place(device, *archive, tree, instance, collision);
     generator.bossFigure->play(0, !settled);
     if (settled) {
         // The projectile has already finished its landing before it leaves the generator.
@@ -617,33 +824,39 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.box = generator.bossFigure->obstacle(info);
     bindSupport(generator, info, instance.position, collision);
     if (collision != nullptr) {
-        m_collision = collision;
+        m_sim.collision = collision;
     }
-    m_generators.push_back(std::move(generator));
+    generator.instance = m_sim.nextInstance;
+    m_sim.generators.push_back(std::move(generator));
+    ++m_sim.nextInstance;
     ++m_restoreGeneration;
     syncFloors();
     return true;
 }
 
 void Generators::clear() {
+    ++m_localEpoch;
     ++m_restoreGeneration;
-    m_bound = false;
+    m_sim.bound = false;
     m_roster.clear();
-    m_collision = nullptr;
-    m_view.reset();
-    m_attention.reset();
-    m_specialBirth = 0;
-    m_generators.clear();
-    for (auto& bodies : m_bodies) {
+    m_sim.collision = nullptr;
+    m_sim.view.reset();
+    m_sim.attention.reset();
+    m_sim.specialBirth = 0;
+    m_sim.nextInstance = 1;
+    m_sim.generators.clear();
+    for (auto& bodies : m_sim.bodies) {
         for (TreeModel& model : bodies->models) {
             model.clear();
         }
     }
-    m_bodies.clear();
+    m_sim.bodies.clear();
+    m_bodyCache.clear();
+    m_bossPrototypes.clear();
 }
 
 bool Generators::seen(const Generator& generator) const {
-    if (!m_view) {
+    if (!m_sim.view) {
         return true;
     }
     // SetItem's collision and attention anchors share the lifted, rotated offset.
@@ -651,13 +864,13 @@ bool Generators::seen(const Generator& generator) const {
         TargetAssist::itemAcquisition(generator.placement, generator.collisionOffset,
                                       generator.targetRadius, generator.targetHeight, 1)
             .point;
-    if (!m_view->sees(point, generator.viewRadius)) {
+    if (!m_sim.view->sees(point, generator.viewRadius)) {
         return false;
     }
     // do_items applies this extra gate in normal/debug camera modes (1/2), not
     // the legacy camera used by bosses. An expanded sphere alone admits distant huts.
-    return !m_attention ||
-           glm::dot(point - *m_attention, point - *m_attention) <= kAttentionRangeSquared;
+    return !m_sim.attention ||
+           glm::dot(point - *m_sim.attention, point - *m_sim.attention) <= kAttentionRangeSquared;
 }
 
 void Generators::updatePresence(Generator& generator, bool seen) const {
@@ -666,11 +879,11 @@ void Generators::updatePresence(Generator& generator, bool seen) const {
     if (generator.presence == Generator::Presence::Hidden) {
         if (seen) {
             generator.presence = Generator::Presence::Suppressed;
-        } else if (shownToParty(generator.minPlayers, m_players)) {
+        } else if (shownToParty(generator.minPlayers, m_sim.players)) {
             generator.presence = Generator::Presence::Shown;
         }
     } else if (generator.presence == Generator::Presence::Shown && !seen &&
-               !shownToParty(generator.minPlayers, m_players)) {
+               !shownToParty(generator.minPlayers, m_sim.players)) {
         generator.presence = Generator::Presence::Hidden;
     }
     generator.box.solid = generator.presence == Generator::Presence::Shown && generator.state > 0;
@@ -678,10 +891,10 @@ void Generators::updatePresence(Generator& generator, bool seen) const {
 
 void Generators::applyBroodEvents(Enemies& enemies) {
     for (const auto& event : enemies.takeGeneratorEvents()) {
-        if (event.generator < 0 || static_cast<usize>(event.generator) >= m_generators.size()) {
+        if (event.generator < 0 || static_cast<usize>(event.generator) >= m_sim.generators.size()) {
             continue;
         }
-        auto& generator = m_generators[static_cast<usize>(event.generator)];
+        auto& generator = m_sim.generators[static_cast<usize>(event.generator)];
         switch (event.kind) {
         case EnemyGeneratorEvent::Kind::Born: ++generator.living; break;
         case EnemyGeneratorEvent::Kind::Detached:
@@ -704,23 +917,23 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
     }
     // Texture cycles belong to the archive, not to each placed generator or its
     // current damage state. Keep them running even when its brood cannot spawn.
-    for (auto& bodies : m_bodies) {
+    for (auto& bodies : m_sim.bodies) {
         bodies->textures.advance(static_cast<f32>(ticks) / 60.0f);
     }
     // Refresh the entire obstacle roster before any generator attempts a birth.
-    for (Generator& generator : m_generators) {
+    for (Generator& generator : m_sim.generators) {
         updatePresence(generator, seen(generator));
     }
     // uncouple_enemy releases quota before the death animation. A patrol's
     // departure resets the counter, which cannot be reconstructed by a census.
     applyBroodEvents(enemies);
-    for (usize g = 0; g < m_generators.size(); ++g) {
-        Generator& generator = m_generators[g];
+    for (usize g = 0; g < m_sim.generators.size(); ++g) {
+        Generator& generator = m_sim.generators[g];
         const bool visible = seen(generator);
         if (generator.presence != Generator::Presence::Shown) {
             continue;
         }
-        if (generator.bossFigure != nullptr && generator.state > 0) {
+        if (generator.bossFigure.has_value() && generator.state > 0) {
             generator.bossFigure->update(static_cast<f32>(ticks) / 60.0f);
         }
         if (generator.state <= 0 || generator.tier <= 0) {
@@ -759,7 +972,7 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
         spawn.tier = generator.tier;
         spawn.algorithm = generator.algorithm;
         if (generator.kind == -2 || generator.kind == -3) {
-            const usize at = m_specialBirth++ % kTempleKinds.size();
+            const usize at = m_sim.specialBirth++ % kTempleKinds.size();
             spawn.kind = generator.kind == -2 ? kTempleKinds[at] : kHellKinds[at];
             spawn.tier = generator.kind == -2 ? 2 : 3;
             spawn.algorithm = generator.kind == -2 ? 7 : kHellAlgorithms[at];
@@ -776,9 +989,9 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
             spawn.zigZagSide = (generator.bred & 1) == 0 ? 1 : -1;
         }
         std::vector<Obstacle> birthObstacles{obstacles.begin(), obstacles.end()};
-        for (usize other = 0; other < m_generators.size(); ++other) {
+        for (usize other = 0; other < m_sim.generators.size(); ++other) {
             if (other != g && standing(static_cast<s32>(other))) {
-                birthObstacles.push_back(m_generators[other].box);
+                birthObstacles.push_back(m_sim.generators[other].box);
             }
         }
         const auto child = enemies.spawn(spawn, players, birthObstacles);
@@ -816,10 +1029,10 @@ s32 Generators::stateFor(const Generator& generator, bool destroyed) {
 }
 
 std::optional<GeneratorEvent> Generators::strike(s32 id, f32 power, [[maybe_unused]] s32 byPlayer) {
-    if (id < 0 || static_cast<usize>(id) >= m_generators.size()) {
+    if (id < 0 || static_cast<usize>(id) >= m_sim.generators.size()) {
         return std::nullopt;
     }
-    Generator& generator = m_generators[static_cast<usize>(id)];
+    Generator& generator = m_sim.generators[static_cast<usize>(id)];
     if (generator.state <= 0 || generator.presence != Generator::Presence::Shown ||
         generator.armor < 0.0f) {
         return std::nullopt;
@@ -851,6 +1064,7 @@ std::optional<GeneratorEvent> Generators::strike(s32 id, f32 power, [[maybe_unus
     event.placement = generator.placement;
     event.stateChanged = changed;
     event.destroyed = state == 0;
+    event.instance = generator.instance;
     if (event.destroyed) {
         generator.box.solid = false;
     }
@@ -862,8 +1076,8 @@ std::optional<s32> Generators::struckBy(const Vec3& from, const Vec3& to, f32 ra
     f32 bestDistance = 0.0f;
     const Vec3 sweep = to - from;
     const f32 length = glm::length(sweep);
-    for (usize g = 0; g < m_generators.size(); ++g) {
-        const Generator& generator = m_generators[g];
+    for (usize g = 0; g < m_sim.generators.size(); ++g) {
+        const Generator& generator = m_sim.generators[g];
         if (generator.state <= 0 || generator.presence != Generator::Presence::Shown) {
             continue;
         }
@@ -888,8 +1102,8 @@ std::optional<s32> Generators::struckBy(const Vec3& from, const Vec3& to, f32 ra
 
 std::vector<s32> Generators::within(const Vec3& centre, f32 radius) const {
     std::vector<s32> out;
-    for (usize g = 0; g < m_generators.size(); ++g) {
-        const Generator& generator = m_generators[g];
+    for (usize g = 0; g < m_sim.generators.size(); ++g) {
+        const Generator& generator = m_sim.generators[g];
         if (generator.state <= 0 || generator.presence != Generator::Presence::Shown) {
             continue;
         }
@@ -904,7 +1118,7 @@ std::vector<s32> Generators::within(const Vec3& centre, f32 radius) const {
 
 std::vector<Obstacle> Generators::obstacles() const {
     std::vector<Obstacle> out;
-    for (const Generator& generator : m_generators) {
+    for (const Generator& generator : m_sim.generators) {
         if (generator.state > 0 && generator.presence == Generator::Presence::Shown) {
             out.push_back(generator.box);
         }
@@ -914,8 +1128,8 @@ std::vector<Obstacle> Generators::obstacles() const {
 
 std::vector<Generators::Contact> Generators::identifiedObstacles() const {
     std::vector<Contact> out;
-    for (usize index = 0; index < m_generators.size(); ++index) {
-        const auto& generator = m_generators[index];
+    for (usize index = 0; index < m_sim.generators.size(); ++index) {
+        const auto& generator = m_sim.generators[index];
         if (generator.state > 0 && generator.presence == Generator::Presence::Shown) {
             out.push_back({static_cast<u32>(index), generator.box});
         }
@@ -925,7 +1139,7 @@ std::vector<Generators::Contact> Generators::identifiedObstacles() const {
 
 std::vector<Obstacle> Generators::enemyObstacles() const {
     std::vector<Obstacle> out;
-    for (const Generator& generator : m_generators) {
+    for (const Generator& generator : m_sim.generators) {
         if (generator.state > 0 && generator.presence == Generator::Presence::Shown &&
             generator.kind != kWormKind) {
             out.push_back(generator.box);
@@ -936,12 +1150,12 @@ std::vector<Obstacle> Generators::enemyObstacles() const {
 
 void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 presentationAlpha) {
-    for (const Generator& generator : m_generators) {
+    for (const Generator& generator : m_sim.generators) {
         if (generator.presence != Generator::Presence::Shown) {
             continue;
         }
         if (generator.boss) {
-            if (generator.state > 0 && generator.bossFigure != nullptr) {
+            if (generator.state > 0 && generator.bossFigure.has_value()) {
                 generator.bossFigure->draw(device, clip, lighting);
             }
             continue;
@@ -963,7 +1177,7 @@ void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
 
 std::vector<Generators::BodyResource> Generators::bodyResources() const {
     std::vector<BodyResource> result;
-    for (const auto& bodies : m_bodies) {
+    for (const auto& bodies : m_sim.bodies) {
         for (s32 state = 0; state <= kStates; ++state) {
             const auto index = static_cast<usize>(state);
             if (bodies->models[index].bound()) {
@@ -979,35 +1193,35 @@ std::vector<Generators::BodyResource> Generators::bodyResources() const {
 
 std::vector<Generators::Presentation> Generators::presentation() const {
     std::vector<Presentation> result;
-    for (usize index = 0; index < m_generators.size(); ++index) {
+    for (usize index = 0; index < m_sim.generators.size(); ++index) {
         if (!bodyShown(static_cast<s32>(index))) {
             continue;
         }
-        const auto& generator = m_generators[index];
+        const auto& generator = m_sim.generators[index];
         const auto* bodies = bodiesOf(generator.kind);
         result.push_back({index, generator.kind, generator.state, generator.placement,
                           bodies != nullptr ? static_cast<f32>(bodies->textures.frame()) : 0,
-                          generator.bossFigure.get()});
+                          generator.bossFigure ? &*generator.bossFigure : nullptr});
     }
     return result;
 }
 
 bool Generators::standing(s32 id) const {
-    return id >= 0 && static_cast<usize>(id) < m_generators.size() &&
-           m_generators[static_cast<usize>(id)].state > 0 &&
-           m_generators[static_cast<usize>(id)].presence == Generator::Presence::Shown;
+    return id >= 0 && static_cast<usize>(id) < m_sim.generators.size() &&
+           m_sim.generators[static_cast<usize>(id)].state > 0 &&
+           m_sim.generators[static_cast<usize>(id)].presence == Generator::Presence::Shown;
 }
 
 bool Generators::bodyShown(s32 id) const {
-    if (id < 0 || static_cast<usize>(id) >= m_generators.size()) {
+    if (id < 0 || static_cast<usize>(id) >= m_sim.generators.size()) {
         return false;
     }
-    const Generator& generator = m_generators[static_cast<usize>(id)];
+    const Generator& generator = m_sim.generators[static_cast<usize>(id)];
     if (generator.presence != Generator::Presence::Shown) {
         return false;
     }
     if (generator.boss) {
-        return generator.state > 0 && generator.bossFigure != nullptr &&
+        return generator.state > 0 && generator.bossFigure.has_value() &&
                generator.bossFigure->hasFigure();
     }
     const Bodies* bodies = bodiesOf(generator.kind);
@@ -1016,37 +1230,37 @@ bool Generators::bodyShown(s32 id) const {
 }
 
 s32 Generators::stateOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].state;
+    return m_sim.generators[static_cast<usize>(id)].state;
 }
 f32 Generators::healthOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].health;
+    return m_sim.generators[static_cast<usize>(id)].health;
 }
 s32 Generators::kindOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].kind;
+    return m_sim.generators[static_cast<usize>(id)].kind;
 }
 s32 Generators::tierOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].tier;
+    return m_sim.generators[static_cast<usize>(id)].tier;
 }
 s32 Generators::algorithmOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].algorithm;
+    return m_sim.generators[static_cast<usize>(id)].algorithm;
 }
 s32 Generators::mostOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].most;
+    return m_sim.generators[static_cast<usize>(id)].most;
 }
 s32 Generators::intervalOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].interval;
+    return m_sim.generators[static_cast<usize>(id)].interval;
 }
 s32 Generators::countdownOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].countdown;
+    return m_sim.generators[static_cast<usize>(id)].countdown;
 }
 s32 Generators::bredOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].bred;
+    return m_sim.generators[static_cast<usize>(id)].bred;
 }
 const Vec3& Generators::positionOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].position;
+    return m_sim.generators[static_cast<usize>(id)].position;
 }
 MissileTarget Generators::target(s32 index, s32 id) const {
-    const auto& generator = m_generators.at(static_cast<usize>(index));
+    const auto& generator = m_sim.generators.at(static_cast<usize>(index));
     MissileTarget result{id, generator.position,
                          std::max(generator.box.halfAcross, generator.box.halfAlong),
                          generator.box.height};
@@ -1058,7 +1272,7 @@ MissileTarget Generators::target(s32 index, s32 id) const {
 }
 
 const Obstacle& Generators::boxOf(s32 id) const {
-    return m_generators[static_cast<usize>(id)].box;
+    return m_sim.generators[static_cast<usize>(id)].box;
 }
 
 } // namespace gdl::game

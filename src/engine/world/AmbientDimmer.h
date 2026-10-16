@@ -12,7 +12,13 @@ namespace gdl {
  * a twentieth a frame.
  */
 class AmbientDimmer {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const AmbientDimmer& value) {
+        const auto& [wanted, current, holdLeft, frames] = value;
+        visitor.values(wanted, current, holdLeft, frames);
+    }
 public:
+    bool operator==(const AmbientDimmer&) const = default;
+
     static constexpr f32 kFrameSeconds = 1.0f / 30.0f; ///< the original's frame, which paces it
     static constexpr f32 kHoldSeconds = 2.0f / 30.0f;  ///< how long one asking lasts
     static constexpr f32 kDarkenStep = 0.25f;

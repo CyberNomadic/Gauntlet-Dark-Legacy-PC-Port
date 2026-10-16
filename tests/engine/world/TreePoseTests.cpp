@@ -51,6 +51,29 @@ bool near(const Vec3& a, const Vec3& b) {
     return glm::all(glm::epsilonEqual(a, b, 1e-5f));
 }
 
+TEST_CASE("native pose equality checks transforms and their loaded hierarchy",
+          "[pose][local-rewind]") {
+    const auto tree = sampleTree();
+    const auto otherTree = tree;
+    TreePose pose;
+    pose.evaluate(tree, 0, 2);
+    const auto saved = pose;
+    REQUIRE(pose.equalLocal(saved));
+    auto node = pose.poses()[1];
+    node.rotation.y = 0.25f;
+    pose.setNodePose(1, node);
+    CHECK_FALSE(pose.equalLocal(saved));
+    pose = saved;
+    const auto drawn = pose.drawMatrices(Mat4{1}, CameraFrame::of(WorldCamera{}));
+    CHECK(drawn.size() == pose.size());
+    CHECK(pose.equalLocal(saved));
+    TreePose other;
+    other.evaluate(otherTree, 0, 2);
+    CHECK_FALSE(other.equalLocal(saved));
+    other = saved;
+    CHECK(other.equalLocal(saved));
+}
+
 TEST_CASE("a held node pose keeps following its animated parent", "[world][pose]") {
     const TreeInfo tree = sampleTree();
     TreePose pose;

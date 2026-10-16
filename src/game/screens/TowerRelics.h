@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -23,6 +24,9 @@ class TowerRelics {
 public:
     enum class Kind : u8 { Rune, Shard, Followup };
     struct Entry {
+        template <class Visitor> friend void visitNativeState(Visitor& digest, const Entry& value) {
+            digest.template fields<2>(value);
+        }
         Kind kind = Kind::Rune;
         s32 index = 0;
         u16 bit() const { return static_cast<u16>(1U << static_cast<u32>(index)); }
@@ -52,18 +56,18 @@ public:
     void drawWizard(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                     const WorldCamera& camera, f32 frameBlend = -1.0f) const;
     void drawCaption(Canvas& canvas, const TextPainter& text, f32 width, f32 height) const;
-    bool active() const { return m_current < m_entries.size(); }
-    const Entry* current() const { return active() ? &m_entries[m_current] : nullptr; }
-    Phase phase() const { return active() ? m_phase : Phase::Done; }
+    bool active() const { return m_sim.current < m_sim.entries.size(); }
+    const Entry* current() const { return active() ? &m_sim.entries[m_sim.current] : nullptr; }
+    Phase phase() const { return active() ? m_sim.phase : Phase::Done; }
     const std::optional<WorldCamera>& camera() const;
-    u16 displayedRunes() const { return m_runes; }
-    u16 displayedShards() const { return m_shards; }
+    u16 displayedRunes() const { return m_sim.runes; }
+    u16 displayedShards() const { return m_sim.shards; }
     const EffectTrees& figures() const { return m_figures; }
     const EffectTrees& wizard() const { return m_wizard; }
-    u16 pendingCeremonies() const { return m_pendingCeremonies; }
+    u16 pendingCeremonies() const { return m_sim.pendingCeremonies; }
     f32 revealAlpha(TowerCompletion::Kind kind) const;
-    usize captionPage() const { return m_page; }
-    usize captionLetters() const { return static_cast<usize>(std::max(m_ticks, 0) / 2); }
+    usize captionPage() const { return m_sim.page; }
+    usize captionLetters() const { return static_cast<usize>(std::max(m_sim.ticks, 0) / 2); }
     std::string_view caption() const;
     static void acknowledge(Relics& relics, const Entry& entry);
 
@@ -74,27 +78,49 @@ private:
     void appendFollowup(TowerCompletion::Kind kind, const MessageTable& strings);
     void finish(Cue& cue);
     void updateLights();
-    std::vector<Entry> m_entries;
-    std::vector<std::vector<std::string>> m_captions;
-    usize m_page = 0;
-    usize m_current = 0;
-    u16 m_runes = 0;
-    u16 m_shards = 0;
-    u16 m_pendingCeremonies = 0;
-    s32 m_ticks = -120;
-    bool m_spoken = false;
-    bool m_revealStarted = false;
-    Phase m_phase = Phase::Speech;
-    f32 m_placementLeft = 0;
-    f32 m_hitIn = 0; ///< seconds until a shard's pane sounds its strike; nought once sounded
+    struct Simulation {
+        std::vector<Entry> entries;
+        std::vector<std::vector<std::string>> captions;
+        usize page = 0;
+        usize current = 0;
+        u16 runes = 0;
+        u16 shards = 0;
+        u16 pendingCeremonies = 0;
+        s32 ticks = -120;
+        bool spoken = false;
+        bool revealStarted = false;
+        Phase phase = Phase::Speech;
+        f32 placementLeft = 0;
+        f32 hitIn = 0; ///< seconds until a shard's pane sounds its strike; nought once sounded
+        Vec3 wizardPosition{0};
+        f32 wizardYaw = 0;
+        u32 wizardMarker = 0;
+        std::optional<WorldCamera> speechCamera;
+        std::optional<WorldCamera> placementCamera;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class TowerRelics;
+        Simulation state;
+        EffectTrees::LocalSnapshot figures;
+        EffectTrees::LocalSnapshot wizard;
+        const TowerRelics* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     RenderDevice* m_device = nullptr;
     LevelWorld* m_world = nullptr;
     EffectTrees m_figures;
     EffectTrees m_wizard;
-    Vec3 m_wizardPosition{0};
-    f32 m_wizardYaw = 0;
-    u32 m_wizardMarker = 0;
-    std::optional<WorldCamera> m_speechCamera;
-    std::optional<WorldCamera> m_placementCamera;
 };
 } // namespace gdl::game

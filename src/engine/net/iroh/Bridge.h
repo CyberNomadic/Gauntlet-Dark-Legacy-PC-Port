@@ -19,7 +19,8 @@ struct GdlIrohStats {
     std::uint32_t relayed;
 };
 // NOLINTBEGIN(readability-identifier-naming) -- C ABI symbols match the Rust bridge.
-GdlIroh* gdl_iroh_create(const std::uint8_t* invite, std::size_t length, std::uint32_t local);
+// Mode: 0 automatic, 1 local-only, 2 relay-only. Other values are rejected.
+GdlIroh* gdl_iroh_create(const std::uint8_t* invite, std::size_t length, std::uint32_t mode);
 void gdl_iroh_destroy(GdlIroh* handle);
 std::uint32_t gdl_iroh_state(const GdlIroh* handle);
 std::size_t gdl_iroh_text(const GdlIroh* handle, std::uint32_t ticket, std::uint8_t* output,

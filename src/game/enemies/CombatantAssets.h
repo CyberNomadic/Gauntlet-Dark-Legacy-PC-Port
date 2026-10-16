@@ -35,7 +35,7 @@ struct CombatantAssets {
     std::vector<Attachment> attachments;
     std::map<std::string, TreeModel> brokenModels; ///< PREFIX + D + node name replacements
     std::map<std::pair<std::string, std::string>, TreeModel> replacementModels;
-    const TreeModel* prepareReplacement(RenderDevice& device, std::string_view node,
+    TreeModel* prepareReplacement(RenderDevice& device, std::string_view node,
                                         std::string_view object);
     TextureAnimator textures;
     std::map<std::string, std::vector<const Texture*>, std::less<>> skins;
@@ -58,9 +58,14 @@ struct CombatantAssets {
     void clear();
 
 private:
+    friend class Combatant;
+    friend class Critters;
+    friend class Bosses;
     friend class CombatantCheckpoint;
     friend class CombatantProjectilesCheckpoint;
     /** Reload/clear invalidates prepared borrowers even if allocator addresses repeat. */
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
+    /** Only weakly borrowed by local states; diagnostics must not keep it alive. */
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

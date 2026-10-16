@@ -26,6 +26,9 @@ struct ItemAttack {
     s32 chargeKind = 0;
     u32 chargeMask = 0;
     bool head = false;
+    template <class D> friend void visitNativeState(D& digest, const ItemAttack& value) {
+        digest.template fields<11>(value);
+    }
 
     static std::optional<ItemAttack> select(const PowerupEffects& worn);
     f32 damageAt(f32 elapsed, f32 lifetime) const;

@@ -28,6 +28,23 @@ const INVITE_LIMIT: usize = 2048;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransportMode {
+    Automatic,
+    Local,
+    RelayOnly,
+}
+impl TransportMode {
+    fn from_abi(mode: u32) -> Option<Self> {
+        match mode {
+            0 => Some(Self::Automatic),
+            1 => Some(Self::Local),
+            2 => Some(Self::RelayOnly),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Ticket {
     version: u8,
@@ -121,16 +138,21 @@ impl Drop for Handle {
     }
 }
 impl Handle {
-    fn new(invite: &str, local: bool) -> Option<Self> {
+    fn new(invite: &str, mode: TransportMode) -> Option<Self> {
         let ticket = if invite.is_empty() {
             None
         } else {
             Some(Ticket::decode(invite)?)
         };
-        if local
+        if mode == TransportMode::Local
             && ticket
                 .as_ref()
                 .is_some_and(|ticket| ticket.address.relay_urls().next().is_some())
+        {
+            return None;
+        }
+        if mode == TransportMode::RelayOnly
+            && ticket.as_ref().is_some_and(|ticket| ticket.address.relay_urls().next().is_none())
         {
             return None;
         }
@@ -146,7 +168,7 @@ impl Handle {
                         .enable_all()
                         .build()
                         .map_err(|_| "Unable to start network worker")?;
-                    runtime.block_on(run(state.clone(), events_tx, stopped, ticket, local))
+                    runtime.block_on(run(state.clone(), events_tx, stopped, ticket, mode))
                 }));
                 let error = match result {
                     Ok(Ok(())) => None,
@@ -220,7 +242,7 @@ async fn run(
     events: mpsc::Sender<Event>,
     mut stop: oneshot::Receiver<()>,
     ticket: Option<Ticket>,
-    local: bool,
+    mode: TransportMode,
 ) -> Result<(), &'static str> {
     let config = QuicTransportConfig::builder()
         .max_concurrent_bidi_streams(1u32.into())
@@ -233,15 +255,23 @@ async fn run(
         .build();
     // Tickets carry the addressing information. No public room directory, DNS
     // publication, telemetry account or automatic router mapping is required.
-    let binding = Endpoint::builder(presets::Minimal)
-        .relay_mode(if local {
+    let builder = Endpoint::builder(presets::Minimal)
+        .relay_mode(if mode == TransportMode::Local {
             RelayMode::Disabled
         } else {
             RelayMode::Default
         })
         .alpns(vec![ALPN.to_vec()])
-        .transport_config(config)
-        .bind();
+        .transport_config(config);
+    // Removing advertised addresses alone does not disable hole punching.
+    // Removing the actual IP transports prevents direct paths for the entire
+    // endpoint lifetime, including peers on the same machine or LAN.
+    let builder = if mode == TransportMode::RelayOnly {
+        builder.clear_ip_transports()
+    } else {
+        builder
+    };
+    let binding = builder.bind();
     let endpoint = tokio::select! {
         _ = &mut stop => return Ok(()),
         result = binding => result.map_err(|_| "Unable to open network endpoint")?,
@@ -260,7 +290,7 @@ async fn run(
             shared.lock().unwrap().state = 1;
             serve(shared.clone(), events.clone(), connection, streams, 1).await;
         } else {
-            if !local {
+            if mode != TransportMode::Local {
                 tokio::time::timeout(CONNECT_TIMEOUT, endpoint.online())
                     .await
                     .map_err(|_| "No relay is reachable; check your Internet connection")?;
@@ -482,9 +512,12 @@ pub struct WireStats {
 pub unsafe extern "C" fn gdl_iroh_create(
     invite: *const u8,
     length: usize,
-    local: u32,
+    mode: u32,
 ) -> *mut Handle {
     catch_unwind(|| {
+        let Some(mode) = TransportMode::from_abi(mode) else {
+            return std::ptr::null_mut();
+        };
         if length > INVITE_LIMIT || (length > 0 && invite.is_null()) {
             return std::ptr::null_mut();
         }
@@ -496,7 +529,7 @@ pub unsafe extern "C" fn gdl_iroh_create(
         let Ok(text) = std::str::from_utf8(bytes) else {
             return std::ptr::null_mut();
         };
-        Handle::new(text, local != 0).map_or(std::ptr::null_mut(), |handle| {
+        Handle::new(text, mode).map_or(std::ptr::null_mut(), |handle| {
             Box::into_raw(Box::new(handle))
         })
     })
@@ -660,7 +693,7 @@ mod tests {
         }
     }
     fn host() -> Handle {
-        let host = Handle::new("", true).unwrap();
+        let host = Handle::new("", TransportMode::Local).unwrap();
         until(|| host.shared.lock().unwrap().state != 0);
         assert_eq!(host.shared.lock().unwrap().state, 1);
         host
@@ -668,7 +701,7 @@ mod tests {
     fn pair() -> (Handle, Handle, u64) {
         let mut host = host();
         let ticket = host.shared.lock().unwrap().invite.clone();
-        let mut guest = Handle::new(&ticket, true).unwrap();
+        let mut guest = Handle::new(&ticket, TransportMode::Local).unwrap();
         let mut host_id = 0;
         let mut guest_ready = false;
         until(|| {
@@ -726,7 +759,7 @@ mod tests {
         let mut host = host();
         let mut ticket = Ticket::decode(&host.shared.lock().unwrap().invite).unwrap();
         ticket.token[0] ^= 1;
-        let guest = Handle::new(&ticket.encode().unwrap(), true).unwrap();
+        let guest = Handle::new(&ticket.encode().unwrap(), TransportMode::Local).unwrap();
         until(|| guest.shared.lock().unwrap().state == 2);
         assert!(host.events.try_recv().is_err());
         assert_eq!(host.shared.lock().unwrap().state, 1);
@@ -738,6 +771,7 @@ mod tests {
         let text = host.shared.lock().unwrap().invite.clone();
         let mut ticket = Ticket::decode(&text).unwrap();
         assert!(ticket.address.relay_urls().next().is_none());
+        assert!(Handle::new(&text, TransportMode::RelayOnly).is_none());
         assert!(Ticket::decode(&format!(" \r\n{text} \n")).is_some());
         for bad in [
             String::new(),
@@ -756,7 +790,7 @@ mod tests {
         ticket.address.addrs.insert(iroh::TransportAddr::Relay(
             "https://relay.invalid".parse().unwrap(),
         ));
-        assert!(Handle::new(&ticket.encode().unwrap(), true).is_none());
+        assert!(Handle::new(&ticket.encode().unwrap(), TransportMode::Local).is_none());
     }
     #[test]
     fn fragments_accept_reordering_but_reject_oversize_and_bound_memory() {
@@ -783,7 +817,13 @@ mod tests {
         let mut ticket = Ticket::decode(&host.shared.lock().unwrap().invite).unwrap();
         ticket.address.id = iroh::SecretKey::generate().public();
         let start = Instant::now();
-        drop(Handle::new(&ticket.encode().unwrap(), true).unwrap());
+        drop(Handle::new(&ticket.encode().unwrap(), TransportMode::Local).unwrap());
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn unknown_abi_modes_are_rejected_without_starting_networking() {
+        for mode in [3, 4, u32::MAX] {
+            assert!(unsafe { gdl_iroh_create(std::ptr::null(), 0, mode) }.is_null());
+        }
     }
 }

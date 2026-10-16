@@ -45,6 +45,8 @@ public:
     /** Silence a turning platform while gameplay is paused. Its next movement cue
      * restarts the loop; a platform that has settled cannot replay it. */
     void pause(LevelSoundscape& audio);
+    /** One aggregate turntable voice, derived after the corrected native tick. */
+    void gatherAudio(const LevelWorld& world, LevelSoundscape& audio) const;
     SoundHandle turningSound() const { return m_rotatorSound; }
 
 private:

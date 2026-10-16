@@ -11,6 +11,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "formats/TextRom.h"
 
@@ -27,6 +28,7 @@ std::string cleanPage(std::string page) {
 } // namespace
 
 bool MessageTable::load(const std::filesystem::path& file) {
+    m_nativeContent.reset();
     m_fonts.clear();
     m_messages.clear();
     m_lists.clear();
@@ -147,6 +149,7 @@ std::string MessageTable::textId(std::string_view prefix, std::string_view name,
 }
 
 usize MessageTable::translate(const StringTable& strings, std::string_view prefix) {
+    m_nativeContent.reset();
     usize taken = 0;
     for (MessageInfo& message : m_messages) {
         if (message.name.empty() || !strings.has(textId(prefix, message.name, 1))) {
@@ -159,6 +162,28 @@ usize MessageTable::translate(const StringTable& strings, std::string_view prefi
         ++taken;
     }
     return taken;
+}
+
+void visitNativeState(NativeStateDigest& digest, const MessageTable& table) {
+    const auto& [fonts, messages, lists, byName, content] = table;
+    // The lookup is rebuilt solely from the ordered messages. Cache only the
+    // immutable content; load/translate invalidate it before changing values.
+    (void)byName;
+    if (!content) {
+        NativeStateDigest identity;
+        identity.value(fonts);
+        identity.wide(messages.size());
+        for (const auto& message : messages) {
+            identity.fields<5>(message);
+        }
+        identity.wide(lists.size());
+        for (const auto& list : lists) {
+            identity.fields<2>(list);
+        }
+        content = identity.finish();
+    }
+    digest.string("message-table/content/1");
+    digest.value(*content);
 }
 
 } // namespace gdl

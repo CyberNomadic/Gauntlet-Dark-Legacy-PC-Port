@@ -56,12 +56,18 @@ struct MissileRelease {
     u8 ordinal = 0;   ///< native fan order, before any projectile collides or disappears
     u32 emission = 0; ///< zero for ordinary throws, otherwise TurboMove's slot/counter identity
     bool operator==(const MissileRelease&) const = default;
+    template <class D> friend void visitNativeState(D& digest, const MissileRelease& value) {
+        digest.template fields<5>(value);
+    }
 };
 
 /** Potion throws have their own action generation and never alias weapon volleys. */
 struct MissilePotionRelease {
     u64 generation = 0;
     bool operator==(const MissilePotionRelease&) const = default;
+    template <class D> friend void visitNativeState(D& digest, const MissilePotionRelease& value) {
+        digest.template fields<1>(value);
+    }
 };
 
 /** What sets a missile off. */
@@ -140,6 +146,9 @@ struct MissileImpact {
     Vec3 direction{0.0f};
     bool stun = false;
     f32 playerHitGap = 0.25f;
+    template <class D> friend void visitNativeState(D& digest, const MissileImpact& value) {
+        digest.template fields<16>(value);
+    }
 };
 
 /** Player cylinders supplied separately from world targets, including missile reflection. */
@@ -210,6 +219,9 @@ public:
         u32 continuity = 1;
         bool valid() const;
         bool operator==(const FlightCheckpoint&) const = default;
+        template <class D> friend void visitNativeState(D& digest, const FlightCheckpoint& value) {
+            digest.template fields<6>(value);
+        }
     };
 
     /** Cosmetic history for native particle nodes. An impact stops emission before
@@ -222,6 +234,9 @@ public:
         bool retiring = false;
         bool valid() const;
         bool operator==(const ParticleFlight&) const = default;
+        template <class D> friend void visitNativeState(D& digest, const ParticleFlight& value) {
+            digest.template fields<5>(value);
+        }
     };
 
     struct VisualHistory {
@@ -237,6 +252,9 @@ public:
         s32 potion = 0; ///< zero selects the ordinary class spec; 1..4 use MissileSpec::potion
         std::optional<MissilePotionRelease> potionRelease;
         bool operator==(const VisualHistory&) const = default;
+        template <class D> friend void visitNativeState(D& digest, const VisualHistory& value) {
+            digest.template fields<11>(value);
+        }
     };
 
     /** One weapon in flight. */
@@ -274,8 +292,31 @@ public:
             s32 player = -1;
             f32 remaining = 0;
             bool operator==(const PlayerContact&) const = default;
+            template <class D> friend void visitNativeState(D& digest, const PlayerContact& value) {
+                digest.template fields<2>(value);
+            }
         };
         std::vector<PlayerContact> playerContacts;
+        template <class D> friend void visitNativeState(D& digest, const Missile& value) {
+            const auto& [instance, continuity, owner, position, velocity, tumble, age,
+                         previousPosition, previousVelocity, previousTumble, previousAge,
+                         presentationCaptured, potion, potency, damage, scale, spec, model,
+                         effect, rider, wallSound, flags, pierced, release, streak,
+                         potionRelease, multiplayer, playerHitGap, breaksPotions,
+                         playerContacts] = value;
+            digest.values(instance, continuity, owner, position, velocity, tumble, age,
+                          previousPosition, previousVelocity, previousTumble, previousAge,
+                          presentationCaptured, potion, potency, damage, scale);
+            digest.flag(spec != nullptr);
+            if (spec) {
+                // The immutable specification can be stack-owned in physics-only
+                // tests. Compare its complete value, not its allocation identity.
+                digest.template fields<7>(*spec);
+            }
+            digest.resource(model);
+            digest.values(effect, rider, wallSound, flags, pierced, release, streak,
+                          potionRelease, multiplayer, playerHitGap, breaksPotions, playerContacts);
+        }
     };
 
     /** Original immutable specs and prebound artwork, not live shooter slots.
@@ -406,7 +447,7 @@ public:
     /** Binds rendering separately from physics. Texture lenders outlive clear(). */
     void bindVisuals(RenderDevice& device, std::span<TextureSet* const> lenders = {});
     const EffectTrees& visuals() const { return m_visuals; }
-    std::span<const VisualHistory> visualHistory() const { return m_visualHistory; }
+    std::span<const VisualHistory> visualHistory() const { return m_sim.visualHistory; }
     const VisualHistory* visualHistory(u32 effect) const;
     /** Flies every missile on by `seconds`; those a wall or floor stops are taken away. */
     void update(f32 seconds, const WorldCollision* collision,
@@ -416,8 +457,8 @@ public:
               const CameraFrame* camera = nullptr, f32 frameBlend = -1.0f) const;
     void clear();
 
-    usize count() const { return m_missiles.size(); }
-    const Missile& missile(usize index) const { return m_missiles[index]; }
+    usize count() const { return m_sim.missiles.size(); }
+    const Missile& missile(usize index) const { return m_sim.missiles[index]; }
     /** Where missiles were stopped since the last call; each is handed out once. */
     std::vector<MissileImpact> takeImpacts();
     /** The directions of `shots` missiles about `direction`: fifteen degrees apart. */
@@ -429,15 +470,43 @@ public:
 private:
     bool launchWithVisuals(const MissileLaunch& launch, const EffectTrees::Prepared* body,
                            const EffectTrees::Prepared* rider, bool prepared);
-    u64 m_nextInstance = 1; ///< never reset by clear; network identities cannot be recycled
-    std::vector<Missile> m_missiles;
-    std::vector<MissileImpact> m_impacts;
-    std::vector<VisualHistory> m_visualHistory;
-    f32 m_ricochetIn = 0;
+    struct Simulation {
+        u64 nextInstance = 1; ///< never reset by clear; network identities cannot be recycled
+        std::vector<Missile> missiles;
+        std::vector<MissileImpact> impacts;
+        std::vector<VisualHistory> visualHistory;
+        f32 ricochetIn = 0;
+        template <class D> friend void visitNativeState(D& digest, const Simulation& value) {
+            digest.template fields<5>(value);
+        }
+    };
+    Simulation m_sim;
+
+public:
+    class LocalSnapshot {
+    private:
+        friend class PlayerMissiles;
+        Simulation state;
+        EffectTrees::LocalSnapshot visuals;
+        RenderDevice* device = nullptr;
+        std::weak_ptr<const u8> owner;
+        u64 epoch = 0;
+    };
+    /** Native value history. Borrowed specs, archives and attack tables must
+     * remain alive for this stage epoch. */
+    void saveLocal(LocalSnapshot& state) const;
+    bool canRestoreLocal(const LocalSnapshot& state) const;
+    bool restoreLocal(const LocalSnapshot& state);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
     RenderDevice* m_device = nullptr;
     EffectTrees m_visuals;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
+    u64 m_localEpoch = 1;
 };
 
 } // namespace gdl::game

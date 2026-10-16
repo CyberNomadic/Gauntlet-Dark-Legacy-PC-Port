@@ -8,6 +8,7 @@
 #include "engine/assets/MessageTable.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "TestSupport.h"
 
@@ -15,6 +16,51 @@ namespace {
 
 using namespace gdl;
 using Catch::Approx;
+
+auto nativeContent(const MessageTable& table) {
+    NativeStateDigest digest;
+    digest.value(table);
+    REQUIRE(digest.good());
+    return digest.finish();
+}
+
+TEST_CASE("message content identity follows reloads and translations, not object addresses",
+          "[assets][text][native-text-digest]") {
+    const auto dir = test::scratchDirectory("message-native-content");
+    const auto first = dir / "first.json";
+    const auto second = dir / "second.json";
+    const std::string text = R"({"fonts":["font32"],"messages":[
+        {"name":"HELLO","font":0,"scale":0.6,"shadowScale":1,"lines":["First"]}],
+        "lists":[{"name":"LIST","messages":[0]}]})";
+    writeTextFile(first, text);
+    writeTextFile(second, text);
+    MessageTable a;
+    MessageTable b;
+    const auto empty = nativeContent(a);
+    REQUIRE(a.load(first));
+    REQUIRE(b.load(second));
+    const auto loaded = nativeContent(a);
+    CHECK(loaded != empty);
+    CHECK(nativeContent(b) == loaded);
+    REQUIRE(a.find("HELLO") == 0U);
+    CHECK(nativeContent(a) == loaded);
+
+    writeTextFile(dir / "xx.json", R"({"scroll.hello.1":"Translated","scroll.hello.2":"Next"})");
+    StringTable strings;
+    REQUIRE(strings.load(dir, "xx"));
+    REQUIRE(a.translate(strings, "scroll") == 1);
+    CHECK(nativeContent(a) != loaded);
+    CHECK(nativeContent(b) == loaded);
+    REQUIRE(a.load(first));
+    CHECK(nativeContent(a) == loaded);
+    writeTextFile(first, R"({"fonts":["font32"],"messages":[
+        {"name":"HELLO","font":0,"scale":0.7,"lines":["First"]}],
+        "lists":[{"name":"LIST","messages":[0]}]})");
+    REQUIRE(a.load(first));
+    CHECK(nativeContent(a) != loaded);
+    REQUIRE_FALSE(a.load(dir / "missing.json"));
+    CHECK(nativeContent(a) == empty);
+}
 
 std::filesystem::path sampleTable(std::string_view name) {
     const auto dir = test::scratchDirectory(name);

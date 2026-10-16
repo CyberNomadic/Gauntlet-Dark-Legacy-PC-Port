@@ -1,4 +1,6 @@
+#include <array>
 #include <filesystem>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -6,6 +8,7 @@
 #include "engine/core/Types.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/world/PlayerFigure.h"
 #include "game/world/PowerupCompanion.h"
@@ -16,6 +19,133 @@ using namespace gdl::game;
 using Catch::Approx;
 using Kind = PowerupCompanion::Kind;
 using Action = PlayerAnimator::Action;
+
+TEST_CASE("native companion rewind retains interpolation and held frame boundaries",
+          "[game][world][companion][powerup-companion-local-rewind][native-local-rewind][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive powerups;
+    ItemArchive weapons;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    const auto camera = CameraFrame::at({10, 20, 30});
+    constexpr std::array<f32, 3> blends{0, 0.5f, 1};
+    constexpr f32 seconds = 1.0f / 60;
+    struct Observation {
+        PowerupCompanion::Checkpoint state;
+        std::array<std::vector<test::RecordedDraw>, 3> draws;
+    };
+    for (const Kind kind : {Kind::Pojo, Kind::FireShield, Kind::Phoenix, Kind::FireBreath,
+                            Kind::AcidBreath, Kind::ElecBreath, Kind::Wings}) {
+        CAPTURE(PowerupCompanion::treeOf(kind));
+        PowerupCompanion companion;
+        companion.choose(device, kind, powerups, &weapons);
+        REQUIRE(companion.shown());
+        for (s32 tick = 0; tick < 24; ++tick) {
+            companion.capturePresentation();
+            companion.update(seconds, Action::Run1, false, false);
+        }
+        PowerupCompanion::LocalSnapshot initial;
+        companion.saveLocal(initial);
+        const auto observe = [&] {
+            Observation result;
+            const auto state = companion.checkpoint();
+            REQUIRE(state);
+            result.state = *state;
+            for (usize blend = 0; blend < blends.size(); ++blend) {
+                device.draws.clear();
+                companion.draw(device, Mat4{1}, Mat4{1}, {}, 0.8f, &camera, blends[blend]);
+                REQUIRE_FALSE(device.draws.empty());
+                result.draws[blend] = device.draws;
+            }
+            CHECK(companion.checkpoint() == state);
+            return result;
+        };
+        const auto check = [&](const Observation& expected) {
+            const auto actual = observe();
+            CHECK(actual.state == expected.state);
+            for (usize blend = 0; blend < blends.size(); ++blend) {
+                CAPTURE(blends[blend]);
+                REQUIRE(actual.draws[blend].size() == expected.draws[blend].size());
+                for (usize draw = 0; draw < actual.draws[blend].size(); ++draw) {
+                    CAPTURE(draw);
+                    test::checkRecordedDraw(actual.draws[blend][draw], expected.draws[blend][draw]);
+                }
+            }
+        };
+        const auto step = [&](s32 tick) {
+            companion.capturePresentation();
+            if (tick % 3 != 1) {
+                companion.update(seconds, tick % 4 == 0 ? Action::Run1 : Action::Ready,
+                                 tick % 4 == 2, tick % 4 == 2);
+            }
+        };
+        for (s32 length = 1; length <= 8; ++length) {
+            for (const bool held : {false, true}) {
+                CAPTURE(length, held);
+                REQUIRE(companion.restoreLocal(initial));
+                if (held) {
+                    companion.capturePresentation();
+                }
+                PowerupCompanion::LocalSnapshot before;
+                companion.saveLocal(before);
+                const auto baseline = observe();
+                CHECK(baseline.state.presentationAdvanced == !held);
+
+                // Run the uninterrupted branch first, against this same resource owner.
+                std::vector<Observation> expected;
+                for (s32 tick = 0; tick < length; ++tick) {
+                    step(tick);
+                    expected.push_back(observe());
+                }
+                REQUIRE(companion.restoreLocal(before));
+                for (s32 tick = 0; tick < length; ++tick) {
+                    companion.capturePresentation();
+                    companion.update(seconds, Action::Death, true, true);
+                }
+                device.draws.clear();
+                const auto uploads = device.texturesCreated;
+                const auto updates = device.textureUpdates;
+                REQUIRE(companion.restoreLocal(before));
+                CHECK(device.draws.empty());
+                CHECK(device.texturesCreated == uploads);
+                CHECK(device.textureUpdates == updates);
+                // Exercise immediate drawing before any corrected update can conceal
+                // lost previous-frame fields by overwriting them.
+                check(baseline);
+                for (s32 tick = 0; tick < length; ++tick) {
+                    CAPTURE(tick);
+                    step(tick);
+                    check(expected[static_cast<usize>(tick)]);
+                }
+                CHECK(device.texturesCreated == uploads);
+                CHECK(device.textureUpdates == updates);
+            }
+        }
+    }
+}
+
+TEST_CASE("native companion snapshots reject missing foreign and expired owners",
+          "[game][world][companion][powerup-companion-local-rewind][native-local-rewind]") {
+    PowerupCompanion owner;
+    PowerupCompanion foreign;
+    PowerupCompanion::LocalSnapshot missing;
+    PowerupCompanion::LocalSnapshot saved;
+    owner.saveLocal(saved);
+    CHECK_FALSE(owner.canRestoreLocal(missing));
+    CHECK_FALSE(owner.restoreLocal(missing));
+    CHECK_FALSE(foreign.canRestoreLocal(saved));
+    CHECK_FALSE(foreign.restoreLocal(saved));
+    CHECK(owner.canRestoreLocal(saved));
+    CHECK(owner.restoreLocal(saved));
+    {
+        PowerupCompanion temporary;
+        temporary.saveLocal(saved);
+        REQUIRE(temporary.canRestoreLocal(saved));
+    }
+    CHECK_FALSE(owner.canRestoreLocal(saved));
+    CHECK_FALSE(owner.restoreLocal(saved));
+}
 
 TEST_CASE(
     "native levitation wings follow the animated back without render calls advancing its pose",

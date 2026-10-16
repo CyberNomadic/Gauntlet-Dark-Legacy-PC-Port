@@ -12,6 +12,9 @@ namespace gdl::game {
 
 /** What the wizard says, page by page: the message it is in and the page. */
 struct VictoryCaption {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const VictoryCaption& value) {
+        digest.template fields<3>(value);
+    }
     std::string message;
     usize page = 0;
     usize shown = 0; ///< characters of the page shown so far, the way the original types them
@@ -31,6 +34,13 @@ struct VictoryVoice {
  * What is said is looked up by whoever shows it: `update` receives the caption pages.
  */
 class BossVictory {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const BossVictory& value) {
+        const auto& [stage, kind, realm, quality, goldLeft, allTempleRunes, ticksLeft, alpha,
+                     caption, typeTicks, pauseTicks, pauseAfter, pageDone, pagesOver, sparkling] = value;
+        digest.values(stage, kind, realm, quality, goldLeft, allTempleRunes, ticksLeft, alpha,
+                      caption, typeTicks, pauseTicks, pauseAfter, pageDone, pagesOver, sparkling);
+    }
+
 public:
     enum class Stage : u8 { None, Waiting, Appearing, Defeat, Runes, Leaving, Gone, Done };
 

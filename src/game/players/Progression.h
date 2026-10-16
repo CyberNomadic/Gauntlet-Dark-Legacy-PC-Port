@@ -9,6 +9,10 @@
 #include "game/players/LevelRecord.h"
 #include "game/players/Relics.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 inline constexpr s32 kMaxLevel = 99;
@@ -28,6 +32,7 @@ inline constexpr usize kRealmCount = 14;
 /** Per-class P_SAVE_STATS counters used by shop_show_final_stats. Old saves
  * start these at zero; wallet balance and experience cannot reconstruct them. */
 struct LifetimeStats {
+    bool operator==(const LifetimeStats&) const = default;
     s32 enemiesKilled = 0;
     s32 generatorsDestroyed = 0;
     s32 goldFound = 0;
@@ -35,6 +40,7 @@ struct LifetimeStats {
 };
 
 struct ClassProgress {
+    bool operator==(const ClassProgress&) const = default;
     s32 experience = 0;
     s32 gold = 0; ///< banked wallet; the selected class uses CharacterSave::gold while playing
     s32 promotedLevel =
@@ -76,5 +82,8 @@ StatBlock masteryStats();
 
 /** Flat damage absorption from the current armor attribute, including level and shop gains. */
 f32 armorDefense(const ClassStats& stats, const ClassProgress& progress);
+
+void visitNativeState(NativeStateDigest& digest, const LifetimeStats& value);
+void visitNativeState(NativeStateDigest& digest, const ClassProgress& value);
 
 } // namespace gdl::game

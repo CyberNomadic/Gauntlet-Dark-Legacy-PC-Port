@@ -358,7 +358,7 @@ template <class A, class T> void field(A& a, T& v) {
         a.number(present);
         if constexpr (A::reading) {
             if (present) {
-                v.emplace();
+                v.emplace(typename V::value_type{});
             } else {
                 v.reset();
             }
@@ -518,19 +518,19 @@ template <class A, class T> void field(A& a, T& v) {
                v.damage, v.flags, v.secondsLeft, v.lifetime, v.expanding);
     } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::State>) {
         fields(a, v.catalog, v.flying, v.emittedEffects, v.hits, v.worldHits, v.rockHits,
-               v.generators, v.summons, v.random, v.ricochetIn);
+               v.generators, v.summons, v.random, v.ricochetIn, v.nextInstance);
     } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::Catalog>) {
         fields(a, v.id, v.kind, v.name, v.children);
     } else if constexpr (std::is_same_v<V, CombatantProjectilesCheckpoint::Flight>) {
         fields(a, v.shot, v.archive, v.position, v.velocity, v.spin, v.rotation, v.effect,
                v.morphed, v.stuck, v.planted, v.phaseSeconds, v.settled, v.impactRadius,
                v.impactArea, v.leavesGenerator, v.summonsEnemies, v.contactSeconds, v.piercedPlayer,
-               v.reflected);
+               v.reflected, v.instance);
     } else if constexpr (std::is_same_v<V, CombatantProjectileHit>) {
         fields(a, v.player, v.damage, v.flags, v.direction, v.repeatGap, v.critter, v.ownerKind,
-               v.target, v.ricochet, v.position);
+               v.target, v.ricochet, v.position, v.instance);
     } else if constexpr (std::is_same_v<V, CombatantWorldHit>) {
-        fields(a, v.position, v.object, v.splash);
+        fields(a, v.position, v.object, v.splash, v.instance);
     } else if constexpr (std::is_same_v<V, RockHit>) {
         index(a, v.rock);
         field(a, v.damage);
@@ -686,10 +686,11 @@ template <class A, class T> void field(A& a, T& v) {
 } // namespace
 
 bool CombatStatePacket::State::valid() const {
-    if (!combat.valid() || !adapter.valid() ||
-        (stage && !StageStatePacket::envelopeValid(*stage))) {
-        return false;
-    }
+    return combat.valid() && adapter.valid() &&
+           (!stage || StageStatePacket::envelopeValid(*stage)) && references();
+}
+
+bool CombatStatePacket::State::references() const {
     const auto owns = [&](s32 player) {
         return std::ranges::any_of(combat.players,
                                    [=](const auto& member) { return member.player == player; });
@@ -711,6 +712,9 @@ bool CombatStatePacket::State::valid() const {
     }
     u8 playerMask = 0;
     for (const auto& player : combat.players) {
+        if (player.player < 0 || player.player >= 4) {
+            return false;
+        }
         playerMask |= static_cast<u8>(1U << player.player);
     }
     return adapter.references(playerMask, combat.effects);

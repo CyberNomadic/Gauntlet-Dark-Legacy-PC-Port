@@ -14,12 +14,78 @@
 #include "game/players/TurboMove.h"
 #include "game/world/DynamicLights.h"
 #include "game/world/WeaponGlow.h"
+#include "game/world/NativeStateResources.h"
 namespace gdl::game {
 namespace {
 constexpr f32 kPhoenixDamage = 10.0f;
 constexpr u32 kPhoenixDamageFlags = 0x11; ///< fire plus knockback
 
 } // namespace
+void PlayerArsenal::appendBindingDigest(NativeStateDigest& digest) const {
+    digest.flag(m_resources.has_value());
+    if (m_resources) {
+        const auto& resources = *m_resources;
+        digest.resource(&resources.collision);
+        digest.flag(resources.weapons.loaded());
+        if (resources.weapons.loaded()) {
+            digest.resource(&resources.weapons);
+        }
+        digest.flag(resources.powerups && resources.powerups->loaded());
+        if (resources.powerups && resources.powerups->loaded()) {
+            digest.resource(resources.powerups);
+        }
+        digest.values(resources.wallHitSound, resources.tower, resources.bossEncounter);
+        digest.flag(resources.multiplayer != nullptr);
+        if (resources.multiplayer) {
+            digest.value(*resources.multiplayer);
+        }
+    }
+}
+
+bool PlayerArsenal::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("PlayerArsenal.native.1");
+    appendBindingDigest(digest);
+    digest.value(m_sim);
+    return m_missiles.appendNativeDigest(digest) && digest.good();
+}
+
+bool PlayerArsenal::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("PlayerArsenal.native.1");
+    appendBindingDigest(digest);
+    digest.value(saved.state);
+    return m_missiles.appendLocalDigest(digest, saved.missiles) && digest.good();
+}
+
+bool PlayerArsenal::registerNativeResources(NativeStateResources& resources) const {
+    if (m_resources && m_resources->weapons.loaded()) {
+        const auto& archive = m_resources->weapons;
+        if (!resources.refreshArchive(archive)) {
+            return false;
+        }
+        for (usize i = 0; i < m_potionModels.size(); ++i) {
+            if (m_potionModels[i].bound() && !resources.registerModel(
+                    m_potionModels[i], archive, "arsenal/potion/" + std::to_string(i))) {
+                return false;
+            }
+        }
+        for (usize i = 0; i < m_gauntlets.size(); ++i) {
+            if (m_gauntlets[i].bound() && !resources.registerModel(
+                    m_gauntlets[i], archive, "arsenal/gauntlet/" + std::to_string(i))) {
+                return false;
+            }
+        }
+        if ((m_superShot.bound() && !resources.registerModel(m_superShot, archive, "arsenal/super")) ||
+            (m_phoenixShot.bound() && !resources.registerModel(m_phoenixShot, archive, "arsenal/phoenix"))) {
+            return false;
+        }
+    }
+    return m_missiles.registerNativeResources(resources) && resources.good();
+}
+
 PlayerArsenal::SoundCapture::SoundCapture(PlayerArsenal* arsenal, SoundObserver observer)
     : m_arsenal(arsenal) {
     if (m_arsenal != nullptr) {
@@ -30,6 +96,26 @@ PlayerArsenal::SoundCapture::~SoundCapture() {
     if (m_arsenal != nullptr) {
         m_arsenal->m_soundObserver = std::move(m_previous);
     }
+}
+void PlayerArsenal::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+    m_missiles.saveLocal(saved.missiles);
+}
+bool PlayerArsenal::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding &&
+           m_missiles.canRestoreLocal(saved.missiles);
+}
+bool PlayerArsenal::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_missiles.restoreLocal(saved.missiles);
+    ++m_restoreGeneration;
+    return true;
 }
 void PlayerArsenal::bind(const Resources& resources, std::span<TextureSet* const> textureLenders) {
     clear();
@@ -53,13 +139,14 @@ void PlayerArsenal::bind(const Resources& resources, std::span<TextureSet* const
     }
 }
 void PlayerArsenal::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     ++m_restoreGeneration;
     if (m_resources) {
-        for (const auto& cast : m_castEffects) {
+        for (const auto& cast : m_sim.casts) {
             m_resources->effects.stop(cast.effect);
         }
     }
-    m_castEffects.clear();
+    m_sim.casts.clear();
     m_missiles.clear();
     m_superShot.clear();
     m_phoenixShot.clear();
@@ -328,14 +415,17 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
         }
     }
     const auto cue = weaponCue(prepared->soundFlags, figure);
+    const auto soundScope = m_resources->audio.soundScope(
+        {15, 0, 1, static_cast<u8>(actor.player())}, 1);
     SoundHandle handle = kNoSound;
     if (!cue.name.empty()) {
         handle = m_resources->audio.playNamed(cue.name, LevelSoundscape::kStepVolume);
-    } else if (m_resources->sounds != nullptr && cue.call) {
+    } else if (cue.call) {
         try {
-            handle =
-                m_resources->sounds->play(figure.voice().sequence(*cue.call),
-                                          LevelSoundscape::kStepVolume, SoundCategory::Effects);
+            handle = m_resources->audio.playFromCall(figure.voice(), *cue.call,
+                                                     LevelSoundscape::kStepVolume);
+        } catch (const SceneSoundEvents::Unsupported&) {
+            throw;
         } catch (const std::exception& e) {
             log::warn("Tower: throw sound: {}", e.what());
         }
@@ -661,8 +751,8 @@ s32 PlayerArsenal::resolvePotionKind(s32 kind) {
     if (kind != 0) {
         return kind;
     }
-    const s32 resolved = m_nextPotionKind;
-    m_nextPotionKind = m_nextPotionKind % 4 + 1;
+    const s32 resolved = m_sim.nextPotionKind;
+    m_sim.nextPotionKind = m_sim.nextPotionKind % 4 + 1;
     return resolved;
 }
 
@@ -699,7 +789,7 @@ void PlayerArsenal::healingCast(const PlayerActor& actor, f32 power) {
     const u32 id = m_resources->effects.startSet(m_resources->device, *m_resources->powerups,
                                                  "MAGICHEALTH", actor.position(), setting);
     if (id != 0) {
-        m_castEffects.push_back({actor.player(), id});
+        m_sim.casts.push_back({actor.player(), id});
         followCaster(actor);
     }
 }
@@ -708,10 +798,10 @@ void PlayerArsenal::followCaster(const PlayerActor& actor) {
     if (!m_resources) {
         return;
     }
-    std::erase_if(m_castEffects, [&](const CastEffect& cast) {
+    std::erase_if(m_sim.casts, [&](const CastEffect& cast) {
         return !m_resources->effects.playing(cast.effect);
     });
-    for (const auto& cast : m_castEffects) {
+    for (const auto& cast : m_sim.casts) {
         if (cast.owner == actor.player()) {
             m_resources->effects.placeAt(cast.effect, actor.transform());
         }

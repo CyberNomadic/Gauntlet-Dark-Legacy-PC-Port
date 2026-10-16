@@ -1,7 +1,7 @@
-// Runs the real gameplay update in an independent process. There is no network
-// authority, replica, replay admission gate, or OrdinaryCombatTick in this probe.
-// The observation explicitly reports incomplete coverage: equal traces are not
-// proof that the entire scene can already be restored or replayed deterministically.
+// Runs the real gameplay update in an independent process. Offline mode retains
+// its partial diagnostic observer; network mode exercises native rollback over
+// actual Iroh (local by default, relay opt-in), reporting confirmed native hashes.
+// Neither mode uses a replica scene or opens an audio/display device.
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -13,12 +13,15 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "engine/assets/StringTable.h"
 #include "engine/io/Sha256.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "FakeRenderDevice.h"
@@ -40,6 +43,7 @@ struct Options {
     std::filesystem::path report;
     std::filesystem::path timings;
     u32 timingWarmup = 0;
+    bool enemyRoundtrip = false;
     std::filesystem::path assets = GDL_TEST_ASSET_DIR;
     std::filesystem::path data = GDL_TEST_DATA_DIR;
     std::string stage = "G1";
@@ -49,9 +53,11 @@ struct Options {
     u32 renderEvery = 0;
     u32 perturbTick = 0;
     std::string networkRole;
+    std::string networkPath = "local";
     u32 networkPeer = 0;
     std::filesystem::path ticket;
     u32 inputDelay = 0;
+    test::NativeProbeImpairment impairment;
 };
 
 void require(bool condition, std::string_view reason) {
@@ -80,6 +86,9 @@ Options parse(std::span<char*> args) {
             result.timings = value;
         } else if (key == "--timing-warmup") {
             result.timingWarmup = number(value);
+        } else if (key == "--enemy-roundtrip") {
+            require(value == "0" || value == "1", "Enemy roundtrip must be 0 or 1");
+            result.enemyRoundtrip = value == "1";
         } else if (key == "--assets") {
             result.assets = value;
         } else if (key == "--data") {
@@ -102,15 +111,38 @@ Options parse(std::span<char*> args) {
             result.networkRole = value;
         } else if (key == "--ticket") {
             result.ticket = value;
+        } else if (key == "--network-path") {
+            require(value == "local" || value == "relay", "Network path must be local or relay");
+            result.networkPath = value;
         } else if (key == "--network-peer") {
             result.networkPeer = number(value);
         } else if (key == "--input-delay") {
             result.inputDelay = number(value);
+        } else if (key == "--input-latency-ms") {
+            result.impairment.latencyMs = number(value);
+        } else if (key == "--input-jitter-ms") {
+            result.impairment.jitterMs = number(value);
+        } else if (key == "--input-loss-ppm") {
+            result.impairment.lossPpm = number(value);
+        } else if (key == "--input-reorder-ppm") {
+            result.impairment.reorderPpm = number(value);
+        } else if (key == "--input-reorder-ms") {
+            result.impairment.reorderMs = number(value);
+        } else if (key == "--input-impairment-seed") {
+            result.impairment.seed = number(value);
+        } else if (key == "--input-outage-tick") {
+            result.impairment.outageTick = number(value);
+        } else if (key == "--input-outage-ms") {
+            result.impairment.outageMs = number(value);
+        } else if (key == "--input-outage-peer") {
+            result.impairment.outagePeer = number(value);
         } else {
             throw std::runtime_error("Unknown option: " + std::string(key));
         }
     }
     require(!result.report.empty(), "--report is required");
+    require(!result.enemyRoundtrip || (!result.timings.empty() && result.networkRole.empty()),
+            "Enemy roundtrip requires --timings and offline mode");
     require(!std::filesystem::exists(result.report), "Report exists; choose a new path");
     require(result.ticks > 0 && result.ticks <= 36'000, "Ticks must be 1..36000");
     require(!result.timings.empty() || result.timingWarmup == 0,
@@ -125,11 +157,29 @@ Options parse(std::span<char*> args) {
     require(result.players >= 1 && result.players <= 4, "Players must be 1..4");
     require(result.renderEvery <= 60, "Render interval must be 0..60 ticks");
     require(result.perturbTick <= result.ticks, "Perturbation is outside the run");
-    require(result.inputDelay <= LockstepInputs::kMaxDelay, "Input delay must be 0..6");
+    require(result.inputDelay <= RollbackInputs::kMaxDelay, "Input delay must be 0..2");
+    require(result.networkRole.empty() || result.timings.empty(),
+            "Network rollback reports contain their own native timing metrics");
     require(result.networkRole.empty() == result.ticket.empty(), "Network role requires a ticket");
+    require(!result.networkRole.empty() || result.networkPath == "local",
+            "Relay path requires network mode");
     require(!result.networkRole.empty() || result.inputDelay == 0, "Delay requires network mode");
     require(result.networkRole.empty() || result.players >= 2,
             "Network probe requires two to four players");
+    const auto& impairment = result.impairment;
+    require(impairment.latencyMs <= 500 && impairment.jitterMs <= 500 &&
+                impairment.lossPpm <= 250'000 && impairment.reorderPpm <= 1'000'000 &&
+                impairment.reorderMs <= 500 && impairment.seed != 0 &&
+                ((impairment.reorderPpm == 0) == (impairment.reorderMs == 0)),
+            "Invalid bounded native input impairment");
+    require((impairment.outageMs == 0 && impairment.outageTick == 0 && impairment.outagePeer == 0) ||
+                (impairment.outageMs <= 5000 && impairment.outageMs != 0 &&
+                 impairment.outageTick != 0 && impairment.outageTick < result.ticks &&
+                 result.ticks - impairment.outageTick > 8 &&
+                 impairment.outagePeer >= 1 && impairment.outagePeer <= result.players),
+            "Outage requires a peer, duration1..5000ms and a tick leaving eight recovery ticks");
+    require(!result.networkRole.empty() || !impairment.enabled(),
+            "Input impairment requires real network mode");
     if (!result.networkRole.empty()) {
         if (result.networkPeer == 0) {
             result.networkPeer = result.networkRole == "host" ? 1 : 2;
@@ -159,6 +209,105 @@ std::string digest(std::span<const u8> bytes) {
     Sha256 hash;
     hash.update(bytes);
     return hash.hex();
+}
+
+std::string eventDigest(const PlayScene::OutputLedger::Journal& journal) {
+    NativeStateDigest digest;
+    digest.string("native-probe/output/1");
+    digest.wide(journal.events.size());
+    for (const auto& event : journal.events) {
+        const auto& [id, policy, payload, loop] = event;
+        digest.values(id, policy, loop, payload.index());
+        std::visit([&](const auto& value) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, PlayScene::RumbleOutput>) {
+                digest.fields<3>(value);
+            } else {
+                digest.fields<1>(value);
+            }
+        }, payload);
+    }
+    return hex(digest.finish());
+}
+
+std::string audioDigest(const SceneSoundEvents::Frame& frame) {
+    NativeStateDigest digest;
+    digest.string("native-probe/audio/1");
+    const auto payload = [&](const SceneSoundPayload& value) {
+        const auto& [resource, volume, pan, after, playback, start] = value;
+        digest.fields<2>(resource);
+        digest.values(volume, pan, after, playback, start);
+    };
+    const auto& [finite, loops] = frame;
+    const auto& [events] = finite;
+    digest.wide(events.size());
+    for (const auto& event : events) {
+        const auto& [id, policy, sound, loop] = event;
+        digest.values(id, policy, loop);
+        payload(sound);
+    }
+    digest.wide(loops.size());
+    for (const auto& loop : loops) {
+        const auto& [key, sound] = loop;
+        digest.value(key);
+        payload(sound);
+    }
+    return hex(digest.finish());
+}
+
+Json impairmentConfig(const test::NativeProbeImpairment& value) {
+    return {{"mode", value.enabled() ? "simulated-application-input" : "none"},
+            {"scope", "outbound-unreliable-input-only"}, {"reliable_impaired", false},
+            {"latency_ms", value.latencyMs}, {"jitter_ms", value.jitterMs},
+            {"loss_ppm", value.lossPpm}, {"reorder_ppm", value.reorderPpm},
+            {"reorder_ms", value.reorderMs}, {"seed", value.seed},
+            {"outage_tick", value.outageTick}, {"outage_ms", value.outageMs},
+            {"outage_peer", value.outagePeer}};
+}
+Json networkMetrics(const test::NativeProbeLink::Metrics& value) {
+    const auto& injected = value.impairment;
+    Json paths = Json::array();
+    for (const auto& link : value.links) {
+        paths.push_back({{"peer", link.peer}, {"samples", link.samples},
+                         {"relay_samples", link.relaySamples}, {"direct_samples", link.directSamples},
+                         {"unavailable_samples", link.unavailableSamples},
+                         {"rtt_p50_ms", link.rttP50Ms}, {"rtt_p95_ms", link.rttP95Ms},
+                         {"rtt_max_ms", link.rttMaxMs}});
+    }
+    return {{"sampled_inputs", value.sampledInputs},
+            {"input_sample_to_first_native_update_p50_ms", value.inputToUpdateP50Ms},
+            {"input_sample_to_first_native_update_p95_ms", value.inputToUpdateP95Ms},
+            {"native_ticks", value.simulation.nativeTicks},
+            {"replay_ticks", value.simulation.replayTicks},
+            {"corrections", value.simulation.corrections},
+            {"max_replay", value.simulation.maxReplay},
+            {"stalls", value.simulation.stalls},
+            {"pacing_idles", value.simulation.pacingIdles},
+            {"prediction_max_ticks", value.predictionMaxTicks},
+            {"correction_p50_ms", value.correctionP50Ms},
+            {"correction_p95_ms", value.correctionP95Ms},
+            {"correction_max_ms", value.correctionMaxMs},
+            {"link_rtt_ms", value.linkRttMs},
+            {"transport", {{"local_peer", value.localPeer}, {"links", paths}}},
+            {"impairment", {{"attempted", injected.attempted}, {"enqueued", injected.enqueued},
+                            {"transmitted", injected.transmitted}, {"loss_dropped", injected.lossDropped},
+                            {"outage_dropped", injected.outageDropped}, {"reordered", injected.reordered},
+                            {"oldest_recovery_datagrams", injected.oldestRecoveryDatagrams},
+                            {"queue_peak", injected.queuePeak}, {"queue_pending", injected.queuePending},
+                            {"queue_abandoned", injected.queueAbandoned},
+                            {"outage_started_tick", injected.outageStartedTick},
+                            {"outage_finished", injected.outageFinished},
+                            {"outage_elapsed_ms", injected.outageElapsedMs},
+                            {"outage_progress", {{"updates", injected.outageProgress.updates},
+                                                 {"stalls", injected.outageProgress.stalls},
+                                                 {"pacing_idles", injected.outageProgress.pacingIdles},
+                                                 {"first_next_tick", injected.outageProgress.firstNextTick},
+                                                 {"last_next_tick", injected.outageProgress.lastNextTick},
+                                                 {"first_confirmed_tick", injected.outageProgress.firstConfirmedTick},
+                                                 {"last_confirmed_tick", injected.outageProgress.lastConfirmedTick},
+                                                 {"prediction_max_ticks", injected.outageProgress.predictionMaxTicks}}},
+                            {"residence_p50_ms", injected.residenceP50Ms},
+                            {"residence_p95_ms", injected.residenceP95Ms},
+                            {"residence_max_ms", injected.residenceMaxMs}}}};
 }
 
 // Journal v1 is tick-indexed, including startup. Aim is already resolved into
@@ -238,11 +387,6 @@ void run(const Options& options) {
     PlayOptions openOptions;
     openOptions.welcome = false;
     require(scene.open(device, context, world, party, openOptions), "Could not open native scene");
-    // Existing catalogs resolve immutable artwork identities for diagnostic
-    // hashing only. They do not select or run the old guest simulation.
-    SimulationObserver observer{scene};
-    require(observer.bind(), "Could not bind native observation resources");
-
     std::ofstream report(options.report, std::ios::binary);
     require(report.is_open(), "Could not open report");
     const auto write = [&](const Json& row) {
@@ -250,35 +394,102 @@ void run(const Options& options) {
         require(report.good(), "Could not write report");
     };
     const std::string configDigest = digest(configBytes);
-    std::unique_ptr<test::NativeProbeLink> network;
     if (!options.networkRole.empty()) {
+        std::string identityError;
+        const auto identityInputs = NativeOnlineIdentity::snapshot(strings, &identityError);
+        require(identityInputs.has_value(), identityError);
+        const auto identity = NativeOnlineIdentity::capture(*identityInputs, &identityError);
+        require(identity.has_value() && NativeOnlineIdentity::numericMatches(*identityInputs),
+                identityError.empty() ? "Native runtime identity changed" : identityError);
         const std::string contract = Json{{"assets", assetsDigest},
                                           {"data", dataDigest},
+                                          {"runtime", identity->runtime},
+                                          {"language", identity->language},
                                           {"config", configDigest},
                                           {"stage", options.stage},
                                           {"ticks", options.ticks},
                                           {"workload", options.workload},
                                           {"delay", options.inputDelay},
-                                          {"players", options.players},
-                                          {"protocol", "native-input-probe-v2"}}
+                                          {"network_path", options.networkPath},
+                                           {"players", options.players},
+                                           {"impairment", impairmentConfig(options.impairment)},
+                                          {"protocol", "native-rollback-probe-v4"}}
                                          .dump();
         const auto contractBytes =
             std::span{reinterpret_cast<const u8*>(contract.data()), contract.size()};
-        network = std::make_unique<test::NativeProbeLink>(
+        auto network = std::make_unique<test::NativeProbeLink>(
             options.networkRole == "host", options.ticket, digest(contractBytes),
-            static_cast<u8>(options.inputDelay), static_cast<u8>(options.players),
-            static_cast<u8>(options.networkPeer));
+            static_cast<u8>(options.inputDelay), scene, static_cast<u8>(options.players),
+            static_cast<u8>(options.networkPeer), options.impairment, options.networkPath == "relay");
+        write({{"type", "metadata"}, {"schema", 2}, {"simulation", "NativeRollbackDriver"},
+               {"stage", options.stage}, {"ticks", options.ticks}, {"players", options.players},
+               {"tick_rate", 60}, {"render_every", options.renderEvery},
+               {"workload", options.workload}, {"input_version", 1},
+               {"input_delivery", "iroh-rollback"}, {"input_delay", options.inputDelay},
+               {"network_path", options.networkPath},
+               {"initialization", "native-defaults-v1"}, {"assets_digest", assetsDigest},
+               {"data_digest", dataDigest}, {"config_digest", configDigest},
+               {"runtime_digest", identity->runtime}, {"complete_state", false},
+               {"subsystems", {"audio", "events", "inputs", "native_scene_and_control"}},
+               {"unobserved", {"Rendered pixels", "Physical audio and controller output"}},
+               {"agreement_schema", "native-scene-and-control-v1"},
+               {"impairment", impairmentConfig(options.impairment)}});
+        const Mat4 projection = glm::ortho(0.0f, 640.0f, 448.0f, 0.0f, -1.0f, 1.0f);
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds{60 + options.ticks / 30};
+        while (network->completed() < options.ticks) {
+            require(std::chrono::steady_clock::now() < deadline, "Native rollback probe timed out");
+            const auto result = network->frame(options.ticks, [&](u64 tick, u8 seat) {
+                return journal(options, static_cast<u32>(tick))[seat];
+            });
+            for (const auto& confirmed : result.confirmed) {
+                const auto& frame = confirmed.frame;
+                const auto commands = std::span{frame.input.commands}.first(options.players);
+                const auto bytes = InputPacket::encode(commands);
+                require(bytes.has_value() && frame.audio.has_value(),
+                        "Confirmed native report lacks input or audio");
+                write({{"type", "tick"}, {"tick", frame.tick},
+                       {"input_digest", digest(*bytes)}, {"event_digest", eventDigest(frame.journal)},
+                       {"audio_digest", audioDigest(*frame.audio)}});
+                if (confirmed.digest) {
+                    write({{"type", "confirmed"}, {"tick", frame.tick},
+                           {"digest", hex(*confirmed.digest)}});
+                }
+            }
+            if (result.advanced && options.renderEvery != 0 &&
+                result.simulatedThrough % options.renderEvery == 0) {
+                require(device.beginFrame(), "Headless frame refused");
+                scene.render(device, projection, 640, 448, false, 0.5f);
+                device.endFrame();
+            }
+        }
+        const auto final = network->finalDigest();
+        network->finish();
+        write({{"type", "complete"}, {"ticks", options.ticks}, {"last_tick", options.ticks},
+               {"native_digest", hex(final)}, {"metrics", networkMetrics(network->metrics())}});
+        report.close();
+        require(!report.fail(), "Could not finish native rollback report");
+        return;
     }
+    // The older offline observer is diagnostic only. The network path above
+    // hashes actual captured native values and does not bind these catalogs.
+    SimulationObserver observer{scene};
+    require(observer.bind(), "Could not bind native observation resources");
     const Mat4 projection = glm::ortho(0.0f, 640.0f, 448.0f, 0.0f, -1.0f, 1.0f);
     u32 readyTicks = 0;
     u32 movedTicks = 0;
     usize mostEnemies = 0;
     usize mostProjectiles = 0;
-    std::vector<f64> updateTimes, observationTimes, renderTimes;
+    std::vector<f64> updateTimes, observationTimes, renderTimes, enemySaveTimes, enemyRestoreTimes;
+    auto enemySaved = options.enemyRoundtrip ? std::make_unique<Enemies::LocalSnapshot>() : nullptr;
     if (!options.timings.empty()) {
         updateTimes.reserve(options.ticks);
         observationTimes.reserve(options.ticks);
         renderTimes.reserve(options.ticks);
+        if (enemySaved) {
+            enemySaveTimes.reserve(options.ticks);
+            enemyRestoreTimes.reserve(options.ticks);
+        }
     }
     for (u32 tick = 1; tick <= options.ticks; ++tick) {
         const auto measure = [&](std::vector<f64>& samples, const auto& operation) {
@@ -292,10 +503,7 @@ void run(const Options& options) {
                                     std::chrono::steady_clock::now() - started).count();
             samples.push_back(elapsed);
         };
-        const auto commands = network ? network->frame([&](u64 inputTick, u8 seat) {
-            return journal(options, static_cast<u32>(inputTick))[seat];
-        })
-                                      : journal(options, tick);
+        const auto commands = journal(options, tick);
         const auto bytes = InputPacket::encode(commands);
         require(bytes.has_value(), "Invalid journal input");
         PlayScene::Inputs inputs;
@@ -307,10 +515,16 @@ void run(const Options& options) {
         measure(updateTimes, [&] { outcome = scene.update(1.0 / 60, inputs); });
         require(outcome == PlayOutcome::Running,
                 "Scene requested travel or ended; campaign transitions are not exercised yet");
-        if (network) {
-            network->frameCompleted(tick % MatchSession::kNativeAgreementPeriod == 0
-                                        ? scene.nativeAgreementDigest()
-                                        : std::nullopt);
+        // An identity roundtrip inside the real scene tests integration without pretending
+        // that rewinding only enemies could replay a whole scene. The observer and a separate
+        // uninterrupted run compare outcomes; neither capture nor restore emits world events.
+        if (enemySaved) {
+            bool saved = false;
+            bool restored = false;
+            measure(enemySaveTimes, [&] { saved = scene.enemies().saveLocal(*enemySaved); });
+            require(saved, "Local enemy save refused");
+            measure(enemyRestoreTimes, [&] { restored = scene.enemies().restoreLocal(*enemySaved); });
+            require(restored, "Local enemy restore refused");
         }
         readyTicks += scene.spawning() ? 0U : 1U;
         movedTicks += before == scene.actor(0)->position() ? 0U : 1U;
@@ -341,7 +555,7 @@ void run(const Options& options) {
                    {"render_every", options.renderEvery},
                    {"workload", options.workload},
                    {"input_version", 1},
-                   {"input_delivery", network ? "iroh-lockstep" : "local"},
+                   {"input_delivery", "local"},
                    {"input_delay", options.inputDelay},
                    {"initialization", "native-defaults-v1"},
                    {"assets_digest", assetsDigest},
@@ -369,9 +583,6 @@ void run(const Options& options) {
     write({{"type", "complete"}, {"ticks", options.ticks}, {"last_tick", options.ticks}});
     report.close();
     require(!report.fail(), "Could not finish report");
-    if (network) {
-        network->finish();
-    }
     if (!options.timings.empty()) {
         const auto summary = [](std::span<const f64> samples) -> Json {
             const auto value = test::summarizeNativeTimings(samples);
@@ -387,7 +598,7 @@ void run(const Options& options) {
                            {"simulation", "PlayScene::update"}, {"tick_rate", 60},
                            {"stage", options.stage}, {"players", options.players},
                            {"workload", options.workload},
-                           {"input_delivery", network ? "iroh-lockstep" : "local"},
+                           {"input_delivery", "local"},
                            {"assets_digest", assetsDigest}, {"data_digest", dataDigest},
                            {"config_digest", configDigest},
                            {"ticks", options.ticks}, {"warmup_ticks", options.timingWarmup},
@@ -397,6 +608,9 @@ void run(const Options& options) {
                            {"update", summary(updateTimes)},
                            {"diagnostic_observation", summary(observationTimes)},
                            {"headless_render", summary(renderTimes)},
+                           {"enemy_pool_roundtrip", {{"enabled", options.enemyRoundtrip},
+                                                     {"save", summary(enemySaveTimes)},
+                                                     {"restore", summary(enemyRestoreTimes)}}},
                            {"save", nullptr}, {"restore", nullptr}, {"replay", nullptr},
                            {"complete_rewind", false}};
         std::ofstream timingReport(options.timings, std::ios::binary);
@@ -424,8 +638,16 @@ int main(int argc, char** argv) {
                          "[--players 1..4] [--render-every 0..60] [--workload idle|combat] "
                          "[--assets path] [--data path] [--perturb-tick tick] "
                          "[--timings timings.json --timing-warmup ticks] "
+                         "[--enemy-roundtrip 0|1 (offline, with timings)] "
                          "[--network-role host|guest --network-peer 1..4 --ticket path "
-                         "--input-delay 0..6]\n"
+                         "--input-delay 0..2 --network-path local|relay]\n"
+                         "[--input-latency-ms 0..500 --input-jitter-ms 0..500 "
+                         "--input-loss-ppm 0..250000 --input-reorder-ppm 0..1000000 "
+                         "--input-reorder-ms 0..500 --input-impairment-seed positive]\n"
+                         "[--input-outage-tick tick --input-outage-ms 1..5000 --input-outage-peer 1..4]\n"
+                         "Relay is opt-in public Iroh with direct paths disabled. "
+                         "Impairment is simulated outbound application input, "
+                         "not Internet latency. Reliable controls and provider RTT are unmodified.\n"
                          "No desktop control, audio device, or persisted saves. "
                          "Partial state observation; not a full determinism certificate.\n";
             return 0;

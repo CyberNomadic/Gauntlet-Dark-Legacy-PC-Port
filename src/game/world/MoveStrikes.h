@@ -62,7 +62,34 @@ public:
         f32 secondsLeft = 0.0f;
         f32 damageTime = 0.0f; ///< effect lifetime less the burst's wind-up
         bool operator==(const Strike&) const = default;
+        template <class D> friend void visitNativeState(D& digest, const Strike& value) {
+            digest.template fields<15>(value);
+        }
     };
+
+private:
+    struct Simulation {
+        std::vector<Strike> strikes;
+        u32 next = 1;
+        template <class D> friend void visitNativeState(D& digest, const Simulation& value) {
+            digest.template fields<2>(value);
+        }
+    };
+
+public:
+    class LocalSnapshot {
+        friend class MoveStrikes;
+        Simulation state;
+        const MoveStrikes* owner = nullptr;
+        std::weak_ptr<const u8> lifetime;
+        u64 epoch = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
     struct Checkpoint {
         static constexpr usize kMaxStrikes = 4096;
         std::vector<Strike> strikes;
@@ -109,16 +136,16 @@ public:
     void stop(u32 id);
     void clear();
 
-    usize count() const { return m_strikes.size(); }
-    const Strike& strike(usize index) const { return m_strikes[index]; }
+    usize count() const { return m_sim.strikes.size(); }
+    const Strike& strike(usize index) const { return m_sim.strikes[index]; }
     /** The strike numbered `id`, or null once it is over. */
     const Strike* find(u32 id) const;
 
 private:
-    std::vector<Strike> m_strikes;
-    u32 m_next = 1;
+    Simulation m_sim;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
+    u64 m_localEpoch = 0;
 };
 
 } // namespace gdl::game

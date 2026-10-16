@@ -5,8 +5,18 @@
 #include "engine/assets/TextureBindings.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl {
+
+void visitNativeState(NativeStateDigest& digest, const TreeParticles& state) {
+    const auto& [field, nodes] = state;
+    digest.value(field);
+    digest.wide(nodes.size());
+    for (const auto& node : nodes) {
+        digest.fields<2>(node);
+    }
+}
 bool TreeParticles::Checkpoint::valid() const {
     if (!field.valid() || nodes.size() != field.entries.size()) {
         return false;
@@ -109,10 +119,10 @@ void TreeParticles::setTextureFrame(u32 slot, const Texture& texture) {
 }
 
 void TreeParticles::setTextureBlend(u32 slot, const Texture& current, const Texture* next,
-                                    f32 blend) {
+                                    f32 blend, bool stepped) {
     for (usize i = 0; i < m_nodes.size(); ++i) {
         if (m_nodes[i].texture == slot) {
-            m_field.setTextureBlend(i, current, next, blend);
+            m_field.setTextureBlend(i, current, next, blend, stepped);
         }
     }
 }

@@ -5,8 +5,50 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
+
+void SumnerFigure::appendState(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("SumnerFigure.native.1");
+    digest.resource(m_tree);
+    digest.values(m_sequences, m_position, m_yaw, m_transform);
+    digest.fields<7>(state);
+}
+
+bool SumnerFigure::appendNativeDigest(NativeStateDigest& digest) const {
+    appendState(digest, m_sim);
+    return digest.good();
+}
+
+bool SumnerFigure::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, owner, binding] = saved;
+    appendState(digest, state);
+    return digest.good();
+}
+
+void SumnerFigure::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+}
+
+bool SumnerFigure::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding;
+}
+
+bool SumnerFigure::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    return true;
+}
 
 bool SumnerFigure::load(RenderDevice& device, ItemArchive& items, const WorldLayout& layout) {
     clear();
@@ -44,27 +86,28 @@ bool SumnerFigure::load(RenderDevice& device, ItemArchive& items, const WorldLay
     m_yaw = lookout->rotation.y + kPi;
     m_transform =
         glm::rotate(glm::translate(Mat4{1.0f}, m_position), m_yaw, Vec3{0.0f, 1.0f, 0.0f});
-    m_index = 0;
-    m_cutIn = false;
+    m_sim.index = 0;
+    m_sim.cutIn = false;
     const u32 first = sequenceFor(0);
-    m_player.start(m_tree->sequences[first], first);
-    m_pose.evaluate(*m_tree, first, 0.0f);
-    m_previousFrame = m_player.presentationFrame();
-    m_previousGeneration = m_player.generation();
+    m_sim.player.start(m_tree->sequences[first], first);
+    m_sim.pose.evaluate(*m_tree, first, 0.0f);
+    m_sim.previousFrame = m_sim.player.presentationFrame();
+    m_sim.previousGeneration = m_sim.player.generation();
     return true;
 }
 
 void SumnerFigure::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_model.clear();
     m_tree = nullptr;
     m_sequences.fill(-1);
-    m_index = 0;
-    m_cutIn = false;
-    m_player.stop();
-    m_pose = {};
-    m_previousFrame = 0;
-    m_previousGeneration = 0;
-    m_presentationAdvanced = false;
+    m_sim.index = 0;
+    m_sim.cutIn = false;
+    m_sim.player.stop();
+    m_sim.pose = {};
+    m_sim.previousFrame = 0;
+    m_sim.previousGeneration = 0;
+    m_sim.presentationAdvanced = false;
 }
 
 /** The sequence an index asks for, the stance standing in for any the tree lacks. */
@@ -83,33 +126,33 @@ void SumnerFigure::play(s32 index) {
     if (!loaded()) {
         return;
     }
-    m_index = index;
-    m_cutIn = true;
+    m_sim.index = index;
+    m_sim.cutIn = true;
 }
 
 void SumnerFigure::update(f32 seconds) {
-    m_presentationAdvanced = seconds > 0 && loaded();
+    m_sim.presentationAdvanced = seconds > 0 && loaded();
     if (!loaded()) {
         return;
     }
-    m_previousFrame = m_player.presentationFrame();
-    m_previousGeneration = m_player.generation();
+    m_sim.previousFrame = m_sim.player.presentationFrame();
+    m_sim.previousGeneration = m_sim.player.generation();
     // The original plays the asked-for sequence once the current one has ended (at once for
     // the gesture) and, whenever one ends or changes, asks for the next of the cycle.
-    m_player.advance(seconds, m_tree->sequences[m_player.sequence()].repeats);
-    const bool done = m_player.finished();
-    const u32 wanted = sequenceFor(m_index);
-    const bool different = wanted != m_player.sequence();
+    m_sim.player.advance(seconds, m_tree->sequences[m_sim.player.sequence()].repeats);
+    const bool done = m_sim.player.finished();
+    const u32 wanted = sequenceFor(m_sim.index);
+    const bool different = wanted != m_sim.player.sequence();
     bool restarted = false;
-    if (m_cutIn ? (done || different) : (done && different)) {
-        m_player.start(m_tree->sequences[wanted], wanted);
+    if (m_sim.cutIn ? (done || different) : (done && different)) {
+        m_sim.player.start(m_tree->sequences[wanted], wanted);
         restarted = true;
     }
     if (restarted || done) {
-        m_index = m_index + 1 > 2 ? 0 : m_index + 1;
-        m_cutIn = false;
+        m_sim.index = m_sim.index + 1 > 2 ? 0 : m_sim.index + 1;
+        m_sim.cutIn = false;
     }
-    m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
+    m_sim.pose.evaluate(*m_tree, m_sim.player.sequence(), m_sim.player.frame());
 }
 
 void SumnerFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
@@ -118,18 +161,18 @@ void SumnerFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLight
         return;
     }
     TreePose visualPose;
-    const TreePose* pose = &m_pose;
-    f32 frame = m_player.frame();
-    const f32 blend = frameBlend < 0 || m_presentationAdvanced ? frameBlend : 1.0f;
-    if (blend >= 0 && m_player.playing()) {
-        frame = m_previousGeneration == m_player.generation()
-                    ? std::lerp(m_previousFrame, m_player.presentationFrame(),
+    const TreePose* pose = &m_sim.pose;
+    f32 frame = m_sim.player.frame();
+    const f32 blend = frameBlend < 0 || m_sim.presentationAdvanced ? frameBlend : 1.0f;
+    if (blend >= 0 && m_sim.player.playing()) {
+        frame = m_sim.previousGeneration == m_sim.player.generation()
+                    ? std::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
                                 std::clamp(blend, 0.0f, 1.0f))
-                    : m_player.presentationFrame();
-        visualPose.evaluate(*m_tree, m_player.sequence(), frame, false, true);
+                    : m_sim.player.presentationFrame();
+        visualPose.evaluate(*m_tree, m_sim.player.sequence(), frame, false, true);
         pose = &visualPose;
     }
-    m_model.setPresentationFrame(m_player.sequence(), frame);
+    m_model.setPresentationFrame(m_sim.player.sequence(), frame);
     m_model.draw(device, clip, m_transform, lighting, pose->matrices());
 }
 

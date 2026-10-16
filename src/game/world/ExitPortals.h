@@ -70,21 +70,24 @@ public:
     };
     static std::vector<Contact> contacts(const WorldLayout& layout,
                                          const WorldCollision* collision);
-    /** One portal. */
-    struct Portal : Contact {
+    /** Live values, separate from the stage-retained ordinary/off model. */
+    struct PortalState : Contact {
         bool consumed = false;
         bool shut = false; ///< the tower has not opened it: it wears EXIT_OFF and takes nobody
         f32 alpha = 1.0f;  ///< tower route reveal; does not change progression eligibility
         std::optional<Vec3> departurePosition;
-        const ItemArchive* archive = nullptr; ///< borrowed source of the ordinary/off figure
         ItemFigure icon;
-        std::string tag;                     ///< "g1"
-        std::optional<LevelRef> destination; ///< none for a tag naming no level
-        s32 action = 0;                      ///< which of kSequences it plays
-        s32 ticksLeft = 0;                   ///< before it may move on
-        TreeModel model;
+        s32 action = 0;    ///< which of kSequences it plays
+        s32 ticksLeft = 0; ///< before it may move on
         TreePose pose;
         AnimationPlayer player;
+    };
+    /** One portal. */
+    struct Portal : PortalState {
+        const ItemArchive* archive = nullptr; ///< borrowed source of the ordinary/off figure
+        std::string tag;                      ///< "g1"
+        std::optional<LevelRef> destination;  ///< none for a tag naming no level
+        TreeModel model;
     };
 
     /** A portal the tower keeps shut, by the world and level (from nought) it leads to. */
@@ -117,7 +120,7 @@ public:
     std::optional<usize> update(s32 ticks, f32 seconds, std::span<const PortalVisitor> party);
     /** Who is ready on a portal the rest of a party of more than one has yet to reach
      * (DoExit's wait), by place in the party. */
-    std::vector<s32> takeWaiting() { return std::exchange(m_waiting, {}); }
+    std::vector<s32> takeWaiting() { return std::exchange(m_wait.waiting, {}); }
     /** The occupied exit's position for its continuous flame, including moving visitors. */
     std::optional<Vec3> flamePosition(std::span<const PortalVisitor> party) const;
     /** Continues the selected sequences while gameplay is held for transportation. */
@@ -137,6 +140,30 @@ private:
         s32 party = -1;
         s32 ticks = 0;
     };
+    struct Waiting {
+        std::vector<s32> waiting;
+        std::vector<VisitorWait> visitors;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class ExitPortals;
+        std::vector<PortalState> portals;
+        Waiting waiting;
+        const ExitPortals* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    void appendBinding(NativeStateDigest& digest) const;
+    static void appendPortal(NativeStateDigest& digest, const PortalState& state);
+    static void appendWaiting(NativeStateDigest& digest, const Waiting& state);
     void advance(Portal& portal, s32 action);
     bool readyToLeave(s32 party) const;
     void updateReadiness(s32 ticks, std::span<const PortalVisitor> party, f32 extra);
@@ -146,8 +173,7 @@ private:
     const TreeInfo* m_tree = nullptr;
     const WorldCollision* m_collision = nullptr; ///< borrowed through clear()
     std::array<s32, kSequences.size()> m_sequences{-1, -1, -1, -1, -1};
-    std::vector<s32> m_waiting;
-    std::vector<VisitorWait> m_visitors;
+    Waiting m_wait;
     std::vector<Portal> m_portals;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;

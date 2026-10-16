@@ -6,8 +6,65 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+
+bool LockedGates::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const {
+    digest.string("LockedGates.native.1");
+    // These immutable binding inputs remain fixed until clear/bind invalidates
+    // history. Mutable collision values are visited by the enclosing world owner.
+    digest.resource(m_layout);
+    digest.resource(m_collision);
+    digest.fields<1>(state);
+    return digest.good();
+}
+
+bool LockedGates::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim);
+}
+
+bool LockedGates::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state);
+}
+
+bool LockedGates::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& gate : m_sim.gates) {
+        if (!gate.figure.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void LockedGates::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool LockedGates::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding;
+}
+
+bool LockedGates::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool LockedGates::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
+}
 
 std::string_view LockedGates::openingSound(s32 realm, s32 subtype) {
     static constexpr std::array<std::array<std::string_view, 4>, 14> kSounds{{
@@ -47,56 +104,55 @@ bool LockedGates::bind(RenderDevice& device, const WorldLayout& layout, const As
             continue;
         }
         const ItemInfo& info = infos[static_cast<usize>(instance.info)];
-        auto gate = std::make_unique<Gate>();
-        gate->instance = static_cast<s32>(index);
-        gate->subtype = info.subtype;
-        gate->minPlayers = instance.minPlayers;
+        Gate gate;
+        gate.instance = static_cast<s32>(index);
+        gate.subtype = info.subtype;
+        gate.minPlayers = instance.minPlayers;
         const std::string& name = instance.name.empty() ? info.name : instance.name;
-        if (!gate->figure.place(device, scope, name, instance,
-                                (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
+        if (!gate.figure.place(device, scope, name, instance,
+                               (info.collisionFlags & 1U) != 0 ? nullptr : collision)) {
             log::warn("Gates: no figure {} in the item archive", name);
         }
-        gate->box = gate->figure.obstacle(info);
-        gate->support.bind(instance, info, authored ? &*authored : nullptr, gate->figure, gate->box,
-                           collision);
-        gate->support.sync(collision, gate->figure, gate->box);
+        gate.box = gate.figure.obstacle(info);
+        gate.support.bind(instance, info, authored ? &*authored : nullptr, gate.figure, gate.box,
+                          collision);
+        gate.support.sync(collision, gate.figure, gate.box);
         if (info.collisionType == 4) {
             // Type 7 also includes floor decorations (E1DOORCARPET23). Retail
             // fn_8005FDA8 tests the authored triangle list, not the broad-phase
             // radius as a solid box. A floor-only list cannot block a passage
             // and must never reach the key-spending contact handler.
             const Mat3 rotation{itemPlacement(Vec3{0}, instance.rotation)};
-            gate->blocksPassage =
-                std::ranges::any_of(instance.collision, [&](const auto& triangle) {
-                    return std::abs((rotation * triangle.normal).y) < WorldCollision::kFloorNormalY;
-                });
-            gate->box.solid = gate->blocksPassage;
+            gate.blocksPassage = std::ranges::any_of(instance.collision, [&](const auto& triangle) {
+                return std::abs((rotation * triangle.normal).y) < WorldCollision::kFloorNormalY;
+            });
+            gate.box.solid = gate.blocksPassage;
             if (instance.collision.empty()) {
                 log::warn("Gates: {} has no exported triangle collision; re-export the level",
                           name);
             }
         }
-        m_gates.push_back(std::move(gate));
+        m_sim.gates.push_back(std::move(gate));
     }
-    return !m_gates.empty();
+    return !m_sim.gates.empty();
 }
 
 void LockedGates::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_collision = nullptr;
     m_layout = nullptr;
-    m_gates.clear();
+    m_sim.gates.clear();
 }
 
 void LockedGates::syncFloors() {
-    for (const auto& gate : m_gates) {
-        gate->support.sync(m_collision, gate->figure, gate->box);
+    for (auto& gate : m_sim.gates) {
+        gate.support.sync(m_collision, gate.figure, gate.box);
     }
 }
 
 void LockedGates::setPlayerCount(s32 players) {
-    for (const std::unique_ptr<Gate>& gate : m_gates) {
-        gate->shown = shownToParty(gate->minPlayers, players);
+    for (auto& gate : m_sim.gates) {
+        gate.shown = shownToParty(gate.minPlayers, players);
     }
 }
 
@@ -104,8 +160,8 @@ std::vector<GateEvent> LockedGates::update(s32 ticks, f32 seconds,
                                            std::span<const ChestVisitor> party) {
     std::vector<GateEvent> events;
     syncFloors();
-    for (usize index = 0; index < m_gates.size(); ++index) {
-        Gate& gate = *m_gates[index];
+    for (usize index = 0; index < m_sim.gates.size(); ++index) {
+        Gate& gate = m_sim.gates[index];
         if (!gate.shown) {
             continue;
         }
@@ -154,26 +210,26 @@ std::vector<GateEvent> LockedGates::update(s32 ticks, f32 seconds,
 
 std::vector<Obstacle> LockedGates::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (const std::unique_ptr<Gate>& gate : m_gates) {
-        if (gate->shown && gate->box.solid) {
-            boxes.push_back(gate->box);
+    for (auto& gate : m_sim.gates) {
+        if (gate.shown && gate.box.solid) {
+            boxes.push_back(gate.box);
         }
     }
     return boxes;
 }
 
 void LockedGates::capturePresentation() {
-    for (const auto& gate : m_gates) {
-        gate->figure.capturePresentation();
+    for (auto& gate : m_sim.gates) {
+        gate.figure.capturePresentation();
     }
 }
 
 void LockedGates::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                        f32 presentationAlpha) const {
-    for (const std::unique_ptr<Gate>& gate : m_gates) {
-        if (gate->shown) {
-            gate->figure.draw(device, clip, lighting, 1, 1, nullptr, TreeModel::Pass::All,
-                              presentationAlpha);
+    for (auto& gate : m_sim.gates) {
+        if (gate.shown) {
+            gate.figure.draw(device, clip, lighting, 1, 1, nullptr, TreeModel::Pass::All,
+                             presentationAlpha);
         }
     }
 }

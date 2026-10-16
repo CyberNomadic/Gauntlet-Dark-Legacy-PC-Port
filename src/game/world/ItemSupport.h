@@ -27,8 +27,13 @@ public:
               const WorldCollision* current = nullptr);
     void sync(const WorldCollision* collision, ItemFigure& figure, Obstacle& box);
     s32 object() const { return m_object; }
+    bool operator==(const ItemSupport&) const = default;
 
 private:
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const ItemSupport& value) {
+        const auto& [object, local, boxOffset, boxYaw] = value;
+        visitor.values(object, local, boxOffset, boxYaw);
+    }
     friend class LockedGatesCheckpoint;
     friend class BreakablesCheckpoint;
     friend class StaticSceneryCheckpoint;

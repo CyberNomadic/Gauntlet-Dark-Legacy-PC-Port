@@ -8,7 +8,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "game/screens/NativePlayDriver.h"
+#include "game/screens/NativeRollbackDriver.h"
 
 namespace {
 using namespace gdl;
@@ -46,28 +46,19 @@ struct MenuFixture {
     }
 };
 
-struct Wire final : PacketTransport {
-    std::vector<std::vector<u8>> packets;
-    SendResult send(Connection, std::span<const u8> bytes, Delivery delivery) override {
-        REQUIRE(delivery == Delivery::Reliable);
-        packets.emplace_back(bytes.begin(), bytes.end());
-        return SendResult::Sent;
-    }
-    std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-    void close(Connection) override {}
-};
-
 struct Peer {
     test::FakeRenderDevice device;
     GameConfig config;
     StringTable strings;
     LevelWorld world;
     PlayScene scene;
-    MatchSession match;
-    NativePlayDriver driver;
-    Peer(u8 peer, u8 delay) {
+    MatchContext match;
+    u8 id;
+    NativeRollbackDriver driver;
+    NativeRollbackDriver::Result last;
+    Peer(u8 peer, u8 delay) : id(peer) {
         device.recordDraws = false;
+        config.timing.tickRate = 60;
         const auto root = test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2")
                               .parent_path()
                               .parent_path()
@@ -95,8 +86,18 @@ struct Peer {
         // is the visitor, and host seat1 is away from Sumner's authored trigger.
         const_cast<PlayerActor*>(scene.actor(1))->place(Vec3{0, 2.1f, 0});
         const_cast<PlayerActor*>(scene.actor(3))->place(*options.position);
-        const std::array links{MatchLink{static_cast<u8>(peer == 1 ? 2 : 1), 1}};
-        REQUIRE(match.open(peer, {0, 1, 0, 2}, links, delay));
+        match.epoch = 1;
+        match.scene = 1;
+        match.owners = {0, 1, 0, 2};
+        match.grants = {0, 1, 0, 2};
+        match.inputLead = delay;
+        REQUIRE(scene.beginRecordedAudio(1));
+        REQUIRE(driver.bind(scene, match, id, NativeRollbackDriver::AudioMode::Required));
+    }
+    ~Peer() { driver.clear(); scene.endRecordedAudio(); }
+    NativeRollbackDriver::Status advance(bool forward = true) {
+        last = driver.advance(forward);
+        return last.status;
     }
 };
 
@@ -104,13 +105,6 @@ struct Pair {
     std::unique_ptr<Peer> host, guest;
     explicit Pair(u8 delay)
         : host(std::make_unique<Peer>(1, delay)), guest(std::make_unique<Peer>(2, delay)) {
-        REQUIRE(host->match.prepare(1));
-        pump();
-        REQUIRE(host->driver.bind(host->scene, host->match));
-        REQUIRE(guest->driver.bind(guest->scene, guest->match));
-        REQUIRE(host->match.loaded());
-        REQUIRE(guest->match.loaded());
-        pump();
         for (u32 tick = 0; tick < 900 && !host->scene.hints().active(); ++tick) {
             step();
         }
@@ -119,26 +113,24 @@ struct Pair {
         REQUIRE(host->scene.hints().topics().definition().playerLabel == "Player 4");
     }
     void pump() {
-        for (u8 pass = 0; pass < 3; ++pass) {
-            for (bool reverse : {false, true}) {
-                auto& from = reverse ? guest->match : host->match;
-                auto& to = reverse ? host->match : guest->match;
-                Wire wire;
-                from.flush(wire);
-                for (const auto& bytes : wire.packets) {
-                    const auto result = to.receive(1, bytes);
-                    REQUIRE((result == MatchSession::Admission::Accepted ||
-                             result == MatchSession::Admission::Stale));
-                }
+        using A = NativeRollbackDriver::Admission;
+        for (const bool reverse : {false, true}) {
+            auto& from = reverse ? *guest : *host;
+            auto& to = reverse ? *host : *guest;
+            if (!from.driver.redundantInputs().empty()) {
+                const auto result = to.driver.submit(from.id, from.driver.redundantInputs());
+                REQUIRE((result == A::Accepted || result == A::Duplicate || result == A::Stale));
             }
+            const auto result = to.driver.observePeerTick(from.id, 1, from.driver.nextTick());
+            REQUIRE((result == A::Accepted || result == A::Duplicate || result == A::Stale));
         }
     }
     void step(const SessionInputs::Frame& first = {}, const SessionInputs::Frame& second = {}) {
-        REQUIRE(host->driver.sample(host->match, first));
-        REQUIRE(guest->driver.sample(guest->match, second));
+        REQUIRE(host->driver.sample(first));
+        REQUIRE(guest->driver.sample(second));
         pump();
-        REQUIRE(host->driver.advance(host->match) == NativePlayDriver::Result::Advanced);
-        REQUIRE(guest->driver.advance(guest->match) == NativePlayDriver::Result::Advanced);
+        REQUIRE(host->advance() == NativeRollbackDriver::Status::Advanced);
+        REQUIRE(guest->advance() == NativeRollbackDriver::Status::Advanced);
     }
 };
 } // namespace
@@ -209,7 +201,7 @@ TEST_CASE("Sumner topic revisions reject old pages backs closes and tolerate byt
 }
 
 TEST_CASE("native sparse-seat Sumner mouse clicks survive a stall exactly once",
-          "[native-play-driver][hint-input][assets]") {
+          "[native-rollback-lifecycle][hint-input][assets]") {
     Pair pair(0);
     const auto& menu = pair.guest->scene.hints();
     const auto pointer = click(menu.topics(), 1);
@@ -231,25 +223,25 @@ TEST_CASE("native sparse-seat Sumner mouse clicks survive a stall exactly once",
     pair.guest->scene.render(pair.guest->device, projection, 640, 480);
     REQUIRE(pair.guest->scene.captureNativeInput(3, clickInput).hintTopic == 2);
 
-    REQUIRE(pair.guest->driver.sample(pair.guest->match, {}));
-    const auto heldTick = pair.guest->driver.completedTick();
+    REQUIRE(pair.guest->driver.sample({}));
+    const auto heldTick = (pair.guest->driver.nextTick() - 1);
     for (s32 poll = 0; poll < 20; ++poll) {
         SessionInputs::Frame local;
         if (poll == 3) {
             local[0] = clickInput; // local device0 owns canonical seat3
         }
-        REQUIRE(pair.guest->driver.sample(pair.guest->match, local));
-        REQUIRE(pair.guest->driver.advance(pair.guest->match) == NativePlayDriver::Result::Held);
-        CHECK(pair.guest->driver.completedTick() == heldTick);
+        REQUIRE(pair.guest->driver.sample(local));
+        REQUIRE(pair.guest->advance(false) == NativeRollbackDriver::Status::Held);
+        CHECK((pair.guest->driver.nextTick() - 1) == heldTick);
     }
-    REQUIRE(pair.host->driver.sample(pair.host->match, {}));
+    REQUIRE(pair.host->driver.sample({}));
     pair.pump();
-    REQUIRE(pair.host->driver.advance(pair.host->match) == NativePlayDriver::Result::Advanced);
-    REQUIRE(pair.guest->driver.advance(pair.guest->match) == NativePlayDriver::Result::Advanced);
+    REQUIRE(pair.host->advance() == NativeRollbackDriver::Status::Advanced);
+    REQUIRE(pair.guest->advance() == NativeRollbackDriver::Status::Advanced);
     pair.step();
     for (const auto* peer : {pair.host.get(), pair.guest.get()}) {
-        REQUIRE(peer->match.resolvedInput(3));
-        CHECK(peer->match.resolvedInput(3)->hintTopic == 2);
+        REQUIRE_FALSE(peer->last.frames.empty());
+        CHECK(peer->last.frames.back().input.commands[3].hintTopic == 2);
         REQUIRE(peer->scene.hints().reading());
         CHECK(peer->scene.hints().page().definition().title == "The Lich");
     }
@@ -261,7 +253,7 @@ TEST_CASE("native sparse-seat Sumner mouse clicks survive a stall exactly once",
         pair.step();
         CHECK_FALSE(pair.host->scene.hints().reading());
         CHECK_FALSE(pair.guest->scene.hints().reading());
-        CHECK(pair.guest->match.resolvedInput(3)->hintTopic == 0);
+        CHECK(pair.guest->last.frames.back().input.commands[3].hintTopic == 0);
     }
     CHECK(pair.host->scene.hints().topics().selection() == 1);
     CHECK(pair.guest->scene.hints().topics().selection() == 1);

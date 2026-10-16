@@ -14,6 +14,9 @@ namespace gdl::game {
 struct SpeechTiming {
     f64 remainingSeconds = 0;
     bool looping = false;
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const SpeechTiming& state) {
+        visitor.template fields<2>(state);
+    }
 
     static SpeechTiming of(const SoundSequence& sequence) {
         SpeechTiming result;

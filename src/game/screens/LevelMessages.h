@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <optional>
 
 #include "engine/assets/BitmapFont.h"
@@ -16,7 +18,24 @@ namespace gdl::game {
  * Borrows the scene's static textures. Clear all users of text() before clear(), and
  * clear this presentation before releasing those textures. No world or audio is retained. */
 class LevelMessages {
+    struct Simulation {
+        std::optional<u32> message;
+        u32 firstPage = 0;
+    };
+
 public:
+    class LocalSnapshot {
+        friend class LevelMessages;
+        Simulation state;
+        const LevelMessages* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+        ScrollBox::LocalSnapshot scroll;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     struct Cues {
         bool stopVoice = false;
         bool burnSound = false;
@@ -59,13 +78,14 @@ public:
     std::optional<Look> look() const;
 
 private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     BitmapFont m_font32;
     ControlLabels m_controlLabels;
     TextPainter m_text;
     MessageTable m_scrollText;
     ScrollBox m_scroll; ///< references our painter, so this owner must not move
-    std::optional<u32> m_message;
-    u32 m_firstPage = 0;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

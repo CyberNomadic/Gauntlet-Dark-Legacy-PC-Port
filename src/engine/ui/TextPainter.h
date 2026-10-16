@@ -42,10 +42,13 @@ public:
     s32 draw(Canvas& canvas, s32 x, s32 y, std::string_view text, const TextStyle& style) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const TextPainter&);
     s32 advance(u8 code, f32 scale) const;
 
     const BitmapFont* m_font = nullptr;
     const Texture* m_texture = nullptr;
 };
+
+void visitNativeState(NativeStateDigest&, const TextPainter&);
 
 } // namespace gdl

@@ -7,6 +7,8 @@
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 
@@ -20,6 +22,119 @@ s32 parameter(const ItemInstance& instance, usize offset) {
 }
 
 } // namespace
+
+bool SafeRocks::appendBindingDigest(NativeStateDigest& digest) const {
+    digest.string("SafeRocks.native.1");
+    digest.resource(m_layout);
+    const auto archive = [&](const ItemArchive* items) {
+        // Missing optional art is a valid native cover binding. An unloaded
+        // archive has no resource identity or artwork to borrow.
+        digest.flag(items != nullptr);
+        if (items) {
+            digest.flag(items->loaded());
+            if (items->loaded()) {
+                digest.resource(items);
+            }
+        }
+    };
+    archive(m_items);
+    archive(m_animationItems);
+    digest.value(m_textureSlots);
+    m_textures.appendBindingDigest(digest);
+    digest.wide(m_rocks.size());
+    for (const auto& rock : m_rocks) {
+        if (!rock) {
+            digest.invalidate();
+            return false;
+        }
+        // Model bindings remain in this owner, not in local history. Their
+        // texture/frame draw cache is reconstructed before each draw.
+        for (const auto& model : rock->models) {
+            digest.flag(model.bound());
+            if (model.bound()) {
+                digest.resource(&model);
+            }
+        }
+    }
+    return digest.good();
+}
+
+bool SafeRocks::appendNativeDigest(NativeStateDigest& digest) const {
+    if (!appendBindingDigest(digest)) {
+        return false;
+    }
+    digest.fields<3>(m_textures.clock());
+    digest.wide(m_rocks.size());
+    for (const auto& rock : m_rocks) {
+        digest.value(static_cast<const RockState&>(*rock));
+    }
+    return digest.good();
+}
+
+bool SafeRocks::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    if (!appendBindingDigest(digest)) {
+        return false;
+    }
+    digest.fields<3>(saved.textures);
+    digest.value(saved.rocks);
+    return digest.good();
+}
+
+bool SafeRocks::registerNativeResources(NativeStateResources& resources) const {
+    if (m_items && m_items->loaded()) {
+        if (!resources.refreshArchive(*m_items)) {
+            return false;
+        }
+        for (usize index = 0; index < m_rocks.size(); ++index) {
+            for (usize tier = 0; tier < m_rocks[index]->models.size(); ++tier) {
+                const auto& model = m_rocks[index]->models[tier];
+                if (model.bound() &&
+                    !resources.registerModel(model, *m_items,
+                                               std::format("safe-rock/{}/{}", index, tier))) {
+                    return false;
+                }
+            }
+        }
+    }
+    return (!m_animationItems || !m_animationItems->loaded() ||
+            resources.refreshArchive(*m_animationItems)) && resources.good();
+}
+
+void SafeRocks::saveLocal(LocalSnapshot& saved) const {
+    saved.rocks.resize(m_rocks.size());
+    for (usize index = 0; index < m_rocks.size(); ++index) {
+        saved.rocks[index] = *m_rocks[index];
+    }
+    saved.textures = m_textures.clock();
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool SafeRocks::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding && saved.rocks.size() == m_rocks.size();
+}
+
+bool SafeRocks::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.rocks == right.rocks &&
+           left.textures == right.textures;
+}
+
+bool SafeRocks::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize index = 0; index < m_rocks.size(); ++index) {
+        static_cast<RockState&>(*m_rocks[index]) = saved.rocks[index];
+    }
+    m_textures.restoreClock(saved.textures);
+    ++m_checkpointGeneration;
+    return true;
+}
 
 bool SafeRocks::bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items) {
     clear();

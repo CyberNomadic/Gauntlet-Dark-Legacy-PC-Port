@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <memory>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -18,6 +19,70 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+
+TEST_CASE("Death events retain their birth through slot reuse and eight tick native rewind",
+          "[death][local-rewind][native-combat-audio]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, test::deathArchive(), nullptr, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kDeathKind));
+    const EnemySpawn spawn{.kind = kDeathKind,
+                           .placed = true,
+                           .asleep = true,
+                           .priority = EnemySpawn::Priority::Visible};
+    REQUIRE(enemies.spawn(spawn, {}) == 0);
+    const auto birth = enemies.observe(0)->instance;
+    auto saved = std::make_unique<Enemies::LocalSnapshot>();
+    REQUIRE(enemies.saveLocal(*saved));
+    const auto advance = [&](s32 tick, bool wrong) {
+        if (tick == 0) {
+            enemies.hurt(0, EnemyHit{.damage = 1, .player = 0});
+        } else if (tick == 1) {
+            enemies.hurt(0, EnemyHit{.damage = 1, .player = 0, .antiDeath = !wrong});
+        } else if (tick == 2) {
+            enemies.hurt(0, EnemyHit{.flags = EnemyHit::kMagic, .player = 0, .level = 99});
+        } else if (tick == 3) {
+            REQUIRE(enemies.spawn(spawn, {}) == 0);
+            enemies.hurt(0, EnemyHit{.damage = 1, .player = 0});
+        } else if (tick == 4) {
+            enemies.finishDeath(0, 0);
+        }
+        enemies.update(1, 1.0f / 60, {});
+        return enemies.takeDeathEvents();
+    };
+    std::array<std::vector<DeathEvent>, 8> expected;
+    std::array<Enemies::Checkpoint, 8> states;
+    for (s32 tick = 0; tick < 8; ++tick) {
+        expected[tick] = advance(tick, false);
+        const auto state = enemies.checkpoint();
+        REQUIRE(state);
+        states[tick] = *state;
+        for (const auto& event : expected[tick]) {
+            CHECK(event.enemy == 0);
+            CHECK(event.instance == (tick < 3 ? birth : birth + 1));
+        }
+    }
+    REQUIRE(expected[0].size() == 1);
+    CHECK(expected[0][0].kind == DeathEvent::Kind::Awakened);
+    REQUIRE(expected[2].size() == 2);
+    CHECK(expected[2][0].kind == DeathEvent::Kind::MagicHeal);
+    CHECK(expected[2][0].amount > 0);
+    CHECK(expected[2][1].kind == DeathEvent::Kind::Killed);
+    REQUIRE(expected[4].size() == 1);
+    CHECK(expected[4][0].kind == DeathEvent::Kind::Exhausted);
+    for (s32 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        REQUIRE(enemies.restoreLocal(*saved));
+        for (s32 tick = 0; tick < distance; ++tick) {
+            advance(tick, true);
+        }
+        REQUIRE(enemies.restoreLocal(*saved));
+        for (s32 tick = 0; tick < distance; ++tick) {
+            CHECK(advance(tick, false) == expected[tick]);
+            CHECK(enemies.checkpoint() == states[tick]);
+        }
+    }
+}
 
 TEST_CASE("Death reverses its seek route after nine world-blocked movement steps",
           "[death][enemies][alpha-seek-blocked]") {

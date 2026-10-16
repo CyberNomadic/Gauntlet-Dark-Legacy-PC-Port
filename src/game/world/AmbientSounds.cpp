@@ -96,21 +96,51 @@ bool AmbientSounds::bind(const WorldLayout& layout, std::span<SoundSet* const> b
     return !m_emitters.empty();
 }
 
-void AmbientSounds::update(SoundPlayer& player, std::span<const Vec3> listeners,
-                           const AmbientEar& ear, f32 levelVolume,
-                           std::optional<f32> volumeOverride, const WorldScene* world) {
-    for (AmbientEmitter& emitter : m_emitters) {
+std::vector<AmbientSounds::Request> AmbientSounds::requests(std::span<const Vec3> listeners,
+                                                            f32 levelVolume,
+                                                            std::optional<f32> volumeOverride,
+                                                            const WorldScene* world) const {
+    std::vector<Request> result;
+    result.reserve(m_emitters.size());
+    for (usize index = 0; index < m_emitters.size(); ++index) {
+        const AmbientEmitter& emitter = m_emitters[index];
+        Vec3 position = emitter.position;
         if (world != nullptr && emitter.parent >= 0) {
-            emitter.position = Vec3{world->worldTransform(static_cast<usize>(emitter.parent))[3]};
+            position = Vec3{world->worldTransform(static_cast<usize>(emitter.parent))[3]};
         }
         f32 nearest = -1.0f;
         for (const Vec3& listener : listeners) {
-            const f32 distance = glm::distance(listener, emitter.position);
+            const f32 distance = glm::distance(listener, position);
             nearest = nearest < 0.0f ? distance : std::min(nearest, distance);
         }
-        emitter.loudness = nearest < 0.0f || !shownToParty(emitter.minPlayers, m_players)
-                               ? 0.0f
-                               : loudness(nearest, emitter.radius);
+        const f32 heard = nearest < 0.0f || !shownToParty(emitter.minPlayers, m_players)
+                              ? 0.0f
+                              : loudness(nearest, emitter.radius);
+        result.push_back(
+            {index, position, heard,
+             std::clamp(volumeOverride.value_or(kPeak * heard * levelVolume), 0.0f, 1.0f)});
+    }
+    return result;
+}
+
+std::optional<f32> AmbientSounds::musicScale(std::span<const Request> requests) const {
+    std::optional<f32> scale;
+    for (const auto& request : requests) {
+        if (request.emitter < m_emitters.size() &&
+            (m_emitters[request.emitter].flags & kDuckMusic) != 0 && request.loudness > 0) {
+            scale = 1.0f - 0.5f * request.loudness;
+        }
+    }
+    return scale;
+}
+
+void AmbientSounds::update(SoundPlayer& player, std::span<const Vec3> listeners,
+                           const AmbientEar& ear, f32 levelVolume,
+                           std::optional<f32> volumeOverride, const WorldScene* world) {
+    for (const auto& request : requests(listeners, levelVolume, volumeOverride, world)) {
+        AmbientEmitter& emitter = m_emitters[request.emitter];
+        emitter.position = request.position;
+        emitter.loudness = request.loudness;
         if (emitter.loudness <= 0.0f) {
             if (emitter.handle != kNoSound) {
                 player.stop(emitter.handle);
@@ -118,8 +148,7 @@ void AmbientSounds::update(SoundPlayer& player, std::span<const Vec3> listeners,
             }
             continue;
         }
-        const f32 volume =
-            std::clamp(volumeOverride.value_or(kPeak * emitter.loudness * levelVolume), 0.0f, 1.0f);
+        const f32 volume = request.volume;
         if (emitter.handle == kNoSound || !player.isPlaying(emitter.handle)) {
             try {
                 emitter.handle = player.play(emitter.bank->sequence(emitter.sound), volume,

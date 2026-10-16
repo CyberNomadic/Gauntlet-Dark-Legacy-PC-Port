@@ -18,6 +18,7 @@
 #include "game/players/ClassData.h"
 #include "game/players/NameCheats.h"
 #include "game/players/Progression.h"
+#include "game/world/NativeStateResources.h"
 #include "game/world/PlayerMissiles.h"
 
 namespace gdl::game {
@@ -49,6 +50,19 @@ std::optional<usize> armOf(u32 equipment) {
         }
     }
     return std::nullopt;
+}
+
+std::string playerResourceKey(const std::filesystem::path& directory) {
+    // Only the actual class and bank/costume components identify this binding.
+    // Installation paths and on-disk filename casing can differ between peers.
+    auto key = std::format("players/{}/{}", directory.parent_path().filename().generic_string(),
+                           directory.filename().generic_string());
+    for (char& value : key) {
+        if (value >= 'A' && value <= 'Z') {
+            value = static_cast<char>(value + ('a' - 'A'));
+        }
+    }
+    return key;
 }
 } // namespace
 
@@ -123,8 +137,10 @@ std::unique_ptr<PlayerFigure> PlayerFigure::load(RenderDevice& device,
     }
     figure->m_costume = &figure->m_costumeArchive.trees.tree(*tree);
     figure->m_directory = directory;
+    figure->m_costumeResourceKey = playerResourceKey(directory);
     figure->m_effectDirectory =
         classFolder(root, save.character, std::format("SFX{}", colorCode(save.color)));
+    figure->m_effectResourceKey = playerResourceKey(figure->m_effectDirectory);
     const auto animations = figure->m_costumeArchive.trees.textureAnimations();
     if (!animations.empty()) {
         // Hand glows borrow POWERUPS; load_player_geo's special BOMB texmod
@@ -327,13 +343,14 @@ void PlayerFigure::loadActions(const std::filesystem::path& root, const Characte
                                bool enter) {
     const std::string_view cls = actionsClassOf(root, save.character);
     const std::filesystem::path directory = classFolder(root, save.character, kClassAnimations);
+    m_actionResourceKey = playerResourceKey(directory);
     const auto tree = m_actions.load(directory) ? m_actions.find(cls) : std::nullopt;
-    if (!tree.has_value() || !m_animator.bind(m_actions.tree(*tree), enter)) {
+    if (!tree.has_value() || !m_action.animator.bind(m_actions.tree(*tree), enter)) {
         log::warn("Tower: no sequences for the {} under {}; the figure stands still", cls,
                   directory.string());
         return;
     }
-    m_animator.setCharacter(save.character);
+    m_action.animator.setCharacter(save.character);
     // The second hand, and what a shield borne on it hides (player.c 4512, 5604).
     m_armNode = -1;
     m_armHidden = -1;
@@ -370,31 +387,33 @@ void PlayerFigure::loadActions(const std::filesystem::path& root, const Characte
 }
 
 void PlayerFigure::animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed) {
-    ++m_animationRevision;
+    ++m_action.revision;
     m_visualTransforms.clear();
     m_costumeTextures.advance(seconds);
     // PlayerMotion consumes the familiar-shot bit on the following simulation step,
     // not on every frame the attack button is held.
-    m_familiarReleased = m_familiarPending && deed != PlayerDeed::Die;
-    m_familiarPending = false;
-    if (!m_animator.bound()) {
+    m_action.familiarReleased = m_action.familiarPending && deed != PlayerDeed::Die;
+    m_action.familiarPending = false;
+    if (!m_action.animator.bound()) {
         return;
     }
-    m_animator.update(PlayerAnimator::motionFor(stickMagnitude), ticks, seconds, deed);
+    m_action.animator.update(PlayerAnimator::motionFor(stickMagnitude), ticks, seconds, deed);
     const bool phoenix = phoenixActive();
-    m_familiarPending =
+    m_action.familiarPending =
         (phoenix || familiarTier() > 0) &&
-        (m_animator.released() || m_animator.strongReleased() || m_animator.superReleased() ||
-         m_animator.itemReleased() == PlayerDeed::FireLeft ||
-         m_animator.itemReleased() == PlayerDeed::FireRight);
+        (m_action.animator.released() || m_action.animator.strongReleased() ||
+         m_action.animator.superReleased() ||
+         m_action.animator.itemReleased() == PlayerDeed::FireLeft ||
+         m_action.animator.itemReleased() == PlayerDeed::FireRight);
     // Swings and throws animate Pojo; ranged releases animate both firing familiars.
-    const bool swung = m_animator.meleeStruck() || m_animator.released() ||
-                       m_animator.strongReleased() || m_animator.superReleased();
-    m_companion.update(seconds, m_animator.action(), swung, phoenix && m_familiarPending);
-    m_familiar.update(seconds, m_familiarPending);
-    m_transforms.resize(m_costume->nodes.size());
-    for (usize n = 0; n < m_transforms.size(); ++n) {
-        m_transforms[n] = poseTransform(n, m_animator.pose());
+    const bool swung = m_action.animator.meleeStruck() || m_action.animator.released() ||
+                       m_action.animator.strongReleased() || m_action.animator.superReleased();
+    m_companion.update(seconds, m_action.animator.action(), swung,
+                       phoenix && m_action.familiarPending);
+    m_familiar.update(seconds, m_action.familiarPending);
+    m_action.transforms.resize(m_costume->nodes.size());
+    for (usize n = 0; n < m_action.transforms.size(); ++n) {
+        m_action.transforms[n] = poseTransform(n, m_action.animator.pose());
     }
 }
 
@@ -405,19 +424,19 @@ void PlayerFigure::capturePresentation() {
 }
 
 void PlayerFigure::updateTrail(const Mat4& body, s32 ticks) {
-    const PlayerAnimator::Action action = m_animator.action();
+    const PlayerAnimator::Action action = m_action.animator.action();
     const bool swinging = action == PlayerAnimator::Action::SlowSwing ||
                           action == PlayerAnimator::Action::Spin ||
                           action == PlayerAnimator::Action::PowerMed;
     const auto hand = static_cast<usize>(std::max(m_handNode, 0));
-    const Mat4 wrist = hand < m_transforms.size() ? m_transforms[hand] : Mat4{1.0f};
+    const Mat4 wrist = hand < m_action.transforms.size() ? m_action.transforms[hand] : Mat4{1.0f};
     m_trail.step(ticks, body * wrist,
                  swinging && heldWeaponBound() && !m_handItemHeld && !pojoActive());
 }
 
 void PlayerFigure::setCompanionPowerups(RenderDevice& device, ItemArchive& powerups,
                                         const Inventory& inventory, ItemArchive* weapons) {
-    const bool shieldRunning = m_animator.action() == PlayerAnimator::Action::ShieldRun;
+    const bool shieldRunning = m_action.animator.action() == PlayerAnimator::Action::ShieldRun;
     m_companion.choose(device,
                        PowerupCompanion::choose(PowerupEffects::of(inventory), shieldRunning),
                        powerups, weapons);
@@ -425,7 +444,7 @@ void PlayerFigure::setCompanionPowerups(RenderDevice& device, ItemArchive& power
 }
 
 bool PlayerFigure::syncCompanionPowerups(const Inventory& inventory) {
-    const bool shieldRunning = m_animator.action() == PlayerAnimator::Action::ShieldRun;
+    const bool shieldRunning = m_action.animator.action() == PlayerAnimator::Action::ShieldRun;
     const auto kind = PowerupCompanion::choose(PowerupEffects::of(inventory), shieldRunning);
     if (kind != m_companion.kind() ||
         (kind != PowerupCompanion::Kind::None && !m_companion.shown())) {
@@ -442,11 +461,37 @@ ItemArchive* PlayerFigure::effects() {
     return m_effects.loaded() ? &m_effects : nullptr;
 }
 
+bool PlayerFigure::registerNativeResources(NativeStateResources& resources) const {
+    if (!resources.registerArchive(m_costumeArchive, m_costumeResourceKey) ||
+        (m_actions.loaded() &&
+         !resources.registerAnimations(m_actions, m_actionResourceKey)) ||
+        (m_effects.loaded() &&
+         !resources.registerArchive(m_effects, m_effectResourceKey)) ||
+        (m_sharedTextures.loaded() &&
+         !resources.registerTextures(m_sharedTextures, "powerups")) ||
+        (m_familiarTextures.loaded() &&
+         !resources.registerTextures(m_familiarTextures, "weapons"))) {
+        return false;
+    }
+    // The animator's resolved bank is immutable; its changing clock is native
+    // state. Equipment models are mutable draw caches and are not registered.
+    return resources.registerTextureAnimator(m_costumeTextures, m_costumeArchive, "costume") &&
+           (!m_missile.bound() ||
+            (m_missileArchive &&
+             resources.registerModel(m_missile, *m_missileArchive,
+                                     "player/missile/" + m_missileName))) &&
+           (!m_familiarMissile.bound() ||
+            resources.registerModel(m_familiarMissile, m_effects, "player/familiar-missile")) &&
+           m_companion.registerNativeResources(resources) &&
+           resources.good();
+}
+
 std::optional<Vec3> PlayerFigure::handPosition(const Mat4& body) const {
-    if (m_handNode < 0 || static_cast<usize>(m_handNode) >= m_transforms.size()) {
+    if (m_handNode < 0 || static_cast<usize>(m_handNode) >= m_action.transforms.size()) {
         return std::nullopt;
     }
-    return Vec3{body * m_transforms[static_cast<usize>(m_handNode)] * Vec4{0.0f, 0.0f, 0.0f, 1.0f}};
+    return Vec3{body * m_action.transforms[static_cast<usize>(m_handNode)] *
+                Vec4{0.0f, 0.0f, 0.0f, 1.0f}};
 }
 
 std::optional<Mat4> PlayerFigure::handAttachment(const Mat4& body) const {
@@ -454,8 +499,8 @@ std::optional<Mat4> PlayerFigure::handAttachment(const Mat4& body) const {
         return std::nullopt;
     }
     const auto hand = static_cast<usize>(m_handNode);
-    return body * (hand < m_transforms.size()
-                       ? m_transforms[hand]
+    return body * (hand < m_action.transforms.size()
+                       ? m_action.transforms[hand]
                        : glm::translate(Mat4{1.0f}, m_costume->worldPosition(hand)));
 }
 
@@ -463,8 +508,8 @@ Mat4 PlayerFigure::rootAttachment(const Mat4& body) const {
     if (m_costume == nullptr || m_costume->nodes.empty()) {
         return body;
     }
-    return body * (m_transforms.empty() ? glm::translate(Mat4{1}, m_costume->worldPosition(0))
-                                        : m_transforms.front());
+    return body * (m_action.transforms.empty() ? glm::translate(Mat4{1}, m_costume->worldPosition(0))
+                                              : m_action.transforms.front());
 }
 
 Mat4 PlayerFigure::poseTransform(usize node, const TreePose& pose) const {
@@ -485,9 +530,9 @@ Mat4 PlayerFigure::rootAttachment(const Mat4& body, const TreePose& pose) const 
 std::optional<Mat4> PlayerFigure::attachment(const Mat4& body,
                                              std::string_view objectSuffix) const {
     if (m_costume != nullptr) {
-        for (usize n = 0; n < m_costume->nodes.size() && n < m_transforms.size(); ++n) {
+        for (usize n = 0; n < m_costume->nodes.size() && n < m_action.transforms.size(); ++n) {
             if (m_costume->nodes[n].object.ends_with(objectSuffix)) {
-                return body * m_transforms[n];
+                return body * m_action.transforms[n];
             }
         }
     }
@@ -507,11 +552,11 @@ std::optional<Mat4> PlayerFigure::attachment(const Mat4& body, std::string_view 
 }
 
 void PlayerFigure::preparePresentation(f32 frameBlend) const {
-    if (!m_animator.bound() || m_costume == nullptr) {
-        m_visualTransforms = m_transforms;
+    if (!m_action.animator.bound() || m_costume == nullptr) {
+        m_visualTransforms = m_action.transforms;
         return;
     }
-    m_animator.evaluatePresentation(m_visualPose, frameBlend);
+    m_action.animator.evaluatePresentation(m_visualPose, frameBlend);
     const auto matrices = m_visualPose.matrices();
     m_visualTransforms.resize(m_costume->nodes.size());
     for (usize n = 0; n < m_visualTransforms.size(); ++n) {
@@ -523,7 +568,7 @@ void PlayerFigure::preparePresentation(f32 frameBlend) const {
 }
 
 std::optional<Mat4> PlayerFigure::visualAttachment(const Mat4& body, s32 node) const {
-    const auto& matrices = m_visualTransforms.empty() ? m_transforms : m_visualTransforms;
+    const auto& matrices = m_visualTransforms.empty() ? m_action.transforms : m_visualTransforms;
     if (node < 0 || m_costume == nullptr || static_cast<usize>(node) >= m_costume->nodes.size()) {
         return std::nullopt;
     }
@@ -585,8 +630,8 @@ void PlayerFigure::draw(RenderDevice& device, const Mat4& clip, const Mat4& body
     applyCostumeTextures(m_weapon, frameBlend);
     m_model.draw(device, clip, body, lighting, m_visualTransforms, camera, alpha);
     drawCompanions(device, clip, body, lighting, alpha, camera, frameBlend, companionPass);
-    const bool thrown = m_animator.recovering() ||
-                        m_animator.action() == PlayerAnimator::Action::StrongThrowRecover;
+    const bool thrown = m_action.animator.recovering() ||
+                        m_action.animator.action() == PlayerAnimator::Action::StrongThrowRecover;
     if (m_armHeld) {
         if (const auto arm = visualAttachment(body, m_armNode)) {
             m_arm.draw(device, clip, *arm, lighting, {}, nullptr, alpha);
@@ -848,10 +893,10 @@ void PlayerFigure::setWeaponPowerups(RenderDevice& device, ItemArchive& powerups
 
 std::optional<Mat4> PlayerFigure::armAttachment(const Mat4& body) const {
     const auto arm = static_cast<usize>(m_armNode);
-    if (m_armNode < 0 || arm >= m_transforms.size()) {
+    if (m_armNode < 0 || arm >= m_action.transforms.size()) {
         return std::nullopt;
     }
-    return body * m_transforms[arm];
+    return body * m_action.transforms[arm];
 }
 
 void PlayerFigure::drawMarker(RenderDevice& device, ItemArchive& archive, std::string_view object,
@@ -870,6 +915,74 @@ void PlayerFigure::drawMarker(RenderDevice& device, ItemArchive& archive, std::s
         m_marker.bind(m_markerTree, archive.models, archive.textures, device);
     }
     m_marker.draw(device, clip, body, lighting, {}, nullptr, alpha);
+}
+
+void PlayerFigure::saveLocal(LocalSnapshot& state) const {
+    state.m_actions = m_action;
+    m_companion.saveLocal(state.m_companion);
+    m_familiar.saveLocal(state.m_familiar);
+    state.m_costumeTextures = m_costumeTextures.clock();
+    state.m_companionAlpha = m_companionAlpha;
+    state.m_owner = m_localOwner;
+}
+
+bool PlayerFigure::appendState(NativeStateDigest& digest, const ActionState& actions,
+                               const TextureAnimator::Clock& textures,
+                               f32 companionAlpha) const {
+    if (!m_costumeArchive.loaded() || !m_costume) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("PlayerFigure.native.1");
+    digest.resource(&m_costumeArchive);
+    digest.resource(m_costume);
+    digest.resource(m_actionTree);
+    // These immutable bindings control native hand/head attachment evaluation;
+    // peers may own separate allocations of the same authored class/costume.
+    digest.values(m_handNode, m_armNode, m_armHidden, m_backNode, m_classNodeOfNode,
+                  m_staysInHand, m_phoenixSide);
+    m_costumeTextures.appendBindingDigest(digest);
+    digest.fields<5>(actions);
+    digest.fields<3>(textures);
+    digest.value(companionAlpha);
+    return digest.good();
+}
+
+bool PlayerFigure::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendState(digest, m_action, m_costumeTextures.clock(), m_companionAlpha) &&
+           m_companion.appendNativeDigest(digest) && m_familiar.appendNativeDigest(digest);
+}
+
+bool PlayerFigure::appendLocalDigest(NativeStateDigest& digest,
+                                    const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [actions, companion, familiar, textures, companionAlpha, owner] = saved;
+    return appendState(digest, actions, textures, companionAlpha) &&
+           m_companion.appendLocalDigest(digest, companion) &&
+           m_familiar.appendLocalDigest(digest, familiar);
+}
+
+bool PlayerFigure::canRestoreLocal(const LocalSnapshot& state) const {
+    return state.m_owner.lock() == m_localOwner &&
+           m_companion.canRestoreLocal(state.m_companion) &&
+           m_familiar.canRestoreLocal(state.m_familiar);
+}
+
+bool PlayerFigure::restoreLocal(const LocalSnapshot& state) {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    m_action = state.m_actions;
+    m_companion.restoreLocal(state.m_companion);
+    m_familiar.restoreLocal(state.m_familiar);
+    m_costumeTextures.restoreClock(state.m_costumeTextures);
+    m_companionAlpha = state.m_companionAlpha;
+    m_visualTransforms.clear();
+    m_trail.clear(); // never draw speculative ghosts from the discarded branch
+    return true;
 }
 
 bool PlayerFigure::GameplayCheckpoint::valid() const {
@@ -910,7 +1023,7 @@ bool PlayerFigure::GameplayCheckpoint::valid() const {
 }
 
 std::optional<PlayerFigure::GameplayCheckpoint> PlayerFigure::gameplayCheckpoint() const {
-    if (!m_actionTree || !m_costume || !m_animator.bound() || pojoActive()) {
+    if (!m_actionTree || !m_costume || !m_action.animator.bound() || pojoActive()) {
         return std::nullopt;
     }
     GameplayCheckpoint state;
@@ -932,12 +1045,12 @@ std::optional<PlayerFigure::GameplayCheckpoint> PlayerFigure::gameplayCheckpoint
     state.handHeld = m_handItemHeld;
     state.armHeld = m_armHeld;
     state.staysInHand = m_staysInHand;
-    state.animation = m_animator.checkpoint();
-    state.transition = m_animator.transitionPose();
-    state.transforms = m_transforms;
-    state.animationRevision = m_animationRevision;
-    state.familiarPending = m_familiarPending;
-    state.familiarReleased = m_familiarReleased;
+    state.animation = m_action.animator.checkpoint();
+    state.transition = m_action.animator.transitionPose();
+    state.transforms = m_action.transforms;
+    state.animationRevision = m_action.revision;
+    state.familiarPending = m_action.familiarPending;
+    state.familiarReleased = m_action.familiarReleased;
     state.phoenixSide = m_phoenixSide;
     auto familiar = m_familiar.checkpoint();
     auto companion = m_companion.checkpoint();
@@ -962,13 +1075,14 @@ bool PlayerFigure::gameplayBindingMatches(const GameplayCheckpoint& state) const
         }
         return true;
     };
-    return m_actionTree && m_costume && m_animator.bound() && state.actions == m_actionTree->name &&
+    return m_actionTree && m_costume && m_action.animator.bound() &&
+           state.actions == m_actionTree->name &&
            state.costume == m_costume->name && objects(*m_costume, state.costumeObjects) &&
            objects(m_handItemTree, state.handObjects) && objects(m_armTree, state.armObjects) &&
            state.familiarTier == m_familiar.tier() && state.companion == m_companion.kind() &&
            !pojoActive() && state.handHeld == m_handItemHeld && state.armHeld == m_armHeld &&
            state.staysInHand == m_staysInHand && state.phoenixSide == m_phoenixSide &&
-           state.animation.character == m_animator.checkpoint().character;
+           state.animation.character == m_action.animator.checkpoint().character;
 }
 
 struct PlayerFigure::PreparedGameplay::Data {
@@ -1002,7 +1116,7 @@ PlayerFigure::prepareGameplayRestore(const GameplayCheckpoint& state) const {
     data->actions = m_actionTree;
     data->costume = m_costume;
     data->state = state;
-    data->animator = m_animator;
+    data->animator = m_action.animator;
     data->familiar = m_familiar;
     data->companion = m_companion;
     data->familiarBinding = m_familiar.bindingRevision();
@@ -1033,11 +1147,11 @@ bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
     }
     auto& data = *prepared.m_data;
     static_assert(std::is_nothrow_move_assignable_v<PlayerAnimator>);
-    m_animator = std::move(data.animator);
-    m_transforms.swap(data.state.transforms);
-    m_animationRevision = data.state.animationRevision;
-    m_familiarPending = data.state.familiarPending;
-    m_familiarReleased = data.state.familiarReleased;
+    m_action.animator = std::move(data.animator);
+    m_action.transforms.swap(data.state.transforms);
+    m_action.revision = data.state.animationRevision;
+    m_action.familiarPending = data.state.familiarPending;
+    m_action.familiarReleased = data.state.familiarReleased;
     static_assert(std::is_nothrow_move_assignable_v<PlayerFamiliar>);
     static_assert(std::is_nothrow_move_assignable_v<PowerupCompanion>);
     m_familiar = std::move(data.familiar);

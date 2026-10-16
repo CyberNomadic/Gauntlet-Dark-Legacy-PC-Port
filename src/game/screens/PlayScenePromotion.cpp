@@ -7,6 +7,64 @@
 #include "game/screens/PlayerPowerups.h"
 
 namespace gdl::game {
+bool PlayScene::ownsFigure(usize player, const PlayerFigure* figure) const {
+    return player < m_players.size() &&
+           (figure == nullptr || m_players[player].figure.get() == figure ||
+            std::ranges::any_of(m_promotionFigures, [figure](const auto& retained) {
+                return retained.get() == figure;
+            }));
+}
+
+void PlayScene::activateFigure(usize player, PlayerFigure* figure) {
+    auto& active = m_players[player].figure;
+    if (active.get() == figure) {
+        return;
+    }
+    if (figure == nullptr) {
+        m_promotionFigures.push_back(std::move(active));
+        return;
+    }
+    for (auto& retained : m_promotionFigures) {
+        if (retained.get() == figure) {
+            active.swap(retained);
+            return;
+        }
+    }
+}
+
+void PlayScene::upgradeFigure(usize player) {
+    auto& runtime = m_players[player];
+    const auto& save = runtime.actor.save();
+    const s32 level = save.progress().appearanceLevel();
+    const auto cached = std::ranges::find_if(m_promotionBindings, [&](const auto& binding) {
+        return binding.player == player && binding.character == save.character &&
+               binding.color == save.color && binding.level == level;
+    });
+    if (cached != m_promotionBindings.end()) {
+        // A discarded promotion keeps its resources alive: replay restores the
+        // new costume's birth values rather than loading a second copy of it.
+        activateFigure(player, cached->figure);
+        runtime.figure->restoreLocal(cached->initial);
+    } else {
+        auto figure = PlayerFigure::load(*m_device, m_context.unpackedRoot, save, false);
+        if (figure == nullptr) {
+            return;
+        }
+        PromotionFigure binding;
+        binding.player = player;
+        binding.character = save.character;
+        binding.color = save.color;
+        binding.level = level;
+        binding.figure = figure.get();
+        figure->saveLocal(binding.initial);
+        m_promotionBindings.push_back(std::move(binding));
+        m_promotionFigures.push_back(std::move(runtime.figure));
+        runtime.figure = std::move(figure);
+    }
+    runtime.figure->setCompanionPowerups(*m_device, m_world->powerups(), save.progress().inventory,
+                                        &m_weapons);
+}
+
 s32 PlayScene::familiarTier(s32 player) const {
     for (const auto& runtime : m_players) {
         if (runtime.actor.player() == player && runtime.figure != nullptr) {
@@ -53,13 +111,7 @@ void PlayScene::updatePromotion(s32 ticks, f32 seconds) {
     }
     if (cue.award) {
         save.progress().promotedLevel = entry->level;
-        if (auto figure = PlayerFigure::load(*m_device, m_context.unpackedRoot, save, false);
-            figure != nullptr) {
-            figure->setCompanionPowerups(*m_device, m_world->powerups(), save.progress().inventory,
-                                         &m_weapons);
-            m_promotionFigures.push_back(std::move(runtime.figure));
-            runtime.figure = std::move(figure);
-        }
+        upgradeFigure(entry->player);
         EffectTrees::Setting setting;
         setting.seconds = 3;
         m_effects.startSet(*m_device, m_weapons, std::format("LEVELUP_{}", colorCode(save.color)),

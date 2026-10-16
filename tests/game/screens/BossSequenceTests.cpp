@@ -12,6 +12,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "fixtures/NativeSoundBank.h"
@@ -345,6 +346,140 @@ TEST_CASE("native boss victory completes on clip time with stalled stopped or ab
             fixture->sequence.clear();
             CHECK_FALSE(fixture->sequence.speechTiming().playing());
             fixture->audio.close();
+        }
+    }
+}
+TEST_CASE("native boss sequence rewind restores death birth speech and confirmed visit timing",
+          "[local-rewind][boss-sequence-local-rewind]") {
+    Fixture actual, expected;
+    actual.loadLevel();
+    expected.loadLevel();
+    const auto root = test::scratchDirectory("boss-sequence-local-speech");
+    const std::array<test::NativeSoundSample, 1> samples{{{8000, std::vector<s16>(16000, 8192)}}};
+    test::writeNativeSoundBank(root / "audio/COMMON", R"({"sounds":[
+        {"index":0,"name":"S_DEFEATVOXG","sequence":[{"sample":0}]},
+        {"index":1,"name":"S_RUNEVOX0G","sequence":[{"sample":0}]}]})",
+                               samples);
+    actual.audio.open(root, nullptr, nullptr);
+    expected.audio.open(root, nullptr, nullptr);
+    BossSequence::LocalSnapshot saved;
+    EffectTrees::LocalSnapshot effectsSaved;
+    CHECK_FALSE(actual.sequence.restoreLocal(saved));
+    const auto compare = [&] {
+        const auto& a = actual.sequence.victory().state();
+        const auto& b = expected.sequence.victory().state();
+        CHECK(a.stage() == b.stage());
+        CHECK(a.wizardAlpha() == b.wizardAlpha());
+        CHECK(a.sparkling() == b.sparkling());
+        CHECK(actual.sequence.speechTiming() == expected.sequence.speechTiming());
+        CHECK(actual.sequence.victorySubject().position ==
+              expected.sequence.victorySubject().position);
+        REQUIRE(actual.effects.count() == expected.effects.count());
+        for (usize i = 0; i < expected.effects.count(); ++i) {
+            CHECK(actual.effects.checkpoint(actual.effects.effect(i).id) ==
+                  expected.effects.checkpoint(expected.effects.effect(i).id));
+        }
+        actual.device.draws.clear();
+        expected.device.draws.clear();
+        actual.sequence.victory().drawWizard(actual.device, Mat4{1}, {}, nullptr, 0.37f);
+        expected.sequence.victory().drawWizard(expected.device, Mat4{1}, {}, nullptr, 0.37f);
+        REQUIRE(actual.device.draws.size() == expected.device.draws.size());
+        for (usize i = 0; i < expected.device.draws.size(); ++i) {
+            test::checkRecordedDraw(actual.device.draws[i], expected.device.draws[i]);
+        }
+    };
+    s32 frame = 0;
+    s32 completions = 0;
+    for (s32 window = 0; window < 192; ++window) {
+        CAPTURE(window, frame);
+        const s32 distance = window % 8 + 1;
+        actual.sequence.saveLocal(saved);
+        actual.effects.saveLocal(effectsSaved);
+        CHECK_FALSE(expected.sequence.restoreLocal(saved));
+        const std::array saves{actual.players[0].actor.save(), actual.players[1].actor.save()};
+        actual.sequence.fallen({90, 10, 20}, actual.bosses, actual.players);
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.sequence.capturePresentation();
+            actual.sequence.advanceAudio(0.7f);
+            actual.sequence.advanceVictory(100, 0.7f, actual.players, actual.strings);
+            actual.effects.update(0.7f);
+        }
+        REQUIRE(actual.effects.restoreLocal(effectsSaved));
+        REQUIRE(actual.sequence.restoreLocal(saved));
+        for (usize i = 0; i < saves.size(); ++i) {
+            actual.players[i].actor.save() = saves[i];
+        }
+        compare();
+        for (s32 tick = 0; tick < distance; ++tick, ++frame) {
+            if (frame == 2) {
+                actual.sequence.fallen({2, 3, 4}, actual.bosses, actual.players);
+                expected.sequence.fallen({2, 3, 4}, expected.bosses, expected.players);
+            }
+            actual.sequence.capturePresentation();
+            expected.sequence.capturePresentation();
+            actual.sequence.advanceAudio(1.0f / 30);
+            expected.sequence.advanceAudio(1.0f / 30);
+            const bool a =
+                actual.sequence.advanceVictory(2, 1.0f / 30, actual.players, actual.strings);
+            const bool b =
+                expected.sequence.advanceVictory(2, 1.0f / 30, expected.players, expected.strings);
+            CHECK(a == b);
+            completions += static_cast<s32>(a);
+            actual.effects.update(1.0f / 30);
+            expected.effects.update(1.0f / 30);
+        }
+        compare();
+    }
+    CHECK(completions == 1);
+    CHECK(actual.sequence.victory().state().finished());
+    CHECK(actual.device.textureUpdates == 0);
+    actual.sequence.clear();
+    CHECK_FALSE(actual.sequence.restoreLocal(saved));
+    actual.sequence.saveLocal(saved);
+    actual.bind();
+    CHECK_FALSE(actual.sequence.restoreLocal(saved));
+    actual.sequence.clear();
+    expected.sequence.clear();
+    actual.audio.close();
+    expected.audio.close();
+}
+
+TEST_CASE("native boss coin rewind restores RNG and item flights after discarded sprays",
+          "[local-rewind][boss-sequence-local-rewind][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG5/WORLDS.PS2").parent_path().parent_path().parent_path();
+    Fixture fixture;
+    REQUIRE(fixture.levels.load(root));
+    REQUIRE(fixture.world.load(fixture.device, root, *fixture.levels.byName("G5")));
+    fixture.bind();
+    LevelOpponents opponents;
+    LevelFixtures fixtures;
+    CombatSpew spew;
+    spew.origin = Vec3{0, 10, 0};
+    spew.velocity = Vec3{0, 10, 10};
+    spew.halfAngle = 0.5f;
+    BossSequence::LocalSnapshot saved;
+    LevelWorld::LocalSnapshot worldSaved;
+    fixture.sequence.saveLocal(saved);
+    fixture.world.saveLocal(worldSaved);
+    const usize before = fixture.world.placedItems().size();
+    fixture.sequence.spewCoins(spew, opponents, fixtures, fixture.players);
+    std::vector<Vec3> velocities;
+    for (usize i = before; i < fixture.world.placedItems().size(); ++i) {
+        velocities.push_back(fixture.world.placedItems().item(i).velocity);
+    }
+    REQUIRE_FALSE(velocities.empty());
+    for (s32 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        for (s32 tick = 0; tick < distance; ++tick) {
+            fixture.sequence.spewCoins(spew, opponents, fixtures, fixture.players);
+        }
+        REQUIRE(fixture.world.restoreLocal(worldSaved));
+        REQUIRE(fixture.sequence.restoreLocal(saved));
+        fixture.sequence.spewCoins(spew, opponents, fixtures, fixture.players);
+        REQUIRE(fixture.world.placedItems().size() == before + velocities.size());
+        for (usize i = 0; i < velocities.size(); ++i) {
+            CHECK(fixture.world.placedItems().item(before + i).velocity == velocities[i]);
         }
     }
 }

@@ -20,7 +20,7 @@ void word(std::vector<u8>& bytes, usize at, u32 value) {
     }
 }
 
-PlacedEnemies::Checkpoint sample() {
+PlacedEnemiesCheckpoint::State sample() {
     PlacedEnemies::Placement placement;
     auto& spawn = placement.spawn;
     spawn.zigZagSide = -1;
@@ -40,7 +40,7 @@ PlacedEnemies::Checkpoint sample() {
     placement.viewRadius = 2.5f;
     placement.sight = -7;
     placement.carried = 37;
-    PlacedEnemies::Checkpoint state;
+    PlacedEnemiesCheckpoint::State state;
     state.roster = {placement, placement, placement};
     state.roster[1].spawn.position.x = 23;
     state.pending = {0, 2};
@@ -86,14 +86,14 @@ TEST_CASE("placed enemy wire preserves every field and ordered duplicate records
     PlacedEnemies restored;
     original.bind(state.roster);
     restored.bind(state.roster);
-    REQUIRE(original.restore(state));
-    REQUIRE(restored.restore(*decoded));
+    REQUIRE(PlacedEnemiesCheckpoint::restore(original, state));
+    REQUIRE(PlacedEnemiesCheckpoint::restore(restored, *decoded));
     std::vector<PlacedEnemies::Placement> a;
     std::vector<PlacedEnemies::Placement> b;
     original.activate([&](const auto& entry) { a.push_back(entry); });
     restored.activate([&](const auto& entry) { b.push_back(entry); });
     CHECK(a == b);
-    CHECK(original.checkpoint() == restored.checkpoint());
+    CHECK(PlacedEnemiesCheckpoint::capture(original) == PlacedEnemiesCheckpoint::capture(restored));
 }
 
 TEST_CASE("placed enemy wire refuses malformed fields counts and noncanonical optionals",

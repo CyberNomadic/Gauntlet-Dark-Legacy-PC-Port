@@ -35,56 +35,43 @@ bool BurnDialogueScroll::ready(const Image* scroll, std::span<const Image* const
            });
 }
 
-bool BurnDialogueScroll::start(RenderDevice& device, const Rect& area, const Image& scroll,
+bool BurnDialogueScroll::start(RenderDevice&, const Rect& area, const Image& scroll,
                                std::vector<const Image*> masks, std::vector<const Texture*> ring) {
     reset();
-    if (scroll.pixels.empty() || masks.empty() || ring.empty()) {
+    if (scroll.pixels.empty() || masks.empty() || ring.empty() || masks.front() == nullptr) {
         log::warn("Burning scroll: missing the scroll image or its frames");
         return false;
     }
     for (const Image* mask : masks) {
-        if (mask == nullptr || mask->width != masks[0]->width || mask->height != masks[0]->height) {
+        if (mask == nullptr || mask->width != masks.front()->width ||
+            mask->height != masks.front()->height) {
             log::warn("Burning scroll: burn frames must share one size");
             return false;
         }
     }
-    m_area = area;
-    m_source = scroll;
-    m_composite = scroll;
-    m_masks = std::move(masks);
-    m_ring = std::move(ring);
-    m_texture = device.createTexture(TextureDesc{m_source.width, m_source.height,
-                                                 TextureFilter::Linear, TextureWrap::ClampToEdge},
-                                     m_source.pixels);
-    m_timer = 0;
-    m_cutFrame = -1;
-    m_uploadedFrame = -1;
-    m_active = true;
-    cutOut(0);
+    // The burn still completes when individual flame frames are absent. The
+    // stricter ready() check is for callers requiring the complete artwork.
+    NativeStateDigest source;
+    source.string("burn-scroll-source-v1");
+    source.fields<3>(scroll);
+    m_sim.art = std::make_shared<const Artwork>(
+        Artwork{scroll, std::move(masks), std::move(ring), source.finish()});
+    m_sim.area = area;
+    m_sim.active = true;
     return true;
 }
 
 void BurnDialogueScroll::reset() {
-    m_active = false;
-    m_texture.reset();
-    m_masks.clear();
-    m_ring.clear();
-    m_timer = 0;
-    m_cutFrame = -1;
-    m_uploadedFrame = -1;
+    m_sim = {};
 }
 
 void BurnDialogueScroll::step(s32 ticks) {
-    if (!m_active) {
+    if (!m_sim.active) {
         return;
     }
-    m_timer += ticks;
+    m_sim.timer += ticks;
     if (frame() >= kFrameCount) {
-        m_active = false;
-        return;
-    }
-    if (m_cutFrame != frame()) {
-        cutOut(frame());
+        m_sim.active = false;
     }
 }
 
@@ -111,14 +98,6 @@ f32 BurnDialogueScroll::maskAlpha(const Image& source, const Image& mask, u32 x,
     return lerp(top, bottom, fy);
 }
 
-/** Cuts the scroll out wherever `frame` of the mask is fully transparent. */
-void BurnDialogueScroll::cutOut(s32 frame) {
-    const Image& mask =
-        *m_masks[static_cast<usize>(std::min<s32>(frame, static_cast<s32>(m_masks.size()) - 1))];
-    m_composite = composite(m_source, mask);
-    m_cutFrame = frame;
-}
-
 Image BurnDialogueScroll::composite(const Image& scroll, const Image& mask) {
     Image result = scroll;
     if (mask.width == 0 || mask.height == 0 || mask.pixels.empty()) {
@@ -136,24 +115,110 @@ Image BurnDialogueScroll::composite(const Image& scroll, const Image& mask) {
     return result;
 }
 
+u8 BurnDialogueScroll::compositeAlpha(u32 x, u32 y) const {
+    if (!m_sim.art) {
+        return 0;
+    }
+    const auto& art = *m_sim.art;
+    const auto index =
+        static_cast<usize>(std::clamp(frame(), 0, static_cast<s32>(art.masks.size()) - 1));
+    const Image& mask = *art.masks[index];
+    if (mask.width == 0 || mask.height == 0 || mask.pixels.empty()) {
+        return art.source.pixel(x, y).a;
+    }
+    return maskAlpha(art.source, mask, x, y) == 0 ? 0 : art.source.pixel(x, y).a;
+}
+
 void BurnDialogueScroll::prepare(RenderDevice& device) {
-    if (!m_active || !m_texture || m_uploadedFrame == m_cutFrame) {
+    if (!m_sim.active || !m_sim.art) {
         return;
     }
-    device.updateTexture(*m_texture, m_composite.pixels);
-    m_uploadedFrame = m_cutFrame;
+    const auto& art = *m_sim.art;
+    if (m_uploadedArt == m_sim.art && m_uploadedFrame == frame() && m_device == &device) {
+        return;
+    }
+    const auto index =
+        static_cast<usize>(std::clamp(frame(), 0, static_cast<s32>(art.masks.size()) - 1));
+    const Image pixels = composite(art.source, *art.masks[index]);
+    if (!m_texture || m_texture->width() != pixels.width || m_texture->height() != pixels.height ||
+        m_device != &device) {
+        m_texture =
+            device.createTexture(TextureDesc{pixels.width, pixels.height, TextureFilter::Linear,
+                                             TextureWrap::ClampToEdge},
+                                 pixels.pixels);
+    } else {
+        device.updateTexture(*m_texture, pixels.pixels);
+    }
+    m_device = &device;
+    m_uploadedArt = m_sim.art;
+    m_uploadedFrame = frame();
 }
 
 void BurnDialogueScroll::draw(Canvas& canvas) const {
-    if (!m_active || !m_texture) {
+    if (!m_sim.active || !m_texture || m_uploadedArt != m_sim.art || m_uploadedFrame != frame()) {
         return;
     }
-    canvas.draw(*m_texture, m_area);
+    canvas.draw(*m_texture, m_sim.area);
+    const auto& ring = m_sim.art->ring;
     const auto ringFrame =
-        static_cast<usize>(std::min<s32>(frame(), static_cast<s32>(m_ring.size()) - 1));
-    if (m_ring[ringFrame] != nullptr) {
-        canvas.draw(*m_ring[ringFrame], m_area);
+        static_cast<usize>(std::min<s32>(frame(), static_cast<s32>(ring.size()) - 1));
+    if (ring[ringFrame] != nullptr) {
+        canvas.draw(*ring[ringFrame], m_sim.area);
     }
+}
+
+void BurnDialogueScroll::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+}
+
+bool BurnDialogueScroll::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding;
+}
+
+bool BurnDialogueScroll::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    return true;
+}
+
+bool BurnDialogueScroll::appendSimulationDigest(NativeStateDigest& digest,
+                                                 const Simulation& state) {
+    digest.string("burn-scroll-native-v1");
+    const auto& [art, area, timer, active] = state;
+    digest.flag(art != nullptr);
+    if (art) {
+        const auto& [source, masks, ring, sourceIdentity] = *art;
+        // Artwork owns an immutable copy. Its pixels were fingerprinted once at
+        // construction; frame uploads and compositing are presentation caches.
+        digest.values(source.width, source.height, sourceIdentity);
+        digest.wide(masks.size());
+        for (const auto* mask : masks) {
+            digest.resource(mask);
+        }
+        digest.wide(ring.size());
+        for (const auto* texture : ring) {
+            digest.resource(texture);
+        }
+    }
+    digest.values(area, timer, active);
+    return digest.good();
+}
+
+bool BurnDialogueScroll::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim);
+}
+
+bool BurnDialogueScroll::appendLocalDigest(NativeStateDigest& digest,
+                                           const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state);
 }
 
 } // namespace gdl::game

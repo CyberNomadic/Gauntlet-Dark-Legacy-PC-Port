@@ -50,6 +50,7 @@ public:
         s32 activeOn = 0; ///< the record's, in half ticks; nought for the sequence's own length
         std::optional<usize> carried; ///< the pickup the great one holds
         bool operator==(const Placement&) const;
+        friend void visitNativeState(NativeStateDigest& digest, const Placement& value);
     };
     /** Whether a sphere of a radius about a point is in view. */
     using Seen = std::function<bool(const Vec3&, f32)>;
@@ -74,16 +75,16 @@ public:
     /** Bounds for the native 64-cell-wide item query preceding proximity waking.
      * Unconfigured/degenerate bounds leave the query in one cell. */
     void setContactGridBounds(const Vec3& minimum, const Vec3& maximum);
-    usize count() const { return m_statues.size(); }
+    usize count() const { return m_sim.statues.size(); }
     /** Stable presentation identity, independent of the compacted collision list. */
-    u64 instanceOf(usize index) const { return m_statues[index]->instance; }
-    const ItemFigure& figure(usize index) const { return m_statues[index]->figure; }
-    ItemArchive& archive(usize index) const { return *m_statues[index]->archive; }
-    const Placement& placement(usize index) const { return m_statues[index]->placement; }
-    const Vec3& positionOf(usize index) const { return m_statues[index]->figure.position(); }
-    bool woken(usize index) const { return m_statues[index]->woken; }
+    u64 instanceOf(usize index) const { return m_sim.statues[index]->instance; }
+    const ItemFigure& figure(usize index) const { return m_sim.statues[index]->figure; }
+    ItemArchive& archive(usize index) const { return *m_sim.statues[index]->archive; }
+    const Placement& placement(usize index) const { return m_sim.statues[index]->placement; }
+    const Vec3& positionOf(usize index) const { return m_sim.statues[index]->figure.position(); }
+    bool woken(usize index) const { return m_sim.statues[index]->woken; }
     /** Whether its ACTIVE sequence is under way. */
-    bool rising(usize index) const { return m_statues[index]->rising; }
+    bool rising(usize index) const { return m_sim.statues[index]->rising; }
     void wake(usize index);
     /** The statue not yet woken nearest `spot`, and how far off it is. */
     std::optional<std::pair<usize, f32>> nearestAsleep(const Vec3& spot) const;
@@ -161,23 +162,57 @@ private:
         bool woken = false;
         bool rising = false;
         s32 ticksLeft = 0;
+        bool operator==(const Statue& other) const;
+        friend void visitNativeState(NativeStateDigest& digest, const Statue& value);
     };
     friend class OpponentCombatCheckpoint;
     static Obstacle obstacleOf(const Statue& statue);
     static bool wakesAt(const Statue& statue, const Vec3& position, f32 radius, f32 height);
     s32 contactCell(f32 coordinate, f32 origin) const;
     bool inContactGrid(const Vec3& statue, const Vec3& player, f32 radius) const;
-    std::vector<std::unique_ptr<Statue>> m_statues;
     struct Prototype {
         Checkpoint::Definition definition;
         ItemArchive* archive = nullptr;
         std::unique_ptr<ItemFigure> figure;
     };
     std::vector<Prototype> m_prototypes;
-    std::vector<Placement> m_risen;
-    Vec2 m_contactGridOrigin{0};
-    f32 m_contactGridInverseWidth = 0;
-    u64 m_nextInstance = 1; ///< not reset by clear; old snapshots cannot reuse a statue's ID
+    struct Simulation {
+        std::vector<std::optional<Statue>> statues;
+        std::vector<Placement> risen;
+        Vec2 contactGridOrigin{0};
+        f32 contactGridInverseWidth = 0;
+        u64 nextInstance = 1; ///< not reset by clear; old snapshots cannot reuse a statue's ID
+        bool operator==(const Simulation&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Simulation& value);
+    };
+    friend void visitNativeState(NativeStateDigest& digest, const Statue& value);
+    friend void visitNativeState(NativeStateDigest& digest, const Simulation& value);
+
+public:
+    /** Value-owned live figures and queued births; loaded prototypes stay bound. */
+    class LocalSnapshot {
+        friend class CritterStatues;
+        Simulation m_values;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const;
+    /** Archives must already have stage-scoped semantic identities. Also indexes
+     * retained prototype art after a statue has risen and left the active list. */
+    bool registerNativeResources(NativeStateResources& resources) const;
+    /** Actual captured values, including queued births and each figure's own
+     * clocks/particles. Shared model draw caches and diagnostic prototypes are not state. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    static bool archivesLoaded(const Simulation& state);
+    static bool appendStateDigest(NativeStateDigest& digest, const Simulation& state);
+    Simulation m_sim;
+    u64 m_localEpoch = 1;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 0;
 };

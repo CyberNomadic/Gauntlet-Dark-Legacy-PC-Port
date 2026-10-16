@@ -34,11 +34,11 @@ def build_presets() -> dict[str, str]:
 
 
 def cache_path(binary_dir: pathlib.Path, variable: str, default: pathlib.Path) -> pathlib.Path:
-    """A PATH entry from CMakeCache.txt, or `default` when it is absent."""
+    """A path/string cache value, including an untyped -D/preset override."""
     cache = binary_dir / "CMakeCache.txt"
     if not cache.is_file():
         return default
-    match = re.search(rf"^{variable}:(?:PATH|FILEPATH|STRING)=(.*)$", cache.read_text(encoding="utf-8"),
+    match = re.search(rf"^{variable}:(?:PATH|FILEPATH|STRING|UNINITIALIZED)=(.*)$", cache.read_text(encoding="utf-8"),
                       re.MULTILINE)
     return pathlib.Path(match.group(1)) if match and match.group(1) else default
 

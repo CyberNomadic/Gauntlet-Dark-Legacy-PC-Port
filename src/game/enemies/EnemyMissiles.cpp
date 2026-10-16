@@ -132,7 +132,9 @@ bool EnemyMissiles::Checkpoint::valid() const {
     }
     for (const auto& burst : bursts) {
         const auto& blast = burst.blast;
-        if (blast.stages.empty() || burst.stage >= blast.stages.size() ||
+        if ((burst.instance != 0 && ((nextInstance != 0 && burst.instance >= nextInstance) ||
+                                     !instances.insert(burst.instance).second)) ||
+            blast.stages.empty() || burst.stage >= blast.stages.size() ||
             !checkpointCount(blast.stages.size(), stages, kMaxStages) ||
             !checkpointPoint(blast.position) || !checkpointNumber(blast.radius, 0, 10000) ||
             !checkpointNumber(blast.damage, 0) || !checkpointPlayer(blast.spared) ||
@@ -177,7 +179,8 @@ bool EnemyMissiles::Checkpoint::valid() const {
         }
     }
     for (const auto& hit : hits) {
-        if (!checkpointPlayer(hit.player) || hit.shooter < -1 || hit.shooter >= Enemies::kMost ||
+        if ((hit.instance != 0 && nextInstance != 0 && hit.instance >= nextInstance) ||
+            !checkpointPlayer(hit.player) || hit.shooter < -1 || hit.shooter >= Enemies::kMost ||
             !checkpointNumber(hit.damage, 0) || !checkpointNumber(hit.burstRadius, 0, 10000) ||
             !checkpointPoint(hit.position) || !checkpointPoint(hit.direction) ||
             !checkpointId(hit.target) || !checkpointId(hit.worldObject)) {
@@ -210,24 +213,24 @@ EnemyMissiles::Prepared::~Prepared() = default;
 
 std::optional<EnemyMissiles::Checkpoint>
 EnemyMissiles::checkpoint(std::span<const Resource> resources) const {
-    if (!checkpointResources(resources) || m_missiles.size() > Checkpoint::kMaxMissiles ||
-        m_bursts.size() > Checkpoint::kMaxBursts) {
+    if (!checkpointResources(resources) || m_sim.missiles.size() > Checkpoint::kMaxMissiles ||
+        m_sim.bursts.size() > Checkpoint::kMaxBursts) {
         return std::nullopt;
     }
     usize contacts = 0;
     usize stages = 0;
     usize events = 0;
-    if (!checkpointCount(m_hits.size(), events, Checkpoint::kMaxEvents) ||
-        !checkpointCount(m_rockHits.size(), events, Checkpoint::kMaxEvents) ||
-        !checkpointCount(m_pickupBlasts.size(), events, Checkpoint::kMaxEvents)) {
+    if (!checkpointCount(m_sim.hits.size(), events, Checkpoint::kMaxEvents) ||
+        !checkpointCount(m_sim.rockHits.size(), events, Checkpoint::kMaxEvents) ||
+        !checkpointCount(m_sim.pickupBlasts.size(), events, Checkpoint::kMaxEvents)) {
         return std::nullopt;
     }
-    for (const auto& missile : m_missiles) {
+    for (const auto& missile : m_sim.missiles) {
         if (!checkpointCount(missile.pierced.size(), contacts, Checkpoint::kMaxContacts)) {
             return std::nullopt;
         }
     }
-    for (const auto& burst : m_bursts) {
+    for (const auto& burst : m_sim.bursts) {
         if (!checkpointCount(burst.blast.stages.size(), stages, Checkpoint::kMaxStages) ||
             !checkpointCount(burst.players.size(), contacts, Checkpoint::kMaxContacts) ||
             !checkpointCount(burst.swarm.size(), contacts, Checkpoint::kMaxContacts) ||
@@ -236,8 +239,8 @@ EnemyMissiles::checkpoint(std::span<const Resource> resources) const {
         }
     }
     Checkpoint state;
-    state.missiles.reserve(m_missiles.size());
-    for (const auto& missile : m_missiles) {
+    state.missiles.reserve(m_sim.missiles.size());
+    for (const auto& missile : m_sim.missiles) {
         u32 resource = 0;
         if (missile.model != nullptr) {
             const auto found = std::ranges::find(resources, missile.model, &Resource::model);
@@ -251,14 +254,14 @@ EnemyMissiles::checkpoint(std::span<const Resource> resources) const {
              missile.turned, missile.kind, resource, missile.shooter, missile.secondsLeft,
              missile.lived, missile.heldLeft, missile.scale, missile.reflected, missile.pierced});
     }
-    state.bursts = m_bursts;
-    state.hits = m_hits;
-    state.rockHits = m_rockHits;
-    state.pickupBlasts = m_pickupBlasts;
-    state.nextInstance = m_nextInstance;
-    state.random = m_random.checkpoint();
-    state.shrink = m_shrink;
-    state.ricochetIn = m_ricochetIn;
+    state.bursts = m_sim.bursts;
+    state.hits = m_sim.hits;
+    state.rockHits = m_sim.rockHits;
+    state.pickupBlasts = m_sim.pickupBlasts;
+    state.nextInstance = m_sim.nextInstance;
+    state.random = m_sim.random.checkpoint();
+    state.shrink = m_sim.shrink;
+    state.ricochetIn = m_sim.ricochetIn;
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
@@ -304,15 +307,50 @@ bool EnemyMissiles::commitRestore(Prepared&& state) noexcept {
         return false;
     }
     auto prepared = std::move(state.m_data);
-    m_missiles.swap(prepared->missiles);
-    m_bursts.swap(prepared->values.bursts);
-    m_hits.swap(prepared->values.hits);
-    m_rockHits.swap(prepared->values.rockHits);
-    m_pickupBlasts.swap(prepared->values.pickupBlasts);
-    m_nextInstance = prepared->values.nextInstance;
-    m_random.restore(prepared->values.random);
-    m_shrink = prepared->values.shrink;
-    m_ricochetIn = prepared->values.ricochetIn;
+    m_sim.missiles.swap(prepared->missiles);
+    m_sim.bursts.swap(prepared->values.bursts);
+    m_sim.hits.swap(prepared->values.hits);
+    m_sim.rockHits.swap(prepared->values.rockHits);
+    m_sim.pickupBlasts.swap(prepared->values.pickupBlasts);
+    m_sim.nextInstance = prepared->values.nextInstance;
+    m_sim.random.restore(prepared->values.random);
+    m_sim.shrink = prepared->values.shrink;
+    m_sim.ricochetIn = prepared->values.ricochetIn;
+    ++m_restoreGeneration;
+    ++m_localEpoch;
+    return true;
+}
+
+void EnemyMissiles::saveLocal(LocalSnapshot& saved) const {
+    saved.m_values = m_sim;
+    saved.m_owner = m_restoreOwner;
+    saved.m_epoch = m_localEpoch;
+}
+bool EnemyMissiles::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.m_owner.lock() == m_restoreOwner && saved.m_epoch == m_localEpoch;
+}
+bool EnemyMissiles::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.m_values == b.m_values;
+}
+bool EnemyMissiles::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("EnemyMissiles.native.1");
+    digest.value(m_sim);
+    return digest.good();
+}
+bool EnemyMissiles::appendLocalDigest(NativeStateDigest& digest,
+                                      const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    digest.string("EnemyMissiles.native.1");
+    digest.value(saved.m_values);
+    return digest.good();
+}
+bool EnemyMissiles::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.m_values;
     ++m_restoreGeneration;
     return true;
 }
@@ -542,19 +580,19 @@ EnemyMissileKind EnemyMissiles::thrown(const EnemyMissileKind& kind) const {
         return kind;
     }
     EnemyMissileKind out = kind;
-    out.damage = EnemyShrink::harmDealt(m_shrink, kind.damage);
+    out.damage = EnemyShrink::harmDealt(m_sim.shrink, kind.damage);
     return out;
 }
 
 bool EnemyMissiles::launch(const EnemyMissileKind& kind, const EnemyMissileLaunch& launch,
                            const WorldCollision* collision, std::span<const Obstacle> items) {
-    if (m_nextInstance == 0) {
+    if (m_sim.nextInstance == 0) {
         return false;
     }
     const f32 speed = kind.speed * std::max(launch.speedScale, 0.01f);
     // Pin the distribution as well as the raw stream across standard libraries.
     // Consume one word even for zero error or a launch subsequently rejected.
-    const f32 spread = m_random.unitFloat24() * kAimSpread;
+    const f32 spread = m_sim.random.unitFloat24() * kAimSpread;
     const f32 error = launch.aimError * (-0.5f * kAimSpread + spread);
     const Vec3 way = heading(kind, launch.body, launch.target, speed, error);
     const Vec2 flat{way.x, way.z};
@@ -575,28 +613,28 @@ bool EnemyMissiles::launch(const EnemyMissileKind& kind, const EnemyMissileLaunc
         return false;
     }
     EnemyMissile missile;
-    missile.instance = m_nextInstance++;
+    missile.instance = m_sim.nextInstance++;
     missile.kind = thrown(kind);
-    missile.scale = m_shrink;
+    missile.scale = m_sim.shrink;
     missile.position = from;
     missile.velocity = way * speed;
     missile.model = launch.model;
     missile.shooter = launch.shooter;
     missile.secondsLeft = kLife + kind.held;
     missile.heldLeft = kind.held;
-    m_missiles.push_back(missile);
+    m_sim.missiles.push_back(missile);
     return true;
 }
 
 void EnemyMissiles::launch(const EnemyMissileKind& kind, const Vec3& from, const Vec3& aim,
                            f32 speedScale, const TreeModel* model, s32 shooter) {
-    if (m_nextInstance == 0) {
+    if (m_sim.nextInstance == 0) {
         return;
     }
     EnemyMissile missile;
-    missile.instance = m_nextInstance++;
+    missile.instance = m_sim.nextInstance++;
     missile.kind = thrown(kind);
-    missile.scale = m_shrink;
+    missile.scale = m_sim.shrink;
     missile.position = from;
     missile.model = model;
     missile.shooter = shooter;
@@ -614,7 +652,7 @@ void EnemyMissiles::launch(const EnemyMissileKind& kind, const Vec3& from, const
         const f32 length = glm::length(way);
         missile.velocity = length > 0.001f ? way * (speed / length) : Vec3{0.0f, 0.0f, speed};
     }
-    m_missiles.push_back(missile);
+    m_sim.missiles.push_back(missile);
 }
 
 void EnemyMissiles::burst(const Vec3& position, f32 radius, f32 damage, u32 flags, f32 seconds,
@@ -632,16 +670,17 @@ void EnemyMissiles::burst(const Vec3& position, f32 radius, f32 damage, u32 flag
 
 void EnemyMissiles::blast(EnemyBlast blast) {
     std::erase_if(blast.stages, [](f32 stage) { return stage <= 0.0f; });
-    if (blast.stages.empty()) {
+    if (blast.stages.empty() || m_sim.nextInstance == 0) {
         return;
     }
     Burst burst;
+    burst.instance = m_sim.nextInstance++;
     burst.stageLeft = blast.stages.front();
     if (blast.spared >= 0) {
         burst.players.push_back({blast.spared, std::numeric_limits<f32>::infinity()});
     }
     burst.blast = std::move(blast);
-    m_bursts.push_back(std::move(burst));
+    m_sim.bursts.push_back(std::move(burst));
 }
 
 /** Each stage the blast grows to its radius as its harm fades, and is harmless over its last
@@ -654,7 +693,7 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
     const auto held = [](std::vector<Held>& holds, s32 id) {
         return std::ranges::any_of(holds, [id](const Held& hold) { return hold.id == id; });
     };
-    for (Burst& burst : m_bursts) {
+    for (Burst& burst : m_sim.bursts) {
         for (std::vector<Held>* holds : {&burst.players, &burst.swarm}) {
             for (Held& hold : *holds) {
                 hold.secondsLeft -= seconds;
@@ -676,7 +715,7 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
         const f32 damage = blast.damage * kBurstGrowth * (phase - kBurstFade);
         const f32 remaining = phase * stage;
         const PickupBlastReach reach{blast.position, radius, damage, blast.flags};
-        m_pickupBlasts.push_back(reach);
+        m_sim.pickupBlasts.push_back(reach);
         if (scenery) {
             scenery(reach, burst.scenery);
         }
@@ -714,12 +753,13 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
             }
             EnemyMissileHit hit;
             hit.fromBurst = true;
+            hit.instance = burst.instance;
             hit.player = view.player;
             hit.damage = damage;
             hit.flags = flags;
             hit.position = blast.position;
             hit.direction = push(away) * kBurstPush;
-            m_hits.push_back(hit);
+            m_sim.hits.push_back(hit);
         }
         for (const MissileTarget& body : swarm) {
             const Vec3 away = body.base - blast.position;
@@ -730,15 +770,16 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
             burst.swarm.push_back({body.id, std::max(kSwarmGap, remaining + kBlastSlack)});
             EnemyMissileHit hit;
             hit.fromBurst = true;
+            hit.instance = burst.instance;
             hit.target = body.id;
             hit.damage = damage;
             hit.flags = flags;
             hit.position = blast.position;
             hit.direction = push(away);
-            m_hits.push_back(hit);
+            m_sim.hits.push_back(hit);
         }
     }
-    std::erase_if(m_bursts,
+    std::erase_if(m_sim.bursts,
                   [](const Burst& burst) { return burst.stage >= burst.blast.stages.size(); });
 }
 
@@ -760,7 +801,7 @@ bool EnemyMissiles::stopped(const EnemyMissile& missile, std::span<const Missile
         }
         // What this update has already dealt it counts against what it has.
         f32 dealt = 0.0f;
-        for (const RockHit& hit : m_rockHits) {
+        for (const RockHit& hit : m_sim.rockHits) {
             if (static_cast<s32>(hit.rock) == item.rock) {
                 dealt += std::max(1.0f, std::round(hit.damage - static_cast<f32>(item.rockArmor)));
             }
@@ -770,7 +811,7 @@ bool EnemyMissiles::stopped(const EnemyMissile& missile, std::span<const Missile
         }
         const f32 blow =
             std::max(1.0f, std::round(missile.kind.damage - static_cast<f32>(item.rockArmor)));
-        m_rockHits.push_back(RockHit{static_cast<usize>(item.rock), missile.kind.damage});
+        m_sim.rockHits.push_back(RockHit{static_cast<usize>(item.rock), missile.kind.damage});
         if (!pierces || static_cast<f32>(item.rockHealth) > dealt + blow) {
             return true;
         }
@@ -779,7 +820,7 @@ bool EnemyMissiles::stopped(const EnemyMissile& missile, std::span<const Missile
 }
 
 std::vector<RockHit> EnemyMissiles::takeRockHits() {
-    return std::exchange(m_rockHits, {});
+    return std::exchange(m_sim.rockHits, {});
 }
 
 void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
@@ -788,9 +829,9 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
     if (seconds <= 0) {
         return;
     }
-    m_ricochetIn = std::max(0.0f, m_ricochetIn - seconds);
+    m_sim.ricochetIn = std::max(0.0f, m_sim.ricochetIn - seconds);
     stepBursts(seconds, collision, players, swarm, scenery);
-    for (EnemyMissile& missile : m_missiles) {
+    for (EnemyMissile& missile : m_sim.missiles) {
         f32 remaining = std::min(seconds, missile.secondsLeft);
         const f32 gravity = std::max(missile.kind.weight, 0.0f);
         const f32 radius = std::max(missile.kind.radius, 0.0f);
@@ -879,12 +920,13 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
             if (victim != nullptr && victim->reflects) {
                 // Armour that reflects turns it straight back, harmless to its wearer, with
                 // less time and harm left (ProcessEffects, fn_8009EF7C).
-                if (m_ricochetIn <= 0.0f) {
-                    m_ricochetIn = kRicochetGap;
+                if (m_sim.ricochetIn <= 0.0f) {
+                    m_sim.ricochetIn = kRicochetGap;
                     EnemyMissileHit ricochet;
+                    ricochet.instance = missile.instance;
                     ricochet.ricochet = true;
                     ricochet.position = glm::mix(from, to, first);
-                    m_hits.push_back(ricochet);
+                    m_sim.hits.push_back(ricochet);
                 }
                 ++missile.continuity;
                 missile.velocity = -missile.velocity;
@@ -896,12 +938,13 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
                                           : std::max(0.0f, missile.secondsLeft - 1.0f);
                 if (missile.secondsLeft <= 0.0f && missile.kind.burstRadius > 0.0f) {
                     EnemyMissileHit hit;
+                    hit.instance = missile.instance;
                     hit.shooter = missile.shooter;
                     hit.damage = missile.kind.damage;
                     hit.flags = missile.kind.hitFlags();
                     hit.burstRadius = missile.kind.burstRadius;
                     hit.position = missile.position;
-                    m_hits.push_back(hit);
+                    m_sim.hits.push_back(hit);
                 }
                 continue;
             }
@@ -914,6 +957,7 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
                 if (!held) {
                     missile.pierced.emplace_back(victim->player, kPierceGap);
                     EnemyMissileHit hit;
+                    hit.instance = missile.instance;
                     hit.player = victim->player;
                     hit.shooter = missile.shooter;
                     hit.damage = missile.kind.damage;
@@ -921,7 +965,7 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
                     hit.position = glm::mix(from, to, first);
                     const f32 speed = glm::length(missile.velocity);
                     hit.direction = speed > 0.001f ? missile.velocity / speed : Vec3{0, 0, 1};
-                    m_hits.push_back(hit);
+                    m_sim.hits.push_back(hit);
                 }
                 victim = nullptr;
             }
@@ -932,6 +976,7 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
             if (struckWorld || victim != nullptr || body != nullptr ||
                 (expired && missile.kind.burstRadius > 0.0f)) {
                 EnemyMissileHit hit;
+                hit.instance = missile.instance;
                 hit.worldContact = struckWorld;
                 hit.worldObject = worldObject;
                 hit.liquid = liquid;
@@ -944,17 +989,17 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
                 hit.position = missile.position;
                 const f32 speed = glm::length(missile.velocity);
                 hit.direction = speed > 0.001f ? missile.velocity / speed : Vec3{0, 0, 1};
-                m_hits.push_back(hit);
+                m_sim.hits.push_back(hit);
                 missile.secondsLeft = 0;
             }
         }
     }
-    std::erase_if(m_missiles,
+    std::erase_if(m_sim.missiles,
                   [](const EnemyMissile& missile) { return missile.secondsLeft <= 0.0f; });
 }
 
 std::vector<EnemyMissileHit> EnemyMissiles::takeHits() {
-    return std::exchange(m_hits, {});
+    return std::exchange(m_sim.hits, {});
 }
 
 Mat4 EnemyMissiles::transformOf(const EnemyMissile& missile) {
@@ -979,7 +1024,7 @@ Mat4 EnemyMissiles::transformOf(const EnemyMissile& missile) {
 
 void EnemyMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                          const CameraFrame* camera) const {
-    for (const EnemyMissile& missile : m_missiles) {
+    for (const EnemyMissile& missile : m_sim.missiles) {
         if (missile.model == nullptr || !missile.model->bound()) {
             continue;
         }
@@ -1001,12 +1046,12 @@ void EnemyMissiles::lights(std::vector<PointLight>& out) const {
         lit.intensity = DynamicLights::kEffectIntensity;
         out.push_back(lit);
     };
-    for (const EnemyMissile& missile : m_missiles) {
+    for (const EnemyMissile& missile : m_sim.missiles) {
         if (missile.kind.slot == EnemyMissileKind::kBomb) {
             light(missile.position);
         }
     }
-    for (const Burst& burst : m_bursts) {
+    for (const Burst& burst : m_sim.bursts) {
         if (burst.blast.lit) {
             light(burst.blast.position);
         }
@@ -1016,12 +1061,13 @@ void EnemyMissiles::lights(std::vector<PointLight>& out) const {
 void EnemyMissiles::clear() {
     if (m_restoreGeneration != 0) {
         ++m_restoreGeneration;
+        ++m_localEpoch;
     }
-    m_missiles.clear();
-    m_bursts.clear();
-    m_hits.clear();
-    m_rockHits.clear();
-    m_pickupBlasts.clear();
+    m_sim.missiles.clear();
+    m_sim.bursts.clear();
+    m_sim.hits.clear();
+    m_sim.rockHits.clear();
+    m_sim.pickupBlasts.clear();
 }
 
 } // namespace gdl::game

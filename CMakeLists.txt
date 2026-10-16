@@ -7,10 +7,15 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/GdlVersion.cmake")
 gdl_version_core("${GDL_VERSION}" GDL_VERSION_CORE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/GdlStaticRuntime.cmake")
+gdl_configure_windows_runtime()
+
 project(GauntletDarkLegacy
     VERSION "${GDL_VERSION_CORE}"
     DESCRIPTION "C++26 / Vulkan reconstruction of the Gauntlet Dark Legacy engine"
     LANGUAGES CXX)
+
+gdl_validate_windows_runtime()
 
 # MSVC has no /std:c++26 switch yet; CMake reaches its C++26 preview (/std:c++latest) via 23.
 if(MSVC)

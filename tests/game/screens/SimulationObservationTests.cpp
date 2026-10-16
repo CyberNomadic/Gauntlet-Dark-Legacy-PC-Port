@@ -138,11 +138,10 @@ TEST_CASE("native agreement observes live party and opponents without replica bi
     CHECK(fixture->scene.nativeAgreementDigest() != before);
     actor.place(position);
     REQUIRE(fixture->scene.nativeAgreementDigest() == before);
-    // CharacterProfile canonicalizes the selected class's banked wallet from
-    // CharacterSave::gold, the native live wallet. Its stale bank copy is not a
-    // second gameplay balance and is intentionally absent from this watchdog.
+    // Unlike the profile projection, native agreement includes the stored bank
+    // copy too. Restoring a native value must not silently normalize hidden data.
     ++actor.save().progress().gold;
-    CHECK(fixture->scene.nativeAgreementDigest() == before);
+    CHECK(fixture->scene.nativeAgreementDigest() != before);
     --actor.save().progress().gold;
     ++actor.save().gold;
     CHECK(fixture->scene.nativeAgreementDigest() != before);

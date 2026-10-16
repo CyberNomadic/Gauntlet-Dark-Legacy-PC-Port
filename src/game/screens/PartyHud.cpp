@@ -6,6 +6,7 @@
 #include <span>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/menu/OptionMenu.h"
 #include "game/menu/ScrollBox.h"
@@ -51,25 +52,27 @@ bool PartyHud::load(RenderDevice& device, const std::filesystem::path& root,
     if (strings != nullptr) {
         m_strings.translate(*strings, kHelpTextPrefix);
     }
-    m_help.setTexts(&m_strings);
+    m_sim.help.setTexts(&m_strings);
     return true;
 }
 void PartyHud::clear() {
-    for (PowerupSelector& selector : m_selectors) {
+    m_localBinding = std::make_shared<const u8>(0);
+    for (PowerupSelector& selector : m_sim.selectors) {
         selector.close();
     }
     m_glowSheet = nullptr;
-    m_relicTicks = 0;
-    m_help.clear();
-    m_helpPosition.reset();
-    m_pickups.clear();
+    m_sim.relicTicks = 0;
+    m_sim.help.clear();
+    m_sim.helpPosition.reset();
+    m_sim.pickups.clear();
     m_hourglass.clear();
-    m_localStopTimeTotal = 0;
+    m_sim.localStopTimeTotal = 0;
     m_sharedStopTimeTotal = nullptr;
     m_boxes.release();
 }
 
 bool PartyHud::bindHourglass(RenderDevice& device, ItemArchive& archive, f32* sharedTotal) {
+    m_localBinding = std::make_shared<const u8>(0);
     m_sharedStopTimeTotal = sharedTotal;
     return m_hourglass.bind(device, archive);
 }
@@ -111,7 +114,7 @@ void PartyHud::drawStatus(Canvas& canvas, std::span<const PlayerRuntime> players
         view.keysShown = relicsShown();
         m_boxes.draw(canvas, player, view, true);
     }
-    m_pickups.draw(canvas, m_boxes);
+    m_sim.pickups.draw(canvas, m_boxes);
 }
 bool PartyHud::postHelp(s32 id, usize index, std::span<PlayerRuntime> players,
                         LevelSoundscape& audio, s32 number, std::optional<Vec3> position) {
@@ -128,11 +131,11 @@ bool PartyHud::postHelp(s32 id, usize index, std::span<PlayerRuntime> players,
     const CharacterSave& namedSave = players[index].actor.save();
     const HelpSpeaker speaker{namedSave.character, PickupVoices::carriesPojo(namedSave)};
     const HelpMessageSpec* spec =
-        m_help.post(id, position ? -1 : players[index].actor.player(), readers, number, speaker);
+        m_sim.help.post(id, position ? -1 : players[index].actor.player(), readers, number, speaker);
     if (spec == nullptr) {
         return false;
     }
-    m_helpPosition = position;
+    m_sim.helpPosition = position;
     {
         // A turbo attack's name is called from the character's own class's bank; the
         // narrator's lines are in either of its banks. Both wait in the narrator's queue, and
@@ -166,7 +169,7 @@ bool PartyHud::postHelp(s32 id, usize index, std::span<PlayerRuntime> players,
 void PartyHud::stepSelector(PlayerActor& actor, const SelectorInput& input, s32 ticks,
                             LevelSoundscape& audio, bool challenge) {
     const auto slot = static_cast<usize>(std::clamp(actor.player(), 0, kPlayerCount - 1));
-    switch (m_selectors[slot].step(input, actor.save().progress().inventory, ticks, challenge)) {
+    switch (m_sim.selectors[slot].step(input, actor.save().progress().inventory, ticks, challenge)) {
     case SelectorCue::Opened:
     case SelectorCue::Closed: audio.playNamed(kMenuMoveSound); break;
     case SelectorCue::Moved: audio.playNamed(kSelectorMoveSound); break;
@@ -180,7 +183,7 @@ void PartyHud::focusPickup(const PlayerActor& actor, s32 kind, u32 flags) {
         return;
     }
     const Inventory& inventory = actor.save().progress().inventory;
-    m_selectors[static_cast<usize>(actor.player())].focus(inventory, kind, flags);
+    m_sim.selectors[static_cast<usize>(actor.player())].focus(inventory, kind, flags);
     if (kind == powerup::kSpecial && (flags & powerup::kStopTime) != 0) {
         // PlayerAddPowerup resets one shared sand total to the post-pickup duration, including
         // a duplicate's half-strength extension. This is independent of which wearer is shown.
@@ -274,7 +277,7 @@ void PartyHud::drawSelector(Canvas& canvas, const TextPainter& text, const Strin
 void PartyHud::drawHelp(Canvas& canvas, RenderDevice& device, TextureSet& textures,
                         std::span<const PlayerRuntime> players, const Mat4& clip,
                         const Mat4& canvasProjection, f32 width, f32 height) const {
-    if (!m_help.showing()) {
+    if (!m_sim.help.showing()) {
         return;
     }
     Vec2 head{width * 0.5f, height * 0.5f};
@@ -290,15 +293,66 @@ void PartyHud::drawHelp(Canvas& canvas, RenderDevice& device, TextureSet& textur
             scroll = nullptr;
         }
     }
-    m_help.draw(canvas, m_boxes.smallCaps(), scroll, head); // the strings' own font
+    m_sim.help.draw(canvas, m_boxes.smallCaps(), scroll, head); // the strings' own font
 }
 
 std::optional<Vec3> PartyHud::helpAnchor(std::span<const PlayerRuntime> players) const {
     for (const auto& runtime : players) {
-        if (runtime.actor.player() == m_help.player()) {
+        if (runtime.actor.player() == m_sim.help.player()) {
             return runtime.actor.attentionPoint();
         }
     }
-    return m_helpPosition;
+    return m_sim.helpPosition;
 }
+void PartyHud::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    m_hourglass.saveLocal(saved.hourglass);
+    saved.sharedTotal = m_sharedStopTimeTotal;
+    saved.total = stopTimeTotal();
+}
+
+bool PartyHud::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding &&
+           saved.sharedTotal == m_sharedStopTimeTotal && m_hourglass.canRestoreLocal(saved.hourglass);
+}
+
+bool PartyHud::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_hourglass.restoreLocal(saved.hourglass);
+    stopTimeTotal() = saved.total;
+    return true;
+}
+
+bool PartyHud::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("party-hud-native-v1");
+    digest.fields<6>(saved ? saved->state : m_sim);
+    digest.flag(m_sharedStopTimeTotal != nullptr);
+    digest.real(saved ? saved->total : stopTimeTotal());
+    // Status-box art, local control labels and font GPU caches only draw. Help's
+    // actual borrowed text content is visited with its admission state below.
+    if (saved) {
+        m_hourglass.appendLocalDigest(digest, saved->hourglass);
+    } else {
+        m_hourglass.appendNativeDigest(digest);
+    }
+    return digest.good();
+}
+
+bool PartyHud::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool PartyHud::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
 } // namespace gdl::game

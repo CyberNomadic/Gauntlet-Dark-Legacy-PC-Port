@@ -57,8 +57,13 @@ private:
 } // namespace
 std::unique_ptr<SessionTransport> openSessionTransport(const SessionTransport::Options& options,
                                                        std::string& error) {
+    if (options.localOnly && options.relayOnly) {
+        error = "Local-only and relay-only transports are mutually exclusive";
+        return nullptr;
+    }
     const std::vector<u8> invitation(options.invitation.begin(), options.invitation.end());
-    auto* handle = gdl_iroh_create(invitation.data(), invitation.size(), options.localOnly ? 1 : 0);
+    const u32 mode = options.localOnly ? 1 : options.relayOnly ? 2 : 0;
+    auto* handle = gdl_iroh_create(invitation.data(), invitation.size(), mode);
     if (!handle) {
         error = "Invalid invitation or network worker unavailable";
         return nullptr;

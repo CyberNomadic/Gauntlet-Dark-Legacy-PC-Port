@@ -1,5 +1,7 @@
 #include "game/world/FallingScenery.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -43,6 +45,67 @@ std::string_view soundOf(const std::array<std::string_view, kRealms>& table,
 }
 } // namespace
 
+bool FallingScenery::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("FallingScenery/1");
+    digest.resource(m_layout);
+    digest.resource(m_textures);
+    digest.values(m_breakSound, m_leafSound, m_bottom);
+    digest.value(saved ? saved->clock : m_clock);
+    digest.wide(m_pieces.size());
+    for (usize i = 0; i < m_pieces.size(); ++i) {
+        digest.value(saved ? saved->pieces[i] : static_cast<const PieceState&>(m_pieces[i]));
+    }
+    // Meshes/models are fixed stage art; the complete per-piece profile and motion
+    // are values above, including the retained previous pose.
+    return digest.good();
+}
+
+bool FallingScenery::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool FallingScenery::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [pieces, clock, binding, owner] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+void FallingScenery::saveLocal(LocalSnapshot& saved) const {
+    saved.pieces.resize(m_pieces.size());
+    for (usize index = 0; index < m_pieces.size(); ++index) {
+        saved.pieces[index] = m_pieces[index];
+    }
+    saved.clock = m_clock;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool FallingScenery::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding && saved.pieces.size() == m_pieces.size();
+}
+
+bool FallingScenery::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.pieces == right.pieces &&
+           left.clock == right.clock;
+}
+
+bool FallingScenery::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize index = 0; index < m_pieces.size(); ++index) {
+        static_cast<PieceState&>(m_pieces[index]) = saved.pieces[index];
+    }
+    m_clock = saved.clock;
+    ++m_checkpointGeneration;
+    return true;
+}
+
 std::string_view FallingScenery::breakSoundOf(std::string_view levelName) {
     if (levelName == kForestFirstLevel) {
         return kForestFirstLevelSound;
@@ -65,8 +128,7 @@ void FallingScenery::clear() {
     m_pieces.clear();
     m_breakSound = {};
     m_leafSound = {};
-    m_remainder = 0.0f;
-    m_updateSeconds = 0.0f;
+    m_clock = {};
     m_bottom = 0.0f;
 }
 
@@ -166,8 +228,8 @@ std::vector<FallingCue> FallingScenery::shoot(const Vec3& position, f32 radius) 
 }
 
 void FallingScenery::update(f32 seconds) {
-    m_updateSeconds = seconds;
-    for (s32 frame = FallingPiece::framesDue(m_remainder, seconds); frame > 0; --frame) {
+    m_clock.updateSeconds = seconds;
+    for (s32 frame = FallingPiece::framesDue(m_clock.remainder, seconds); frame > 0; --frame) {
         for (Piece& piece : m_pieces) {
             if (piece.started) {
                 piece.motion.advance(piece.profile, m_bottom);
@@ -178,8 +240,8 @@ void FallingScenery::update(f32 seconds) {
 
 void FallingScenery::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                           f32 presentationAlpha) const {
-    const f32 alpha =
-        FallingPiece::presentationFraction(m_remainder, m_updateSeconds, presentationAlpha);
+    const f32 alpha = FallingPiece::presentationFraction(m_clock.remainder, m_clock.updateSeconds,
+                                                         presentationAlpha);
     for (const Piece& piece : m_pieces) {
         if (piece.shown && piece.motion.visible) {
             piece.model.draw(device, clip,

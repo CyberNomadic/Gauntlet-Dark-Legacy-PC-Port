@@ -19,7 +19,7 @@ public:
     /** Canonical encoded-byte SHA, not validation of incoming state. */
     static std::optional<std::array<u8, 32>> canonicalDigest(const Enemies::Checkpoint& state);
 
-    static constexpr u32 kVersion = 2;
+    static constexpr u32 kVersion = 4;
     static constexpr usize kMaxBytes = 512 * 1024;
     static constexpr usize kMaxNodes = 128;
     static constexpr usize kMaxTotalNodes = 2048;

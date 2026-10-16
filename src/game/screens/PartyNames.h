@@ -48,6 +48,8 @@ public:
     static void advance(std::span<PlayerRuntime> players, s32 ticks);
     /** Runs the names down by `ticks`, unless play is `held`. */
     void step(std::span<PlayerRuntime> players, s32 ticks, bool held);
+    bool held() const { return m_held; }
+    void restoreHeld(bool held) { m_held = held; }
     void draw(Canvas& canvas, std::span<const PlayerRuntime> players, const Mat4& clip,
               const Mat4& canvasProjection, f32 frameBlend = 1) const;
 

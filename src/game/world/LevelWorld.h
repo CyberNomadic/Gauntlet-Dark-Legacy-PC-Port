@@ -50,7 +50,51 @@ namespace gdl::game {
  * it.
  */
 class LevelWorld {
+    struct Simulation {
+        s32 playerCount = -1;
+        ParticleField particles;
+        bool particlesAdvanced = false;
+        std::vector<RotatorCue> rotatorCues;
+        f32 frameRemainder = 0;
+        f32 textureAdvance = 0;
+        WorldLighting lighting;
+        WorldLighting litNow;
+        f32 ambientOffset = 0;
+        bool operator==(const Simulation&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+            digest.template fields<9>(value);
+        }
+    };
+
 public:
+    // One bound stage, with immutable layouts, meshes and textures retained in place.
+    class LocalSnapshot {
+        friend class LevelWorld;
+        Simulation state;
+        WorldScene::LocalSnapshot scene;
+        WorldAnimator::LocalSnapshot worldAnimator;
+        WorldCollision::LocalSnapshot collision;
+        PlacedItems::LocalSnapshot placedItems;
+        SkorneArena::LocalSnapshot skorneArena;
+        FallingScenery::LocalSnapshot fallingScenery;
+        DestructibleWalls::LocalSnapshot walls;
+        WorldDestruction::LocalSnapshot destruction;
+        LevelTriggers::LocalSnapshot triggers;
+        Rotators::LocalSnapshot rotators;
+        TextureAnimator::Clock textures;
+        const LevelWorld* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    /** Exact captured native values of this bound world and all captured children. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    /** Refresh already identified stage/archive resources without creating assets. */
+    bool registerNativeResources(NativeStateResources& resources) const;
+
     static constexpr std::string_view kPowerups = "POWERUPS";
 
     /** Loads the unpacked level; false (with a log line) when it is not there. Without the
@@ -68,8 +112,8 @@ public:
     void update(f32 seconds, bool timeStopped = false);
     /** Begin a scene tick; particles retain their current picture if this tick is held. */
     void capturePresentation() {
-        m_particlesAdvanced = false;
-        m_textureAdvance = 0;
+        m_sim.particlesAdvanced = false;
+        m_sim.textureAdvance = 0;
         m_scene.capturePresentation();
         m_placedItems.capturePresentation();
     }
@@ -89,7 +133,7 @@ public:
     void activateTrigger(s32 id, bool atOnce);
     void shootTrigger(usize index) { m_triggers.shoot(index); }
     const Rotators& rotators() const { return m_rotators; }
-    std::vector<RotatorCue> takeRotatorCues() { return std::exchange(m_rotatorCues, {}); }
+    std::vector<RotatorCue> takeRotatorCues() { return std::exchange(m_sim.rotatorCues, {}); }
     std::vector<Vec3> takeWorldExplosions() { return m_destruction.takeExplosions(); }
     bool hasWorldExplosions() const { return m_destruction.hasExplosions(); }
     bool wouldExplodeObject(s32 object) const { return m_destruction.wouldExplode(object); }
@@ -105,8 +149,8 @@ public:
     const WorldAnimator& worldAnimator() const { return m_worldAnimator; }
     WorldMotion::State motion(bool pauseLoops = false) const;
     const TextureAnimator& textureAnimator() const { return m_textureAnimator; }
-    const ParticleField& particles() const { return m_particles; }
-    bool particlesAdvanced() const { return m_particlesAdvanced; }
+    const ParticleField& particles() const { return m_sim.particles; }
+    bool particlesAdvanced() const { return m_sim.particlesAdvanced; }
     /** The pickups the level places: the crystals Sumner keeps for a new party. */
     const PlacedItems& placedItems() const { return m_placedItems; }
     std::vector<PlacedItems::PerkChange> blessItems(RenderDevice& device, const Vec3& position,
@@ -130,10 +174,10 @@ public:
     }
     /** Shows the pickups a party of `players` sees; none for the select screen's empty one. */
     void setPlayerCount(s32 players) {
-        if (m_playerCount == players) {
+        if (m_sim.playerCount == players) {
             return;
         }
-        m_playerCount = players;
+        m_sim.playerCount = players;
         m_triggers.setPlayerCount(players);
         m_placedItems.setPlayerCount(players);
         m_walls.setPlayerCount(players, m_collision);
@@ -209,16 +253,16 @@ public:
     const WorldCollision& collision() const { return m_collision; }
     /** The level's light, for everything standing in it. */
     /** The level's light as it is now, with whatever has been taken off its ambient. */
-    const WorldLighting& lighting() const { return m_litNow; }
+    const WorldLighting& lighting() const { return m_sim.litNow; }
     /** The level's own light, whatever has been taken off it: what effects are drawn by, so
      * that they stand out when the level goes dark. */
-    const WorldLighting& fullLighting() const { return m_lighting; }
+    const WorldLighting& fullLighting() const { return m_sim.lighting; }
     /** This frame's point lights, lighting the level and everything lit in it. */
     void setPointLights(std::span<const PointLight> points);
     /** Darkens everything lit by `offset` (-0.6 leaves two fifths of the light), the way the
      * original's ambient special darkens the picture. */
     void setAmbientOffset(f32 offset);
-    f32 ambientOffset() const { return m_ambientOffset; }
+    f32 ambientOffset() const { return m_sim.ambientOffset; }
     /** What the follow camera takes from the level. */
     const CameraRange& cameraRange() const { return m_cameraRange; }
     /** The level's record, and its sound bank and music stream; null without the realm's
@@ -265,13 +309,14 @@ public:
         const CameraFrame frame = CameraFrame::of(camera);
         m_scene.drawOpaque(device, clip, frame, presentationAlpha,
                            presentedTextureFrameOffset(presentationAlpha));
-        m_skorneArena.draw(device, clip, m_litNow, m_particlesAdvanced ? presentationAlpha : -1.0f);
-        m_fallingScenery.draw(device, clip, m_litNow,
-                              m_particlesAdvanced ? presentationAlpha : -1.0f);
-        m_walls.draw(device, clip, m_litNow);
-        m_triggers.draw(device, clip, m_litNow);
-        m_rotators.draw(device, clip, m_litNow);
-        m_placedItems.draw(device, clip, m_litNow, &frame, TreeModel::Pass::Opaque,
+        m_skorneArena.draw(device, clip, m_sim.litNow,
+                           m_sim.particlesAdvanced ? presentationAlpha : -1.0f);
+        m_fallingScenery.draw(device, clip, m_sim.litNow,
+                              m_sim.particlesAdvanced ? presentationAlpha : -1.0f);
+        m_walls.draw(device, clip, m_sim.litNow);
+        m_triggers.draw(device, clip, m_sim.litNow);
+        m_rotators.draw(device, clip, m_sim.litNow);
+        m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::Opaque,
                            presentationAlpha);
     }
     void drawDeferred(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
@@ -279,13 +324,14 @@ public:
         const CameraFrame frame = CameraFrame::of(camera);
         m_scene.drawDeferred(device, clip, frame, presentationAlpha,
                              presentedTextureFrameOffset(presentationAlpha));
-        m_placedItems.draw(device, clip, m_litNow, &frame, TreeModel::Pass::Blended,
+        m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::Blended,
                            presentationAlpha);
-        m_particles.draw(device, clip, frame.right, frame.up,
-                         m_particlesAdvanced ? presentationAlpha : -1.0f);
+        m_sim.particles.draw(device, clip, frame.right, frame.up,
+                             m_sim.particlesAdvanced ? presentationAlpha : -1.0f);
     }
 
 private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     friend class LevelWorldCheckpoint;
     friend class TowerCameraCheckpoint;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
@@ -293,7 +339,7 @@ private:
     std::optional<f32> presentedTextureFrameOffset(f32 alpha) const;
     void loadLevelData(const std::filesystem::path& unpackedRoot);
     LevelRef m_ref = LevelRef::tower();
-    s32 m_playerCount = -1;
+    Simulation m_sim;
     void syncCollision();
 
     ModelSet m_models;
@@ -310,20 +356,12 @@ private:
     WorldAnimator m_worldAnimator;
     WorldDestruction m_destruction;
     TextureAnimator m_textureAnimator;
-    ParticleField m_particles;
-    bool m_particlesAdvanced = false;
     LevelTriggers m_triggers;
     HazardSurfaces m_hazards;
     Rotators m_rotators;
-    std::vector<RotatorCue> m_rotatorCues;
     std::vector<s32> m_movingObjects; ///< objects whose collision follows their animation
-    f32 m_frameRemainder = 0.0f;      ///< game frames owed to the texture animations
-    f32 m_textureAdvance = 0.0f;      ///< texture frames elapsed in the latest simulation tick
     WorldCollision m_collision;
     WorldData m_worldData;
-    WorldLighting m_lighting;
-    WorldLighting m_litNow; ///< m_lighting with the ambient offset
-    f32 m_ambientOffset = 0.0f;
     CameraRange m_cameraRange;
     const LevelInfo* m_level = nullptr;
     const LevelAudioInfo* m_audio = nullptr;

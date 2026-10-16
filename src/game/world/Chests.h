@@ -56,6 +56,11 @@ struct ChestEvent {
  */
 class Chests {
 public:
+    Chests() = default;
+    Chests(const Chests&) = delete;
+    Chests& operator=(const Chests&) = delete;
+    Chests(Chests&&) noexcept = default;
+    Chests& operator=(Chests&&) noexcept = default;
     static constexpr s32 kBarrel = 43; ///< container subtypes
     static constexpr s32 kTrappedChest = 44;
     static constexpr s32 kChest = 46;
@@ -98,17 +103,25 @@ public:
         struct Floor {
             s32 object = -1;
             Mat4 local{1.0f};
+            bool operator==(const Floor&) const = default;
+            template <class Visitor> friend void visitNativeState(Visitor& visitor, const Floor& value) {
+                visitor.template fields<2>(value);
+            }
         };
         std::optional<Floor> floor;
         std::optional<f32> collectedSeconds;
+        bool operator==(const Chest&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Chest& value) {
+            visitor.template fields<21>(value);
+        }
     };
 
     /** Stands a chest at every chest item of the layout (barrels are not chests). */
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision);
     void clear();
-    usize size() const { return m_chests.size(); }
-    const Chest& chest(usize index) const { return *m_chests[index]; }
+    usize size() const { return m_sim.chests.size(); }
+    const Chest& chest(usize index) const { return m_sim.chests[index]; }
     void setPlayerCount(s32 players);
     /** Carries the container and its obstacle with its authored supporting platform. */
     void syncFloors();
@@ -153,9 +166,33 @@ private:
     friend class ChestsCheckpoint;
     static void rock(Chest& chest, f32 seconds);
 
-    std::vector<std::unique_ptr<Chest>> m_chests;
+    struct Simulation {
+        std::vector<Chest> chests;
+        u32 seed = 0;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    class LocalSnapshot {
+        friend class Chests;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const Chests* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Complete native value equality, only within this owner's current binding. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
+    // Authored definitions do not change during play. Keep the bind-time copy
+    // outside rewind history; per-instance choices and their RNG stay in m_sim.
     std::vector<ItemInfo> m_infos;
-    u32 m_seed = 0;
     const WorldCollision* m_collision = nullptr;
     const WorldLayout* m_layout = nullptr; ///< borrowed immutable authored roster
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);

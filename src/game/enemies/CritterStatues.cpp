@@ -7,6 +7,9 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 namespace {
@@ -14,21 +17,58 @@ constexpr s32 kContactGridDimension = 64;
 constexpr f32 kItemQueryPadding = 15.0f;
 
 bool sameSpawn(const EnemySpawn& a, const EnemySpawn& b) {
-    const auto values = [](const EnemySpawn& s) {
-        return std::tie(s.zigZagSide, s.kind, s.tier, s.algorithm, s.position, s.direction,
-                        s.clearance, s.generator, s.placed, s.patrolBirth, s.allBirthDirections,
-                        s.asleep, s.throwInterval, s.priority, s.sight);
-    };
-    return values(a) == values(b);
+    bool same = false;
+    visitNativeFields<15>(a, [&](const auto&... left) {
+        visitNativeFields<15>(b, [&](const auto&... right) {
+            same = std::tie(left...) == std::tie(right...);
+        });
+    });
+    return same;
 }
 
-bool sameInstance(const ItemInstance& a, const ItemInstance& b) {
-    return a.info == b.info && a.minPlayers == b.minPlayers && a.flags == b.flags &&
-           a.name == b.name && a.position == b.position && a.rotation == b.rotation &&
-           a.params == b.params && a.collision.size() == b.collision.size() &&
-           std::ranges::equal(a.collision, b.collision, [](const auto& x, const auto& y) {
-               return x.normal == y.normal && x.vertices == y.vertices;
-           });
+template <class T> bool sameField(const T& a, const T& b) {
+    return a == b;
+}
+
+bool sameField(const std::optional<EnemySpawn>& a, const std::optional<EnemySpawn>& b) {
+    return a.has_value() == b.has_value() && (!a || sameSpawn(*a, *b));
+}
+
+bool sameField(const std::vector<ItemCollisionTriangle>& a,
+                const std::vector<ItemCollisionTriangle>& b) {
+    return std::ranges::equal(a, b, [](const auto& first, const auto& second) {
+        bool same = false;
+        visitNativeFields<2>(first, [&](const auto&... left) {
+            visitNativeFields<2>(second, [&](const auto&... right) {
+                same = std::tie(left...) == std::tie(right...);
+            });
+        });
+        return same;
+    });
+}
+
+bool sameField(const ItemInstance& a, const ItemInstance& b) {
+    bool same = false;
+    visitNativeFields<8>(a, [&](const auto&... left) {
+        visitNativeFields<8>(b, [&](const auto&... right) {
+            same = (sameField(left, right) && ...);
+        });
+    });
+    return same;
+}
+
+void appendInstance(NativeStateDigest& digest, const ItemInstance& instance) {
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, std::vector<ItemCollisionTriangle>>) {
+            digest.wide(field.size());
+            for (const auto& triangle : field) {
+                digest.fields<2>(triangle);
+            }
+        } else {
+            digest.value(field);
+        }
+    };
+    visitNativeFields<8>(instance, [&](const auto&... fields) { (append(fields), ...); });
 }
 
 bool bounded(f32 value, f32 low = -1'000'000, f32 high = 1'000'000) {
@@ -69,11 +109,102 @@ bool validPlacement(const CritterStatues::Placement& p) {
 } // namespace
 
 bool CritterStatues::Placement::operator==(const Placement& other) const {
-    return kind == other.kind && enemy.has_value() == other.enemy.has_value() &&
-           (!enemy || sameSpawn(*enemy, *other.enemy)) && form == other.form &&
-           sameInstance(instance, other.instance) && onFloor == other.onFloor &&
-           radius == other.radius && height == other.height && viewRadius == other.viewRadius &&
-           sight == other.sight && activeOn == other.activeOn && carried == other.carried;
+    bool same = false;
+    visitNativeFields<11>(*this, [&](const auto&... left) {
+        visitNativeFields<11>(other, [&](const auto&... right) {
+            same = (sameField(left, right) && ...);
+        });
+    });
+    return same;
+}
+
+bool CritterStatues::Statue::operator==(const Statue& other) const {
+    bool same = false;
+    visitNativeFields<7>(*this, [&](const auto&... left) {
+        visitNativeFields<7>(other, [&](const auto&... right) {
+            same = std::tie(left...) == std::tie(right...);
+        });
+    });
+    return same;
+}
+
+void visitNativeState(NativeStateDigest& digest, const CritterStatues::Placement& value) {
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, ItemInstance>) {
+            appendInstance(digest, field);
+        } else {
+            digest.value(field);
+        }
+    };
+    visitNativeFields<11>(value, [&](const auto&... fields) { (append(fields), ...); });
+}
+
+void visitNativeState(NativeStateDigest& digest, const CritterStatues::Statue& value) {
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, ItemArchive*>) {
+            digest.resource(field);
+        } else {
+            digest.value(field);
+        }
+    };
+    visitNativeFields<7>(value, [&](const auto&... fields) { (append(fields), ...); });
+}
+
+void visitNativeState(NativeStateDigest& digest, const CritterStatues::Simulation& value) {
+    digest.fields<5>(value);
+}
+
+bool CritterStatues::archivesLoaded(const Simulation& state) {
+    return std::ranges::all_of(state.statues, [](const auto& statue) {
+        return !statue || (statue->archive != nullptr && statue->archive->loaded());
+    });
+}
+
+bool CritterStatues::appendStateDigest(NativeStateDigest& digest, const Simulation& state) {
+    if (!archivesLoaded(state)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("CritterStatues.native.1");
+    digest.value(state);
+    return digest.good();
+}
+
+bool CritterStatues::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendStateDigest(digest, m_sim);
+}
+
+bool CritterStatues::appendLocalDigest(NativeStateDigest& digest,
+                                       const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendStateDigest(digest, saved.m_values);
+}
+
+bool CritterStatues::registerNativeResources(NativeStateResources& resources) const {
+    if (!archivesLoaded(m_sim)) {
+        return false;
+    }
+    // Compaction removes the live figure, not artwork still borrowed by native
+    // history. Prototype values themselves are only a diagnostic restore cache.
+    for (const auto& prototype : m_prototypes) {
+        if (prototype.archive == nullptr || !prototype.archive->loaded() || !prototype.figure ||
+            !prototype.figure->registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    for (const auto& statue : m_sim.statues) {
+        if (statue && !statue->figure.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+bool CritterStatues::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.m_values == b.m_values;
 }
 
 bool CritterStatues::Checkpoint::valid() const {
@@ -145,8 +276,8 @@ std::optional<CritterStatues::Checkpoint> CritterStatues::checkpoint() const {
         }
         state.roster.push_back(prototype.definition);
     }
-    state.statues.reserve(m_statues.size());
-    for (const auto& statue : m_statues) {
+    state.statues.reserve(m_sim.statues.size());
+    for (const auto& statue : m_sim.statues) {
         const auto figure = statue->figure.checkpoint();
         if (!figure) {
             return std::nullopt;
@@ -154,10 +285,10 @@ std::optional<CritterStatues::Checkpoint> CritterStatues::checkpoint() const {
         state.statues.push_back(
             {statue->instance, *figure, statue->woken, statue->rising, statue->ticksLeft});
     }
-    state.risen = m_risen;
-    state.contactGridOrigin = m_contactGridOrigin;
-    state.contactGridInverseWidth = m_contactGridInverseWidth;
-    state.nextInstance = m_nextInstance;
+    state.risen = m_sim.risen;
+    state.contactGridOrigin = m_sim.contactGridOrigin;
+    state.contactGridInverseWidth = m_sim.contactGridInverseWidth;
+    state.nextInstance = m_sim.nextInstance;
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
@@ -165,7 +296,7 @@ struct CritterStatues::Prepared::Data {
     const CritterStatues* owner = nullptr;
     std::shared_ptr<const u8> lifetime;
     u64 generation = 0;
-    std::vector<std::unique_ptr<Statue>> statues;
+    std::vector<std::optional<Statue>> statues;
     std::vector<Placement> risen;
     Vec2 contactGridOrigin{0};
     f32 contactGridInverseWidth = 0;
@@ -211,7 +342,7 @@ CritterStatues::prepareRestore(const Checkpoint& state) const {
         if (!figure) {
             return std::nullopt;
         }
-        auto statue = std::make_unique<Statue>();
+        auto statue = std::optional<Statue>{std::in_place};
         statue->instance = body.instance;
         statue->archive = found->archive;
         statue->placement = found->definition.placement;
@@ -241,11 +372,32 @@ bool CritterStatues::commitRestore(Prepared&& state) {
         return false;
     }
     auto data = std::move(state.m_data);
-    m_statues = std::move(data->statues);
-    m_risen = std::move(data->risen);
-    m_contactGridOrigin = data->contactGridOrigin;
-    m_contactGridInverseWidth = data->contactGridInverseWidth;
-    m_nextInstance = data->nextInstance;
+    m_sim.statues = std::move(data->statues);
+    m_sim.risen = std::move(data->risen);
+    m_sim.contactGridOrigin = data->contactGridOrigin;
+    m_sim.contactGridInverseWidth = data->contactGridInverseWidth;
+    m_sim.nextInstance = data->nextInstance;
+    ++m_restoreGeneration;
+    ++m_localEpoch;
+    return true;
+}
+
+void CritterStatues::saveLocal(LocalSnapshot& saved) const {
+    saved.m_values = m_sim;
+    saved.m_owner = m_lifetime;
+    saved.m_epoch = m_localEpoch;
+}
+bool CritterStatues::canRestoreLocal(const LocalSnapshot& saved) const {
+    // Same-address asset reload is prohibited while histories borrow the stage;
+    // the enclosing stage must invalidate its registry/history before rebinding.
+    return saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch &&
+           archivesLoaded(saved.m_values);
+}
+bool CritterStatues::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.m_values;
     ++m_restoreGeneration;
     return true;
 }
@@ -274,47 +426,46 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
     if (placement.enemy && placement.enemy->kind == kDeathKind) {
         tree = placement.enemy->tier == 2 ? "DEATHSTATUE2" : "DEATHSTATUE1";
     }
-    if (tree.empty() || m_nextInstance == std::numeric_limits<u64>::max()) {
+    if (tree.empty() || m_sim.nextInstance == std::numeric_limits<u64>::max()) {
         return false;
     }
-    auto statue = std::make_unique<Statue>();
+    auto statue = std::optional<Statue>{std::in_place};
     statue->placement = placement;
     if (!statue->figure.place(device, archive, tree, placement.instance,
                               placement.onFloor ? collision : nullptr)) {
         return false;
     }
     statue->figure.play(kIdleSequence, true);
-    statue->instance = m_nextInstance++;
+    statue->instance = m_sim.nextInstance++;
     statue->archive = &archive;
-    // Keep the initially loaded CPU bindings after a statue rises and is erased.
-    // A native figure outside checkpoint bounds still works; only replay declines.
-    auto state = statue->figure.checkpoint();
-    m_prototypes.push_back({{statue->instance, placement},
-                            &archive,
-                            state ? statue->figure.restored(*state) : nullptr});
-    m_statues.push_back(std::move(statue));
+    // Keep immutable art bindings available after the live statue rises.
+    m_prototypes.push_back(
+        {{statue->instance, placement}, &archive, std::make_unique<ItemFigure>(statue->figure)});
+    m_sim.statues.push_back(std::move(statue));
     ++m_restoreGeneration;
+    ++m_localEpoch;
     return true;
 }
 
 void CritterStatues::clear() {
-    m_statues.clear();
+    m_sim.statues.clear();
     m_prototypes.clear();
-    m_risen.clear();
-    m_contactGridOrigin = Vec2{0};
-    m_contactGridInverseWidth = 0;
+    m_sim.risen.clear();
+    m_sim.contactGridOrigin = Vec2{0};
+    m_sim.contactGridInverseWidth = 0;
     ++m_restoreGeneration;
+    ++m_localEpoch;
 }
 
 void CritterStatues::setContactGridBounds(const Vec3& minimum, const Vec3& maximum) {
-    m_contactGridOrigin = Vec2{minimum.x, minimum.z};
+    m_sim.contactGridOrigin = Vec2{minimum.x, minimum.z};
     const f32 cellWidth =
         std::max(maximum.x - minimum.x, maximum.z - minimum.z) / kContactGridDimension;
-    m_contactGridInverseWidth = cellWidth > 0 ? static_cast<f32>(1.0 / cellWidth) : 0;
+    m_sim.contactGridInverseWidth = cellWidth > 0 ? static_cast<f32>(1.0 / cellWidth) : 0;
 }
 
 s32 CritterStatues::contactCell(f32 coordinate, f32 origin) const {
-    return static_cast<s32>(std::clamp((coordinate - origin) * m_contactGridInverseWidth, 0.0f,
+    return static_cast<s32>(std::clamp((coordinate - origin) * m_sim.contactGridInverseWidth, 0.0f,
                                        static_cast<f32>(kContactGridDimension - 1)));
 }
 
@@ -322,24 +473,24 @@ bool CritterStatues::inContactGrid(const Vec3& statue, const Vec3& player, f32 r
     // StartEnemyGrid (80043490) visits whole cells, not a second sight circle.
     // InitDynGrid (80043A04) receives a 15-unit item margin in every realm.
     const f32 pad = radius > 0 ? kItemQueryPadding + radius : -radius;
-    const s32 x = contactCell(statue.x, m_contactGridOrigin.x);
-    const s32 z = contactCell(statue.z, m_contactGridOrigin.y);
-    return x >= contactCell(player.x - pad, m_contactGridOrigin.x) &&
-           x <= contactCell(player.x + pad, m_contactGridOrigin.x) &&
-           z >= contactCell(player.z - pad, m_contactGridOrigin.y) &&
-           z <= contactCell(player.z + pad, m_contactGridOrigin.y);
+    const s32 x = contactCell(statue.x, m_sim.contactGridOrigin.x);
+    const s32 z = contactCell(statue.z, m_sim.contactGridOrigin.y);
+    return x >= contactCell(player.x - pad, m_sim.contactGridOrigin.x) &&
+           x <= contactCell(player.x + pad, m_sim.contactGridOrigin.x) &&
+           z >= contactCell(player.z - pad, m_sim.contactGridOrigin.y) &&
+           z <= contactCell(player.z + pad, m_sim.contactGridOrigin.y);
 }
 
 void CritterStatues::wake(usize index) {
-    if (index < m_statues.size()) {
-        m_statues[index]->woken = true;
+    if (index < m_sim.statues.size()) {
+        m_sim.statues[index]->woken = true;
     }
 }
 
 std::optional<std::pair<usize, f32>> CritterStatues::nearestAsleep(const Vec3& spot) const {
     std::optional<std::pair<usize, f32>> nearest;
-    for (usize i = 0; i < m_statues.size(); ++i) {
-        const Statue& statue = *m_statues[i];
+    for (usize i = 0; i < m_sim.statues.size(); ++i) {
+        const Statue& statue = *m_sim.statues[i];
         const f32 distance = glm::distance(statue.figure.position(), spot);
         if (!statue.woken && (!nearest.has_value() || distance < nearest->second)) {
             nearest = std::pair{i, distance};
@@ -367,10 +518,10 @@ bool CritterStatues::wakesAt(const Statue& statue, const Vec3& position, f32 rad
 }
 
 bool CritterStatues::dormantFor(std::span<const Visitor> visitors) const {
-    if (!m_risen.empty()) {
+    if (!m_sim.risen.empty()) {
         return false;
     }
-    for (const auto& statue : m_statues) {
+    for (const auto& statue : m_sim.statues) {
         if (statue->woken || statue->rising) {
             return false;
         }
@@ -402,7 +553,7 @@ bool CritterStatues::dormantFor(std::span<const Visitor> visitors) const {
 
 Vec3 CritterStatues::touch(const Vec3& position, f32 radius, f32 height) {
     Vec3 stood = position;
-    for (auto& statue : m_statues) {
+    for (auto& statue : m_sim.statues) {
         if (!inContactGrid(statue->figure.position(), position, radius)) {
             continue;
         }
@@ -423,8 +574,8 @@ Vec3 CritterStatues::touch(const Vec3& position, f32 radius, f32 height) {
 
 std::vector<Obstacle> CritterStatues::obstacles() const {
     std::vector<Obstacle> out;
-    out.reserve(m_statues.size());
-    for (const auto& statue : m_statues) {
+    out.reserve(m_sim.statues.size());
+    for (const auto& statue : m_sim.statues) {
         out.push_back(obstacleOf(*statue));
     }
     return out;
@@ -432,9 +583,9 @@ std::vector<Obstacle> CritterStatues::obstacles() const {
 
 std::vector<MissileTarget> CritterStatues::targets() const {
     std::vector<MissileTarget> out;
-    out.reserve(m_statues.size());
-    for (usize i = 0; i < m_statues.size(); ++i) {
-        const Statue& statue = *m_statues[i];
+    out.reserve(m_sim.statues.size());
+    for (usize i = 0; i < m_sim.statues.size(); ++i) {
+        const Statue& statue = *m_sim.statues[i];
         out.push_back(MissileTarget{static_cast<s32>(i), statue.figure.position(),
                                     statue.placement.radius, statue.placement.height});
     }
@@ -442,7 +593,7 @@ std::vector<MissileTarget> CritterStatues::targets() const {
 }
 
 void CritterStatues::update(s32 ticks, f32 seconds, const Seen& seen) {
-    for (auto& statue : m_statues) {
+    for (auto& statue : m_sim.statues) {
         // Out of view nothing happens to it: neither the waking nor its countdown.
         if (!statue->woken ||
             (seen && !seen(statue->figure.position(), statue->placement.viewRadius))) {
@@ -465,20 +616,20 @@ void CritterStatues::update(s32 ticks, f32 seconds, const Seen& seen) {
         statue->figure.update(seconds);
         statue->ticksLeft -= ticks;
         if (statue->ticksLeft <= 0) {
-            m_risen.push_back(statue->placement);
+            m_sim.risen.push_back(statue->placement);
             statue.reset();
         }
     }
-    std::erase_if(m_statues, [](const std::unique_ptr<Statue>& statue) { return !statue; });
+    std::erase_if(m_sim.statues, [](const std::optional<Statue>& statue) { return !statue; });
 }
 
 std::vector<CritterStatues::Placement> CritterStatues::takeRisen() {
-    return std::exchange(m_risen, {});
+    return std::exchange(m_sim.risen, {});
 }
 
 void CritterStatues::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                           const CameraFrame* camera) const {
-    for (const auto& statue : m_statues) {
+    for (const auto& statue : m_sim.statues) {
         statue->figure.draw(device, clip, lighting, 1.0f, 1.0f, camera);
     }
 }

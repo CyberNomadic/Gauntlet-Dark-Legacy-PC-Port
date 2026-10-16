@@ -1,7 +1,9 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
@@ -18,6 +20,8 @@
 #include "game/world/CompanionVisual.h"
 
 namespace gdl::game {
+
+class NativeStateResources;
 
 /**
  * The companion a powerup brings along (PlayerProcessPowerups, player.c 5789): Pojo, the fire
@@ -41,6 +45,46 @@ public:
     /** What it hangs from: the body (p->node), the head (weapon_node), or the back (the
      * root's first child's first child). */
     enum class Mount : u8 { Body, Head, Back };
+
+private:
+    struct Resource {
+        const ItemArchive* archive = nullptr;
+        const TreeInfo* tree = nullptr;
+        TreeModel model;
+        TextureAnimator textures; ///< resolved bank; its sampled clock is derived from State
+    };
+    struct Resources {
+        std::vector<std::unique_ptr<Resource>> entries;
+    };
+    /** Ordinary values only. Resource addresses remain stable across kind changes. */
+    struct State {
+        Kind kind = Kind::None;
+        Resource* resource = nullptr;
+        const TreeInfo* poseTree = nullptr; ///< clear preserves the native dormant pose
+        TreePose pose;
+        AnimationPlayer player;
+        TextureAnimator::Clock textures;
+        // The saved interval must survive a rewind even before the next update.
+        f32 previousFrame = 0;
+        u64 previousGeneration = 0;
+        bool presentationAdvanced = false;
+    };
+
+public:
+    /** In-process rewind, including Pojo's projectile attachment pose. Never uploads
+     * or reconstructs models. All borrowed archives must outlive this owner. */
+    class LocalSnapshot {
+        friend class PowerupCompanion;
+        State m_state;
+        std::weak_ptr<const Resources> m_owner;
+    };
+    void saveLocal(LocalSnapshot& state) const;
+    bool canRestoreLocal(const LocalSnapshot& state) const;
+    bool restoreLocal(const LocalSnapshot& state);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    /** Archives are registered by their owners before retained companion banks. */
+    bool registerNativeResources(NativeStateResources& resources) const;
     struct Checkpoint {
         Kind kind = Kind::None;
         std::string tree;
@@ -86,38 +130,35 @@ public:
      * idling, the phoenix's attack as `spat`. */
     void update(f32 seconds, PlayerAnimator::Action action, bool swung, bool spat);
     void capturePresentation() {
-        m_presentationAdvanced = false;
-        m_textures.advance(0);
+        m_state.presentationAdvanced = false;
+        m_state.textures.advance = 0;
     }
     void draw(RenderDevice& device, const Mat4& clip, const Mat4& at, const WorldLighting& lighting,
               f32 alpha, const CameraFrame* camera, f32 renderAlpha = -1.0f,
               TreeModel::Pass pass = TreeModel::Pass::All) const;
     void clear();
 
-    Kind kind() const { return m_kind; }
-    bool shown() const { return m_tree != nullptr; }
+    Kind kind() const { return m_state.kind; }
+    bool shown() const { return m_state.resource != nullptr; }
     std::optional<CompanionVisual> visual(const Mat4& at, f32 alpha) const;
     std::optional<Mat4> attachment(const Mat4& at, std::string_view object) const;
-    s32 sequence() const { return m_tree != nullptr ? static_cast<s32>(m_player.sequence()) : -1; }
-    AnimationPlayer::Checkpoint animationCheckpoint() const { return m_player.checkpoint(); }
+    s32 sequence() const { return shown() ? static_cast<s32>(m_state.player.sequence()) : -1; }
+    AnimationPlayer::Checkpoint animationCheckpoint() const { return m_state.player.checkpoint(); }
 
 private:
+    bool appendState(NativeStateDigest& digest, const State& state) const;
     void play(s32 sequence);
     /** Whether `sequence` loops: the stance, and Pojo's run; the rest play once. */
     bool loops(s32 sequence) const {
-        return sequence == kReady || (m_kind == Kind::Pojo && sequence == kRun);
+        return sequence == kReady || (m_state.kind == Kind::Pojo && sequence == kRun);
     }
 
-    Kind m_kind = Kind::None;
-    const TreeInfo* m_tree = nullptr;
-    const TreeInfo* m_poseTree = nullptr; ///< clear preserves the native dormant pose
-    mutable TreeModel m_model;
-    TreePose m_pose;
-    AnimationPlayer m_player;
-    TextureAnimator m_textures;
-    f32 m_previousFrame = 0;
-    u64 m_previousGeneration = 0;
-    bool m_presentationAdvanced = false;
+    const TreeInfo* tree() const { return shown() ? m_state.resource->tree : nullptr; }
+    Resource* findResource(ItemArchive& archive, const TreeInfo& tree) const;
+    State m_state;
+    // Copies used by the legacy diagnostic transaction share only retained artwork,
+    // never animation state. Local rewind itself copies State, not this cache.
+    std::shared_ptr<Resources> m_resources = std::make_shared<Resources>();
     u64 m_bindingRevision = 0;
 };
 

@@ -9,16 +9,17 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDNA");
+constexpr u32 kTerminalMagic = fourcc("GDNT");
 enum class Kind : u8 { Report = 1, Accepted, Failed };
 using Failure = NativeAgreement::Failure;
 using Digest = NativeAgreement::Digest;
 using Bytes = std::array<u8, NativeAgreement::kPacketBytes>;
 
 Bytes encode(Kind kind, u64 epoch, u64 tick, const Digest& digest,
-             Failure failure = Failure::None) {
+             Failure failure = Failure::None, bool terminal = false) {
     Bytes bytes{};
     for (u32 i = 0; i < 4; ++i) {
-        bytes[i] = static_cast<u8>(kMagic >> (i * 8));
+        bytes[i] = static_cast<u8>((terminal ? kTerminalMagic : kMagic) >> (i * 8));
     }
     bytes[4] = NativeAgreement::kVersion;
     bytes[5] = static_cast<u8>(kind);
@@ -36,6 +37,7 @@ struct Message {
     u64 epoch;
     u64 tick;
     Digest digest;
+    bool terminal;
 };
 std::optional<Message> decode(std::span<const u8> bytes) {
     if (bytes.size() != NativeAgreement::kPacketBytes || !NativeAgreement::recognizes(bytes) ||
@@ -44,7 +46,8 @@ std::optional<Message> decode(std::span<const u8> bytes) {
         bytes[6] > static_cast<u8>(Failure::Transport)) {
         return std::nullopt;
     }
-    Message result{static_cast<Kind>(bytes[5]), static_cast<Failure>(bytes[6]), 0, 0, {}};
+    Message result{static_cast<Kind>(bytes[5]), static_cast<Failure>(bytes[6]), 0, 0, {},
+                   NativeAgreement::recognizesTerminal(bytes)};
     for (u32 i = 0; i < 8; ++i) {
         result.epoch |= static_cast<u64>(bytes[8 + i]) << (i * 8);
         result.tick |= static_cast<u64>(bytes[16 + i]) << (i * 8);
@@ -64,7 +67,16 @@ bool expired(NativeAgreement::Time start, NativeAgreement::Time now) {
 } // namespace
 
 bool NativeAgreement::recognizes(std::span<const u8> bytes) {
-    return bytes.size() >= 4 && ByteReader(bytes).readU32() == kMagic;
+    return bytes.size() >= 4 && (ByteReader(bytes).readU32() == kMagic || recognizesTerminal(bytes));
+}
+bool NativeAgreement::recognizesTerminal(std::span<const u8> bytes) {
+    return bytes.size() >= 4 && ByteReader(bytes).readU32() == kTerminalMagic;
+}
+std::optional<std::pair<u64, u64>> NativeAgreement::terminalContext(std::span<const u8> bytes) {
+    const auto message = decode(bytes);
+    if (!message || !message->terminal ||
+        (message->tick == 0 && message->kind != Kind::Failed)) return std::nullopt;
+    return std::pair{message->epoch, message->tick};
 }
 bool NativeAgreement::occupied(u8 peer) const {
     return peer != 0 && std::ranges::find(m_owners, peer) != m_owners.end();
@@ -105,11 +117,19 @@ bool NativeAgreement::open(u8 localPeer, u64 epoch, const Owners& owners,
     m_links = connections;
     return true;
 }
+bool NativeAgreement::openTerminal(u8 localPeer, u64 epoch, const Owners& owners,
+                                  std::span<const Link> links, u64 terminalTick, Time now) {
+    if (terminalTick == 0 || !open(localPeer, epoch, owners, links, 1, now)) return false;
+    m_terminal = terminalTick;
+    m_submit = terminalTick;
+    return true;
+}
 bool NativeAgreement::scheduled(u64 tick) const {
-    return tick != 0 && m_period != 0 && tick % m_period == 0;
+    return m_terminal ? tick == *m_terminal : tick != 0 && m_period != 0 && tick % m_period == 0;
 }
 bool NativeAgreement::inWindow(u64 tick) const {
-    return tick > m_agreed && (tick - m_agreed) / m_period <= kWindow;
+    return tick > m_agreed && (m_terminal ? tick == *m_terminal
+                                        : (tick - m_agreed) / m_period <= kWindow);
 }
 bool NativeAgreement::queueReady() const {
     for (u8 peer = 1; peer <= 4; ++peer) {
@@ -136,7 +156,7 @@ void NativeAgreement::fail(Failure reason, u64 tick) {
     m_failure = reason;
     m_failureTick = tick;
     m_pending.clear();
-    const auto bytes = encode(Kind::Failed, m_epoch, tick, {}, reason);
+    const auto bytes = encode(Kind::Failed, m_epoch, tick, {}, reason, m_terminal.has_value());
     for (u8 peer = 1; peer <= 4; ++peer) {
         // Terminal notification has reserved bounded capacity even when ordinary
         // reports/verdicts are congested. Already sent packets remain ordered.
@@ -198,7 +218,8 @@ void NativeAgreement::settle() {
         const auto entry = m_pending.begin();
         const u64 tick = entry->first;
         const auto& pending = entry->second;
-        if (tick - m_agreed != m_period || !pending.digests[m_local]) {
+        if ((m_terminal ? tick != *m_terminal || m_agreed != 0 : tick - m_agreed != m_period) ||
+            !pending.digests[m_local]) {
             return;
         }
         const Digest digest = *pending.digests[m_local];
@@ -217,7 +238,8 @@ void NativeAgreement::settle() {
             if (!queueReady()) {
                 return;
             }
-            const auto bytes = encode(Kind::Accepted, m_epoch, tick, digest);
+            const auto bytes = encode(Kind::Accepted, m_epoch, tick, digest, Failure::None,
+                                      m_terminal.has_value());
             for (u8 peer = 2; peer <= 4; ++peer) {
                 if (m_links[peer] != 0) {
                     m_outgoing[peer].push_back({bytes, m_now});
@@ -260,9 +282,10 @@ NativeAgreement::Admission NativeAgreement::submit(u64 tick, const Digest& diges
         return result;
     }
     if (m_local != 1) {
-        m_outgoing[1].push_back({encode(Kind::Report, m_epoch, tick, digest), m_now});
+        m_outgoing[1].push_back({encode(Kind::Report, m_epoch, tick, digest, Failure::None,
+                                        m_terminal.has_value()), m_now});
     }
-    m_submit = tick > std::numeric_limits<u64>::max() - m_period ? 0 : tick + m_period;
+    m_submit = m_terminal || tick > std::numeric_limits<u64>::max() - m_period ? 0 : tick + m_period;
     settle();
     return failed() ? Admission::Failed : Admission::Accepted;
 }
@@ -280,7 +303,7 @@ NativeAgreement::Admission NativeAgreement::receive(PacketTransport::Connection 
         fail(Failure::Protocol, 0);
         return Admission::Invalid;
     }
-    if (message->epoch != m_epoch) {
+    if (message->epoch != m_epoch || message->terminal != m_terminal.has_value()) {
         return Admission::Stale;
     }
     if ((!scheduled(message->tick) && (message->kind != Kind::Failed || message->tick != 0)) ||

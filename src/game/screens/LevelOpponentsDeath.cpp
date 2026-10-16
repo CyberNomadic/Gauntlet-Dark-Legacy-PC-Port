@@ -35,23 +35,43 @@ bool LevelOpponents::releaseDeath(s32 record, const Vec3& position, s32 count) {
 }
 
 void LevelOpponents::stopDeathSound() {
-    if (m_resources.has_value()) {
+    if (m_resources.has_value() && !m_resources->audio.recordingSounds()) {
         m_resources->audio.stop(m_deathSound);
+        m_deathSound = kNoSound;
+        m_resumeDeathSound = true;
     }
-    m_deathSound = kNoSound;
-    m_deathContact = false;
 }
 
 void LevelOpponents::clearDeaths() {
     if (m_resources.has_value()) {
-        for (const u32 id : m_deathEffects) {
+        for (const u32 id : m_sim.deathEffects) {
             m_resources->effects.stop(id);
         }
-        m_resources->audio.stop(m_deathSound);
+        if (!m_resources->audio.recordingSounds()) {
+            m_resources->audio.stop(m_deathSound);
+        }
     }
-    m_deathEffects.fill(0);
+    m_sim.deathEffects.fill(0);
     m_deathSound = kNoSound;
-    m_deathContact = false;
+    m_resumeDeathSound = false;
+    m_sim.deathContact = false;
+    m_sim.deathSound = {};
+}
+
+void LevelOpponents::gatherLoops() const {
+    if (!m_resources || !m_resources->audio.recordingSounds()) {
+        return;
+    }
+    auto& audio = m_resources->audio;
+    if (m_sim.deathContact && m_sim.deathSound) {
+        audio.desireNamedLoop({{20, Enemies::kMost, 1}, 1, 1}, "S_DEATHSUCK",
+                              SceneSoundPlayback::PlayOnceUntilCancelled, 1, 0, m_sim.deathSound);
+    }
+    for (const auto& yell : m_sim.yells) {
+        audio.desireNamedLoop({yell.emitter, 2, yell.instance}, "S_SUICIDE_YELL",
+                              SceneSoundPlayback::PlayOnceUntilCancelled, yell.volume, yell.pan,
+                              yell.start);
+    }
 }
 
 void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events& events) {
@@ -69,6 +89,13 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
         }
     };
     const auto consume = [&](const DeathEvent& cue) {
+        if (resources.audio.recordingSounds() &&
+            (cue.enemy < 0 || cue.enemy >= Enemies::kMost || cue.instance == 0)) {
+            resources.audio.recorder()->unsupported("Death event without its source lifetime");
+        }
+        auto scope = resources.audio.soundScope(
+            {20, static_cast<u64>(std::max(cue.enemy, 0)), cue.instance},
+            32 + static_cast<u32>(cue.kind));
         switch (cue.kind) {
         case DeathEvent::Kind::Killed: resources.audio.playNamed("S_DEATHDIE"); return;
         case DeathEvent::Kind::Exhausted:
@@ -131,7 +158,7 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
     }
     bool contact = false;
     for (s32 i = 0; i < Enemies::kMost; ++i) {
-        u32& effect = m_deathEffects[static_cast<usize>(i)];
+        u32& effect = m_sim.deathEffects[static_cast<usize>(i)];
         if (!m_enemies.draining(i)) {
             resources.effects.stop(effect);
             effect = 0;
@@ -154,12 +181,22 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
                                            m_enemies.yawOf(i), Vec3{0, 1, 0});
         resources.effects.placeAt(effect, transform);
     }
-    if (contact && !m_deathContact) {
-        m_deathSound = resources.audio.playNamed("S_DEATHSUCK");
-    } else if (!contact && m_deathContact) {
-        resources.audio.stop(m_deathSound);
-        m_deathSound = kNoSound;
+    if (resources.audio.recordingSounds()) {
+        if (contact && !m_sim.deathContact) {
+            auto scope = resources.audio.soundScope({20, Enemies::kMost, 1}, 1);
+            m_sim.deathSound = resources.audio.beginNamedCue("S_DEATHSUCK");
+        } else if (!contact) {
+            m_sim.deathSound = {};
+        }
+    } else {
+        if (contact && (!m_sim.deathContact || m_resumeDeathSound)) {
+            m_deathSound = resources.audio.playNamed("S_DEATHSUCK");
+        } else if (!contact && m_sim.deathContact) {
+            resources.audio.stop(m_deathSound);
+            m_deathSound = kNoSound;
+        }
+        m_resumeDeathSound = false;
     }
-    m_deathContact = contact;
+    m_sim.deathContact = contact;
 }
 } // namespace gdl::game

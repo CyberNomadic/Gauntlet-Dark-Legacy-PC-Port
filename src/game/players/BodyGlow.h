@@ -3,6 +3,10 @@
 #include "engine/core/Types.h"
 #include "engine/world/WorldLighting.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -13,6 +17,8 @@ namespace gdl::game {
  * the whole of a channel (MBTreeSetAmbientAdd of 255 a unit).
  */
 class BodyGlow {
+    friend void visitNativeState(NativeStateDigest& digest, const BodyGlow& value);
+
 public:
     static constexpr f32 kStrike = 2.0f; ///< 0x80347DAC
     static constexpr f32 kBearer = 2.0f;

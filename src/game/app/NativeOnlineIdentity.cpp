@@ -392,9 +392,68 @@ std::filesystem::path modulePath(HMODULE module) {
     }
 }
 
+#if defined(_MSC_VER) && defined(_MT) && !defined(_DLL)
+void verifyStaticRuntime() {
+    const HMODULE executable = GetModuleHandleW(nullptr);
+    if (executable == nullptr) {
+        throw std::runtime_error("cannot identify the static native runtime executable");
+    }
+    const auto check = [executable](auto function, std::string_view name) {
+        HMODULE owner = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                  GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(function), &owner) == 0 ||
+            owner != executable) {
+            throw std::runtime_error("static native runtime function is outside the executable: " +
+                                     std::string(name));
+        }
+    };
+    // Check the actual linked function addresses, not the presence of a DLL
+    // with a familiar filename. Drivers may legitimately load a second UCRT.
+    // The build/import audit covers other translation units; these references
+    // independently verify the math and control used by the numeric witness.
+    check(&::sinf, "sinf");
+    check(&::cosf, "cosf");
+    check(&::tanf, "tanf");
+    check(&::asinf, "asinf");
+    check(&::acosf, "acosf");
+    check(&::atan2f, "atan2f");
+    check(&::sqrtf, "sqrtf");
+    check(&::hypotf, "hypotf");
+    check(&::powf, "powf");
+    check(&::fmodf, "fmodf");
+    check(&::expf, "expf");
+    check(&::logf, "logf");
+    using Unary = f64 (*)(f64);
+    using Binary = f64 (*)(f64, f64);
+    check(static_cast<Unary>(&::sin), "sin");
+    check(static_cast<Unary>(&::cos), "cos");
+    check(static_cast<Unary>(&::tan), "tan");
+    check(static_cast<Unary>(&::asin), "asin");
+    check(static_cast<Unary>(&::acos), "acos");
+    check(static_cast<Binary>(&::atan2), "atan2");
+    check(static_cast<Unary>(&::sqrt), "sqrt");
+    check(static_cast<Binary>(&::hypot), "hypot");
+    check(static_cast<Binary>(&::pow), "pow");
+    check(static_cast<Binary>(&::fmod), "fmod");
+    check(static_cast<Unary>(&::exp), "exp");
+    check(static_cast<Unary>(&::log), "log");
+    check(&::_controlfp_s, "_controlfp_s");
+#if defined(_M_X64)
+    check(&::_get_FMA3_enable, "_get_FMA3_enable");
+    check(&::_set_FMA3_enable, "_set_FMA3_enable");
+#endif
+}
+#endif
+
 void runtimeFiles(Digest& digest) {
     digest.text("executable");
     digest.text(fileDigest(modulePath(nullptr)));
+#if defined(_MSC_VER) && defined(_MT) && !defined(_DLL)
+    // /MT places our runtime in the already-hashed executable. Hashing a UCRT
+    // loaded by unrelated graphics/audio code would instead gate on the OS.
+    verifyStaticRuntime();
+#else
     struct Runtime {
         const wchar_t* native;
         const char* name;
@@ -449,6 +508,7 @@ void runtimeFiles(Digest& digest) {
     (void)compilerRuntime;
     (void)cppRuntime;
 #endif
+#endif
 }
 #elif defined(__linux__)
 void runtimeFiles(Digest& digest) {
@@ -488,6 +548,20 @@ void runtimeFiles(Digest&) {
 #endif
 
 } // namespace
+
+std::string_view NativeOnlineIdentity::runtimeProfile() {
+#if defined(_WIN32) && defined(_MSC_VER) && defined(_MT) && !defined(_DLL)
+    return "windows-msvc-static-crt-v1";
+#elif defined(_WIN32) && defined(_MSC_VER) && defined(_DLL)
+    return "windows-msvc-dynamic-crt-v1";
+#elif defined(_WIN32)
+    return "windows-loaded-runtime-v1";
+#elif defined(__linux__)
+    return "linux-loaded-runtime-v1";
+#else
+    return "unsupported-runtime";
+#endif
+}
 
 bool NativeOnlineIdentity::prepareProcessNumeric(std::string* error) {
     fail(error, {});
@@ -539,8 +613,9 @@ std::optional<NativeOnlineIdentity::Result> NativeOnlineIdentity::capture(Inputs
     }
     try {
         Digest digest;
-        digest.text("gdl-native-runtime-identity-v1");
+        digest.text("gdl-native-runtime-identity-v2");
         platform(digest);
+        digest.text(runtimeProfile());
         digest.text(inputs.numeric);
         runtimeFiles(digest);
         return Result{digest.finish(), std::move(inputs.data), std::move(inputs.language)};

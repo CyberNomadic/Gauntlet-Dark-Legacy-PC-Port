@@ -65,7 +65,7 @@ ParticleDescriptor fireTrail(const CombatEffectDefinition& cue) {
 }
 } // namespace
 
-u32 CombatantProjectiles::show(Flying& flying, s32 index, RenderDevice& device,
+u32 CombatantProjectiles::show(Flying& flying, s32 index, SoundPhase phase, RenderDevice& device,
                                EffectTrees& effects, const PlaySound& sound, f32 life) {
     const CombatEffectDefinition* cue = flying.shot.data->sound(index);
     if (cue == nullptr) {
@@ -74,7 +74,7 @@ u32 CombatantProjectiles::show(Flying& flying, s32 index, RenderDevice& device,
     if (sound) {
         const std::string name = cue->soundFor(flying.shot.realm);
         if (!name.empty()) {
-            sound(name);
+            sound({flying.instance, phase, index, name});
         }
     }
     if (!cue->shows()) {
@@ -87,7 +87,7 @@ u32 CombatantProjectiles::show(Flying& flying, s32 index, RenderDevice& device,
     const u32 effect =
         effects.startSet(device, *flying.archive, cue->tree, flying.position, setting);
     if (effect != 0) {
-        m_emittedEffects.push_back(effect);
+        m_sim.emittedEffects.push_back(effect);
         // The only shipped projectile SFXX link is a custom emitter parented
         // to the preceding effect. Keep malformed chains from cycling forever.
         std::vector<s32> visited{index};
@@ -118,7 +118,7 @@ u32 CombatantProjectiles::show(Flying& flying, s32 index, RenderDevice& device,
             if (sound) {
                 const std::string name = linked->soundFor(flying.shot.realm);
                 if (!name.empty()) {
-                    sound(name);
+                    sound({flying.instance, phase, at, name});
                 }
             }
             at = linked->link;
@@ -162,7 +162,12 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
                   shot.data->name(), cue->tree);
         return;
     }
+    if (m_sim.nextInstance == 0) {
+        log::error("combatant projectile lifetimes exhausted");
+        return;
+    }
     Flying flying;
+    flying.instance = m_sim.nextInstance++;
     flying.shot = shot;
     // Unattached SFXX offsets are world-axis offsets, scaled by the creature.
     flying.shot.origin += cue->offset * shot.scale;
@@ -184,28 +189,30 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
                     -std::atan2(floor->normal.x, std::hypot(floor->normal.y, floor->normal.z));
             }
         }
-        flying.effect = show(flying, damage->sound, device, effects, sound, shot.birthLife);
+        flying.effect =
+            show(flying, damage->sound, SoundPhase::Launch, device, effects, sound, shot.birthLife);
         flying.phaseSeconds = effects.remaining(flying.effect).value_or(0);
         if (flying.effect != 0) {
             place(flying, effects);
-            m_flying.push_back(flying);
+            m_sim.flying.push_back(flying);
         }
         return;
     }
     // Preserve the native Windows binary32 mapping and draw count explicitly,
     // rather than depending on the host standard library's distribution.
-    const f32 spread = m_random.unitFloat24() * 2.0f - 1.0f;
+    const f32 spread = m_sim.random.unitFloat24() * 2.0f - 1.0f;
     flying.velocity = CombatantProjectile::velocity(*damage, flying.shot, spread);
     flying.rotation.y = std::atan2(flying.velocity.x, flying.velocity.z);
     if ((cue->flags & kSpin) != 0) {
         constexpr f32 kSpinRate = std::numbers::pi_v<f32> / 2.0f;
-        flying.spin =
-            Vec3{m_random.unitFloat24() * kSpinRate, 0.0f, m_random.unitFloat24() * kSpinRate};
+        flying.spin = Vec3{m_sim.random.unitFloat24() * kSpinRate, 0.0f,
+                           m_sim.random.unitFloat24() * kSpinRate};
     }
-    flying.effect = show(flying, damage->sound, device, effects, sound, shot.birthLife);
+    flying.effect =
+        show(flying, damage->sound, SoundPhase::Launch, device, effects, sound, shot.birthLife);
     if (flying.effect != 0) {
         place(flying, effects);
-        m_flying.push_back(flying);
+        m_sim.flying.push_back(flying);
     }
 }
 
@@ -217,8 +224,8 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
     if (seconds <= 0.0f) {
         return;
     }
-    m_ricochetIn = std::max(0.0f, m_ricochetIn - seconds);
-    for (Flying& flying : m_flying) {
+    m_sim.ricochetIn = std::max(0.0f, m_sim.ricochetIn - seconds);
+    for (Flying& flying : m_sim.flying) {
         const AttackDefinition& damage = *flying.shot.data->damage(flying.shot.damageIndex);
         if (flying.planted) {
             // Damage ends with the hold, not with the last lingering particle of
@@ -236,11 +243,12 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 if (!flying.morphed && damage.morph >= 0) {
                     flying.morphed = true;
                     flying.phaseSeconds = damage.morphLife > 0 ? damage.morphLife : kMorphLife;
-                    flying.effect =
-                        show(flying, damage.morph, device, effects, sound, flying.phaseSeconds);
+                    flying.effect = show(flying, damage.morph, SoundPhase::Morph, device, effects,
+                                         sound, flying.phaseSeconds);
                     place(flying, effects);
                 } else {
-                    flying.effect = show(flying, damage.morphEnd, device, effects, sound);
+                    flying.effect =
+                        show(flying, damage.morphEnd, SoundPhase::End, device, effects, sound);
                     place(flying, effects);
                     flying.effect = 0;
                 }
@@ -256,25 +264,28 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 if (damage.morphEnd < 0) {
                     flying.impactRadius = 0;
                 }
-                flying.effect = show(flying, damage.morph, device, effects, sound,
-                                     damage.morphLife > 0.0f ? damage.morphLife : kMorphLife);
+                flying.effect =
+                    show(flying, damage.morph, SoundPhase::Morph, device, effects, sound,
+                         damage.morphLife > 0.0f ? damage.morphLife : kMorphLife);
             } else if (!flying.settled && !flying.stuck && flying.impactRadius > 0 &&
                        damage.hitSound >= 0 &&
-                       settleImpact(flying, show(flying, damage.hitSound, device, effects, sound),
+                       settleImpact(flying,
+                                    show(flying, damage.hitSound, SoundPhase::Impact, device,
+                                         effects, sound),
                                     effects, collision)) {
                 place(flying, effects);
             } else {
                 if (flying.morphed) {
-                    show(flying, damage.morphEnd, device, effects, sound);
+                    show(flying, damage.morphEnd, SoundPhase::End, device, effects, sound);
                 } else if (flying.shot.endVisual && !flying.settled && !flying.stuck) {
                     // The family can make a silent flight expiry visible without
                     // starting an impact area or changing its completion callbacks.
-                    show(flying, damage.hitSound, device, effects, sound);
+                    show(flying, damage.hitSound, SoundPhase::End, device, effects, sound);
                 }
                 if (flying.leavesGenerator) {
                     Mat4 placement = glm::translate(Mat4{1}, flying.position);
                     placement = glm::rotate(placement, flying.rotation.y, Vec3{0, 1, 0});
-                    m_generators.push_back(placement);
+                    m_sim.generators.push_back(placement);
                 }
                 summon(flying);
                 flying.effect = 0;
@@ -380,12 +391,13 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 // ProcessEffects (80094BE0), mode 0: reverse a direct missile,
                 // cap its harm at 15, shorten its life, and enable critter hits.
                 // Planted/sticky/area effects above deliberately do not use this branch.
-                if (m_ricochetIn <= 0) {
+                if (m_sim.ricochetIn <= 0) {
                     CombatantProjectileHit cue;
                     cue.ricochet = true;
                     cue.position = glm::mix(from, to, nearest);
-                    m_hits.push_back(cue);
-                    m_ricochetIn = 1;
+                    cue.instance = flying.instance;
+                    m_sim.hits.push_back(cue);
+                    m_sim.ricochetIn = 1;
                 }
                 flying.velocity = -flying.velocity;
                 flying.position = from;
@@ -409,8 +421,9 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                     flying.position = wall ? destination : glm::mix(from, to, nearest);
                 }
                 if (wall && !item) {
-                    m_worldHits.push_back(
-                        {flying.position, worldObject, liquid && (damage.flags & kReflect) == 0});
+                    m_sim.worldHits.push_back({flying.position, worldObject,
+                                               liquid && (damage.flags & kReflect) == 0,
+                                               flying.instance});
                 }
                 summon(flying);
                 if (!wall && !item && returnedTarget != nullptr) {
@@ -422,18 +435,19 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                                         ? glm::normalize(flying.velocity)
                                         : Vec3{0};
                     hit.position = flying.position;
-                    m_hits.push_back(hit);
+                    hit.instance = flying.instance;
+                    m_sim.hits.push_back(hit);
                 }
                 if (item && item->suppressEffect) {
                     // Surviving cover ends the piercing flight. An optional end
                     // visual changes only its presentation, never its damage.
                     if (flying.shot.endVisual) {
-                        show(flying, damage.hitSound, device, effects, sound);
+                        show(flying, damage.hitSound, SoundPhase::Impact, device, effects, sound);
                     } else if (const auto* cue = flying.shot.data->sound(damage.hitSound);
                                cue != nullptr && sound) {
                         const std::string name = cue->soundFor(flying.shot.realm);
                         if (!name.empty()) {
-                            sound(name);
+                            sound({flying.instance, SoundPhase::Impact, damage.hitSound, name});
                         }
                     }
                     effects.stop(flying.effect);
@@ -466,15 +480,24 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                             ? projectileHitGap(*flying.archive,
                                                flying.shot.data->sound(damage.hitSound), pierces)
                             : 0;
-                    m_hits.push_back({victim->player, hitDamage, damage.flags,
-                                      speed > 0.0f ? flying.velocity / speed : Vec3{0.0f}, hitGap,
-                                      flying.shot.critter, flying.shot.data->kind()});
+                    m_sim.hits.push_back({victim->player,
+                                          hitDamage,
+                                          damage.flags,
+                                          speed > 0.0f ? flying.velocity / speed : Vec3{0.0f},
+                                          hitGap,
+                                          flying.shot.critter,
+                                          flying.shot.data->kind(),
+                                          -1,
+                                          false,
+                                          {},
+                                          flying.instance});
                     if ((damage.flags & kPassThrough) != 0 && flying.piercedPlayer < 0) {
                         // Reflecting super shots leave an impact and spend their
                         // pass-through bit; ordinary super shots keep travelling.
                         if ((damage.flags & kReflect) != 0 && damage.hitSound >= 0 &&
                             damage.damage * flying.shot.damageScale > 2) {
-                            show(flying, damage.hitSound, device, effects, sound);
+                            show(flying, damage.hitSound, SoundPhase::Impact, device, effects,
+                                 sound);
                             flying.piercedPlayer = victim->player;
                         }
                         contacted.push_back(victim->player);
@@ -499,11 +522,12 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                                 floor->normal.x, std::hypot(floor->normal.y, floor->normal.z));
                         }
                     }
-                    flying.effect =
-                        show(flying, damage.hitSound, device, effects, impactSound, kStickyLife);
+                    flying.effect = show(flying, damage.hitSound, SoundPhase::Impact, device,
+                                         effects, impactSound, kStickyLife);
                     break;
                 }
-                const u32 impact = show(flying, damage.hitSound, device, effects, impactSound);
+                const u32 impact =
+                    show(flying, damage.hitSound, SoundPhase::Impact, device, effects, impactSound);
                 if (settleImpact(flying, impact, effects, collision)) {
                     // The impact owns a new damage lifetime. It is not an
                     // immediate full-radius second hit on the contact frame.
@@ -511,7 +535,7 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                     flying.settled = true;
                     flying.effect = impact;
                     if (impact == 0) {
-                        m_generators.push_back(glm::translate(Mat4{1}, flying.position));
+                        m_sim.generators.push_back(glm::translate(Mat4{1}, flying.position));
                     }
                 } else {
                     flying.effect = 0;
@@ -524,8 +548,8 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
             place(flying, effects);
         }
     }
-    std::erase_if(m_flying, [](const Flying& flying) { return flying.effect == 0; });
-    std::erase_if(m_emittedEffects, [&](u32 effect) { return !effects.playing(effect); });
+    std::erase_if(m_sim.flying, [](const Flying& flying) { return flying.effect == 0; });
+    std::erase_if(m_sim.emittedEffects, [&](u32 effect) { return !effects.playing(effect); });
 }
 
 bool CombatantProjectiles::settleImpact(Flying& flying, u32 effect, EffectTrees& effects,
@@ -600,8 +624,17 @@ void CombatantProjectiles::impactContacts(Flying& flying, f32 seconds,
             constexpr u32 kNoHitEffect = 0x1000000;
             flags = (flags & ~kHeavyHitFlags) | kNoHitEffect;
         }
-        m_hits.push_back({player.player, area.currentDamage(), flags, push, area.hitGap(),
-                          flying.shot.critter, flying.shot.data->kind()});
+        m_sim.hits.push_back({player.player,
+                              area.currentDamage(),
+                              flags,
+                              push,
+                              area.hitGap(),
+                              flying.shot.critter,
+                              flying.shot.data->kind(),
+                              -1,
+                              false,
+                              {},
+                              flying.instance});
     }
 }
 
@@ -617,27 +650,36 @@ void CombatantProjectiles::stickyContacts(Flying& flying, f32 seconds,
             if (!player.hidden &&
                 CombatantProjectile::contact(flying.position, flying.position, reach,
                                              player.position, player.radius, player.height)) {
-                m_hits.push_back({player.player, damage.damage * flying.shot.damageScale,
-                                  damage.flags, Vec3{0}, 0, flying.shot.critter,
-                                  flying.shot.data->kind()});
+                m_sim.hits.push_back({player.player,
+                                      damage.damage * flying.shot.damageScale,
+                                      damage.flags,
+                                      Vec3{0},
+                                      0,
+                                      flying.shot.critter,
+                                      flying.shot.data->kind(),
+                                      -1,
+                                      false,
+                                      {},
+                                      flying.instance});
             }
         }
     }
 }
 
 void CombatantProjectiles::clear(EffectTrees& effects) {
+    ++m_localEpoch;
     m_checkpointBinding = std::make_shared<const u8>(0);
-    for (const u32 effect : m_emittedEffects) {
+    for (const u32 effect : m_sim.emittedEffects) {
         effects.stop(effect);
     }
-    m_emittedEffects.clear();
-    m_flying.clear();
-    m_hits.clear();
-    m_worldHits.clear();
-    m_rockHits.clear();
-    m_generators.clear();
-    m_summons.clear();
-    m_ricochetIn = 0;
+    m_sim.emittedEffects.clear();
+    m_sim.flying.clear();
+    m_sim.hits.clear();
+    m_sim.worldHits.clear();
+    m_sim.rockHits.clear();
+    m_sim.generators.clear();
+    m_sim.summons.clear();
+    m_sim.ricochetIn = 0;
 }
 
 std::optional<CombatantProjectiles::ItemImpact>
@@ -666,7 +708,7 @@ CombatantProjectiles::hitItems(const Flying& flying, const Vec3& from, const Vec
         // Queued damage matters for subsequent iceballs in the same update. The
         // scene applies these blows to the actual rock before the next update.
         f32 health = static_cast<f32>(item->rockHealth);
-        for (const RockHit& hit : m_rockHits) {
+        for (const RockHit& hit : m_sim.rockHits) {
             if (hit.rock == static_cast<usize>(item->rock)) {
                 health -=
                     std::max(1.0f, std::round(hit.damage - static_cast<f32>(item->rockArmor)));
@@ -680,7 +722,7 @@ CombatantProjectiles::hitItems(const Flying& flying, const Vec3& from, const Vec
         constexpr u32 kHealOrGas = 0x200 | 0x800;
         if (item->rockArmor >= 0 && (damage.flags & kHealOrGas) == 0) {
             const f32 power = damage.damage * flying.shot.damageScale;
-            m_rockHits.push_back({static_cast<usize>(item->rock), power});
+            m_sim.rockHits.push_back({static_cast<usize>(item->rock), power});
             health -= std::max(1.0f, std::round(power - static_cast<f32>(item->rockArmor)));
         }
         // DMG_SUPER only passes cover its hit destroyed. Surviving cover clears
@@ -694,21 +736,59 @@ CombatantProjectiles::hitItems(const Flying& flying, const Vec3& from, const Vec
 
 void CombatantProjectiles::summon(Flying& flying) {
     if (flying.summonsEnemies) {
-        m_summons.push_back(glm::rotate(glm::translate(Mat4{1}, flying.position), flying.rotation.y,
-                                        Vec3{0, 1, 0}));
+        m_sim.summons.push_back(glm::rotate(glm::translate(Mat4{1}, flying.position),
+                                            flying.rotation.y, Vec3{0, 1, 0}));
         flying.summonsEnemies = false;
     }
 }
 
 std::vector<Mat4> CombatantProjectiles::takeSummons() {
-    return std::exchange(m_summons, {});
+    return std::exchange(m_sim.summons, {});
 }
 
 std::vector<Mat4> CombatantProjectiles::takeGenerators() {
-    return std::exchange(m_generators, {});
+    return std::exchange(m_sim.generators, {});
 }
 
 std::vector<CombatantProjectileHit> CombatantProjectiles::takeHits() {
-    return std::exchange(m_hits, {});
+    return std::exchange(m_sim.hits, {});
+}
+
+void CombatantProjectiles::saveLocal(LocalSnapshot& state) const {
+    state.owner.reset();
+    state.state = m_sim;
+    state.epoch = m_localEpoch;
+    state.owner = m_localOwner;
+}
+
+bool CombatantProjectiles::canRestoreLocal(const LocalSnapshot& state) const {
+    return !state.owner.expired() && state.owner.lock() == m_localOwner &&
+           state.epoch == m_localEpoch;
+}
+
+bool CombatantProjectiles::restoreLocal(const LocalSnapshot& state) {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    m_sim = state.state;
+    ++m_checkpointRevision;
+    return true;
+}
+bool CombatantProjectiles::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.state == b.state;
+}
+bool CombatantProjectiles::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("CombatantProjectiles.native.1");
+    digest.value(m_sim);
+    return digest.good();
+}
+bool CombatantProjectiles::appendLocalDigest(NativeStateDigest& digest,
+                                            const LocalSnapshot& state) const {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    digest.string("CombatantProjectiles.native.1");
+    digest.value(state.state);
+    return digest.good();
 }
 } // namespace gdl::game

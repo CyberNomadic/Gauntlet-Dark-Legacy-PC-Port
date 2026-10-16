@@ -5,6 +5,10 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 /** Death's two forms consume different resources, independently of ordinary melee. */
 enum class DeathForm : u8 { Red, Black };
@@ -30,6 +34,8 @@ struct DeathEvent {
     DeathForm form = DeathForm::Red;
     f32 amount = 0;
     Vec3 position{0};
+    u64 instance = 0; ///< the emitting Death, not the slot's later occupant
     bool operator==(const DeathEvent&) const = default;
 };
+void visitNativeState(NativeStateDigest& digest, const DeathEvent& value);
 } // namespace gdl::game

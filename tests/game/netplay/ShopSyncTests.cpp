@@ -2,7 +2,6 @@
 
 #include "game/netplay/OnlinePair.h"
 #include "game/netplay/ShopSync.h"
-#include "game/screens/MatchInputs.h"
 
 namespace {
 using namespace gdl;
@@ -10,15 +9,18 @@ using namespace gdl::game;
 using Admission = ShopSync::Admission;
 
 u64 completeStartupFrame(test::OnlinePair& pair) {
-    REQUIRE(MatchInputs::sample(pair.host, {}));
-    REQUIRE(MatchInputs::sample(pair.guest, {}));
+    REQUIRE(pair.sample(pair.host, {}));
+    REQUIRE(pair.sample(pair.guest, {}));
     pair.pump();
-    const u64 tick = pair.host.tick();
-    REQUIRE(pair.guest.tick() == tick);
-    REQUIRE(MatchInputs::advance(pair.host));
-    REQUIRE(MatchInputs::advance(pair.guest));
-    REQUIRE(pair.host.completedNativeTick(tick));
-    REQUIRE(pair.guest.completedNativeTick(tick));
+    const u64 tick = pair.hostInputs.tick();
+    REQUIRE(pair.guestInputs.tick() == tick);
+    REQUIRE(pair.advance(pair.host));
+    REQUIRE(pair.advance(pair.guest));
+    REQUIRE(pair.hostInputs.submitBoundaryDigest());
+    REQUIRE(pair.guestInputs.submitBoundaryDigest());
+    pair.pump();
+    REQUIRE(pair.hostInputs.completeBoundary());
+    REQUIRE(pair.guestInputs.completeBoundary());
     return tick;
 }
 
@@ -164,13 +166,13 @@ TEST_CASE("a two-peer post-level epoch waits for profiles setup and every shop c
     const ShopSetup setup{1, 3585, true, 0, {1000, 100, 1000}, {}};
     REQUIRE(pair.host.prepare(1, MatchTransition::Shop, &party, &setup));
     pair.pump();
-    REQUIRE(pair.guest.completedNativeTick(terminalTick));
+    REQUIRE(pair.guest.completeNativeBoundary(pair.guest.context().epoch, terminalTick));
     REQUIRE(pair.host.travelParty());
     REQUIRE(pair.guest.travelParty());
     REQUIRE(pair.guest.shop().setup());
     CHECK(pair.guest.shop().setup()->expanded);
     pair.ready();
-    CHECK_FALSE(pair.host.advance()); // combat cannot advance behind the shop
+    CHECK_FALSE(pair.hostInputs.advance()); // combat cannot advance behind the shop
     MenuInput buy;
     buy.select = true;
     REQUIRE(pair.guest.shop().sample(1, buy));
@@ -203,7 +205,7 @@ TEST_CASE("disconnect discards pending shop transactions without releasing the s
     const ShopSetup setup{1, 3585, false, 0, {1000, 100, 1000}, {}};
     REQUIRE(pair.host.prepare(1, MatchTransition::Shop, &party, &setup));
     pair.pump();
-    REQUIRE(pair.guest.completedNativeTick(terminalTick));
+    REQUIRE(pair.guest.completeNativeBoundary(pair.guest.context().epoch, terminalTick));
     pair.ready();
     MenuInput buy;
     buy.select = true;

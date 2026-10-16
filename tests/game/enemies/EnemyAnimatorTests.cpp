@@ -84,6 +84,53 @@ TEST_CASE("a collision hold cancels pending walk and run without interrupting ot
     }
 }
 
+TEST_CASE("native enemy animation equality covers requests clocks unbound values and correction",
+          "[enemies][animation][local-rewind][native-equality]") {
+    EnemyAnimator animator;
+    const EnemyAnimator empty = animator;
+    CHECK(animator.equalLocal(empty));
+    animator.setIdle(0.25f);
+    CHECK_FALSE(animator.equalLocal(empty)); // unbound does not mean valueless
+    animator = empty;
+    const auto tree = gruntTree();
+    REQUIRE(animator.bind(tree));
+    const EnemyAnimator initial = animator;
+    const auto changed = [&](auto&& change) {
+        animator = initial;
+        change();
+        CHECK_FALSE(animator.equalLocal(initial));
+    };
+    changed([&] { animator.request(Action::Attack); });
+    changed([&] { animator.setIdle(0.125f); });
+    changed([&] { animator.setThrowInterval(0.5f); });
+    changed([&] { animator.update(1, 1.0f / 60); });
+
+    const auto foreignTree = tree;
+    EnemyAnimator foreign;
+    REQUIRE(foreign.bind(foreignTree));
+    CHECK_FALSE(initial.equalLocal(foreign));
+
+    animator = initial;
+    std::array<EnemyAnimator, 8> uninterrupted;
+    for (auto& expected : uninterrupted) {
+        animator.request(Action::Walk);
+        animator.update(1, 1.0f / 60);
+        expected = animator;
+    }
+    animator = initial;
+    for (usize tick = 0; tick < uninterrupted.size(); ++tick) {
+        animator.request(Action::Dying);
+        animator.update(1, 1.0f / 60);
+    }
+    CHECK_FALSE(animator.equalLocal(uninterrupted.back()));
+    animator = initial;
+    for (const auto& expected : uninterrupted) {
+        animator.request(Action::Walk);
+        animator.update(1, 1.0f / 60);
+        CHECK(animator.equalLocal(expected));
+    }
+}
+
 TEST_CASE("enemy presentation interpolates without changing attack events and holds across cuts",
           "[enemies][animation][presentation]") {
     TreeInfo tree = gruntTree();
@@ -135,6 +182,128 @@ TEST_CASE("enemy presentation interpolates without changing attack events and ho
     const Mat4 cut = pose.matrices()[0];
     shown.evaluatePresentation(pose, 1);
     CHECK(pose.matrices()[0] == cut);
+}
+
+TEST_CASE("captured enemy updates retain standalone actions and held presentation intervals",
+          "[enemies][animation][presentation][captured-update]") {
+    TreeInfo tree = gruntTree();
+    for (const auto* name : {"THROW1", "THROW2", "THROWF", "ATTTOREADY"}) {
+        TreeSequenceInfo sequence = tree.sequences.front();
+        sequence.name = name;
+        sequence.frames = 3;
+        sequence.repeats = false;
+        tree.sequences.push_back(sequence);
+    }
+    for (usize index = 0; index < tree.sequences.size(); ++index) {
+        auto& sequence = tree.sequences[index];
+        TrackInfo track;
+        track.node = 0;
+        track.flags = TrackInfo::channelBit(3);
+        track.frames = {0, 60};
+        const f32 offset = static_cast<f32>(index) * 10;
+        track.values = {offset, offset + 60};
+        sequence.tracks = {track};
+        sequence.trackOfNode = {0};
+    }
+
+    bool sawStrike = false;
+    bool sawPower = false;
+    bool sawThrow = false;
+    bool sawDead = false;
+    for (const auto action : {Action::Walk, Action::Attack, Action::PowerAttack, Action::Throw,
+                              Action::HitReact1, Action::HitReact2, Action::Dying}) {
+        CAPTURE(action);
+        EnemyAnimator standalone;
+        REQUIRE(standalone.bind(tree));
+        EnemyAnimator previousOwner = standalone;
+        EnemyAnimator captured = standalone;
+        for (s32 tick = 0; tick < 240; ++tick) {
+            CAPTURE(tick);
+            // Enemies accumulate two 60 Hz ticks before stepping their animator.
+            // Stopped/off-screen owners still capture, but do not animate at all.
+            const bool stopped = tick >= 30 && tick < 40;
+            if (stopped) {
+                standalone.holdPresentation();
+                previousOwner.holdPresentation();
+                captured.holdPresentation();
+            } else if ((tick % 2) == 0) {
+                previousOwner.holdPresentation();
+                captured.holdPresentation();
+                for (auto* animator : {&standalone, &previousOwner, &captured}) {
+                    // The native owner asks its mind and applies collision holds
+                    // after capturing, before any animation advances.
+                    animator->request(action);
+                    if ((tick % 34) == 0) {
+                        animator->stopWalking();
+                    }
+                }
+                const bool contact = (tick % 10) == 0;
+                standalone.update(kTicks, kStep, contact);
+                previousOwner.update(kTicks, kStep, contact); // original duplicate capture
+                captured.updateCaptured(kTicks, kStep, contact);
+                sawStrike |= captured.struck();
+                sawPower |= captured.powerStruck();
+                sawThrow |= captured.threw();
+                sawDead |= captured.dead();
+            }
+            CHECK(captured.equalLocal(previousOwner));
+            CHECK(captured.equalLocal(standalone));
+            for (const f32 alpha : {0.0f, 0.37f, 1.0f}) {
+                TreePose expected;
+                TreePose actual;
+                standalone.evaluatePresentation(expected, alpha);
+                captured.evaluatePresentation(actual, alpha);
+                CHECK(actual.equalLocal(expected));
+                CHECK(captured.presentationFrame(alpha) == standalone.presentationFrame(alpha));
+            }
+        }
+    }
+    CHECK(sawStrike);
+    CHECK(sawPower);
+    CHECK(sawThrow);
+    CHECK(sawDead);
+}
+
+TEST_CASE("captured enemy updates preserve unbound early outs and native correction copies",
+          "[enemies][animation][local-rewind][native-equality][captured-update]") {
+    EnemyAnimator standalone;
+    EnemyAnimator captured;
+    standalone.setIdle(0.25f);
+    captured.setIdle(0.25f);
+    captured.holdPresentation();
+    standalone.request(Action::Dying);
+    captured.request(Action::Dying);
+    standalone.update(kTicks, kStep);
+    captured.updateCaptured(kTicks, kStep);
+    REQUIRE(captured.equalLocal(standalone));
+
+    const auto tree = gruntTree();
+    REQUIRE(standalone.bind(tree));
+    REQUIRE(stepsUntil(standalone, Action::Walk, Action::Walk, 60) < 60);
+    const EnemyAnimator saved = standalone;
+    for (usize distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        std::array<EnemyAnimator, 8> expected;
+        standalone = saved;
+        captured = saved;
+        for (usize tick = 0; tick < distance; ++tick) {
+            standalone.request(Action::Attack);
+            standalone.update(kTicks, kStep);
+            expected[tick] = standalone;
+            captured.holdPresentation();
+            captured.request(Action::Dying);
+            captured.updateCaptured(kTicks, kStep);
+        }
+        REQUIRE_FALSE(captured.equalLocal(standalone));
+        captured = saved; // local rewind is a native value copy, not diagnostic restore
+        for (usize tick = 0; tick < distance; ++tick) {
+            CAPTURE(tick);
+            captured.holdPresentation();
+            captured.request(Action::Attack);
+            captured.updateCaptured(kTicks, kStep);
+            CHECK(captured.equalLocal(expected[tick]));
+        }
+    }
 }
 
 TEST_CASE("an enemy walks in, is asked by priority, and lands its blow as the swing ends",

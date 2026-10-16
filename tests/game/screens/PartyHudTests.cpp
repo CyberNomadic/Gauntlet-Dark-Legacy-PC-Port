@@ -425,4 +425,135 @@ TEST_CASE("native inventory labels remain below crystal counts in every player l
         CHECK(device.draws.front().vertices == expected.draws.front().vertices);
     }
 }
+
+TEST_CASE("party HUD rewind restores notices selectors shared sand and external help history",
+          "[party-hud][party-hud-local-rewind]") {
+    const auto root = test::scratchDirectory("party-hud-local-rewind");
+    writeTextFile(root / "messages.json", R"({"messages":[
+        {"name":"TRAPMOVE","lines":["TRAPS MOVE"]},
+        {"name":"LEVELUP","lines":["LEVEL %d"]}]})");
+    MessageTable messages;
+    REQUIRE(messages.load(root / "messages.json"));
+    struct State {
+        test::FakeRenderDevice device;
+        ItemArchive archive;
+        LevelSoundscape audio;
+        f32 total = 0;
+        PartyHud hud;
+        std::array<PlayerRuntime, 2> players;
+    } expected, corrected;
+    for (auto* f : {&expected, &corrected}) {
+        // Failed artwork binding still retains the application's shared total.
+        REQUIRE_FALSE(f->hud.bindHourglass(f->device, f->archive, &f->total));
+        f->hud.help().setTexts(&messages);
+        for (usize i = 0; i < f->players.size(); ++i) {
+            auto& actor = f->players[i].actor;
+            actor.spawn(i == 0 ? 3 : 1, {}, nullptr, Vec3{static_cast<f32>(i), 2, 3}, 0);
+            actor.save().progress().inventory.addPowerup(powerup::kSpeed, 0, 5, 120);
+            actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kStopTime, 0,
+                                                         60);
+        }
+    }
+    const auto tick = [](State& f, s32 t) {
+        const usize index = static_cast<usize>((t / 9) % 2);
+        auto& actor = f.players[index].actor;
+        if (t % 29 == 0) {
+            f.hud.pickups().addCard(actor.player(), "CRYSTAL");
+            f.hud.pickups().showCount(actor.player(), "SM_CRYSTAL_ORA", t, 250);
+            f.hud.showRelics();
+        }
+        if (t % 41 == 0) {
+            f.hud.focusPickup(actor, powerup::kSpecial, powerup::kStopTime);
+        }
+        SelectorInput input;
+        input.up = t % 43 == 0;
+        input.right = t % 11 == 0;
+        input.down = t % 53 == 0;
+        f.hud.stepSelector(actor, input, 1, f.audio);
+        f.hud.pickups().step(1, 1.0f / 30);
+        f.hud.stepHourglass(1.0f / 60, f.players);
+        f.hud.help().update(1);
+        f.hud.stepRelics(1);
+        return f.hud.postHelp(t < 40 ? HelpMessages::kTrapsMove : HelpMessages::kLevelUp, index,
+                              f.players, f.audio, t, Vec3{1, 5, 7});
+    };
+    s32 at = 0;
+    s32 posted = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        const s32 delay = 1 + window % 8;
+        CAPTURE(window, at, delay);
+        PartyHud::LocalSnapshot saved;
+        corrected.hud.saveLocal(saved);
+        const std::array<PlayerSimulation, 2> party{corrected.players[0].simulation(),
+                                                    corrected.players[1].simulation()};
+        REQUIRE_FALSE(expected.hud.restoreLocal(saved));
+        std::vector<bool> events;
+        for (s32 t = at; t < at + delay; ++t) {
+            events.push_back(tick(expected, t));
+            corrected.total = 800;
+            corrected.hud.help().clear();
+            corrected.hud.pickups().clear();
+            corrected.hud.stepRelics(1000);
+            corrected.hud.stepSelector(corrected.players[0].actor,
+                                       SelectorInput{.up = true, .right = true}, 20,
+                                       corrected.audio);
+            corrected.hud.postHelp(HelpMessages::kLevelUp, 0, corrected.players, corrected.audio,
+                                   99, Vec3{9});
+        }
+        const auto created = corrected.device.texturesCreated;
+        const auto uploaded = corrected.device.textureUpdates;
+        REQUIRE(corrected.hud.restoreLocal(saved));
+        for (usize i = 0; i < party.size(); ++i) {
+            corrected.players[i].simulation() = party[i];
+        }
+        for (s32 t = at; t < at + delay; ++t) {
+            const bool event = tick(corrected, t);
+            CHECK(event == events[static_cast<usize>(t - at)]);
+            posted += event ? 1 : 0;
+        }
+        CHECK(corrected.device.texturesCreated == created);
+        CHECK(corrected.device.textureUpdates == uploaded);
+        CHECK(corrected.total == expected.total);
+        CHECK(corrected.hud.help().lines() == expected.hud.help().lines());
+        CHECK(corrected.hud.help().showing() == expected.hud.help().showing());
+        CHECK(corrected.hud.help().id() == expected.hud.help().id());
+        CHECK(corrected.hud.helpAnchor(corrected.players) ==
+              expected.hud.helpAnchor(expected.players));
+        CHECK(corrected.hud.relicsShown() == expected.hud.relicsShown());
+        const auto& a = corrected.hud.pickups().cards();
+        const auto& b = expected.hud.pickups().cards();
+        REQUIRE(a.size() == b.size());
+        for (usize i = 0; i < a.size(); ++i) {
+            CHECK(a[i].player == b[i].player);
+            CHECK(a[i].texture == b[i].texture);
+            CHECK(a[i].y == b[i].y);
+            CHECK(a[i].state == b[i].state);
+            CHECK(a[i].holdTicks == b[i].holdTicks);
+        }
+        for (usize i = 0; i < party.size(); ++i) {
+            const auto& player = corrected.players[i];
+            const auto& reference = expected.players[i];
+            const s32 id = player.actor.player();
+            CHECK(player.actor.save().helpSeen == reference.actor.save().helpSeen);
+            CHECK(player.helpHeard == reference.helpHeard);
+            CHECK(corrected.hud.selector(id).selection() == expected.hud.selector(id).selection());
+            CHECK(corrected.hud.selector(id).state() == expected.hud.selector(id).state());
+            CHECK(corrected.hud.selector(id).slide() == expected.hud.selector(id).slide());
+            CHECK(corrected.hud.selector(id).usageSlot(player.actor.save().progress().inventory) ==
+                  expected.hud.selector(id).usageSlot(reference.actor.save().progress().inventory));
+            CHECK(corrected.hud.pickups().count(id).secondsLeft ==
+                  expected.hud.pickups().count(id).secondsLeft);
+            CHECK(corrected.hud.pickups().count(id).count ==
+                  expected.hud.pickups().count(id).count);
+        }
+        at += delay;
+    }
+    CHECK(posted >= 3);
+    PartyHud::LocalSnapshot stale;
+    corrected.hud.saveLocal(stale);
+    f32 otherTotal = 123;
+    REQUIRE_FALSE(corrected.hud.bindHourglass(corrected.device, corrected.archive, &otherTotal));
+    CHECK_FALSE(corrected.hud.restoreLocal(stale));
+    CHECK(otherTotal == 123);
+}
 } // namespace

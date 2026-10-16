@@ -38,43 +38,43 @@ bool TransitionScreen::load(RenderDevice& device, const std::filesystem::path& u
 void TransitionScreen::release() {
     m_picture = nullptr;
     m_textures.releaseTextures();
-    m_phase = Phase::Off;
-    m_opacity = 0.0f;
+    m_state.phase = Phase::Off;
+    m_state.opacity = 0.0f;
 }
 
 void TransitionScreen::comeUp() {
-    if (m_phase != Phase::Covering) {
-        m_phase = Phase::ComingUp;
+    if (m_state.phase != Phase::Covering) {
+        m_state.phase = Phase::ComingUp;
     }
 }
 
 void TransitionScreen::cover() {
-    m_phase = Phase::Covering;
-    m_opacity = 1.0f;
+    m_state.phase = Phase::Covering;
+    m_state.opacity = 1.0f;
 }
 
 void TransitionScreen::clearAway() {
-    if (m_phase != Phase::Off) {
-        m_phase = Phase::Clearing;
+    if (m_state.phase != Phase::Off) {
+        m_state.phase = Phase::Clearing;
     }
 }
 
 void TransitionScreen::update(f32 seconds) {
-    if (m_phase == Phase::ComingUp) {
-        m_opacity = std::min(m_opacity + seconds / kFadeInSeconds, 1.0f);
-        if (m_opacity >= 1.0f) {
-            m_phase = Phase::Covering;
+    if (m_state.phase == Phase::ComingUp) {
+        m_state.opacity = std::min(m_state.opacity + seconds / kFadeInSeconds, 1.0f);
+        if (m_state.opacity >= 1.0f) {
+            m_state.phase = Phase::Covering;
         }
-    } else if (m_phase == Phase::Clearing) {
-        m_opacity = std::max(m_opacity - seconds / kFadeOutSeconds, 0.0f);
-        if (m_opacity <= 0.0f) {
-            m_phase = Phase::Off;
+    } else if (m_state.phase == Phase::Clearing) {
+        m_state.opacity = std::max(m_state.opacity - seconds / kFadeOutSeconds, 0.0f);
+        if (m_state.opacity <= 0.0f) {
+            m_state.phase = Phase::Off;
         }
     }
 }
 
 void TransitionScreen::draw(Canvas& canvas, f32 width, f32 height, Area area) const {
-    drawOpacity(canvas, width, height, showing() ? m_opacity : 0, area);
+    drawOpacity(canvas, width, height, showing() ? m_state.opacity : 0, area);
 }
 
 void TransitionScreen::drawOpacity(Canvas& canvas, f32 width, f32 height, f32 opacity,

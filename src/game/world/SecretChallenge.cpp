@@ -4,7 +4,15 @@
 #include <array>
 #include <cmath>
 
+#include "engine/io/NativeStateDigest.h"
+
 namespace gdl::game {
+
+void visitNativeState(NativeStateDigest& digest, const SecretChallenge& value) {
+    digest.string("SecretChallenge");
+    const auto& [state, remaining, duration, reward, total, coins] = value;
+    digest.values(state, remaining, duration, reward, total, coins);
+}
 
 s32 SecretChallenge::classFor(s32 levelIndex) {
     // GC towerAwardWorldRunes, table at 0x80124DA0: SECRET realm order, not class order.

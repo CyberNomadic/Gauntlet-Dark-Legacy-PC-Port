@@ -10,8 +10,10 @@
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/world/ItemSupport.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 
@@ -20,7 +22,111 @@ namespace {
 constexpr f32 kTicksPerSecond = 60.0f;
 constexpr usize kTagAt = 4; ///< where an exit's parameters keep its two characters
 
+template <class T>
+constexpr bool kExtraPortalMember = requires {
+    T{ExitPortals::Contact{}, bool{}, bool{}, f32{}, std::optional<Vec3>{}, ItemFigure{},
+      s32{}, s32{}, TreePose{}, AnimationPlayer{}, {}};
+};
+
 } // namespace
+
+void ExitPortals::appendBinding(NativeStateDigest& digest) const {
+    digest.string("ExitPortals.native.1");
+    digest.resource(m_tree);
+    digest.resource(m_collision);
+    digest.value(m_sequences);
+    digest.wide(m_portals.size());
+    for (const auto& portal : m_portals) {
+        digest.resource(portal.archive);
+        digest.values(portal.tag, portal.destination);
+    }
+}
+
+void ExitPortals::appendPortal(NativeStateDigest& digest, const PortalState& state) {
+    static_assert(requires {
+        PortalState{Contact{}, bool{}, bool{}, f32{}, std::optional<Vec3>{}, ItemFigure{},
+                    s32{}, s32{}, TreePose{}, AnimationPlayer{}};
+    });
+    static_assert(!kExtraPortalMember<PortalState>);
+    digest.fields<8>(static_cast<const Contact&>(state));
+    digest.values(state.consumed, state.shut, state.alpha, state.departurePosition, state.icon,
+                  state.action, state.ticksLeft, state.pose, state.player);
+}
+
+void ExitPortals::appendWaiting(NativeStateDigest& digest, const Waiting& state) {
+    const auto& [waiting, visitors] = state;
+    digest.value(waiting);
+    digest.wide(visitors.size());
+    for (const auto& visitor : visitors) {
+        digest.fields<2>(visitor);
+    }
+}
+
+bool ExitPortals::appendNativeDigest(NativeStateDigest& digest) const {
+    appendBinding(digest);
+    appendWaiting(digest, m_wait);
+    for (const auto& portal : m_portals) {
+        appendPortal(digest, portal);
+    }
+    return digest.good();
+}
+
+bool ExitPortals::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [portals, waiting, owner, binding] = saved;
+    appendBinding(digest);
+    appendWaiting(digest, waiting);
+    for (const auto& portal : portals) {
+        appendPortal(digest, portal);
+    }
+    return digest.good();
+}
+
+bool ExitPortals::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& portal : m_portals) {
+        if ((portal.archive && !resources.refreshArchive(*portal.archive)) ||
+            !portal.icon.registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void ExitPortals::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_checkpointBinding;
+    saved.waiting = m_wait;
+    saved.portals.resize(m_portals.size());
+    for (usize i = 0; i < m_portals.size(); ++i) {
+        saved.portals[i] = m_portals[i];
+    }
+}
+
+bool ExitPortals::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_checkpointBinding &&
+           saved.portals.size() == m_portals.size();
+}
+
+bool ExitPortals::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_wait = saved.waiting;
+    for (usize i = 0; i < m_portals.size(); ++i) {
+        auto& portal = m_portals[i];
+        static_cast<PortalState&>(portal) = saved.portals[i];
+        if (!portal.secret && !portal.shut && portal.player.playing()) {
+            portal.model.setFrame(portal.player.sequence(),
+                                  static_cast<s32>(portal.player.frame()));
+        }
+    }
+    ++m_checkpointGeneration;
+    return true;
+}
 
 std::string ExitPortals::tagOf(const ItemInstance& instance) {
     std::string tag;
@@ -154,8 +260,8 @@ void ExitPortals::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
     m_portals.clear();
-    m_waiting.clear();
-    m_visitors.clear();
+    m_wait.waiting.clear();
+    m_wait.visitors.clear();
     m_tree = nullptr;
     m_collision = nullptr;
     m_sequences.fill(-1);
@@ -235,8 +341,8 @@ bool ExitPortals::Contact::touches(const PortalVisitor& visitor, f32 extra) cons
 }
 
 bool ExitPortals::readyToLeave(s32 party) const {
-    const auto visitor = std::ranges::find(m_visitors, party, &VisitorWait::party);
-    return visitor != m_visitors.end() && visitor->ticks >= kIdleTicks;
+    const auto visitor = std::ranges::find(m_wait.visitors, party, &VisitorWait::party);
+    return visitor != m_wait.visitors.end() && visitor->ticks >= kIdleTicks;
 }
 
 void ExitPortals::updateReadiness(s32 ticks, std::span<const PortalVisitor> party, f32 extra) {
@@ -255,8 +361,9 @@ void ExitPortals::updateReadiness(s32 ticks, std::span<const PortalVisitor> part
             })) {
             continue;
         }
-        const auto previous = std::ranges::find(m_visitors, visitor.party, &VisitorWait::party);
-        s32 idle = previous != m_visitors.end() ? previous->ticks : 0;
+        const auto previous =
+            std::ranges::find(m_wait.visitors, visitor.party, &VisitorWait::party);
+        s32 idle = previous != m_wait.visitors.end() ? previous->ticks : 0;
         // DoExit 0x80087538-0x80087594 adds gFrameTicks and compares six.
         // Moving preserves partial credit; leaving every exit clears it.
         if (visitor.still || sharedWait) {
@@ -264,7 +371,7 @@ void ExitPortals::updateReadiness(s32 ticks, std::span<const PortalVisitor> part
         }
         visitors.push_back({visitor.party, idle});
     }
-    m_visitors = std::move(visitors);
+    m_wait.visitors = std::move(visitors);
 }
 
 std::optional<usize> ExitPortals::update(s32 ticks, f32 seconds,
@@ -314,7 +421,7 @@ std::optional<usize> ExitPortals::update(s32 ticks, f32 seconds,
             for (const PortalVisitor& visitor : party) {
                 if (party.size() > 1 && readyToLeave(visitor.party) &&
                     standsOn(portal, visitor, extra)) {
-                    m_waiting.push_back(visitor.party);
+                    m_wait.waiting.push_back(visitor.party);
                 }
             }
             // Some of the party: up to the waiting sequence, and back round from past it.

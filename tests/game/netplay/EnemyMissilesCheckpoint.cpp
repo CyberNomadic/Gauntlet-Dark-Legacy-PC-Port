@@ -11,7 +11,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDEM");
-constexpr u32 kVersion = 1;
+constexpr u32 kVersion = 2;
 
 template <class Output> void word(Output& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
@@ -156,6 +156,7 @@ bool writeCanonical(Output& bytes, const EnemyMissiles::Checkpoint& state, bool 
         word(bytes, static_cast<u32>(burst.players.size()));
         word(bytes, static_cast<u32>(burst.swarm.size()));
         word(bytes, static_cast<u32>(burst.scenery.size()));
+        wide(bytes, burst.instance);
         for (const f32 seconds : burst.blast.stages) {
             real(bytes, seconds);
         }
@@ -183,6 +184,7 @@ bool writeCanonical(Output& bytes, const EnemyMissiles::Checkpoint& state, bool 
                         (hit.ricochet ? 4U : 0U) | (hit.liquid ? 8U : 0U));
         integer(bytes, hit.target);
         integer(bytes, hit.worldObject);
+        wide(bytes, hit.instance);
     }
     for (const auto& hit : state.rockHits) {
         word(bytes, static_cast<u32>(hit.rock));
@@ -296,6 +298,7 @@ EnemyMissilesCheckpoint::decode(std::span<const u8> bytes) {
             const usize players = reader.readU32();
             const usize swarm = reader.readU32();
             const usize scenery = reader.readU32();
+            burst.instance = wide(reader);
             if (flags > 1 || stageCount == 0 || players > 4 ||
                 !count(stageCount, stages, kMaxStages) || !count(players, contacts, kMaxContacts) ||
                 !count(swarm, contacts, kMaxContacts) || !count(scenery, contacts, kMaxContacts) ||
@@ -342,6 +345,7 @@ EnemyMissilesCheckpoint::decode(std::span<const u8> bytes) {
             hit.liquid = (flags & 8U) != 0;
             hit.target = reader.readS32();
             hit.worldObject = reader.readS32();
+            hit.instance = wide(reader);
             state.hits.push_back(hit);
         }
         state.rockHits.reserve(rocks);

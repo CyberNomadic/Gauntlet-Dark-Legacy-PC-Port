@@ -20,7 +20,38 @@ namespace gdl::game {
  * clear before releasing figures, effects, world collision or the weapons archive.
  * Models/missiles retain addresses inside this owner, so it must not move. */
 class PlayerArsenal {
+    struct CastEffect {
+        s32 owner;
+        u32 effect;
+        template <class D> friend void visitNativeState(D& digest, const CastEffect& value) {
+            digest.template fields<2>(value);
+        }
+    };
+    struct Simulation {
+        std::vector<CastEffect> casts;
+        s32 nextPotionKind = 1;
+        template <class D> friend void visitNativeState(D& digest, const Simulation& value) {
+            digest.template fields<2>(value);
+        }
+    };
+
 public:
+    /** Same-stage native values; borrowed resources and output observers stay put.
+     * Shared cast effects and player inventory belong to the enclosing scene. */
+    class LocalSnapshot {
+        friend class PlayerArsenal;
+        Simulation state;
+        PlayerMissiles::LocalSnapshot missiles;
+        const PlayerArsenal* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
     static constexpr f32 kBurstPerPower = PotionEmission::kBurstPerPower;
     struct WeaponSound {
         SoundHandle handle = kNoSound;
@@ -154,6 +185,7 @@ public:
     const PlayerMissiles& missiles() const { return m_missiles; }
 
 private:
+    void appendBindingDigest(NativeStateDigest& digest) const;
     friend class PlayerArsenalCheckpoint;
     friend class CombatRollbackCheckpoint;
     MissileStreak weaponStreak(const PlayerActor& actor, const Texture* texture,
@@ -168,11 +200,8 @@ private:
     void loadPotionModels();
     void presentPotion(const PotionEmission::Burst& burst, bool castSound);
     void healingCast(const PlayerActor& actor, f32 power);
-    struct CastEffect {
-        s32 owner;
-        u32 effect;
-    };
-    std::vector<CastEffect> m_castEffects;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::optional<Resources> m_resources;
     std::array<TreeModel, 5> m_potionModels;
     TreeModel m_superShot;
@@ -180,6 +209,5 @@ private:
     std::array<TreeModel, 2> m_gauntlets;
     PlayerMissiles m_missiles;
     SoundObserver m_soundObserver;
-    s32 m_nextPotionKind = 1;
 };
 } // namespace gdl::game

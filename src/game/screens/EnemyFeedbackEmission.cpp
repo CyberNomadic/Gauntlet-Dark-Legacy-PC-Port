@@ -87,7 +87,7 @@ prepareEffect(ItemArchive* archive, std::string_view tree,
             continue;
         }
         EffectTrees::Prepared prepared{archive,           nativeTree,
-                                       &prototype->model, &prototype->particles,
+                                       prototype->model.get(), &prototype->particles,
                                        resource.textures, resource.lenders};
         prepared.device = prototype->device;
         return prepared;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -41,7 +42,7 @@ public:
     void clear();
     /** Start a scene tick even when another presentation holds the victory visit. */
     void capturePresentation() {
-        m_presentationAdvanced = false;
+        m_sim.presentationAdvanced = false;
         m_textures.advance(0);
     }
     Update update(s32 ticks, f32 seconds, bool goldLeft, const MessageTable& strings,
@@ -51,22 +52,47 @@ public:
     void drawCaption(Canvas& canvas, const TextPainter& text, const MessageTable& strings,
                      f32 width, f32 height) const;
 
-    const BossVictory& state() const { return m_visit; }
+    const BossVictory& state() const { return m_sim.visit; }
     BossCameraSubject wizardSubject() const;
 
 private:
-    BossVictory m_visit;
-    const TreeInfo* m_tree = nullptr;
+    struct Simulation {
+        BossVictory visit;
+        const TreeInfo* tree = nullptr;
+        AnimationPlayer player;
+        TreePose pose;
+        f32 previousFrame = 0;
+        u64 previousGeneration = 0;
+        bool presentationAdvanced = false;
+        Vec3 position{0.0f};
+        f32 yaw = 0.0f;
+        bool sparkled = false;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class BossVictoryPresentation;
+        Simulation state;
+        TextureAnimator::Clock textureClock;
+        const BossVictoryPresentation* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    void appendState(NativeStateDigest& digest, const Simulation& state,
+                     const TextureAnimator::Clock& clock) const;
+    void reset();
+    RenderDevice* m_boundDevice = nullptr;
+    ItemArchive* m_boundItems = nullptr;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     mutable TreeModel m_model;
-    AnimationPlayer m_player;
-    TreePose m_pose;
-    f32 m_previousFrame = 0;
-    u64 m_previousGeneration = 0;
-    bool m_presentationAdvanced = false;
     TextureAnimator m_textures;
-    Vec3 m_position{0.0f};
-    f32 m_yaw = 0.0f;
-    bool m_sparkled = false;
 };
 
 } // namespace gdl::game

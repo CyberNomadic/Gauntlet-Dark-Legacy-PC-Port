@@ -32,31 +32,31 @@ bool ScrollBox::open(RenderDevice& device, std::vector<std::string> pages, f32 s
     if (m_text == nullptr || !m_text->ready() || pages.empty()) {
         return false;
     }
-    m_device = &device;
-    m_pages = std::move(pages);
-    m_prompt = std::move(prompt);
-    m_scale = scale;
-    m_active = true;
-    m_time = 0;
+    m_sim.device = &device;
+    m_sim.pages = std::move(pages);
+    m_sim.prompt = std::move(prompt);
+    m_sim.scale = scale;
+    m_sim.active = true;
+    m_sim.time = 0;
     showPage(0);
     return true;
 }
 
 void ScrollBox::close() {
     m_fire.reset();
-    m_pages.clear();
-    m_layout = {};
-    m_page = 0;
-    m_active = false;
-    m_device = nullptr;
+    m_sim.pages.clear();
+    m_sim.layout = {};
+    m_sim.page = 0;
+    m_sim.active = false;
+    m_sim.device = nullptr;
 }
 
 /** Sizes the scroll to the page: the text plus its margins, no narrower than the prompt and
  * no wider than the screen, centred on the box's point. */
 void ScrollBox::showPage(usize page) {
-    m_page = page;
-    m_layout = layout(m_pages[page], m_scale, m_prompt);
-    m_hold = kHoldTicks;
+    m_sim.page = page;
+    m_sim.layout = layout(m_sim.pages[page], m_sim.scale, m_sim.prompt);
+    m_sim.hold = kHoldTicks;
 }
 
 ScrollBox::PageLayout ScrollBox::layout(std::string_view page, f32 scale,
@@ -83,10 +83,10 @@ ScrollBox::PageLayout ScrollBox::layout(std::string_view page, f32 scale,
 }
 
 void ScrollBox::step(s32 ticks, u32 accepted) {
-    if (!m_active) {
+    if (!m_sim.active) {
         return;
     }
-    m_time += ticks;
+    m_sim.time += ticks;
     if (m_fire.active()) {
         m_fire.step(ticks);
         if (!m_fire.active()) {
@@ -94,15 +94,15 @@ void ScrollBox::step(s32 ticks, u32 accepted) {
         }
         return;
     }
-    if (m_hold > 0) {
-        m_hold -= ticks;
+    if (m_sim.hold > 0) {
+        m_sim.hold -= ticks;
         return;
     }
     if (accepted == 0) {
         return;
     }
-    if (m_page + 1 < m_pages.size()) {
-        showPage(m_page + 1);
+    if (m_sim.page + 1 < m_sim.pages.size()) {
+        showPage(m_sim.page + 1);
     } else {
         finish();
     }
@@ -110,9 +110,9 @@ void ScrollBox::step(s32 ticks, u32 accepted) {
 
 /** After the last page the scroll burns away; without the burn art it simply goes. */
 void ScrollBox::finish() {
-    const bool canBurn = m_device != nullptr && m_art.backdropImage != nullptr &&
+    const bool canBurn = m_sim.device != nullptr && m_art.backdropImage != nullptr &&
                          !m_art.burnMasks.empty() && !m_art.burnRing.empty();
-    if (!canBurn || !m_fire.start(*m_device, m_layout.area, *m_art.backdropImage, m_art.burnMasks,
+    if (!canBurn || !m_fire.start(*m_sim.device, m_sim.layout.area, *m_art.backdropImage, m_art.burnMasks,
                                   m_art.burnRing)) {
         close();
     }
@@ -125,7 +125,7 @@ void ScrollBox::prepare(RenderDevice& device) {
 }
 
 void ScrollBox::draw(Canvas& canvas) const {
-    if (!m_active || m_text == nullptr) {
+    if (!m_sim.active || m_text == nullptr) {
         return;
     }
     // The words are gone before the scroll burns; only the fire is left to see.
@@ -133,11 +133,11 @@ void ScrollBox::draw(Canvas& canvas) const {
         m_fire.draw(canvas);
         return;
     }
-    drawWords(canvas, m_layout, m_scale, m_prompt, promptAlpha());
+    drawWords(canvas, m_sim.layout, m_sim.scale, m_sim.prompt, promptAlpha());
 }
 
 u8 ScrollBox::promptAlpha() const {
-    return pulseOpacity(m_time, kGlowPulseTicks, kGlowHoldTicks);
+    return pulseOpacity(m_sim.time, kGlowPulseTicks, kGlowHoldTicks);
 }
 
 void ScrollBox::drawWords(Canvas& canvas, const PageLayout& page, f32 scale,
@@ -210,6 +210,72 @@ void ScrollBox::drawPage(Canvas& canvas, const PageLayout& page, f32 scale, std:
     if (const auto* ring = m_art.burnRing[std::min(frame, m_art.burnRing.size() - 1)]) {
         canvas.draw(*ring, page.area);
     }
+}
+
+void ScrollBox::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    m_fire.saveLocal(saved.fire);
+}
+
+bool ScrollBox::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding &&
+           m_fire.canRestoreLocal(saved.fire);
+}
+
+bool ScrollBox::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_fire.restoreLocal(saved.fire);
+    return true;
+}
+
+bool ScrollBox::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("scroll-box-native-v1");
+    const auto& [backdrop, backdropImage, glow, button, masks, ring] = m_art;
+    digest.resource(backdrop);
+    digest.resource(backdropImage);
+    digest.resource(glow);
+    digest.resource(button);
+    digest.wide(masks.size());
+    for (const auto* mask : masks) {
+        digest.resource(mask);
+    }
+    digest.wide(ring.size());
+    for (const auto* texture : ring) {
+        digest.resource(texture);
+    }
+    digest.flag(m_text != nullptr);
+    if (m_text) {
+        digest.value(*m_text);
+    }
+    const auto& [device, pages, layout, prompt, scale, page, hold, time, active] =
+        saved ? saved->state : m_sim;
+    // Device presence selects the burn fallback. Its allocation identity and
+    // the preloaded/uploaded frames do not affect the simulation.
+    digest.flag(device != nullptr);
+    digest.values(pages, layout, prompt, scale, page, hold, time, active);
+    if (saved) {
+        m_fire.appendLocalDigest(digest, saved->fire);
+    } else {
+        m_fire.appendNativeDigest(digest);
+    }
+    return digest.good();
+}
+
+bool ScrollBox::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool ScrollBox::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
 }
 
 } // namespace gdl::game

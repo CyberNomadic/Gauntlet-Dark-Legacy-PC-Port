@@ -18,7 +18,13 @@ struct PickupVoice {
 
 /** Owns food-response variation independently of rendering and inventory mutation. */
 class PickupVoices {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PickupVoices& value) {
+        const auto& [random] = value;
+        visitor.value(random);
+    }
 public:
+    bool operator==(const PickupVoices&) const = default;
+
     PickupVoice food(s32 character, std::string_view name, bool poisoned, bool pojo);
     /** The special spoken response is selected on one of four rolls, otherwise eating SFX. */
     static PickupVoice foodChoice(s32 character, std::string_view name, bool poisoned, bool pojo,

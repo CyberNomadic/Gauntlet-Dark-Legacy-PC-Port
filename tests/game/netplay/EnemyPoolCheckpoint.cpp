@@ -186,7 +186,7 @@ template <class IO, class T, class Fn> bool optional(IO& io, T& value, Fn visit)
     }
     if constexpr (IO::kReading) {
         if (present) {
-            value.emplace();
+            value.emplace(typename T::value_type{});
         } else {
             value.reset();
         }
@@ -325,16 +325,18 @@ template <class IO, class T> bool event(IO& io, T& value) {
         return io(value.enemy, value.kind, value.tier, value.player, value.experience, value.killed,
                   value.position);
     } else if constexpr (std::is_same_v<Value, EnemyBurst>) {
-        return io(value.position, value.damage, value.enemy, value.kind, value.silencesYell);
+        return io(value.position, value.damage, value.enemy, value.kind, value.silencesYell,
+                  value.instance);
     } else if constexpr (std::is_same_v<Value, EnemyBirth>) {
         return io(value.position, value.kind, value.tier);
     } else if constexpr (std::is_same_v<Value, EnemyCue>) {
-        return io(value.kind, value.enemyKind, value.position);
+        return io(value.kind, value.enemyKind, value.position, value.enemy, value.instance);
     } else if constexpr (std::is_same_v<Value, EnemyFeedback>) {
         return io(value.kind, value.tier, value.hitCount, value.killed, value.close, value.flags,
-                  value.position, value.yaw, value.halfHeight);
+                  value.position, value.yaw, value.halfHeight, value.enemy, value.instance);
     } else if constexpr (std::is_same_v<Value, DeathEvent>) {
-        return io(value.kind, value.enemy, value.player, value.form, value.amount, value.position);
+        return io(value.kind, value.enemy, value.player, value.form, value.amount, value.position,
+                  value.instance);
     } else if constexpr (std::is_same_v<Value, EnemyDeathShot>) {
         return io(value.enemy, value.kind, value.position, value.direction);
     } else if constexpr (std::is_same_v<Value, EnemyGeneratorEvent>) {
@@ -392,9 +394,9 @@ template <class IO, class T> bool pool(IO& io, T& state) {
             io, values, EnemyPoolCheckpoint::kMaxEvents, minimumBytes,
             [&](auto& value) { return event(io, value); }, &eventsLeft);
     };
-    if (!events(state.blows, 40) || !events(state.losses, 36) || !events(state.bursts, 28) ||
-        !events(state.births, 20) || !events(state.cues, 20) || !events(state.feedback, 44) ||
-        !events(state.deathEvents, 32) || !events(state.deathShots, 32) ||
+    if (!events(state.blows, 40) || !events(state.losses, 36) || !events(state.bursts, 36) ||
+        !events(state.births, 20) || !events(state.cues, 32) || !events(state.feedback, 56) ||
+        !events(state.deathEvents, 40) || !events(state.deathShots, 32) ||
         !events(state.tagged, 4) || !events(state.generatorEvents, 8)) {
         return false;
     }

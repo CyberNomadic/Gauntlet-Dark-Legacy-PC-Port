@@ -1,7 +1,9 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -12,6 +14,7 @@
 
 #include "game/enemies/LegendItems.h"
 #include "game/world/EffectTrees.h"
+#include "game/world/SceneSoundEvents.h"
 
 namespace gdl::game {
 
@@ -30,6 +33,12 @@ public:
     struct Audio {
         std::function<SoundHandle(std::string_view)> play;
         std::function<void(SoundHandle)> stop;
+        /** Resource availability, independent of whether the mixer made a voice. */
+        std::function<bool(std::string_view)> available;
+        /** An engaged result means recorded (even a silent/missing cue). A loop
+         * reserves its native start token; gathering presents its final desire. */
+        std::function<std::optional<SoundCueToken>(std::string_view, bool, s32, s32, u32)> record;
+        std::function<void(std::string_view, s32, s32, SoundCueToken)> desire;
     };
     /** Current pose supplied by the scene, independent of its actor/figure storage. */
     struct Bearer {
@@ -70,12 +79,18 @@ public:
                   const std::optional<Target>& target);
     /** Stops only this presentation's effects and loop, leaving unrelated effects alone. */
     void clear();
-    s32 player() const { return m_player; }
-    s32 kind() const { return m_kind; }
+    /** End this item within the current stage, retaining the local rewind binding. */
+    void reset();
+    /** Gather the still-owned flight sound once after replay's native step. */
+    void gatherAudio() const;
+    /** Presentation-boundary attachment guard; never used to decide gameplay. */
+    bool hasLegacyAudio() const { return m_loop != kNoSound; }
+    s32 player() const { return m_sim.player; }
+    s32 kind() const { return m_sim.kind; }
     /** The player whose ordinary hand weapon is replaced, not an overhead relic's bearer. */
     s32 occupiedHand() const;
     /** Borrowed ice skin for the draw call, not part of the boss's gameplay state. */
-    const Texture* frozenTexture() const { return m_frozenTexture; }
+    const Texture* frozenTexture() const { return m_sim.frozenTexture; }
 
 private:
     void brandish(const Bearer& bearer);
@@ -91,20 +106,42 @@ private:
     EffectTrees& m_effects;
     Assets m_assets;
     Audio m_audio;
-    std::vector<u32> m_ownedEffects;
-    s32 m_player = -1;
-    s32 m_kind = -1;
-    char m_realm = 'A';
-    u32 m_held = 0;
-    u32 m_flying = 0;
-    u32 m_attached = 0;
-    bool m_gestureOwed = false;
-    bool m_released = false;
-    bool m_brandished = false;
-    f32 m_flightLeft = 0.0f;
-    Vec3 m_flightPosition{0}; ///< Plague's SfxSetHitTarget flight tracks the animated eye
+    struct Simulation {
+        std::vector<u32> ownedEffects;
+        s32 player = -1;
+        s32 kind = -1;
+        char realm = 'A';
+        u32 held = 0;
+        u32 flying = 0;
+        u32 attached = 0;
+        bool gestureOwed = false;
+        bool released = false;
+        bool brandished = false;
+        f32 flightLeft = 0.0f;
+        Vec3 flightPosition{0}; ///< Plague's SfxSetHitTarget flight tracks the animated eye
+        const Texture* frozenTexture = nullptr;
+        SoundCueToken flightCue;
+        std::string flightSound;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class LegendPresentation;
+        Simulation state;
+        const LegendPresentation* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    static void appendState(NativeStateDigest& digest, const Simulation& state);
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     SoundHandle m_loop = kNoSound;
-    const Texture* m_frozenTexture = nullptr;
 };
 
 } // namespace gdl::game

@@ -7,8 +7,26 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
+bool SumnerVisit::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("SumnerVisit.native.1");
+    digest.fields<3>(m_sim);
+    return m_menu.appendNativeDigest(digest) && m_hints.appendNativeDigest(digest);
+}
+
+bool SumnerVisit::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, owner, binding, menu, hints] = saved;
+    digest.string("SumnerVisit.native.1");
+    digest.fields<3>(state);
+    return m_menu.appendLocalDigest(digest, menu) && m_hints.appendLocalDigest(digest, hints);
+}
+
 namespace {
 constexpr std::string_view kHintTextFile = "text/hints_e.json";
 constexpr std::string_view kArrowTree = "ICON_ARROW";
@@ -86,6 +104,7 @@ const Texture* SumnerVisit::load(RenderDevice& device, TextureSet& textures, Ite
 }
 
 bool SumnerVisit::loadTexts(const std::filesystem::path& file, const StringTable* strings) {
+    m_localBinding = std::make_shared<const u8>(0);
     if (!m_hints.load(file)) {
         return false;
     }
@@ -96,34 +115,35 @@ bool SumnerVisit::loadTexts(const std::filesystem::path& file, const StringTable
 }
 
 void SumnerVisit::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_menu.close();
     m_menu.setArt(HintMenuArt{});
     m_arrow = ModelSprite{};
-    m_owner = -1;
-    m_greetingLeft = -1.0f;
-    m_hintsGiven = false;
+    m_sim.owner = -1;
+    m_sim.greetingLeft = -1.0f;
+    m_sim.hintsGiven = false;
 }
 
 bool SumnerVisit::visit(f32 seconds, std::optional<s32> visitor, bool sumnerReady,
                         const TextPainter& text, const GameConfig* config,
                         const StringTable* strings) {
-    if (m_greetingLeft > 0.0f) {
-        m_greetingLeft = std::max(m_greetingLeft - seconds, 0.0f);
+    if (m_sim.greetingLeft > 0.0f) {
+        m_sim.greetingLeft = std::max(m_sim.greetingLeft - seconds, 0.0f);
     }
     if (!visitor.has_value()) {
-        m_hintsGiven = false;
+        m_sim.hintsGiven = false;
         return false;
     }
-    if (m_hintsGiven || !m_hints.loaded() || !sumnerReady) {
+    if (m_sim.hintsGiven || !m_hints.loaded() || !sumnerReady) {
         return false;
     }
-    if (m_greetingLeft < 0.0f) {
-        m_greetingLeft = kGreetingSeconds;
+    if (m_sim.greetingLeft < 0.0f) {
+        m_sim.greetingLeft = kGreetingSeconds;
         return true;
     }
-    if (m_greetingLeft == 0.0f) {
-        m_greetingLeft = -1.0f;
-        m_hintsGiven = true;
+    if (m_sim.greetingLeft == 0.0f) {
+        m_sim.greetingLeft = -1.0f;
+        m_sim.hintsGiven = true;
         open(*visitor, text, config, strings);
     }
     return false;
@@ -152,25 +172,25 @@ void SumnerVisit::open(s32 player, const TextPainter& text, const GameConfig* co
     screen.horizontalFov = config->horizontalFovRadians();
     m_hints.beginVisit();
     if (m_menu.open(text, screen, std::move(labels))) {
-        m_owner = player;
+        m_sim.owner = player;
     }
 }
 
 HintMenuEvent SumnerVisit::update(RenderDevice& device, const MenuInput& input, s32 ticks) {
-    return updateNative(device, m_owner, input, ticks, 0, 0);
+    return updateNative(device, m_sim.owner, input, ticks, 0, 0);
 }
 
 u8 SumnerVisit::captureTopic(s32 player, const MenuInput& input) const {
-    return player == m_owner && player >= 0 ? m_menu.captureTopic(input) : 0;
+    return player == m_sim.owner && player >= 0 ? m_menu.captureTopic(input) : 0;
 }
 
 HintMenuEvent SumnerVisit::updateNative(RenderDevice& device, s32 player, const MenuInput& input,
                                         s32 ticks, u8 topic, u8 revision) {
-    const bool owned = player >= 0 && player == m_owner;
+    const bool owned = player >= 0 && player == m_sim.owner;
     const HintMenuEvent event =
         m_menu.update(device, owned ? input : MenuInput{}, ticks, owned ? topic : 0, revision);
     if (!m_menu.active()) {
-        m_owner = -1;
+        m_sim.owner = -1;
     }
     return event;
 }
@@ -186,6 +206,29 @@ void SumnerVisit::answer(s32 topic, const TextPainter& text, const StringTable* 
     HintPage page = m_hints.next(entry->topic, knowledge, strings->get("hints.generalTitle"));
     m_menu.read(text, std::move(page.title), std::move(page.passages), page.scale, page.centred,
                 page.gap);
+}
+
+void SumnerVisit::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    m_menu.saveLocal(saved.menu);
+    m_hints.saveLocal(saved.hints);
+}
+
+bool SumnerVisit::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding &&
+           m_menu.canRestoreLocal(saved.menu) && m_hints.canRestoreLocal(saved.hints);
+}
+
+bool SumnerVisit::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_menu.restoreLocal(saved.menu);
+    m_hints.restoreLocal(saved.hints);
+    return true;
 }
 
 } // namespace gdl::game

@@ -39,6 +39,9 @@ struct HelpMessageSpec {
 
 /** Who a message names, for the messages that begin with the player's colour and class. */
 struct HelpSpeaker {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const HelpSpeaker& value) {
+        visitor.template fields<2>(value);
+    }
     s32 character = -1; ///< the class; none leaves the names out
     bool pojo = false;  ///< carrying Pojo, who is named instead
 };
@@ -178,6 +181,7 @@ public:
     Rect areaFor(const TextPainter& text, const Vec2& head) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const HelpMessages&);
     static Rect areaForLines(const TextPainter& text, const Vec2& head,
                              std::span<const std::string> lines);
     /** The line naming `player`: their colour and class, or Pojo when carried (message.c

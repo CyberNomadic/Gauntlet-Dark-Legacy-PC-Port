@@ -6,6 +6,7 @@
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/InputCommand.h"
 #include "game/netplay/OnlineSession.h"
+#include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/NativePlaySetup.h"
 
 namespace {
@@ -34,6 +35,7 @@ struct Pair {
     Wire a, b;
     HostedRoom hostRoom, guestRoom;
     OnlineSession host, guest;
+    test::RollbackSessionHarness hostInputs, guestInputs;
     Pair(u8 hostPlayers = 1, u8 guestPlayers = 1, std::string version = "test",
          std::string content = std::string(64, 'a'))
         : hostRoom(a, true, hostPlayers, "test", std::string(64, 'a')),
@@ -57,6 +59,8 @@ struct Pair {
         REQUIRE(guest.select(std::vector<CharacterProfile>(guestPlayers, profile)));
     }
     ~Pair() {
+        hostInputs.clear();
+        guestInputs.clear();
         host.leave();
         guest.leave();
         hostRoom.leave();
@@ -132,9 +136,10 @@ TEST_CASE("hosted exact-input packets fit a single provider fragment", "[netplay
         inputs[index].tick = index + 1;
         inputs[index].grant = 1;
     }
-    const auto packet = InputPacket::encode(inputs);
+    RollbackExchange::Message message{1, 1, 1, {}, inputs, 1};
+    const auto packet = RollbackExchange::encode(message);
     REQUIRE(packet);
-    REQUIRE(pair.hostRoom.transport().send(7, *packet, PacketTransport::Delivery::Reliable) ==
+    REQUIRE(pair.hostRoom.transport().send(7, *packet, PacketTransport::Delivery::Unreliable) ==
             PacketTransport::SendResult::Sent);
     REQUIRE(pair.b.incoming.size() == 1);
     const auto& wrapped = pair.b.incoming.front().bytes;
@@ -168,10 +173,22 @@ TEST_CASE("self hosted admission starts existing online gameplay without a room 
         REQUIRE(pair.host.match().prepare(1));
         pair.pump();
         REQUIRE(pair.guest.match().phase() == MatchSession::Phase::Loading);
+        CHECK_FALSE(pair.host.match().loaded());
+        CHECK_FALSE(pair.guest.match().loaded());
+        REQUIRE(pair.hostInputs.bind(pair.host.match()));
+        REQUIRE(pair.guestInputs.bind(pair.guest.match()));
         REQUIRE(pair.host.match().loaded());
         REQUIRE(pair.guest.match().loaded());
         pair.pump();
         REQUIRE(pair.guest.match().phase() == MatchSession::Phase::Running);
+        // The agreed one-tick local buffer is executable for every owned seat;
+        // admission alone is not a substitute for the native input consumer.
+        REQUIRE(pair.hostInputs.advance());
+        REQUIRE(pair.guestInputs.advance());
+        REQUIRE(pair.hostInputs.complete());
+        REQUIRE(pair.guestInputs.complete());
+        CHECK(pair.host.match().nativeConfirmed() == 1);
+        CHECK(pair.guest.match().nativeConfirmed() == 1);
         pair.guest.leave();
         pair.pump();
         REQUIRE(pair.host.phase() == OnlineSession::Phase::Failed);

@@ -3,6 +3,7 @@
 #include <string>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "game/enemies/CombatantKind.h"
@@ -11,12 +12,14 @@ namespace gdl::game {
 struct CombatPush {
     s32 player = -1;
     Vec3 velocity{0};
+    bool operator==(const CombatPush&) const = default;
 };
 /** A golem's uncredited contact damage to a small swarm enemy. */
 struct CombatTrample {
     s32 enemy = -1;
     f32 damage = 0;
     Vec3 position{0};
+    bool operator==(const CombatTrample&) const = default;
 };
 /** Hold updates carry an animated attachment; release carries the authored throw force.
  * Damage is deferred until the thrown player reaches the floor. A zero force cancels. */
@@ -26,18 +29,21 @@ struct CombatGrab {
     std::optional<Mat4> attachment;
     Vec3 velocity{0};
     f32 damage = 0;
+    bool operator==(const CombatGrab&) const = default;
 };
 /** A stage attachment, identified by its encounter-owned obstacle index. */
 struct CombatArenaTarget {
     usize index = 0;
     Mat4 placement{1};
     bool active = false;
+    bool operator==(const CombatArenaTarget&) const = default;
 };
 
 /** A successful eruption makes its obstacle solid after the visual wind-up. */
 struct CombatArenaActivation {
     usize index = 0;
     f32 delay = 0;
+    bool operator==(const CombatArenaActivation&) const = default;
 };
 
 /** A contact a critter has made. Breath contacts repeat while touching; the
@@ -53,6 +59,7 @@ struct CombatBlow {
     Vec3 origin{0.0f};  ///< emitted segment origin, used for breath cover queries
     bool area = false;
     f32 repeatGap = 0.0f; ///< area-effect immunity requested on contact
+    bool operator==(const CombatBlow&) const = default;
 };
 
 /** An effect and a sound a critter has set off: a move's, a strike's or a hit's, where it
@@ -82,6 +89,7 @@ struct CombatCue {
     bool loop = true;
     std::optional<Mat4> placement;       ///< complete world placement for a static arena effect
     std::optional<s32> playerAttachment; ///< player input id, independent of the captor's pose
+    bool operator==(const CombatCue&) const = default;
 };
 
 /** A dying critter's death throwing something out (the coins a boss spews): from where,
@@ -91,6 +99,7 @@ struct CombatSpew {
     Vec3 origin{0.0f, 0.0f, 0.0f};
     Vec3 velocity{0.0f, 0.0f, 0.0f};
     f32 halfAngle = 0.0f; ///< radians
+    bool operator==(const CombatSpew&) const = default;
 };
 
 /** Experience a critter is worth: a share of its value for each hit, to the hitter, and
@@ -104,6 +113,35 @@ struct CombatLoss {
     bool killed = false;
     bool drop = false; ///< animation finished; release the carried item at the final position
     Vec3 position{0.0f, 0.0f, 0.0f};
+    bool operator==(const CombatLoss&) const = default;
 };
+
+inline void visitNativeState(NativeStateDigest& digest, const CombatPush& state) {
+    digest.fields<2>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatTrample& state) {
+    digest.fields<3>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatGrab& state) {
+    digest.fields<5>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatArenaTarget& state) {
+    digest.fields<3>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatArenaActivation& state) {
+    digest.fields<2>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatBlow& state) {
+    digest.fields<10>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatCue& state) {
+    digest.fields<21>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatSpew& state) {
+    digest.fields<4>(state);
+}
+inline void visitNativeState(NativeStateDigest& digest, const CombatLoss& state) {
+    digest.fields<8>(state);
+}
 
 } // namespace gdl::game

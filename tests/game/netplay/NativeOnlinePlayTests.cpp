@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <memory>
 
@@ -8,6 +9,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "engine/audio/AudioMixer.h"
 #include "game/netplay/OnlinePair.h"
 #include "game/screens/AfterLevelScene.h"
 #include "game/screens/NativeOnlinePlay.h"
@@ -19,9 +21,11 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-constexpr std::array<s32, 2> kSeats{1, 3};
+constexpr std::array<u8, 2> kSeats{1, 3};
 constexpr s32 kHostDevice = 2;
 constexpr s32 kGuestDevice = 0;
+constexpr s32 kSecondHostDevice = 3;
+constexpr u8 kSecondHostSeat = 2;
 
 struct NativePair {
     std::filesystem::path root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
@@ -36,6 +40,8 @@ struct NativePair {
     OnlineSession hostSession{hostService, hostWire, true, 1};
     OnlineSession guestSession{guestService, guestWire, false, 1};
     test::FakeRenderDevice hostDevice, guestDevice;
+    AudioMixer hostMixer{48000}, guestMixer{48000};
+    SoundPlayer hostSounds{hostMixer}, guestSounds{guestMixer};
     GameConfig hostConfig, guestConfig;
     StringTable strings;
     LevelCatalog catalog;
@@ -52,7 +58,12 @@ struct NativePair {
     u16 hostUnlocks = 0, guestUnlocks = 0;
 
     explicit NativePair(PlayOptions options = {}, std::string_view beatenLevel = {},
-                        std::optional<bool> autoSave = {}, std::string_view initialLevel = "L1") {
+                        std::optional<bool> autoSave = {}, std::string_view initialLevel = "L1",
+                        bool withAudio = false, u8 inputDelay = 1, bool secondHostPlayer = false)
+        : hostSession(hostService, hostWire, true, static_cast<u8>(secondHostPlayer ? 2 : 1)) {
+        if (secondHostPlayer) {
+            room.members[0].seats.push_back(kSecondHostSeat);
+        }
         hostWire.remote = &guestWire;
         guestWire.remote = &hostWire;
         hostDevice.recordDraws = guestDevice.recordDraws = false;
@@ -66,6 +77,10 @@ struct NativePair {
             autoSave.value_or(!beatenLevel.empty());
         hostContext.config = &hostConfig;
         guestContext.config = &guestConfig;
+        if (withAudio) {
+            hostContext.sounds = &hostSounds;
+            guestContext.sounds = &guestSounds;
+        }
         for (auto* context : {&hostContext, &guestContext}) {
             context->strings = &strings;
             context->levels = &catalog;
@@ -128,7 +143,11 @@ struct NativePair {
             }
             return result;
         };
-        REQUIRE(hostParty.select(hostSession, std::array{selected(kHostDevice, 0, "HOST")}));
+        std::vector<PartyMember> hostMembers{selected(kHostDevice, 0, "HOST")};
+        if (secondHostPlayer) {
+            hostMembers.push_back(selected(kSecondHostDevice, 2, "LOCAL"));
+        }
+        REQUIRE(hostParty.select(hostSession, hostMembers));
         REQUIRE(guestParty.select(guestSession, std::array{selected(kGuestDevice, 1, "GUEST")}));
         // The guest's first poll creates its connection event for the host's
         // next poll. Admission of the room is not yet authenticated readiness.
@@ -142,6 +161,7 @@ struct NativePair {
                                                      std::string(64, 'a'), std::string(64, 'b'),
                                                      "en"};
         auto rules = OnlineSession::NativeRules{};
+        rules.startupDelay = inputDelay;
         const auto initial = catalog.byName(initialLevel);
         REQUIRE(initial);
         const auto scene = NativeOnlinePlay::sceneId(catalog, *initial);
@@ -235,12 +255,20 @@ struct NativePair {
         }
     }
     void settle() {
+        const auto controlsReady = [](const PlayScene& scene) {
+            return std::ranges::all_of(scene.participants(), [](const PlayerRuntime& player) {
+                return player.life != PlayerLife::Standing ||
+                       (player.figure && !player.figure->animator().entering() &&
+                        player.figure->animator().moveScale() > 0);
+            });
+        };
         for (u32 frame = 0; frame < 1200; ++frame) {
             REQUIRE(host.scene());
             REQUIRE(guest.scene());
             if (!host.scene()->spawning() && !guest.scene()->spawning() &&
                 !host.scene()->startCamera().active() && !guest.scene()->startCamera().active() &&
-                !host.scene()->scroll().active() && !guest.scene()->scroll().active()) {
+                !host.scene()->scroll().active() && !guest.scene()->scroll().active() &&
+                controlsReady(*host.scene()) && controlsReady(*guest.scene())) {
                 return;
             }
             SessionInputs::Frame first, second;
@@ -253,12 +281,18 @@ struct NativePair {
     void synchronize() {
         // Identical fixture mutations must occur at the same native boundary,
         // not merely in the same application loop on differently paced peers.
-        for (u32 attempt = 0; attempt < 30 && host.completedTick() != guest.completedTick();
+        // Drain the most recent press edges first: subsequent zero predictions
+        // must not rewind away out-of-band test fixture changes.
+        for (u32 tick = 0; tick < 3; ++tick) {
+            step();
+        }
+        pump();
+        for (u32 attempt = 0; attempt < 30 && host.simulatedTick() != guest.simulatedTick();
              ++attempt) {
-            auto& behind = host.completedTick() < guest.completedTick() ? host : guest;
+            auto& behind = host.simulatedTick() < guest.simulatedTick() ? host : guest;
             REQUIRE(behind.update({}) != NativeOnlinePlay::Phase::Failed);
         }
-        REQUIRE(host.completedTick() == guest.completedTick());
+        REQUIRE(host.simulatedTick() == guest.simulatedTick());
     }
     void placeOnPortal(NativeOnlinePlay& play, const std::string& destination = {},
                        bool secret = false) {
@@ -292,6 +326,31 @@ PlayOptions immediateTower() {
     options.position = Vec3{0, 0, 0};
     return options;
 }
+
+struct NativeCommandTrace {
+    std::array<std::map<u64, InputCommand>, InputCommand::kSeats> seats;
+
+    void observe(std::span<const u8> bytes, u8 origin) {
+        if (!RollbackExchange::recognizes(bytes)) {
+            return;
+        }
+        const auto packet = RollbackExchange::decode(bytes);
+        REQUIRE(packet);
+        if (packet->origin != origin) {
+            return;
+        }
+        for (const auto& command : packet->commands) {
+            auto [found, inserted] = seats[command.seat].try_emplace(command.tick, command);
+            if (!inserted) {
+                // Pausing may discard a physical tap not yet published. It
+                // must never rewrite a command already carried by the wire.
+                CHECK(InputPacket::encode(std::array{found->second}) ==
+                      InputPacket::encode(std::array{command}));
+            }
+        }
+    }
+    u64 latest(u8 seat) const { return seats[seat].empty() ? 0 : seats[seat].rbegin()->first; }
+};
 
 TEST_CASE("native online bootstrap opens canonical sparse fresh parties on both peers",
           "[native-online-play][native-bootstrap][assets]") {
@@ -330,15 +389,15 @@ TEST_CASE("native online bootstrap opens canonical sparse fresh parties on both 
     u32 compared = 0;
     const auto observe = [&](NativeOnlinePlay& play, SimulationObserver& observer,
                              std::map<u64, SimulationObservation>& samples) {
-        if (play.completedTick() > 0 && play.completedTick() % 30 == 0 &&
-            !samples.contains(play.completedTick())) {
+        if (play.simulatedTick() > 0 && play.simulatedTick() % 30 == 0 &&
+            !samples.contains(play.simulatedTick())) {
             auto state = observer.observe();
             REQUIRE_FALSE(state.complete); // Partial diagnostics never certify the whole world.
             for (const auto& subsystem : state.subsystems) {
                 INFO(subsystem.name << ": " << subsystem.unavailable);
                 REQUIRE(subsystem.digest);
             }
-            samples.emplace(play.completedTick(), std::move(state));
+            samples.emplace(play.simulatedTick(), std::move(state));
         }
     };
     for (u32 frame = 0; frame < 240; ++frame) {
@@ -366,7 +425,7 @@ TEST_CASE("native online local pause fences only the owned device while agreed t
     REQUIRE_FALSE(pair->host.pause(kGuestDevice));
     REQUIRE(pair->host.pause(kHostDevice));
     CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Paused);
-    const auto before = pair->host.completedTick();
+    const auto before = pair->host.simulatedTick();
     u32 checked = 0;
     for (u32 frame = 0; frame < 50; ++frame) {
         SessionInputs::Frame first, second;
@@ -375,23 +434,333 @@ TEST_CASE("native online local pause fences only the owned device while agreed t
         second[kGuestDevice].move = {{-1, 0}, 0.5f};
         pair->step(first, second);
         if (frame > 10) {
-            for (const auto* session : {&pair->hostSession, &pair->guestSession}) {
-                const auto& stopped = session->match().resolvedInput(1);
-                const auto& moving = session->match().resolvedInput(3);
+            for (const auto* play : {&pair->host, &pair->guest}) {
+                const auto* stopped = play->scene()->actor(kSeats[0]);
+                const auto* moving = play->scene()->actor(kSeats[1]);
                 REQUIRE(stopped);
                 REQUIRE(moving);
-                CHECK_FALSE(stopped->held(CommandHeld::Attack));
-                CHECK(stopped->magnitude == 0);
-                CHECK(moving->magnitude > 0);
+                CHECK_FALSE(stopped->moving());
+                CHECK(moving->moving());
                 ++checked;
             }
         }
     }
     CHECK(checked > 0);
-    CHECK(pair->host.completedTick() >= before + 40);
+    CHECK(pair->host.simulatedTick() >= before + 40);
     REQUIRE(pair->host.resume(kHostDevice));
     CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
     CHECK_FALSE(pair->host.resume(kHostDevice));
+}
+
+TEST_CASE("shipping native online predicts local movement before delayed peer inputs arrive",
+          "[native-online-play][native-rollback-online][native-latency][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", true);
+    pair->settle();
+    pair->synchronize();
+    const auto epoch = pair->hostSession.match().context().epoch;
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        for (const auto& player : play->scene()->participants()) {
+            REQUIRE(player.figure);
+            REQUIRE_FALSE(player.figure->animator().entering());
+            REQUIRE(player.figure->animator().moveScale() > 0);
+        }
+    }
+    REQUIRE(pair->host.scene()->recordedAudioEpoch() == epoch);
+    REQUIRE(pair->guest.scene()->recordedAudioEpoch() == epoch);
+    pair->hostWire.latency = pair->guestWire.latency = 4;
+    usize hostAudio = 0;
+    usize guestAudio = 0;
+    SoundPlayer::Capture captureHost(&pair->hostSounds, [&](const auto&) { ++hostAudio; });
+    SoundPlayer::Capture captureGuest(&pair->guestSounds, [&](const auto&) { ++guestAudio; });
+    std::optional<u32> locallyMoving;
+    std::optional<u32> remotelyMoving;
+    u64 largestSpeculation = 0;
+    for (u32 frame = 0; frame < 120; ++frame) {
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
+        if (frame >= 12) {
+            first[kHostDevice].move = {{frame % 24 < 12 ? 1.0f : -1.0f, 0}, 0.5f};
+        }
+        second[kGuestDevice].move = {{frame % 20 < 10 ? -1.0f : 1.0f, 0}, 0.5f};
+        if (frame >= 20) {
+            first[kHostDevice].attack = second[kGuestDevice].attack = frame % 20 < 10;
+            first[kHostDevice].attackPressed = second[kGuestDevice].attackPressed = frame % 20 == 0;
+        }
+        pair->step(first, second);
+        if (!locallyMoving && pair->guest.scene()->actor(kSeats[1])->moving()) {
+            locallyMoving = frame;
+        }
+        if (!remotelyMoving && pair->host.scene()->actor(kSeats[1])->moving()) {
+            remotelyMoving = frame;
+        }
+        for (const auto* play : {&pair->host, &pair->guest}) {
+            REQUIRE(play->confirmedTick() <= play->simulatedTick());
+            const u64 speculative = play->simulatedTick() - play->confirmedTick();
+            largestSpeculation = std::max(largestSpeculation, speculative);
+            CHECK(speculative <= RollbackInputs::kPredictionTicks);
+            CHECK(play->rollbackStatistics().maxReplay <= RollbackInputs::kPredictionTicks);
+        }
+        // Audio device work remains outside replay; real captured calls must
+        // reach both outputs without requiring either peer to render.
+        std::array<f32, 1600> mixed{};
+        pair->hostMixer.mix(mixed);
+        pair->guestMixer.mix(mixed);
+        pair->hostSounds.update();
+        pair->guestSounds.update();
+    }
+    REQUIRE(locallyMoving);
+    REQUIRE(remotelyMoving);
+    INFO("local motion application frame=" << *locallyMoving
+                                           << " remote presentation frame=" << *remotelyMoving);
+    CHECK(*locallyMoving <= pair->guestSession.match().context().inputLead + 1U);
+    CHECK(*locallyMoving < *remotelyMoving);
+    CHECK(largestSpeculation >= 2);
+    CHECK(pair->host.rollbackStatistics().corrections > 0);
+    CHECK(pair->guest.rollbackStatistics().corrections > 0);
+    CHECK(hostAudio > 0);
+    CHECK(guestAudio > 0);
+    CHECK(pair->hostSaves == 0);
+    CHECK(pair->guestSaves == 0);
+    CHECK(pair->hostAwards == 0);
+    CHECK(pair->guestAwards == 0);
+    pair->hostWire.latency = pair->guestWire.latency = 0;
+    for (u32 frame = 0; frame < 60; ++frame) {
+        pair->step();
+    }
+    REQUIRE(pair->hostSession.match().nativeAgreement());
+    REQUIRE(pair->guestSession.match().nativeAgreement());
+    CHECK_FALSE(pair->hostSession.match().nativeAgreement()->failed());
+    CHECK_FALSE(pair->guestSession.match().nativeAgreement()->failed());
+    CHECK(pair->hostSession.match().nativeAgreement()->agreedTick() >= 120);
+    CHECK(pair->guestSession.match().nativeAgreement()->agreedTick() >= 120);
+}
+
+TEST_CASE("shipping correction admits current local input without an extra application update",
+          "[native-online-play][native-pending-input][native-latency][assets]") {
+    const u8 delay = GENERATE(u8{0}, u8{1});
+    NativeCommandTrace published;
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", false, delay);
+    pair->settle();
+    pair->synchronize();
+    pair->guestWire.beforeSend = [&](std::span<const u8> bytes, auto) {
+        published.observe(bytes, pair->guestSession.match().localPeer());
+        return PeerTransport::SendResult::Sent;
+    };
+    pair->hostWire.latency = pair->guestWire.latency = 3;
+    u32 checkedCorrections = 0;
+    for (u32 frame = 0; frame < 72; ++frame) {
+        SessionInputs::Frame first, second;
+        first[kHostDevice].move = {{frame % 4 < 2 ? 1.0f : -1.0f, 0}, 0.5f};
+        second[kGuestDevice].move = {{frame % 2 == 0 ? -1.0f : 1.0f, 0}, 0.5f};
+        const auto latest = published.latest(kSeats[1]);
+        const auto nextSample = pair->guest.simulatedTick() + 1 + delay;
+        const auto before = pair->guest.rollbackStatistics().corrections;
+        // NativeOnlinePlay samples before advance(), unlike a harness that
+        // performs a separate correction pre-pass before polling controls.
+        pair->step(first, second);
+        if (pair->guest.rollbackStatistics().corrections != before && nextSample > latest) {
+            CAPTURE(delay, frame, nextSample, latest);
+            const auto& seat = published.seats[kSeats[1]];
+            REQUIRE(seat.contains(nextSample));
+            CHECK(seat.at(nextSample).direction == second[kGuestDevice].move.direction);
+            CHECK(seat.at(nextSample).magnitude == second[kGuestDevice].move.magnitude);
+            if (delay == 0) {
+                CHECK(pair->guest.simulatedTick() >= nextSample);
+            }
+            ++checkedCorrections;
+        }
+    }
+    CHECK(checkedCorrections >= 8);
+    pair->hostWire.latency = pair->guestWire.latency = 0;
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step();
+    }
+    REQUIRE(pair->guestSession.match().nativeAgreement());
+    CHECK_FALSE(pair->guestSession.match().nativeAgreement()->failed());
+    pair->guestWire.beforeSend = {};
+}
+
+TEST_CASE("shipping renders predicted local movement with only the native interpolation interval",
+          "[native-online-play][native-latency][native-visible-input][assets]") {
+    const u8 delay = GENERATE(u8{0}, u8{1});
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", false, delay);
+    pair->settle();
+    pair->synchronize();
+    pair->hostWire.latency = pair->guestWire.latency = 4;
+    const auto* scene = pair->guest.scene();
+    REQUIRE(scene);
+    const auto local = std::ranges::find(scene->participants(), kSeats[1],
+                                        [](const PlayerRuntime& player) {
+                                            return player.actor.player();
+                                        });
+    REQUIRE(local != scene->participants().end());
+    REQUIRE(local->figure);
+    REQUIRE_FALSE(local->transport.active());
+    REQUIRE_FALSE(local->capture.body());
+    const Vec3 initial = local->actor.position();
+    const Vec3 remoteInitial = pair->host.scene()->actor(kSeats[1])->position();
+    WorldCamera previousCamera;
+    std::optional<u32> movementFrame;
+    for (u32 frame = 0; frame < 3; ++frame) {
+        SessionInputs::Frame input;
+        input[kGuestDevice].move = {{-1, 0}, 0.5f};
+        previousCamera = scene->viewCamera();
+        pair->step({}, input);
+        if (local->actor.position() != initial) {
+            movementFrame = frame;
+            break;
+        }
+    }
+    REQUIRE(movementFrame);
+    CHECK(*movementFrame <= delay + 1U);
+    // The display under test belongs to the predicting guest. The host has not
+    // received this movement yet, so a host echo cannot satisfy the assertions.
+    CHECK(pair->host.scene()->actor(kSeats[1])->position() == remoteInitial);
+    CHECK(pair->guest.simulatedTick() > pair->guest.confirmedTick());
+    REQUIRE(local->previous.continuous);
+    REQUIRE(local->previous.position == initial);
+    REQUIRE(local->figure->animationRevision() != local->previous.animationRevision);
+    const Vec3 current = local->actor.position();
+    const auto currentCamera = scene->viewCamera();
+    const auto nativeTick = pair->guest.simulatedTick();
+    const auto corrections = pair->guest.rollbackStatistics().corrections;
+    const auto worn = PowerupEffects::of(local->actor.save().progress().inventory);
+    test::FakeRenderDevice reference;
+    pair->guestDevice.recordDraws = true;
+
+    const auto samePositions = [](const test::RecordedDraw& a, const test::RecordedDraw& b) {
+        return a.texture == b.texture && a.vertices.size() == b.vertices.size() &&
+               std::ranges::equal(a.vertices, b.vertices, {},
+                                   &ImmediateVertex::position, &ImmediateVertex::position);
+    };
+    for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
+        CAPTURE(delay, *movementFrame, alpha);
+        pair->guestDevice.draws.clear();
+        pair->draw(pair->guest, pair->guestDevice, alpha);
+        REQUIRE_FALSE(pair->guestDevice.draws.empty());
+
+        // Derive the expected body directly from the two actual native states,
+        // not from PartyFigures::presentationBody (the code under test). Mesh
+        // vertices are emitted in world space; RecordedDraw::transform is the
+        // camera's clip matrix, not the player's body transform.
+        const Vec3 position = glm::mix(initial, current, alpha);
+        const f32 yaw = local->previous.yaw +
+                        std::remainder(local->actor.yaw() - local->previous.yaw, kTwoPi) * alpha;
+        const Mat4 base = glm::rotate(glm::translate(Mat4{1}, position), yaw, Vec3{0, 1, 0});
+        const Mat4 body = PlayerFigure::bodyPlacement(base, local->actor.save(), worn);
+        const auto camera = currentCamera.interpolate(previousCamera, alpha);
+        const auto frame = CameraFrame::of(camera);
+        const Mat4 clip = camera.clipTransform(pair->guestConfig.horizontalFovRadians(), 1280,
+                                               720, Mat4{1});
+        reference.draws.clear();
+        local->figure->draw(reference, clip, body, scene->world()->lighting(), 1,
+                            local->move.weaponHidden(), &frame, alpha);
+        REQUIRE_FALSE(reference.draws.empty());
+        for (const auto& expected : reference.draws) {
+            REQUIRE_FALSE(expected.vertices.empty());
+            const auto actual = std::ranges::find_if(pair->guestDevice.draws, [&](const auto& draw) {
+                return samePositions(draw, expected);
+            });
+            REQUIRE(actual != pair->guestDevice.draws.end());
+            CHECK(actual->transform == clip);
+        }
+
+        // Hold the same animation pose and yaw at the old position. At alpha
+        // .5/1 the actual emitted costume must already have left it, without
+        // another update or a packet arriving. Alpha0 intentionally retains it.
+        const auto predicted = reference.draws;
+        const Mat4 oldBase = glm::rotate(glm::translate(Mat4{1}, initial), yaw, Vec3{0, 1, 0});
+        reference.draws.clear();
+        local->figure->draw(reference, clip,
+                            PlayerFigure::bodyPlacement(oldBase, local->actor.save(), worn),
+                            scene->world()->lighting(), 1, local->move.weaponHidden(), &frame,
+                            alpha);
+        REQUIRE(reference.draws.size() == predicted.size());
+        CHECK(samePositions(reference.draws.front(), predicted.front()) == (alpha == 0));
+        CHECK(pair->guest.simulatedTick() == nativeTick);
+        CHECK(pair->guest.rollbackStatistics().corrections == corrections);
+        CHECK(pair->host.scene()->actor(kSeats[1])->position() == remoteInitial);
+    }
+}
+
+TEST_CASE("native pause discards only one local device's unpublished stalled tap",
+          "[native-online-play][native-pending-input][native-pause][assets]") {
+    const u8 delay = GENERATE(u8{0}, u8{1});
+    NativeCommandTrace published;
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", false, delay, true);
+    pair->settle();
+    pair->synchronize();
+    REQUIRE(pair->hostParty.device(pair->hostSession, kSeats[0]) == kHostDevice);
+    REQUIRE(pair->hostParty.device(pair->hostSession, kSecondHostSeat) == kSecondHostDevice);
+    pair->hostWire.beforeSend = [&](std::span<const u8> bytes, auto) {
+        published.observe(bytes, pair->hostSession.match().localPeer());
+        return PeerTransport::SendResult::Sent;
+    };
+    bool blocked = true;
+    pair->guestWire.beforeSend = [&](std::span<const u8> bytes, auto) {
+        return blocked && RollbackExchange::recognizes(bytes) ? PeerTransport::SendResult::Congested
+                                                             : PeerTransport::SendResult::Sent;
+    };
+    u32 held = 0;
+    for (u32 frame = 0; frame < 40 && held < 3; ++frame) {
+        const auto before = pair->host.simulatedTick();
+        SessionInputs::Frame second;
+        second[kGuestDevice].move = {{-1, 0}, 0.5f};
+        pair->step({}, second);
+        held = pair->host.simulatedTick() == before ? held + 1 : 0;
+    }
+    REQUIRE(held == 3);
+    const auto stalled = pair->host.simulatedTick();
+    const auto lastPublished = published.latest(kSeats[0]);
+    REQUIRE(lastPublished > 0);
+    REQUIRE(published.latest(kSecondHostSeat) == lastPublished);
+    SessionInputs::Frame taps;
+    for (const auto device : {kHostDevice, kSecondHostDevice}) {
+        taps[device].attack = true;
+        taps[device].attackPressed = true;
+    }
+    pair->step(taps);
+    REQUIRE(pair->host.simulatedTick() == stalled);
+    REQUIRE(published.latest(kSeats[0]) == lastPublished);
+    REQUIRE(pair->host.pause(kHostDevice));
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Paused);
+    // The application keeps polling while the menu is open. Neutral devices
+    // must not accidentally reintroduce a consumed tap from the pending queue.
+    pair->step();
+    pair->step();
+    blocked = false;
+    for (u32 frame = 0; frame < 40 && published.latest(kSeats[0]) == lastPublished; ++frame) {
+        pair->step();
+    }
+    const u64 firstAfterStall = lastPublished + 1;
+    REQUIRE(published.seats[kSeats[0]].contains(firstAfterStall));
+    REQUIRE(published.seats[kSecondHostSeat].contains(firstAfterStall));
+    const auto& paused = published.seats[kSeats[0]].at(firstAfterStall);
+    const auto& continuing = published.seats[kSecondHostSeat].at(firstAfterStall);
+    CHECK(paused.heldButtons == 0);
+    CHECK(paused.pressedButtons == 0);
+    CHECK(paused.direction == Vec2{0});
+    CHECK(paused.magnitude == 0);
+    CHECK_FALSE(paused.aimDirection);
+    CHECK(paused.hintTopic == 0);
+    CHECK(paused.hintRevision == 0);
+    CHECK(continuing.held(CommandHeld::Attack));
+    CHECK(continuing.pressed(CommandPress::Attack));
+    CHECK(pair->host.rollbackStatistics().corrections > 0);
+    REQUIRE(pair->host.resume(kHostDevice));
+    for (u32 frame = 0; frame < 24; ++frame) {
+        pair->step();
+    }
+    for (const auto& [tick, command] : published.seats[kSeats[0]]) {
+        if (tick > lastPublished) {
+            CHECK_FALSE(command.pressed(CommandPress::Attack));
+        }
+    }
+    CHECK(pair->host.simulatedTick() > stalled);
+    CHECK(pair->hostSaves == 0);
+    CHECK(pair->guestSaves == 0);
+    pair->hostWire.beforeSend = {};
+    pair->guestWire.beforeSend = {};
 }
 
 TEST_CASE("native online travel drains the terminal tick and retains the native shop party",
@@ -419,23 +788,33 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
             REQUIRE(next.transition == MatchTransition::Travel);
             REQUIRE(next.sourceEpoch == epoch);
             sourceTick = next.sourceTick;
-            CHECK(sourceTick == pair->host.completedTick());
-            const auto before = pair->guest.completedTick();
+            CHECK(sourceTick == pair->host.simulatedTick());
+            CHECK(sourceTick == pair->host.confirmedTick());
+            const auto before = pair->guest.simulatedTick();
+            const auto confirmedBefore = pair->guest.confirmedTick();
             // Poll control and source input without stepping the scene. The
             // authenticated Prepare must not replace an unexecuted old world.
             pair->guestSession.update(0);
-            REQUIRE(pair->guestSession.match().nativeDraining());
-            CHECK(pair->guestSession.match().context().epoch == epoch);
-            CHECK(pair->guest.completedTick() == before);
+            if (pair->guestSession.match().context().epoch == epoch) {
+                REQUIRE(pair->guestSession.match().nativeDraining());
+            } else {
+                // Prediction may have reached and confirmed the same terminal
+                // boundary first. Only that completed boundary permits the
+                // Prepare to adopt without another native step.
+                CHECK(confirmedBefore == sourceTick);
+                CHECK(pair->guest.outcome() == NativeRollbackDriver::Status::Travel);
+                CHECK(pair->guestSession.match().context().sourceTick == sourceTick);
+            }
+            CHECK(pair->guest.simulatedTick() == before);
             CHECK(pair->guest.scene()->world()->ref().isTower());
-            CHECK(before < sourceTick);
+            CHECK(before <= sourceTick);
             observedDrain = true;
         }
         REQUIRE(pair->guest.update({}) != NativeOnlinePlay::Phase::Failed);
     }
     REQUIRE(observedDrain);
     REQUIRE(sourceTick > 0);
-    REQUIRE(pair->guest.completedTick() == sourceTick);
+    REQUIRE(pair->guest.simulatedTick() == sourceTick);
     REQUIRE(pair->guestSession.match().context().sourceTick == sourceTick);
     REQUIRE(pair->host.pause(kHostDevice));
     CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Loading);
@@ -874,18 +1253,105 @@ TEST_CASE("native GameOver finishes locally while terminal input relay remains l
     }
     REQUIRE(pair->host.phase() == NativeOnlinePlay::Phase::Finished);
     REQUIRE(pair->guest.phase() == NativeOnlinePlay::Phase::Finished);
-    CHECK(pair->host.outcome() == NativePlayDriver::Result::GameOver);
-    CHECK(pair->guest.outcome() == NativePlayDriver::Result::GameOver);
+    CHECK(pair->host.outcome() == NativeRollbackDriver::Status::GameOver);
+    CHECK(pair->guest.outcome() == NativeRollbackDriver::Status::GameOver);
     CHECK_FALSE(pair->host.hasCompletedProgress());
     CHECK_FALSE(pair->host.pause(kHostDevice));
-    const auto hostTick = pair->host.completedTick();
-    const auto guestTick = pair->guest.completedTick();
+    const auto hostTick = pair->host.simulatedTick();
+    const auto guestTick = pair->guest.simulatedTick();
     for (u32 frame = 0; frame < 10; ++frame) {
         pair->step();
     }
-    CHECK(pair->host.completedTick() == hostTick);
-    CHECK(pair->guest.completedTick() == guestTick);
+    CHECK(pair->host.simulatedTick() == hostTick);
+    CHECK(pair->guest.simulatedTick() == guestTick);
     CHECK(pair->hostSession.phase() == OnlineSession::Phase::Active);
     CHECK(pair->guestSession.phase() == OnlineSession::Phase::Active);
+}
+
+TEST_CASE("native terminal departure waits for exact off-cadence state agreement",
+          "[native-online-play][native-terminal-barrier][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower());
+    pair->settle();
+    pair->synchronize();
+    // Leave enough distance from the periodic hash boundary to exercise the
+    // independent exact-terminal report, not its periodic neighbour.
+    while (pair->host.simulatedTick() % MatchSession::kNativeAgreementPeriod > 20) {
+        pair->step();
+    }
+    pair->synchronize();
+    const auto epoch = pair->hostSession.match().context().epoch;
+    const auto* hostScene = pair->host.scene();
+    const auto* guestScene = pair->guest.scene();
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        auto& scene = *const_cast<PlayScene*>(play->scene());
+        scene.startGameOver();
+        const_cast<GameOver&>(scene.gameOver()).step(GameOver::kDurationTicks - 2);
+    }
+    usize blockedReports = 0;
+    pair->guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
+        if (NativeAgreement::recognizesTerminal(bytes)) {
+            ++blockedReports;
+            return PacketTransport::SendResult::Congested;
+        }
+        return PacketTransport::SendResult::Sent;
+    };
+    for (u32 frame = 0; frame < 40; ++frame) {
+        pair->step();
+    }
+    REQUIRE(blockedReports > 0);
+    const auto tick = pair->host.confirmedTick();
+    REQUIRE(tick > 0);
+    REQUIRE(tick % MatchSession::kNativeAgreementPeriod != 0);
+    CHECK(pair->guest.confirmedTick() == tick);
+    CHECK(pair->host.simulatedTick() == tick);
+    CHECK(pair->guest.simulatedTick() == tick);
+    CHECK_FALSE(pair->hostSession.match().nativeTerminalAgreed(epoch, tick));
+    CHECK_FALSE(pair->guestSession.match().nativeTerminalAgreed(epoch, tick));
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->guest.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->host.scene() == hostScene);
+    CHECK(pair->guest.scene() == guestScene);
+    CHECK(pair->hostSaves == 0);
+    CHECK(pair->guestSaves == 0);
+    CHECK(pair->hostAwards == 0);
+    CHECK(pair->guestAwards == 0);
+
+    pair->guestWire.beforeSend = {};
+    for (u32 frame = 0; frame < 30 && (pair->host.phase() != NativeOnlinePlay::Phase::Finished ||
+                                        pair->guest.phase() != NativeOnlinePlay::Phase::Finished);
+         ++frame) {
+        pair->step();
+    }
+    REQUIRE(pair->host.phase() == NativeOnlinePlay::Phase::Finished);
+    REQUIRE(pair->guest.phase() == NativeOnlinePlay::Phase::Finished);
+    CHECK(pair->hostSession.match().nativeTerminalAgreed(epoch, tick));
+    CHECK(pair->guestSession.match().nativeTerminalAgreed(epoch, tick));
+    CHECK(pair->host.simulatedTick() == tick);
+    CHECK(pair->guest.simulatedTick() == tick);
+}
+
+TEST_CASE("native online failures retain the session cause without saving speculative state",
+          "[native-online-play][native-failure-detail][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower());
+    pair->settle();
+    pair->synchronize();
+    REQUIRE(pair->host.failureDetail().empty());
+    const auto completed = pair->host.simulatedTick();
+    pair->hostService.closed = true;
+    REQUIRE(pair->host.update({}) == NativeOnlinePlay::Phase::Failed);
+    REQUIRE_FALSE(pair->hostSession.failureDetail().empty());
+    CHECK(pair->host.failureDetail() == pair->hostSession.failureDetail());
+    CHECK(pair->host.failureDetail() == "Room closed");
+    const auto detail = std::string(pair->host.failureDetail());
+    for (u32 tick = 0; tick < 20; ++tick) {
+        CHECK(pair->host.update({}) == NativeOnlinePlay::Phase::Failed);
+        CHECK(pair->host.failureDetail() == detail);
+    }
+    CHECK(pair->host.simulatedTick() == completed);
+    CHECK(pair->hostSaves == 0);
+    CHECK(pair->hostAwards == 0);
+    pair->host.close();
+    CHECK(pair->host.failureDetail().empty());
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Closed);
 }
 } // namespace

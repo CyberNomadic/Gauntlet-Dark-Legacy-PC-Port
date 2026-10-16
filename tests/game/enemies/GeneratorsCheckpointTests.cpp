@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <limits>
@@ -12,6 +13,7 @@
 
 #include "engine/io/File.h"
 
+#include "../world/ProjectileCheckpointFixture.h"
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/enemies/Generators.h"
@@ -130,6 +132,257 @@ TEST_CASE("generator and enemy pools rewind quotas timers presence textures and 
         CHECK(pool.enemies.checkpoint() == opponents[static_cast<usize>(tick)]);
     }
     CHECK(pool.device.texturesCreated == uploads);
+}
+
+TEST_CASE("native generator history rewinds broods quotas presence and linked enemy output",
+          "[local-rewind][generator-local-rewind][native-equality][assets]") {
+    Pool pool;
+    struct Frame {
+        Generators::LocalSnapshot generators;
+        Enemies::LocalSnapshot enemies;
+    };
+    std::array<Frame, 16> history;
+    const auto step = [&](s32 tick, bool wrong) {
+        pool.players[0].position = {wrong ? -80.0f : static_cast<f32>(tick % 13), 0, 25};
+        pool.generators.setPlayerCount(wrong ? 4 : 1 + (tick / 23) % 2);
+        pool.generators.setView(std::nullopt);
+        if (tick % 43 == 0) {
+            (void)pool.generators.strike((tick / 43) % 3, wrong ? 500.0f : 2.0f, 0);
+        }
+        if (tick % 29 == 0 && pool.enemies.count() > 0) {
+            EnemyHit hit;
+            hit.damage = wrong ? 5.0f : 1000.0f;
+            hit.player = 0;
+            (void)pool.enemies.hurt(0, hit);
+        }
+        const bool stopped = wrong || tick % 31 < 6;
+        pool.generators.update(1, pool.enemies, pool.players, {}, stopped);
+        pool.enemies.update(1, kStep, pool.players, pool.generators.enemyObstacles(), nullptr, 1,
+                            stopped);
+    };
+    s32 tick = 0;
+    for (usize window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        pool.generators.saveLocal(saved.generators);
+        REQUIRE(pool.enemies.saveLocal(saved.enemies));
+        const s32 distance = static_cast<s32>(window % 8 + 1);
+        std::vector<Generators::Checkpoint> generators;
+        std::vector<Enemies::Checkpoint> enemies;
+        std::vector<Frame> nativeExpected(static_cast<usize>(distance));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, false);
+            const auto g = pool.generators.checkpoint();
+            const auto e = pool.enemies.checkpoint();
+            REQUIRE(g);
+            REQUIRE(e);
+            generators.push_back(*g);
+            enemies.push_back(*e);
+            pool.generators.saveLocal(nativeExpected[static_cast<usize>(i)].generators);
+            REQUIRE(pool.enemies.saveLocal(nativeExpected[static_cast<usize>(i)].enemies));
+        }
+        REQUIRE(pool.generators.restoreLocal(saved.generators));
+        REQUIRE(pool.enemies.restoreLocal(saved.enemies));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, true);
+        }
+        REQUIRE(pool.generators.restoreLocal(saved.generators));
+        REQUIRE(pool.enemies.restoreLocal(saved.enemies));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, false);
+            CHECK(pool.generators.checkpoint() == generators[static_cast<usize>(i)]);
+            CHECK(pool.enemies.checkpoint() == enemies[static_cast<usize>(i)]);
+            Frame corrected;
+            pool.generators.saveLocal(corrected.generators);
+            REQUIRE(pool.enemies.saveLocal(corrected.enemies));
+            CHECK(pool.generators.equalLocal(corrected.generators,
+                                             nativeExpected[static_cast<usize>(i)].generators));
+            CHECK(pool.enemies.equalLocal(corrected.enemies,
+                                          nativeExpected[static_cast<usize>(i)].enemies));
+        }
+        tick += distance;
+    }
+}
+
+TEST_CASE(
+    "native generator history includes boss births animated landings and cancelled destruction",
+    "[local-rewind][generator-local-rewind][native-equality][assets]") {
+    Pool pool;
+    test::ProjectileCheckpointFixture art;
+    ItemInfo info;
+    info.type = ItemInfo::kGenerator;
+    info.name = "BOSSGEN";
+    info.hitPoints = 20;
+    info.radius = 2;
+    info.height = 5;
+    const bool settled = GENERATE(false, true);
+    const auto observe = [&] {
+        std::vector<Generators::Slot> slots;
+        std::vector<std::optional<ItemFigure::Checkpoint>> figures;
+        for (usize i = 0; i < pool.generators.count(); ++i) {
+            slots.push_back(pool.generators.slot(i));
+        }
+        for (const auto& item : pool.generators.presentation()) {
+            figures.push_back(item.bossFigure ? item.bossFigure->checkpoint() : std::nullopt);
+        }
+        return std::tuple{slots, figures, pool.enemies.checkpoint()};
+    };
+    const auto step = [&](s32 tick, bool wrong) {
+        if (tick % 31 == 0 || (wrong && tick % 5 == 0)) {
+            REQUIRE(pool.generators.placeBoss(
+                pool.device, info, art.archive, pool.enemies, kGruntKind,
+                glm::translate(Mat4{1}, Vec3{static_cast<f32>(tick), wrong ? 9.0f : 0.0f, 10}),
+                nullptr, "FLIGHT", settled));
+        }
+        if (tick % 7 == 0 && pool.generators.count() > 3) {
+            (void)pool.generators.strike(static_cast<s32>(pool.generators.count() - 1),
+                                         wrong ? 1000.0f : 1.0f, 0);
+        }
+        pool.generators.update(1, pool.enemies, pool.players, {}, wrong);
+        pool.enemies.update(1, kStep, pool.players, pool.generators.enemyObstacles(), nullptr, 1,
+                            wrong);
+    };
+    Generators::LocalSnapshot generators;
+    Enemies::LocalSnapshot enemies;
+    s32 tick = 0;
+    for (s32 window = 0; window < 64; ++window) {
+        CAPTURE(window, tick, settled);
+        pool.generators.saveLocal(generators);
+        REQUIRE(pool.enemies.saveLocal(enemies));
+        const s32 distance = window % 8 + 1;
+        std::vector<decltype(observe())> expected;
+        std::vector<Generators::LocalSnapshot> nativeExpected(static_cast<usize>(distance));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, false);
+            expected.push_back(observe());
+            pool.generators.saveLocal(nativeExpected[static_cast<usize>(i)]);
+        }
+        REQUIRE(pool.generators.restoreLocal(generators));
+        REQUIRE(pool.enemies.restoreLocal(enemies));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, true);
+        }
+        REQUIRE(pool.generators.restoreLocal(generators));
+        REQUIRE(pool.enemies.restoreLocal(enemies));
+        for (s32 i = 0; i < distance; ++i) {
+            step(tick + i, false);
+            CHECK(observe() == expected[static_cast<usize>(i)]);
+            Generators::LocalSnapshot corrected;
+            pool.generators.saveLocal(corrected);
+            CHECK(pool.generators.equalLocal(corrected, nativeExpected[static_cast<usize>(i)]));
+        }
+        tick += distance;
+    }
+    CHECK(pool.generators.count() > 3);
+    CHECK(pool.generators.bodyShown(3));
+    CHECK(pool.device.textureUpdates == 0);
+}
+
+TEST_CASE("native generator history cannot outlive its level or owner",
+          "[local-rewind][generator-local-rewind][native-equality]") {
+    Generators::LocalSnapshot saved;
+    Generators a, b;
+    CHECK_FALSE(a.restoreLocal(saved));
+    CHECK_FALSE(a.equalLocal(saved, saved));
+    a.saveLocal(saved);
+    CHECK_FALSE(b.restoreLocal(saved));
+    CHECK_FALSE(b.equalLocal(saved, saved));
+    REQUIRE(a.restoreLocal(saved));
+    CHECK(a.equalLocal(saved, saved));
+    a.clear();
+    CHECK_FALSE(a.restoreLocal(saved));
+    CHECK_FALSE(a.equalLocal(saved, saved));
+    {
+        Generators temporary;
+        temporary.saveLocal(saved);
+    }
+    CHECK_FALSE(a.restoreLocal(saved));
+}
+
+TEST_CASE("generator source lifetimes survive authored restore and corrected dynamic births",
+          "[local-rewind][generator-local-rewind][native-sound-identity][assets]") {
+    Pool pool;
+    std::vector<u64> authored;
+    for (usize index = 0; index < pool.generators.count(); ++index) {
+        const auto instance = pool.generators.instanceOf(static_cast<s32>(index));
+        REQUIRE(instance != 0);
+        CHECK(std::ranges::find(authored, instance) == authored.end());
+        authored.push_back(instance);
+    }
+    CHECK(pool.generators.instanceOf(-1) == 0);
+    CHECK(pool.generators.instanceOf(static_cast<s32>(authored.size())) == 0);
+    const auto diagnostic = pool.generators.checkpoint();
+    REQUIRE(diagnostic);
+    const auto hit = pool.generators.strike(0, 1, 0);
+    REQUIRE(hit);
+    CHECK(hit->instance == authored[0]);
+    REQUIRE(pool.generators.restore(*diagnostic));
+    for (usize index = 0; index < authored.size(); ++index) {
+        CHECK(pool.generators.instanceOf(static_cast<s32>(index)) == authored[index]);
+    }
+
+    test::ProjectileCheckpointFixture art;
+    ItemInfo info;
+    info.type = ItemInfo::kGenerator;
+    info.name = "BOSSGEN";
+    info.hitPoints = 20;
+    info.radius = 2;
+    info.height = 5;
+    const auto birth = [&](s32 kind) {
+        return pool.generators.placeBoss(pool.device, info, art.archive, pool.enemies, kind,
+                                         Mat4{1}, nullptr, "FLIGHT", true);
+    };
+    Generators::LocalSnapshot saved;
+    pool.generators.saveLocal(saved);
+    REQUIRE(birth(kGruntKind));
+    const auto dynamic = static_cast<s32>(authored.size());
+    const u64 first = pool.generators.instanceOf(dynamic);
+    CHECK(first > authored.back());
+    const auto destroyed = pool.generators.strike(dynamic, 1000, 0);
+    REQUIRE(destroyed);
+    REQUIRE(destroyed->destroyed);
+    CHECK(destroyed->instance == first);
+    CHECK(pool.generators.instanceOf(dynamic) == first);
+    REQUIRE(birth(kGruntKind));
+    const u64 second = pool.generators.instanceOf(dynamic + 1);
+    CHECK(second > first);
+
+    REQUIRE(pool.generators.restoreLocal(saved));
+    CHECK(pool.generators.instanceOf(dynamic) == 0);
+    // Rejected births do not consume a logical lifetime. Replaying accepted
+    // births restores the original sequence, including a now-retired emitter.
+    CHECK_FALSE(birth(-1));
+    REQUIRE(birth(kGruntKind));
+    CHECK(pool.generators.instanceOf(dynamic) == first);
+    const auto replayed = pool.generators.strike(dynamic, 1000, 0);
+    REQUIRE(replayed);
+    CHECK(*replayed == *destroyed);
+    REQUIRE(birth(kGruntKind));
+    CHECK(pool.generators.instanceOf(dynamic + 1) == second);
+}
+
+TEST_CASE("native generator equality includes player admission and offscreen attention",
+          "[local-rewind][generator-local-rewind][native-equality]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    Generators generators;
+    REQUIRE(generators.bind(device, WorldLayout{}, enemies, nullptr, {}, 1));
+    Generators::LocalSnapshot initial;
+    generators.saveLocal(initial);
+    const auto changed = [&](auto&& change) {
+        REQUIRE(generators.restoreLocal(initial));
+        change();
+        Generators::LocalSnapshot after;
+        generators.saveLocal(after);
+        CHECK_FALSE(generators.equalLocal(initial, after));
+        CHECK_FALSE(generators.equalLocal(after, initial));
+        REQUIRE(generators.restoreLocal(initial));
+        generators.saveLocal(after);
+        CHECK(generators.equalLocal(initial, after));
+    };
+    changed([&] { generators.setPlayerCount(4); });
+    changed([&] { generators.setView(ViewVolume{}); });
+    changed([&] { generators.setView(std::nullopt, Vec3{7, 8, 9}); });
 }
 
 TEST_CASE("empty bound generator pools have resumable clocks but unbound pools do not",

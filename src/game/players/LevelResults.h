@@ -4,6 +4,10 @@
 #include "engine/core/Types.h"
 
 #include "game/players/CharacterSave.h"
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 /** A completed level's gains, not lifetime totals. Gold/experience are already awarded:
  * the tally is presentation only and must never award them a second time. */
@@ -14,6 +18,7 @@ struct LevelResults {
         s32 gold = 0;
         s32 experience = 0;
         s32 kills = 0;
+        bool operator==(const Checkpoint&) const = default;
     };
     s32 player = 0;
     std::array<s32, 3> totals{}; ///< gold, kills (including generators), experience
@@ -48,4 +53,6 @@ private:
     usize m_next = 0;
     f64 m_tickRemainder = 0;
 };
+void visitNativeState(NativeStateDigest& digest, const LevelResults::Checkpoint& value);
+
 } // namespace gdl::game

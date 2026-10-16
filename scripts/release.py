@@ -29,6 +29,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -175,15 +176,23 @@ def project_notices(root):
     return files
 
 
-def licenses(binary, staging):
-    """Carry the installed dependency copyright/license notices, not generated asset data."""
-    files = project_notices(ROOT)
-    triplet = "x64-windows" if devenv.WINDOWS else "x64-linux"
-    share = binary / "vcpkg_installed" / triplet / "share"
+def dependency_notices(binary):
+    """Read the configured target's inventory, not a stale neighboring triplet."""
+    triplet = str(package.build.cache_path(binary, "VCPKG_TARGET_TRIPLET", Path()))
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", triplet):
+        raise ValueError(f"Missing or invalid configured vcpkg target triplet: {binary}")
+    installed = package.build.cache_path(binary, "VCPKG_INSTALLED_DIR", binary / "vcpkg_installed")
+    share = installed / triplet / "share"
     copyrights = sorted(share.glob("*/copyright"))
     if not copyrights:
         raise ValueError(f"Missing vcpkg license inventory: {share}")
-    files.extend((path, f"licenses/vcpkg/{path.parent.name}.txt") for path in copyrights)
+    return [(path, f"licenses/vcpkg/{path.parent.name}.txt") for path in copyrights]
+
+
+def licenses(binary, staging):
+    """Carry the installed dependency copyright/license notices, not generated asset data."""
+    files = project_notices(ROOT)
+    files.extend(dependency_notices(binary))
     files.extend(networking_notices(staging))
     files.extend(installer_notices(staging))
     python_notices = [Path(sys.base_prefix) / "LICENSE.txt",
@@ -206,8 +215,9 @@ def licenses(binary, staging):
         "Qt sources: https://download.qt.io/official_releases/qt/\n"
         "PySide/Shiboken sources: https://download.qt.io/official_releases/QtForPython/\n"
         "PyInstaller sources: https://github.com/pyinstaller/pyinstaller\n"
-        "Game dependencies: see licenses/vcpkg and licenses/rust.txt. Windows includes the Microsoft Visual C++ "
-        "redistributable CRT, not a system DLL harvest. No Microsoft development tools are included.\n"
+        "Game dependencies: see licenses/vcpkg and licenses/rust.txt. Windows release games link the Microsoft "
+        "Visual C++ runtime statically; the installer carries its own Python/Qt runtime dependencies. "
+        "No Microsoft development tools or harvested system DLLs are included.\n"
         "Linux includes libstdc++/libgcc under GPLv3 plus the GCC Runtime Library Exception; "
         "see licenses/gcc. System graphics, audio and windowing libraries are not bundled.\n"
         "Game assets are supplied solely by the player and remain unchanged.\n", encoding="utf-8")
@@ -248,9 +258,11 @@ def build_release(args):
     for artifact in (final_name, runtime_name(release_version, system), f"{name}-licenses.zip", f"{name}.sha256"):
         if (output / artifact).exists():
             raise ValueError(f"Release artifact already exists: {output / artifact}")
-    # Separate build cache: no disc icon, retail inputs or developer-specific fallback paths.
+    # Recreate the dedicated cache so an older dynamic-CRT release build cannot
+    # retain its toolchain/runtime selections. Built source artifacts are kept.
+    # No disc icon, retail inputs or developer-specific fallback paths.
     binary = ROOT / "build" / f"release-{system}"
-    configure = ["cmake", "--preset", devenv.release_preset(), "-B", str(binary),
+    configure = ["cmake", "--preset", devenv.release_preset(), "--fresh", "-B", str(binary),
                  "-DGDL_ENABLE_NETPLAY=ON",
                  "-DGDL_EMBED_DISC_ICON=OFF", "-DGDL_ENABLE_VULKAN_VALIDATION=OFF",
                  "-DGDL_ASSET_DIR=", "-DGDL_UNPACKED_DIR=", f"-DGDL_DATA_DIR={ROOT / 'data'}",
@@ -268,8 +280,10 @@ def build_release(args):
         raise ValueError(f"Executable version {reported!r} differs from VERSION")
     with temporary_directory(ROOT / "build", "gdl-release-") as temporary:
         staging = Path(temporary)
-        runtimes = (package.msvc_runtime_directory(),) if devenv.WINDOWS else ()
-        plan = package.make_plan(executable, None, ROOT / "data", staging / "unused", runtimes)
+        if devenv.WINDOWS and not package.windows_static_crt(binary):
+            raise ValueError("Windows releases require the configured static-CRT release preset")
+        plan = package.make_plan(executable, None, ROOT / "data", staging / "unused",
+                                 static_crt=devenv.WINDOWS)
         # Public packages use the checked-in defaults only, never local debug/test data.
         tracked_data = set(subprocess.check_output(
             ["git", "ls-files", "data"], cwd=ROOT, text=True).splitlines())

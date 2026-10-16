@@ -12,6 +12,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/screens/BossVictoryPresentation.h"
@@ -269,8 +270,8 @@ TEST_CASE("victory captions use the table's weighted text and render typed multi
     REQUIRE(test::minCorner(device.draws.front()).y >= 16.0f);
     REQUIRE(test::minCorner(device.draws.front()).y < 18.0f);
     REQUIRE(test::maxCorner(device.draws.front()).y < 16.0f + 2.0f * 32.0f * 0.667f);
-    const f32 middle = (test::minCorner(device.draws.front()).x +
-                        test::maxCorner(device.draws.front()).x) / 2.0f;
+    const f32 middle =
+        (test::minCorner(device.draws.front()).x + test::maxCorner(device.draws.front()).x) / 2.0f;
     REQUIRE(std::abs(middle - 256.0f) < 8.0f); // centred on the 512-wide screen's middle
     REQUIRE(device.draws.front().texture == &sheet);
     presentation.update(BossVictory::kPagePauseTicks, 0.0f, false, strings);
@@ -361,5 +362,95 @@ TEST_CASE("victory fractional poses preserve speech state and snap loop boundari
     device.draws.clear();
     presentation.drawWizard(device, Mat4{1}, {}, nullptr, 0.5f);
     CHECK(device.draws.empty());
+}
+TEST_CASE("native victory rewind survives lazy wizard binding and corrects an entire visit",
+          "[local-rewind][victory-local-rewind]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(wizardFixture("victory-local-rewind")));
+    test::FakeRenderDevice device;
+    BossVictoryPresentation actual, expected, foreign;
+    MessageTable strings;
+    loadCaptions(strings);
+    const std::array party{Vec3{2, 0, 3}, Vec3{7, 0, 1}};
+    BossVictoryPresentation::LocalSnapshot saved;
+    CHECK_FALSE(actual.restoreLocal(saved));
+    actual.saveLocal(saved);
+    actual.begin(43, 'E', 0, 0, true);
+    actual.bindWizard(device, archive, {90, -20, 4}, party);
+    actual.update(800, 5, true, strings);
+    const auto textures = device.texturesCreated;
+    REQUIRE(actual.restoreLocal(saved));
+    CHECK(actual.state().stage() == Stage::None);
+    for (auto* presentation : {&actual, &expected}) {
+        presentation->begin(41, 'G', 1, 0, false);
+        presentation->bindWizard(device, archive, {1, 2, 3}, party);
+    }
+    CHECK(device.texturesCreated == textures);
+    const auto draw = [&](const BossVictoryPresentation& presentation) {
+        device.draws.clear();
+        presentation.drawWizard(device, Mat4{1}, {}, nullptr, 0.37f);
+        return device.draws;
+    };
+    s32 voices = 0;
+    s32 sparkles = 0;
+    for (s32 window = 0; window < 192; ++window) {
+        CAPTURE(window);
+        const s32 distance = window % 8 + 1;
+        actual.saveLocal(saved);
+        CHECK_FALSE(foreign.restoreLocal(saved));
+        const auto before = draw(actual);
+        actual.begin(43, 'E', 0, 0, true);
+        actual.bindWizard(device, archive, {90, -20, 4}, {});
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.update(180, 0.7f, true, strings, true);
+        }
+        REQUIRE(actual.restoreLocal(saved));
+        const auto restored = draw(actual);
+        REQUIRE(restored.size() == before.size());
+        for (usize i = 0; i < before.size(); ++i) {
+            test::checkRecordedDraw(restored[i], before[i]);
+        }
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.capturePresentation();
+            expected.capturePresentation();
+            const auto a = actual.update(2, 1.0f / 30, false, strings);
+            const auto b = expected.update(2, 1.0f / 30, false, strings);
+            CHECK(a.sparkle == b.sparkle);
+            sparkles += static_cast<s32>(a.sparkle);
+            REQUIRE(a.voices.size() == b.voices.size());
+            voices += static_cast<s32>(a.voices.size());
+            for (usize i = 0; i < a.voices.size(); ++i) {
+                CHECK(a.voices[i].sound == b.voices[i].sound);
+            }
+            CHECK(actual.state().stage() == expected.state().stage());
+            CHECK(actual.state().wizardAlpha() == expected.state().wizardAlpha());
+            REQUIRE(actual.state().caption().has_value() == expected.state().caption().has_value());
+            if (actual.state().caption()) {
+                CHECK(actual.state().caption()->message == expected.state().caption()->message);
+                CHECK(actual.state().caption()->page == expected.state().caption()->page);
+                CHECK(actual.state().caption()->shown == expected.state().caption()->shown);
+            }
+        }
+        const auto reference = draw(expected);
+        const auto corrected = draw(actual);
+        REQUIRE(corrected.size() == reference.size());
+        for (usize i = 0; i < reference.size(); ++i) {
+            test::checkRecordedDraw(corrected[i], reference[i]);
+        }
+    }
+    CHECK(actual.state().finished());
+    CHECK(voices == 2);
+    CHECK(sparkles == 1);
+    CHECK(device.texturesCreated == textures);
+    CHECK(device.textureUpdates == 0);
+    actual.clear();
+    CHECK_FALSE(actual.restoreLocal(saved));
+    actual.saveLocal(saved);
+    actual.bindWizard(device, archive, {}, {});
+    REQUIRE(actual.restoreLocal(saved));
+    ItemArchive different;
+    REQUIRE(different.load(wizardFixture("victory-local-rewind-different")));
+    actual.bindWizard(device, different, {}, {});
+    CHECK_FALSE(actual.restoreLocal(saved));
 }
 } // namespace

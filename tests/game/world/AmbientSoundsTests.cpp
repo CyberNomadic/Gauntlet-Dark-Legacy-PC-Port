@@ -90,6 +90,42 @@ TEST_CASE("loudness holds within the radius and fades to nothing half a radius o
     REQUIRE(AmbientSounds::panOf(ear.position, ear) == 0.0f);
 }
 
+TEST_CASE("ambient desired requests are pure and independent of physical playback",
+          "[game][world][ambience][scene-sound-loops]") {
+    const Fixture f("ambient-pure-requests");
+    SoundSet bank;
+    WorldLayout layout;
+    REQUIRE(bank.load(f.bank));
+    REQUIRE(layout.load(f.level));
+    AmbientSounds sounds;
+    const std::array banks{&bank};
+    REQUIRE(sounds.bind(layout, banks));
+    const std::array near{Vec3{0}}, far{Vec3{8, 0, 0}};
+    const auto initial = sounds.emitter(0);
+    const auto wanted = sounds.requests(near, 0.5f);
+    REQUIRE(wanted.size() == 1);
+    CHECK(wanted[0].loudness == 1);
+    CHECK(wanted[0].volume == Approx(AmbientSounds::kPeak * 0.5f));
+    CHECK(sounds.musicScale(wanted) == 0.5f);
+    CHECK(sounds.emitter(0).handle == initial.handle);
+    CHECK(sounds.emitter(0).position == initial.position);
+    CHECK(sounds.emitter(0).loudness == initial.loudness);
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    sounds.update(output, near, {}, 1);
+    const auto before = sounds.emitter(0);
+    const auto silent = sounds.requests(far, 1);
+    REQUIRE(silent.size() == 1);
+    CHECK(silent[0].loudness == 0);
+    CHECK_FALSE(sounds.musicScale(silent));
+    CHECK(sounds.emitter(0).handle == before.handle);
+    CHECK(output.isPlaying(before.handle));
+    sounds.stop(output);
+    const auto resumed = sounds.requests(near, 0.5f);
+    CHECK(resumed[0].volume == wanted[0].volume);
+    CHECK(resumed[0].position == wanted[0].position);
+}
+
 TEST_CASE("sound items follow their nearest animated parent through repeated activations",
           "[game][world][ambience][ambient-parent]") {
     const Fixture f("ambient-parent");

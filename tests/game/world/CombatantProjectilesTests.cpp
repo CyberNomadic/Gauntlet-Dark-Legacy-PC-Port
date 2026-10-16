@@ -35,8 +35,8 @@ struct Fixture {
     EffectTrees effects;
     CombatantProjectiles projectiles;
     std::vector<std::string> sounds;
-    CombatantProjectiles::PlaySound sound = [&](std::string_view name) {
-        sounds.emplace_back(name);
+    CombatantProjectiles::PlaySound sound = [&](const CombatantProjectiles::SoundCue& cue) {
+        sounds.emplace_back(cue.name);
     };
     Fixture() {
         const auto root = test::scratchDirectory("critter-projectiles");
@@ -964,6 +964,7 @@ TEST_CASE("boss projectiles report water hits but rebounds do not play impact so
     REQUIRE_FALSE(hits.empty());
     CHECK(hits.front().object == 73);
     CHECK(hits.front().splash == !reflects);
+    CHECK(hits.front().instance != 0);
     CHECK(std::ranges::find(f.sounds, "S_HIT") == f.sounds.end());
     CHECK(f.projectiles.count() == (reflects ? 1 : 0));
     CHECK(f.projectiles.takeWorldHits().empty());

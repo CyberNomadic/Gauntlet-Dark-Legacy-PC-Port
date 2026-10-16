@@ -24,12 +24,21 @@
 #include "game/world/PlayerFigure.h"
 #include "game/world/WeaponGlow.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 enum class PlayerLife : u8 { Standing, Dying, InTower };
 
-/** Everything that belongs to one participant for this level. The player id may
- * differ from this record's position in the party; figures may be unavailable. */
-struct PlayerRuntime {
+/** Value-owned participant state. Copying this value includes the complete character
+ * record (not just the active class), pending combat decisions and movement contacts.
+ * It owns no renderer, mixer, resource binding or callback. The scene's local history
+ * can copy it directly, without the cross-process checkpoint restore protocol.
+ *
+ * This is one component, not a complete scene snapshot: action poses, projectiles,
+ * effect stores, the party-wide RNG and the world must be rewound alongside it. */
+struct PlayerSimulation {
     PlayerActor actor;
     bool cursorAiming = false; ///< manual facing must not be redirected by controller assistance
     /** This movement step's requested attack direction, which may differ from the
@@ -38,25 +47,16 @@ struct PlayerRuntime {
     struct AttackStep {
         Vec3 from{0};
         Vec3 to{0};
+        bool operator==(const AttackStep&) const = default;
     };
     /** This invocation's intended collision-centre segment before creature correction,
      * never a retained target ID. Empty outside motion; queries then test standing contact. */
     std::optional<AttackStep> attackStep;
-    struct Presentation {
-        Vec3 position{0};
-        f32 yaw = 0;
-        bool continuous = false;
-        u64 animationRevision = 0;
-    };
-    Presentation previous; ///< preceding simulation placement, never used for collision
     PlayerCapture capture;
     ComboState combo; ///< its side of a two-player combo, none outside one
     PlayerTransport transport;
     MikeyDecoy mikey;
-    std::unique_ptr<MikeyFigure> mikeyFigure;
-    std::unique_ptr<PlayerFigure> figure; ///< null when character assets are unavailable
-    std::optional<usize> slot;            ///< persistent save slot, not the input player id
-    CharacterSave entrySave;              ///< restored when a fallen character leaves the level
+    CharacterSave entrySave; ///< restored when a fallen character leaves the level
     std::optional<LevelResults::Checkpoint> resultsCheckpoint; ///< prior linked stages, not saved
     s32 levelKills = 0; ///< creatures and generators credited during this level
     PlayerLife life = PlayerLife::Standing;
@@ -79,13 +79,11 @@ struct PlayerRuntime {
     struct ShockGap {
         s32 target = -1;
         f32 seconds = 0.0f;
+        bool operator==(const ShockGap&) const = default;
     };
     std::vector<ShockGap> shockGaps;
     s32 deathHeld = -1;      ///< the Death a halo holds, by enemy slot; none when -1
     s32 deathDrainTicks = 0; ///< ticks until the next drain; separation cannot reset its cadence
-    u32 deathHeldEffect = 0; ///< Death's drain effect on the one holding him
-    SoundHandle deathHeldCry = kNoSound;
-    SoundHandle deathHeldSuck = kNoSound;
     bool deathHaloHeard = false; ///< activation cue latched until Anti-Death is unequipped
     PlayerDeed reaction = PlayerDeed::None; ///< hit or gesture requested for the next update
     Knockback knockback;                    ///< the pushes of this frame's hits, and the slide
@@ -105,15 +103,51 @@ struct PlayerRuntime {
         s32 object = -1;
         u32 flags = 0;
         std::optional<Mat4> placement;
+        bool operator==(const Floor&) const = default;
     };
     Floor floor;
-    HeadGem gem;           ///< a hand of death's or health vampire's gem on the head
-    BodyGlow glow;         ///< shining through a darkening strike or the legend's rite
-    WeaponGlow weaponGlow; ///< an elemental weapon powerup's effect in the hand
-    MeleeStreak streak;    ///< close blows landed, towards the narrator's praise
-    ExitWait exitWait;     ///< standing still on an exit for the rest of the party
-    s32 nameTicks = 0;     ///< while over nought the name shows over the head (name_timer)
-    u32 wornSpecial = 0;   ///< the special flags worn last update, for their endings (old_flags)
+    HeadGem gem;         ///< a hand of death's or health vampire's gem on the head
+    MeleeStreak streak;  ///< close blows landed, towards the narrator's praise
+    ExitWait exitWait;   ///< standing still on an exit for the rest of the party
+    s32 nameTicks = 0;   ///< while over nought the name shows over the head (name_timer)
+    u32 wornSpecial = 0; ///< the special flags worn last update, for their endings (old_flags)
+    /** Complete typed native value equality, including every class's save and
+     * action/contact internals. Figure resources and PlayerRuntime presentation
+     * bindings are deliberately outside this component. */
+    bool operator==(const PlayerSimulation&) const = default;
+};
+
+void visitNativeState(NativeStateDigest& digest, const PlayerSimulation& value);
+void visitNativeState(NativeStateDigest& digest, const PlayerSimulation::AttackStep& value);
+void visitNativeState(NativeStateDigest& digest, const PlayerSimulation::ShockGap& value);
+void visitNativeState(NativeStateDigest& digest, const PlayerSimulation::Floor& value);
+
+/** Runtime bindings stay at their existing addresses while simulation values rewind.
+ * The public base keeps native participant consumers on the same live fields: there
+ * is no second, hand-maintained list of fields to capture and restore. */
+struct PlayerRuntime : PlayerSimulation {
+    using Simulation = PlayerSimulation;
+    const Simulation& simulation() const { return *this; }
+    Simulation& simulation() { return *this; }
+
+    struct Presentation {
+        Vec3 position{0};
+        f32 yaw = 0;
+        bool continuous = false;
+        u64 animationRevision = 0;
+        template <class D> friend void visitNativeState(D& digest, const Presentation& value) {
+            digest.template fields<4>(value);
+        }
+    };
+    Presentation previous; ///< preceding draw placement, never used for collision
+    std::unique_ptr<MikeyFigure> mikeyFigure;
+    std::unique_ptr<PlayerFigure> figure; ///< null when character assets are unavailable
+    std::optional<usize> slot; ///< persistent save slot; never rewound by speculative gameplay
+    u32 deathHeldEffect = 0;   ///< presentation effect, not Death's gameplay hold
+    SoundHandle deathHeldCry = kNoSound;
+    SoundHandle deathHeldSuck = kNoSound;
+    BodyGlow glow;
+    WeaponGlow weaponGlow;
 };
 
 } // namespace gdl::game

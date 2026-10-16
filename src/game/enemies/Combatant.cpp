@@ -5,6 +5,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <limits>
+#include <tuple>
 #include <utility>
 
 #include "engine/core/Types.h"
@@ -23,34 +24,35 @@ constexpr f32 kGravity = 100.0f;
 } // namespace
 void Combatant::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
-    m_children.clear();
-    m_actor = Actor{};
-    m_id = -1;
-    m_collision = nullptr;
-    m_blows.clear();
-    m_grabs.clear();
-    m_pushes.clear();
-    m_rams.clear();
-    m_tramples.clear();
+    m_sim.childCount = 0;
+    m_sim.actor = Actor{};
+    m_sim.id = -1;
+    m_sim.collision = nullptr;
+    m_sim.blows.clear();
+    m_sim.grabs.clear();
+    m_sim.pushes.clear();
+    m_sim.rams.clear();
+    m_sim.tramples.clear();
     m_swarm = {};
     m_obstacles = {};
-    m_losses.clear();
-    m_cues.clear();
-    m_spews.clear();
-    m_shots.clear();
-    m_arenaActivations.clear();
+    m_sim.losses.clear();
+    m_sim.cues.clear();
+    m_sim.spews.clear();
+    m_sim.shots.clear();
+    m_sim.arenaActivations.clear();
+    m_sim.assets.clear();
 }
 void Combatant::setArenaAnchors(std::span<const Mat4> anchors) {
-    m_actor.arenaAnchors.assign(anchors.begin(), anchors.end());
+    m_sim.actor.arenaAnchors.assign(anchors.begin(), anchors.end());
 }
 void Combatant::setArenaTargets(std::span<const CombatArenaTarget> targets) {
-    m_actor.arenaTargets.assign(targets.begin(), targets.end());
-    if (!m_actor.arenaCollected && !targets.empty()) {
+    m_sim.actor.arenaTargets.assign(targets.begin(), targets.end());
+    if (!m_sim.actor.arenaCollected && !targets.empty()) {
         // The ordered native roster selects an index, not a library-specific
         // distribution. Its engine and accepted/rejected draw counts stay intact.
-        m_actor.lastArenaTarget = static_cast<s32>(
-            random_distribution::boundedIndex(m_arenaRandom, targets.size()).value());
-        m_actor.arenaCollected = true;
+        m_sim.actor.lastArenaTarget = static_cast<s32>(
+            random_distribution::boundedIndex(m_sim.arenaRandom, targets.size()).value());
+        m_sim.actor.arenaCollected = true;
     }
 }
 bool Combatant::raisesArenaRocks() const {
@@ -67,48 +69,270 @@ bool Combatant::raisesArenaRocks() const {
 }
 bool Combatant::spawn(CombatantAssets& stock, s32 id, const Vec3& position, f32 yaw,
                       const WorldCollision* collision, const EnemyScales& scales, char realm) {
-    if (m_incarnation == std::numeric_limits<u64>::max()) {
+    if (m_sim.incarnation == std::numeric_limits<u64>::max()) {
         return false;
     }
-    m_children.clear();
+    for (auto& part : children()) {
+        part->clear();
+    }
+    m_sim.childCount = 0;
     if (!spawnActor(stock, stock.data, id, position, yaw, collision, scales, realm)) {
         return false;
     }
     for (const auto& definition : stock.children) {
-        auto part = std::make_unique<Combatant>();
-        if (!part->spawnActor(stock, definition, id + 1 + static_cast<s32>(m_children.size()),
+        if (m_sim.childCount == m_children.size()) {
+            m_children.push_back(std::make_unique<Combatant>());
+        }
+        auto& part = m_children[m_sim.childCount];
+        // A new branch has fresh clocks, RNG and output queues, just as a newly
+        // allocated child did. Only its storage/lifetime identity is retained.
+        part->m_sim = Simulation{};
+        if (!part->spawnActor(stock, definition, id + 1 + static_cast<s32>(children().size()),
                               position, yaw, nullptr, scales, realm)) {
             clear();
             return false;
         }
-        part->m_actor.parent = this;
-        part->m_actor.branch =
+        part->m_sim.actor.parent = this;
+        part->m_sim.actor.branch =
             stock.tree->findNode(definition.rootNode(), kCombatantNodeNameLength);
         part->synchronizeChild();
-        m_children.push_back(std::move(part));
+        ++m_sim.childCount;
     }
-    ++m_incarnation;
+    ++m_sim.incarnation;
+    return true;
+}
+
+bool Combatant::saveLocal(LocalSnapshot& snapshot) const {
+    snapshot.m_owner.reset();
+    if (!m_obstacles.empty() || !m_swarm.empty() ||
+        std::ranges::any_of(m_sim.assets, [](const auto& asset) { return asset.expired(); })) {
+        return false;
+    }
+    snapshot.m_state = m_sim;
+    snapshot.m_epoch = m_localEpoch;
+    // Keep warmed child snapshots even while the current incarnation has fewer
+    // parts. Neither inactive retained slots nor their stale assets are visited.
+    if (snapshot.m_children.size() < m_sim.childCount) {
+        snapshot.m_children.resize(m_sim.childCount);
+    }
+    for (usize i = 0; i < m_sim.childCount; ++i) {
+        if (!m_children[i]->saveLocal(snapshot.m_children[i])) {
+            return false;
+        }
+    }
+    snapshot.m_owner = m_localOwner;
+    return true;
+}
+
+bool Combatant::canRestoreLocal(const LocalSnapshot& snapshot) const {
+    if (snapshot.m_owner.lock() != m_localOwner || snapshot.m_epoch != m_localEpoch ||
+        !m_obstacles.empty() || !m_swarm.empty() ||
+        snapshot.m_state.childCount > m_children.size() ||
+        snapshot.m_state.childCount > snapshot.m_children.size() ||
+        std::ranges::any_of(snapshot.m_state.assets,
+                            [](const auto& asset) { return asset.expired(); })) {
+        return false;
+    }
+    for (usize i = 0; i < snapshot.m_state.childCount; ++i) {
+        if (!m_children[i]->canRestoreLocal(snapshot.m_children[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Combatant::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state,
+                                       const Combatant* expectedParent) {
+    // Bind the actual records in full so adding a native field requires updating
+    // this visitor. No portable checkpoint representation participates here.
+    const auto& [actor, incarnation, childCount, id, collision, hazards, scales, realm, fullHarm,
+                 arenaRandom, cues, grabs, spews, shots, arenaActivations, tramples, rams, pushes,
+                 blows, losses, assets] = state;
+    const auto& [actorState, hidden, forcedPattern, childrenIntact, smoothValid, stock, definition,
+                 parent, branch, health, burnGap, maxHealth, position, floor, yaw, initialYaw,
+                 homePosition, initialRoot, push, target, targetDistance, targetYaw, targets,
+                 playerDamage, move, moveTarget, pattern, finishedSeconds, age, moveTimes,
+                 patternTimes, patternStep, struckThisMove, areas, arenaAnchors, arenaTargets,
+                 patrol, lastArenaTarget, hurtPending, hurtFlags, hurtDirection, roarOwed,
+                 sinceHurt, flashTicks, skin, skinAge, hitNodes, modelReplacements, alpha, tint,
+                 scale, shrink, frozenTicks, blindTicks, curbSeconds, held, roarWanted, moveEffect,
+                 moveDone, soundsGiven, arenaCollected, shotFrame, attackTarget, stepTarget,
+                 patrolAim, grabbed, grabMove, grabNode, grabOffset, player, pose, smooth,
+                 presentation, attachments, gaze] = actor;
+    if (parent != expectedParent ||
+        std::ranges::any_of(assets, [](const auto& asset) { return asset.expired(); })) {
+        digest.invalidate();
+        return;
+    }
+    digest.values(actorState, hidden, forcedPattern, childrenIntact, smoothValid);
+    digest.resource(stock);
+    digest.resource(definition);
+    // The ordered recursive traversal identifies the parent structurally. Never
+    // read its current state: a saved child's parent may be on a wrong branch.
+    digest.flag(parent != nullptr);
+    digest.values(branch, health, burnGap, maxHealth, position, floor, yaw, initialYaw,
+                  homePosition, initialRoot, push, target, targetDistance, targetYaw, targets,
+                  playerDamage, move, moveTarget, pattern, finishedSeconds, age, moveTimes,
+                  patternTimes, patternStep, struckThisMove, areas, arenaAnchors, arenaTargets,
+                  patrol, lastArenaTarget, hurtPending, hurtFlags, hurtDirection, roarOwed,
+                  sinceHurt, flashTicks);
+    digest.resource(skin);
+    digest.values(skinAge, hitNodes, modelReplacements, alpha, tint, scale, shrink, frozenTicks,
+                  blindTicks, curbSeconds, held, roarWanted, moveEffect, moveDone, soundsGiven,
+                  arenaCollected, shotFrame, attackTarget, stepTarget, patrolAim, grabbed,
+                  grabMove, grabNode, grabOffset, player, pose, smooth, presentation, attachments,
+                  gaze, incarnation, childCount, id);
+    digest.resource(collision);
+    digest.resource(hazards);
+    digest.values(scales, realm, fullHarm, arenaRandom, cues, grabs, spews, shots, arenaActivations,
+                  tramples, rams, pushes, blows, losses);
+    // assets holds lifetime fences, including old incarnations with pending
+    // outputs. Validate them above; hash the actual bound definitions/resources
+    // at their uses, never token allocation identity or retained cache history.
+}
+
+bool Combatant::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendNativeDigest(digest, nullptr);
+}
+
+bool Combatant::appendNativeDigest(NativeStateDigest& digest,
+                                   const Combatant* expectedParent) const {
+    if (!m_obstacles.empty() || !m_swarm.empty() || m_sim.childCount > m_children.size()) {
+        digest.invalidate();
+        return false;
+    }
+    appendSimulationDigest(digest, m_sim, expectedParent);
+    for (usize i = 0; i < m_sim.childCount && digest.good(); ++i) {
+        m_children[i]->appendNativeDigest(digest, this);
+    }
+    return digest.good();
+}
+
+bool Combatant::appendLocalDigest(NativeStateDigest& digest,
+                                  const LocalSnapshot& snapshot) const {
+    if (!canRestoreLocal(snapshot)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendLocalDigest(digest, snapshot, nullptr);
+}
+
+bool Combatant::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& snapshot,
+                                  const Combatant* expectedParent) const {
+    appendSimulationDigest(digest, snapshot.m_state, expectedParent);
+    for (usize i = 0; i < snapshot.m_state.childCount && digest.good(); ++i) {
+        m_children[i]->appendLocalDigest(digest, snapshot.m_children[i], this);
+    }
+    return digest.good();
+}
+
+bool Combatant::Actor::equalLocal(const Actor& other) const {
+    // These select retained art, damage definitions and native family ownership.
+    // Compare their identity, never the shared model's mutable draw caches.
+    if (stock != other.stock || definition != other.definition || parent != other.parent ||
+        skin != other.skin) {
+        return false;
+    }
+    const auto placement = [](const Actor& a) {
+        return std::tie(a.state, a.hidden, a.forcedPattern, a.childrenIntact, a.smoothValid,
+                        a.branch, a.health, a.burnGap, a.maxHealth, a.position, a.floor, a.yaw,
+                        a.initialYaw, a.homePosition, a.initialRoot, a.push, a.target,
+                        a.targetDistance, a.targetYaw, a.targets, a.playerDamage);
+    };
+    const auto moves = [](const Actor& a) {
+        return std::tie(a.move, a.moveTarget, a.pattern, a.finishedSeconds, a.age, a.moveTimes,
+                        a.patternTimes, a.patternStep, a.struckThisMove, a.areas, a.arenaAnchors,
+                        a.arenaTargets, a.lastArenaTarget);
+    };
+    const auto reactions = [](const Actor& a) {
+        return std::tie(a.hurtPending, a.hurtFlags, a.hurtDirection, a.roarOwed, a.sinceHurt,
+                        a.flashTicks, a.skinAge, a.hitNodes, a.modelReplacements, a.alpha, a.tint,
+                        a.scale, a.shrink, a.frozenTicks, a.blindTicks, a.curbSeconds, a.held,
+                        a.roarWanted, a.moveEffect, a.moveDone, a.soundsGiven, a.arenaCollected,
+                        a.shotFrame, a.attackTarget, a.stepTarget, a.patrolAim, a.grabbed,
+                        a.grabMove, a.grabNode, a.grabOffset);
+    };
+    const auto drawing = [](const Presentation& p) {
+        return std::tie(p.valid, p.state, p.generation, p.sequence, p.position, p.yaw, p.frame);
+    };
+    return placement(*this) == placement(other) && moves(*this) == moves(other) &&
+           reactions(*this) == reactions(other) && patrol.equalLocal(other.patrol) &&
+           gaze.equalLocal(other.gaze) && player.equalLocal(other.player) &&
+           pose.equalLocal(other.pose) && smooth.equalLocal(other.smooth) &&
+           drawing(presentation) == drawing(other.presentation) &&
+           presentation.pose.equalLocal(other.presentation.pose) &&
+           std::ranges::equal(
+               attachments, other.attachments, [](const Attachment& a, const Attachment& b) {
+                   return std::tie(a.world, a.previousFrame, a.previousGeneration) ==
+                              std::tie(b.world, b.previousFrame, b.previousGeneration) &&
+                          a.player.equalLocal(b.player) && a.pose.equalLocal(b.pose);
+               });
+}
+
+bool Combatant::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
+        return false;
+    }
+    const auto& a = left.m_state;
+    const auto& b = right.m_state;
+    const auto values = [](const Simulation& s) {
+        return std::tie(s.incarnation, s.childCount, s.id, s.collision, s.hazards, s.scales,
+                        s.realm, s.fullHarm, s.arenaRandom, s.cues, s.grabs, s.spews, s.shots,
+                        s.arenaActivations, s.tramples, s.rams, s.pushes, s.blows, s.losses);
+    };
+    if (values(a) != values(b) || !a.actor.equalLocal(b.actor) ||
+        !std::ranges::equal(a.assets, b.assets, [](const auto& first, const auto& second) {
+            return first.lock() == second.lock();
+        })) {
+        return false;
+    }
+    for (usize i = 0; i < a.childCount; ++i) {
+        if (!m_children[i]->equalLocal(left.m_children[i], right.m_children[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Combatant::restoreLocalValues(const LocalSnapshot& snapshot) {
+    m_sim = snapshot.m_state;
+    ++m_checkpointRevision;
+    for (usize i = 0; i < m_sim.childCount; ++i) {
+        m_children[i]->restoreLocalValues(snapshot.m_children[i]);
+    }
+}
+
+bool Combatant::restoreLocal(const LocalSnapshot& snapshot) {
+    if (!canRestoreLocal(snapshot)) {
+        return false;
+    }
+    restoreLocalValues(snapshot);
     return true;
 }
 
 bool Combatant::spawnActor(CombatantAssets& stock, const CritterData& definition, s32 id,
                            const Vec3& position, f32 yaw, const WorldCollision* collision,
                            const EnemyScales& scales, char realm) {
-    m_actor = Actor{};
-    m_id = -1;
-    m_collision = nullptr;
+    m_sim.actor = Actor{};
+    m_sim.id = -1;
+    m_sim.collision = nullptr;
     if (stock.tree == nullptr) {
         return false;
     }
-    m_id = id;
-    m_collision = collision;
-    m_scales = scales;
-    m_realm = realm;
-    Actor& critter = m_actor;
+    if (std::ranges::none_of(m_sim.assets, [&](const auto& asset) {
+            return asset.lock() == stock.m_localBinding;
+        })) {
+        m_sim.assets.push_back(stock.m_localBinding);
+    }
+    m_sim.id = id;
+    m_sim.collision = collision;
+    m_sim.scales = scales;
+    m_sim.realm = realm;
+    Actor& critter = m_sim.actor;
     critter.state = State::Active;
     critter.stock = &stock;
     critter.definition = &definition;
-    critter.maxHealth = definition.maxHealth() * m_scales.health;
+    critter.maxHealth = definition.maxHealth() * m_sim.scales.health;
     critter.health = critter.maxHealth;
     for (const auto& part : definition.parts()) {
         HitNode node;
@@ -116,8 +340,8 @@ bool Combatant::spawnActor(CombatantAssets& stock, const CritterData& definition
         critter.hitNodes.push_back(node);
     }
     critter.position = position;
-    if (m_collision != nullptr) {
-        if (const auto floor = m_collision->floorAt(position, kDrop, kDrop)) {
+    if (m_sim.collision != nullptr) {
+        if (const auto floor = m_sim.collision->floorAt(position, kDrop, kDrop)) {
             critter.position.y = floor->y;
         }
     }
@@ -159,18 +383,18 @@ bool Combatant::spawnActor(CombatantAssets& stock, const CritterData& definition
 }
 void Combatant::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                        std::span<const Combatant> peers, bool timeStopped) {
-    if (m_actor.parent == nullptr) {
+    if (m_sim.actor.parent == nullptr) {
         capturePresentation();
     }
     updateActor(ticks, seconds, players, peers, timeStopped);
-    if (m_actor.parent == nullptr) {
+    if (m_sim.actor.parent == nullptr) {
         // Sample fractional animation once per simulation update, not once per
         // draw, shadow, attachment or monitor refresh.
-        m_actor.smooth = smoothPose(m_actor);
-        m_actor.smoothValid = true;
-        for (auto& child : m_children) {
-            child->m_actor.smooth = smoothPose(child->m_actor);
-            child->m_actor.smoothValid = true;
+        m_sim.actor.smooth = smoothPose(m_sim.actor);
+        m_sim.actor.smoothValid = true;
+        for (auto& child : children()) {
+            child->m_sim.actor.smooth = smoothPose(child->m_sim.actor);
+            child->m_sim.actor.smoothValid = true;
         }
     }
 }
@@ -181,15 +405,15 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
     if (ticks <= 0) {
         return;
     }
-    Actor& critter = m_actor;
+    Actor& critter = m_sim.actor;
     if (!present()) {
         return;
     }
     if (critter.parent == nullptr) {
         // Linked heads keep their hit-feedback clock even when the body drives their pose.
         updateHitFlashes(critter, ticks);
-        for (auto& child : m_children) {
-            updateHitFlashes(child->m_actor, ticks);
+        for (auto& child : children()) {
+            updateHitFlashes(child->m_sim.actor, ticks);
         }
         // CritterInitPlayerData recounts state-1 slots before processing the list.
         // This affects damage, experience and roar thresholds, not spawn population.
@@ -201,12 +425,12 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
                 standing[static_cast<usize>(player.player)] = true;
             }
         }
-        m_scales.players = static_cast<s32>(std::ranges::count(standing, true));
-        for (auto& child : m_children) {
-            child->m_scales.players = m_scales.players;
+        m_sim.scales.players = static_cast<s32>(std::ranges::count(standing, true));
+        for (auto& child : children()) {
+            child->m_sim.scales.players = m_sim.scales.players;
         }
     }
-    const s32 i = m_id;
+    const s32 i = m_sim.id;
     const CritterData& data = *critter.definition;
     critter.age += seconds;
     critter.burnGap = std::max(0.0f, critter.burnGap - seconds);
@@ -262,7 +486,7 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
             data.moves()[static_cast<usize>(critter.move)].type == MoveDefinition::kGrab) {
             critter.grabMove = critter.move;
         } else {
-            m_grabs.push_back({critter.grabbed, i, std::nullopt, Vec3{0}, 0});
+            m_sim.grabs.push_back({critter.grabbed, i, std::nullopt, Vec3{0}, 0});
             critter.grabbed = -1;
         }
     }
@@ -429,9 +653,9 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
                 harm != nullptr && harm->type == AttackDefinition::kSpew) {
                 critter.soundsGiven |= 32U;
                 // CritterDoDamage passes the active move node's world origin, not the floor.
-                m_spews.push_back(CombatSpew{i, partPosition(critter, move->colnode),
-                                             harm->spewVelocity(critter.yaw),
-                                             harm->spewHalfAngle()});
+                m_sim.spews.push_back(CombatSpew{i, partPosition(critter, move->colnode),
+                                                 harm->spewVelocity(critter.yaw),
+                                                 harm->spewHalfAngle()});
             }
         }
         critter.shotFrame = frame;
@@ -475,12 +699,12 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
             }
         } else {
             CombatLoss drop;
-            drop.critter = m_id;
+            drop.critter = m_sim.id;
             drop.kind = data.kind();
             drop.form = form();
             drop.drop = true;
             drop.position = critter.position;
-            m_losses.push_back(std::move(drop));
+            m_sim.losses.push_back(std::move(drop));
             critter = Actor{};
         }
     } else if (critter.state == State::Dying &&
@@ -496,7 +720,7 @@ f32 Combatant::hurt(const EnemyHit& hit, s32 partId) {
     if (!alive()) {
         return 0;
     }
-    for (auto& part : m_children) {
+    for (auto& part : children()) {
         if (part->id() == partId) {
             const f32 before = part->health();
             const f32 credited = part->hurtActor(hit);
@@ -504,8 +728,8 @@ f32 Combatant::hurt(const EnemyHit& hit, s32 partId) {
             if (part->alive()) {
                 loseHealth(before - part->health());
             }
-            m_actor.childrenIntact =
-                std::ranges::all_of(m_children, [](const auto& p) { return p->alive(); });
+            m_sim.actor.childrenIntact =
+                std::ranges::all_of(children(), [](const auto& p) { return p->alive(); });
             collectChildEvents(*part);
             return credited;
         }
@@ -514,8 +738,8 @@ f32 Combatant::hurt(const EnemyHit& hit, s32 partId) {
 }
 
 f32 Combatant::hurtActor(const EnemyHit& hit) {
-    Actor& critter = m_actor;
-    const s32 id = m_id;
+    Actor& critter = m_sim.actor;
+    const s32 id = m_sim.id;
     if (critter.state != State::Active) {
         return 0;
     }
@@ -538,7 +762,7 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
         }
     }
     const Damage modified =
-        Damage::modify(amount, flags, data.shieldFlags(), data.armor(), m_scales.bossEncounter);
+        Damage::modify(amount, flags, data.shieldFlags(), data.armor(), m_sim.scales.bossEncounter);
     flags = modified.flags;
     amount = modified.amount;
     // Shrunk, a great one takes double (CritterDamage); a boss never shrinks.
@@ -553,8 +777,9 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
     // (CritterDamage's damage_mul).
     const f32 counterDamage = amount;
     critter.roarOwed += counterDamage;
-    const s32 players = std::clamp(m_scales.players, 0, static_cast<s32>(kBossShares.size()) - 1);
-    if (boss && !m_fullHarm) {
+    const s32 players =
+        std::clamp(m_sim.scales.players, 0, static_cast<s32>(kBossShares.size()) - 1);
+    if (boss && !m_sim.fullHarm) {
         amount *= kBossShares[static_cast<usize>(players)];
     }
     if (const f32 length = glm::length(hit.direction); length > 0.001f) {
@@ -573,9 +798,9 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
         if (boss) {
             share *= static_cast<f32>(players);
         }
-        if (!boss && m_scales.playerLevel > 0.0f &&
-            static_cast<f32>(hit.level) < m_scales.playerLevel) {
-            const f32 under = m_scales.playerLevel - static_cast<f32>(hit.level);
+        if (!boss && m_sim.scales.playerLevel > 0.0f &&
+            static_cast<f32>(hit.level) < m_sim.scales.playerLevel) {
+            const f32 under = m_sim.scales.playerLevel - static_cast<f32>(hit.level);
             amount *= std::max(1.0f - kUnderLevelLoss * under, 0.1f);
         }
         CombatLoss loss;
@@ -584,7 +809,7 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
         loss.player = hit.player;
         loss.experience = share;
         loss.position = critter.position;
-        m_losses.push_back(loss);
+        m_sim.losses.push_back(loss);
     }
     amount = damageNode(hit.node, amount, flags);
     if (amount <= 0) {
@@ -604,7 +829,7 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
         burst.position = where;
         burst.yaw = critter.yaw;
         burst.scale = damage::kHitEffectScale * data.radius() * critter.scale;
-        m_cues.push_back(std::move(burst));
+        m_sim.cues.push_back(std::move(burst));
     } else if (damage::marks(flags)) {
         const s32 mark =
             !hit.close && data.hitSoundFar() >= 0 ? data.hitSoundFar() : data.hitSoundClose();
@@ -619,30 +844,30 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
                static_cast<usize>(hit.node) < critter.hitNodes.size()) {
         critter.hitNodes[static_cast<usize>(hit.node)].flashTicks = kFlashTicks;
     }
-    if (alive() && !m_children.empty()) {
+    if (alive() && !children().empty()) {
         const auto count =
-            std::ranges::count_if(m_children, [](const auto& part) { return part->alive(); });
+            std::ranges::count_if(children(), [](const auto& part) { return part->alive(); });
         if (count > 0) {
-            for (auto& part : m_children) {
+            for (auto& part : children()) {
                 if (part->alive()) {
                     part->loseHealth(0.5f * amount / static_cast<f32>(count));
                     collectChildEvents(*part);
                 }
             }
         }
-        m_actor.childrenIntact =
-            std::ranges::all_of(m_children, [](const auto& part) { return part->alive(); });
+        m_sim.actor.childrenIntact =
+            std::ranges::all_of(children(), [](const auto& part) { return part->alive(); });
     }
     return credited;
 }
 
 void Combatant::damagedPlayer(s32 player, f32 amount, s32 partId) {
-    Actor* actor = &m_actor;
-    if (partId >= 0 && partId != m_id) {
+    Actor* actor = &m_sim.actor;
+    if (partId >= 0 && partId != m_sim.id) {
         actor = nullptr;
-        for (auto& child : m_children) {
+        for (auto& child : children()) {
             if (child->id() == partId) {
-                actor = &child->m_actor;
+                actor = &child->m_sim.actor;
                 break;
             }
         }
@@ -656,7 +881,7 @@ void Combatant::damagedPlayer(s32 player, f32 amount, s32 partId) {
 }
 
 void Combatant::loseHealth(f32 amount) {
-    Actor& critter = m_actor;
+    Actor& critter = m_sim.actor;
     if (!alive() || amount <= 0.0f) {
         return;
     }
@@ -664,77 +889,77 @@ void Combatant::loseHealth(f32 amount) {
     if (critter.health <= 0.0f) {
         critter.state = State::Dying;
         CombatLoss fall;
-        fall.critter = m_id;
+        fall.critter = m_sim.id;
         fall.kind = data()->kind();
         fall.form = form();
         fall.player = -1;
         fall.experience = kKillShare * data()->experience();
         fall.killed = true;
         fall.position = critter.position;
-        m_losses.push_back(fall);
-        for (auto& part : m_children) {
+        m_sim.losses.push_back(fall);
+        for (auto& part : children()) {
             if (part->alive()) {
-                part->m_actor.health = 1.0f;
+                part->m_sim.actor.health = 1.0f;
             }
         }
     }
 }
 
 std::vector<CombatBlow> Combatant::takeBlows() {
-    return std::exchange(m_blows, {});
+    return std::exchange(m_sim.blows, {});
 }
 std::vector<CombatGrab> Combatant::takeGrabs() {
-    return std::exchange(m_grabs, {});
+    return std::exchange(m_sim.grabs, {});
 }
 
 std::vector<CombatLoss> Combatant::takeLosses() {
-    return std::exchange(m_losses, {});
+    return std::exchange(m_sim.losses, {});
 }
 
 std::vector<CombatCue> Combatant::takeCues() {
-    return std::exchange(m_cues, {});
+    return std::exchange(m_sim.cues, {});
 }
 
 std::vector<CombatSpew> Combatant::takeSpews() {
-    return std::exchange(m_spews, {});
+    return std::exchange(m_sim.spews, {});
 }
 
 std::vector<CombatShot> Combatant::takeShots() {
-    return std::exchange(m_shots, {});
+    return std::exchange(m_sim.shots, {});
 }
 std::vector<CombatArenaActivation> Combatant::takeArenaActivations() {
-    return std::exchange(m_arenaActivations, {});
+    return std::exchange(m_sim.arenaActivations, {});
 }
 
 void Combatant::startPatrol(const LookoutRoute* route, f32 sight) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->patrol.start(route, critter->position, sight);
         critter->patrolAim = critter->patrol.aim(critter->position);
     }
 }
 
 void Combatant::freeze(s32 ticks) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->frozenTicks = std::max(ticks, 0);
         critter->roarWanted = false;
     }
 }
 
 void Combatant::blind(s32 ticks) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->blindTicks = std::max(ticks, 0);
         critter->target = -1;
     }
 }
 
 void Combatant::curb(f32 seconds) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->curbSeconds = std::max(seconds, 0.0f);
     }
 }
 
 void Combatant::resize(f32 scale) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr && scale > 0.0f) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr && scale > 0.0f) {
         critter->scale = scale;
     }
 }
@@ -743,18 +968,19 @@ void Combatant::setShrink(f32 scale) {
     if (scale <= 0.0f) {
         return;
     }
-    m_actor.shrink = scale;
-    for (auto& child : m_children) {
-        child->m_actor.shrink = scale;
+    m_sim.actor.shrink = scale;
+    for (auto& child : children()) {
+        child->m_sim.actor.shrink = scale;
     }
 }
 
 f32 Combatant::dealt(f32 amount) const {
-    return kind() == CombatantKind::Boss ? amount : EnemyShrink::harmDealt(m_actor.shrink, amount);
+    return kind() == CombatantKind::Boss ? amount
+                                         : EnemyShrink::harmDealt(m_sim.actor.shrink, amount);
 }
 
 void Combatant::hold(bool held) {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->held = held;
     }
 }
@@ -766,7 +992,7 @@ f32 Combatant::roarThreshold(s32 players) {
 }
 
 void Combatant::roar() {
-    if (Actor* critter = present() ? &m_actor : nullptr; critter != nullptr) {
+    if (Actor* critter = present() ? &m_sim.actor : nullptr; critter != nullptr) {
         critter->roarWanted = true;
     }
 }

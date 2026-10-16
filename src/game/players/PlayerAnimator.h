@@ -97,6 +97,8 @@ enum class StrafeWay : u8 { None, Forward, Back, Left, Right };
  * it blends), the sequence steps, and the pose is evaluated for drawing.
  */
 class PlayerAnimator {
+    friend void visitNativeState(NativeStateDigest& digest, const PlayerAnimator& value);
+
 public:
     enum class Action : u8 {
         Ready,

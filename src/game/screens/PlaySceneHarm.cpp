@@ -51,22 +51,24 @@ void PlayScene::hurt(usize index, f32 damage, HurtKind kind, bool directed,
                      const PlayerImpact& impact) {
     // damage_player excludes trigger-camera shots even though existing effects
     // and the player's action continue to advance beneath the input lock.
-    if (index >= m_players.size() || m_switchCutscene.active()) {
+    if (index >= m_players.size() || m_sim.switchCutscene.active()) {
         return;
     }
     const LevelInfo* level = m_world->level();
     PlayerRuntime& runtime = m_players[index];
+    const auto audioScope = m_audio.soundScope(
+        {31, 0, 1, static_cast<u8>(runtime.actor.player())}, static_cast<u32>(kind) + 1);
     const PartyDamage::Context context{
         .tower = m_world->isTower(),
         .damageScale = level != nullptr ? level->tuning.damage : 1.0f,
         .bossEncounter = level != nullptr && level->bossType >= 0,
-        .cutscene = m_switchCutscene.active(),
+        .cutscene = m_sim.switchCutscene.active(),
         .lastRealmLevel =
             m_context.levels != nullptr && m_context.levels->isLastLevel(m_world->ref()),
         .realm = m_world->ref().realmId,
-        .playSeconds = m_playSeconds};
+        .playSeconds = m_sim.playSeconds};
     PartyDamage::hurt(
-        m_health, runtime, damage, kind, directed, context,
+        m_sim.health, runtime, damage, kind, directed, context,
         {.block = [this, index](f32 taken,
                                 f32 left) { m_attacks.showBlock(index, taken, left, m_players); },
          .sound = [this](std::string_view sound) { m_audio.playNamed(sound); },
@@ -76,9 +78,7 @@ void PlayScene::hurt(usize index, f32 damage, HurtKind kind, bool directed,
          .learnBlock = [this, index] { postHelp(HelpMessages::kLearnBlock, index); },
          .vibrate =
              [this, &runtime](s32 frames) {
-                 if (m_context.vibrate) {
-                     m_context.vibrate(runtime.actor.player(), frames, ControlFeedback::Damage);
-                 }
+                 emitOutput(RumbleOutput{runtime.actor.player(), frames, ControlFeedback::Damage});
              }},
         impact, m_classes.stats(runtime.actor.save().character));
 }
@@ -104,6 +104,8 @@ void PlayScene::updateHazardSurfaces(f32 seconds) {
         }
         runtime.surfaceGap = kSurfaceGap;
         if (touch->harm.jolts && m_world->ref().realmId == kMineRealm) {
+            const auto audioScope = m_audio.soundScope(
+                {44, static_cast<u64>(touch->object), 1, static_cast<u8>(actor.player())}, 1);
             m_audio.playNamed(kMineCartSound);
         }
         hurt(i, touch->harm.damage, HurtKind::Blow, true,
@@ -119,6 +121,8 @@ void PlayScene::sayWithName(usize index, std::string_view line, f32 wait) {
         return;
     }
     const CharacterSave& save = m_players[index].actor.save();
+    const auto audioScope = m_audio.soundScope(
+        {34, 0, 1, static_cast<u8>(m_players[index].actor.player())}, 1);
     const std::array lines{line};
     m_audio.announce(body->voice(), PickupVoices::nameOf(save.character, save.color),
                      PickupVoices::carriesPojo(save), lines, wait);

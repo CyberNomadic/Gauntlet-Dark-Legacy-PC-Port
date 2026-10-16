@@ -40,6 +40,40 @@ public:
 
     void open(const std::filesystem::path& root, SoundPlayer* output, const LevelAudioInfo* info,
               char realm = 'L', bool boss = false);
+    /** Capture gameplay cues before mixer mutation. Attach once before
+     * saving native history and close the recorder before releasing these banks.
+     * Owned loops are gathered after native work; music and mixer controls are
+     * serviced only after the corrected suffix. */
+    void recordTo(SceneSoundEvents* events);
+    /** Presentation-boundary preflight. Existing opening/scroll lifetimes cannot
+     * acquire a logical birth retroactively, and queued speech must drain first.
+     * Does not poll or alter playback. */
+    bool canAttachRecorder() const;
+    bool recordingSounds() const { return m_events != nullptr; }
+    bool recording() const { return m_events != nullptr && m_events->recording(); }
+    SceneSoundEvents* recorder() const { return m_events; }
+    /** Seed output-only camera placement before native work and abandon the
+     * preceding frame's ambient duck request, including on terminal early returns. */
+    void prepareRecordedFrame(const AmbientEar& ear);
+    std::optional<SceneSoundEvents::Scope> soundScope(FrameEventEmitter emitter, u32 cue) {
+        if (recording()) {
+            return std::optional<SceneSoundEvents::Scope>{std::in_place, *m_events, emitter, cue};
+        }
+        return std::nullopt;
+    }
+    /** Complete final-state gather, once after the native step's last early-return branch. */
+    void gatherLoops(std::span<const Vec3> listeners, const AmbientEar& ear, f32 volume,
+                     bool ducked, const WorldScene* world, const std::optional<Vec3>& exit,
+                     const std::optional<Vec3>& hourglass);
+    bool desireNamedLoop(const FrameLoopKey& key, std::string_view name,
+                         SceneSoundPlayback playback, f32 volume = 1, f32 pan = 0,
+                         SoundCueToken start = {});
+    bool hasNamed(std::string_view name);
+    SpeechTiming namedTiming(std::string_view name);
+    f32 panAt(const Vec3& position) const { return AmbientSounds::panOf(position, m_ear); }
+    SoundCueToken beginNamedCue(std::string_view name);
+    /** Mixer/music service belongs after the corrected suffix, not inside replay. */
+    void servicePresentation(f32 seconds);
     /** Binds the level's ambient loops, its music zones and its objects' flags. */
     void bindAmbience(const WorldLayout& layout, const WorldScene* world = nullptr);
     /** ItemVisible's joined population, independent of active listening positions. */
@@ -60,8 +94,21 @@ public:
     /** Lets the zones ask for the area holding the party (items.c 4514-4522, 4733-4736). */
     void updateMusicAreas(std::span<const Vec3> listeners, const WorldScene* world = nullptr);
     /** Starts the first area's stream at `volume`, the level's; `assets` is borrowed for the
-     * other areas' streams until the music stops. */
+     * other areas' streams and corrected requests until close(). */
     void startMusic(const AssetLocator* assets, f32 volume);
+    /** Desired music is native state; stream progress and output fades are not. */
+    struct MusicRequest {
+        s32 area = 0;
+        MusicSwitch how = MusicSwitch::AtPartEnd;
+        u64 revision = 0;
+        u64 start = 0;
+        bool enabled = false;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const MusicRequest& state) {
+            visitor.template fields<5>(state);
+        }
+        bool operator==(const MusicRequest&) const = default;
+    };
+    const MusicRequest& desiredMusic() const { return m_sim.music; }
     /** Presentation-only follower: the host chooses area/ducking, the local
      * mixer retains its own volume. Never evaluates triggers or advances AI. */
     void followMusic(const AssetLocator* assets, s32 area, s32 level, f32 volume);
@@ -89,9 +136,9 @@ public:
     /** The area whose stream plays (sSelectStreamState), -1 before the music starts. */
     s32 musicArea() const { return m_playingArea; }
     /** The area asked for (sMusicSubIndex). */
-    s32 musicRequest() const { return m_musicArea; }
+    s32 musicRequest() const { return m_sim.music.area; }
     /** The music's level, kFullLevel but for a fade or a duck. */
-    s32 musicLevel() const { return m_musicLevel; }
+    s32 musicLevel() const { return m_musicPlayback.level; }
     /** The area a switch at the part's end waits for, -1 when none does. */
     s32 musicFollowing() const { return m_followArea; }
     const MusicAreas& musicAreas() const { return m_areas; }
@@ -111,6 +158,7 @@ public:
                        f32 volume = 1.0f);
     static constexpr f32 kSplashLevel = 180.0f; ///< byte volume of a projectile's water impact
     SoundHandle playFrom(SoundSet& bank, std::string_view name, f32 volume = 1.0f);
+    SoundHandle playFromCall(SoundSet& bank, u32 call, f32 volume = 1.0f);
     SoundHandle playPromotion(std::string_view name, SoundHandle after = kNoSound);
     /** A gameplay wait paired with optional audible playback. Never poll the
      * handle for simulation decisions; missing or failed output still retains
@@ -118,6 +166,7 @@ public:
     struct Speech {
         SoundHandle handle = kNoSound;
         SpeechTiming timing;
+        SoundCueToken cue;
     };
     Speech speechNamed(std::string_view name) { return speechNamed(name, Speech{}); }
     Speech speechNamed(std::string_view name, const Speech& after);
@@ -247,7 +296,13 @@ private:
     void placeLoop(PlacedLoop& loop, const std::optional<Vec3>& spot, const AmbientEar& ear);
     void stopLoop(PlacedLoop& loop);
     SoundHandle track(SoundHandle handle);
+    void requirePresentation(std::string_view operation) const;
+    SoundHandle playSequence(const SoundSequence& sequence, f32 volume = 1, f32 pan = 0,
+                             SoundHandle after = kNoSound);
+    SoundHandle playNamedPanned(std::string_view name, f32 volume, f32 pan,
+                                SoundHandle after = kNoSound);
     SoundHandle playOpening(s32 slot, bool settled);
+    std::string openingName(s32 slot, bool settled) const;
     void playMotion(s32 slot, s32 target, bool settled);
     /** The bank of the level's own that holds `name`, if one does: level, common, ambient. */
     SoundSet* bankOf(std::string_view name, u32& sound);
@@ -269,8 +324,15 @@ private:
     void playArea(s32 area);
     f32 musicVolume() const;
     void stopMusic();
+    /** Reconcile a corrected native request at a service boundary, never during restore. */
+    void applyMusicRequest();
+    void serviceMusic(f32 seconds);
+    void duckAmbientMusic(f32 seconds, f32 scale);
 
     SoundPlayer* m_output = nullptr;
+    SceneSoundEvents* m_events = nullptr;
+    AmbientEar m_ear;
+    std::optional<f32> m_ambientDuck;
     SoundSet m_common;
     SoundSet m_level;
     SoundSet m_ambient;
@@ -278,7 +340,6 @@ private:
     SoundSet m_narratorSecond;
     SoundSet m_promotions;
     AmbientSounds m_ambience; ///< cleared before its borrowed banks
-    AmbientEar m_ear;
     MusicAreas m_areas;
     std::vector<u32> m_objectFlags; ///< the level's objects' flags, by object
     std::optional<u32> m_pickup;
@@ -287,21 +348,23 @@ private:
     std::array<s32, 8> m_streamParts{}; ///< a part count per area
     char m_realm = 'L';
     bool m_boss = false;
-    const AssetLocator* m_assets = nullptr; ///< borrowed while the music runs
+    const AssetLocator* m_assets = nullptr; ///< stage binding retained until close()
     std::shared_ptr<StreamPlaylist> m_playlist;
     f32 m_musicVolume = 1.0f;   ///< the level's
     bool m_musicOn = false;     ///< started and not stopped (sSelectStreamHandle held)
     bool m_musicSilent = false; ///< the area asked for had no stream: silent until another
-    s32 m_musicArea = 0;        ///< sMusicSubIndex
-    MusicSwitch m_musicSwitch = MusicSwitch::AtPartEnd; ///< sMusicSubState
-    s32 m_playingArea = -1;                             ///< sSelectStreamState
-    s32 m_followArea = -1;                              ///< the area waiting for the part's end
-    usize m_followsTaken = 0; ///< the playlist's continuations seen through
-    s32 m_musicLevel = kFullLevel;
-    f32 m_musicFrames = 0.0f; ///< game time owed to the music, in its frames
-    f32 m_musicDuck = 0.0f;   ///< seconds the duck has left to run
-    f32 m_musicDuckScale = 1.0f;
-    bool m_bossAwake = false;
+    s32 m_playingArea = -1;     ///< sSelectStreamState
+    s32 m_followArea = -1;      ///< the area waiting for the part's end
+    usize m_followsTaken = 0;   ///< the playlist's continuations seen through
+    struct MusicPlayback {
+        MusicRequest applied;
+        s32 area = 0;
+        MusicSwitch how = MusicSwitch::AtPartEnd;
+        s32 level = kFullLevel;
+        f32 frames = 0;
+        f32 ambientDuck = 0;
+        f32 ambientDuckScale = 1;
+    } m_musicPlayback;
     SoundHandle m_music = kNoSound;
     SoundHandle m_voice = kNoSound;
     std::vector<Opening> m_openings;
@@ -310,6 +373,57 @@ private:
     std::vector<SoundHandle> m_voices; ///< includes queued lines; pruned as new sounds start
     VoiceQueue m_narration;
     VoiceQueue m_barks;
+    /** Logical requests/timers. Stream callbacks and mixer handles remain presentation state. */
+    struct Simulation {
+        struct OwnedCue {
+            std::string name;
+            SoundCueToken start;
+            s32 target = -1;
+            bool promotion = false;
+            template <class Visitor> friend void visitNativeState(Visitor& visitor, const OwnedCue& state) {
+                visitor.template fields<4>(state);
+            }
+            bool operator==(const OwnedCue&) const = default;
+        };
+        std::vector<OwnedCue> openings;
+        std::optional<OwnedCue> scroll;
+        bool cuesEnabled = true;
+        MusicRequest music;
+        f32 duck = 0;
+        f32 duckScale = 1;
+        bool bossAwake = false;
+        s32 players = 1;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Simulation& state) {
+            visitor.template fields<8>(state);
+        }
+        bool operator==(const Simulation&) const = default;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class LevelSoundscape;
+        Simulation m_values;
+        VoiceQueue::LocalSnapshot m_narration;
+        VoiceQueue::LocalSnapshot m_barks;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+    };
+    /** Same loaded banks/ambience only. Restores requests and speech admission,
+     * never rewinds a stream, changes a mixer voice or emits output. Music stream
+     * callback servicing itself remains local presentation, not deterministic state. */
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    /** Logical requests and admission only; device voices and stream positions
+     * never feed a native tick and are not restored. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
+    u64 m_localEpoch = 1;
 };
 
 } // namespace gdl::game

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -7,10 +8,12 @@
 #include "engine/assets/AnimationSet.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 #include "engine/math/Math.h"
 #include "engine/world/WorldScene.h"
 
 namespace gdl {
+class NativeStateDigest;
 
 /**
  * A level's keyframed objects played the way the original moves them: thirty frames a
@@ -53,6 +56,9 @@ public:
         bool presentationCut = true;
         bool valid() const;
         bool operator==(const Cursor&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Cursor& value) {
+            digest.template fields<8>(value);
+        }
     };
     std::vector<Cursor> checkpoint() const;
     /** Restores every cursor atomically against the bound track roster. Does not
@@ -67,27 +73,42 @@ public:
     struct CycleEvent {
         s32 object = -1;
         bool wrapped = false; ///< loop endpoint, otherwise the first frames of a new pass
+        bool operator==(const CycleEvent&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const CycleEvent& value) {
+            digest.template fields<2>(value);
+        }
     };
     std::span<const CycleEvent> cycleEvents() const { return m_cycleEvents; }
+    class LocalSnapshot {
+        friend class WorldAnimator;
+        std::vector<Cursor> cursors;
+        std::vector<CycleEvent> cycles;
+        const WorldAnimator* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
 
 private:
     friend class WorldStateCheckpoint;
-    struct Track {
-        s32 object = -1;
-        s32 frames = 0;
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
+    const CanonicalDigestSink::Digest& trackDigest() const;
+    struct Track : Cursor {
         TrackInfo track;
-        Vec3 origin{0.0f, 0.0f, 0.0f}; ///< the object's rest offset from its parent
-        f32 frame = 0.0f;
-        bool reverse = false; ///< plays backwards once
-        bool once = false;    ///< plays forwards once
-        bool finished = false;
-        bool held = false;           ///< waiting at its first frame for a trigger
-        bool presentationCut = true; ///< first placement, reset or loop discontinuity
+        Vec3 origin{0.0f}; ///< immutable rest offset from the parent
     };
 
     static void pose(const Track& track, WorldScene& scene);
 
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::vector<Track> m_tracks;
+    // Authored keys/origins change only on bind/clear. Live cursors and pending
+    // cycle events are still visited directly on every hash and rewind.
+    mutable std::optional<CanonicalDigestSink::Digest> m_trackDigest;
     std::vector<CycleEvent> m_cycleEvents;
 };
 

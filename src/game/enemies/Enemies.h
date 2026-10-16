@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,8 @@
 #include "game/world/PlayerMissiles.h"
 
 namespace gdl::game {
+
+class NativeStateResources;
 
 /** The level's scales on its enemies. */
 struct EnemyScales {
@@ -174,6 +177,7 @@ struct EnemyBurst {
     s32 enemy = -1;
     s32 kind = -1;             ///< whose fragments scatter when it explodes
     bool silencesYell = false; ///< set off by a hit rather than its own fuse
+    u64 instance = 0;          ///< retained after the bomber's body disappears
     bool operator==(const EnemyBurst&) const = default;
 };
 
@@ -192,8 +196,22 @@ struct EnemyCue {
     Kind kind = Kind::Arrow;
     s32 enemyKind = 0;
     Vec3 position{0.0f, 0.0f, 0.0f};
+    /** Captured at emission: the pool slot may be recycled before this is consumed. */
+    s32 enemy = -1;
+    u64 instance = 0;
     bool operator==(const EnemyCue&) const = default;
 };
+
+void visitNativeState(NativeStateDigest& digest, const EnemyScales& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyBlow& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyLoss& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyBody& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyGeneratorEvent& value);
+void visitNativeState(NativeStateDigest& digest, const EnemySpawn& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyDeathShot& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyBurst& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyBirth& value);
+void visitNativeState(NativeStateDigest& digest, const EnemyCue& value);
 
 /** The strengths a placement gives past the tiers: the variants. */
 inline constexpr s32 kArcherStrength = 4;
@@ -241,16 +259,16 @@ public:
     /** The level's harmful surfaces, borrowed until close. */
     void setHazards(const HazardSurfaces* hazards) { m_hazards = hazards; }
     /** What the camera takes in, for what is on screen; none takes everything in. */
-    void setView(std::optional<ViewVolume> view) { m_view = view; }
+    void setView(std::optional<ViewVolume> view) { m_simulation.view = view; }
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): shown and
      * shadowed at it, taking double and dealing half while under one. */
-    void setShrink(f32 scale) { m_shrink = scale; }
-    f32 shrink() const { return m_shrink; }
+    void setShrink(f32 scale) { m_simulation.shrink = scale; }
+    f32 shrink() const { return m_simulation.shrink; }
     /** How many stand in view by twice their radius, as of the last update (do_enemies);
      * without a view, all of them. */
-    s32 inView() const { return m_inView; }
+    s32 inView() const { return m_simulation.inView; }
     /** The lookouts its patrollers walk between. */
-    void setLookouts(LookoutRoute lookouts) { m_lookouts = std::move(lookouts); }
+    void setLookouts(LookoutRoute lookouts) { m_simulation.lookouts = std::move(lookouts); }
     /** Snapshot of the larger creatures' solid collision nodes and root fallbacks.
      * Refreshed before births and movement; owns the values, not the caller's view. */
     void setCombatantBodies(std::span<const MissileTarget> bodies);
@@ -263,6 +281,9 @@ public:
     bool kindLoaded(s32 kind) const;
     const ItemArchive* archiveOf(s32 kind) const;
     ItemArchive* archive(s32 kind);
+    /** Retained stage artwork includes kinds admitted only by a discarded native branch. */
+    bool registerNativeResources(NativeStateResources& resources,
+                                 std::string_view stablePrefix) const;
     /** Already-loaded arrow/bomb/bolt model; never loads assets or starts a shot. */
     const TreeModel* projectileModel(s32 kind, s32 slot) const;
     /** The prefix a kind's bodies are named by ("GRU") and the tree of a tier ("GRU1"). */
@@ -410,13 +431,19 @@ public:
     f32 sightOf(s32 id) const;     ///< how far it sees, at the level's scale
     s32 stunTicksOf(s32 id) const; ///< ticks it still stands still after appearing
     /** How solid it shows: one, or less while a veiling kind fades. */
-    f32 opacityOf(s32 id) const { return 1.0f - m_enemies[static_cast<usize>(id)].veil / kVeiled; }
+    f32 opacityOf(s32 id) const {
+        return 1.0f - m_simulation.enemies[static_cast<usize>(id)].veil / kVeiled;
+    }
     static constexpr s32 kVeilingKind = 24; ///< the warlock (fn_8004D958's type 24)
     static constexpr f32 kVeiled = 255.0f;
     const EnemyAnimator* animatorOf(s32 id) const;
-    const MindMemory& memoryOf(s32 id) const { return m_enemies[static_cast<usize>(id)].mind; }
-    bool bumpedWallOf(s32 id) const { return m_enemies[static_cast<usize>(id)].bumpedWall; }
-    bool blockedOf(s32 id) const { return m_enemies[static_cast<usize>(id)].blocked; }
+    const MindMemory& memoryOf(s32 id) const {
+        return m_simulation.enemies[static_cast<usize>(id)].mind;
+    }
+    bool bumpedWallOf(s32 id) const {
+        return m_simulation.enemies[static_cast<usize>(id)].bumpedWall;
+    }
+    bool blockedOf(s32 id) const { return m_simulation.enemies[static_cast<usize>(id)].blocked; }
     /** How far one of `kind` goes in a tick. */
     f32 paceOf(s32 kind) const;
 
@@ -450,6 +477,7 @@ public:
             s32 object = -1;
             Vec3 local{0};
             bool operator==(const Floor&) const = default;
+            friend void visitNativeState(NativeStateDigest& digest, const Floor& value);
         };
         std::optional<Floor> floor;
         f32 yaw = 0.0f; ///< the way the body faces
@@ -490,6 +518,7 @@ public:
         std::string deathSkin;
         bool valid() const;
         bool operator==(const BodyState&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const BodyState& value);
     };
 
     struct Checkpoint {
@@ -582,6 +611,7 @@ private:
 
     struct Enemy : BodyState {
         EnemyAnimator animator;
+        bool operator==(const Enemy&) const = default;
     };
 
     Stock* stockOf(s32 kind);
@@ -648,33 +678,76 @@ private:
     std::filesystem::path m_root;
     const WorldCollision* m_collision = nullptr;
     const HazardSurfaces* m_hazards = nullptr; ///< borrowed from the level
-    LookoutRoute m_lookouts;
-    s32 m_most = kMost;
-    EnemyScales m_scales;
-    std::vector<std::unique_ptr<Stock>> m_stocks;
-    std::array<Enemy, kMost> m_enemies;
-    u64 m_nextInstance = 1;
-    std::vector<EnemyBlow> m_blows;
-    std::vector<EnemyLoss> m_losses;
-    std::vector<EnemyBurst> m_bursts;
-    std::vector<EnemyBirth> m_births;
-    std::vector<EnemyCue> m_cues;
-    std::vector<EnemyFeedback> m_feedback;
-    std::vector<DeathEvent> m_deathEvents;
-    std::vector<EnemyDeathShot> m_deathShots;
-    std::vector<s32> m_tagged;
-    std::vector<EnemyGeneratorEvent> m_generatorEvents;
-    std::vector<EnemyBody> m_combatants;
-    Vec2 m_contactGridOrigin{0};
-    f32 m_contactGridInverseWidth = 0;
-    Mt19937 m_random;
-    s32 m_bomber = -1; ///< the lit suicide bomber the rest run from this tick
-    std::optional<ViewVolume> m_view;
-    s32 m_inView = 0;
-    u32 m_frame = 0;
-    s32 m_pendingTicks = 0;
-    f32 m_pendingSeconds = 0;
-    f32 m_shrink = 1.0f;
+    // Live mutable values, copied directly for same-process rewind. Enemy animators
+    // borrow immutable trees from m_stockCache; poses, RNG and event queues are values.
+    struct Simulation {
+        LookoutRoute lookouts;
+        s32 most = kMost;
+        EnemyScales scales;
+        std::vector<Stock*> stocks;
+        std::array<Enemy, kMost> enemies;
+        u64 nextInstance = 1;
+        std::vector<EnemyBlow> blows;
+        std::vector<EnemyLoss> losses;
+        std::vector<EnemyBurst> bursts;
+        std::vector<EnemyBirth> births;
+        std::vector<EnemyCue> cues;
+        std::vector<EnemyFeedback> feedback;
+        std::vector<DeathEvent> deathEvents;
+        std::vector<EnemyDeathShot> deathShots;
+        std::vector<s32> tagged;
+        std::vector<EnemyGeneratorEvent> generatorEvents;
+        std::vector<EnemyBody> combatants;
+        Vec2 contactGridOrigin{0};
+        f32 contactGridInverseWidth = 0;
+        Mt19937 random;
+        s32 bomber = -1; ///< the lit suicide bomber the rest run from this tick
+        std::optional<ViewVolume> view;
+        s32 inView = 0;
+        u32 frame = 0;
+        s32 pendingTicks = 0;
+        f32 pendingSeconds = 0;
+        f32 shrink = 1.0f;
+    };
+
+public:
+    /** Reusable local memory only. No wire representation or resource-rebinding protocol.
+     * The opened pool owns all borrowed artwork; close/open invalidates the snapshot. */
+    class LocalSnapshot {
+    public:
+        LocalSnapshot() = default;
+
+    private:
+        friend class Enemies;
+        Simulation m_simulation;
+        std::vector<TextureAnimator::Clock> m_textureClocks;
+        std::shared_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+        const WorldCollision* m_collision = nullptr;
+        const HazardSurfaces* m_hazards = nullptr;
+    };
+    bool saveLocal(LocalSnapshot& destination) const;
+    bool canRestoreLocal(const LocalSnapshot& source) const;
+    /** Exact same-owner native values, including inactive slots, RNG, pending
+     * outputs and retained animation. Shared art/draw caches are not compared. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    /** Complete captured native pool values, not its public presentation. Immutable
+     * art is resolved through stage resource identities; draw caches are excluded. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& source) const;
+    /** Restores values in place, retaining archives and GPU resources. May reuse this
+     * snapshot repeatedly; collision/hazard state is owned by the enclosing scene. */
+    bool restoreLocal(const LocalSnapshot& source);
+
+private:
+    static void appendSimulationDigest(
+        NativeStateDigest& digest, const Simulation& state,
+        std::optional<std::span<const TextureAnimator::Clock>> savedClocks = std::nullopt);
+    Simulation m_simulation;
+    // Retain lazily loaded archives until close, even when a rewind hides their kind.
+    // A replayed loadKind reactivates the same resource without disk/GPU work.
+    std::vector<std::unique_ptr<Stock>> m_stockCache;
+    u64 m_resourceEpoch = 0;
 };
 
 } // namespace gdl::game

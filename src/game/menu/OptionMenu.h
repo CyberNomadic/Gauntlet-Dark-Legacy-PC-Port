@@ -19,6 +19,9 @@ namespace gdl::game {
 
 /** The virtual screen a menu lays itself out on, and the camera its 3D icon is sized for. */
 struct MenuScreen {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuScreen& value) {
+        digest.template fields<3>(value);
+    }
     s32 width = 512;
     s32 height = 384;
     f32 horizontalFov = glm::radians(60.0f);
@@ -26,11 +29,17 @@ struct MenuScreen {
 
 /** Placement of a choice and its arrows independently of the other rows. */
 struct MenuValueColumn {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuValueColumn& value) {
+        digest.template fields<2>(value);
+    }
     s32 x = 0;
     s32 width = 0;
 };
 
 struct MenuItem {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuItem& value) {
+        digest.template fields<8>(value);
+    }
     std::string text;
     s32 code = 0;
     s32 extraSpacing = 0; ///< pixels added below the item
@@ -45,12 +54,18 @@ struct MenuItem {
 };
 
 struct MenuColors {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuColors& value) {
+        digest.template fields<3>(value);
+    }
     Color off = Color::rgba(180, 50, 10);
     Color on = Color::white();
     Color hi = Color::rgba(130, 0, 234);
 };
 
 struct MenuDefinition {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuDefinition& value) {
+        digest.template fields<33>(value);
+    }
     /** Shared parchment menu: red ink, purple selection glow, no instruction footer. */
     static MenuDefinition parchment();
 
@@ -123,6 +138,17 @@ struct MenuTextures {
  * per-tick rules (60 ticks per second).
  */
 class OptionMenu {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const OptionMenu& value) {
+        const auto& [definition, screen, open, backdropReleased, selection, time, finishTimer,
+                     lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale,
+                     backdrop, iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas,
+                     alternateX, lastPointer, hoverPart] = value;
+        digest.values(definition, screen, open, backdropReleased, selection, time, finishTimer,
+                      lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale,
+                      backdrop, iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas,
+                      alternateX, lastPointer, hoverPart);
+    }
+
 public:
     static constexpr s32 kFadeTicks = 30;
     static constexpr s32 kPulseTicks = 40;

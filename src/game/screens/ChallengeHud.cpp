@@ -1,5 +1,7 @@
 #include "game/screens/ChallengeHud.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -44,16 +46,17 @@ bool ChallengeHud::bind(RenderDevice& device, ItemArchive& archive) {
 }
 
 void ChallengeHud::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_frame = nullptr;
     m_sand = nullptr;
     m_falling.clear();
-    m_frames = 0;
+    m_sim.frames = 0;
 }
 
 void ChallengeHud::step(f32 seconds) {
-    m_frames += std::max(seconds, 0.0f) * kAnimationRate;
-    const auto frames = static_cast<u32>(m_frames);
-    m_frames -= static_cast<f32>(frames);
+    m_sim.frames += std::max(seconds, 0.0f) * kAnimationRate;
+    const auto frames = static_cast<u32>(m_sim.frames);
+    m_sim.frames -= static_cast<f32>(frames);
     m_falling.step(frames);
 }
 
@@ -104,6 +107,48 @@ void ChallengeHud::draw(Canvas& canvas, const Look& look) const {
     const auto shape = sandAt(look.elapsed);
     canvas.draw(*m_sand, shape.upper, shape.upperUv, Color::white());
     canvas.draw(*m_sand, shape.lower, shape.lowerUv, Color::white());
+}
+
+void ChallengeHud::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.falling = m_falling.clock();
+}
+
+bool ChallengeHud::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding;
+}
+
+bool ChallengeHud::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_falling.restoreClock(saved.falling);
+    return true;
+}
+
+bool ChallengeHud::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("challenge-hud-native-v1");
+    digest.resource(m_frame);
+    digest.resource(m_sand);
+    m_falling.appendBindingDigest(digest);
+    digest.fields<1>(saved ? saved->state : m_sim);
+    digest.fields<3>(saved ? saved->falling : m_falling.clock());
+    return digest.good();
+}
+
+bool ChallengeHud::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool ChallengeHud::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
 }
 
 } // namespace gdl::game

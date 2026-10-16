@@ -1,5 +1,7 @@
 #include "engine/world/WorldScene.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -152,7 +154,11 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                 break;
             }
         }
+        if (placement.moving) {
+            m_movingPlacements.push_back(i);
+        }
     }
+    captureStaticPlacements();
 
     // Still geometry is keyed by texture and lightmap, the glows and the objects that keep
     // depth unwritten apart from the rest.
@@ -323,11 +329,182 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
     return true;
 }
 
+WorldScene::StaticPlacements::StaticPlacements(std::vector<PlacementState> states)
+    : values(std::move(states)) {
+    NativeStateDigest digest;
+    digest.string("WorldScene.static-placements/1");
+    digest.value(values);
+    fingerprint = digest.finish();
+}
+
+void WorldScene::captureStaticPlacements() {
+    std::vector<PlacementState> values;
+    values.reserve(m_placements.size() - m_movingPlacements.size());
+    m_staticPreviousPending = false;
+    for (const auto& placement : m_placements) {
+        if (!placement.moving) {
+            values.push_back(placement);
+            m_staticPreviousPending |= placement.previous != placement.local;
+        }
+    }
+    m_staticPlacements = std::make_shared<const StaticPlacements>(std::move(values));
+}
+
+const CanonicalDigestSink::Digest& WorldScene::rosterDigest() const {
+    if (m_rosterDigest) return *m_rosterDigest;
+    NativeStateDigest digest;
+    digest.string("WorldScene.roster/1");
+    digest.values(m_layoutSignature, m_movingPlacements);
+    digest.wide(m_placements.size());
+    for (const auto& placement : m_placements) {
+        digest.values(placement.initial, placement.parent, placement.unit, placement.moving);
+    }
+    digest.wide(m_units.size());
+    for (const auto& unit : m_units) {
+        digest.values(unit.object, unit.sortBias, unit.facing, unit.prelit, unit.chrome,
+                      unit.sorted, unit.deferAlways, unit.meshAlpha, unit.background,
+                      unit.depthWrite, unit.depthTest);
+    }
+    m_rosterDigest = digest.finish();
+    return *m_rosterDigest;
+}
+
+bool WorldScene::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("WorldScene/2");
+    // Build fixes the roster. Static poses are immutable versions, not a cache
+    // of whichever version happens to be live when historical state is hashed.
+    digest.bytes(rosterDigest());
+    digest.bytes((saved ? saved->staticPlacements : m_staticPlacements)->fingerprint);
+    digest.wide(m_movingPlacements.size());
+    for (usize i = 0; i < m_movingPlacements.size(); ++i) {
+        digest.value(saved ? saved->placements[i]
+                           : static_cast<const PlacementState&>(m_placements[m_movingPlacements[i]]));
+    }
+    digest.flag(saved ? saved->staticPreviousPending : m_staticPreviousPending);
+    digest.wide(m_units.size());
+    for (usize i = 0; i < m_units.size(); ++i) {
+        digest.value(saved ? saved->units[i] : static_cast<const UnitState&>(m_units[i]));
+    }
+    // Slot iteration must not inherit unordered-map insertion/bucket order. Saved
+    // motion is read directly, never selected from the live animation clock.
+    std::vector<std::pair<u32, const SlotMotion*>> slots;
+    slots.reserve(m_slots.size());
+    if (saved) {
+        for (const auto& [key, motion] : saved->slots) slots.emplace_back(key, &motion);
+    } else {
+        for (const auto& [key, motion] : m_slots) slots.emplace_back(key, &motion);
+    }
+    std::ranges::sort(slots, {}, &std::pair<u32, const SlotMotion*>::first);
+    digest.wide(slots.size());
+    for (const auto& [key, motion] : slots) {
+        const auto found = m_slots.find(key);
+        if (found == m_slots.end()) { digest.invalidate(); return false; }
+        digest.value(key);
+        digest.resource(found->second.texture);
+        digest.values(found->second.usable, found->second.thermal, *motion);
+    }
+    digest.values(saved ? saved->lighting : m_lighting,
+                  saved ? saved->darken : m_darken,
+                  saved ? saved->textureFrame : m_textureFrame);
+    // Bound mesh/batch geometry is immutable art authenticated at stage load.
+    // Composed matrices, sorting, uploaded/lit vertices are derived draw scratch.
+    return digest.good();
+}
+
+bool WorldScene::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool WorldScene::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [placements, staticPlacements, staticPreviousPending, units, slots, lighting, darken, textureFrame, owner, binding] = saved;
+    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    return appendDigest(digest, &saved);
+}
+
+void WorldScene::saveLocal(LocalSnapshot& saved) const {
+    saved.placements.resize(m_movingPlacements.size());
+    for (usize i = 0; i < m_movingPlacements.size(); ++i) {
+        saved.placements[i] = m_placements[m_movingPlacements[i]];
+    }
+    saved.staticPlacements = m_staticPlacements;
+    saved.staticPreviousPending = m_staticPreviousPending;
+    saved.units.resize(m_units.size());
+    for (usize i = 0; i < m_units.size(); ++i) {
+        saved.units[i] = m_units[i];
+    }
+    saved.slots.resize(m_slots.size());
+    usize i = 0;
+    for (const auto& [key, slot] : m_slots) {
+        // Copy into the retained cycle buffer. Assigning a temporary pair
+        // allocates a fresh cycle vector and throws away the ring slot's capacity.
+        auto& destination = saved.slots[i++];
+        destination.first = key;
+        destination.second = slot;
+    }
+    saved.lighting = m_lighting;
+    saved.darken = m_darken;
+    saved.textureFrame = m_textureFrame;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+}
+
+bool WorldScene::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
+           saved.placements.size() == m_movingPlacements.size() && saved.staticPlacements &&
+           saved.staticPlacements->values.size() == m_placements.size() - m_movingPlacements.size() &&
+           saved.units.size() == m_units.size() && saved.slots.size() == m_slots.size();
+}
+
+bool WorldScene::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.placements == right.placements &&
+           left.staticPlacements->values == right.staticPlacements->values &&
+           left.staticPreviousPending == right.staticPreviousPending && left.units == right.units &&
+           left.slots == right.slots && left.lighting == right.lighting &&
+           left.darken == right.darken && left.textureFrame == right.textureFrame;
+}
+
+bool WorldScene::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize i = 0; i < m_movingPlacements.size(); ++i) {
+        static_cast<PlacementState&>(m_placements[m_movingPlacements[i]]) = saved.placements[i];
+    }
+    if (m_staticPlacements != saved.staticPlacements) {
+        usize i = 0;
+        for (auto& placement : m_placements) {
+            if (!placement.moving) {
+                static_cast<PlacementState&>(placement) = saved.staticPlacements->values[i++];
+            }
+        }
+        m_staticPlacements = saved.staticPlacements;
+    }
+    m_staticPreviousPending = saved.staticPreviousPending;
+    for (usize i = 0; i < m_units.size(); ++i) {
+        static_cast<UnitState&>(m_units[i]) = saved.units[i];
+    }
+    for (const auto& [key, motion] : saved.slots) {
+        static_cast<SlotMotion&>(m_slots.at(key)) = motion;
+    }
+    m_lighting = saved.lighting;
+    m_darken = saved.darken;
+    m_textureFrame = saved.textureFrame;
+    std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
+    std::fill(m_presentedValid.begin(), m_presentedValid.end(), u8{0});
+    return true;
+}
+
 void WorldScene::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_slots.clear();
     m_batches.clear();
     m_units.clear();
     m_placements.clear();
+    m_movingPlacements.clear();
+    m_staticPlacements = std::make_shared<const StaticPlacements>();
+    m_rosterDigest.reset();
+    m_staticPreviousPending = false;
     m_world.clear();
     m_worldValid.clear();
     m_presentedWorld.clear();
@@ -344,8 +521,20 @@ bool WorldScene::moving(usize object) const {
 }
 
 void WorldScene::capturePresentation() {
-    for (Placement& placement : m_placements) {
+    for (const usize object : m_movingPlacements) {
+        auto& placement = m_placements[object];
         placement.previous = placement.local;
+    }
+    // The diagnostic restore can supply an earlier pose for a static parent.
+    // It is settled once, just as in the full roster capture, without copying
+    // the unchanged static world into every native history slot thereafter.
+    if (m_staticPreviousPending) {
+        for (auto& placement : m_placements) {
+            if (!placement.moving) {
+                placement.previous = placement.local;
+            }
+        }
+        captureStaticPlacements();
     }
 }
 
@@ -433,8 +622,12 @@ bool WorldScene::applyGeometry(const SceneGeometry& state) {
         unit.visible = true;
         unit.alpha = 1;
     }
+    bool staticChanged = false;
     for (const auto& object : state.objects) {
         auto& placement = m_placements[object.index];
+        staticChanged |= !placement.moving &&
+                         (placement.local != object.local || placement.previous != object.local ||
+                          placement.continuity != object.continuity);
         placement.local = object.local;
         placement.previous = object.local;
         placement.continuity = object.continuity;
@@ -442,6 +635,9 @@ bool WorldScene::applyGeometry(const SceneGeometry& state) {
             unit->alpha = object.alpha;
             unit->visible = object.visible;
         }
+    }
+    if (staticChanged) {
+        captureStaticPlacements();
     }
     m_darken = state.darken;
     std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
@@ -644,8 +840,8 @@ Color WorldScene::shadeAt(bool additive, bool prelit, const MeshVertex& vertex,
 /** Places, lights and draws a unit's parts: the plain ones when `plainParts`, the glowing
  * ones when `additiveParts`. A fading unit blends and stops writing depth as a whole. */
 void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& clip,
-                          const CameraFrame& camera, bool plainParts, bool additiveParts,
-                          f32 alpha, std::optional<f32> textureFrameOffset) const {
+                          const CameraFrame& camera, bool plainParts, bool additiveParts, f32 alpha,
+                          std::optional<f32> textureFrameOffset) const {
     if (!unit.visible || unit.alpha <= 0.0f) {
         return;
     }
@@ -660,7 +856,14 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
         m_scratch.begin(PrimitiveTopology::TriangleList);
         for (const u32 index : part.part->indices) {
             const MeshVertex& v = unit.mesh->vertices[index];
-            const Vec3 normal = glm::normalize(normalMatrix * v.normal);
+            const Vec3 transformedNormal = normalMatrix * v.normal;
+            const f32 normalLength = glm::length(transformedNormal);
+            // Authored prelit meshes may have no normal; collapsed moving
+            // geometry also yields zero. Preserve its baked colour and the
+            // neutral chrome coordinate instead of normalizing zero to NaN.
+            const Vec3 normal = normalLength > 0 && std::isfinite(normalLength)
+                                    ? transformedNormal / normalLength
+                                    : Vec3{0};
             const Vec4 placed = world * Vec4{v.position, 1.0f};
             Color color = shadeAt(part.additive, unit.prelit, v, Vec3{placed}, normal, m_lighting);
             if (unit.alpha < 1.0f) {

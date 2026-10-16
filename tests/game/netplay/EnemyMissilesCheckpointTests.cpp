@@ -62,6 +62,7 @@ State richState() {
     state.missiles.push_back(flight);
 
     EnemyMissiles::Burst burst;
+    burst.instance = 0x0102030405060709ULL;
     burst.blast.position = {-10, 3, 0.5f};
     burst.blast.radius = 7.5f;
     burst.blast.damage = 11.125f;
@@ -77,6 +78,7 @@ State richState() {
     state.bursts.push_back(burst);
 
     EnemyMissileHit hit;
+    hit.instance = 0x010203040506070aULL;
     hit.player = 3;
     hit.shooter = Enemies::kMost - 1;
     hit.damage = 1.75f;
@@ -112,7 +114,7 @@ TEST_CASE("enemy missile packets preserve every scalar vector queue and opaque d
                                  12 + 16 + 16 + 12 + Codec::kHitBytes + Codec::kRockBytes +
                                  Codec::kPickupBytes);
     CHECK(readU32LE(*bytes, 0) == fourcc("GDEM"));
-    CHECK(readU32LE(*bytes, 4) == 1);
+    CHECK(readU32LE(*bytes, 4) == 2);
     CHECK(readU32LE(*bytes, 8) == 0x55667788U);
     CHECK(readU32LE(*bytes, 12) == 0x11223344U);
     CHECK(readU32LE(*bytes, Codec::kHeaderBytes) == 0x05060708U);
@@ -153,7 +155,7 @@ TEST_CASE("enemy missile packet decoding rejects every truncation trailing byte 
     const std::array<std::pair<usize, u32>, 24> edits{{
         {0, 0},
         {4, 0},
-        {4, 2},
+        {4, 3},
         {24, static_cast<u32>(Codec::kMaxMissiles + 1)},
         {28, static_cast<u32>(Codec::kMaxBursts + 1)},
         {32, static_cast<u32>(Codec::kMaxEvents + 1)},
@@ -182,6 +184,46 @@ TEST_CASE("enemy missile packet decoding rejects every truncation trailing byte 
         writeWord(malformed, offset, value);
         CHECK_FALSE(Codec::decode(malformed));
     }
+}
+
+TEST_CASE("enemy missile diagnostic identities preserve retired sources and reject collisions",
+          "[enemy-missiles-wire][native-combat-audio]") {
+    const auto baseline = richState();
+    auto state = baseline;
+    state.missiles.clear();
+    // An impact remains valid after its flight was removed or its shooter reused.
+    REQUIRE(state.valid());
+    const auto retired = Codec::encode(state);
+    REQUIRE(retired);
+    CHECK(Codec::decode(*retired) == state);
+    state = baseline;
+    state.bursts[0].instance = state.missiles[0].instance;
+    CHECK_FALSE(state.valid());
+    CHECK_FALSE(Codec::encode(state));
+    state = baseline;
+    state.bursts[0].instance = state.nextInstance;
+    CHECK_FALSE(state.valid());
+    state = baseline;
+    state.hits[0].instance = state.nextInstance;
+    CHECK_FALSE(state.valid());
+    const auto bytes = Codec::encode(baseline);
+    REQUIRE(bytes);
+    constexpr usize kBurst = Codec::kHeaderBytes + Codec::kFlightBytes + 16;
+    constexpr usize kHit = kBurst + Codec::kBurstBytes + 12 + 16 + 16 + 12;
+    for (const usize offset : {kBurst + 56, kHit + 56}) {
+        auto malformed = *bytes;
+        writeWord(malformed, offset, static_cast<u32>(baseline.nextInstance));
+        writeWord(malformed, offset + 4, static_cast<u32>(baseline.nextInstance >> 32));
+        CHECK_FALSE(Codec::decode(malformed));
+    }
+    // Old synthetic/offline event fixtures have no emitter. Decoding these does
+    // not authorize a recorded runtime to substitute a current live source.
+    state = baseline;
+    state.bursts[0].instance = 0;
+    state.hits[0].instance = 0;
+    REQUIRE(state.valid());
+    REQUIRE(Codec::encode(state));
+    CHECK(Codec::decode(*Codec::encode(state)) == state);
 }
 
 TEST_CASE("enemy missile packets allow infinity only for the spared burst player",

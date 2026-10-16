@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -163,6 +165,158 @@ TEST_CASE("online lobby starts and resumes on host and guest Vulkan renderers",
     }
     exerciseLobby(*hostRenderer, *guestRenderer, [&] { hostWindow->pollEvents(); });
 }
+
+TEST_CASE("three real iroh menu peers run four split-seat players and fail closed on departure",
+          "[netplay][online-lobby][online-lobby-multipeer][assets]") {
+    REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    LevelCatalog levels;
+    StringTable strings;
+    REQUIRE(levels.load(root));
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    std::array<GameConfig, 3> configs;
+    std::array<GameContext, 3> contexts;
+    std::array<u32, 3> autoSaves{}, manualSaves{}, unlocks{};
+    std::array<std::unique_ptr<test::FakeRenderDevice>, 3> devices;
+    std::array<std::unique_ptr<OnlineRun>, 3> runs;
+    for (usize peer = 0; peer < runs.size(); ++peer) {
+        configs[peer].game.autoSave = true;
+        contexts[peer].config = &configs[peer];
+        contexts[peer].strings = &strings;
+        contexts[peer].levels = &levels;
+        contexts[peer].unpackedRoot = root;
+        contexts[peer].saveLocalParty = [&, peer](std::span<PartyMember>) { ++autoSaves[peer]; };
+        contexts[peer].manualSaveLocalParty = [&, peer](std::span<PartyMember>) {
+            ++manualSaves[peer];
+            return true;
+        };
+        contexts[peer].unlockClasses = [&, peer](u16) { ++unlocks[peer]; };
+        devices[peer] = std::make_unique<test::FakeRenderDevice>();
+        devices[peer]->recordDraws = false;
+        runs[peer] = std::make_unique<OnlineRun>();
+    }
+    std::array<SessionInputs::Frame, 3> input{};
+    // These are physical local devices, not the canonical seats assigned by
+    // HostedRoom. Exercise the real bootstrap's two-seat host plus two guests.
+    input[0][0].movieSkipPressed = input[0][3].movieSkipPressed = true;
+    input[1][2].movieSkipPressed = input[2][1].movieSkipPressed = true;
+    std::array<bool, 3> active{true, true, true};
+    auto due = std::chrono::steady_clock::now();
+    const auto step = [&] {
+        for (usize peer = 0; peer < runs.size(); ++peer) {
+            if (!active[peer]) continue;
+            runs[peer]->update(input[peer], {});
+            REQUIRE(devices[peer]->beginFrame());
+            runs[peer]->render(*devices[peer], Mat4{1}, 640, 448, 1.0 / 60, 1);
+            devices[peer]->endFrame();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        due = std::max(due + std::chrono::nanoseconds(16'666'667), now);
+        std::this_thread::sleep_until(due);
+    };
+    const auto pump = [&](const auto& finished, bool expectHealthy = true) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+        while (!finished() && std::chrono::steady_clock::now() < deadline) {
+            step();
+            if (expectHealthy) {
+                for (usize peer = 0; peer < runs.size(); ++peer) {
+                    if (!active[peer]) continue;
+                    INFO("peer=" << peer + 1 << " status=" << runs[peer]->status());
+                    REQUIRE(runs[peer]->lobby().page != NetplayMenu::Page::Finished);
+                }
+            }
+        }
+        REQUIRE(finished());
+    };
+    REQUIRE(runs[0]->openLobby(*devices[0], contexts[0], {}, "test", std::string(64, 'a'), 2, true));
+    pump([&] { return !runs[0]->lobby().invitation.empty(); });
+    // The actual provider invitation stays private; never include it in INFO/CAPTURE.
+    const auto invitation = runs[0]->lobby().invitation;
+    for (usize peer = 1; peer < runs.size(); ++peer) {
+        REQUIRE(runs[peer]->openLobby(*devices[peer], contexts[peer], invitation, "test",
+                                       std::string(64, 'a'), 1, true));
+    }
+    pump([&] {
+        return std::ranges::all_of(runs, [](const auto& run) {
+            return run->lobby().connected && run->lobby().players == 4;
+        });
+    });
+    const auto member = [](s32 device, s32 character, const char* name) {
+        PartyMember result;
+        result.player = device;
+        result.slot = static_cast<usize>(10 + device);
+        result.save.name = name;
+        result.save.character = character;
+        result.save.color = character;
+        result.save.progress().health = 1000;
+        return result;
+    };
+    REQUIRE(runs[0]->select(std::array{member(0, 0, "HOST"), member(3, 1, "LOCAL")}));
+    REQUIRE(runs[1]->select(std::array{member(2, 2, "GUEST1")}));
+    REQUIRE(runs[2]->select(std::array{member(1, 3, "GUEST2")}));
+    const RoomSettings rules{4, 2, 1};
+    REQUIRE(runs[0]->settings(rules));
+    pump([&] {
+        return std::ranges::all_of(runs, [&](const auto& run) { return run->lobby().settings == rules; });
+    });
+    for (const auto& run : runs) REQUIRE(run->ready(true));
+    pump([&] { return runs[0]->lobby().canStart; });
+    REQUIRE(runs[0]->start());
+    pump([&] {
+        return std::ranges::all_of(runs, [](const auto& run) {
+            return run->playing() && run->status().empty() && run->confirmedTick() >= 90;
+        });
+    });
+    for (const auto& run : runs) {
+        CHECK(run->confirmedTick() <= run->simulatedTick());
+        CHECK(run->simulatedTick() - run->confirmedTick() <= 8);
+        CHECK_FALSE(run->hasCompletedProgress());
+    }
+    // The host's canonical second seat is not its physical device 1.
+    CHECK_FALSE(runs[0]->pause(1));
+    CHECK_FALSE(runs[1]->pause(0));
+    REQUIRE(runs[0]->pause(0));
+    std::array<u64, 3> confirmed{};
+    for (usize peer = 0; peer < runs.size(); ++peer) confirmed[peer] = runs[peer]->confirmedTick();
+    pump([&] {
+        for (usize peer = 0; peer < runs.size(); ++peer) {
+            if (runs[peer]->confirmedTick() < confirmed[peer] + 90) return false;
+        }
+        return true;
+    });
+    CHECK(runs[0]->status() == "Local menu open - the game continues for everyone.");
+    CHECK(runs[1]->status().empty());
+    CHECK(runs[2]->status().empty());
+    runs[0]->resume();
+    step();
+    CHECK(runs[0]->status().empty());
+    // A real provider departure after start must stop both surviving machines,
+    // not silently shrink the roster or persist their speculative live party.
+    runs[1]->close();
+    active[1] = false;
+    pump([&] {
+        return runs[0]->lobby().page == NetplayMenu::Page::Finished &&
+               runs[2]->lobby().page == NetplayMenu::Page::Finished;
+    }, false);
+    const std::array stopped{runs[0]->simulatedTick(), runs[2]->simulatedTick()};
+    const std::array detail{runs[0]->status(), runs[2]->status()};
+    CHECK_FALSE(detail[0].empty());
+    CHECK_FALSE(detail[1].empty());
+    for (u32 frame = 0; frame < 20; ++frame) step();
+    CHECK(runs[0]->simulatedTick() == stopped[0]);
+    CHECK(runs[2]->simulatedTick() == stopped[1]);
+    CHECK(runs[0]->status() == detail[0]);
+    CHECK(runs[2]->status() == detail[1]);
+    for (const auto& run : runs) {
+        CHECK_FALSE(run->playing());
+        CHECK_FALSE(run->hasCompletedProgress());
+        CHECK_FALSE(run->saveCompletedProgress());
+    }
+    CHECK((autoSaves == std::array<u32, 3>{}));
+    CHECK((manualSaves == std::array<u32, 3>{}));
+    CHECK((unlocks == std::array<u32, 3>{}));
+}
+
 TEST_CASE("development iroh launcher retains explicit native setup and automatic start",
           "[netplay][online-native-launch][assets]") {
     REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());

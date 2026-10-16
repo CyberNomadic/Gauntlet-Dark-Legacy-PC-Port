@@ -10,6 +10,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/world/PlacedItemsCheckpoint.h"
@@ -80,6 +81,15 @@ struct Fixture {
         REQUIRE(saved->valid());
         return *saved;
     }
+    PlacedItemsCheckpoint::State nativeState() const {
+        auto saved = state();
+        // The independent diagnostic also preserves the last draw's caches.
+        // Native history intentionally derives these again on the next draw.
+        for (auto& item : saved.items) {
+            item.presentationPose.reset();
+        }
+        return saved;
+    }
     void takeGem(usize index) {
         const auto result =
             items.collect(device, std::array{Collector{items.item(index).position, 1, 1}});
@@ -87,6 +97,172 @@ struct Fixture {
         REQUIRE(result.front().item == index);
     }
 };
+
+TEST_CASE("native pickup history restores corrected births flight rewards and moving floors",
+          "[local-rewind][placed-items-local-rewind]") {
+    Fixture native("pickup-local-native", true);
+    Fixture replay("pickup-local-replay", true);
+    std::array<PlacedItems::LocalSnapshot, 16> history;
+    std::array<PlacedItems::LocalSnapshot, 8> expected;
+    PlacedItems::LocalSnapshot observed;
+    WorldCollision::LocalSnapshot floor;
+    const auto step = [](Fixture& fixture, u32 tick, bool wrong) {
+        fixture.items.capturePresentation();
+        fixture.collision.setObjectTransform(
+            0, glm::translate(Mat4{1}, Vec3{0, wrong ? -20.0f : (tick % 20) * 0.2f, 0}));
+        fixture.items.setPlayerCount(wrong ? 1 : 2);
+        if (tick % 17 == 0 || wrong) {
+            REQUIRE(fixture.items.throwItem(fixture.device, "COIN", {5, 8, 0},
+                                            wrong ? Vec3{-20, 5, 0} : Vec3{2, 8, 0},
+                                            &fixture.collision, 0.3f));
+        }
+        if (tick % 29 == 0) {
+            fixture.items.hideCrystals();
+        }
+        fixture.items.reveal(1.0f / 60);
+        fixture.items.attach(0, glm::translate(Mat4{1}, Vec3{0, 2, 0}), tick % 7 < 3);
+        fixture.items.setOpener(0, static_cast<s32>(tick % 4));
+        if (tick % 23 == 0 || wrong) {
+            fixture.items.blast(fixture.device, Vec3{5, 8, 0}, 30, 100);
+        }
+        if (tick % 31 == 0) {
+            if (const auto item = fixture.items.claim({5, 8, 0}, 12, 16)) {
+                REQUIRE(
+                    fixture.items.release(*item, {3, 7, 0}, {2, 3, 0}, &fixture.collision, 0.1f));
+            }
+        }
+        if (wrong) {
+            fixture.items.discard(0);
+        }
+        const auto pickups = fixture.items.collect(
+            fixture.device, std::array{Collector{Vec3{tick < 80 ? 20.0f : 40.0f, 0, 0}, 2, 3}});
+        fixture.items.update(1.0f / 60);
+        // Drawing is interleaved with simulation to expose stale shared caches.
+        fixture.device.draws.clear();
+        fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.37f);
+        return pickups;
+    };
+    u32 tick = 0;
+    const auto uploads = replay.device.texturesCreated;
+    for (u32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        replay.items.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, false);
+            replay.items.saveLocal(expected[i]);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.items.restoreLocal(saved));
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.items.restoreLocal(saved));
+        CHECK(replay.nativeState() == native.nativeState());
+        for (u32 i = 0; i < distance; ++i) {
+            const auto a = step(native, tick + i, false);
+            const auto b = step(replay, tick + i, false);
+            replay.items.saveLocal(observed);
+            CHECK(replay.items.equalLocal(observed, expected[i]));
+            REQUIRE(a.size() == b.size());
+            for (usize j = 0; j < a.size(); ++j) {
+                CHECK(a[j].item == b[j].item);
+                CHECK(a[j].collector == b[j].collector);
+                CHECK(a[j].amount == b[j].amount);
+                CHECK(a[j].position == b[j].position);
+            }
+            // Hidden/retired items do not redraw their derived pose cache. A
+            // discarded speculative draw may therefore leave different cache
+            // contents, but not different continuation values or visible draws.
+            // Complete same-owner native equality is checked above; compare
+            // the independent diagnostic without its stale draw-only caches.
+            CHECK(replay.nativeState() == native.nativeState());
+            REQUIRE(replay.device.draws.size() == native.device.draws.size());
+            for (usize j = 0; j < native.device.draws.size(); ++j) {
+                test::checkRecordedDraw(replay.device.draws[j], native.device.draws[j]);
+            }
+        }
+        tick += distance;
+    }
+    CHECK(replay.device.texturesCreated == uploads);
+    CHECK(replay.device.textureUpdates == 0);
+    CHECK_FALSE(native.items.restoreLocal(history[0]));
+    CHECK_FALSE(native.items.equalLocal(history[0], history[0]));
+    replay.items.clear();
+    CHECK_FALSE(replay.items.restoreLocal(history[0]));
+    CHECK_FALSE(replay.items.equalLocal(history[0], history[0]));
+}
+
+TEST_CASE(
+    "pickup rewind derives interpolated poses after corrected births without saving draw caches",
+    "[local-rewind][placed-items-local-rewind]") {
+    Fixture fixture("pickup-local-draw-cache");
+    fixture.items.capturePresentation();
+    fixture.items.update(1.0f / 60);
+    PlacedItems::LocalSnapshot beforeDraw;
+    fixture.items.saveLocal(beforeDraw);
+    const auto native = fixture.nativeState();
+    fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.37f);
+    const auto expected = fixture.device.draws;
+    REQUIRE_FALSE(expected.empty());
+    PlacedItems::LocalSnapshot afterDraw;
+    fixture.items.saveLocal(afterDraw);
+    CHECK(fixture.items.equalLocal(beforeDraw, afterDraw));
+    CHECK(fixture.nativeState() == native);
+
+    for (const auto* saved : {&beforeDraw, &afterDraw}) {
+        REQUIRE(fixture.items.throwItem(fixture.device, "COIN", {8, 10, 0}, {2, 4, 0},
+                                        &fixture.collision, 0.5f));
+        fixture.items.capturePresentation();
+        fixture.items.update(7.0f / 60);
+        fixture.device.draws.clear();
+        fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.91f);
+        const auto uploads = fixture.device.texturesCreated;
+        REQUIRE(fixture.items.restoreLocal(*saved));
+        CHECK(fixture.nativeState() == native);
+        fixture.device.draws.clear();
+        fixture.items.draw(fixture.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.37f);
+        REQUIRE(fixture.device.draws.size() == expected.size());
+        for (usize i = 0; i < expected.size(); ++i) {
+            test::checkRecordedDraw(fixture.device.draws[i], expected[i]);
+        }
+        CHECK(fixture.device.texturesCreated == uploads);
+    }
+}
+
+TEST_CASE("native pickup history refuses a changed collision owner before mutating values",
+          "[local-rewind][placed-items-local-rewind]") {
+    Fixture fixture("pickup-local-collision-guard");
+    PlacedItems::LocalSnapshot saved;
+    fixture.items.saveLocal(saved);
+    WorldCollision other;
+    other.build({{{0, 1, 0}, {Vec3{-100, 0, -100}, Vec3{100, 0, -100}, Vec3{0, 0, 100}}, 0, 4}});
+    REQUIRE(fixture.items.throwItem(fixture.device, "COIN", {5, 8, 0}, {2, 4, 0}, &other, 0.5f));
+    const auto before = fixture.items.size();
+    CHECK_FALSE(fixture.items.canRestoreLocal(saved));
+    CHECK_FALSE(fixture.items.restoreLocal(saved));
+    CHECK(fixture.items.size() == before);
+}
+
+TEST_CASE("native pickup equality distinguishes loot ownership without visible movement",
+          "[local-rewind][placed-items-local-rewind]") {
+    Fixture fixture("pickup-local-owner-values");
+    PlacedItems::LocalSnapshot before, after, restored;
+    fixture.items.saveLocal(before);
+    const auto position = fixture.items.item(0).position;
+    const auto value = fixture.items.item(0).value;
+    fixture.items.setOpener(0, 3);
+    fixture.items.saveLocal(after);
+    CHECK(fixture.items.item(0).position == position);
+    CHECK(fixture.items.item(0).value == value);
+    CHECK_FALSE(fixture.items.equalLocal(before, after));
+    REQUIRE(fixture.items.restoreLocal(before));
+    fixture.items.saveLocal(restored);
+    CHECK(fixture.items.equalLocal(before, restored));
+}
 
 TEST_CASE("pickup checkpoints continue native flight reveal animation particles and collection at "
           "both rates",
@@ -363,35 +539,37 @@ TEST_CASE("pickup presentation candidate filtering retains topology and composed
     const auto& item = fixture.items.item(0);
     REQUIRE(item.figure);
     REQUIRE(baseline.items[0].presentationPose);
-    REQUIRE(item.presentationPose.size() == 2);
+    REQUIRE(fixture.items.presentationPoseOf(0));
+    auto& presentation = *const_cast<TreePose*>(fixture.items.presentationPoseOf(0));
+    REQUIRE(presentation.size() == 2);
     auto changedTree = *item.figure;
     const s32 mutation = GENERATE(0, 1, 2, 3);
     switch (mutation) {
     case 0:
         changedTree.name = "FOREIGN";
-        item.presentationPose.rest(changedTree);
+        presentation.rest(changedTree);
         break;
     case 1:
         changedTree.nodes.pop_back();
-        item.presentationPose.rest(changedTree);
+        presentation.rest(changedTree);
         break;
     case 2:
         changedTree.nodes[1].position.x += 1;
-        item.presentationPose.rest(changedTree);
+        presentation.rest(changedTree);
         break;
     case 3:
         // Each local scalar remains valid, but the child inherits a 4,000,000
         // scale. A name/count-only acceptance would silently lose this guard.
         for (usize node = 0; node < 2; ++node) {
-            auto pose = item.presentationPose.poses()[node];
+            auto pose = presentation.poses()[node];
             pose.scale = Vec3{2000};
-            item.presentationPose.setNodePose(node, pose);
+            presentation.setNodePose(node, pose);
         }
-        CHECK(item.presentationPose.matrices()[1][0][0] > TreePose::Checkpoint::kMaxMagnitude);
+        CHECK(presentation.matrices()[1][0][0] > TreePose::Checkpoint::kMaxMagnitude);
         break;
     }
     CAPTURE(mutation);
-    const auto captured = item.presentationPose.checkpoint();
+    const auto captured = presentation.checkpoint();
     REQUIRE(captured);
     REQUIRE(captured->valid());
     TreePose independent;

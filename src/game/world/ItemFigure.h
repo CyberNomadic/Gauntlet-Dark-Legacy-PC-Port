@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -21,11 +22,17 @@
 
 namespace gdl::game {
 
+class NativeStateResources;
+
 /** Something solid a level's item puts in the way: a box or an upright cylinder. */
 struct Obstacle {
     struct ItemQuery {
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const ItemQuery& value) {
+            visitor.template fields<2>(value);
+        }
         bool cylindrical = false;
         f32 radius = 0;
+        bool operator==(const ItemQuery&) const = default;
     };
 
     Vec3 centre{0.0f, 0.0f, 0.0f};
@@ -38,6 +45,10 @@ struct Obstacle {
     // Native cylinder/box items use endpoint/retreat tests for enemy births and
     // route probes. Absent on mesh barriers and synthetic swept-only obstacles.
     std::optional<ItemQuery> enemyItem = std::nullopt;
+    bool operator==(const Obstacle&) const = default;
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const Obstacle& value) {
+        visitor.template fields<8>(value);
+    }
 
     /** Where a body of `radius` standing at `position` is pushed to so as not to be in the
      * box; `position` itself when it is clear of it, over it or under it. */
@@ -57,6 +68,23 @@ struct Obstacle {
  */
 class ItemFigure {
 public:
+    ItemFigure() = default;
+    /** Same-process value copy: gameplay poses, clocks and particles are independent;
+     * immutable mesh/texture bindings are shared. Archives and device must outlive
+     * every copy. No GPU work or cross-process restore protocol is involved. */
+    ItemFigure(const ItemFigure& other);
+    ItemFigure& operator=(const ItemFigure& other);
+    ItemFigure(ItemFigure&&) noexcept = default;
+    ItemFigure& operator=(ItemFigure&&) noexcept = default;
+    /** Same-process native equality under shared loaded artwork. Drawing caches
+     * and the resource cache itself are not simulation state. */
+    bool equalLocal(const ItemFigure& other) const;
+    /** Register retained native bindings, including static fallback trees from
+     * discarded branches. Archives must already have logical registry keys. */
+    bool registerNativeResources(NativeStateResources& resources) const;
+    /** Value equality is local to the same bound artwork, not cross-load equivalence. */
+    bool operator==(const ItemFigure& other) const { return equalLocal(other); }
+
     static constexpr f32 kFloorLift = 0.1f;
 
     /** Value state only. The caller supplies the already-loaded matching figure;
@@ -130,26 +158,26 @@ public:
               TreeModel::Pass pass = TreeModel::Pass::All, f32 presentationAlpha = -1.0f) const;
     /** Traps suppress emission in OFF without killing their live particle tails. */
     void gateParticlesOnSequence(bool enabled);
-    const TreeParticles& particles() const { return m_particles; }
-    const TextureAnimator& textureAnimator() const { return m_textures; }
+    const TreeParticles& particles() const { return m_sim.particles; }
+    const TextureAnimator& textureAnimator() const { return textures(); }
 
-    bool hasFigure() const { return m_tree != nullptr; }
-    s32 sequence() const { return m_index; }
+    bool hasFigure() const { return m_sim.tree != nullptr; }
+    s32 sequence() const { return m_sim.index; }
     /** Whether a sequence played once has reached its end (a missing one has at once). */
     bool finished() const;
     /** Current posed attachment, including the instance's placement. */
     std::optional<Mat4> nodeTransform(std::string_view name) const;
     f32 progress() const;
     /** How many sequences the figure has. */
-    usize sequenceCount() const { return m_tree != nullptr ? m_tree->sequences.size() : 0; }
+    usize sequenceCount() const { return m_sim.tree != nullptr ? m_sim.tree->sequences.size() : 0; }
     /** How long the sequence number `index` lasts, in ticks of a sixtieth. */
     s32 ticksOf(s32 index) const;
     /** The sequence number `index` itself, or null without one. */
     const TreeSequenceInfo* sequenceInfo(s32 index) const;
-    const Vec3& position() const { return m_position; }
-    f32 yaw() const { return m_yaw; }
+    const Vec3& position() const { return m_sim.position; }
+    f32 yaw() const { return m_sim.yaw; }
     /** How the figure is placed in the world. */
-    const Mat4& transform() const { return m_transform; }
+    const Mat4& transform() const { return m_sim.transform; }
     /** Read-only draw cursors. Empty states can retain a different pose and
      * texture cursor from the sequence controlling visible object meshes. */
     struct Presentation {
@@ -172,42 +200,65 @@ public:
     /** Rocks the figure where it stands: pitched by `pitch` and turned `yaw` off its facing. */
     void tilt(f32 pitch, f32 yaw);
     /** Stands the figure back as it was placed. */
-    void rest() { m_transform = m_placement; }
+    void rest() { m_sim.transform = m_sim.placement; }
     /** The box the item's record gives it, where the figure stands. */
     Obstacle obstacle(const ItemInfo& info) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const ItemFigure&);
     friend class ItemFigureCheckpoint;
     void refreshTextures();
 
-    const TreeInfo* m_tree = nullptr;
-    const ItemArchive* m_archive = nullptr;
-    u32 m_poseSequence = 0;
-    f32 m_poseFrame = 0;
-    u64 m_poseGeneration = 0;
-    u32 m_continuity = 1;
-    std::unique_ptr<TreeInfo> m_staticTree;
-    mutable TreeModel m_model;
-    TreePose m_pose;
+    struct Resources {
+        std::shared_ptr<TreeInfo> staticTree;
+        TreeModel model;
+        TextureAnimator textures;
+    };
+    struct Simulation {
+        std::shared_ptr<Resources> resources = std::make_shared<Resources>();
+        TextureAnimator::Clock textureClock;
+        const TreeInfo* tree = nullptr;
+        const ItemArchive* archive = nullptr;
+        u32 poseSequence = 0;
+        f32 poseFrame = 0;
+        u64 poseGeneration = 0;
+        u32 continuity = 1;
+        TreePose pose;
+        Mat4 previousTransform{1};
+        f32 previousFrame = 0;
+        u64 previousGeneration = 0;
+        bool presentationCaptured = false;
+        bool presentationAdvanced = false;
+        AnimationPlayer player;
+        mutable TreeParticles particles;
+        u32 textureSequence = 0;
+        s32 textureFrame = 0;
+        bool gateParticles = false;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        f32 yaw = 0.0f;
+        Mat4 transform{1.0f};
+        Mat4 placement{1.0f}; ///< the transform `place` gave it
+        s32 index = -1;
+        bool loop = false;
+        bool holdPose = false;
+    };
+    struct CachedBinding {
+        const ItemArchive* archive = nullptr;
+        RenderDevice* device = nullptr;
+        std::string name;
+        bool staticModel = false;
+        u32 flags = 0;
+        const TreeInfo* tree = nullptr;
+        std::shared_ptr<Resources> resources;
+        TreeParticles particles;
+    };
+    // Resource bindings survive correction and are bounded by the distinct artwork
+    // used by this figure, not by the number of speculative births.
+    using Bindings = std::vector<CachedBinding>;
+    std::shared_ptr<Bindings> m_bindings = std::make_shared<Bindings>();
+    Simulation m_sim;
     mutable TreePose m_presentationPose;
-    Mat4 m_previousTransform{1};
-    f32 m_previousFrame = 0;
-    u64 m_previousGeneration = 0;
-    bool m_presentationCaptured = false;
-    bool m_presentationAdvanced = false;
-    AnimationPlayer m_player;
-    mutable TreeParticles m_particles;
-    TextureAnimator m_textures;
-    u32 m_textureSequence = 0;
-    s32 m_textureFrame = 0;
-    bool m_gateParticles = false;
-    Vec3 m_position{0.0f, 0.0f, 0.0f};
-    f32 m_yaw = 0.0f;
-    Mat4 m_transform{1.0f};
-    Mat4 m_placement{1.0f}; ///< the transform `place` gave it
-    s32 m_index = -1;
-    bool m_loop = false;
-    bool m_holdPose = false;
+    TextureAnimator& textures() const;
 };
 
 /** Whether a party of `players` sees an item placed for `minPlayers`, by the original's

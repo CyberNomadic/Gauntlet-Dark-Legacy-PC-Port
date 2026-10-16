@@ -8,6 +8,7 @@
 #include "engine/assets/AnimationSet.h"
 #include "engine/assets/TextureSet.h"
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 #include "engine/math/Math.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/world/WorldScene.h"
@@ -16,6 +17,7 @@ namespace gdl {
 
 class TreeModel;
 class TreeParticles;
+class NativeStateDigest;
 
 /** What an animation shows now: the frame its cycle has reached, or how far its scroll has
  * slid a coordinate and how much it has stretched it. */
@@ -47,13 +49,21 @@ struct ScrollState {
  */
 class TextureAnimator {
 public:
-    struct Checkpoint {
+    struct Clock {
         u32 frame = 0;
         f32 remainder = 0;
         f32 advance = 0;
         bool valid() const;
-        bool operator==(const Checkpoint&) const = default;
+        bool operator==(const Clock&) const = default;
     };
+    using Checkpoint = Clock;
+    Clock clock() const;
+    /** Immutable authored/resolved bank only. Pair with the captured Clock when
+     * hashing local history; never read the live clock in place of a saved one. */
+    bool appendBindingDigest(NativeStateDigest& digest) const;
+    /** Trusted same-bank local clock. Rebuilds derived counters without loading textures.
+     * Only pass a clock captured from this binding (or zero to restart the binding). */
+    void restoreClock(const Clock& clock);
     Checkpoint checkpoint() const;
     /** Restores only the clock of this already-bound animation bank. */
     bool restore(const Checkpoint& state);
@@ -118,6 +128,10 @@ public:
     void apply(TreeParticles& particles, const TreeInfo& tree, u32 sequence, s32 frame) const {
         apply(particles, tree, sequence, static_cast<f32>(frame));
     }
+    /** Draw-only particle overrides. Without an offset, keep native stepped sampling,
+     * but never replace the emitter's simulation texture binding. */
+    void applyPresentation(TreeParticles& particles, const TreeInfo& tree, u32 sequence,
+                           f32 frame, std::optional<f32> frameOffset = {}) const;
     /** Advances `ticks` game frames, showing each step. */
     void step(WorldScene& scene, u32 ticks = 1);
 
@@ -130,12 +144,17 @@ private:
         s32 period = 1;                     ///< steps in a cycle
         s32 rate = 0;                       ///< frames per step; 0 or 1 steps every frame
         s32 counter = 0;
+        s32 initialCounter = 0; ///< exact bound start, before the first native increment
         bool keyed = false; ///< read at a sequence frame, never stepped
         s32 offset = 0;     ///< a keyed one's first sequence frame
         s32 fade = 0;       ///< -1 fades out, +1 fades in, 0 cycles or scrolls
     };
 
     static void show(const Entry& entry, WorldScene& scene);
+    static s32 counterAt(const Entry& entry, u32 frame);
+    const CanonicalDigestSink::Digest& bindingValuesDigest() const;
+    void applyParticles(TreeParticles& particles, const TreeInfo& tree, u32 sequence, f32 frame,
+                        std::optional<f32> frameOffset, bool presentationOnly) const;
 
     std::vector<Entry> m_entries;
     // Immutable authored identities survive pointer resolution, including names
@@ -145,6 +164,9 @@ private:
     u32 m_frame = 0;
     f32 m_remainder = 0.0f;
     f32 m_advance = 0.0f;
+    // Only pointer-free authored/resolved constants. Current texture identities
+    // and the counter invariant are checked against each caller's live registry.
+    mutable std::optional<CanonicalDigestSink::Digest> m_bindingValuesDigest;
 };
 
 } // namespace gdl

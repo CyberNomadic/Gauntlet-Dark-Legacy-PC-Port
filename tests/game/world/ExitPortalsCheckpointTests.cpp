@@ -81,6 +81,79 @@ struct PortalFixture {
     }
 };
 
+TEST_CASE("native portal history rewinds contacts waiting events secret icons and departure",
+          "[local-rewind][exit-portals-local-rewind]") {
+    const bool artwork = GENERATE(false, true);
+    PortalFixture native("portal-local-native", artwork), replay("portal-local-replay", artwork);
+    std::array<ExitPortals::LocalSnapshot, 16> history;
+    WorldCollision::LocalSnapshot floor;
+    const auto* model = &replay.portals.portal(0).model;
+    const auto uploads = replay.device.texturesCreated;
+    const auto step = [](PortalFixture& fixture, u32 tick, bool wrong) {
+        const f32 height = wrong ? -8.0f : static_cast<f32>(tick % 40) * 0.05f;
+        fixture.collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{0, height, 0}));
+        std::array party{
+            PortalVisitor{{0, height, 0}, 0.75f, 3, true},
+            PortalVisitor{{tick % 120 < 70 ? 10.0f : 0.0f, height, 0}, 0.75f, 1, tick % 9 != 0}};
+        if (wrong || tick == 320) {
+            party[0].position.x = 20;
+        }
+        fixture.portals.setAlpha("g1", wrong ? 0.1f : 0.8f);
+        if (wrong || tick == 325) {
+            fixture.portals.consume(wrong ? 0 : 1);
+        }
+        const auto departure = fixture.portals.update(1, 1.0f / 60, party);
+        if (wrong || tick % 7 == 0) {
+            fixture.portals.takeWaiting();
+        }
+        return departure;
+    };
+    const auto compareDraws = [&] {
+        native.device.draws.clear();
+        replay.device.draws.clear();
+        native.portals.draw(native.device, Mat4{1}, {});
+        replay.portals.draw(replay.device, Mat4{1}, {});
+        REQUIRE(replay.device.draws.size() == native.device.draws.size());
+        for (usize i = 0; i < native.device.draws.size(); ++i) {
+            CHECK(replay.device.draws[i].vertices == native.device.draws[i].vertices);
+            CHECK(replay.device.draws[i].transform == native.device.draws[i].transform);
+            CHECK(replay.device.draws[i].state.uvOffset == native.device.draws[i].state.uvOffset);
+            CHECK(replay.device.draws[i].state.blend == native.device.draws[i].state.blend);
+        }
+    };
+    u32 tick = 0;
+    for (u32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick, artwork);
+        auto& saved = history[window % history.size()];
+        replay.portals.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.portals.restoreLocal(saved));
+        CHECK(replay.state() == native.state());
+        compareDraws(); // No simulation update may be needed to repair the restored picture.
+        for (u32 i = 0; i < distance; ++i) {
+            CHECK(step(replay, tick + i, false) == step(native, tick + i, false));
+            CHECK(replay.state() == native.state());
+            compareDraws();
+        }
+        tick += distance;
+    }
+    CHECK(replay.portals.takeWaiting() == native.portals.takeWaiting());
+    CHECK(&replay.portals.portal(0).model == model);
+    CHECK(replay.device.texturesCreated == uploads);
+    CHECK(replay.device.textureUpdates == 0);
+    CHECK_FALSE(native.portals.restoreLocal(history[0]));
+    replay.bind();
+    CHECK_FALSE(replay.portals.restoreLocal(history[0]));
+    replay.portals.saveLocal(history[0]);
+    replay.portals.clear();
+    CHECK_FALSE(replay.portals.restoreLocal(history[0]));
+}
+
 TEST_CASE("portal checkpoint resumes native phases floor carry texture clocks and wait queues",
           "[rollback][exit-portals-checkpoint]") {
     const s32 rate = GENERATE(30, 60);

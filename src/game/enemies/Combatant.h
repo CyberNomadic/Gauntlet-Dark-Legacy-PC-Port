@@ -45,6 +45,10 @@ struct CombatantObstacle {
 struct CombatantRam {
     s32 id = -1;
     f32 damage = 0.0f;
+    bool operator==(const CombatantRam&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const CombatantRam& state) {
+        digest.fields<2>(state);
+    }
 };
 
 /** One fighter. Executes authored moves with family policy, without owning a population.
@@ -73,7 +77,7 @@ public:
                const WorldCollision* collision, const EnemyScales& scales, char realm);
     /** Independently controlled branches share assets and the body's placement. */
     const Combatant* child(s32 id) const;
-    usize childCount() const { return m_children.size(); }
+    usize childCount() const { return m_sim.childCount; }
     void clear();
     /** Static stage attachment points supplied by the encounter, not player targets. */
     void setArenaAnchors(std::span<const Mat4> anchors);
@@ -89,21 +93,21 @@ public:
     void damagedPlayer(s32 player, f32 amount, s32 partId = -1);
     /** The level's harmful surfaces, which hurt it where it walks against or onto them
      * (CritterWorldDamage); borrowed, none for nothing. */
-    void setHazards(const HazardSurfaces* hazards) { m_hazards = hazards; }
+    void setHazards(const HazardSurfaces* hazards) { m_sim.hazards = hazards; }
     /** What of the level's stands where it walks this update. */
     void setObstacles(std::span<const CombatantObstacle> items) { m_obstacles = items; }
     void setSwarm(std::span<const EnemyBody> bodies) { m_swarm = bodies; }
-    std::vector<CombatTrample> takeTramples() { return std::exchange(m_tramples, {}); }
-    std::vector<CombatantRam> takeRams() { return std::exchange(m_rams, {}); }
-    std::vector<CombatPush> takePushes() { return std::exchange(m_pushes, {}); }
+    std::vector<CombatTrample> takeTramples() { return std::exchange(m_sim.tramples, {}); }
+    std::vector<CombatantRam> takeRams() { return std::exchange(m_sim.rams, {}); }
+    std::vector<CombatPush> takePushes() { return std::exchange(m_sim.pushes, {}); }
     /** Sets it walking the level's lookouts from the chained one nearest it, within ten
      * (CritterNewInst's round for a general); with `sight` over nought it takes only a player
      * whose target score is within it meanwhile (the placement's radius at the level's sight
      * scale, CritterGetSingleTargetPlayer). `route` is borrowed for the round. */
     void startPatrol(const LookoutRoute* route, f32 sight = 0.0f);
-    bool patrolling() const { return m_actor.patrol.active(); }
+    bool patrolling() const { return m_sim.actor.patrol.active(); }
     /** The lookout it makes for, by its place in the route; -1 for none. */
-    s32 lookout() const { return m_actor.patrol.lookout(); }
+    s32 lookout() const { return m_sim.actor.patrol.lookout(); }
     void freeze(s32 ticks);
     void blind(s32 ticks);
     /** MBSetObject-style replacement of one mesh from this actor's own archive.
@@ -114,38 +118,40 @@ public:
     /** The scale the party's enemy shrinkers hold it at (`EnemyShrink`): drawn and shadowed
      * at it over its own size; a great one, never a boss, then takes double and deals half. */
     void setShrink(f32 scale);
-    f32 shrink() const { return m_actor.shrink; }
-    void tint(Color color) { m_actor.tint = color; }
+    f32 shrink() const { return m_sim.actor.shrink; }
+    void tint(Color color) { m_sim.actor.tint = color; }
     void hold(bool held);
     /** While a legend item's rite runs, a boss takes its harm whole, however many play. */
-    void takeFullHarm(bool full) { m_fullHarm = full; }
+    void takeFullHarm(bool full) { m_sim.fullHarm = full; }
     void roar();
-    bool present() const { return m_actor.state != State::Inactive; }
+    bool present() const { return m_sim.actor.state != State::Inactive; }
     /** Never reused by this pool slot, including across clear(). */
-    u64 incarnation() const { return m_incarnation; }
+    u64 incarnation() const { return m_sim.incarnation; }
     std::vector<CombatantVisual> visuals(const CameraFrame* camera = nullptr,
                                          bool healthBars = true) const;
-    bool alive() const { return m_actor.state == State::Active; }
-    bool dying() const { return m_actor.state == State::Dying; }
-    s32 id() const { return m_id; }
+    bool alive() const { return m_sim.actor.state == State::Active; }
+    bool dying() const { return m_sim.actor.state == State::Dying; }
+    s32 id() const { return m_sim.id; }
     CombatantKind kind() const {
         return data() != nullptr ? data()->kind() : CombatantKind::Unknown;
     }
-    f32 health() const { return m_actor.health; }
-    bool flashing() const { return m_actor.flashTicks > 0; }
+    f32 health() const { return m_sim.actor.health; }
+    bool flashing() const { return m_sim.actor.flashTicks > 0; }
     static f32 roarThreshold(s32 players);
-    f32 maxHealth() const { return m_actor.maxHealth; }
-    const Vec3& position() const { return m_actor.position; }
+    f32 maxHealth() const { return m_sim.actor.maxHealth; }
+    const Vec3& position() const { return m_sim.actor.position; }
     /** Retained native support, including the dying pose. */
-    s32 floorObject() const { return present() && m_actor.floor ? m_actor.floor->object : -1; }
-    f32 yaw() const { return m_actor.yaw; }
+    s32 floorObject() const {
+        return present() && m_sim.actor.floor ? m_sim.actor.floor->object : -1;
+    }
+    f32 yaw() const { return m_sim.actor.yaw; }
     f32 radius() const { return data() != nullptr ? data()->radius() : 0; }
-    s32 target() const { return m_actor.target; }
-    bool moveDone() const { return m_actor.moveDone; }
-    bool frozen() const { return m_actor.frozenTicks > 0; }
-    bool blinded() const { return m_actor.blindTicks > 0; }
-    bool curbed() const { return m_actor.curbSeconds > 0; }
-    f32 scale() const { return m_actor.scale; }
+    s32 target() const { return m_sim.actor.target; }
+    bool moveDone() const { return m_sim.actor.moveDone; }
+    bool frozen() const { return m_sim.actor.frozenTicks > 0; }
+    bool blinded() const { return m_sim.actor.blindTicks > 0; }
+    bool curbed() const { return m_sim.actor.curbSeconds > 0; }
+    f32 scale() const { return m_sim.actor.scale; }
     s32 moveType() const;
     std::string_view moveName() const;
     std::string form() const;
@@ -178,6 +184,7 @@ public:
     std::vector<CombatArenaActivation> takeArenaActivations();
 
 private:
+    friend class Critters;
     friend class OpponentCombatCheckpoint;
     friend class CombatantCheckpoint;
     static constexpr usize kPlayerSlots = 4;
@@ -187,6 +194,10 @@ private:
         f32 received = 0;
         f32 dealtTime = 0;
         f32 receivedTime = 0;
+        bool operator==(const PlayerDamage&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const PlayerDamage& state) {
+            digest.fields<4>(state);
+        }
     };
     struct Target {
         s32 player = -1;
@@ -194,6 +205,10 @@ private:
         f32 score = 0;
         f32 inverseAnger = 1;
         Vec2 direction{0}; ///< horizontal direction captured with distance by CalcTarget
+        bool operator==(const Target&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Target& state) {
+            digest.fields<5>(state);
+        }
     };
     enum class State : u8 { Inactive, Active, Dying };
     struct HitNode {
@@ -201,6 +216,14 @@ private:
         s32 flashTicks = 0;
         bool broken = false;
         std::optional<NodePose> heldPose;
+        bool operator==(const HitNode&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const HitNode& state) {
+            const auto& [health, flashTicks, broken, heldPose] = state;
+            digest.values(health, flashTicks, broken, heldPose.has_value());
+            if (heldPose) {
+                digest.fields<4>(*heldPose);
+            }
+        }
     };
     struct Actor {
         State state = State::Inactive;
@@ -219,6 +242,10 @@ private:
         struct Floor {
             s32 object = -1;
             Vec3 local{0};
+            bool operator==(const Floor&) const = default;
+            friend void visitNativeState(NativeStateDigest& digest, const Floor& state) {
+                digest.fields<2>(state);
+            }
         };
         std::optional<Floor> floor;
         f32 yaw = 0.0f;
@@ -256,8 +283,14 @@ private:
         std::vector<HitNode> hitNodes;
         struct ModelReplacement {
             usize node = 0;
-            const TreeModel* resource = nullptr;
-            mutable TreeModel model; ///< per-draw appearance cache, not simulation state
+            TreeModel* resource = nullptr; ///< shared draw cache, not simulation state
+            bool operator==(const ModelReplacement&) const = default;
+            friend void visitNativeState(NativeStateDigest& digest,
+                                         const ModelReplacement& state) {
+                const auto& [node, resource] = state;
+                digest.value(node);
+                digest.resource(resource);
+            }
         };
         std::vector<ModelReplacement> modelReplacements;
         f32 alpha = 1.0f;
@@ -293,6 +326,9 @@ private:
             f32 yaw = 0;
             f32 frame = 0;
             TreePose pose;
+            friend void visitNativeState(NativeStateDigest& digest, const Presentation& state) {
+                digest.fields<8>(state);
+            }
         } presentation;
         struct Attachment {
             AnimationPlayer player;
@@ -300,11 +336,68 @@ private:
             Mat4 world{1}; ///< fixed world parent when ADDA does not follow a node
             f32 previousFrame = 0;
             u64 previousGeneration = 0;
+            friend void visitNativeState(NativeStateDigest& digest, const Attachment& state) {
+                digest.fields<5>(state);
+            }
         };
         std::vector<Attachment> attachments;
         CombatantGaze gaze; ///< the turn of its head and eyes to its target
+        bool equalLocal(const Actor& other) const;
     };
 
+    /** Native value state. Assets and draw caches remain in CombatantAssets. */
+    struct Simulation {
+        Actor actor;
+        u64 incarnation = 0;
+        usize childCount = 0;
+        s32 id = -1;
+        const WorldCollision* collision = nullptr;
+        const HazardSurfaces* hazards = nullptr;
+        EnemyScales scales;
+        char realm = 'G';
+        bool fullHarm = false;
+        std::minstd_rand arenaRandom;
+        std::vector<CombatCue> cues;
+        std::vector<CombatGrab> grabs;
+        std::vector<CombatSpew> spews;
+        std::vector<CombatShot> shots;
+        std::vector<CombatArenaActivation> arenaActivations;
+        std::vector<CombatTrample> tramples;
+        std::vector<CombatantRam> rams;
+        std::vector<CombatPush> pushes;
+        std::vector<CombatBlow> blows;
+        std::vector<CombatLoss> losses;
+        /** Includes prior incarnations whose queued shots still borrow definitions. */
+        std::vector<std::weak_ptr<const u8>> assets;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class Combatant;
+        Simulation m_state;
+        std::vector<LocalSnapshot> m_children;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+    };
+    /** Capture only at a tick boundary, after borrowed contact lists are released. */
+    bool saveLocal(LocalSnapshot& snapshot) const;
+    bool canRestoreLocal(const LocalSnapshot& snapshot) const;
+    /** Exact native values under this owner, including inactive state, queued
+     * outputs and all current children. Retained unused child storage is a cache. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& snapshot);
+    /** Canonical native state of an ownership root and all of its current children.
+     * Borrowed resources require semantic bindings; parent links use tree structure. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& snapshot) const;
+
+private:
+    static void appendSimulationDigest(NativeStateDigest& digest, const Simulation& state,
+                                       const Combatant* expectedParent);
+    bool appendNativeDigest(NativeStateDigest& digest, const Combatant* expectedParent) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& snapshot,
+                           const Combatant* expectedParent) const;
+    void restoreLocalValues(const LocalSnapshot& snapshot);
     bool startMove(Actor& critter, usize index, bool recordUse = true);
     void updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                      std::span<const Combatant> peers, bool timeStopped);
@@ -368,14 +461,9 @@ private:
              std::optional<std::string_view> node = std::nullopt,
              const AttackDefinition* damage = nullptr, std::optional<s32> player = std::nullopt);
 
-    std::vector<CombatCue> m_cues;
-    std::vector<CombatGrab> m_grabs;
     void grab(Actor& actor, const MoveDefinition& move, const AttackDefinition& damage,
               bool release, std::span<const EnemyView> players);
     void carryGrab(Actor& actor, std::span<const EnemyView> players);
-    std::vector<CombatSpew> m_spews;
-    std::vector<CombatShot> m_shots;
-    std::vector<CombatArenaActivation> m_arenaActivations;
     void shoot(const Actor& critter, s32 id, const MoveDefinition& move, s32 damageIndex,
                std::span<const EnemyView> players);
     void plant(const Actor& critter, s32 id, s32 damageIndex);
@@ -402,23 +490,21 @@ private:
     bool blockedBySwarm(Actor& critter, const Vec3& to);
     static const EnemyView* viewOf(std::span<const EnemyView> players, s32 player);
 
-    Actor m_actor;
-    u64 m_incarnation = 0;
+    Simulation m_sim;
+    /** Retained slots keep native parent/child addresses stable across local rewind. */
     std::vector<std::unique_ptr<Combatant>> m_children;
-    s32 m_id = -1;
-    const WorldCollision* m_collision = nullptr;
-    const HazardSurfaces* m_hazards = nullptr; ///< borrowed from the level
-    EnemyScales m_scales;
+    std::span<const std::unique_ptr<Combatant>> children() const {
+        return std::span{m_children}.first(m_sim.childCount);
+    }
+    std::span<std::unique_ptr<Combatant>> children() {
+        return std::span{m_children}.first(m_sim.childCount);
+    }
+    /** Borrowed for one update, regenerated by the population before replay. */
     std::span<const CombatantObstacle> m_obstacles;
     std::span<const EnemyBody> m_swarm;
-    std::vector<CombatTrample> m_tramples;
-    std::vector<CombatantRam> m_rams;
-    std::vector<CombatPush> m_pushes;
-    char m_realm = 'G';
-    std::vector<CombatBlow> m_blows;
-    bool m_fullHarm = false;
-    std::vector<CombatLoss> m_losses;
-    std::minstd_rand m_arenaRandom;
+    std::shared_ptr<const u8> m_localOwner = std::make_shared<const u8>(0);
+    u64 m_localEpoch = 0;
+    u64 m_checkpointRevision = 0;
     /** Actor lifetime/restore fence, independent of ordinary slot reuse. */
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
 };

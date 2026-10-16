@@ -3,6 +3,7 @@ import contextlib
 import io
 import pathlib
 import stat
+import struct
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,42 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 import package
+
+
+def pe_image(imports=(), delayed=(), delay_va=False):
+    """Minimal independent PE32+ import fixture; no executable code is needed."""
+    image = bytearray(4096)
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 60, 0x80)
+    image[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", image, 0x84, 0x8664, 1, 0, 0, 0, 240, 0x22)
+    optional = 0x98
+    struct.pack_into("<H", image, optional, 0x20b)
+    image_base = 0x10000000 if delay_va else 0x140000000
+    struct.pack_into("<Q", image, optional + 24, image_base)
+    struct.pack_into("<I", image, optional + 60, 0x200)
+    struct.pack_into("<I", image, optional + 108, 16)
+    section = optional + 240
+    image[section:section + 8] = b".idata\0\0"
+    struct.pack_into("<IIII", image, section + 8, 0xe00, 0x1000, 0xe00, 0x200)
+    names = 0x800
+    for directory, raw, stride, libraries in ((1, 0x200, 20, imports), (13, 0x500, 32, delayed)):
+        if not libraries:
+            continue
+        struct.pack_into("<II", image, optional + 112 + directory * 8,
+                         0x1000 + raw - 0x200, (len(libraries) + 1) * stride)
+        for index, library in enumerate(libraries):
+            address = 0x1000 + names - 0x200
+            if directory == 13:
+                struct.pack_into("<8I", image, raw + index * stride,
+                                 0 if delay_va else 1, address + (image_base if delay_va else 0),
+                                 0, 0, 0, 0, 0, 0)
+            else:
+                struct.pack_into("<5I", image, raw + index * stride, 0, 0, 0, address, 0)
+            encoded = library.encode("ascii") + b"\0"
+            image[names:names + len(encoded)] = encoded
+            names += len(encoded)
+    return image
 
 
 class PackageTests(unittest.TestCase):
@@ -177,6 +214,116 @@ class PackageTests(unittest.TestCase):
         with mock.patch.object(package.devenv, "environment", return_value={}), \
                 self.assertRaisesRegex(ValueError, "--runtime-dir"):
             package.msvc_runtime_directory()
+
+    def test_static_game_import_audit_checks_direct_and_delayed_crt_families(self):
+        for library in ("VCRUNTIME140.dll", "vcruntime140_1d.dll", "MSVCP140.dll", "msvcp140_atomic_wait.dll",
+                        "ucrtbase.dll", "ucrtbased.dll", "api-ms-win-crt-math-l1-1-0.dll",
+                        "msvcrt.dll", "msvcr120.dll", "concrt140.dll"):
+            for delayed in (False, True):
+                with self.subTest(library=library, delayed=delayed):
+                    self.executable.write_bytes(pe_image(
+                        ("KERNEL32.dll",) if delayed else ("KERNEL32.dll", library),
+                        (library,) if delayed else ()))
+                    with self.assertRaisesRegex(ValueError, "static CRT.*dynamic imports"):
+                        package.make_plan(self.executable, self.assets, self.data,
+                                          self.output, static_crt=True)
+                    self.assertFalse(self.output.exists())
+
+    def test_pe_imports_accept_both_rva_and_legacy_va_delay_descriptors(self):
+        for va in (False, True):
+            self.executable.write_bytes(pe_image(("KERNEL32.dll",), ("VULKAN-1.dll",), va))
+            self.assertEqual(package.pe_imports(self.executable), ("kernel32.dll", "vulkan-1.dll"))
+            package.require_static_crt(self.executable)
+
+    def test_malformed_or_truncated_pe_does_not_certify_static_runtime(self):
+        fixtures = [b"not a PE", pe_image()[:63]]
+        image = pe_image(("KERNEL32.dll",))
+        struct.pack_into("<I", image, 0x98 + 112 + 8, 0x7fffffff)
+        fixtures.append(image)
+        image = pe_image(("KERNEL32.dll",))
+        struct.pack_into("<I", image, 0x98 + 112 + 8 + 4, 20) # omit descriptor terminator
+        fixtures.append(image)
+        image = pe_image(delayed=("KERNEL32.dll",))
+        struct.pack_into("<I", image, 0x500, 2) # undefined delay attributes
+        fixtures.append(image)
+        for image in fixtures:
+            with self.subTest(size=len(image)):
+                self.executable.write_bytes(image)
+                with self.assertRaises(ValueError):
+                    package.require_static_crt(self.executable)
+
+    def test_static_plan_excludes_stale_crt_but_keeps_explicit_non_crt_dependencies(self):
+        self.executable.write_bytes(pe_image(("KERNEL32.dll", "VULKAN-1.dll")))
+        stale = self.executable.parent / "vcruntime140.dll"
+        stale.write_bytes(b"old dynamic game CRT")
+        extra = self.root / "runtime"
+        extra.mkdir()
+        (extra / "MSVCP140.dll").write_bytes(b"unused CRT")
+        (extra / "openal32.dll").write_bytes(b"explicit dependency")
+        original = {path: path.read_bytes() for path in (stale, extra / "MSVCP140.dll")}
+        plan = package.make_plan(self.executable, self.assets, self.data, self.output,
+                                 (extra,), static_crt=True)
+        names = {destination.name.casefold() for _, destination in plan.files}
+        self.assertNotIn("vcruntime140.dll", names)
+        self.assertNotIn("msvcp140.dll", names)
+        self.assertIn("openal32.dll", names)
+        self.assertIn("glfw3.dll", names) # do not guess which non-CRT dependencies the caller needs
+        for path, content in original.items():
+            self.assertEqual(path.read_bytes(), content)
+
+    def test_runtime_mode_comes_from_cache_and_rejects_mixed_contracts(self):
+        binary = self.root / "configured"
+        binary.mkdir()
+        cache = binary / "CMakeCache.txt"
+        with self.assertRaisesRegex(ValueError, "Configure"):
+            package.windows_static_crt(binary)
+        for triplet, runtime, expected in (
+                ("x64-windows-static", "MultiThreaded", True),
+                ("x64-windows", "MultiThreadedDLL", False),
+                ("x64-windows", "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL", False),
+                ("x64-windows", "", False)):
+            for triplet_type in ("STRING", "UNINITIALIZED"):
+                for runtime_type in ("STRING", "UNINITIALIZED"):
+                    with self.subTest(triplet=triplet, runtime=runtime,
+                                      triplet_type=triplet_type, runtime_type=runtime_type):
+                        cache.write_text(f"VCPKG_TARGET_TRIPLET:{triplet_type}={triplet}\n"
+                                         f"CMAKE_MSVC_RUNTIME_LIBRARY:{runtime_type}={runtime}\n", encoding="utf-8")
+                        self.assertIs(package.windows_static_crt(binary), expected)
+        for triplet, runtime in (("x64-windows", "MultiThreaded"),
+                                 ("x64-windows-static", "MultiThreadedDLL"),
+                                 ("x64-windows-static", "MultiThreadedDebug")):
+            for runtime_type in ("STRING", "UNINITIALIZED"):
+                with self.subTest(triplet=triplet, runtime=runtime, runtime_type=runtime_type):
+                    cache.write_text(f"VCPKG_TARGET_TRIPLET:STRING={triplet}\n"
+                                     f"CMAKE_MSVC_RUNTIME_LIBRARY:{runtime_type}={runtime}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "mixed Windows runtime"):
+                        package.windows_static_crt(binary)
+
+    def test_static_cli_does_not_discover_or_require_developer_crt(self):
+        self.executable.write_bytes(pe_image(("KERNEL32.dll",)))
+        with mock.patch.object(package.devenv, "WINDOWS", True), \
+                mock.patch.object(package, "windows_static_crt", return_value=True), \
+                mock.patch.object(package, "msvc_runtime_directory") as redist, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(package.main([
+                "--executable", str(self.executable), "--assets", str(self.assets),
+                "--data", str(self.data), "--output", str(self.output), "--dry-run"]), 0)
+        redist.assert_not_called()
+        self.assertIn("Static CRT imports verified", output.getvalue())
+
+    def test_dynamic_development_cli_keeps_redist_discovery(self):
+        redist_path = self.root / "redist"
+        redist_path.mkdir()
+        (redist_path / "vcruntime140.dll").write_bytes(b"development runtime")
+        with mock.patch.object(package.devenv, "WINDOWS", True), \
+                mock.patch.object(package, "windows_static_crt", return_value=False), \
+                mock.patch.object(package, "msvc_runtime_directory", return_value=redist_path) as redist, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(package.main([
+                "--executable", str(self.executable), "--assets", str(self.assets),
+                "--data", str(self.data), "--output", str(self.output), "--dry-run"]), 0)
+        redist.assert_called_once_with()
+        self.assertIn("vcruntime140.dll", output.getvalue())
 
 
 if __name__ == "__main__":

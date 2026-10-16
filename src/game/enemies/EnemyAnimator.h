@@ -122,6 +122,11 @@ public:
      * are then forgotten. `contact` says a player is against the body, which some attacks
      * chain on. */
     void update(s32 ticks, f32 seconds, bool contact = false);
+    /** Same native update after the owner already called holdPresentation() for
+     * this movement step. Requests may change meanwhile, but animation/binding
+     * must not advance or be replaced. Keeps held and updated bodies on the same
+     * presentation interval without evaluating the previous pose twice. */
+    void updateCaptured(s32 ticks, f32 seconds, bool contact = false);
 
     Action action() const { return m_current; }
     Action requested() const { return m_requested; }
@@ -168,8 +173,17 @@ public:
     Presentation presentation() const;
     /** Holds the current pose when its owner skips animation (off screen or stopped). */
     void holdPresentation();
+    /** Exact values under the same borrowed tree; no checkpoint limits, asset
+     * lookup or reconstruction of poses participates in this comparison. */
+    bool equalLocal(const EnemyAnimator& other) const;
+    bool operator==(const EnemyAnimator& other) const { return equalLocal(other); }
+
+    friend void visitNativeState(NativeStateDigest& digest, const EnemyAnimator& value);
 
 private:
+    // Both equality and hashing traverse the same actual members. A new member
+    // makes the implementation's structured binding fail until it is accounted for.
+    static auto nativeValues(const EnemyAnimator& value);
     /** When a decided action may start: the original's cut-in rules. */
     enum class Cut : u8 { WhenDoneIfDifferent, IfDifferent };
 

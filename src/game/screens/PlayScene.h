@@ -6,6 +6,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 #include "engine/assets/ItemArchive.h"
@@ -18,6 +20,7 @@
 #include "engine/world/WorldCamera.h"
 
 #include "game/menu/CompassHud.h"
+#include "game/netplay/FrameEventLedger.h"
 #include "game/players/CharacterSave.h"
 #include "game/players/ClassData.h"
 #include "game/players/LevelResults.h"
@@ -58,6 +61,7 @@
 #include "game/world/LevelSoundscape.h"
 #include "game/world/LevelTransporters.h"
 #include "game/world/LevelWorld.h"
+#include "game/world/NativeStateResources.h"
 #include "game/world/PlayerArsenal.h"
 #include "game/world/PlayerFigure.h"
 #include "game/world/SecretChallenge.h"
@@ -121,6 +125,40 @@ enum class PlayOutcome : u8 {
  * everyone has fallen the game-over sequence ends the session.
  */
 class PlayScene {
+    /** Live, value-owned control state. Pure gameplay helpers are copied directly,
+     * not translated into a second checkpoint schema. Assets, devices, callbacks
+     * and persistent save-slot identities stay in their existing owners. */
+    struct Simulation {
+        friend void visitNativeState(NativeStateDigest& digest, const Simulation& value) {
+            digest.fields<23>(value);
+        }
+        BossCamera bossCamera;
+        GameOver gameOver;
+        SecretChallenge challenge;
+        RuneMeter runeMeter;
+        std::optional<usize> runeItem;
+        bool secretTravel = false;
+        Vec3 secretReturnPosition{0.0f};
+        SwitchCutscene switchCutscene;
+        PlayerHealth health;
+        PartyPickups pickups;
+        AmbientDimmer dimmer;
+        LevelWatch levels;
+        LevelRef destination;
+        s32 refusedPortal = -1;  ///< the portal last found to lead nowhere, not to say so twice
+        TowerAccess towerAccess; ///< what the tower opens to this party; empty elsewhere
+        f32 playSeconds = 0.0f;
+        f32 towerNoticeSeconds = 0.0f;
+        CameraShake shake;
+        TowerWelcome welcome;
+        bool leaving = false;
+        bool opponentsAdvanced = false;
+        bool projectilesAdvanced = false;
+        bool movementUpdated = false;
+
+        bool operator==(const Simulation&) const = default;
+    };
+
 public:
     static constexpr s32 kPlayerCount = 4;
     static constexpr f32 kSpawnSpacing = 2.0f; ///< between party members at the entrance
@@ -137,8 +175,75 @@ public:
               std::span<const PartyMember> party, const PlayOptions& options = {});
     void close();
     bool isOpen() const { return m_open; }
+    u64 loadGeneration() const { return m_openGeneration; }
 
     PlayOutcome update(f64 deltaSeconds, const Inputs& inputs);
+    struct RumbleOutput {
+        s32 player = 0;
+        s32 frames = 0;
+        ControlFeedback feedback = ControlFeedback::Damage;
+        bool operator==(const RumbleOutput&) const = default;
+    };
+    struct UnlockClassesOutput {
+        u16 mask = 0;
+        bool operator==(const UnlockClassesOutput&) const = default;
+    };
+    using OutputPayload = std::variant<RumbleOutput, UnlockClassesOutput>;
+    using OutputLedger = FrameEventLedger<OutputPayload>;
+    struct RecordedStep {
+        PlayOutcome outcome = PlayOutcome::Running;
+        OutputLedger::Journal journal;
+        std::optional<SceneSoundEvents::Frame> audio;
+    };
+    /** Captures rumble and persistent class-unlock intents without invoking those
+     * application callbacks. Native character rewards still change immediately.
+     * Epoch/tick must be nonzero; invalid or nested calls throw before advancing.
+     * The caller owns the fixed-roster epoch and supplies the completed tick.
+     * Audio is journaled only after beginRecordedAudio; otherwise the offline
+     * sound path remains immediate. Callers must explicitly select that boundary. */
+    RecordedStep recordStep(u64 epoch, u64 tick, f64 deltaSeconds, const Inputs& inputs);
+    /** Native audio gate, before the first snapshot of a loaded online epoch.
+     * Rollback requires this dispatcher; offline play keeps immediate audio. */
+    bool beginRecordedAudio(u64 epoch);
+    /** Presentation boundary only, after abandoning history or confirming travel.
+     * Ending recording invalidates snapshots from its audio epoch. */
+    void endRecordedAudio();
+    u64 recordedAudioEpoch() const { return m_recordedAudio.epoch(); }
+    SceneSoundEvents::Result reconcileRecordedAudio(u64 firstTick,
+                                                    std::span<const SceneSoundEvents::Frame> frames,
+                                                    std::optional<u64> newHead = std::nullopt);
+    SceneSoundEvents::Result confirmRecordedAudio(u64 allSeatsThrough);
+    void dispatchRecordedAudio(const SceneSoundEvents::Result& result);
+    void serviceRecordedAudio(f32 seconds);
+    /** Dispatch a ledger-approved rumble Present or unlock Commit once. Online
+     * callers must obtain Commit only from the all-seat-confirmed frontier.
+     * Offline update dispatches its fresh intents immediately after the step. */
+    bool dispatchOutput(const OutputLedger::Action& action) const;
+    /** In-process history for this loaded scene. Copies the live value owners,
+     * never serializes resources or restores across a load/party change. Output
+     * and persistent writes must be gated by the caller before speculative use. */
+    class LocalSnapshot {
+    public:
+        LocalSnapshot();
+        ~LocalSnapshot();
+        LocalSnapshot(LocalSnapshot&&) noexcept;
+        LocalSnapshot& operator=(LocalSnapshot&&) noexcept;
+        LocalSnapshot(const LocalSnapshot&) = delete;
+        LocalSnapshot& operator=(const LocalSnapshot&) = delete;
+
+    private:
+        friend class PlayScene;
+        struct Data;
+        std::unique_ptr<Data> m_data;
+    };
+    bool saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Read-only exact value equality of root control state, including hidden
+     * helper clocks, coin identities and RNG. Not whole-scene equality: players,
+     * world, other owners and outputs are outside this comparison. Uses normal
+     * typed equality (including float ==), not byte/signed-zero comparison. */
+    bool matchesLocalControl(const LocalSnapshot& saved) const;
     /** Resolve a local pointer against the currently presented Sumner menu.
      * Read-only: only the bounded semantic choice enters shared native input. */
     PlayInput captureNativeInput(s32 player, PlayInput input) const;
@@ -156,7 +261,18 @@ public:
     /** Periodic native agreement watchdog, without replica bindings or state
      * transfer. Observes party outcomes/motion, opponent pools and scene control;
      * it is not a complete serialization of every hidden simulation owner. */
-    std::optional<SimulationObservation::Digest> nativeAgreementDigest();
+    struct NativeDigestProfile {
+        struct Sample {
+            std::string_view owner;
+            f64 microseconds = 0;
+        };
+        std::vector<Sample> samples;
+    };
+    /** Optional diagnostics only; the ordinary path does not read a clock. */
+    std::optional<SimulationObservation::Digest>
+    nativeAgreementDigest(NativeDigestProfile* profile = nullptr);
+    /** Same schema over retained native values, without restoring or drawing. */
+    std::optional<SimulationObservation::Digest> nativeLocalDigest(const LocalSnapshot& saved);
     /** Read-only native load-barrier preflight for message/hint resources whose
      * absence changes simulation holds. Does not change offline optional art. */
     bool nativePresentationReady() const;
@@ -178,7 +294,7 @@ public:
     /** Horizontal world direction, zero in the cursor dead zone; never a world target. */
     std::optional<Vec3> cursorAim(Vec2 cursor, const Vec3& position) const;
     /** The boss fight's camera, used while a boss level's boss stands. */
-    const BossCamera& bossCamera() const { return m_bossCamera; }
+    const BossCamera& bossCamera() const { return m_sim.bossCamera; }
     bool bossCameraOn() const;
     BossCameraSubject bossSubject() const;
     const StartCamera& startCamera() const { return m_arrival.camera(); }
@@ -191,7 +307,7 @@ public:
      * opening (a gate's force field humming as it thins, a lift, a gate), kNoSound otherwise. */
     SoundHandle fieldSound() const { return m_audio.fieldSound(); }
     bool exitFlameOn() const { return m_audio.exitFlameOn(); }
-    Intro intro() const { return m_welcome.intro(); }
+    Intro intro() const { return m_sim.welcome.intro(); }
     const ScrollBox& scroll() const { return m_messages.scroll(); }
     std::optional<LevelMessages::Look> scrollLook() const { return m_messages.look(); }
     const HintMenu& hints() const { return m_sumnerVisit.menu(); }
@@ -199,17 +315,19 @@ public:
     PlayerArsenal::SoundCapture captureWeaponSounds(PlayerArsenal::SoundObserver observer) {
         return {&m_arsenal, std::move(observer)};
     }
-    bool projectilesAdvanced() const { return m_projectilesAdvanced; }
+    bool projectilesAdvanced() const { return m_sim.projectilesAdvanced; }
     const ExitPortals& portals() const { return m_portals; }
     const LevelTransporters& transporters() const { return m_transporters; }
     const PortalDeparture& departure() const { return m_departure; }
-    const SwitchCutscene& switchCutscene() const { return m_switchCutscene; }
+    const SwitchCutscene& switchCutscene() const { return m_sim.switchCutscene; }
+    const LevelFixtures& fixtures() const { return m_fixtures; }
     const Chests& chests() const { return m_fixtures.chests(); }
     const LockedGates& gates() const { return m_fixtures.gates(); }
     const Traps& traps() const { return m_fixtures.traps(); }
     const Breakables& barrels() const { return m_fixtures.barrels(); }
     const SafeRocks& safeRocks() const { return m_fixtures.safeRocks(); }
     const Rubble& rubble() const { return m_fixtures.rubble(); }
+    const LevelOpponents& opponents() const { return m_opponents; }
     const Enemies& enemies() const { return m_opponents.enemies(); }
     Enemies& enemies() { return m_opponents.enemies(); }
     const Generators& generators() const { return m_opponents.generators(); }
@@ -238,9 +356,9 @@ public:
     const HelpMessages& help() const { return m_hud.help(); }
     const PartyHud& hud() const { return m_hud; }
     bool cinematicBars() const;
-    bool hudVisible() const { return !m_gameOver.active() && !cinematicBars(); }
+    bool hudVisible() const { return !m_sim.gameOver.active() && !cinematicBars(); }
     const MoveStrikes& strikes() const { return m_attacks.strikes(); }
-    const AmbientDimmer& dimmer() const { return m_dimmer; }
+    const AmbientDimmer& dimmer() const { return m_sim.dimmer; }
     /** Gives `player`'s character experience won in play, which also feeds its turbo meter
      * (unless it is in the middle of a turbo move), as a kill does in the original. */
     void awardExperience(s32 player, s32 amount, bool kill = true);
@@ -267,16 +385,16 @@ public:
     void blast(const Vec3& position, f32 radius, f32 damage);
     const TransitionScreen& transition() const { return m_transition; }
     /** Whether the party has gone through a portal and the picture is coming up over it. */
-    bool leaving() const { return m_leaving; }
+    bool leaving() const { return m_sim.leaving; }
     bool canPause(s32 player) const;
     /** Whether `player`, not in the party, may join: in the tower, with nothing scripted
      * running (game_main's MG_PLAY, world 13, no options or scripted camera). */
     bool canJoin(s32 player) const;
-    const GameOver& gameOver() const { return m_gameOver; }
+    const GameOver& gameOver() const { return m_sim.gameOver; }
     /** Where the party is bound once update() has said Travel, and the realm it leaves. */
-    const LevelRef& destination() const { return m_destination; }
-    bool secretTravel() const { return m_secretTravel; }
-    const SecretChallenge& challenge() const { return m_challenge; }
+    const LevelRef& destination() const { return m_sim.destination; }
+    bool secretTravel() const { return m_sim.secretTravel; }
+    const SecretChallenge& challenge() const { return m_sim.challenge; }
     std::optional<ChallengeHud::Look> hourglassLook() const;
     /** Pause the parent stage while the party visits a secret challenge. */
     void suspendForChallenge();
@@ -300,7 +418,7 @@ public:
     /** How large a character is drawn: an ogre, one grown by a powerup, one of level 99. */
     const SumnerHints& hintTexts() const { return m_sumnerVisit.texts(); }
     const PickupHud& pickups() const { return m_hud.pickups(); }
-    const RuneMeter& runeMeter() const { return m_runeMeter; }
+    const RuneMeter& runeMeter() const { return m_sim.runeMeter; }
     const AmbientSounds& ambience() const { return m_audio.ambience(); }
     /** How far Sumner's beam of light has come up, 0 to 1. */
     /** Whether the party is still materialising: held under the level's title until the start
@@ -334,8 +452,21 @@ public:
 private:
     friend class SimulationObserver; // test-only read access, no restoration interface
     u64 m_openGeneration = 0;
+    Simulation m_sim;
+    struct OutputFrame {
+        u64 epoch = 0;
+        u64 tick = 0;
+        OutputLedger::Journal* journal = nullptr;
+    };
+    OutputFrame* m_outputFrame = nullptr; ///< call-scoped collector, never snapshot state
+    void emitOutput(OutputPayload payload);
+    PlayOutcome advanceNative(f64 deltaSeconds, const Inputs& inputs);
     SimulationObservation::Digest simulationControlDigest() const;
     SimulationObservation::Digest opponentFollowupDigest() const;
+    bool registerNativeDigestResources();
+    bool appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot* saved,
+                           NativeDigestProfile* profile = nullptr) const;
+    NativeStateResources m_nativeDigestResources; ///< immutable bindings, outside local history
     /** The bodies' shadows, after all of the level's floors (some of which are translucent). */
     PartyFigures::Scene figureScene(f32 frameBlend = 1.0f);
     void drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& eye, f32 frameBlend,
@@ -374,6 +505,9 @@ private:
      * Appearance upgrades and title ceremonies wait for a tower return. */
     void updateLevels();
     void updatePromotion(s32 ticks, f32 seconds);
+    bool ownsFigure(usize player, const PlayerFigure* figure) const;
+    void activateFigure(usize player, PlayerFigure* figure);
+    void upgradeFigure(usize player);
     void beginTowerRelics();
     void revealTowerRoutes();
     void updateTowerRelics(s32 ticks, f32 seconds);
@@ -389,6 +523,7 @@ private:
     /** Where the level finds a character: nowhere once it has fallen. */
     Vec3 presenceOf(usize index) const;
     void updateAmbience();
+    void gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome);
     void beginSpawn(RenderDevice& device, const std::optional<WorldCamera>& marker);
     bool anyButton(const Inputs& inputs) const;
     bool openMessage(std::string_view name, usize page);
@@ -411,41 +546,25 @@ private:
     std::optional<Mat4> m_presentedCanvas; ///< local pointer mapping, never simulation state
     std::optional<WorldCamera> m_previousCamera;
     bool m_previousBossCamera = false;
-    BossCamera m_bossCamera;
     std::vector<PlayerRuntime> m_players;
-    GameOver m_gameOver;
     LevelSoundscape m_audio;
-    SecretChallenge m_challenge;
+    SceneSoundEvents m_recordedAudio;
     ChallengeHud m_challengeHud;
-    RuneMeter m_runeMeter;
-    std::optional<usize> m_runeItem;
     const Texture* m_runeFrame = nullptr;
     const Texture* m_runeColumn = nullptr;
-    bool m_secretTravel = false;
-    Vec3 m_secretReturnPosition{0.0f};
     SumnerFigure m_sumner;
     TextureSet m_staticTextures;
     LevelMessages m_messages;
     PlayerArsenal m_arsenal;
     ExitPortals m_portals;
     LevelTransporters m_transporters;
-    SwitchCutscene m_switchCutscene;
-    PlayerHealth m_health;
-    PartyPickups m_pickups;
-    AmbientDimmer m_dimmer;
     PlayerAttacks m_attacks;
     LevelFixtures m_fixtures;
     LevelOpponents m_opponents;
-    LevelWatch m_levels;
     TransitionScreen m_transition;
-    LevelRef m_destination;
-    s32 m_refusedPortal = -1;  ///< the portal last found to lead nowhere, not to say so twice
-    TowerAccess m_towerAccess; ///< what the tower opens to this party; empty elsewhere
     EffectTrees m_effects;
     std::vector<PointLight> m_lights; ///< this frame's, gathered before it is drawn
     BossSequence m_bossSequence;
-    f32 m_playSeconds = 0.0f;
-    f32 m_towerNoticeSeconds = 0.0f;
     SumnerVisit m_sumnerVisit;
     TowerPromotion m_promotion;
     TowerRelics m_towerRelics;
@@ -454,16 +573,19 @@ private:
     TriggerCues m_triggerCues;
     std::vector<std::unique_ptr<PlayerFigure>>
         m_promotionFigures; ///< retain borrowed voice/effect clips until close
-    CameraShake m_shake;
-    TowerWelcome m_welcome;
+    struct PromotionFigure {
+        usize player = 0;
+        s32 character = 0;
+        s32 color = 0;
+        s32 level = 0;
+        PlayerFigure* figure = nullptr;
+        PlayerFigure::LocalSnapshot initial;
+    };
+    std::vector<PromotionFigure> m_promotionBindings;
 
     ItemArchive m_weapons;              ///< shared weapon and effect assets
     LevelArrivalPresentation m_arrival; ///< borrows the weapons archive
     bool m_open = false;
-    bool m_leaving = false;
-    bool m_opponentsAdvanced = false;
-    bool m_projectilesAdvanced = false;
-    bool m_movementUpdated = false;
     PortalDeparture m_departure;
     PartyFigures m_figures;
     PartyNames m_names;

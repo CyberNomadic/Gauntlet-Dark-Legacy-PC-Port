@@ -9,10 +9,11 @@
 
 namespace gdl::game {
 
-/** Host-side admission and playout, independent of sockets and local input devices.
- * Only the host assigns seats and advances ticks. Call from the simulation thread;
- * transport callbacks must enqueue messages instead of mutating this concurrently.
- * This is authoritative input delivery, NOT a deterministic lockstep simulation. */
+/** Offline command admission and playout, independent of sockets and input devices.
+ * SessionInputs assigns every seat locally and submits its controls before each
+ * advance. Ownership and bounded missing-input handling remain available to its
+ * diagnostic tests. Native online simulation uses RollbackInputs instead.
+ * Call from the simulation thread; this object is not thread-safe. */
 class InputTimeline {
 public:
     using Peer = u64;
@@ -58,7 +59,7 @@ public:
     const std::optional<InputCommand>& previous(usize seat) const {
         return m_seats.at(seat).previous;
     }
-    /** Shared missing-input policy for authoritative playout and rollback replay. */
+    /** Bounded missing-input policy for this timeline; not online prediction. */
     static InputCommand heldOrNeutral(const std::optional<InputCommand>& previous, u64 epoch,
                                       u64 tick, u32 grant, u8 seat);
 

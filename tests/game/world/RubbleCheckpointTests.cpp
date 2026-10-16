@@ -7,6 +7,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/RubbleCheckpoint.h"
 
 namespace {
@@ -124,5 +125,122 @@ TEST_CASE("debris never drops uncatalogued live meshes from a full checkpoint",
     CHECK(state->resources[state->pieces[0].resource].object == "UNKNOWN");
     REQUIRE(fixture.owner.restore(*state));
     CHECK(fixture.owner.checkpoint() == state);
+}
+
+TEST_CASE("native debris history removes predicted births and reuses bound models during replay",
+          "[local-rewind][rubble-local-rewind]") {
+    Fixture reference, corrected;
+    LocalStateHistory<Rubble::LocalSnapshot> history;
+    std::array<Rubble::LocalSnapshot, 8> expectedLocal;
+    Rubble::LocalSnapshot observed;
+    const auto textures = corrected.device.texturesCreated;
+    const auto updates = corrected.device.textureUpdates;
+    auto spawn = [](Fixture& fixture, u64 tick) {
+        if (tick % 3 != 0) {
+            return;
+        }
+        const auto object = tick % 2 == 0 ? Rubble::kBlownBarrel : Rubble::kGasBarrel;
+        const auto placement = glm::translate(Mat4{1}, Vec3{static_cast<f32>(tick), 2, 8});
+        REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, object, placement));
+    };
+    u64 tick = 0;
+    for (u64 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(tick, [&](auto& saved) {
+            corrected.rubble.saveLocal(saved);
+            return true;
+        }));
+        const auto before = corrected.owner.checkpoint();
+        REQUIRE(before);
+        auto stale = corrected.owner.prepareRestore(*before);
+        REQUIRE(stale);
+        const u64 distance = 1 + window % 8;
+        const auto* saved = history.find(tick);
+        REQUIRE(saved);
+        for (u64 offset = 0; offset < distance; ++offset) {
+            spawn(corrected, tick + offset);
+            corrected.rubble.saveLocal(expectedLocal[static_cast<usize>(offset)]);
+        }
+        REQUIRE(corrected.rubble.restoreLocal(*saved));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            spawn(reference, tick + offset);
+            REQUIRE(corrected.rubble.leave(corrected.device, corrected.archives, "UNKNOWN",
+                                           glm::translate(Mat4{1}, Vec3{-40, 10, -20})));
+        }
+        // Native history has no catalogue admission step, even for a first-time birth.
+        CHECK_FALSE(corrected.owner.checkpoint());
+        REQUIRE(corrected.rubble.restoreLocal(*saved));
+        CHECK_FALSE(corrected.owner.canCommit(*stale));
+        CHECK(corrected.owner.checkpoint() == before);
+        for (u64 offset = 0; offset < distance; ++offset) {
+            spawn(corrected, tick + offset);
+            corrected.rubble.saveLocal(observed);
+            CHECK(corrected.rubble.equalLocal(observed, expectedLocal[static_cast<usize>(offset)]));
+        }
+        CHECK(corrected.owner.checkpoint() == reference.owner.checkpoint());
+        REQUIRE(corrected.rubble.size() == reference.rubble.size());
+        for (usize index = 0; index < reference.rubble.size(); ++index) {
+            CHECK(corrected.rubble.transform(index) == reference.rubble.transform(index));
+        }
+        reference.device.draws.clear();
+        corrected.device.draws.clear();
+        reference.rubble.draw(reference.device, Mat4{1}, {});
+        corrected.rubble.draw(corrected.device, Mat4{1}, {});
+        REQUIRE(corrected.device.draws.size() == reference.device.draws.size());
+        for (usize index = 0; index < reference.device.draws.size(); ++index) {
+            CHECK(corrected.device.draws[index].vertices == reference.device.draws[index].vertices);
+            CHECK(corrected.device.draws[index].transform ==
+                  reference.device.draws[index].transform);
+            CHECK(corrected.device.draws[index].state == reference.device.draws[index].state);
+        }
+        tick += distance;
+    }
+    CHECK(corrected.device.texturesCreated == textures);
+    CHECK(corrected.device.textureUpdates == updates);
+}
+
+TEST_CASE("native debris snapshots retain uncatalogued values but reject replaced owners",
+          "[local-rewind][rubble-local-rewind]") {
+    Fixture first, second;
+    Rubble::LocalSnapshot saved;
+    CHECK_FALSE(first.rubble.restoreLocal(saved));
+    CHECK_FALSE(first.rubble.equalLocal(saved, saved));
+    REQUIRE(first.rubble.leave(first.device, first.archives, "UNKNOWN", Mat4{1}));
+    first.rubble.saveLocal(saved);
+    CHECK_FALSE(second.rubble.restoreLocal(saved));
+    CHECK_FALSE(second.rubble.equalLocal(saved, saved));
+    CHECK(second.rubble.size() == 0);
+    REQUIRE(first.rubble.leave(first.device, first.archives, Rubble::kGasBarrel, Mat4{1}));
+    REQUIRE(first.rubble.restoreLocal(saved));
+    REQUIRE(first.rubble.size() == 1);
+    CHECK(first.rubble.presentation()[0].object == "UNKNOWN");
+    CHECK_FALSE(first.owner.checkpoint());
+    first.rubble.clear();
+    CHECK_FALSE(first.rubble.restoreLocal(saved));
+    CHECK_FALSE(first.rubble.equalLocal(saved, saved));
+    REQUIRE(first.rubble.leave(first.device, first.archives, "UNKNOWN", Mat4{1}));
+    CHECK_FALSE(first.rubble.restoreLocal(saved));
+}
+
+TEST_CASE("native debris equality distinguishes same-count mesh identities and placement",
+          "[local-rewind][rubble-local-rewind][native-equality]") {
+    Fixture fixture;
+    Rubble::LocalSnapshot empty, barrel, gas, moved, replay;
+    fixture.rubble.saveLocal(empty);
+    REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, Rubble::kBlownBarrel, Mat4{1}));
+    fixture.rubble.saveLocal(barrel);
+    REQUIRE(fixture.rubble.restoreLocal(empty));
+    REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, Rubble::kGasBarrel, Mat4{1}));
+    fixture.rubble.saveLocal(gas);
+    CHECK_FALSE(fixture.rubble.equalLocal(barrel, gas));
+    REQUIRE(fixture.rubble.restoreLocal(empty));
+    REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, Rubble::kBlownBarrel,
+                                 glm::translate(Mat4{1}, Vec3{0, 1, 0})));
+    fixture.rubble.saveLocal(moved);
+    CHECK_FALSE(fixture.rubble.equalLocal(barrel, moved));
+    REQUIRE(fixture.rubble.restoreLocal(empty));
+    REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, Rubble::kBlownBarrel, Mat4{1}));
+    fixture.rubble.saveLocal(replay);
+    CHECK(fixture.rubble.equalLocal(barrel, replay)); // retained immutable model cache
 }
 } // namespace

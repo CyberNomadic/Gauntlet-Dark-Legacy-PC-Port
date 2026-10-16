@@ -1,28 +1,185 @@
 #include "game/enemies/Critters.h"
 
+#include <algorithm>
 #include <cctype>
+#include <format>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "game/enemies/Gargoyle.h"
 #include "game/enemies/General.h"
 #include "game/enemies/Golem.h"
+#include "game/world/NativeStateResources.h"
 namespace gdl::game {
+namespace {
+void appendConfiguration(NativeStateDigest& digest, const WorldCollision* collision,
+                         const HazardSurfaces* hazards, const EnemyScales& scales,
+                         char realm, std::string_view gargoyleForm, bool open) {
+    // These bindings govern a future birth even while all actor slots are empty.
+    // Native snapshots require the same load epoch and collision/hazard owners.
+    digest.resource(collision);
+    digest.resource(hazards);
+    digest.values(scales, realm, gargoyleForm, open);
+}
+} // namespace
+
+void Critters::appendSimulationDigest(
+    NativeStateDigest& digest, const Simulation& state,
+    std::optional<std::span<const TextureAnimator::Clock>> savedClocks) {
+    visitNativeFields<10>(state, [&]<class... Fields>(const Fields&... fields) {
+        const auto append = [&]<class T>(const T& field) {
+            if constexpr (std::is_same_v<T, std::vector<CombatantAssets*>>) {
+                digest.wide(field.size());
+                for (usize i = 0; i < field.size(); ++i) {
+                    digest.resource(field[i]);
+                    if (field[i] == nullptr) {
+                        digest.invalidate();
+                        return;
+                    }
+                    digest.fields<3>(savedClocks ? (*savedClocks)[i] : field[i]->textures.clock());
+                }
+            } else {
+                digest.value(field);
+            }
+        };
+        (append(fields), ...);
+    });
+}
+
+bool Critters::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("Critters.native.1");
+    appendConfiguration(digest, m_collision, m_hazards, m_scales, m_realm, m_gargoyleForm,
+                        m_device != nullptr);
+    appendSimulationDigest(digest, m_sim);
+    for (const auto& fighter : m_critters) {
+        if (!fighter.appendNativeDigest(digest)) {
+            return false;
+        }
+    }
+    return digest.good();
+}
+
+bool Critters::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("Critters.native.1");
+    appendConfiguration(digest, saved.m_collision, saved.m_hazards, m_scales, m_realm,
+                        m_gargoyleForm, m_device != nullptr);
+    appendSimulationDigest(digest, saved.m_state,
+                           std::span<const TextureAnimator::Clock>{saved.m_clocks});
+    for (usize i = 0; i < m_critters.size(); ++i) {
+        if (!m_critters[i].appendLocalDigest(digest, saved.m_actors[i])) {
+            return false;
+        }
+    }
+    return digest.good();
+}
+
+bool Critters::registerNativeResources(NativeStateResources& resources,
+                                         std::string_view stablePrefix) const {
+    if (!resources.registerLookouts(m_sim.lookouts, std::string(stablePrefix) + "/lookouts")) {
+        return false;
+    }
+    for (const auto& stock : m_stockCache) {
+        if (!resources.registerCombatantAssets(
+                *stock, std::format("{}/{}/{}", stablePrefix,
+                                    static_cast<s32>(stock->definition.kind),
+                                    stock->definition.name))) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
 Critters::~Critters() {
     close();
 }
+bool Critters::saveLocal(LocalSnapshot& snapshot) const {
+    snapshot.m_owner.reset();
+    snapshot.m_state = m_sim;
+    snapshot.m_epoch = m_localEpoch;
+    snapshot.m_collision = m_collision;
+    snapshot.m_hazards = m_hazards;
+    snapshot.m_clocks.resize(m_sim.stocks.size());
+    snapshot.m_assets.resize(m_sim.stocks.size());
+    for (usize i = 0; i < m_sim.stocks.size(); ++i) {
+        snapshot.m_clocks[i] = m_sim.stocks[i]->textures.clock();
+        snapshot.m_assets[i] = m_sim.stocks[i]->m_localBinding;
+    }
+    for (usize i = 0; i < m_critters.size(); ++i) {
+        if (!m_critters[i].saveLocal(snapshot.m_actors[i])) {
+            return false;
+        }
+    }
+    snapshot.m_owner = m_localOwner;
+    return true;
+}
+bool Critters::canRestoreLocal(const LocalSnapshot& snapshot) const {
+    if (snapshot.m_owner.lock() != m_localOwner || snapshot.m_epoch != m_localEpoch ||
+        snapshot.m_collision != m_collision || snapshot.m_hazards != m_hazards ||
+        snapshot.m_clocks.size() != snapshot.m_state.stocks.size() ||
+        snapshot.m_assets.size() != snapshot.m_state.stocks.size() ||
+        std::ranges::any_of(snapshot.m_assets, [](const auto& asset) { return asset.expired(); })) {
+        return false;
+    }
+    for (usize i = 0; i < m_critters.size(); ++i) {
+        if (!m_critters[i].canRestoreLocal(snapshot.m_actors[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+bool Critters::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
+        return false;
+    }
+    bool equal = true;
+    visitNativeFields<10>(left.m_state, [&](const auto&... first) {
+        visitNativeFields<10>(right.m_state, [&](const auto&... second) {
+            equal = std::tie(first...) == std::tie(second...);
+        });
+    });
+    if (!equal || left.m_clocks != right.m_clocks) {
+        return false;
+    }
+    // Inactive slots still carry incarnation counters and queued native state.
+    for (usize i = 0; i < m_critters.size(); ++i) {
+        if (!m_critters[i].equalLocal(left.m_actors[i], right.m_actors[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+bool Critters::restoreLocal(const LocalSnapshot& snapshot) {
+    if (!canRestoreLocal(snapshot)) {
+        return false;
+    }
+    // Copy into the existing route object: patrols borrow its stable address.
+    m_sim = snapshot.m_state;
+    for (usize i = 0; i < m_sim.stocks.size(); ++i) {
+        m_sim.stocks[i]->textures.restoreClock(snapshot.m_clocks[i]);
+    }
+    for (usize i = 0; i < m_critters.size(); ++i) {
+        m_critters[i].restoreLocalValues(snapshot.m_actors[i]);
+    }
+    return true;
+}
 std::vector<CombatantAssets*> Critters::resources() {
     std::vector<CombatantAssets*> result;
-    result.reserve(m_stocks.size());
-    for (auto& stock : m_stocks) {
-        result.push_back(stock.get());
+    result.reserve(m_sim.stocks.size());
+    for (auto& stock : m_sim.stocks) {
+        result.push_back(stock);
     }
     return result;
 }
 std::vector<const CombatantAssets*> Critters::resources() const {
     std::vector<const CombatantAssets*> result;
-    result.reserve(m_stocks.size());
-    for (const auto& stock : m_stocks) {
-        result.push_back(stock.get());
+    result.reserve(m_sim.stocks.size());
+    for (const auto& stock : m_sim.stocks) {
+        result.push_back(stock);
     }
     return result;
 }
@@ -39,43 +196,60 @@ void Critters::open(RenderDevice& device, const std::filesystem::path& root,
     m_gargoyleForm = gargoyleForm;
 }
 void Critters::close() {
+    ++m_localEpoch;
     m_checkpointBinding = std::make_shared<const u8>(0);
     for (auto& actor : m_critters) {
         actor.clear();
     }
-    m_stocks.clear();
+    m_sim.stocks.clear();
+    m_stockCache.clear();
     m_textureLenders.clear();
     m_gargoyleForm.clear();
-    m_blows.clear();
-    m_grabs.clear();
-    m_losses.clear();
-    m_cues.clear();
-    m_spews.clear();
-    m_shots.clear();
-    m_rams.clear();
-    m_pushes.clear();
+    m_sim.blows.clear();
+    m_sim.grabs.clear();
+    m_sim.losses.clear();
+    m_sim.cues.clear();
+    m_sim.spews.clear();
+    m_sim.shots.clear();
+    m_sim.rams.clear();
+    m_sim.pushes.clear();
     m_hitFlash = nullptr;
     m_device = nullptr;
     m_collision = nullptr;
     m_hazards = nullptr;
 }
 CombatantAssets* Critters::stockFor(const CombatantDefinition& definition) {
-    for (auto& stock : m_stocks) {
+    for (auto& stock : m_sim.stocks) {
         if (stock->definition.name == definition.name &&
             stock->definition.kind == definition.kind) {
-            return stock.get();
+            return stock;
         }
     }
-    if (m_device == nullptr) {
-        return nullptr;
+    CombatantAssets* active = nullptr;
+    for (const auto& stock : m_stockCache) {
+        if (stock->definition.name == definition.name &&
+            stock->definition.kind == definition.kind) {
+            active = stock.get();
+            break;
+        }
     }
-    auto stock = std::make_unique<CombatantAssets>();
-    if (!stock->load(*m_device, m_root, definition, m_realm, m_textureLenders)) {
-        return nullptr;
+    if (active == nullptr) {
+        if (m_device == nullptr) {
+            return nullptr;
+        }
+        auto stock = std::make_unique<CombatantAssets>();
+        if (!stock->load(*m_device, m_root, definition, m_realm, m_textureLenders)) {
+            return nullptr;
+        }
+        active = stock.get();
+        m_stockCache.push_back(std::move(stock));
     }
-    m_stocks.push_back(std::move(stock));
+    // A speculative first use may have already loaded this archive. Re-entry
+    // begins at the same native clock without reloading/rebinding the artwork.
+    active->textures.restoreClock({});
+    m_sim.stocks.push_back(active);
     m_checkpointBinding = std::make_shared<const u8>(0);
-    return m_stocks.back().get();
+    return active;
 }
 CombatantDefinition Critters::definitionOf(CombatantKind kind, std::string_view form) const {
     switch (kind) {
@@ -124,8 +298,8 @@ std::optional<s32> Critters::spawn(const CombatantDefinition& definition, const 
                 actor.setHazards(m_hazards);
                 // A general takes up its round of the lookouts where it is placed, seeing
                 // only as far as its placement allows meanwhile (visrad at the level's scale).
-                if (definition.patrols && !m_lookouts.empty()) {
-                    actor.startPatrol(&m_lookouts, sight * m_scales.sight);
+                if (definition.patrols && !m_sim.lookouts.empty()) {
+                    actor.startPatrol(&m_sim.lookouts, sight * m_scales.sight);
                 }
                 return id;
             }
@@ -142,28 +316,28 @@ s32 Critters::lookoutOf(s32 id) const {
 }
 void Critters::collect(Combatant& actor) {
     for (const auto& event : actor.takePushes()) {
-        m_pushes.push_back(event);
+        m_sim.pushes.push_back(event);
     }
     for (auto& event : actor.takeGrabs()) {
-        m_grabs.push_back(event);
+        m_sim.grabs.push_back(event);
     }
     for (auto& event : actor.takeBlows()) {
-        m_blows.push_back(event);
+        m_sim.blows.push_back(event);
     }
     for (auto& event : actor.takeLosses()) {
-        m_losses.push_back(std::move(event));
+        m_sim.losses.push_back(std::move(event));
     }
     for (auto& event : actor.takeCues()) {
-        m_cues.push_back(std::move(event));
+        m_sim.cues.push_back(std::move(event));
     }
     for (auto& event : actor.takeSpews()) {
-        m_spews.push_back(event);
+        m_sim.spews.push_back(event);
     }
     for (auto& event : actor.takeShots()) {
-        m_shots.push_back(event);
+        m_sim.shots.push_back(event);
     }
     for (const CombatantRam& ram : actor.takeRams()) {
-        m_rams.push_back(ram);
+        m_sim.rams.push_back(ram);
     }
 }
 void Critters::syncFloors() {
@@ -175,7 +349,7 @@ void Critters::syncFloors() {
 void Critters::update(s32 ticks, f32 seconds, std::span<const EnemyView> players, bool timeStopped,
                       std::span<const CombatantObstacle> items, Enemies* swarm) {
     syncFloors();
-    for (const auto& stock : m_stocks) {
+    for (const auto& stock : m_sim.stocks) {
         stock->textures.advance(ticks > 0 ? seconds : 0.0f);
     }
     if (ticks <= 0) {
@@ -253,22 +427,22 @@ void Critters::roar(s32 id) {
     }
 }
 std::vector<CombatBlow> Critters::takeBlows() {
-    return std::exchange(m_blows, {});
+    return std::exchange(m_sim.blows, {});
 }
 std::vector<CombatGrab> Critters::takeGrabs() {
-    return std::exchange(m_grabs, {});
+    return std::exchange(m_sim.grabs, {});
 }
 std::vector<CombatLoss> Critters::takeLosses() {
-    return std::exchange(m_losses, {});
+    return std::exchange(m_sim.losses, {});
 }
 std::vector<CombatCue> Critters::takeCues() {
-    return std::exchange(m_cues, {});
+    return std::exchange(m_sim.cues, {});
 }
 std::vector<CombatSpew> Critters::takeSpews() {
-    return std::exchange(m_spews, {});
+    return std::exchange(m_sim.spews, {});
 }
 std::vector<CombatShot> Critters::takeShots() {
-    return std::exchange(m_shots, {});
+    return std::exchange(m_sim.shots, {});
 }
 bool Critters::alive(s32 id) const {
     return id >= 0 && id < kMost ? m_critters[static_cast<usize>(id)].alive() : false;

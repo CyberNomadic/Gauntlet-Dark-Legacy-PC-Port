@@ -14,6 +14,7 @@
 #include "engine/world/WorldCamera.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/enemies/Bosses.h"
@@ -109,6 +110,54 @@ TEST_CASE("legend presentation retries the gesture until the bearer accepts it",
     REQUIRE(fixture.presentation.player() == -1);
 }
 
+TEST_CASE("recorded legend cues choose resources without mixer success and rewind flight ownership",
+          "[game][screens][legend][legend-audio-rewind]") {
+    LegendFixture fixture;
+    fixture.load("legend-recorded-flight");
+    usize physicalCalls = 0;
+    std::vector<std::string> recorded;
+    std::vector<SoundCueToken> desired;
+    SoundCueToken start{{9, 7, {14, 34, 1, 2}, 4, 0}};
+    LegendPresentation presentation{
+        fixture.effects,
+        {fixture.device, fixture.items, fixture.weapons, fixture.shared},
+        {[&](std::string_view) {
+             ++physicalCalls;
+             return kNoSound;
+         },
+         [&](SoundHandle) { ++physicalCalls; }, [](std::string_view) { return true; },
+         [&](std::string_view name, bool looping, s32 player, s32 kind,
+             u32) -> std::optional<SoundCueToken> {
+             CHECK(player == 2);
+             CHECK(kind == 34);
+             recorded.emplace_back(name);
+             return looping ? start : SoundCueToken{};
+         },
+         [&](std::string_view, s32 player, s32 kind, SoundCueToken cue) {
+             CHECK(player == 2);
+             CHECK(kind == 34);
+             desired.push_back(cue);
+         }}};
+    presentation.show(LegendCue::Brandished, 2, 2, 34, fixture.bearer);
+    CHECK(recorded == std::vector<std::string>{"S_LEGWPUP"});
+    presentation.show(LegendCue::Thrown, 2, 2, 34, fixture.bearer);
+    fixture.bearer.casting = fixture.bearer.released = true;
+    REQUIRE_FALSE(presentation.update(0, fixture.bearer, fixture.target).landed);
+    CHECK(recorded.size() == 3); // Pickup, throw, flight: no fallback duplicated by a zero handle.
+    presentation.gatherAudio();
+    CHECK(desired == std::vector{start});
+    CHECK_FALSE(presentation.hasLegacyAudio());
+    LegendPresentation::LocalSnapshot saved;
+    presentation.saveLocal(saved);
+    presentation.reset();
+    presentation.gatherAudio();
+    CHECK(desired.size() == 1);
+    REQUIRE(presentation.restoreLocal(saved));
+    presentation.gatherAudio();
+    CHECK(desired == std::vector{start, start});
+    CHECK(physicalCalls == 0);
+}
+
 TEST_CASE("carried relics precede the charge and inherit their complete parent transform",
           "[game][screens][legend][legend-held]") {
     const s32 kind = GENERATE(34, 35, 36, 37, 38, 39, 40, 41, 42);
@@ -186,6 +235,7 @@ TEST_CASE("legend flight follows its held pose and reports impact exactly once",
           "[game][screens][legend]") {
     LegendFixture fixture;
     fixture.load("legend-flight");
+    CHECK_FALSE(fixture.presentation.hasLegacyAudio());
     fixture.show(LegendCue::Brandished);
     REQUIRE(fixture.find("LEGENDHLD") != nullptr);
     fixture.bearer.holdPoint.x = 3.0f;
@@ -197,6 +247,7 @@ TEST_CASE("legend flight follows its held pose and reports impact exactly once",
     REQUIRE_FALSE(fixture.presentation.update(0.0f, fixture.bearer, fixture.target).landed);
     REQUIRE(fixture.find("LEGENDHLD") == nullptr);
     REQUIRE(fixture.find("LEGENDPRJ") != nullptr);
+    CHECK(fixture.presentation.hasLegacyAudio());
     const u32 flight = fixture.find("LEGENDPRJ")->id;
     REQUIRE(fixture.find("LEGENDPRJ")->velocity == Vec3{20.0f, 0.0f, 0.0f});
     REQUIRE(fixture.find("LEGENDPRJ")->trails.size() == 1);
@@ -207,6 +258,7 @@ TEST_CASE("legend flight follows its held pose and reports impact exactly once",
     REQUIRE(fixture.find("LEGENDPRJ") == nullptr);
     REQUIRE(fixture.find("LEGENDFX") != nullptr);
     REQUIRE(fixture.stopped == std::vector<SoundHandle>{3});
+    CHECK_FALSE(fixture.presentation.hasLegacyAudio());
     REQUIRE(fixture.sounds.back() == "S_BLEGWHIT");
     REQUIRE(fixture.presentation.frozenTexture() ==
             &fixture.items.textures.texture(fixture.device, 0));
@@ -689,4 +741,89 @@ TEST_CASE("every costume uses its authored relic charge once at brandishing",
     fixture.presentation.clear();
 }
 
+TEST_CASE("native legend rewind restores carries throws impacts and attached effects without audio",
+          "[local-rewind][legend-local-rewind]") {
+    const s32 kind = GENERATE(34, 35, 36, 37, 38, 39, 40, 41, 42);
+    LegendFixture actual, expected;
+    actual.load("legend-local-actual");
+    expected.load("legend-local-expected");
+    REQUIRE(actual.weapons.load(legendArchive("legend-local-actual-weapons")));
+    REQUIRE(expected.weapons.load(legendArchive("legend-local-expected-weapons")));
+    const auto advance = [&](LegendFixture& fixture, s32 frame, bool wrong) {
+        fixture.effects.capturePresentation();
+        fixture.bearer.released = frame >= 4;
+        fixture.bearer.casting = frame >= 3;
+        fixture.bearer.holdPoint = Vec3{static_cast<f32>(frame) * 0.02f, 8, 0};
+        fixture.target.position = Vec3{wrong ? -20.0f : 4.0f, 2, 1};
+        fixture.target.root = glm::translate(Mat4{1}, fixture.target.position);
+        if (frame == 0 || wrong) {
+            fixture.presentation.carry(2, 2, wrong ? 41 : kind, fixture.bearer);
+            fixture.show(LegendCue::Brandished, wrong ? 41 : kind);
+        }
+        if (frame == 3 || wrong) {
+            fixture.show(LegendCue::Thrown, wrong ? 41 : kind);
+        }
+        const auto result = fixture.presentation.update(1.0f / 30, fixture.bearer, fixture.target);
+        fixture.effects.update(1.0f / 30);
+        return result;
+    };
+    const auto compare = [&] {
+        CHECK(actual.presentation.player() == expected.presentation.player());
+        CHECK(actual.presentation.kind() == expected.presentation.kind());
+        CHECK(actual.presentation.occupiedHand() == expected.presentation.occupiedHand());
+        test::checkTextureImage(actual.presentation.frozenTexture(),
+                                expected.presentation.frozenTexture());
+        REQUIRE(actual.effects.count() == expected.effects.count());
+        for (usize i = 0; i < expected.effects.count(); ++i) {
+            const auto& a = actual.effects.effect(i);
+            const auto& b = expected.effects.effect(i);
+            CHECK(a.id == b.id);
+            CHECK(a.instance == b.instance);
+            CHECK(a.name == b.name);
+            CHECK(actual.effects.checkpoint(a.id) == expected.effects.checkpoint(b.id));
+            CHECK(a.transform() == b.transform());
+        }
+        actual.device.draws.clear();
+        expected.device.draws.clear();
+        const auto camera = CameraFrame::of(WorldCamera{});
+        actual.effects.draw(actual.device, Mat4{1}, {}, &camera, 0.37f);
+        expected.effects.draw(expected.device, Mat4{1}, {}, &camera, 0.37f);
+        REQUIRE(actual.device.draws.size() == expected.device.draws.size());
+        for (usize i = 0; i < expected.device.draws.size(); ++i) {
+            test::checkRecordedDraw(actual.device.draws[i], expected.device.draws[i]);
+        }
+    };
+    LegendPresentation::LocalSnapshot saved;
+    EffectTrees::LocalSnapshot effectsSaved;
+    CHECK_FALSE(actual.presentation.restoreLocal(saved));
+    s32 frame = 0;
+    for (s32 window = 0; window < 64; ++window) {
+        CAPTURE(kind, window, frame);
+        const s32 distance = window % 8 + 1;
+        actual.presentation.saveLocal(saved);
+        actual.effects.saveLocal(effectsSaved);
+        CHECK_FALSE(expected.presentation.restoreLocal(saved));
+        actual.presentation.reset();
+        for (s32 tick = 0; tick < distance; ++tick) {
+            advance(actual, frame + tick, true);
+        }
+        const auto played = actual.sounds.size();
+        const auto stopped = actual.stopped.size();
+        REQUIRE(actual.effects.restoreLocal(effectsSaved));
+        REQUIRE(actual.presentation.restoreLocal(saved));
+        CHECK(actual.sounds.size() == played);
+        CHECK(actual.stopped.size() == stopped);
+        compare();
+        for (s32 tick = 0; tick < distance; ++tick, ++frame) {
+            const auto a = advance(actual, frame, false);
+            const auto b = advance(expected, frame, false);
+            CHECK(a.gesture == b.gesture);
+            CHECK(a.landed == b.landed);
+        }
+        compare();
+    }
+    CHECK(actual.device.textureUpdates == 0);
+    actual.presentation.clear();
+    CHECK_FALSE(actual.presentation.restoreLocal(saved));
+}
 } // namespace

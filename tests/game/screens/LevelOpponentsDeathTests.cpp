@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,16 +11,326 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "fixtures/NativeSoundBank.h"
 #include "game/enemies/DeathRules.h"
 #include "game/enemies/DeathTestSupport.h"
 #include "game/players/PowerupEffects.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/LevelOpponents.h"
 #include "game/screens/PlayerHealth.h"
+#include "game/world/LevelCatalog.h"
 
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+
+struct DeathSoundFixture {
+    std::filesystem::path root = test::deathArchive();
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    ItemArchive weapons;
+    EffectTrees effects;
+    AudioMixer mixer{24000};
+    SoundPlayer output{mixer};
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    LevelOpponents opponents;
+    LevelOpponents::Events callbacks;
+    SceneSoundEvents sounds;
+
+    explicit DeathSoundFixture(s32 slots) {
+        const std::array<test::NativeSoundSample, 1> samples{
+            {{24000, std::vector<s16>(24000, 4096)}}};
+        test::writeNativeSoundBank(root / "audio/COMMON", R"({"sounds":[
+            {"name":"S_DEATHSHATTER","sequence":[{"sample":0}]},
+            {"name":"S_DEATHDIE","sequence":[{"sample":0}]},
+            {"name":"S_DEATHLAUGH","sequence":[{"sample":0}]},
+            {"name":"S_LOBBER_BOMB","sequence":[{"sample":0}]},
+            {"name":"S_RICOCHET","sequence":[{"sample":0}]},
+            {"name":"S_SPLASH","sequence":[{"sample":0}]}
+        ]})",
+                                   samples);
+        audio.open(root, &output, nullptr);
+        players[0].actor.spawn(0, {}, nullptr, {0, 0, 100}, 0);
+        opponents.open({device, world, weapons, effects, audio, root}, players);
+        opponents.enemies().open(device, root, nullptr, slots, {}, 1);
+        REQUIRE(opponents.enemies().loadKind(kDeathKind));
+        callbacks.settleBlasts = [] {};
+        callbacks.advanceLegend = [](f32) {};
+        callbacks.advanceVictory = [](s32, f32) {};
+        callbacks.levels = [] {};
+        callbacks.award = [](s32, s32, bool) {};
+        callbacks.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+        callbacks.help = [](s32, usize) { return true; };
+        sounds.open(113, &output);
+        audio.recordTo(&sounds);
+    }
+    ~DeathSoundFixture() {
+        opponents.close();
+        audio.close();
+    }
+    SceneSoundEvents::Frame consume(u64 tick) {
+        sounds.beginTick(tick);
+        {
+            // A fallback scope must not become the enemy's identity.
+            auto scope = audio.soundScope({90, 0, 1}, 1);
+            opponents.update(0, 0, players, {}, callbacks);
+            opponents.gatherLoops();
+        }
+        return sounds.endFrame();
+    }
+};
+
+TEST_CASE("correcting an earlier Death cue never renumbers a different Death's audio",
+          "[death][native-combat-audio][scene-sound-events]") {
+    DeathSoundFixture fixture(2);
+    auto& enemies = fixture.opponents.enemies();
+    for (s32 slot = 0; slot < 2; ++slot) {
+        REQUIRE(enemies.spawn({.kind = kDeathKind,
+                               .position = {static_cast<f32>(slot) * 10, 0, 0},
+                               .placed = true,
+                               .asleep = true},
+                              {}) == slot);
+    }
+    const u64 secondInstance = enemies.observe(1)->instance;
+    auto saved = std::make_unique<Enemies::LocalSnapshot>();
+    REQUIRE(enemies.saveLocal(*saved));
+    usize commands = 0;
+    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    enemies.hurt(0, {.damage = 1, .player = 0});
+    enemies.hurt(1, {.damage = 1, .player = 0});
+    const auto wrong = fixture.consume(1);
+    REQUIRE(wrong.finite.events.size() == 2);
+    CHECK(commands == 0);
+    const auto published = fixture.sounds.reconcileFrames(1, std::span{&wrong, 1});
+    REQUIRE(published);
+    fixture.sounds.dispatch(published);
+    REQUIRE(commands > 0);
+    const usize before = commands;
+    REQUIRE(enemies.restoreLocal(*saved));
+    enemies.hurt(1, {.damage = 1, .player = 0});
+    const auto corrected = fixture.consume(1);
+    REQUIRE(corrected.finite.events.size() == 1);
+    CHECK(corrected.finite.events[0] == wrong.finite.events[1]);
+    CHECK(corrected.finite.events[0].id.emitter == FrameEventEmitter{20, 1, secondInstance});
+    const auto delta = fixture.sounds.reconcileFrames(1, std::span{&corrected, 1});
+    REQUIRE(delta);
+    CHECK(delta.actions.empty());
+    REQUIRE(delta.unretractable.size() == 1);
+    CHECK(delta.unretractable[0] == wrong.finite.events[0].id);
+    fixture.sounds.dispatch(delta);
+    CHECK(commands == before);
+}
+
+TEST_CASE("Death audio retains its retired birth and refuses legacy events in recorded mode",
+          "[death][native-combat-audio][scene-sound-events]") {
+    DeathSoundFixture fixture(1);
+    auto& enemies = fixture.opponents.enemies();
+    const EnemySpawn spawn{.kind = kDeathKind,
+                           .placed = true,
+                           .asleep = true,
+                           .priority = EnemySpawn::Priority::Visible};
+    REQUIRE(enemies.spawn(spawn, {}) == 0);
+    const u64 first = enemies.observe(0)->instance;
+    enemies.hurt(0, {.flags = EnemyHit::kMagic});
+    REQUIRE(enemies.spawn(spawn, {}) == 0);
+    const u64 next = enemies.observe(0)->instance;
+    REQUIRE(first != next);
+    const auto retired = fixture.consume(1);
+    REQUIRE(retired.finite.events.size() == 1);
+    CHECK(retired.finite.events[0].id.emitter == FrameEventEmitter{20, 0, first});
+    enemies.hurt(0, {.flags = EnemyHit::kMagic});
+    const auto newer = fixture.consume(2);
+    REQUIRE(newer.finite.events.size() == 1);
+    CHECK(newer.finite.events[0].id.emitter == FrameEventEmitter{20, 0, next});
+
+    auto legacy = enemies.checkpoint();
+    REQUIRE(legacy);
+    legacy->deathEvents.push_back({.kind = DeathEvent::Kind::Killed, .enemy = 0});
+    REQUIRE(legacy->valid());
+    REQUIRE(enemies.restore(*legacy));
+    usize commands = 0;
+    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    CHECK_THROWS_AS(fixture.consume(3), SceneSoundEvents::Unsupported);
+    CHECK_FALSE(fixture.sounds.recording());
+    CHECK(commands == 0);
+    CHECK(fixture.sounds.lastUnsupported() == "Death event without its source lifetime");
+}
+
+TEST_CASE("native swarm impact and bomber audio use source lifetimes rather than scene order",
+          "[native-combat-audio][scene-sound-events][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("AUDIO/CATH.VBK");
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("E1")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    AudioMixer mixer{48000};
+    SoundPlayer output{mixer};
+    LevelSoundscape audio;
+    audio.open(root, &output, world.audio(), 'E');
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root}, players);
+    auto& enemies = opponents.enemies();
+    enemies.open(device, root, nullptr, 2, {.health = 20}, 1);
+    REQUIRE(enemies.loadKind(13));
+    for (s32 slot = 0; slot < 2; ++slot) {
+        REQUIRE(enemies.spawn({.kind = 13,
+                               .tier = kSuicideStrength,
+                               .algorithm = 0,
+                               .position = {static_cast<f32>(slot) * 10, 0, 0},
+                               .placed = true},
+                              {}) == slot);
+        REQUIRE(enemies.algorithmOf(slot) == kSuicideWay);
+    }
+    const u64 second = enemies.observe(1)->instance;
+    auto saved = std::make_unique<Enemies::LocalSnapshot>();
+    REQUIRE(enemies.saveLocal(*saved));
+    SceneSoundEvents sounds;
+    sounds.open(117, &output);
+    audio.recordTo(&sounds);
+    LevelOpponents::Events callbacks;
+    callbacks.award = [](s32, s32, bool) {};
+    callbacks.levels = [] {};
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const auto impact = [&](bool firstAlso) {
+        sounds.beginTick(1);
+        if (firstAlso) {
+            enemies.hurt(0, {.damage = 1, .player = 0});
+        }
+        enemies.hurt(1, {.damage = 1, .player = 0});
+        opponents.settleRewards(players, callbacks); // no fallback emitter scope
+        return sounds.endFrame();
+    };
+    const auto wrong = impact(true);
+    REQUIRE(wrong.finite.events.size() == 2);
+    REQUIRE(enemies.restoreLocal(*saved));
+    const auto corrected = impact(false);
+    REQUIRE(corrected.finite.events.size() == 1);
+    CHECK(corrected.finite.events[0] == wrong.finite.events[1]);
+    CHECK(corrected.finite.events[0].id.emitter == FrameEventEmitter{20, 1, second});
+    CHECK(corrected.finite.events[0].id.cue == 16);
+    CHECK(commands == 0);
+
+    callbacks.settleBlasts = [] {};
+    callbacks.advanceLegend = [](f32) {};
+    callbacks.advanceVictory = [](s32, f32) {};
+    callbacks.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    callbacks.help = [](s32, usize) { return true; };
+    sounds.beginTick(2);
+    enemies.hurt(1, {.damage = 100000, .player = 0});
+    opponents.update(0, 0, players, {}, callbacks);
+    opponents.gatherLoops();
+    const auto explosion = sounds.endFrame();
+    REQUIRE(explosion.finite.events.size() == 2);
+    CHECK(std::ranges::any_of(explosion.finite.events,
+                              [](const auto& event) { return event.id.cue == 48; }));
+    CHECK(std::ranges::any_of(explosion.finite.events,
+                              [](const auto& event) { return event.id.cue == 17; }));
+    for (const auto& event : explosion.finite.events) {
+        CHECK(event.id.emitter == FrameEventEmitter{20, 1, second});
+    }
+    CHECK(commands == 0);
+    CHECK(sounds.unsupportedCount() == 0);
+    opponents.close();
+    audio.close();
+}
+
+TEST_CASE("corrected native missile impacts cannot steal another flight's recorded audio",
+          "[native-combat-audio][scene-sound-events][enemy-missiles-local-rewind]") {
+    DeathSoundFixture fixture(1);
+    fixture.players[0].actor.spawn(0, {}, nullptr, {10, 0, 10}, 0);
+    // Seed native flights in the mutable owner, without a test-only gameplay API.
+    auto& pool = const_cast<EnemyMissiles&>(fixture.opponents.missiles());
+    auto kind = EnemyMissileKind::bolt(20, 25, 0.3f, 0, 0);
+    kind.burstRadius = 2;
+    pool.launch(kind, {0, 3, 0}, {0, 3, 20}, 1, nullptr, 0);
+    pool.launch(kind, {20, 3, 0}, {20, 3, 20}, 1, nullptr, 0);
+    const u64 first = pool.missile(0).instance;
+    const u64 second = pool.missile(1).instance;
+    EnemyMissiles::LocalSnapshot saved;
+    pool.saveLocal(saved);
+    const auto step = [&](u64 tick, bool both) {
+        std::array views{EnemyView{.player = 0, .position = {0, 0, 0.5f}},
+                         EnemyView{.player = 1, .position = {20, 0, 0.5f}}};
+        views[0].hidden = !both;
+        pool.update(1.0f / 60, nullptr, views);
+        return fixture.consume(tick);
+    };
+    usize commands = 0;
+    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    const auto wrong = step(1, true);
+    REQUIRE(wrong.finite.events.size() == 2);
+    CHECK(wrong.finite.events[0].id.emitter == FrameEventEmitter{22, 0, first, 0});
+    CHECK(wrong.finite.events[1].id.emitter == FrameEventEmitter{22, 0, second, 1});
+    CHECK(commands == 0);
+    auto published = fixture.sounds.reconcileFrames(1, std::span{&wrong, 1});
+    REQUIRE(published);
+    fixture.sounds.dispatch(published);
+    REQUIRE(commands > 0);
+    const usize presented = commands;
+    for (s32 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        REQUIRE(pool.restoreLocal(saved));
+        for (s32 tick = 1; tick <= distance; ++tick) {
+            step(tick, true);
+        }
+        REQUIRE(pool.restoreLocal(saved));
+        std::vector<SceneSoundEvents::Frame> corrected;
+        for (s32 tick = 1; tick <= distance; ++tick) {
+            corrected.push_back(step(tick, false));
+        }
+        REQUIRE(corrected[0].finite.events.size() == 1);
+        CHECK(corrected[0].finite.events[0] == wrong.finite.events[1]);
+        for (usize frame = 1; frame < corrected.size(); ++frame) {
+            CHECK(corrected[frame].finite.events.empty());
+        }
+        const auto delta = fixture.sounds.reconcileFrames(1, corrected);
+        REQUIRE(delta);
+        CHECK(delta.actions.empty());
+        fixture.sounds.dispatch(delta);
+        CHECK(commands == presented);
+    }
+    CHECK(fixture.sounds.unsupportedCount() == 0);
+}
+
+TEST_CASE("retired missile audio rejects missing births instead of binding a recycled shooter",
+          "[native-combat-audio][scene-sound-events]") {
+    DeathSoundFixture fixture(1);
+    fixture.players[0].actor.spawn(0, {}, nullptr, {10, 0, 10}, 0);
+    auto& pool = const_cast<EnemyMissiles&>(fixture.opponents.missiles());
+    auto kind = EnemyMissileKind::bolt(20, 25, 0.3f, 0, 0);
+    kind.burstRadius = 2;
+    pool.launch(kind, {0, 3, 0}, {0, 3, 20}, 1, nullptr, 0);
+    const u64 retired = pool.missile(0).instance;
+    const std::array views{EnemyView{.player = 0, .position = {0, 0, 0.5f}}};
+    pool.update(1.0f / 60, nullptr, views);
+    REQUIRE(pool.count() == 0);
+    pool.launch(kind, {40, 3, 0}, {40, 3, 20}, 1, nullptr, 0);
+    REQUIRE(pool.missile(0).instance != retired);
+    const auto pending = pool.checkpoint();
+    REQUIRE(pending);
+    REQUIRE(pending->hits.size() == 1);
+    const auto frame = fixture.consume(1);
+    REQUIRE(frame.finite.events.size() == 1);
+    CHECK(frame.finite.events[0].id.emitter == FrameEventEmitter{22, 0, retired, 0});
+    auto legacy = *pending;
+    legacy.hits[0].instance = 0;
+    REQUIRE(pool.restore(legacy));
+    usize commands = 0;
+    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    CHECK_THROWS_AS(fixture.consume(2), SceneSoundEvents::Unsupported);
+    CHECK_FALSE(fixture.sounds.recording());
+    CHECK(fixture.sounds.lastUnsupported() == "enemy missile hit without its source lifetime");
+    CHECK(commands == 0);
+}
 
 TEST_CASE("Death placement strengths select statue color and initial wake flag independently",
           "[death][death-statue]") {

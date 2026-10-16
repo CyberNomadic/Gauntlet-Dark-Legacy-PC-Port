@@ -35,6 +35,124 @@ const Texture* textureOf(TextureSet* textures, RenderDevice& device, std::string
 
 } // namespace
 
+void BossMeter::saveLocal(LocalSnapshot& saved) const {
+    saved.m_values = m_sim;
+    saved.m_owner = m_lifetime;
+    saved.m_epoch = m_localEpoch;
+}
+bool BossMeter::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch;
+}
+bool BossMeter::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.m_values;
+    return true;
+}
+
+bool BossMeter::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.m_values == b.m_values;
+}
+
+void BossMeter::appendValuesDigest(NativeStateDigest& digest, const Simulation& values) const {
+    const auto& [textures, name, pieces, left, leftInset, rightInset, backed, current, lifetime,
+                 epoch] = *this;
+    // These layout/resource values cannot change without bind/clear advancing
+    // the epoch. A guarded snapshot therefore shares this exact configuration.
+    // Lifetime and epoch authenticate local history, not peer-visible state.
+    (void)current;
+    (void)lifetime;
+    (void)epoch;
+    digest.string("BossMeter.native.1");
+    digest.resource(textures);
+    digest.values(name, pieces, left, leftInset, rightInset, backed, values);
+}
+
+bool BossMeter::appendNativeDigest(NativeStateDigest& digest) const {
+    appendValuesDigest(digest, m_sim);
+    return digest.good();
+}
+
+bool BossMeter::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    appendValuesDigest(digest, saved.m_values);
+    return digest.good();
+}
+
+void BossMeters::saveLocal(LocalSnapshot& saved) const {
+    for (usize i = 0; i < kCapacity; ++i) {
+        m_meters[i].saveLocal(saved.m_meters[i]);
+    }
+    saved.m_owner = m_lifetime;
+    saved.m_epoch = m_localEpoch;
+}
+bool BossMeters::canRestoreLocal(const LocalSnapshot& saved) const {
+    if (saved.m_owner.lock() != m_lifetime || saved.m_epoch != m_localEpoch) {
+        return false;
+    }
+    for (usize i = 0; i < kCapacity; ++i) {
+        if (!m_meters[i].canRestoreLocal(saved.m_meters[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+bool BossMeters::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize i = 0; i < kCapacity; ++i) {
+        m_meters[i].restoreLocal(saved.m_meters[i]);
+    }
+    return true;
+}
+
+bool BossMeters::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
+    if (!canRestoreLocal(a) || !canRestoreLocal(b)) {
+        return false;
+    }
+    for (usize i = 0; i < kCapacity; ++i) {
+        if (!m_meters[i].equalLocal(a.m_meters[i], b.m_meters[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool BossMeters::appendValuesDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    const auto& [meters, count, lifetime, epoch] = *this;
+    (void)lifetime;
+    (void)epoch;
+    digest.string("BossMeters.native.1");
+    digest.value(count); // bind-time layout, protected by the collection epoch
+    // Include every slot, not just showing layers; an invisible meter still
+    // holds fresh/max/easing state used by the next native update.
+    for (usize i = 0; i < meters.size(); ++i) {
+        const bool appended = saved ? meters[i].appendLocalDigest(digest, saved->m_meters[i])
+                                    : meters[i].appendNativeDigest(digest);
+        if (!appended) {
+            return false;
+        }
+    }
+    return digest.good();
+}
+
+bool BossMeters::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendValuesDigest(digest, nullptr);
+}
+
+bool BossMeters::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendValuesDigest(digest, &saved);
+}
+
 bool BossMeter::bind(const HealthMeterDefinition& meter, TextureSet* textures, s32 left) {
     clear();
     if (!meter.shown || meter.pieces <= 0) {
@@ -51,6 +169,7 @@ bool BossMeter::bind(const HealthMeterDefinition& meter, TextureSet* textures, s
 }
 
 void BossMeter::clear() {
+    ++m_localEpoch;
     m_textures = nullptr;
     m_name.clear();
     m_pieces = 0;
@@ -58,31 +177,31 @@ void BossMeter::clear() {
     m_leftInset = 0;
     m_rightInset = 0;
     m_backed = false;
-    m_max = 1.0f;
-    m_shown = 0.0f;
-    m_fresh = true;
-    m_alive = true;
-    m_frozen = false;
+    m_sim.max = 1.0f;
+    m_sim.shown = 0.0f;
+    m_sim.fresh = true;
+    m_sim.alive = true;
+    m_sim.frozen = false;
 }
 
 void BossMeter::update(s32 ticks, f32 health, f32 maxHealth, bool alive, bool frozen) {
     if (!bound()) {
         return;
     }
-    m_max = std::max(maxHealth, 1.0f);
-    m_alive = alive;
-    m_frozen = frozen;
+    m_sim.max = std::max(maxHealth, 1.0f);
+    m_sim.alive = alive;
+    m_sim.frozen = frozen;
     const f32 target = std::max(health, 0.0f);
-    if (m_fresh) {
-        m_fresh = false; // first sight: as it is
-        m_shown = target;
+    if (m_sim.fresh) {
+        m_sim.fresh = false; // first sight: as it is
+        m_sim.shown = target;
         return;
     }
     const f32 step = kEasePerTick * static_cast<f32>(std::max(ticks, 0));
-    if (m_shown > target) {
-        m_shown = std::max(m_shown - step, target);
-    } else if (m_shown < target) {
-        m_shown = std::min(m_shown + step, target);
+    if (m_sim.shown > target) {
+        m_sim.shown = std::max(m_sim.shown - step, target);
+    } else if (m_sim.shown < target) {
+        m_sim.shown = std::min(m_sim.shown + step, target);
     }
 }
 
@@ -94,7 +213,7 @@ std::array<s32, BossMeter::kMostPieces> BossMeter::fillWidths() const {
     if (!bound()) {
         return widths;
     }
-    const f32 fraction = std::clamp(m_shown / m_max, 0.0f, 1.0f);
+    const f32 fraction = std::clamp(m_sim.shown / m_sim.max, 0.0f, 1.0f);
     if (m_pieces >= 2) {
         const f32 share = 2.0f * fraction;
         widths[0] = share >= 1.0f
@@ -194,6 +313,7 @@ void BossMeters::update(s32 ticks, std::span<const HealthMeterReading> readings,
 }
 
 void BossMeters::clear() {
+    ++m_localEpoch;
     for (auto& meter : m_meters) {
         meter.clear();
     }

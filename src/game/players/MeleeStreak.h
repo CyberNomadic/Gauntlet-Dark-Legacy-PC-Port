@@ -4,6 +4,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -13,7 +17,10 @@ namespace gdl::game {
  * `S_BRAVERY`, and the count starts over.
  */
 class MeleeStreak {
+    friend void visitNativeState(NativeStateDigest&, const MeleeStreak&);
+
 public:
+    bool operator==(const MeleeStreak&) const = default;
     struct Checkpoint {
         s32 count = 0;
         f32 quiet = 0;

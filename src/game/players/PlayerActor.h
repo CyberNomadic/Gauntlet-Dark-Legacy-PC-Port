@@ -13,6 +13,10 @@
 #include "game/players/ClassData.h"
 #include "game/players/PlayerControls.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -21,7 +25,10 @@ namespace gdl::game {
  * walls by the level's collision.
  */
 class PlayerActor {
+    friend void visitNativeState(NativeStateDigest&, const PlayerActor&);
+
 public:
+    bool operator==(const PlayerActor&) const = default;
     static constexpr f32 kMinSpeed = 5.0f;  ///< units per second with no speed at all
     static constexpr f32 kMaxSpeed = 12.5f; ///< units per second at a speed stat of 1000
     static constexpr f32 kStatScale = 0.001f;

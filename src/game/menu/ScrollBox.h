@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,16 +54,50 @@ public:
     static constexpr Color kTextColor = Color::rgba(22, 12, 3); ///< ink on the parchment
 
     struct PageLayout {
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const PageLayout& value) {
+            visitor.template fields<4>(value);
+        }
         std::vector<std::string> lines;
         Rect area;
         s32 textTop = 0;
         s32 promptY = 0;
     };
+
+private:
+    struct Simulation {
+        RenderDevice* device = nullptr;
+        std::vector<std::string> pages;
+        PageLayout layout;
+        std::string prompt;
+        f32 scale = 1.0f;
+        usize page = 0;
+        s32 hold = 0;
+        s32 time = 0;
+        bool active = false;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class ScrollBox;
+        Simulation state;
+        const ScrollBox* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+        BurnDialogueScroll::LocalSnapshot fire;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     void setArt(ScrollBoxArt art) {
+        m_localBinding = std::make_shared<const u8>(0);
         m_burnFrames.clear();
         m_art = std::move(art);
     }
-    void setText(const TextPainter* text) { m_text = text; }
+    void setText(const TextPainter* text) {
+        m_localBinding = std::make_shared<const u8>(0);
+        m_text = text;
+    }
 
     /** Unrolls over `pages`, drawn at `scale`, with `prompt` under each; false without text
      * to draw with or a page to show. */
@@ -71,18 +107,18 @@ public:
     /** Steps the box; `accepted` has a bit per player who pressed their button this tick. */
     void step(s32 ticks, u32 accepted);
 
-    bool active() const { return m_active; }
+    bool active() const { return m_sim.active; }
     bool burning() const { return m_fire.active(); }
     /** Native-load check only; offline open/finish fallback behavior is unchanged. */
     bool burnReady() const {
         return BurnDialogueScroll::ready(m_art.backdropImage, m_art.burnMasks, m_art.burnRing);
     }
-    usize page() const { return m_page; }
-    usize pageCount() const { return m_pages.size(); }
+    usize page() const { return m_sim.page; }
+    usize pageCount() const { return m_sim.pages.size(); }
     /** The scroll's rectangle for the current page. */
-    const Rect& area() const { return m_layout.area; }
+    const Rect& area() const { return m_sim.layout.area; }
     /** The lines of the current page. */
-    const std::vector<std::string>& lines() const { return m_layout.lines; }
+    const std::vector<std::string>& lines() const { return m_sim.layout.lines; }
     u8 promptAlpha() const;
     s32 burnFrame() const { return burning() ? m_fire.frame() : -1; }
 
@@ -101,6 +137,7 @@ public:
     static std::vector<std::string> splitLines(std::string_view page);
 
 private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     void showPage(usize page);
     void finish();
     void drawWords(Canvas& canvas, const PageLayout& page, f32 scale, std::string_view prompt,
@@ -108,17 +145,10 @@ private:
 
     ScrollBoxArt m_art;
     const TextPainter* m_text = nullptr;
-    RenderDevice* m_device = nullptr;
-    std::vector<std::string> m_pages;
-    PageLayout m_layout;
-    std::string m_prompt;
-    f32 m_scale = 1.0f;
-    usize m_page = 0;
-    s32 m_hold = 0;
-    s32 m_time = 0;
-    bool m_active = false;
     BurnDialogueScroll m_fire;
     std::vector<std::unique_ptr<Texture>> m_burnFrames;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

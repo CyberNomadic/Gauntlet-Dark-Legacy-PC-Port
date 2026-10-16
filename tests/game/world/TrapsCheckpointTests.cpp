@@ -1,3 +1,4 @@
+#include <array>
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -32,12 +33,17 @@ struct Fixture {
         writeTextFile(
             root / "textures.json",
             R"({"bitmaps":[{"index":0,"name":"WHITE","file":"white.png","width":2,"height":2}]})");
-        writeTextFile(root / "animations.json", R"({"trees":[
-          {"name":"SPIKES","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+        writeTextFile(root / "animations.json", R"({
+          "particles":[{"enables":16928,"texture":"WHITE","particleLife":[0.2,0.1],
+            "rate":[30,30,30,30],"flags":128,"flagMask":128}],
+          "trees":[
+          {"name":"SPIKES","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+            {"name":"SPRAY","parent":0,"position":[0,1,0],"particle":0}],
            "sequences":[{"name":"IDLE","frames":1,"frameRate":30},
                         {"name":"ONA","frames":4,"frameRate":30},
                         {"name":"ONB","frames":4,"frameRate":30}]},
-          {"name":"SPIKES_D","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+          {"name":"SPIKES_D","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+            {"name":"SPRAY","parent":0,"position":[0,1,0],"particle":0}],
            "sequences":[{"name":"IDLE","frames":2,"frameRate":30}]},
           {"name":"BARE","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
            "sequences":[{"name":"IDLE","frames":1,"frameRate":30},
@@ -298,5 +304,134 @@ TEST_CASE("trap floor attachments rewind with native nonblocking moving support"
     second.traps.syncFloors();
     CHECK(second.owner.checkpoint() == detached);
     CHECK(second.device.texturesCreated == textures);
+}
+TEST_CASE("trap native values undo random cycles contact gaps disarming and first effect births",
+          "[local-rewind][fixture-local-rewind][traps-local-rewind]") {
+    Fixture native(true), replay(true);
+    std::array<Traps::LocalSnapshot, 16> history;
+    WorldCollision::LocalSnapshot floor;
+    const auto uploads = replay.device.texturesCreated;
+    const auto step = [](Fixture& fixture, s32 tick, bool wrong) {
+        const auto frame = static_cast<f32>(tick);
+        const Mat4 placement = glm::translate(Mat4{1}, Vec3{0, -0.005f * frame, 0});
+        fixture.collision.setObjectTransform(0, placement);
+        fixture.traps.capturePresentation();
+        fixture.traps.setPlayerCount(wrong ? 4 : 1);
+        if (wrong || tick == 200) {
+            fixture.traps.disarm(0, fixture.device, fixture.layout, AssetScope(fixture.items),
+                                 &fixture.collision);
+        }
+        if (wrong || tick == 260) {
+            fixture.traps.disarm(1, fixture.device, fixture.layout, AssetScope(fixture.items),
+                                 &fixture.collision);
+        }
+        if (tick == 120) {
+            fixture.traps.stop(1);
+        }
+        const Vec3 first{placement * Vec4{0, 1, 0, 1}};
+        const Vec3 second{placement * Vec4{20, 1, 0, 1}};
+        const std::array victims{TrapVictim{first, 0.75f, 1.5f}, TrapVictim{second, 0.75f, 1.5f}};
+        return fixture.traps.update(wrong ? 11 : 1, wrong ? 0.2f : 1.0f / 60, victims,
+                                    !wrong && tick >= 70 && tick < 80);
+    };
+    usize hits = 0, wakes = 0;
+    bool particles = false;
+    s32 tick = 0;
+    for (usize window = 0; window < 96; ++window) {
+        const auto distance = static_cast<s32>(window % 8 + 1);
+        CAPTURE(window, distance);
+        const auto before = replay.owner.checkpoint();
+        REQUIRE(before);
+        auto& saved = history[window % history.size()];
+        replay.traps.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        CHECK_FALSE(native.traps.restoreLocal(saved));
+        CHECK_FALSE(native.traps.equalLocal(saved, saved));
+        std::vector<Traps::LocalSnapshot> nativeStates(static_cast<usize>(distance));
+        for (s32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, false);
+            replay.traps.saveLocal(nativeStates[static_cast<usize>(i)]);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.traps.restoreLocal(saved));
+        for (s32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        replay.traps.draw(replay.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.6f);
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.traps.restoreLocal(saved));
+        CHECK(replay.owner.checkpoint() == before);
+        for (s32 i = 0; i < distance; ++i) {
+            const auto expected = step(native, tick + i, false);
+            compareHits(step(replay, tick + i, false), expected);
+            hits += expected.size();
+            wakes += native.traps.wakes().size();
+            const auto state = native.owner.checkpoint();
+            REQUIRE(state);
+            CHECK(replay.owner.checkpoint() == state);
+            Traps::LocalSnapshot actual;
+            replay.traps.saveLocal(actual);
+            CHECK(replay.traps.equalLocal(actual, nativeStates[static_cast<usize>(i)]));
+            particles |= native.traps.trap(0).figure.particles().field().particleCount() > 0;
+        }
+        tick += distance;
+    }
+    CHECK(hits > 0);
+    CHECK(wakes > 0);
+    CHECK(particles);
+    CHECK(replay.traps.trap(0).disarmed);
+    CHECK(replay.traps.trap(1).gone);
+    CHECK(replay.device.texturesCreated == uploads);
+    auto& saved = history.front();
+    replay.traps.saveLocal(saved);
+    auto stale = replay.owner.prepareRestore(*replay.owner.checkpoint());
+    REQUIRE(stale);
+    REQUIRE(replay.traps.restoreLocal(saved));
+    CHECK_FALSE(replay.owner.canCommit(*stale));
+    replay.traps.clear();
+    CHECK_FALSE(replay.traps.restoreLocal(saved));
+    CHECK_FALSE(replay.traps.equalLocal(saved, saved));
+}
+
+TEST_CASE("native trap equality detects victim cooldowns with identical trap figures",
+          "[local-rewind][fixture-local-rewind][traps-local-rewind]") {
+    Fixture fixture;
+    Traps::LocalSnapshot initial, untouched, hit, actual, empty;
+    for (s32 tick = 0; tick < 100 && fixture.traps.trap(0).action != 2; ++tick) {
+        fixture.traps.update(1, 1.0f / 60, {});
+    }
+    REQUIRE(fixture.traps.trap(0).action == 2);
+    fixture.traps.saveLocal(initial);
+    CHECK_FALSE(fixture.traps.equalLocal(initial, empty));
+    CHECK_FALSE(fixture.traps.equalLocal(empty, empty));
+    const std::array far{TrapVictim{Vec3{100, 1, 0}}};
+    const std::array near{TrapVictim{Vec3{0, 1, 0}}};
+    REQUIRE(fixture.traps.update(0, 0, far).empty());
+    fixture.traps.saveLocal(untouched);
+    std::vector<Traps::Trap> figures;
+    for (usize i = 0; i < fixture.traps.size(); ++i) {
+        figures.push_back(fixture.traps.trap(i));
+    }
+
+    REQUIRE(fixture.traps.restoreLocal(initial));
+    const auto hits = fixture.traps.update(0, 0, near);
+    REQUIRE(hits.size() == 1);
+    fixture.traps.saveLocal(hit);
+    for (usize i = 0; i < fixture.traps.size(); ++i) {
+        CHECK(fixture.traps.trap(i) == figures[i]);
+    }
+    CHECK_FALSE(fixture.traps.equalLocal(untouched, hit));
+    CHECK_FALSE(fixture.traps.equalLocal(hit, untouched));
+    REQUIRE(fixture.traps.update(0, 0, near).empty());
+    REQUIRE(fixture.traps.restoreLocal(untouched));
+    compareHits(fixture.traps.update(0, 0, near), hits);
+    fixture.traps.saveLocal(actual);
+    CHECK(fixture.traps.equalLocal(hit, actual));
+
+    REQUIRE(fixture.traps.bind(fixture.device, fixture.layout, AssetScope(fixture.items), nullptr,
+                               7123, 1.25f, 1.5f));
+    fixture.traps.saveLocal(actual);
+    CHECK_FALSE(fixture.traps.equalLocal(initial, actual));
+    CHECK_FALSE(fixture.traps.equalLocal(initial, initial));
 }
 } // namespace

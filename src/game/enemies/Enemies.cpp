@@ -8,15 +8,95 @@
 #include <tuple>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/combat/BodyContact.h"
 #include "game/combat/Damage.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/players/EnemyShrink.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 
+void visitNativeState(NativeStateDigest& digest, const EnemyScales& value) {
+    digest.fields<9>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyBlow& value) {
+    digest.fields<8>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyLoss& value) {
+    digest.fields<7>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyBody& value) {
+    digest.fields<4>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyGeneratorEvent& value) {
+    digest.fields<2>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemySpawn& value) {
+    digest.fields<15>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyDeathShot& value) {
+    digest.fields<4>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyBurst& value) {
+    digest.fields<6>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyBirth& value) {
+    digest.fields<3>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyCue& value) {
+    digest.fields<5>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const EnemyFeedback& value) {
+    digest.fields<11>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const DeathEvent& value) {
+    digest.fields<7>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const ZigZag& value) {
+    digest.fields<5>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const MindMemory& value) {
+    digest.fields<18>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const LookoutRoute& value) {
+    digest.fields<2>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const Enemies::BodyState::Floor& value) {
+    digest.fields<2>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const Enemies::BodyState& value) {
+    digest.fields<57>(value);
+}
+
 namespace {
+
+// A derived record with data in its base cannot be decomposed by C++. Its real
+// base is visited separately; this guard detects an unvisited derived member.
+template <class T>
+constexpr bool kHasExtraEnemyMember =
+    requires { T{Enemies::BodyState{}, EnemyAnimator{}, {}}; };
+
+template <class T> bool sameNativeField(const T& left, const T& right) {
+    return left == right;
+}
+
+bool sameNativeField(const std::optional<ViewVolume>& left,
+                     const std::optional<ViewVolume>& right) {
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+    bool equal = true;
+    if (left) {
+        visitNativeFields<8>(*left, [&](const auto&... first) {
+            visitNativeFields<8>(*right, [&](const auto&... second) {
+                equal = std::tie(first...) == std::tie(second...);
+            });
+        });
+    }
+    return equal;
+}
 
 constexpr f32 kPi = std::numbers::pi_v<f32>;
 // Height of the horizontal wall slice above the supported feet.
@@ -98,7 +178,8 @@ bool checkpointEvent(const EnemyLoss& value) {
 }
 bool checkpointEvent(const EnemyBurst& value) {
     return checkpointSlot(value.enemy) && (value.kind == -1 || checkpointKind(value.kind)) &&
-           checkpointNumber(value.damage, 0) && checkpointPoint(value.position);
+           checkpointNumber(value.damage, 0) && checkpointPoint(value.position) &&
+           (value.instance == 0 || value.enemy >= 0);
 }
 bool checkpointEvent(const EnemyBirth& value) {
     return checkpointKind(value.kind) && value.tier >= 1 && value.tier <= 3 &&
@@ -106,17 +187,21 @@ bool checkpointEvent(const EnemyBirth& value) {
 }
 bool checkpointEvent(const EnemyCue& value) {
     return value.kind <= EnemyCue::Kind::Yell && checkpointKind(value.enemyKind) &&
-           checkpointPoint(value.position);
+           checkpointPoint(value.position) && checkpointSlot(value.enemy) &&
+           ((value.enemy == -1 && value.instance == 0) ||
+            (value.enemy >= 0 && value.instance != 0));
 }
 bool checkpointEvent(const EnemyFeedback& value) {
     return checkpointKind(value.kind) && value.tier >= 1 && value.tier <= 3 &&
            checkpointCounter(value.hitCount, 0) && checkpointPoint(value.position) &&
-           checkpointNumber(value.yaw) && checkpointNumber(value.halfHeight, 0);
+           checkpointNumber(value.yaw) && checkpointNumber(value.halfHeight, 0) &&
+           checkpointSlot(value.enemy) && (value.instance == 0 || value.enemy >= 0);
 }
 bool checkpointEvent(const DeathEvent& value) {
     return value.kind <= DeathEvent::Kind::Unmoved && checkpointSlot(value.enemy) &&
            checkpointPlayer(value.player) && value.form <= DeathForm::Black &&
-           checkpointNumber(value.amount, 0) && checkpointPoint(value.position);
+           checkpointNumber(value.amount, 0) && checkpointPoint(value.position) &&
+           (value.instance == 0 || value.enemy >= 0);
 }
 bool checkpointEvent(const EnemyDeathShot& value) {
     return checkpointSlot(value.enemy) && checkpointKind(value.kind) &&
@@ -394,6 +479,36 @@ bool Enemies::Checkpoint::valid() const {
             }
         }
     }
+    for (const auto& cue : cues) {
+        if (cue.instance >= nextInstance ||
+            (cue.enemy >= 0 && enemies[static_cast<usize>(cue.enemy)].instance == cue.instance &&
+             enemies[static_cast<usize>(cue.enemy)].kind != cue.enemyKind)) {
+            return false;
+        }
+    }
+    // Diagnostic fixtures may omit a source lifetime. Native emissions always
+    // carry it, but the slot is allowed to have changed hands before consumption.
+    const auto sourceValid = [&](const auto& event, s32 kind) {
+        return event.instance < nextInstance &&
+               (event.instance == 0 ||
+                enemies[static_cast<usize>(event.enemy)].instance != event.instance ||
+                kind < 0 || enemies[static_cast<usize>(event.enemy)].kind == kind);
+    };
+    for (const auto& event : feedback) {
+        if (!sourceValid(event, event.kind)) {
+            return false;
+        }
+    }
+    for (const auto& event : deathEvents) {
+        if (!sourceValid(event, kDeathKind)) {
+            return false;
+        }
+    }
+    for (const auto& event : bursts) {
+        if (!sourceValid(event, event.kind)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -416,8 +531,8 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
         return std::nullopt;
     }
     Checkpoint state;
-    for (usize index = 0; index < m_enemies.size(); ++index) {
-        const auto& enemy = m_enemies[index];
+    for (usize index = 0; index < m_simulation.enemies.size(); ++index) {
+        const auto& enemy = m_simulation.enemies[index];
         auto& body = state.enemies[index];
         static_cast<BodyState&>(body) = enemy;
         body.animator = enemy.animator.checkpoint();
@@ -425,38 +540,38 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
             return std::nullopt;
         }
     }
-    for (const auto& stock : m_stocks) {
+    for (const auto& stock : m_simulation.stocks) {
         state.stocks.push_back({stock->kind, stock->textures.checkpoint()});
     }
     // Loading placed enemies before optional presentation preloads can produce
     // a different stock order on another machine. The value roster is canonical;
     // native stock iteration and each already-bound resource remain untouched.
     std::ranges::sort(state.stocks, {}, &Checkpoint::Stock::kind);
-    state.nextInstance = m_nextInstance;
-    state.random = m_random.checkpoint();
-    state.most = m_most;
-    state.scales = m_scales;
-    state.lookouts = m_lookouts;
-    state.blows = m_blows;
-    state.losses = m_losses;
-    state.bursts = m_bursts;
-    state.births = m_births;
-    state.cues = m_cues;
-    state.feedback = m_feedback;
-    state.deathEvents = m_deathEvents;
-    state.deathShots = m_deathShots;
-    state.tagged = m_tagged;
-    state.generatorEvents = m_generatorEvents;
-    state.combatants = m_combatants;
-    state.contactGridOrigin = m_contactGridOrigin;
-    state.contactGridInverseWidth = m_contactGridInverseWidth;
-    state.bomber = m_bomber;
-    state.view = m_view;
-    state.inView = m_inView;
-    state.frame = m_frame;
-    state.pendingTicks = m_pendingTicks;
-    state.pendingSeconds = m_pendingSeconds;
-    state.shrink = m_shrink;
+    state.nextInstance = m_simulation.nextInstance;
+    state.random = m_simulation.random.checkpoint();
+    state.most = m_simulation.most;
+    state.scales = m_simulation.scales;
+    state.lookouts = m_simulation.lookouts;
+    state.blows = m_simulation.blows;
+    state.losses = m_simulation.losses;
+    state.bursts = m_simulation.bursts;
+    state.births = m_simulation.births;
+    state.cues = m_simulation.cues;
+    state.feedback = m_simulation.feedback;
+    state.deathEvents = m_simulation.deathEvents;
+    state.deathShots = m_simulation.deathShots;
+    state.tagged = m_simulation.tagged;
+    state.generatorEvents = m_simulation.generatorEvents;
+    state.combatants = m_simulation.combatants;
+    state.contactGridOrigin = m_simulation.contactGridOrigin;
+    state.contactGridInverseWidth = m_simulation.contactGridInverseWidth;
+    state.bomber = m_simulation.bomber;
+    state.view = m_simulation.view;
+    state.inView = m_simulation.inView;
+    state.frame = m_simulation.frame;
+    state.pendingTicks = m_simulation.pendingTicks;
+    state.pendingSeconds = m_simulation.pendingSeconds;
+    state.shrink = m_simulation.shrink;
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
@@ -478,7 +593,8 @@ Enemies::Prepared& Enemies::Prepared::operator=(Prepared&&) noexcept = default;
 Enemies::Prepared::~Prepared() = default;
 
 std::optional<Enemies::Prepared> Enemies::prepareRestore(const Checkpoint& state) const {
-    if (m_device == nullptr || !state.valid() || state.stocks.size() != m_stocks.size()) {
+    if (m_device == nullptr || !state.valid() ||
+        state.stocks.size() != m_simulation.stocks.size()) {
         return std::nullopt;
     }
     auto data = std::make_unique<Prepared::Data>();
@@ -488,14 +604,14 @@ std::optional<Enemies::Prepared> Enemies::prepareRestore(const Checkpoint& state
     data->collision = m_collision;
     data->hazards = m_hazards;
     auto& textures = data->textures;
-    textures.reserve(m_stocks.size());
-    data->stocks.reserve(m_stocks.size());
-    for (const auto& stock : m_stocks) {
+    textures.reserve(m_simulation.stocks.size());
+    data->stocks.reserve(m_simulation.stocks.size());
+    for (const auto& stock : m_simulation.stocks) {
         const auto source = std::ranges::find(state.stocks, stock->kind, &Checkpoint::Stock::kind);
         if (source == state.stocks.end()) {
             return std::nullopt;
         }
-        data->stocks.push_back(stock.get());
+        data->stocks.push_back(stock);
         textures.push_back(stock->textures);
         if (!textures.back().restore(source->textures)) {
             return std::nullopt;
@@ -540,11 +656,11 @@ bool Enemies::canCommit(const Prepared& prepared) const {
         prepared.m_data->lifetime != m_restoreOwner ||
         prepared.m_data->generation != m_restoreGeneration ||
         prepared.m_data->collision != m_collision || prepared.m_data->hazards != m_hazards ||
-        prepared.m_data->stocks.size() != m_stocks.size()) {
+        prepared.m_data->stocks.size() != m_simulation.stocks.size()) {
         return false;
     }
-    for (usize index = 0; index < m_stocks.size(); ++index) {
-        if (prepared.m_data->stocks[index] != m_stocks[index].get()) {
+    for (usize index = 0; index < m_simulation.stocks.size(); ++index) {
+        if (prepared.m_data->stocks[index] != m_simulation.stocks[index]) {
             return false;
         }
     }
@@ -560,35 +676,35 @@ bool Enemies::commitRestore(Prepared&& prepared) {
     }
     auto data = std::move(prepared.m_data);
     auto& values = data->values;
-    m_enemies = std::move(data->enemies);
-    for (usize index = 0; index < m_stocks.size(); ++index) {
-        m_stocks[index]->textures = std::move(data->textures[index]);
+    m_simulation.enemies = std::move(data->enemies);
+    for (usize index = 0; index < m_simulation.stocks.size(); ++index) {
+        m_simulation.stocks[index]->textures = std::move(data->textures[index]);
     }
-    m_nextInstance = values.nextInstance;
-    m_random.restore(values.random);
-    m_most = values.most;
-    m_scales = values.scales;
-    m_lookouts = std::move(values.lookouts);
-    m_blows = std::move(values.blows);
-    m_losses = std::move(values.losses);
-    m_bursts = std::move(values.bursts);
-    m_births = std::move(values.births);
-    m_cues = std::move(values.cues);
-    m_feedback = std::move(values.feedback);
-    m_deathEvents = std::move(values.deathEvents);
-    m_deathShots = std::move(values.deathShots);
-    m_tagged = std::move(values.tagged);
-    m_generatorEvents = std::move(values.generatorEvents);
-    m_combatants = std::move(values.combatants);
-    m_contactGridOrigin = values.contactGridOrigin;
-    m_contactGridInverseWidth = values.contactGridInverseWidth;
-    m_bomber = values.bomber;
-    m_view = values.view;
-    m_inView = values.inView;
-    m_frame = values.frame;
-    m_pendingTicks = values.pendingTicks;
-    m_pendingSeconds = values.pendingSeconds;
-    m_shrink = values.shrink;
+    m_simulation.nextInstance = values.nextInstance;
+    m_simulation.random.restore(values.random);
+    m_simulation.most = values.most;
+    m_simulation.scales = values.scales;
+    m_simulation.lookouts = std::move(values.lookouts);
+    m_simulation.blows = std::move(values.blows);
+    m_simulation.losses = std::move(values.losses);
+    m_simulation.bursts = std::move(values.bursts);
+    m_simulation.births = std::move(values.births);
+    m_simulation.cues = std::move(values.cues);
+    m_simulation.feedback = std::move(values.feedback);
+    m_simulation.deathEvents = std::move(values.deathEvents);
+    m_simulation.deathShots = std::move(values.deathShots);
+    m_simulation.tagged = std::move(values.tagged);
+    m_simulation.generatorEvents = std::move(values.generatorEvents);
+    m_simulation.combatants = std::move(values.combatants);
+    m_simulation.contactGridOrigin = values.contactGridOrigin;
+    m_simulation.contactGridInverseWidth = values.contactGridInverseWidth;
+    m_simulation.bomber = values.bomber;
+    m_simulation.view = values.view;
+    m_simulation.inView = values.inView;
+    m_simulation.frame = values.frame;
+    m_simulation.pendingTicks = values.pendingTicks;
+    m_simulation.pendingSeconds = values.pendingSeconds;
+    m_simulation.shrink = values.shrink;
     ++m_restoreGeneration;
     return true;
 }
@@ -596,6 +712,149 @@ bool Enemies::commitRestore(Prepared&& prepared) {
 bool Enemies::restore(const Checkpoint& state) {
     auto prepared = prepareRestore(state);
     return prepared && commitRestore(std::move(*prepared));
+}
+
+bool Enemies::saveLocal(LocalSnapshot& destination) const {
+    if (m_device == nullptr) {
+        return false;
+    }
+    destination.m_simulation = m_simulation;
+    destination.m_textureClocks.resize(m_simulation.stocks.size());
+    for (usize index = 0; index < m_simulation.stocks.size(); ++index) {
+        destination.m_textureClocks[index] = m_simulation.stocks[index]->textures.clock();
+    }
+    destination.m_owner = m_restoreOwner;
+    destination.m_epoch = m_resourceEpoch;
+    destination.m_collision = m_collision;
+    destination.m_hazards = m_hazards;
+    return true;
+}
+
+bool Enemies::canRestoreLocal(const LocalSnapshot& source) const {
+    return m_device != nullptr && source.m_owner == m_restoreOwner &&
+           source.m_epoch == m_resourceEpoch && source.m_collision == m_collision &&
+           source.m_hazards == m_hazards &&
+           source.m_textureClocks.size() == source.m_simulation.stocks.size();
+}
+
+bool Enemies::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
+        return false;
+    }
+    if (left.m_textureClocks != right.m_textureClocks) {
+        return false;
+    }
+    bool equal = false;
+    // Same native traversal as hashing, retaining same-owner pointer equality
+    // for immutable resources and comparing captured rather than live clocks.
+    visitNativeFields<27>(left.m_simulation, [&](const auto&... first) {
+        visitNativeFields<27>(right.m_simulation, [&](const auto&... second) {
+            equal = (sameNativeField(first, second) && ...);
+        });
+    });
+    return equal;
+}
+
+void Enemies::appendSimulationDigest(
+    NativeStateDigest& digest, const Simulation& state,
+    std::optional<std::span<const TextureAnimator::Clock>> savedClocks) {
+    static_assert(std::is_aggregate_v<Enemy>);
+    static_assert(requires { Enemy{BodyState{}, EnemyAnimator{}}; });
+    static_assert(!kHasExtraEnemyMember<Enemy>);
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, std::vector<Stock*>>) {
+            digest.wide(field.size());
+            for (usize index = 0; index < field.size(); ++index) {
+                if (field[index] == nullptr) {
+                    digest.invalidate();
+                    return;
+                }
+                const auto& [kind, archive, textures, trees, bodies, variantTrees, variantBodies,
+                             arrow, bomb, fireball, deathStatues, deathStatueTrees, shadows,
+                             unseen] = *field[index];
+                digest.value(kind);
+                digest.resource(archive.loaded() ? &archive : nullptr);
+                for (const auto* tree : trees) {
+                    digest.resource(tree);
+                }
+                for (const auto* tree : variantTrees) {
+                    digest.resource(tree);
+                }
+                for (const auto* tree : deathStatueTrees) {
+                    digest.resource(tree);
+                }
+                // TreeModels and BlobShadows are shared render caches, never
+                // copied into native history. Only immutable availability counts.
+                for (const auto& body : bodies) {
+                    digest.flag(body.bound());
+                }
+                for (const auto& body : variantBodies) {
+                    digest.flag(body.bound());
+                }
+                for (const auto& body : deathStatues) {
+                    digest.flag(body.bound());
+                }
+                digest.values(arrow.bound(), bomb.bound(), fireball.bound());
+                (void)shadows;
+                (void)unseen; // the built-in IT tree is identified through trees
+                digest.resource(archive.loaded() ? &textures : nullptr);
+                digest.fields<3>(savedClocks ? (*savedClocks)[index] : textures.clock());
+            }
+        } else if constexpr (std::is_same_v<T, std::array<Enemy, kMost>>) {
+            digest.wide(field.size());
+            for (const auto& enemy : field) {
+                // Inactive slots retain animation, lifetime and AI values too.
+                digest.value(static_cast<const BodyState&>(enemy));
+                digest.value(enemy.animator);
+            }
+        } else if constexpr (std::is_same_v<T, std::optional<ViewVolume>>) {
+            digest.flag(field.has_value());
+            if (field) {
+                digest.fields<8>(*field);
+            }
+        } else {
+            digest.value(field);
+        }
+    };
+    visitNativeFields<27>(state, [&](const auto&... fields) { (append(fields), ...); });
+}
+
+bool Enemies::appendNativeDigest(NativeStateDigest& digest) const {
+    if (m_device == nullptr) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("Enemies.native.1");
+    digest.resource(m_collision);
+    digest.resource(m_hazards);
+    appendSimulationDigest(digest, m_simulation);
+    return digest.good();
+}
+
+bool Enemies::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("Enemies.native.1");
+    digest.resource(saved.m_collision);
+    digest.resource(saved.m_hazards);
+    appendSimulationDigest(digest, saved.m_simulation,
+                           std::span<const TextureAnimator::Clock>{saved.m_textureClocks});
+    return digest.good();
+}
+
+bool Enemies::restoreLocal(const LocalSnapshot& source) {
+    if (!canRestoreLocal(source)) {
+        return false;
+    }
+    m_simulation = source.m_simulation;
+    for (usize index = 0; index < m_simulation.stocks.size(); ++index) {
+        m_simulation.stocks[index]->textures.restoreClock(source.m_textureClocks[index]);
+    }
+    // Legacy diagnostic preparations must not commit across a local rewind.
+    ++m_restoreGeneration;
+    return true;
 }
 
 Enemies::~Enemies() {
@@ -608,17 +867,18 @@ void Enemies::open(RenderDevice& device, const std::filesystem::path& unpackedRo
     m_device = &device;
     m_root = unpackedRoot;
     m_collision = collision;
-    m_most = std::clamp(most, 1, kMost);
-    m_scales = scales;
-    m_random.seed(seed);
+    m_simulation.most = std::clamp(most, 1, kMost);
+    m_simulation.scales = scales;
+    m_simulation.random.seed(seed);
 }
 
 void Enemies::close() {
+    ++m_resourceEpoch;
     ++m_restoreGeneration;
-    for (Enemy& enemy : m_enemies) {
+    for (Enemy& enemy : m_simulation.enemies) {
         enemy = Enemy{};
     }
-    for (auto& stock : m_stocks) {
+    for (auto& stock : m_stockCache) {
         for (TreeModel& body : stock->bodies) {
             body.clear();
         }
@@ -633,59 +893,60 @@ void Enemies::close() {
         stock->textures.clear();
         stock->archive.release();
     }
-    m_stocks.clear();
-    m_blows.clear();
-    m_losses.clear();
-    m_bursts.clear();
-    m_births.clear();
-    m_cues.clear();
-    m_feedback.clear();
-    m_deathEvents.clear();
-    m_deathShots.clear();
-    m_tagged.clear();
-    m_generatorEvents.clear();
-    m_combatants.clear();
-    m_contactGridOrigin = Vec2{0};
-    m_contactGridInverseWidth = 0;
+    m_simulation.stocks.clear();
+    m_stockCache.clear();
+    m_simulation.blows.clear();
+    m_simulation.losses.clear();
+    m_simulation.bursts.clear();
+    m_simulation.births.clear();
+    m_simulation.cues.clear();
+    m_simulation.feedback.clear();
+    m_simulation.deathEvents.clear();
+    m_simulation.deathShots.clear();
+    m_simulation.tagged.clear();
+    m_simulation.generatorEvents.clear();
+    m_simulation.combatants.clear();
+    m_simulation.contactGridOrigin = Vec2{0};
+    m_simulation.contactGridInverseWidth = 0;
     m_device = nullptr;
     m_collision = nullptr;
     m_hazards = nullptr;
-    m_frame = 0;
-    m_pendingTicks = 0;
-    m_pendingSeconds = 0;
+    m_simulation.frame = 0;
+    m_simulation.pendingTicks = 0;
+    m_simulation.pendingSeconds = 0;
 }
 
 Enemies::Stock* Enemies::stockOf(s32 kind) {
-    for (auto& stock : m_stocks) {
+    for (auto& stock : m_simulation.stocks) {
         if (stock->kind == kind) {
-            return stock.get();
+            return stock;
         }
     }
     return nullptr;
 }
 
 void Enemies::setCombatantBodies(std::span<const MissileTarget> bodies) {
-    m_combatants.clear();
+    m_simulation.combatants.clear();
     for (const auto& body : bodies) {
         if (body.radius > 0 && body.height > 0) {
-            m_combatants.push_back({body.id, body.base + Vec3{0, 0.5f * body.height, 0},
-                                    body.radius, 0.5f * body.height});
+            m_simulation.combatants.push_back({body.id, body.base + Vec3{0, 0.5f * body.height, 0},
+                                               body.radius, 0.5f * body.height});
         }
     }
 }
 
 void Enemies::setContactGridBounds(const Vec3& minimum, const Vec3& maximum) {
-    m_contactGridOrigin = Vec2{minimum.x, minimum.z};
+    m_simulation.contactGridOrigin = Vec2{minimum.x, minimum.z};
     // InitDynGrid (80043A04): 803466A4 is 1/64, 803466A8 is double 1.
     const f32 cellWidth =
         std::max(maximum.x - minimum.x, maximum.z - minimum.z) / kContactGridDimension;
-    m_contactGridInverseWidth = cellWidth > 0 ? static_cast<f32>(1.0 / cellWidth) : 0;
+    m_simulation.contactGridInverseWidth = cellWidth > 0 ? static_cast<f32>(1.0 / cellWidth) : 0;
 }
 
 const Enemies::Stock* Enemies::stockOf(s32 kind) const {
-    for (const auto& stock : m_stocks) {
+    for (const auto& stock : m_simulation.stocks) {
         if (stock->kind == kind) {
-            return stock.get();
+            return stock;
         }
     }
     return nullptr;
@@ -697,6 +958,13 @@ bool Enemies::loadKind(s32 kind) {
     }
     if (m_device == nullptr || kind < 0 || kind >= kEnemyKindCount) {
         return false;
+    }
+    for (const auto& cached : m_stockCache) {
+        if (cached->kind == kind) {
+            cached->textures.restoreClock({});
+            m_simulation.stocks.push_back(cached.get());
+            return true;
+        }
     }
     const EnemyKind& info = enemyKind(kind);
     auto stock = std::make_unique<Stock>();
@@ -716,7 +984,8 @@ bool Enemies::loadKind(s32 kind) {
         stance.repeats = true;
         stock->unseen.sequences.push_back(stance);
         stock->trees.fill(&stock->unseen);
-        m_stocks.push_back(std::move(stock));
+        m_simulation.stocks.push_back(stock.get());
+        m_stockCache.push_back(std::move(stock));
         return true;
     }
     stock->textures.bind(stock->archive.trees.textureAnimations(), stock->archive.textures,
@@ -775,7 +1044,8 @@ bool Enemies::loadKind(s32 kind) {
             }
         }
     }
-    m_stocks.push_back(std::move(stock));
+    m_simulation.stocks.push_back(stock.get());
+    m_stockCache.push_back(std::move(stock));
     return true;
 }
 
@@ -791,6 +1061,43 @@ const ItemArchive* Enemies::archiveOf(s32 kind) const {
 ItemArchive* Enemies::archive(s32 kind) {
     Stock* stock = stockOf(kind);
     return stock != nullptr ? &stock->archive : nullptr;
+}
+
+bool Enemies::registerNativeResources(NativeStateResources& resources,
+                                     std::string_view stablePrefix) const {
+    if (stablePrefix.empty()) {
+        return false;
+    }
+    // Restoring a native branch removes its newly admitted kinds from stocks,
+    // but cached boss figures and retained history can still borrow their art.
+    // Register the owning cache without admitting those kinds to gameplay again.
+    for (const auto& stock : m_stockCache) {
+        if (!stock->archive.loaded()) {
+            // IT deliberately has no archive on the disc, but its READY body
+            // and retained sequence/pose bindings are still actual native state.
+            if (!resources.registerBuiltinTree(
+                    stock->unseen, std::format("{}/{}/body", stablePrefix, stock->kind))) {
+                return false;
+            }
+            continue;
+        }
+        if (!resources.registerArchive(stock->archive,
+                                         std::format("{}/{}", stablePrefix, stock->kind))) {
+            return false;
+        }
+        if (!resources.registerTextureAnimator(stock->textures, stock->archive, "swarm/textures")) {
+            return false;
+        }
+        const std::array models{&stock->arrow, &stock->bomb, &stock->fireball};
+        for (usize slot = 0; slot < models.size(); ++slot) {
+            if (models[slot]->bound() &&
+                !resources.registerModel(*models[slot], stock->archive,
+                                            std::format("shot/{}", slot))) {
+                return false;
+            }
+        }
+    }
+    return resources.good();
 }
 
 const TreeModel* Enemies::projectileModel(s32 kind, s32 slot) const {
@@ -823,7 +1130,7 @@ const TreeInfo* Enemies::treeOf(s32 kind, s32 tier) const {
 }
 
 f32 Enemies::paceOf(s32 kind) const {
-    return enemyKind(kind).pace * m_scales.speed;
+    return enemyKind(kind).pace * m_simulation.scales.speed;
 }
 
 Vec3 Enemies::bodyCentre(const Enemy& enemy) {
@@ -854,16 +1161,16 @@ std::optional<s32> Enemies::takeSlot(const EnemySpawn& spawn) {
     // Prefer a free slot, otherwise the greatest recycling score. Dying/sleeping
     // enemies and authored sentries get reduced scores; other unseen enemies
     // get the offscreen bonus.
-    for (s32 i = 0; i < m_most; ++i) {
-        if (m_enemies[static_cast<usize>(i)].state == State::Inactive) {
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        if (m_simulation.enemies[static_cast<usize>(i)].state == State::Inactive) {
             return i;
         }
     }
     s32 best = -1;
     bool bestVisible = false;
     f32 bestCost = -1.0f;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.kind == kItKind) {
             continue;
         }
@@ -888,7 +1195,7 @@ std::optional<s32> Enemies::takeSlot(const EnemySpawn& spawn) {
     if (spawn.kind < kSwarmKindCount && static_cast<s32>(spawn.priority) < (bestVisible ? 1 : 0)) {
         return std::nullopt;
     }
-    Enemy& taken = m_enemies[static_cast<usize>(best)];
+    Enemy& taken = m_simulation.enemies[static_cast<usize>(best)];
     detachGenerator(taken);
     taken = Enemy{};
     return best;
@@ -911,11 +1218,11 @@ bool Enemies::birthPathClear(const Enemy& enemy, const Vec3& from, const Vec3& t
         }
     }
     const f32 radius = 0.5f * enemy.radius;
-    if (combatantContact(m_combatants, from, to, radius) != nullptr) {
+    if (combatantContact(m_simulation.combatants, from, to, radius) != nullptr) {
         return false;
     }
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& other = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& other = m_simulation.enemies[static_cast<usize>(i)];
         if (i == self || other.state == State::Inactive || other.state == State::Dying) {
             continue;
         }
@@ -940,12 +1247,12 @@ void Enemies::initialise(Enemy& enemy, const EnemySpawn& spawn, const EnemyKind&
     } else {
         enemy.tier = enemy.variant == kSuicideStrength ? 1 : 2;
     }
-    const bool mirrored = smallKind(spawn.kind) && (m_random() & 1U) != 0;
+    const bool mirrored = smallKind(spawn.kind) && (m_simulation.random() & 1U) != 0;
     enemy.algorithm = resolvedWayOf(spawn.kind, spawn.tier, spawn.algorithm, mirrored);
     if (spawn.patrolBirth) {
         enemy.algorithm = kPatrolWay; // generate_single overrides the kind's remapping.
     }
-    initializeEnemyMind(enemy.mind, enemy.algorithm, m_random());
+    initializeEnemyMind(enemy.mind, enemy.algorithm, m_simulation.random());
     enemy.generator = spawn.generator;
     enemy.bred = spawn.generator >= 0 && !spawn.patrolBirth;
     enemy.birth = spawn.placed ? Birth::Placement : Birth::Brood;
@@ -957,14 +1264,14 @@ void Enemies::initialise(Enemy& enemy, const EnemySpawn& spawn, const EnemyKind&
     enemy.reach = 0.5f * kind.height;
     // A placement sees as far as it says, else thirty, at the level's scale (SetItem,
     // init_enemy_vars); what a generator breeds always thirty.
-    enemy.sight = (spawn.sight > 0.0f ? spawn.sight : kBaseSight) * m_scales.sight;
+    enemy.sight = (spawn.sight > 0.0f ? spawn.sight : kBaseSight) * m_simulation.scales.sight;
     // A placement of ordinary strength stands still thirty ticks on appearing (SetItem, items.c
     // 5564; do_enemy_move zeroes its step): not the variants, nor one that sleeps first.
     enemy.stunTicks =
         spawn.placed && !spawn.asleep && spawn.tier < kArcherStrength ? kPlacedStun : 0;
     // Death alone is not scaled by the level; the swarm has a third of its kind's health a
     // tier, and hits softer as it loses its kind's full share.
-    const f32 scale = spawn.kind != kDeathKind ? m_scales.health : 1.0f;
+    const f32 scale = spawn.kind != kDeathKind ? m_simulation.scales.health : 1.0f;
     enemy.fullHealth = kind.health * scale;
     enemy.health =
         spawn.kind < kSwarmKindCount ? kind.healthAtTier(enemy.tier) * scale : enemy.fullHealth;
@@ -982,7 +1289,7 @@ void Enemies::initialise(Enemy& enemy, const EnemySpawn& spawn, const EnemyKind&
 
 std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const EnemyView> players,
                                   std::span<const Obstacle> obstacles) {
-    if (m_nextInstance == std::numeric_limits<u64>::max()) {
+    if (m_simulation.nextInstance == std::numeric_limits<u64>::max()) {
         return std::nullopt; // Never recycle a network identity after exhaustion.
     }
     const Stock* stock = stockOf(spawn.kind);
@@ -993,7 +1300,7 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
     if (!slot.has_value()) {
         return std::nullopt;
     }
-    Enemy& enemy = m_enemies[static_cast<usize>(*slot)];
+    Enemy& enemy = m_simulation.enemies[static_cast<usize>(*slot)];
     detachGenerator(enemy);
     const EnemyKind& kind = enemyKind(spawn.kind);
     initialise(enemy, spawn, kind);
@@ -1011,7 +1318,7 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
         enemy = Enemy{};
         return std::nullopt;
     }
-    enemy.animator.setThrowInterval(spawn.throwInterval * m_scales.missileRate);
+    enemy.animator.setThrowInterval(spawn.throwInterval * m_simulation.scales.missileRate);
     const f32 facing = std::atan2(spawn.direction.x, spawn.direction.z);
     const auto settle = [this](Vec3 at, Vec3& out) {
         if (m_collision == nullptr) {
@@ -1045,7 +1352,7 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
         if (enemy.algorithm == kLeaderWay) {
             directions = 1;
         }
-        const auto start = static_cast<s32>(m_random() % static_cast<u32>(directions));
+        const auto start = static_cast<s32>(m_simulation.random() % static_cast<u32>(directions));
         s32 d = start;
         do {
             if ((mask & (1U << static_cast<u32>(d))) == 0) {
@@ -1108,12 +1415,12 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
         enemy.mind.headingBefore = enemy.mind.heading;
     }
     if (enemy.generator >= 0) {
-        m_generatorEvents.push_back({enemy.generator, EnemyGeneratorEvent::Kind::Born});
+        m_simulation.generatorEvents.push_back({enemy.generator, EnemyGeneratorEvent::Kind::Born});
     }
     if (enemy.variant == 0) {
-        m_births.push_back({spawn.position, spawn.kind, enemy.tier});
+        m_simulation.births.push_back({spawn.position, spawn.kind, enemy.tier});
     }
-    enemy.instance = m_nextInstance++;
+    enemy.instance = m_simulation.nextInstance++;
     return slot;
 }
 
@@ -1136,7 +1443,7 @@ void Enemies::syncFloors() {
     if (m_collision == nullptr) {
         return;
     }
-    for (Enemy& enemy : m_enemies) {
+    for (Enemy& enemy : m_simulation.enemies) {
         if (!enemy.floor || enemy.state == State::Inactive) {
             continue;
         }
@@ -1158,13 +1465,14 @@ void Enemies::syncFloors() {
 }
 
 void Enemies::wake(s32 id) {
-    if (id >= 0 && id < m_most && m_enemies[static_cast<usize>(id)].state == State::Asleep) {
-        m_enemies[static_cast<usize>(id)].state = State::Active;
+    if (id >= 0 && id < m_simulation.most &&
+        m_simulation.enemies[static_cast<usize>(id)].state == State::Asleep) {
+        m_simulation.enemies[static_cast<usize>(id)].state = State::Active;
     }
 }
 
 void Enemies::generatorGone(s32 generator) {
-    for (Enemy& enemy : m_enemies) {
+    for (Enemy& enemy : m_simulation.enemies) {
         if (enemy.generator == generator) {
             enemy.generator = -1;
         }
@@ -1176,12 +1484,12 @@ void Enemies::generatorGone(s32 generator) {
 void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
                      std::span<const Obstacle> obstacles, EnemyMissiles* missiles,
                      f32 missileSpeedScale, bool timeStopped) {
-    for (auto& stock : m_stocks) {
+    for (auto& stock : m_simulation.stocks) {
         stock->textures.advance(timeStopped ? 0.0f : seconds);
     }
     syncFloors();
     if (timeStopped) {
-        for (Enemy& enemy : m_enemies) {
+        for (Enemy& enemy : m_simulation.enemies) {
             if (enemy.state == State::Active) {
                 capturePresentation(enemy);
             }
@@ -1191,8 +1499,8 @@ void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
         // A body with no death skin has no animation left to simulate. Retire it
         // on the first death update, not after waiting for the next AI frame.
         // Death itself instead rises and fades on its separate timed path.
-        for (s32 i = 0; i < m_most; ++i) {
-            Enemy& enemy = m_enemies[static_cast<usize>(i)];
+        for (s32 i = 0; i < m_simulation.most; ++i) {
+            Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
             if (enemy.state == State::Dying && enemy.kind != kDeathKind &&
                 (enemy.deathSkinFrames <= 0 || enemy.algorithm == kSuicideWay)) {
                 if (enemy.kind == kGarmBroodKind && enemy.algorithm != kSuicideWay) {
@@ -1206,12 +1514,13 @@ void Enemies::update(s32 ticks, f32 seconds, std::span<const EnemyView> players,
     // movement changes the footprint support selected on narrow stair treads.
     const f32 secondsPerTick = ticks > 0 ? seconds / static_cast<f32>(ticks) : 0;
     for (s32 tick = 0; tick < ticks; ++tick) {
-        ++m_pendingTicks;
-        m_pendingSeconds += secondsPerTick;
-        if (m_pendingTicks == 2) {
-            step(m_pendingSeconds, players, obstacles, missiles, missileSpeedScale, timeStopped);
-            m_pendingTicks = 0;
-            m_pendingSeconds = 0;
+        ++m_simulation.pendingTicks;
+        m_simulation.pendingSeconds += secondsPerTick;
+        if (m_simulation.pendingTicks == 2) {
+            step(m_simulation.pendingSeconds, players, obstacles, missiles, missileSpeedScale,
+                 timeStopped);
+            m_simulation.pendingTicks = 0;
+            m_simulation.pendingSeconds = 0;
         }
     }
 }
@@ -1221,35 +1530,37 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
                    f32 missileSpeedScale, bool timeStopped) {
     constexpr s32 kMotionTicks = 2;
     const f32 kMotionSeconds = seconds;
-    for (Enemy& enemy : m_enemies) {
+    for (Enemy& enemy : m_simulation.enemies) {
         capturePresentation(enemy);
     }
-    ++m_frame;
+    ++m_simulation.frame;
     // What is on screen, by twice its radius and fifteen more (do_enemies' visactive), and how
     // many are in view by twice their radius alone (its visible count).
-    m_inView = 0;
-    for (s32 i = 0; i < m_most; ++i) {
-        Enemy& enemy = m_enemies[static_cast<usize>(i)];
-        enemy.onScreen = enemy.state == State::Inactive || !m_view.has_value() ||
-                         m_view->sees(bodyCentre(enemy), (2.0f * enemy.radius) + kOnScreenMargin);
+    m_simulation.inView = 0;
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
+        enemy.onScreen =
+            enemy.state == State::Inactive || !m_simulation.view.has_value() ||
+            m_simulation.view->sees(bodyCentre(enemy), (2.0f * enemy.radius) + kOnScreenMargin);
         if (enemy.state != State::Inactive &&
-            (!m_view.has_value() || m_view->sees(bodyCentre(enemy), 2.0f * enemy.radius))) {
-            ++m_inView;
+            (!m_simulation.view.has_value() ||
+             m_simulation.view->sees(bodyCentre(enemy), 2.0f * enemy.radius))) {
+            ++m_simulation.inView;
         }
     }
     // The first suicide bomber on screen running at the party is one the rest keep away from.
-    m_bomber = -1;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    m_simulation.bomber = -1;
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state == State::Active && !enemy.killed && enemy.algorithm == kSuicideWay &&
             enemy.onScreen && enemy.animator.action() == EnemyAction::Run) {
-            m_bomber = i;
+            m_simulation.bomber = i;
             break;
         }
     }
     std::array<f32, 4> crowding{};
-    for (s32 i = 0; i < m_most; ++i) {
-        Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state == State::Inactive || enemy.state == State::Asleep) {
             continue;
         }
@@ -1274,7 +1585,7 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
             enemy.yaw = turnToward(enemy, enemy.mind.heading, kMotionTicks);
             move(enemy, i, kMotionTicks, kMotionSeconds, Vec3{0.0f, 0.0f, 0.0f}, players,
                  obstacles);
-            enemy.animator.update(kMotionTicks, kMotionSeconds, false);
+            enemy.animator.updateCaptured(kMotionTicks, kMotionSeconds, false);
             // No skin sequence (the small swarm), or a completed one, retires the body
             // even if the fallback animation is still playing: do_enemies, DYING.
             const bool dissolved =
@@ -1338,7 +1649,7 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
             enemy.draining = false;
             enemy.stunTicks = std::max(0, enemy.stunTicks - kMotionTicks);
             enemy.animator.stopWalking();
-            enemy.animator.update(kMotionTicks, kMotionSeconds, false);
+            enemy.animator.updateCaptured(kMotionTicks, kMotionSeconds, false);
             decayPush(enemy, kMotionSeconds);
             continue;
         }
@@ -1354,7 +1665,7 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
         if (enemy.animator.entering()) {
             enemy.animator.request(EnemyAction::Walk);
         }
-        enemy.animator.update(kMotionTicks, kMotionSeconds, enemy.contact >= 0);
+        enemy.animator.updateCaptured(kMotionTicks, kMotionSeconds, enemy.contact >= 0);
         if (enemy.kind == kVeilingKind) {
             veil(enemy, kMotionTicks);
         }
@@ -1371,7 +1682,7 @@ void Enemies::veil(Enemy& enemy, s32 ticks) {
     constexpr s32 kVeilLeast = 60;   ///< ticks seen or unseen, and as many again at random
     const EnemyAction action = enemy.animator.action();
     const auto hold = [this] {
-        return kVeilLeast + static_cast<s32>(m_random() % static_cast<u32>(kVeilLeast));
+        return kVeilLeast + static_cast<s32>(m_simulation.random() % static_cast<u32>(kVeilLeast));
     };
     const f32 step = kVeilStep * static_cast<f32>(ticks);
     if (action != EnemyAction::Ready && action != EnemyAction::Walk && action != EnemyAction::Run) {
@@ -1454,7 +1765,8 @@ void Enemies::chooseTarget(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
     });
     // A mind looks round again every eighth frame, or at once when its player is gone.
     bool look =
-        (m_frame % kRetargetEvery) == (static_cast<u32>(slot) % kRetargetEvery) || enemy.target < 0;
+        (m_simulation.frame % kRetargetEvery) == (static_cast<u32>(slot) % kRetargetEvery) ||
+        enemy.target < 0;
     if (enemy.target >= 0) {
         const EnemyView* current = viewOf(players, enemy.target);
         if (current == nullptr || current->hidden || current->invisible ||
@@ -1515,7 +1827,7 @@ void Enemies::chooseTarget(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
 
 f32 Enemies::fightOf(const Enemy& enemy) const {
     const EnemyKind& kind = enemyKind(enemy.kind);
-    const f32 fight = kind.damage * m_scales.damage;
+    const f32 fight = kind.damage * m_simulation.scales.damage;
     // A weakened one hits softer: two thirds under two thirds health, a third under a third.
     const f32 full = enemy.fullHealth;
     if (enemy.health > 0.667f * full || enemy.kind == kDeathKind) {
@@ -1553,8 +1865,8 @@ void Enemies::resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
         blow.damage = fightOf(enemy);
         blow.power = enemy.animator.powerStruck();
         // Shrunk, it deals half, as a low blow, and its power blow is no more (fn_8004DF58).
-        if (EnemyShrink::shrunk(m_shrink)) {
-            blow.damage = EnemyShrink::harmDealt(m_shrink, blow.damage);
+        if (EnemyShrink::shrunk(m_simulation.shrink)) {
+            blow.damage = EnemyShrink::harmDealt(m_simulation.shrink, blow.damage);
             blow.flags |= Damage::kLow;
         } else {
             if (enemy.reach <= kKnockBackHeight) {
@@ -1582,7 +1894,7 @@ void Enemies::resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
             // or level scaling. Resolve it before the attacker advances its reaction.
             hurt(slot, returned);
         }
-        m_blows.push_back(blow);
+        m_simulation.blows.push_back(blow);
         ++enemy.attackCount;
     }
     enemy.attackIndex = -1;
@@ -1675,12 +1987,12 @@ bool Enemies::probeClear(const Enemy& enemy, const Vec3& at, std::span<const Obs
         }
     }
     const Vec3 offset{0, enemyKind(enemy.kind).collisionHeight, 0};
-    if (combatantContact(m_combatants, enemy.position + offset, at + offset, enemy.radius) !=
-        nullptr) {
+    if (combatantContact(m_simulation.combatants, enemy.position + offset, at + offset,
+                         enemy.radius) != nullptr) {
         return false;
     }
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& other = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& other = m_simulation.enemies[static_cast<usize>(i)];
         if (i == self || other.state == State::Inactive || other.state == State::Dying) {
             continue;
         }
@@ -1723,7 +2035,7 @@ MindSense Enemies::sense(const Enemy& enemy, s32 slot, s32 ticks,
     sense.generatorGone = enemy.generator < 0;
     sense.onScreen = enemy.onScreen;
     sense.mirroredWander = (slot & 1) != 0;
-    sense.lookouts = &m_lookouts;
+    sense.lookouts = &m_simulation.lookouts;
     sense.action = enemy.animator.action();
     if (const EnemyView* view = viewOf(players, enemy.target); view != nullptr) {
         sense.targetVertical = view->position.y - enemy.position.y;
@@ -1765,16 +2077,17 @@ MindSense Enemies::sense(const Enemy& enemy, s32 slot, s32 ticks,
 void Enemies::think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView> players,
                     std::span<const Obstacle> obstacles) {
     MindSense sensed = sense(enemy, slot, ticks, players, obstacles);
-    sensed.random = m_random();
+    sensed.random = m_simulation.random();
     sensed.tier = enemy.tier;
-    sensed.castWait = static_cast<s32>(kCastTicks * m_scales.missileRate);
+    sensed.castWait = static_cast<s32>(kCastTicks * m_simulation.scales.missileRate);
     s32 algorithm = enemy.algorithm;
     // Near a lit bomber most ways run from it for the tick (FoundSuicideBomber): within ten
     // of it, its player within this one's sight, and not held after a bump or rising.
     // Level placements and generate_single sentries have nonzero birth_style and stay put.
-    if (m_bomber >= 0 && m_bomber != slot && fleesBombers(algorithm) && enemy.mind.deadEnd <= 0 &&
-        enemy.birth == Birth::Brood && enemy.animator.action() != EnemyAction::Start) {
-        const Enemy& bomber = m_enemies[static_cast<usize>(m_bomber)];
+    if (m_simulation.bomber >= 0 && m_simulation.bomber != slot && fleesBombers(algorithm) &&
+        enemy.mind.deadEnd <= 0 && enemy.birth == Birth::Brood &&
+        enemy.animator.action() != EnemyAction::Start) {
+        const Enemy& bomber = m_simulation.enemies[static_cast<usize>(m_simulation.bomber)];
         if (bomber.targetDistance <= enemy.sight &&
             glm::distance(bomber.position, enemy.position) < kBomberScare) {
             algorithm = kFleeWay;
@@ -1839,9 +2152,10 @@ void Enemies::think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView
         return;
     }
     if (intent.yell) {
-        m_cues.push_back(
+        m_simulation.cues.push_back(
             {EnemyCue::Kind::Yell, enemy.kind,
-             enemy.position + Vec3{0.0f, enemyKind(enemy.kind).attentionHeight, 0.0f}});
+             enemy.position + Vec3{0.0f, enemyKind(enemy.kind).attentionHeight, 0.0f}, slot,
+             enemy.instance});
     }
     if (intent.throwing) {
         enemy.animator.request(EnemyAction::Throw);
@@ -2039,7 +2353,7 @@ void Enemies::move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& s
         // to hold movement.
         if (enemy.kind == kItKind) {
             if (enemy.state == State::Active && !enemy.killed) {
-                m_tagged.push_back(enemy.contact);
+                m_simulation.tagged.push_back(enemy.contact);
                 enemy.health = 0.0f;
                 enemy.killed = true;
                 enemy.state = State::Dying;
@@ -2059,7 +2373,7 @@ void Enemies::move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& s
         enemy.blocked = true;
         return;
     }
-    if (const auto* body = combatantContact(m_combatants, from + collisionOffset,
+    if (const auto* body = combatantContact(m_simulation.combatants, from + collisionOffset,
                                             to + collisionOffset, enemy.radius)) {
         enemy.bumpedOther = true;
         enemy.blocked = true;
@@ -2101,8 +2415,8 @@ void Enemies::move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& s
         }
     }
     // Against another it stops, unless it is being thrown, when half the push carries over.
-    for (s32 i = 0; i < m_most; ++i) {
-        Enemy& other = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        Enemy& other = m_simulation.enemies[static_cast<usize>(i)];
         // fn_8004646C drops DYING bodies immediately, but sleeping placements remain solid.
         if (i == slot || other.state == State::Inactive || other.state == State::Dying) {
             continue;
@@ -2132,10 +2446,10 @@ void Enemies::move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& s
 // ---- being hit ---------------------------------------------------------------------------
 
 f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
-    if (id < 0 || id >= m_most) {
+    if (id < 0 || id >= m_simulation.most) {
         return 0;
     }
-    Enemy& enemy = m_enemies[static_cast<usize>(id)];
+    Enemy& enemy = m_simulation.enemies[static_cast<usize>(id)];
     if ((enemy.state != State::Active && enemy.state != State::Asleep) || enemy.killed) {
         return 0;
     }
@@ -2152,21 +2466,22 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
     const f32 credited = std::clamp(amount, 0.0f, enemy.health);
     // A character under the level the place is meant for hits a hundredth softer a level;
     // one over it a tenth harder. Armour comes off, but a character always gets a point in.
-    if (hit.player >= 0 && m_scales.playerLevel > 0.0f) {
-        const f32 gap = static_cast<f32>(hit.level) - m_scales.playerLevel;
+    if (hit.player >= 0 && m_simulation.scales.playerLevel > 0.0f) {
+        const f32 gap = static_cast<f32>(hit.level) - m_simulation.scales.playerLevel;
         amount *= gap < 0.0f ? 1.0f + 0.01f * gap : 1.0f + 0.1f * gap;
     }
     const Damage modified =
-        Damage::modify(amount, hit.flags, 0, kind.armor, m_scales.bossEncounter);
-    amount =
-        std::max(EnemyShrink::harmTaken(m_shrink, modified.amount), hit.player >= 0 ? 1.0f : 0.0f);
+        Damage::modify(amount, hit.flags, 0, kind.armor, m_simulation.scales.bossEncounter);
+    amount = std::max(EnemyShrink::harmTaken(m_simulation.shrink, modified.amount),
+                      hit.player >= 0 ? 1.0f : 0.0f);
     if (amount <= 0.0f) {
         return credited;
     }
     enemy.state = State::Active;
     enemy.health -= amount;
     if (enemy.algorithm == kPatrolWay && enemy.generator >= 0) {
-        m_generatorEvents.push_back({enemy.generator, EnemyGeneratorEvent::Kind::PatrolHit});
+        m_simulation.generatorEvents.push_back(
+            {enemy.generator, EnemyGeneratorEvent::Kind::PatrolHit});
     }
     enemy.hurtPending += amount;
     if ((modified.flags & Damage::kElement) != 0) {
@@ -2190,11 +2505,13 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
                                      ? *hit.where
                                      : enemy.position + Vec3{0, kind.attentionHeight, 0},
                                  enemy.yaw,
-                                 enemy.reach};
+                                 enemy.reach,
+                                 id,
+                                 enemy.instance};
     // A suicide's own fuse kills it without a cry, a burst of blood or a death skin
     // (damage_enemy's play_effects, fn_800945D0's player_index test).
     if (!hit.selfInflicted) {
-        m_feedback.push_back(feedback);
+        m_simulation.feedback.push_back(feedback);
     }
     enemy.flashSeconds = killed ? 0.0f : 2.0f / 30.0f;
     if (killed) {
@@ -2212,11 +2529,12 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
         if (enemy.algorithm == kSuicideWay) {
             EnemyBurst burst;
             burst.position = bodyCentre(enemy);
-            burst.damage = kSuicideDamage * m_scales.damage;
+            burst.damage = kSuicideDamage * m_simulation.scales.damage;
             burst.enemy = id;
             burst.kind = enemy.kind;
             burst.silencesYell = !hit.selfInflicted;
-            m_bursts.push_back(burst);
+            burst.instance = enemy.instance;
+            m_simulation.bursts.push_back(burst);
         }
     }
     if (hit.player >= 0) {
@@ -2228,20 +2546,20 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
         loss.killed = killed;
         loss.experience = killed ? kind.experienceKill : kind.experienceHit;
         loss.position = bodyCentre(enemy);
-        m_losses.push_back(loss);
+        m_simulation.losses.push_back(loss);
     }
     return credited;
 }
 
 std::vector<s32> Enemies::takeTagged() {
     std::vector<s32> out;
-    out.swap(m_tagged);
+    out.swap(m_simulation.tagged);
     return out;
 }
 
 std::vector<EnemyDeathShot> Enemies::takeDeathShots() {
     std::vector<EnemyDeathShot> out;
-    out.swap(m_deathShots);
+    out.swap(m_simulation.deathShots);
     return out;
 }
 
@@ -2267,7 +2585,7 @@ void Enemies::aimDeathShot(const Enemy& enemy, s32 slot, std::span<const EnemyVi
     const f32 length = glm::length(way);
     shot.direction =
         length > 0.001f ? way / length : Vec3{std::sin(enemy.yaw), 0.0f, std::cos(enemy.yaw)};
-    m_deathShots.push_back(shot);
+    m_simulation.deathShots.push_back(shot);
 }
 
 void Enemies::die(Enemy& enemy) {
@@ -2277,7 +2595,7 @@ void Enemies::die(Enemy& enemy) {
 
 void Enemies::detachGenerator(Enemy& enemy) {
     if (enemy.generator >= 0) {
-        m_generatorEvents.push_back(
+        m_simulation.generatorEvents.push_back(
             {enemy.generator, enemy.algorithm == kPatrolWay
                                   ? EnemyGeneratorEvent::Kind::PatrolDetached
                                   : EnemyGeneratorEvent::Kind::Detached});
@@ -2286,12 +2604,12 @@ void Enemies::detachGenerator(Enemy& enemy) {
 }
 
 std::vector<EnemyGeneratorEvent> Enemies::takeGeneratorEvents() {
-    return std::exchange(m_generatorEvents, {});
+    return std::exchange(m_simulation.generatorEvents, {});
 }
 
 std::vector<EnemyFeedback> Enemies::takeFeedback() {
     std::vector<EnemyFeedback> out;
-    out.swap(m_feedback);
+    out.swap(m_simulation.feedback);
     return out;
 }
 
@@ -2333,7 +2651,7 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
     launch.facing = enemy.yaw;
     launch.point = enemyLaunchPointOf(enemy.kind, which);
     launch.speedScale = speedScale;
-    launch.aimError = m_scales.missileAim;
+    launch.aimError = m_simulation.scales.missileAim;
     launch.model = model;
     launch.shooter = slot;
     if (!missiles.launch(what, launch, m_collision, items)) {
@@ -2341,14 +2659,15 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
     }
     // The arrow's and the bolt's go off as they leave; a lob goes quietly.
     if (which == EnemyMissileKind::kArrow) {
-        m_cues.push_back({EnemyCue::Kind::Arrow, enemy.kind, from});
+        m_simulation.cues.push_back(
+            {EnemyCue::Kind::Arrow, enemy.kind, from, slot, enemy.instance});
     } else if (which == EnemyMissileKind::kBolt) {
-        m_cues.push_back({EnemyCue::Kind::Bolt, enemy.kind, from});
+        m_simulation.cues.push_back({EnemyCue::Kind::Bolt, enemy.kind, from, slot, enemy.instance});
     }
 }
 
 std::vector<EnemyCue> Enemies::takeCues() {
-    return std::exchange(m_cues, {});
+    return std::exchange(m_simulation.cues, {});
 }
 
 Enemies::Figure Enemies::bodyOf(const Enemy& enemy) {
@@ -2420,25 +2739,25 @@ void Enemies::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& place
 }
 
 std::vector<EnemyBurst> Enemies::takeBursts() {
-    return std::exchange(m_bursts, {});
+    return std::exchange(m_simulation.bursts, {});
 }
 
 std::vector<EnemyBirth> Enemies::takeBirths() {
-    return std::exchange(m_births, {});
+    return std::exchange(m_simulation.births, {});
 }
 
 std::vector<EnemyBlow> Enemies::takeBlows() {
-    return std::exchange(m_blows, {});
+    return std::exchange(m_simulation.blows, {});
 }
 
 std::vector<EnemyLoss> Enemies::takeLosses() {
-    return std::exchange(m_losses, {});
+    return std::exchange(m_simulation.losses, {});
 }
 
 std::vector<MissileTarget> Enemies::targets() const {
     std::vector<MissileTarget> out;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         // Nothing takes aim at IT (PlayerGetTarget).
         if (!alive(i) || enemy.kind == kItKind) {
             continue;
@@ -2455,8 +2774,8 @@ std::vector<MissileTarget> Enemies::targets() const {
 
 std::vector<EnemyBody> Enemies::movementBodies() const {
     std::vector<EnemyBody> bodies;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (alive(i) && enemy.kind != kItKind) {
             bodies.push_back({i, bodyCentre(enemy), enemy.radius, 0.5f * enemy.height});
         }
@@ -2465,10 +2784,10 @@ std::vector<EnemyBody> Enemies::movementBodies() const {
 }
 
 MeleeGeometry::Target Enemies::meleeBody(s32 id) const {
-    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    const auto& enemy = m_simulation.enemies[static_cast<usize>(id)];
     const auto coordinate = [this](f32 value, f32 origin) {
-        return static_cast<s32>(std::clamp((value - origin) * m_contactGridInverseWidth, 0.0f,
-                                           static_cast<f32>(kContactGridDimension - 1)));
+        return static_cast<s32>(std::clamp((value - origin) * m_simulation.contactGridInverseWidth,
+                                           0.0f, static_cast<f32>(kContactGridDimension - 1)));
     };
     constexpr f32 kAimHeightLimit = 10;
     constexpr f32 kLowEnemyHeight = 4;
@@ -2481,8 +2800,8 @@ MeleeGeometry::Target Enemies::meleeBody(s32 id) const {
     target.acquisition = {enemy.position + Vec3{0, enemyKind(enemy.kind).collisionHeight, 0},
                           enemy.radius, 1, kAimHeightLimit};
     target.contactCell =
-        coordinate(enemy.position.z, m_contactGridOrigin.y) * kContactGridDimension +
-        coordinate(enemy.position.x, m_contactGridOrigin.x);
+        coordinate(enemy.position.z, m_simulation.contactGridOrigin.y) * kContactGridDimension +
+        coordinate(enemy.position.x, m_simulation.contactGridOrigin.x);
     target.contact = true;
     target.requireFacing = enemy.kind == kDeathKind;
     target.low = enemy.height <= kLowEnemyHeight;
@@ -2492,9 +2811,9 @@ MeleeGeometry::Target Enemies::meleeBody(s32 id) const {
 
 std::vector<MeleeGeometry::Target> Enemies::meleeGeometry() const {
     std::vector<MeleeGeometry::Target> targets;
-    targets.reserve(static_cast<usize>(m_most));
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    targets.reserve(static_cast<usize>(m_simulation.most));
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (alive(i) && enemy.kind != kItKind) {
             targets.push_back(meleeBody(i));
         }
@@ -2506,8 +2825,8 @@ std::optional<s32> Enemies::playerContact(const Vec3& from, const Vec3& to, f32 
                                           f32 halfHeight, f32* endpointDistance) const {
     std::array<MeleeGeometry::Target, kMost> targets;
     usize count = 0;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (alive(i) && enemy.kind != kItKind) {
             targets[count++] = meleeBody(i);
         }
@@ -2525,8 +2844,8 @@ std::optional<s32> Enemies::struckBy(const Vec3& from, const Vec3& to, f32 radiu
     f32 bestDistance = 0.0f;
     const Vec3 sweep = to - from;
     const f32 length = glm::length(sweep);
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if ((enemy.state != State::Active && enemy.state != State::Asleep) ||
             enemy.kind == kItKind) {
             continue;
@@ -2551,8 +2870,8 @@ std::optional<s32> Enemies::struckBy(const Vec3& from, const Vec3& to, f32 radiu
 
 std::vector<s32> Enemies::within(const Vec3& centre, f32 radius) const {
     std::vector<s32> out;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state != State::Active && enemy.state != State::Asleep) {
             continue;
         }
@@ -2566,8 +2885,8 @@ std::vector<s32> Enemies::within(const Vec3& centre, f32 radius) const {
 std::vector<s32> Enemies::reachedBy(const Vec3& centre, f32 radius, f32 arc,
                                     const Vec3& facing) const {
     std::vector<s32> out;
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state != State::Active && enemy.state != State::Asleep) {
             continue;
         }
@@ -2647,14 +2966,14 @@ f32 Enemies::presentationBlend(const Enemy& enemy, f32 alpha) const {
     }
     // The swarm advances once per two simulation ticks. Keep its presentation
     // one native step behind rather than predicting future collisions/actions.
-    return std::clamp((static_cast<f32>(m_pendingTicks) + alpha) * 0.5f, 0.0f, 1.0f);
+    return std::clamp((static_cast<f32>(m_simulation.pendingTicks) + alpha) * 0.5f, 0.0f, 1.0f);
 }
 
 std::optional<Enemies::Presentation> Enemies::presentation(s32 id) const {
-    if (id < 0 || id >= m_most) {
+    if (id < 0 || id >= m_simulation.most) {
         return std::nullopt;
     }
-    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    const auto& enemy = m_simulation.enemies[static_cast<usize>(id)];
     if (enemy.state == State::Inactive || !enemy.animator.bound() ||
         (enemy.killed && enemy.algorithm == kSuicideWay)) {
         return std::nullopt;
@@ -2685,8 +3004,8 @@ std::optional<Enemies::Presentation> Enemies::presentation(s32 id) const {
 void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                    const Texture* hitFlash, ItemArchive* weapons, const CameraFrame* camera,
                    f32 presentationAlpha, TreeModel::Pass pass) {
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state == State::Inactive || !enemy.animator.bound() ||
             (enemy.killed && enemy.algorithm == kSuicideWay)) {
             continue;
@@ -2747,7 +3066,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         }
         const Mat4 model = glm::scale(
             glm::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f}),
-            Vec3{m_shrink});
+            Vec3{m_simulation.shrink});
         f32 alpha = enemy.kind == kDeathKind && enemy.killed
                         ? std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds)
                         : 1.0f;
@@ -2771,8 +3090,8 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
 
 void Enemies::drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& eye,
                           const WorldLighting& lighting, f32 presentationAlpha) const {
-    for (s32 i = 0; i < m_most; ++i) {
-        const Enemy& enemy = m_enemies[static_cast<usize>(i)];
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         const Stock* stock = stockOf(enemy.kind);
         // It lies on the floor under the body, but not while the body rises (UpdateEnemy).
         if (enemy.state == State::Inactive || !enemy.animator.bound() || stock == nullptr ||
@@ -2793,32 +3112,35 @@ void Enemies::drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& ey
         }
         const f32 shown = 1.0f - enemy.veil / kVeiled;
         if (shown > 0.0f) {
-            stock->shadows[tier].draw(device, clip, eye, ground, normal, lighting, shown, m_shrink);
+            stock->shadows[tier].draw(device, clip, eye, ground, normal, lighting, shown,
+                                      m_simulation.shrink);
         }
     }
 }
 
 bool Enemies::alive(s32 id) const {
-    return id >= 0 && id < m_most && !m_enemies[static_cast<usize>(id)].killed &&
-           (m_enemies[static_cast<usize>(id)].state == State::Active ||
-            m_enemies[static_cast<usize>(id)].state == State::Asleep);
+    return id >= 0 && id < m_simulation.most &&
+           !m_simulation.enemies[static_cast<usize>(id)].killed &&
+           (m_simulation.enemies[static_cast<usize>(id)].state == State::Active ||
+            m_simulation.enemies[static_cast<usize>(id)].state == State::Asleep);
 }
 
 bool Enemies::dying(s32 id) const {
-    return id >= 0 && id < m_most && m_enemies[static_cast<usize>(id)].state == State::Dying;
+    return id >= 0 && id < m_simulation.most &&
+           m_simulation.enemies[static_cast<usize>(id)].state == State::Dying;
 }
 
 std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
-    if (id < 0 || id >= m_most) {
+    if (id < 0 || id >= m_simulation.most) {
         return std::nullopt;
     }
-    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    const auto& enemy = m_simulation.enemies[static_cast<usize>(id)];
     if (enemy.state == State::Inactive) {
         return std::nullopt;
     }
     Observation result{enemy.instance, enemy.health, enemy.fullHealth, enemy.state == State::Asleep,
                        enemy.flashSeconds > 0};
-    result.scale = m_shrink;
+    result.scale = m_simulation.shrink;
     result.alpha = opacityOf(id);
     if (enemy.killed && enemy.algorithm == kSuicideWay) {
         result.alpha = 0; // the explosion replaces the body immediately
@@ -2837,74 +3159,75 @@ std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
 
 usize Enemies::count() const {
     usize n = 0;
-    for (s32 i = 0; i < m_most; ++i) {
-        n += m_enemies[static_cast<usize>(i)].state != State::Inactive ? 1 : 0;
+    for (s32 i = 0; i < m_simulation.most; ++i) {
+        n += m_simulation.enemies[static_cast<usize>(i)].state != State::Inactive ? 1 : 0;
     }
     return n;
 }
 
 s32 Enemies::kindOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].kind;
+    return m_simulation.enemies[static_cast<usize>(id)].kind;
 }
 s32 Enemies::tierOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].tier;
+    return m_simulation.enemies[static_cast<usize>(id)].tier;
 }
 bool Enemies::bred(s32 id) const {
-    return id >= 0 && id < m_most && m_enemies[static_cast<usize>(id)].bred;
+    return id >= 0 && id < m_simulation.most && m_simulation.enemies[static_cast<usize>(id)].bred;
 }
 
 s32 Enemies::generatorOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].generator;
+    return m_simulation.enemies[static_cast<usize>(id)].generator;
 }
 f32 Enemies::healthOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].health;
+    return m_simulation.enemies[static_cast<usize>(id)].health;
 }
 const Vec3& Enemies::positionOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].position;
+    return m_simulation.enemies[static_cast<usize>(id)].position;
 }
 s32 Enemies::floorOf(s32 id) const {
-    if (id < 0 || id >= m_most) {
+    if (id < 0 || id >= m_simulation.most) {
         return -1;
     }
-    const auto& enemy = m_enemies[static_cast<usize>(id)];
+    const auto& enemy = m_simulation.enemies[static_cast<usize>(id)];
     return enemy.state != State::Inactive && enemy.floor ? enemy.floor->object : -1;
 }
 f32 Enemies::yawOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].yaw;
+    return m_simulation.enemies[static_cast<usize>(id)].yaw;
 }
 f32 Enemies::radiusOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].radius;
+    return m_simulation.enemies[static_cast<usize>(id)].radius;
 }
 f32 Enemies::heightOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].height;
+    return m_simulation.enemies[static_cast<usize>(id)].height;
 }
 s32 Enemies::targetOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].target;
+    return m_simulation.enemies[static_cast<usize>(id)].target;
 }
 s32 Enemies::algorithmOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].algorithm;
+    return m_simulation.enemies[static_cast<usize>(id)].algorithm;
 }
 s32 Enemies::pushCountOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].pushes;
+    return m_simulation.enemies[static_cast<usize>(id)].pushes;
 }
 
 f32 Enemies::sightOf(s32 id) const {
-    return alive(id) ? m_enemies[static_cast<usize>(id)].sight : 0.0f;
+    return alive(id) ? m_simulation.enemies[static_cast<usize>(id)].sight : 0.0f;
 }
 
 s32 Enemies::stunTicksOf(s32 id) const {
-    return alive(id) ? std::max(0, m_enemies[static_cast<usize>(id)].stunTicks) : 0;
+    return alive(id) ? std::max(0, m_simulation.enemies[static_cast<usize>(id)].stunTicks) : 0;
 }
 
 s32 Enemies::variantOf(s32 id) const {
-    return m_enemies[static_cast<usize>(id)].variant;
+    return m_simulation.enemies[static_cast<usize>(id)].variant;
 }
 
 const EnemyAnimator* Enemies::animatorOf(s32 id) const {
-    if (id < 0 || id >= m_most || m_enemies[static_cast<usize>(id)].state == State::Inactive) {
+    if (id < 0 || id >= m_simulation.most ||
+        m_simulation.enemies[static_cast<usize>(id)].state == State::Inactive) {
         return nullptr;
     }
-    return &m_enemies[static_cast<usize>(id)].animator;
+    return &m_simulation.enemies[static_cast<usize>(id)].animator;
 }
 
 } // namespace gdl::game

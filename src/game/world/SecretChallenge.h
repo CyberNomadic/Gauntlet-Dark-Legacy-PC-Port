@@ -6,11 +6,17 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** A shared, timed coin hunt. Only the coins present at entry count toward its reward. */
 class SecretChallenge {
 public:
+    bool operator==(const SecretChallenge&) const = default;
+
     enum class State : u8 { Inactive, Collecting, Won, Returning };
     // GC fn_800553B4 starts at wavetime + .99; fn_80054E78 cues integer crossings.
     static constexpr f32 kClockLead = 0.99f;
@@ -33,6 +39,7 @@ public:
     static s32 classFor(s32 levelIndex);
 
 private:
+    friend void visitNativeState(NativeStateDigest& digest, const SecretChallenge& value);
     State m_state = State::Inactive;
     f32 m_remaining = 0;
     f32 m_duration = 0;
@@ -40,5 +47,7 @@ private:
     usize m_total = 0;
     std::unordered_set<usize> m_coins;
 };
+
+void visitNativeState(NativeStateDigest& digest, const SecretChallenge& value);
 
 } // namespace gdl::game

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -46,12 +47,12 @@ public:
                      f32 frameBlend = -1.0f) const;
     void drawTitle(Canvas& canvas, const TextPainter& text, std::string_view title,
                    f32 width) const;
-    f32 titleScale() const { return active() ? m_titleSlide : 0; }
+    f32 titleScale() const { return active() ? m_sim.titleSlide : 0; }
     static void drawTitleAt(Canvas& canvas, const TextPainter& text, std::string_view title,
                             f32 width, f32 scale);
 
-    bool active() const { return m_camera.active() || m_ticks > 0; }
-    const StartCamera& camera() const { return m_camera; }
+    bool active() const { return m_sim.camera.active() || m_sim.ticks > 0; }
+    const StartCamera& camera() const { return m_sim.camera; }
     usize effectCount() const { return m_spawns.size(); }
     struct EffectPresentation {
         Vec3 position{0};
@@ -64,27 +65,53 @@ public:
     };
     /** Read-only native cursors; absent after the materialisation ends. */
     std::optional<EffectPresentation> effectPresentation(usize index) const;
-    bool takeTitleLanded() { return std::exchange(m_titleLanded, false); }
+    bool takeTitleLanded() { return std::exchange(m_sim.titleLanded, false); }
 
 private:
     /** One character's materialisation at its entry position. */
-    struct Spawn {
+    struct SpawnState {
         Vec3 position{0.0f};
         const TreeInfo* tree = nullptr;
-        mutable TreeModel model;
         TreePose pose;
         AnimationPlayer player;
         f32 previousFrame = 0;
         u64 previousGeneration = 0;
         bool presentationAdvanced = false;
     };
+    struct Spawn : SpawnState {
+        mutable TreeModel model;
+    };
+    struct Simulation {
+        s32 ticks = 0;
+        StartCamera camera;
+        f32 titleSlide = 0;
+        bool titleLanded = false;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class LevelArrivalPresentation;
+        Simulation state;
+        std::vector<SpawnState> spawns;
+        TextureAnimator::Clock textures;
+        const LevelArrivalPresentation* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    void appendState(NativeStateDigest& digest, const Simulation& state,
+                     const TextureAnimator::Clock& textures) const;
+    static void appendSpawn(NativeStateDigest& digest, const SpawnState& state);
     std::vector<Spawn> m_spawns;
     const ItemArchive* m_archive = nullptr;
     TextureAnimator m_textures;
-    s32 m_ticks = 0;
-    StartCamera m_camera;
-    f32 m_titleSlide = 0.0f;
-    bool m_titleLanded = false;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-#include "game/enemies/PlacedEnemies.h"
+#include "game/enemies/PlacedEnemiesCheckpoint.h"
 
 namespace gdl::game {
 
@@ -16,7 +16,7 @@ public:
     /** Canonical encoded-byte SHA for an already validated native boundary.
      * Not a validity certificate; incoming state must still pass full restore. */
     static std::optional<std::array<u8, 32>>
-    canonicalDigest(const PlacedEnemies::Checkpoint& state);
+    canonicalDigest(const PlacedEnemiesCheckpoint::State& state);
 
     static constexpr u32 kVersion = 1;
     static constexpr usize kMaxPlacements = 512;
@@ -25,8 +25,8 @@ public:
     static constexpr usize kViewBytes = 64;
     static constexpr usize kMaxBytes =
         kHeaderBytes + kViewBytes + kMaxPlacements * (kPlacementBytes + 4);
-    static std::optional<std::vector<u8>> encode(const PlacedEnemies::Checkpoint& state);
-    static std::optional<PlacedEnemies::Checkpoint> decode(std::span<const u8> bytes);
+    static std::optional<std::vector<u8>> encode(const PlacedEnemiesCheckpoint::State& state);
+    static std::optional<PlacedEnemiesCheckpoint::State> decode(std::span<const u8> bytes);
 };
 
 } // namespace gdl::game

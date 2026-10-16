@@ -8,8 +8,9 @@
 
 #include "engine/platform/Input.h"
 
-#include "game/screens/MatchInputs.h"
+#include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/PartyMotion.h"
+#include "game/screens/SessionInputs.h"
 #include "game/world/CameraMovementLimit.h"
 
 namespace {
@@ -51,6 +52,8 @@ struct Room {
     MatchOwners owners;
     std::array<MatchSession, 5> sessions;
     std::array<Wire, 5> wires;
+    std::array<test::RollbackSessionHarness, 5> inputs;
+    std::array<u64, 5> bound{};
     std::array<u64, 5> completed{};
     explicit Room(MatchOwners roster = {1, 2, 3, 4}) : owners(roster) {
         std::vector<MatchLink> links;
@@ -64,6 +67,43 @@ struct Room {
         REQUIRE(sessions[1].open(1, owners, links, 0));
     }
     bool present(u8 peer) const { return std::ranges::find(owners, peer) != owners.end(); }
+    bool loaded(u8 peer) {
+        auto& session = sessions[peer];
+        if (session.phase() != Phase::Loading) {
+            return false;
+        }
+        if (session.context().transition != MatchTransition::Shop &&
+            bound[peer] != session.context().epoch) {
+            if (!inputs[peer].bind(session)) {
+                return false;
+            }
+            bound[peer] = session.context().epoch;
+        }
+        return session.loaded();
+    }
+    bool sample(u8 peer, const SessionInputs::Frame& local = {}) {
+        std::vector<InputCommand> commands;
+        const auto& context = sessions[peer].context();
+        for (usize seat = 0; seat < owners.size(); ++seat) {
+            if (owners[seat] == peer) {
+                commands.push_back(SessionInputs::command(local[commands.size()], context.epoch,
+                                    inputs[peer].sampleTick(), context.grants[seat],
+                                    static_cast<u8>(seat)));
+            }
+        }
+        return inputs[peer].sample(commands);
+    }
+    std::optional<SessionInputs::Frame> advance(u8 peer) {
+        const auto frame = inputs[peer].advance();
+        if (!frame) {
+            return std::nullopt;
+        }
+        SessionInputs::Frame result;
+        for (usize seat = 0; seat < result.size(); ++seat) {
+            result[seat] = SessionInputs::playInput(frame->commands[seat]);
+        }
+        return result;
+    }
     MatchParty party() const {
         MatchParty result;
         for (usize seat = 0; seat < owners.size(); ++seat) {
@@ -95,7 +135,8 @@ struct Room {
                     // frame. Acknowledgment is explicit, not receipt-driven advancement.
                     if (const auto* pending = sessions[target].pendingNativeContext()) {
                         REQUIRE(pending->sourceTick == completed[target]);
-                        REQUIRE(sessions[target].completedNativeTick(completed[target]));
+                        REQUIRE(sessions[target].completeNativeBoundary(
+                            sessions[target].context().epoch, completed[target]));
                         completed[target] = 0;
                     }
                 }
@@ -103,20 +144,23 @@ struct Room {
         }
     }
     void completeOne() {
-        const u64 tick = sessions[1].tick();
+        const u64 tick = inputs[1].tick();
         for (u8 peer = 1; peer <= 4; ++peer) {
             if (present(peer)) {
-                REQUIRE(MatchInputs::sample(sessions[peer], {}));
+                REQUIRE(sample(peer));
             }
         }
         pump();
         for (u8 peer = 1; peer <= 4; ++peer) {
             if (present(peer)) {
-                REQUIRE(sessions[peer].advance());
-                REQUIRE(sessions[peer].completedNativeTick(tick));
+                REQUIRE(inputs[peer].advance());
+                REQUIRE(inputs[peer].submitBoundaryDigest());
                 completed[peer] = tick;
             }
         }
+        pump();
+        for (u8 peer = 1; peer <= 4; ++peer)
+            if (present(peer)) REQUIRE(inputs[peer].completeBoundary());
     }
     void ready(MatchTransition transition = MatchTransition::Start, u32 scene = 7,
                bool challengeWon = false) {
@@ -133,7 +177,7 @@ struct Room {
         for (u8 peer = 1; peer <= 4; ++peer) {
             if (present(peer)) {
                 REQUIRE(sessions[peer].phase() == Phase::Loading);
-                REQUIRE(sessions[peer].loaded());
+                REQUIRE(loaded(peer));
             }
         }
         pump();
@@ -165,7 +209,7 @@ TEST_CASE("match control has an exact bounded versioned encoding", "[netplay][ma
         CHECK(decoded->kind == static_cast<MatchControlKind>(kind));
         CHECK(decoded->stop == stop);
         CHECK(decoded->movieSkipVotes == votes);
-        CHECK(bytes[4] == 6);
+        CHECK(bytes[4] == MatchControlPacket::kVersion);
         for (usize size = 0; size < bytes.size(); ++size) {
             CHECK_FALSE(MatchControlPacket::decode(std::span(bytes).first(size)));
         }
@@ -280,8 +324,8 @@ TEST_CASE("secret enter and return form fresh authenticated checkpoint epochs wi
     REQUIRE(forgedReady);
     CHECK(host.receive(1, *forgedReady) == Admission::Stale);
     CHECK(host.context().challengeWon == won);
-    REQUIRE(host.loaded());
-    REQUIRE(guest.loaded());
+    REQUIRE(room.loaded(1));
+    REQUIRE(room.loaded(2));
     room.pump();
     CHECK(host.phase() == Phase::Running);
     CHECK(guest.phase() == Phase::Running);
@@ -303,8 +347,8 @@ TEST_CASE("secret transitions require running gameplay and cannot leave a shop",
     setup.maxima = {1000, 100, 1000};
     REQUIRE(host.prepare(7, MatchTransition::Shop, &party, &setup));
     room.pump();
-    REQUIRE(host.loaded());
-    REQUIRE(guest.loaded());
+    REQUIRE(room.loaded(1));
+    REQUIRE(room.loaded(2));
     room.pump();
     for (const auto transition : {MatchTransition::SecretEnter, MatchTransition::SecretReturn}) {
         CHECK_FALSE(host.prepare(8, transition, &party));
@@ -357,9 +401,9 @@ TEST_CASE("movie skipping requires every occupied seat not just every machine",
     room.pump();
     CHECK(host.movieSkipReady());
     CHECK(guest.movieSkipReady());
-    CHECK(host.tick() == 1);
-    REQUIRE(host.loaded());
-    REQUIRE(guest.loaded());
+    CHECK(room.inputs[1].tick() == 1);
+    REQUIRE(room.loaded(1));
+    REQUIRE(room.loaded(2));
     room.pump();
     const auto oldVote = message(guest, MatchControlKind::MovieSkipVote, MatchStop::None, 8);
     CHECK(host.receive(1, oldVote) == Admission::Stale);
@@ -413,7 +457,7 @@ TEST_CASE("match admission separates room peer identities from connection handle
     const std::array valid{MatchLink{2, 1}, MatchLink{3, 2}};
     REQUIRE(session.open(1, owners, valid));
     CHECK_FALSE(session.open(1, owners, valid));
-    CHECK_FALSE(session.advance());
+    CHECK_FALSE(session.publishNativeInputs({}, 1));
     CHECK_FALSE(session.loaded());
     CHECK_FALSE(session.requestPause());
     REQUIRE(session.prepare(1));
@@ -449,21 +493,21 @@ TEST_CASE("travel and secret transitions wait for every profile and reject forge
     CHECK(host.phase() == Phase::Running);
     REQUIRE(host.prepare(8, transition, &party, nullptr, won));
     REQUIRE(host.travelParty());
-    REQUIRE(host.loaded());
+    REQUIRE(room.loaded(1));
     auto& wire = room.wires[1];
     wire.budget = 1; // Prepare arrives, then each profile in a separate batch.
     host.flush(wire);
     REQUIRE(wire.sent.size() == 1);
     REQUIRE(guest.receive(99, wire.sent.back().bytes) == Admission::Accepted);
     REQUIRE(guest.pendingNativeContext());
-    REQUIRE(guest.completedNativeTick(room.completed[2]));
+    REQUIRE(guest.completeNativeBoundary(guest.context().epoch, room.completed[2]));
     room.completed[2] = 0;
     CHECK(guest.context().transition == transition);
     CHECK(guest.context().challengeWon == won);
     wire.sent.clear();
     CHECK_FALSE(guest.travelParty());
-    CHECK_FALSE(guest.loaded());
-    CHECK_FALSE(host.advance());
+    CHECK_FALSE(room.loaded(2));
+    CHECK_FALSE(room.inputs[1].advance());
 
     PartyCheckpoint forged{host.context().epoch, 0, *party[0]};
     auto encoded = PartyCheckpointPacket::encode(forged);
@@ -489,7 +533,7 @@ TEST_CASE("travel and secret transitions wait for every profile and reject forge
         CHECK(guest.receive(99, packet.bytes) == Admission::Accepted); // exact replay
         if (seat < 2) {
             CHECK_FALSE(guest.travelParty());
-            CHECK_FALSE(guest.loaded());
+            CHECK_FALSE(room.loaded(2));
         }
         auto changed = *PartyCheckpointPacket::decode(packet.bytes);
         ++changed.profile.gold;
@@ -498,7 +542,7 @@ TEST_CASE("travel and secret transitions wait for every profile and reject forge
     REQUIRE(guest.travelParty());
     CHECK((*guest.travelParty())[1]->gold == 7654);
     CHECK((*guest.travelParty())[1]->progress.inventory.keys == 7);
-    REQUIRE(guest.loaded());
+    REQUIRE(room.loaded(2));
     wire.budget = 100;
     room.pump();
     CHECK(host.phase() == Phase::Running);
@@ -529,7 +573,7 @@ TEST_CASE("travel preparation is bounded under congestion and missing profiles t
     CHECK(guest.phase() == Phase::Stopped);
     CHECK(guest.stopReason() == MatchStop::LoadTimeout);
     CHECK_FALSE(guest.travelParty());
-    CHECK_FALSE(guest.loaded());
+    CHECK_FALSE(room.loaded(2));
 }
 
 TEST_CASE("simulation waits for every machine to load including two local seats",
@@ -542,27 +586,27 @@ TEST_CASE("simulation waits for every machine to load including two local seats"
     Room room(owners);
     auto& host = room.sessions[1];
     REQUIRE(host.prepare(7));
-    REQUIRE(host.loaded());
+    REQUIRE(room.loaded(1));
     room.pump();
     for (u8 peer = 2; peer < 4; ++peer) {
         if (room.present(peer)) {
-            REQUIRE(room.sessions[peer].loaded());
-            CHECK_FALSE(room.sessions[peer].loaded());
+            REQUIRE(room.loaded(peer));
+            CHECK_FALSE(room.loaded(peer));
         }
     }
     room.pump();
-    CHECK_FALSE(host.advance());
-    CHECK_FALSE(MatchInputs::sample(host, {}));
-    CHECK(host.tick() == 1);
+    CHECK_FALSE(room.inputs[1].advance());
+    CHECK_FALSE(room.sample(1, {}));
+    CHECK(room.inputs[1].tick() == 1);
     auto& slow = room.sessions[4];
     CHECK(slow.receive(99, message(host, MatchControlKind::Commit)) == Admission::WrongPhase);
-    REQUIRE(slow.loaded());
+    REQUIRE(room.loaded(4));
     room.pump();
     REQUIRE(host.phase() == Phase::Running);
-    CHECK_FALSE(host.advance()); // No real frame has arrived from any seat yet.
+    CHECK_FALSE(room.inputs[1].advance()); // No real frame has arrived from any seat yet.
     room.completeOne();
-    CHECK(host.tick() == 2);
-    CHECK(slow.tick() == 2);
+    CHECK(room.inputs[1].tick() == 2);
+    CHECK(room.inputs[4].tick() == 2);
     CHECK_FALSE(slow.prepare(8));
 }
 
@@ -581,11 +625,11 @@ TEST_CASE("local devices map to frozen global seats without UI pointers",
     local[0].menu.pointer = Vec2{1};
     local[1].move = {{-1, 0}, 1};
     local[1].aimDirection = Vec3{0.6f, 0, 0.8f};
-    REQUIRE(MatchInputs::sample(guest, local));
-    REQUIRE(MatchInputs::sample(host, local));
-    CHECK_FALSE(MatchInputs::sample(host, local));
+    REQUIRE(room.sample(2, local));
+    REQUIRE(room.sample(1, local));
+    CHECK_FALSE(room.sample(1, local));
     room.pump();
-    auto frame = MatchInputs::advance(host);
+    auto frame = room.advance(1);
     REQUIRE(frame);
     CHECK((*frame)[0].throwPotion);
     CHECK((*frame)[2].move.direction == Vec2{-1, 0});
@@ -598,15 +642,15 @@ TEST_CASE("local devices map to frozen global seats without UI pointers",
         CHECK(input.menu.typed.empty());
         CHECK_FALSE(input.menu.pointer);
     }
-    const auto remote = MatchInputs::advance(guest);
+    const auto remote = room.advance(2);
     REQUIRE(remote);
     for (usize seat = 0; seat < frame->size(); ++seat) {
         CHECK((*remote)[seat].move.direction == (*frame)[seat].move.direction);
         CHECK((*remote)[seat].throwPotion == (*frame)[seat].throwPotion);
     }
-    REQUIRE(host.completedNativeTick(1));
-    REQUIRE(guest.completedNativeTick(1));
-    CHECK_FALSE(MatchInputs::advance(host)); // No stale held input is invented.
+    REQUIRE(room.inputs[1].complete());
+    REQUIRE(room.inputs[2].complete());
+    CHECK_FALSE(room.advance(1)); // No stale held input is invented.
 }
 
 TEST_CASE("spoofed trailing input cannot partially apply an otherwise valid command",
@@ -616,26 +660,29 @@ TEST_CASE("spoofed trailing input cannot partially apply an otherwise valid comm
     auto& host = room.sessions[1];
     InputCommand input;
     input.epoch = host.context().epoch;
-    input.tick = host.tick();
+    input.tick = room.inputs[1].tick();
     input.grant = host.context().grants[1];
     input.seat = 1;
     input.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
     auto spoof = input;
     spoof.seat = 0;
     const std::array commands{input, spoof};
-    const auto packet = InputPacket::encode(commands);
+    RollbackExchange::Message message{input.epoch, 2, 1, {}, {commands.begin(), commands.end()}};
+    const auto packet = RollbackExchange::encode(message);
     REQUIRE(packet);
-    CHECK(host.receive(1, *packet) == Admission::WrongPeer);
-    CHECK_FALSE(host.advance());
-    REQUIRE(MatchInputs::sample(host, {}));
+    CHECK(host.receive(1, *packet) == Admission::Invalid);
+    CHECK_FALSE(room.inputs[1].advance());
+    REQUIRE(room.sample(1, {}));
     input.pressedButtons = 0;
-    REQUIRE(host.receive(1, *InputPacket::encode(std::span{&input, 1})) == Admission::Accepted);
-    const auto frame = host.advance();
+    message.commands = {input};
+    REQUIRE(host.receive(1, *RollbackExchange::encode(message)) == Admission::Accepted);
+    const auto frame = room.inputs[1].advance();
     REQUIRE(frame);
-    CHECK_FALSE((*frame)[1].pressed(CommandPress::UsePotion));
-    CHECK_FALSE((*frame)[0].pressed(CommandPress::UsePotion));
-    input.tick = host.tick() + LockstepInputs::kWindow + 1;
-    const auto future = InputPacket::encode(std::span(&input, 1));
+    CHECK_FALSE(frame->commands[1].pressed(CommandPress::UsePotion));
+    CHECK_FALSE(frame->commands[0].pressed(CommandPress::UsePotion));
+    input.tick = room.inputs[1].tick() + RollbackInputs::kMaxAhead + 1;
+    message.commands = {input};
+    const auto future = RollbackExchange::encode(message);
     REQUIRE(future);
     CHECK(host.receive(1, *future) == Admission::Invalid);
 }
@@ -650,11 +697,11 @@ TEST_CASE("ready input sampling leaves the caller's attack levels unchanged",
     SessionInputs::Frame input{};
     input[0].attack = held;
     input[0].attackPressed = pressed;
-    REQUIRE(guest.inputReady());
-    REQUIRE(MatchInputs::sample(guest, input));
-    REQUIRE(guest.sampledInputs().size() == 1);
-    CHECK(guest.sampledInputs().front().held(CommandHeld::Attack) == held);
-    CHECK(guest.sampledInputs().front().pressed(CommandPress::Attack) == pressed);
+    REQUIRE(room.inputs[2].sampleReady());
+    REQUIRE(room.sample(2, input));
+    REQUIRE(room.inputs[2].inputs().redundantInputs().size() == 1);
+    CHECK(room.inputs[2].inputs().redundantInputs().front().held(CommandHeld::Attack) == held);
+    CHECK(room.inputs[2].inputs().redundantInputs().front().pressed(CommandPress::Attack) == pressed);
 }
 
 TEST_CASE("load timeout aborts even before the prepare message reaches a guest",
@@ -681,21 +728,25 @@ TEST_CASE("departure stops every remaining machine without stale input or state 
     room.ready();
     auto& host = room.sessions[1];
     const auto oldPrepare = message(host, MatchControlKind::Prepare);
+    auto expectedStop = MatchStop::Disconnected;
     SECTION("running") {}
     SECTION("loading next stage") {
         room.completeOne();
         const auto profiles = room.party();
         REQUIRE(host.prepare(8, MatchTransition::Travel, &profiles));
         room.pump();
+        // The retained source certificate must fail closed if a participant
+        // disconnects before the destination's all-ready commit.
+        expectedStop = MatchStop::TransportFailure;
     }
     host.disconnected(1); // remote peer 2, NOT host peer 1
     room.sessions[2].disconnected(99);
     room.pump();
     for (u8 peer = 1; peer <= 4; ++peer) {
         CHECK(room.sessions[peer].phase() == Phase::Stopped);
-        CHECK(room.sessions[peer].stopReason() == MatchStop::Disconnected);
-        CHECK_FALSE(room.sessions[peer].advance());
-        CHECK_FALSE(MatchInputs::sample(room.sessions[peer], {}));
+        CHECK(room.sessions[peer].stopReason() == expectedStop);
+        CHECK_FALSE(room.inputs[peer].advance());
+        CHECK_FALSE(room.sample(peer, {}));
     }
     CHECK(room.sessions[3].receive(99, oldPrepare) == Admission::WrongPhase);
 }
@@ -708,8 +759,8 @@ TEST_CASE("transport send failure terminates loading instead of pretending a sta
     room.wires[1].result = PacketTransport::SendResult::Disconnected;
     host.flush(room.wires[1]);
     CHECK(host.phase() == Phase::Stopped);
-    CHECK_FALSE(host.advance());
-    CHECK_FALSE(host.loaded());
+    CHECK_FALSE(room.inputs[1].advance());
+    CHECK_FALSE(room.loaded(1));
     CHECK(host.queuedControls() == 0);
 }
 
@@ -763,12 +814,12 @@ TEST_CASE("match lifecycle drives real four player movement events and one share
             input.usePotion = tick == 0 || tick == 90;
             input.selector.up = input.usePotion;
         }
-        REQUIRE(MatchInputs::sample(host, local));
-        REQUIRE(MatchInputs::sample(guest, local));
+        REQUIRE(room.sample(1, local));
+        REQUIRE(room.sample(2, local));
         room.pump();
-        const auto inputs = MatchInputs::advance(host);
+        const auto inputs = room.advance(1);
         REQUIRE(inputs);
-        const auto guestInputs = MatchInputs::advance(guest);
+        const auto guestInputs = room.advance(2);
         REQUIRE(guestInputs);
         for (usize seat = 0; seat < inputs->size(); ++seat) {
             CHECK((*guestInputs)[seat].move.direction == (*inputs)[seat].move.direction);
@@ -779,8 +830,8 @@ TEST_CASE("match lifecycle drives real four player movement events and one share
         const auto moved = PartyMotion::step(players, *inputs, false, camera.yaw(), 1, 1.0f / 60,
                                              collision, events);
         camera.update(moved, {}, range, view, 1.0f / 60);
-        REQUIRE(host.completedNativeTick(tick + 1));
-        REQUIRE(guest.completedNativeTick(tick + 1));
+        REQUIRE(room.inputs[1].complete());
+        REQUIRE(room.inputs[2].complete());
     }
     for (usize seat = 0; seat < players.size(); ++seat) {
         CHECK(potions[seat] == 2);

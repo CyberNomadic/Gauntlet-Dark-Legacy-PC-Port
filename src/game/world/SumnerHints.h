@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <array>
 #include <filesystem>
 #include <span>
@@ -54,7 +56,30 @@ struct HintPage {
  * missing. A guardian, item or runestone tried before shows a passage more each time.
  */
 class SumnerHints {
+    struct Cursor {
+        s32 index = 0;
+        s32 widened = 0;
+    };
+    struct Simulation {
+        s32 generalList = -1;
+        s32 generalHint = -1;
+        Cursor guardian;
+        Cursor legend;
+        Cursor runestone{-1, 0};
+    };
+
 public:
+    class LocalSnapshot {
+        friend class SumnerHints;
+        Simulation state;
+        const SumnerHints* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     static constexpr std::array<s32, 14> kWorldOrder{13, 7, 2, 1, 11, 4, 3, 9, 10, 5, 6, 8, 0, 0};
     static constexpr std::array<s32, 13> kRunestoneOrder{8, 9, 4, 1, 2, 3, 10, 7, 5, 6, 11, 12, 13};
     static constexpr s32 kGuardianCount = 11; ///< of kWorldOrder the guardian hints run over
@@ -64,7 +89,10 @@ public:
     /** Reads the unpacked hint texts; false (with a warning) when they are missing. */
     bool load(const std::filesystem::path& file);
     /** Takes the hints' words from the game's strings, under `hint.`. */
-    void translate(const StringTable& strings) { m_text.translate(strings, kTextPrefix); }
+    void translate(const StringTable& strings) {
+        m_localBinding = std::make_shared<const u8>(0);
+        m_text.translate(strings, kTextPrefix);
+    }
     static constexpr std::string_view kTextPrefix = "hint";
     bool loaded() const { return m_text.loaded(); }
 
@@ -74,19 +102,14 @@ public:
     /** Steps the topic on and returns its hint; an empty page when the texts lack it. */
     HintPage next(HintTopic topic, const HintKnowledge& knowledge, std::string_view generalTitle);
 
-    s32 generalList() const { return m_generalList; }
-    s32 generalHint() const { return m_generalHint; }
-    s32 guardian() const { return m_guardian.index; }
-    s32 legend() const { return m_legend.index; }
-    s32 runestone() const { return m_runestone.index; }
+    s32 generalList() const { return m_sim.generalList; }
+    s32 generalHint() const { return m_sim.generalHint; }
+    s32 guardian() const { return m_sim.guardian.index; }
+    s32 legend() const { return m_sim.legend.index; }
+    s32 runestone() const { return m_sim.runestone.index; }
 
 private:
-    /** Where a topic has got to: the entry it shows and how far its search has widened. */
-    struct Cursor {
-        s32 index = 0;
-        s32 widened = 0;
-    };
-
+    void appendState(NativeStateDigest& digest, const Simulation& state) const;
     void stepGeneral(const HintKnowledge& knowledge);
     static void stepWorlds(Cursor& cursor, s32 count, u32 open, u32 done);
     static void stepRunestones(Cursor& cursor, u32 found);
@@ -95,11 +118,8 @@ private:
                     s32 passages, s32 gap) const;
 
     MessageTable m_text;
-    s32 m_generalList = -1;
-    s32 m_generalHint = -1;
-    Cursor m_guardian;
-    Cursor m_legend;
-    Cursor m_runestone{-1, 0};
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

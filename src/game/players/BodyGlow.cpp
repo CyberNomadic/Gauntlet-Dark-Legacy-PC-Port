@@ -3,8 +3,14 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
+
+void visitNativeState(NativeStateDigest& digest, const BodyGlow& value) {
+    const auto& [level] = value;
+    digest.value(level);
+}
 
 void BodyGlow::step(f32 seconds) {
     if (m_level == 0.0f || seconds <= 0.0f) {

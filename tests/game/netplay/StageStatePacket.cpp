@@ -478,7 +478,7 @@ template <class A, class T> void field(A& a, T& v) {
         a.number(present);
         if constexpr (A::reading) {
             if (present) {
-                v.emplace();
+                v.emplace(typename V::value_type{});
             } else {
                 v.reset();
             }
@@ -773,8 +773,9 @@ template <class A, class T> void field(A& a, T& v) {
         static_assert(std::is_same_v<V, void>, "stage field lacks explicit codec");
     }
 }
-bool stageValid(const StageStatePacket::State& state) {
-    return state.world.valid() && state.fixtures.valid() &&
+bool stageValid(const StageStatePacket::State& state, bool observation = false) {
+    return (observation ? state.world.validObservation() : state.world.valid()) &&
+           state.fixtures.valid() &&
            (!state.camera || (state.camera->valid() && state.camera->level == state.world.level)) &&
            (!state.portals || state.portals->valid()) &&
            (!state.transporters || state.transporters->valid());
@@ -834,11 +835,19 @@ bool StageStatePacket::Catalog::valid() const {
     return m_data != nullptr;
 }
 std::optional<StageStatePacket::Catalog> StageStatePacket::Catalog::build(const State& trusted) {
+    return build(trusted, false);
+}
+std::optional<StageStatePacket::Catalog>
+StageStatePacket::Catalog::buildObservation(const State& trusted) {
+    return build(trusted, true);
+}
+std::optional<StageStatePacket::Catalog> StageStatePacket::Catalog::build(const State& trusted,
+                                                                          bool observation) {
     try {
         auto data = std::make_shared<Data>();
         Writer collector(nullptr, data.get());
         field(collector, trusted);
-        if (!stageValid(trusted)) {
+        if (!stageValid(trusted, observation)) {
             return std::nullopt;
         }
         data->core = trusted.world.core.catalog;

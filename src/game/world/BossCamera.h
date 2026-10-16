@@ -41,7 +41,17 @@ struct BossCameraSubject {
  * the original's do, so that the view neither jumps nor shakes as the party moves about.
  */
 class BossCamera {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const BossCamera& value) {
+        const auto& [camera, attention, lookBase, lookDirection, lookTurnVelocity, lookLength,
+                     lookVelocity, distance, distanceVelocity, yawVelocity, pitchVelocity,
+                     margin, band, marker] = value;
+        visitor.values(camera, attention, lookBase, lookDirection, lookTurnVelocity, lookLength,
+                       lookVelocity, distance, distanceVelocity, yawVelocity, pitchVelocity,
+                       margin, band, marker);
+    }
 public:
+    bool operator==(const BossCamera&) const = default;
+
     static constexpr f32 kFrameRate = 30.0f;       ///< the original's steps are per frame
     static constexpr f32 kOutStep = 10.0f;         ///< units back a frame when something is off screen
     static constexpr f32 kTightMargin = 2.0f;      ///< within this of the edge it backs off

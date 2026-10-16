@@ -71,6 +71,10 @@ struct LookoutRoute {
     bool empty() const { return points.empty(); }
 };
 
+void visitNativeState(NativeStateDigest& digest, const ZigZag& value);
+void visitNativeState(NativeStateDigest& digest, const MindMemory& value);
+void visitNativeState(NativeStateDigest& digest, const LookoutRoute& value);
+
 /** What a mind senses of its body and the world in a tick. */
 struct MindSense {
     Vec3 position{0.0f, 0.0f, 0.0f};

@@ -14,6 +14,9 @@ namespace gdl::game {
 
 /** A card sliding up over a player's status box to say what they picked up. */
 struct PickupCard {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PickupCard& value) {
+        visitor.template fields<5>(value);
+    }
     enum class State : u8 { Rising, Holding, Falling, Done };
 
     s32 player = 0;
@@ -26,6 +29,9 @@ struct PickupCard {
 /** The count shown above a player's box after a collection: what they have of what they
  * need, beside an icon, for a while. */
 struct PickupCount {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PickupCount& value) {
+        visitor.template fields<4>(value);
+    }
     std::string icon; ///< the STATIC icon
     s32 count = 0;
     s32 total = 0;
@@ -81,6 +87,10 @@ public:
     void draw(Canvas& canvas, StatusBoxPainter& boxes) const;
 
 private:
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PickupHud& value) {
+        const auto& [cards, counts] = value;
+        visitor.values(cards, counts);
+    }
     std::vector<PickupCard> m_cards;
     std::array<PickupCount, kSlots> m_counts{};
 };

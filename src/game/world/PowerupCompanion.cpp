@@ -4,8 +4,64 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+
+bool PowerupCompanion::appendState(NativeStateDigest& digest, const State& state) const {
+    const auto& [kind, resource, poseTree, pose, player, textures, previousFrame,
+                 previousGeneration, presentationAdvanced] = state;
+    digest.string("PowerupCompanion.native.1");
+    digest.value(kind);
+    digest.flag(resource != nullptr);
+    if (resource != nullptr) {
+        const bool owned = std::ranges::any_of(m_resources->entries, [resource](const auto& entry) {
+            return entry.get() == resource;
+        });
+        if (!owned || resource->archive == nullptr || !resource->archive->loaded()) {
+            digest.invalidate();
+            return false;
+        }
+        const auto& [archive, tree, model, bank] = *resource;
+        digest.resource(archive);
+        digest.resource(tree);
+        digest.flag(model.bound());
+        bank.appendBindingDigest(digest);
+    }
+    digest.resource(poseTree);
+    digest.values(pose, player);
+    digest.fields<3>(textures);
+    digest.values(previousFrame, previousGeneration, presentationAdvanced);
+    return digest.good();
+}
+
+bool PowerupCompanion::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendState(digest, m_state);
+}
+
+bool PowerupCompanion::appendLocalDigest(NativeStateDigest& digest,
+                                        const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, owner] = saved;
+    return appendState(digest, state);
+}
+
+bool PowerupCompanion::registerNativeResources(NativeStateResources& registry) const {
+    // A discarded kind change keeps these banks for saved poses and replay.
+    // Cache population itself does not enter the native state digest.
+    for (const auto& resource : m_resources->entries) {
+        if (!resource || !resource->archive ||
+            !registry.refreshArchive(*resource->archive)) {
+            return false;
+        }
+    }
+    return registry.good();
+}
 
 namespace {
 
@@ -103,11 +159,11 @@ f32 PowerupCompanion::fadeOf(const Inventory& inventory) {
 
 void PowerupCompanion::choose(RenderDevice& device, Kind kind, ItemArchive& powerups,
                               ItemArchive* weapons) {
-    if (kind == m_kind && (kind == Kind::None || m_tree != nullptr)) {
+    if (kind == m_state.kind && (kind == Kind::None || shown())) {
         return;
     }
     clear();
-    m_kind = kind;
+    m_state.kind = kind;
     ItemArchive* archive = fromWeapons(kind) ? weapons : &powerups;
     if (kind == Kind::None || archive == nullptr || !archive->loaded()) {
         return;
@@ -117,15 +173,54 @@ void PowerupCompanion::choose(RenderDevice& device, Kind kind, ItemArchive& powe
         return;
     }
     const TreeInfo& tree = archive->trees.tree(*index);
-    if (tree.sequences.empty() || !m_model.bind(tree, archive->models, archive->textures, device)) {
+    if (tree.sequences.empty()) {
         return;
     }
-    m_tree = &tree;
-    configureModel(m_model, tree, archive->models);
-    m_textures.bind(archive->trees.textureAnimations(), archive->textures, device);
+    Resource* resource = findResource(*archive, tree);
+    if (!resource) {
+        auto loaded = std::make_unique<Resource>();
+        loaded->archive = archive;
+        loaded->tree = &tree;
+        if (!loaded->model.bind(tree, archive->models, archive->textures, device)) {
+            return;
+        }
+        configureModel(loaded->model, tree, archive->models);
+        loaded->textures.bind(archive->trees.textureAnimations(), archive->textures, device);
+        resource = loaded.get();
+        m_resources->entries.push_back(std::move(loaded));
+    }
+    m_state.resource = resource;
     play(kReady);
     // Cutscenes can draw immediately after binding, before gameplay advances.
     update(0, Action::Ready, false, false);
+}
+
+PowerupCompanion::Resource* PowerupCompanion::findResource(ItemArchive& archive,
+                                                           const TreeInfo& tree) const {
+    for (const auto& resource : m_resources->entries) {
+        if (resource->archive == &archive && resource->tree == &tree) {
+            return resource.get();
+        }
+    }
+    return nullptr;
+}
+
+void PowerupCompanion::saveLocal(LocalSnapshot& state) const {
+    state.m_state = m_state;
+    state.m_owner = m_resources;
+}
+
+bool PowerupCompanion::canRestoreLocal(const LocalSnapshot& state) const {
+    return state.m_owner.lock() == m_resources;
+}
+
+bool PowerupCompanion::restoreLocal(const LocalSnapshot& state) {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    m_state = state.m_state;
+    ++m_bindingRevision; // invalidate legacy prepared restores from the abandoned branch
+    return true;
 }
 
 void PowerupCompanion::configureModel(TreeModel& model, const TreeInfo& tree, ModelSet& models) {
@@ -151,52 +246,59 @@ void PowerupCompanion::configureModel(TreeModel& model, const TreeInfo& tree, Mo
 }
 
 void PowerupCompanion::play(s32 sequence) {
-    if (m_tree == nullptr) {
+    const auto* currentTree = tree();
+    if (!currentTree) {
         return;
     }
-    if (sequence < 0 || static_cast<usize>(sequence) >= m_tree->sequences.size()) {
+    if (sequence < 0 || static_cast<usize>(sequence) >= currentTree->sequences.size()) {
         sequence = 0;
     }
-    m_player.start(m_tree->sequences[static_cast<usize>(sequence)], static_cast<u32>(sequence));
+    m_state.player.start(currentTree->sequences[static_cast<usize>(sequence)],
+                         static_cast<u32>(sequence));
 }
 
 void PowerupCompanion::update(f32 seconds, Action action, bool swung, bool spat) {
-    if (m_tree == nullptr) {
+    const auto* currentTree = tree();
+    if (!currentTree) {
         return;
     }
-    const auto current = static_cast<s32>(m_player.sequence());
-    m_previousFrame = m_player.presentationFrame();
-    m_previousGeneration = m_player.generation();
-    m_presentationAdvanced = seconds > 0;
+    auto& player = m_state.player;
+    auto& resource = *m_state.resource;
+    const auto current = static_cast<s32>(player.sequence());
+    m_state.previousFrame = player.presentationFrame();
+    m_state.previousGeneration = player.generation();
+    m_state.presentationAdvanced = seconds > 0;
     s32 wanted = kReady;
-    if (m_kind == Kind::Pojo) {
+    if (m_state.kind == Kind::Pojo) {
         wanted = swung ? kAttack : pojoSequenceOf(action);
-    } else if (spat && m_tree->sequences.size() > 1) {
+    } else if (spat && currentTree->sequences.size() > 1) {
         wanted = 1; // the attack its bearer's shot calls for
     }
     // A loop gives way at once; a one-shot plays through before a loop takes over, another
     // one-shot cutting in, and held at its end while it is still asked for (Pojo's death).
-    const bool busy = !loops(current) && !m_player.finished();
+    const bool busy = !loops(current) && !player.finished();
     // Releases are edges, not held actions. A second shot must restart ATTACK even
     // while the previous shot's one-shot is playing; held HIT/DEATH must not restart.
-    const bool restart = m_kind == Kind::Pojo && swung;
+    const bool restart = m_state.kind == Kind::Pojo && swung;
     if (restart || (wanted != current && (!busy || !loops(wanted)))) {
         play(wanted);
     }
-    m_player.advance(seconds, loops(static_cast<s32>(m_player.sequence())));
-    const auto frame = static_cast<s32>(m_player.frame());
-    m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
-    m_poseTree = m_tree;
-    m_model.setFrame(m_player.sequence(), frame);
-    m_textures.advance(seconds);
-    m_textures.apply(m_model, *m_tree, m_player.sequence(), frame);
+    player.advance(seconds, loops(static_cast<s32>(player.sequence())));
+    const auto frame = static_cast<s32>(player.frame());
+    m_state.pose.evaluate(*currentTree, player.sequence(), player.frame());
+    m_state.poseTree = currentTree;
+    resource.model.setFrame(player.sequence(), frame);
+    resource.textures.restoreClock(m_state.textures);
+    resource.textures.advance(seconds);
+    m_state.textures = resource.textures.clock();
+    resource.textures.apply(resource.model, *currentTree, player.sequence(), frame);
 }
 
 std::optional<Mat4> PowerupCompanion::attachment(const Mat4& at, std::string_view object) const {
-    if (m_tree != nullptr) {
-        const auto matrices = m_pose.matrices();
-        for (usize node = 0; node < m_tree->nodes.size() && node < matrices.size(); ++node) {
-            if (m_tree->nodes[node].object == object) {
+    if (const auto* currentTree = tree()) {
+        const auto matrices = m_state.pose.matrices();
+        for (usize node = 0; node < currentTree->nodes.size() && node < matrices.size(); ++node) {
+            if (currentTree->nodes[node].object == object) {
                 return at * matrices[node];
             }
         }
@@ -205,52 +307,56 @@ std::optional<Mat4> PowerupCompanion::attachment(const Mat4& at, std::string_vie
 }
 
 std::optional<CompanionVisual> PowerupCompanion::visual(const Mat4& at, f32 alpha) const {
-    if (m_tree == nullptr) {
+    if (!shown()) {
         return std::nullopt;
     }
-    return CompanionVisual{m_tree,
-                           &m_model,
-                           &m_textures,
-                           static_cast<u32>(m_kind),
+    auto& resource = *m_state.resource;
+    resource.textures.restoreClock(m_state.textures);
+    return CompanionVisual{tree(),
+                           &resource.model,
+                           &resource.textures,
+                           static_cast<u32>(m_state.kind),
                            at,
-                           m_player.sequence(),
-                           m_player.generation(),
-                           m_player.presentationFrame(),
-                           static_cast<f32>(m_textures.frame()) +
-                               m_textures.presentationOffset(1).value_or(0),
+                           m_state.player.sequence(),
+                           m_state.player.generation(),
+                           m_state.player.presentationFrame(),
+                           static_cast<f32>(resource.textures.frame()) +
+                               resource.textures.presentationOffset(1).value_or(0),
                            alpha};
 }
 void PowerupCompanion::draw(RenderDevice& device, const Mat4& clip, const Mat4& at,
                             const WorldLighting& lighting, f32 alpha, const CameraFrame* camera,
                             f32 renderAlpha, TreeModel::Pass pass) const {
-    if (m_tree != nullptr) {
-        const f32 blend = renderAlpha < 0 || m_presentationAdvanced ? renderAlpha : 1.0f;
-        f32 frame = m_player.frame();
+    if (const auto* currentTree = tree()) {
+        const auto& player = m_state.player;
+        auto& resource = *m_state.resource;
+        const f32 blend = renderAlpha < 0 || m_state.presentationAdvanced ? renderAlpha : 1.0f;
+        f32 frame = player.frame();
         TreePose visualPose;
-        const TreePose* pose = &m_pose;
+        const TreePose* pose = &m_state.pose;
         if (blend >= 0) {
-            frame = m_previousGeneration == m_player.generation()
-                        ? std::lerp(m_previousFrame, m_player.presentationFrame(),
+            frame = m_state.previousGeneration == player.generation()
+                        ? std::lerp(m_state.previousFrame, player.presentationFrame(),
                                     std::clamp(blend, 0.0f, 1.0f))
-                        : m_player.presentationFrame();
-            visualPose.evaluate(*m_tree, m_player.sequence(), frame, false, true);
+                        : player.presentationFrame();
+            visualPose.evaluate(*currentTree, player.sequence(), frame, false, true);
             pose = &visualPose;
         }
-        m_model.setPresentationFrame(m_player.sequence(), frame);
-        m_textures.apply(m_model, *m_tree, m_player.sequence(), frame,
-                         m_textures.presentationOffset(blend));
-        m_model.draw(device, clip, at, lighting, pose->matrices(), camera, alpha, pass);
+        resource.model.setPresentationFrame(player.sequence(), frame);
+        resource.textures.restoreClock(m_state.textures);
+        resource.textures.apply(resource.model, *currentTree, player.sequence(), frame,
+                                resource.textures.presentationOffset(blend));
+        resource.model.draw(device, clip, at, lighting, pose->matrices(), camera, alpha, pass);
     }
 }
 
 void PowerupCompanion::clear() {
     ++m_bindingRevision;
-    m_kind = Kind::None;
-    m_tree = nullptr;
-    m_model.clear();
-    m_player.stop();
-    m_textures.clear();
-    m_presentationAdvanced = false;
+    m_state.kind = Kind::None;
+    m_state.resource = nullptr;
+    m_state.player.stop();
+    m_state.textures = {};
+    m_state.presentationAdvanced = false;
 }
 
 bool PowerupCompanion::Checkpoint::valid() const {
@@ -264,46 +370,47 @@ bool PowerupCompanion::Checkpoint::valid() const {
             (kind != Kind::None && tree == treeOf(kind) && pose && pose->tree == tree));
 }
 std::optional<PowerupCompanion::Checkpoint> PowerupCompanion::checkpoint() const {
-    Checkpoint state{m_kind,
-                     m_tree ? m_tree->name : std::string{},
-                     m_player.checkpoint(),
-                     m_textures.checkpoint(),
-                     m_pose.checkpoint(),
-                     m_previousFrame,
-                     m_previousGeneration,
-                     m_presentationAdvanced};
-    if ((m_pose.posed() && !state.pose) || !state.valid()) {
+    Checkpoint state{m_state.kind,
+                     tree() ? tree()->name : std::string{},
+                     m_state.player.checkpoint(),
+                     m_state.textures,
+                     m_state.pose.checkpoint(),
+                     m_state.previousFrame,
+                     m_state.previousGeneration,
+                     m_state.presentationAdvanced};
+    if ((m_state.pose.posed() && !state.pose) || !state.valid()) {
         return std::nullopt;
     }
     return state;
 }
 bool PowerupCompanion::restore(const Checkpoint& state) {
-    if (!state.valid() || state.kind != m_kind ||
-        state.tree != (m_tree ? m_tree->name : std::string{}) ||
-        (state.pose && m_poseTree == nullptr)) {
+    const auto* currentTree = tree();
+    if (!state.valid() || state.kind != m_state.kind ||
+        state.tree != (currentTree ? currentTree->name : std::string{}) ||
+        (state.pose && m_state.poseTree == nullptr)) {
         return false;
     }
     const TreeSequenceInfo* sequence = nullptr;
     if (state.animation.playing) {
-        if (!m_tree || state.animation.sequence >= m_tree->sequences.size()) {
+        if (!currentTree || state.animation.sequence >= currentTree->sequences.size()) {
             return false;
         }
-        sequence = &m_tree->sequences[state.animation.sequence];
+        sequence = &currentTree->sequences[state.animation.sequence];
     }
-    auto next = *this;
-    if (!next.m_player.restore(state.animation, sequence) ||
-        !next.m_textures.restore(state.textures) ||
-        (state.pose && !next.m_pose.restore(*m_poseTree, *state.pose))) {
+    auto next = m_state;
+    if (!next.player.restore(state.animation, sequence) ||
+        (state.pose && !next.pose.restore(*m_state.poseTree, *state.pose))) {
         return false;
     }
     if (!state.pose) {
-        next.m_pose = {};
-        next.m_poseTree = nullptr;
+        next.pose = {};
+        next.poseTree = nullptr;
     }
-    next.m_previousFrame = state.previousFrame;
-    next.m_previousGeneration = state.previousGeneration;
-    next.m_presentationAdvanced = state.presentationAdvanced;
-    *this = std::move(next);
+    next.textures = state.textures;
+    m_state = std::move(next);
+    m_state.previousFrame = state.previousFrame;
+    m_state.previousGeneration = state.previousGeneration;
+    m_state.presentationAdvanced = state.presentationAdvanced;
     return true;
 }
 

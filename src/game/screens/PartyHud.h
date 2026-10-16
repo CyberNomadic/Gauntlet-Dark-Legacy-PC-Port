@@ -1,4 +1,6 @@
 #pragma once
+
+#include <memory>
 #include <algorithm>
 #include <array>
 #include <optional>
@@ -22,6 +24,32 @@ class PartyHud {
 public:
     static constexpr s32 kPlayerCount = 4;
     static constexpr s32 kRelicTicks = 300; ///< welcome_timer: the keys show this long
+
+private:
+    struct Simulation {
+        f32 localStopTimeTotal = 0;
+        PickupHud pickups;
+        HelpMessages help;
+        std::optional<Vec3> helpPosition;
+        std::array<PowerupSelector, kPlayerCount> selectors;
+        s32 relicTicks = 0;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class PartyHud;
+        Simulation state;
+        const PartyHud* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+        ChallengeHud::LocalSnapshot hourglass;
+        f32* sharedTotal = nullptr;
+        f32 total = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     PartyHud() = default;
     ~PartyHud() = default;
     PartyHud(const PartyHud&) = delete;
@@ -48,9 +76,9 @@ public:
                                 const PowerupSelector* selector = nullptr);
     void drawStatus(Canvas& canvas, std::span<const PlayerRuntime> players);
     /** Shows the bosses' keys in the boxes a while (a level opening, a runestone found). */
-    void showRelics() { m_relicTicks = kRelicTicks; }
-    void stepRelics(s32 ticks) { m_relicTicks = std::max(m_relicTicks - ticks, 0); }
-    bool relicsShown() const { return m_relicTicks > 0; }
+    void showRelics() { m_sim.relicTicks = kRelicTicks; }
+    void stepRelics(s32 ticks) { m_sim.relicTicks = std::max(m_sim.relicTicks - ticks, 0); }
+    bool relicsShown() const { return m_sim.relicTicks > 0; }
     void drawSelectors(Canvas& canvas, const TextPainter& text, const StringTable* strings,
                        std::span<const PlayerRuntime> players) const;
     static void drawSelector(Canvas& canvas, const TextPainter& text, const StringTable* strings,
@@ -59,32 +87,29 @@ public:
                   std::span<const PlayerRuntime> players, const Mat4& clip,
                   const Mat4& canvasProjection, f32 width, f32 height) const;
     const PowerupSelector& selector(s32 player) const {
-        return m_selectors[static_cast<usize>(std::clamp(player, 0, kPlayerCount - 1))];
+        return m_sim.selectors[static_cast<usize>(std::clamp(player, 0, kPlayerCount - 1))];
     }
-    PickupHud& pickups() { return m_pickups; }
-    const PickupHud& pickups() const { return m_pickups; }
-    HelpMessages& help() { return m_help; }
-    const HelpMessages& help() const { return m_help; }
+    PickupHud& pickups() { return m_sim.pickups; }
+    const PickupHud& pickups() const { return m_sim.pickups; }
+    HelpMessages& help() { return m_sim.help; }
+    const HelpMessages& help() const { return m_sim.help; }
     std::optional<Vec3> helpAnchor(std::span<const PlayerRuntime> players) const;
     const MessageTable& strings() const { return m_strings; }
 
 private:
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     f32& stopTimeTotal() {
-        return m_sharedStopTimeTotal != nullptr ? *m_sharedStopTimeTotal : m_localStopTimeTotal;
+        return m_sharedStopTimeTotal != nullptr ? *m_sharedStopTimeTotal : m_sim.localStopTimeTotal;
     }
     f32 stopTimeTotal() const {
-        return m_sharedStopTimeTotal != nullptr ? *m_sharedStopTimeTotal : m_localStopTimeTotal;
+        return m_sharedStopTimeTotal != nullptr ? *m_sharedStopTimeTotal : m_sim.localStopTimeTotal;
     }
     StatusBoxPainter m_boxes;
     ChallengeHud m_hourglass;
-    f32 m_localStopTimeTotal = 0;
     f32* m_sharedStopTimeTotal = nullptr;
-    PickupHud m_pickups;
-    HelpMessages m_help;
-    std::optional<Vec3> m_helpPosition;
     MessageTable m_strings;
-    std::array<PowerupSelector, kPlayerCount> m_selectors;
     const Texture* m_glowSheet = nullptr;
-    s32 m_relicTicks = 0;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 } // namespace gdl::game

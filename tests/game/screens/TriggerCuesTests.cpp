@@ -79,6 +79,69 @@ TEST_CASE("a native turntable loop stops on pause and resumes only while its pla
     audio.close();
 }
 
+TEST_CASE("recorded turntables derive one desired voice and retract corrected activation",
+          "[trigger-cues][trigger-audio-rewind][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELI2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    usize pad = 0;
+    while (pad < world.rotators().size() &&
+           world.rotators().rotator(pad).subtype != Rotators::kTurnedByPad) {
+        ++pad;
+    }
+    REQUIRE(pad < world.rotators().size());
+    LevelWorld::LocalSnapshot before;
+    world.saveLocal(before);
+    AudioMixer mixer{48000};
+    SoundPlayer sounds{mixer};
+    LevelSoundscape audio;
+    audio.open(root, &sounds, world.audio(), 'I');
+    SceneSoundEvents events;
+    events.open(1, &sounds);
+    audio.recordTo(&events);
+    TriggerCues cues;
+    SwitchCutscene cutscene;
+    usize physical = 0;
+    SoundPlayer::Capture watch(&sounds, [&](const auto&) { ++physical; });
+    const std::array visitors{TriggerVisitor{.position = world.rotators().rotator(pad).spot}};
+    const auto capture = [&](u64 tick, std::span<const TriggerVisitor> standing) {
+        events.beginTick(tick);
+        world.updateTriggers(1.0f / 60, standing);
+        cues.handle(world, audio, &sounds, cutscene, {});
+        cues.gatherAudio(world, audio);
+        return events.endFrame();
+    };
+    const std::array original{capture(1, visitors), capture(2, {})};
+    REQUIRE(original[0].loops.size() == 1);
+    CHECK(original[0].loops.front().key == original[1].loops.front().key);
+    CHECK(physical == 0);
+    const auto start = events.reconcileFrames(1, original);
+    REQUIRE(start);
+    REQUIRE(start.actions.size() == 1);
+    CHECK(start.actions.front().kind == SceneSoundEvents::Ledger::ActionKind::StartLoop);
+    events.dispatch(start);
+    const auto afterStart = physical;
+    REQUIRE(afterStart > 0);
+    REQUIRE(world.restoreLocal(before));
+    const std::array corrected{capture(1, {}), capture(2, {})};
+    CHECK(corrected[0].loops.empty());
+    CHECK(corrected[1].loops.empty());
+    CHECK(physical == afterStart);
+    const auto stop = events.reconcileFrames(1, corrected);
+    REQUIRE(stop);
+    REQUIRE(stop.actions.size() == 1);
+    CHECK(stop.actions.front().kind == SceneSoundEvents::Ledger::ActionKind::StopLoop);
+    events.dispatch(stop);
+    CHECK(events.reconcileFrames(1, corrected).actions.empty());
+    events.close();
+    audio.recordTo(nullptr);
+    audio.close();
+}
+
 TEST_CASE("a party refused by a crystal gate is told what it wants, once a frame",
           "[game][screens][trigger-cues][assets]") {
     const std::filesystem::path root =

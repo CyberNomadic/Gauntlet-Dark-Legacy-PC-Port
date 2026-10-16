@@ -10,6 +10,11 @@ namespace gdl {
 /** Streaming SHA-256 for content compatibility checks (not authentication). */
 class Sha256 {
 public:
+    enum class Backend { Automatic, Portable };
+    Sha256() = default;
+    /** Portable is also useful for verifying the accelerated implementation. */
+    explicit Sha256(Backend backend) : m_backend(backend) {}
+    static bool hardwareAccelerationAvailable();
     void update(std::span<const u8> bytes);
     std::array<u8, 32> finish() const;
     std::string hex() const;
@@ -21,5 +26,6 @@ private:
     std::array<u8, 64> m_buffer{};
     u64 m_size = 0;
     usize m_used = 0;
+    Backend m_backend = Backend::Automatic;
 };
 } // namespace gdl

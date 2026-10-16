@@ -16,7 +16,7 @@ f32 Combatant::attackRate(const Actor& critter) {
 s32 Combatant::attackTarget(const Actor& critter, const TargetCriteria& criteria,
                             std::span<const EnemyView> players, bool fallback) {
     for (const Actor* owner = &critter; owner != nullptr;
-         owner = fallback && owner->parent != nullptr ? &owner->parent->m_actor : nullptr) {
+         owner = fallback && owner->parent != nullptr ? &owner->parent->m_sim.actor : nullptr) {
         const Actor& source = *owner;
         const Vec3 home = source.position - source.homePosition;
         if (criteria.maxHomeDistance > 0 &&

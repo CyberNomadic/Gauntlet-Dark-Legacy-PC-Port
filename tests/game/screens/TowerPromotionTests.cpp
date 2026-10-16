@@ -10,6 +10,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/screens/TowerPromotion.h"
 
@@ -239,5 +240,86 @@ TEST_CASE("the tower wizard's posed head and hands ride above his robe",
         REQUIRE(lowest(hand) > kBodyHeight);
         promotion.animate(0.5f);
     }
+}
+TEST_CASE("native tower promotion rewind preserves awards captions and wizard motion",
+          "[local-rewind][promotion-local-rewind][assets]") {
+    const auto root =
+        test::assetOrSkip("ITEMS/LEVELL/ANIM.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    REQUIRE(items.load(root / "ITEMS/LEVELL"));
+    WorldLayout layout;
+    REQUIRE(layout.load(root / "LEVELS/LEVELL1"));
+    std::array<PlayerRuntime, 2> party;
+    spawn(party[0], 0, 30, 29);
+    spawn(party[1], 1, 80, 79);
+    MessageTable strings;
+    texts(strings);
+    TowerPromotion actual, expected, foreign;
+    for (auto* promotion : {&actual, &expected}) {
+        promotion->begin(party, strings);
+        promotion->bind(device, items, layout, party);
+    }
+    const auto textures = device.texturesCreated;
+    TowerPromotion::LocalSnapshot saved;
+    CHECK_FALSE(actual.restoreLocal(saved));
+    for (s32 window = 0; window < 192; ++window) {
+        CAPTURE(window);
+        const s32 distance = window % 8 + 1;
+        actual.saveLocal(saved);
+        CHECK_FALSE(foreign.restoreLocal(saved));
+        device.draws.clear();
+        actual.draw(device, Mat4{1}, {}, 0.37f);
+        const auto before = device.draws;
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.capturePresentation();
+            actual.update(71, true);
+            actual.animate(0.13f);
+        }
+        REQUIRE(actual.restoreLocal(saved));
+        device.draws.clear();
+        actual.draw(device, Mat4{1}, {}, 0.37f);
+        REQUIRE(device.draws.size() == before.size());
+        for (usize i = 0; i < before.size(); ++i) {
+            test::checkRecordedDraw(device.draws[i], before[i]);
+        }
+        for (s32 tick = 0; tick < distance; ++tick) {
+            actual.capturePresentation();
+            expected.capturePresentation();
+            const auto a = actual.update(2, false);
+            const auto b = expected.update(2, false);
+            CHECK(a.voice == b.voice);
+            CHECK(a.award == b.award);
+            CHECK(a.gem == b.gem);
+            actual.animate(1.0f / 30);
+            expected.animate(1.0f / 30);
+            CHECK(actual.shown() == expected.shown());
+            CHECK(actual.active() == expected.active());
+            if (actual.active()) {
+                CHECK(actual.current()->player == expected.current()->player);
+                CHECK(actual.current()->caption == expected.current()->caption);
+            }
+            CHECK(actual.animation().frame() == expected.animation().frame());
+            CHECK(actual.textureFrame() == expected.textureFrame());
+        }
+        device.draws.clear();
+        expected.draw(device, Mat4{1}, {}, 0.37f);
+        const auto reference = device.draws;
+        device.draws.clear();
+        actual.draw(device, Mat4{1}, {}, 0.37f);
+        REQUIRE(device.draws.size() == reference.size());
+        for (usize i = 0; i < reference.size(); ++i) {
+            test::checkRecordedDraw(device.draws[i], reference[i]);
+        }
+    }
+    CHECK_FALSE(actual.active());
+    CHECK(device.texturesCreated == textures);
+    CHECK(device.textureUpdates == 0);
+    actual.clear();
+    CHECK_FALSE(actual.restoreLocal(saved));
+    actual.begin(party, strings);
+    actual.saveLocal(saved);
+    actual.bind(device, items, layout, party);
+    CHECK_FALSE(actual.restoreLocal(saved));
 }
 } // namespace

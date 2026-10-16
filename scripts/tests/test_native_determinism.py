@@ -12,7 +12,49 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from native_determinism import (MAX_LINE_BYTES, MAX_RENDER_EVERY, MAX_TICKS, METADATA_FIELDS,
-                                ReportError, compare_reports, main, run_pair)
+                                ReportError, compare_reports, main, run_pair, validate_transport)
+
+
+class TransportEvidenceTests(unittest.TestCase):
+    def evidence(self):
+        return {"local_peer": 1, "links": [
+            {"peer": peer, "samples": 5, "relay_samples": 4, "direct_samples": 0,
+             "unavailable_samples": 1, "rtt_p50_ms": 30.0, "rtt_p95_ms": 40.0,
+             "rtt_max_ms": 44.0} for peer in (2, 3, 4)]}
+
+    def test_selected_relay_samples_cover_every_link_and_unknown_is_not_proof(self):
+        validate_transport(self.evidence(), "relay", 4)
+        invalid = (
+            {"relay_samples": 0, "unavailable_samples": 5, "rtt_p50_ms": 0,
+             "rtt_p95_ms": 0, "rtt_max_ms": 0},
+            {"relay_samples": 3, "direct_samples": 1},
+            {"samples": 0}, {"samples": True}, {"relay_samples": -1},
+            {"peer": 2}, {"peer": 1}, {"peer": 5}, {"extra": 1},
+            {"rtt_p50_ms": 45}, {"rtt_p95_ms": float("nan")},
+            {"rtt_max_ms": float("inf")}, {"rtt_max_ms": True},
+        )
+        for change in invalid:
+            with self.subTest(change=change):
+                value = self.evidence()
+                value["links"][1].update(change)
+                with self.assertRaises(ReportError):
+                    validate_transport(value, "relay", 4)
+        value = self.evidence()
+        value["links"].pop()
+        with self.assertRaises(ReportError):
+            validate_transport(value, "relay", 4)
+
+    def test_rtt_is_local_measurement_and_local_only_must_not_report_relay(self):
+        value = self.evidence()
+        with self.assertRaises(ReportError):
+            validate_transport(value, "local", 4)
+        for link in value["links"]:
+            link.update(relay_samples=0, direct_samples=4,
+                        rtt_p50_ms=0, rtt_p95_ms=1, rtt_max_ms=3)
+        validate_transport(value, "local", 4)
+        value = {"local_peer": 4, "links": [deepcopy(value["links"][0])]}
+        value["links"][0]["peer"] = 1
+        validate_transport(value, "local", 4)
 
 
 def observations(ticks=3, cadence=0):

@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "game/netplay/OnlineSession.h"
+#include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/NativePlaySetup.h"
+#include "game/screens/SessionInputs.h"
 
 namespace gdl::test {
 /** In-memory authenticated transport for native gameplay tests. The separate
@@ -121,6 +123,7 @@ struct OnlinePair {
     game::OnlineSession guestSession;
     game::MatchSession& host = hostSession.match();
     game::MatchSession& guest = guestSession.match();
+    RollbackSessionHarness hostInputs, guestInputs;
 
     explicit OnlinePair(std::optional<std::array<game::CharacterProfile, 2>> profiles = {},
                         bool autoStart = true, u8 hostPlayers = 1, u8 guestPlayers = 1)
@@ -198,11 +201,43 @@ struct OnlinePair {
         pump();
     }
     void ready() {
+        if (host.context().transition != game::MatchTransition::Shop) {
+            REQUIRE(hostInputs.bind(host));
+            REQUIRE(guestInputs.bind(guest));
+        } else {
+            hostInputs.clear();
+            guestInputs.clear();
+        }
         REQUIRE(host.loaded());
         REQUIRE(guest.loaded());
         pump();
         REQUIRE(host.phase() == game::MatchSession::Phase::Running);
         REQUIRE(guest.phase() == game::MatchSession::Phase::Running);
+    }
+    RollbackSessionHarness& inputs(game::MatchSession& session) {
+        REQUIRE((&session == &host || &session == &guest));
+        return &session == &host ? hostInputs : guestInputs;
+    }
+    bool sample(game::MatchSession& session, const game::SessionInputs::Frame& local) {
+        auto& timeline = inputs(session);
+        std::vector<game::InputCommand> commands;
+        const auto& context = session.context();
+        for (u8 seat = 0; seat < context.owners.size(); ++seat) {
+            if (context.owners[seat] == session.localPeer()) {
+                commands.push_back(game::SessionInputs::command(
+                    local[commands.size()], context.epoch, timeline.sampleTick(),
+                    context.grants[seat], seat));
+            }
+        }
+        return timeline.sample(commands);
+    }
+    std::optional<game::SessionInputs::Frame> advance(game::MatchSession& session) {
+        const auto command = inputs(session).advance();
+        if (!command) return std::nullopt;
+        game::SessionInputs::Frame result{};
+        for (usize seat = 0; seat < result.size(); ++seat)
+            result[seat] = game::SessionInputs::playInput(command->commands[seat]);
+        return result;
     }
 };
 } // namespace gdl::test

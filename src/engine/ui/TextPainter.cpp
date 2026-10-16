@@ -2,6 +2,7 @@
 
 #include "engine/core/Assert.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl {
 
@@ -69,6 +70,18 @@ s32 TextPainter::advance(u8 code, f32 scale) const {
         return static_cast<s32>(static_cast<f32>(m_font->spaceWidth()) * scale);
     }
     return 0;
+}
+
+void visitNativeState(NativeStateDigest& digest, const TextPainter& painter) {
+    const auto& [font, texture] = painter;
+    digest.string("text-painter/layout/1");
+    digest.flag(font != nullptr);
+    if (font != nullptr) {
+        digest.value(*font);
+    }
+    // Texture presence controls readiness. Its pixels, dimensions and device
+    // identity affect drawing only, never measure(), lineHeight() or paging.
+    digest.flag(texture != nullptr);
 }
 
 } // namespace gdl

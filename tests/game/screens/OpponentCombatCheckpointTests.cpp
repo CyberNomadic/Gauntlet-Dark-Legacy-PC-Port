@@ -11,6 +11,7 @@
 #include "engine/io/File.h"
 
 #include "AttackCheckpointFixture.h"
+#include "game/enemies/PlacedEnemiesCheckpoint.h"
 #include "game/screens/HelpMessages.h"
 #include "game/screens/OpponentCombatCheckpoint.h"
 #include "game/screens/StageResources.h"
@@ -308,12 +309,12 @@ TEST_CASE("ordinary adapter preserves dormant special placements without activat
     placement.spawn.placed = true;
     fixture.opponents.placements().bind({placement});
     REQUIRE(fixture.opponents.pendingPlacements() == 1);
-    const auto pending = fixture.opponents.placements().checkpoint();
+    const auto pending = PlacedEnemiesCheckpoint::capture(fixture.opponents.placements());
     REQUIRE(pending);
     const auto adapter = fixture.adapter.checkpoint(fixture.visual());
     REQUIRE(adapter);
     REQUIRE(fixture.adapter.restore(*adapter, fixture.visual()));
-    CHECK(fixture.opponents.placements().checkpoint() == pending);
+    CHECK(PlacedEnemiesCheckpoint::capture(fixture.opponents.placements()) == pending);
     CHECK(fixture.opponents.pendingPlacements() == 1);
 }
 
@@ -440,7 +441,7 @@ TEST_CASE("native G1 adapter preserves its complete dormant statues and preloade
     REQUIRE_FALSE(before->statues.statues.empty());
     REQUIRE_FALSE(before->critters.banks.empty());
     REQUIRE(opponents.critters().count() == 0);
-    const auto placements = opponents.placements().checkpoint();
+    const auto placements = PlacedEnemiesCheckpoint::capture(opponents.placements());
     REQUIRE(placements);
     REQUIRE_FALSE(placements->roster.empty());
     const auto uploads = device.texturesCreated;
@@ -456,7 +457,7 @@ TEST_CASE("native G1 adapter preserves its complete dormant statues and preloade
     REQUIRE(adapter.canCommit(*undo));
     REQUIRE(adapter.commitRestore(std::move(*undo)));
     CHECK(adapter.checkpoint(*visual) == before);
-    CHECK(opponents.placements().checkpoint() == placements);
+    CHECK(PlacedEnemiesCheckpoint::capture(opponents.placements()) == placements);
     CHECK(device.texturesCreated == uploads);
     auto first = adapter.prepareRestore(*before, *visual);
     auto sibling = adapter.prepareRestore(*before, *visual);
@@ -574,4 +575,180 @@ TEST_CASE("opponent adapter preserves defeated critters and their pending reward
     CHECK_FALSE(critters.takeLosses().empty()); // Capture and restore never dispatch rewards.
     CHECK_FALSE(fixture.adapter.prepareRestore({}, fixture.visual()));
 }
+
+TEST_CASE("native opponent owner replays wrong branches through pools queues and rewards",
+          "[level-opponents-local-rewind][native-equality]") {
+    auto reference = std::make_unique<AdapterFixture>();
+    auto predicted = std::make_unique<AdapterFixture>();
+    const auto prepare = [](AdapterFixture& f) {
+        const auto enemy = f.opponents.enemies().spawn(
+            EnemySpawn{.kind = kGruntKind, .tier = 1, .generator = 0, .placed = true}, {});
+        REQUIRE(enemy);
+        for (s32 hit = 0; hit < 10; ++hit) {
+            f.opponents.strikeEnemy(*enemy, 1, 0, {0, 0, 1}, 2, f.players);
+        }
+        f.opponents.strikeGenerator(0, 1, 2, f.players);
+    };
+    prepare(*reference);
+    prepare(*predicted);
+    REQUIRE_FALSE(predicted->state().lessons.empty());
+    REQUIRE_FALSE(predicted->state().generatorRewards.empty());
+    auto saved = std::make_unique<LevelOpponents::LocalSnapshot>();
+    std::vector<LevelOpponents::LocalSnapshot> expected(8);
+    auto actual = std::make_unique<LevelOpponents::LocalSnapshot>();
+    EffectTrees::LocalSnapshot effects;
+    usize callbacks = 0;
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [&] { ++callbacks; };
+    events.award = [&](s32, s32, bool) { ++callbacks; };
+    events.destroyedGenerator = [&](s32) { ++callbacks; };
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    events.fallen = [](const Vec3&) {};
+    events.spew = [](const CombatSpew&) {};
+    events.help = [&](s32, usize) {
+        ++callbacks;
+        return true;
+    };
+    const auto advance = [&](AdapterFixture& f, s32 tick, bool wrong) {
+        if (tick % 11 == 0) {
+            f.opponents.enemies().spawn(EnemySpawn{.kind = kGruntKind,
+                                                   .tier = 1,
+                                                   .position = {static_cast<f32>(tick), 0, 10},
+                                                   .placed = true},
+                                        {});
+        }
+        // Empty players keep the test's external player owner immutable. Native
+        // population clocks, deaths, effects and coordinator output still advance.
+        f.opponents.update(1, 1.0f / 60, {}, {}, events);
+        if (wrong || tick % 7 == 0) {
+            f.opponents.strikeGenerator(0, wrong ? 100000.0f : 1.0f, 2, f.players);
+            f.opponents.strikeEnemy(0, wrong ? 100000.0f : 1.0f, 0, {0, 0, wrong ? -1.0f : 1.0f}, 2,
+                                    f.players);
+        }
+    };
+    const auto uploads = predicted->device.texturesCreated;
+    s32 tick = 0;
+    for (s32 window = 0; window < 24; ++window) {
+        CAPTURE(window, tick);
+        const auto before = predicted->state();
+        const auto enemies = predicted->opponents.enemies().checkpoint();
+        const auto generators = predicted->opponents.generators().checkpoint();
+        REQUIRE(predicted->opponents.saveLocal(*saved));
+        predicted->effects.saveLocal(effects);
+        const s32 distance = 1 + window % 8;
+        for (s32 step = 0; step < distance; ++step) {
+            advance(*predicted, tick + step, false);
+            REQUIRE(predicted->opponents.saveLocal(expected[static_cast<usize>(step)]));
+        }
+        REQUIRE(predicted->opponents.restoreLocal(*saved));
+        REQUIRE(predicted->effects.restoreLocal(effects));
+        auto diagnostic = predicted->adapter.prepareRestore(before, predicted->visual());
+        REQUIRE(diagnostic);
+        for (s32 step = 0; step < distance; ++step) {
+            advance(*predicted, tick + step, true);
+        }
+        predicted->opponents.takeRockHits();
+        predicted->opponents.takeBarrelRams();
+        predicted->opponents.settleRewards({}, events);
+        const auto calls = callbacks;
+        REQUIRE(predicted->opponents.restoreLocal(*saved));
+        REQUIRE(predicted->effects.restoreLocal(effects));
+        CHECK(callbacks == calls);
+        CHECK_FALSE(predicted->adapter.canCommit(*diagnostic));
+        CHECK(predicted->state() == before);
+        CHECK(predicted->opponents.enemies().checkpoint() == enemies);
+        CHECK(predicted->opponents.generators().checkpoint() == generators);
+        REQUIRE(predicted->opponents.saveLocal(*actual));
+        CHECK(predicted->opponents.equalLocal(*saved, *actual));
+        for (s32 step = 0; step < distance; ++step, ++tick) {
+            advance(*reference, tick, false);
+            advance(*predicted, tick, false);
+            REQUIRE(predicted->opponents.saveLocal(*actual));
+            CHECK(predicted->opponents.equalLocal(expected[static_cast<usize>(step)], *actual));
+            CHECK(predicted->state() == reference->state());
+            CHECK(predicted->opponents.enemies().checkpoint() ==
+                  reference->opponents.enemies().checkpoint());
+            CHECK(predicted->opponents.generators().checkpoint() ==
+                  reference->opponents.generators().checkpoint());
+            CHECK(predicted->opponents.missiles().checkpoint() ==
+                  reference->opponents.missiles().checkpoint());
+            CHECK(PlacedEnemiesCheckpoint::capture(predicted->opponents.placements()) ==
+                  PlacedEnemiesCheckpoint::capture(reference->opponents.placements()));
+        }
+        REQUIRE(predicted->opponents.canRestoreLocal(*saved));
+    }
+    CHECK(callbacks > 0);
+    CHECK(predicted->device.texturesCreated == uploads);
+}
+
+TEST_CASE("native opponent aggregate preflights every child before mutation",
+          "[level-opponents-local-rewind][native-equality]") {
+    auto fixture = std::make_unique<AdapterFixture>();
+    auto foreign = std::make_unique<AdapterFixture>();
+    auto saved = std::make_unique<LevelOpponents::LocalSnapshot>();
+    CHECK_FALSE(fixture->opponents.equalLocal(*saved, *saved));
+    CHECK_FALSE(fixture->opponents.restoreLocal(*saved));
+    REQUIRE(fixture->opponents.saveLocal(*saved));
+    CHECK(fixture->opponents.equalLocal(*saved, *saved));
+    CHECK_FALSE(foreign->opponents.equalLocal(*saved, *saved));
+    CHECK_FALSE(foreign->opponents.restoreLocal(*saved));
+    REQUIRE(fixture->opponents.restoreLocal(*saved));
+    REQUIRE(fixture->opponents.restoreLocal(*saved));
+    SECTION("child placement roster changed") {
+        fixture->opponents.placements().bind({});
+    }
+    SECTION("child generator bindings changed") {
+        fixture->opponents.generators().clear();
+    }
+    SECTION("child meter layout changed") {
+        fixture->opponents.meter().clear();
+    }
+    SECTION("diagnostic coordinator replacement") {
+        REQUIRE(fixture->adapter.restore(fixture->state(), fixture->visual()));
+    }
+    SECTION("owner closed") {
+        fixture->opponents.close();
+    }
+    const auto before = fixture->opponents.enemies().checkpoint();
+    CHECK_FALSE(fixture->opponents.canRestoreLocal(*saved));
+    CHECK_FALSE(fixture->opponents.equalLocal(*saved, *saved));
+    CHECK_FALSE(fixture->opponents.restoreLocal(*saved));
+    CHECK(fixture->opponents.enemies().checkpoint() == before);
+}
+
+TEST_CASE("native opponent equality includes undispatched coordinator rewards",
+          "[level-opponents-local-rewind][native-equality]") {
+    auto fixture = std::make_unique<AdapterFixture>();
+    fixture->opponents.strikeGenerator(0, 1, 2, fixture->players);
+    REQUIRE_FALSE(fixture->state().generatorRewards.empty());
+    auto before = std::make_unique<LevelOpponents::LocalSnapshot>();
+    auto after = std::make_unique<LevelOpponents::LocalSnapshot>();
+    REQUIRE(fixture->opponents.saveLocal(*before));
+    auto enemiesBefore = std::make_unique<Enemies::LocalSnapshot>();
+    auto enemiesAfter = std::make_unique<Enemies::LocalSnapshot>();
+    Generators::LocalSnapshot generatorsBefore, generatorsAfter;
+    REQUIRE(fixture->opponents.enemies().saveLocal(*enemiesBefore));
+    fixture->opponents.generators().saveLocal(generatorsBefore);
+    usize awards = 0;
+    LevelOpponents::Events events;
+    events.award = [&](s32, s32, bool) { ++awards; };
+    events.levels = [] {};
+    fixture->opponents.settleRewards({}, events);
+    CHECK(awards > 0);
+    REQUIRE(fixture->opponents.saveLocal(*after));
+    CHECK_FALSE(fixture->opponents.equalLocal(*before, *after));
+    REQUIRE(fixture->opponents.enemies().saveLocal(*enemiesAfter));
+    fixture->opponents.generators().saveLocal(generatorsAfter);
+    CHECK(fixture->opponents.enemies().equalLocal(*enemiesBefore, *enemiesAfter));
+    CHECK(fixture->opponents.generators().equalLocal(generatorsBefore, generatorsAfter));
+    const auto dispatched = awards;
+    REQUIRE(fixture->opponents.restoreLocal(*before));
+    REQUIRE(fixture->opponents.saveLocal(*after));
+    CHECK(fixture->opponents.equalLocal(*before, *after));
+    CHECK(awards == dispatched); // value comparison and restore cannot dispatch rewards
+}
+
 } // namespace

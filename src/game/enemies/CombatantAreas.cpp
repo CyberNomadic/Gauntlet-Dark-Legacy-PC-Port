@@ -86,12 +86,12 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
         worldParent = glm::rotate(glm::translate(Mat4{1}, position), critter.yaw, Vec3{0, 1, 0});
         offset = Vec3{0};
     }
-    if ((sound->flags & 0x10U) != 0 && damage.hitSound < 0 && m_collision != nullptr) {
+    if ((sound->flags & 0x10U) != 0 && damage.hitSound < 0 && m_sim.collision != nullptr) {
         const Mat4 parent = worldParent.value_or(attachmentTransform(critter, node));
         const Vec3 position{parent * Vec4{offset, 1}};
         const f32 radius = damage.radius * critter.scale;
         if (const auto floor =
-                m_collision->floorAt(position, 1 + radius * 0.5f, 5 + radius * 0.5f)) {
+                m_sim.collision->floorAt(position, 1 + radius * 0.5f, 5 + radius * 0.5f)) {
             Mat4 placement = glm::translate(Mat4{1}, Vec3{position.x, floor->y + 0.1f, position.z});
             placement =
                 glm::rotate(placement, std::atan2(floor->normal.z, floor->normal.y), Vec3{1, 0, 0});
@@ -132,7 +132,7 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
     }
     area.radius = damage.maxDistance * critter.scale;
     area.minDot = damage.minDot;
-    area.damage = damage.damage * m_scales.damage;
+    area.damage = damage.damage * m_sim.scales.damage;
     area.flags = damage.flags;
     area.secondsLeft = life;
     area.lifetime = life;
@@ -142,7 +142,7 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
     CombatCue cue;
     cue.critter = id;
     cue.tree = sound->shows() ? sound->tree : std::string{};
-    cue.sound = sound->soundFor(m_realm);
+    cue.sound = sound->soundFor(m_sim.realm);
     cue.soundPosition = Vec3{modelTransform(critter)[3]};
     const Mat4 parent = worldParent.value_or(attachmentTransform(critter, area.node));
     cue.position = Vec3{(parent * area.local)[3]};
@@ -163,7 +163,7 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
         cue.node.reset();
     }
     if (!cue.tree.empty() || !cue.sound.empty() || cue.shakes) {
-        m_cues.push_back(cue);
+        m_sim.cues.push_back(cue);
     }
     return life;
 }
@@ -201,7 +201,7 @@ void Combatant::eruptArena(Actor& critter, s32 id, const AttackDefinition& damag
     if (const auto life = startArea(critter, id, damage, {}, nearest->placement)) {
         // The stage becomes solid one 30 Hz effect tick before its carrier expires.
         constexpr f32 kEffectTick = 1.0f / 30.0f;
-        m_arenaActivations.push_back({nearest->index, *life - kEffectTick});
+        m_sim.arenaActivations.push_back({nearest->index, *life - kEffectTick});
     }
 }
 
@@ -228,7 +228,7 @@ void Combatant::updateAreas(Actor& critter, s32 id, std::span<const EnemyView> p
             blow.direction = distance > 0 ? Vec3{away.x, 0, away.z} * (0.25f / distance) : Vec3{0};
             blow.area = true;
             blow.repeatGap = area.hitGap();
-            m_blows.push_back(blow);
+            m_sim.blows.push_back(blow);
         }
     }
 }

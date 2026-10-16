@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -96,6 +97,8 @@ public:
                                   std::span<PlayerRuntime> players, const Targets& targets);
     /** Stops held-drain loops when simulation pauses; a live hold restarts them on resume. */
     void stopDeathSounds(std::span<PlayerRuntime> players);
+    /** Complete held-drain desires, once after the entire native tick. */
+    void gatherLoops() const;
     static constexpr f32 kGrabReach = 30.0f; ///< PlayerGetTarget's reach
     static constexpr f32 kGrabCone = 0.707f; ///< how far ahead a new target must lie
     static constexpr f32 kHeldCone = 0.5f;   ///< and one already held
@@ -148,12 +151,12 @@ public:
                const LevelOpponents::GeneratorPublisher& generators,
                const LevelFixtures::BarrelPublisher& barrels = {});
     const MoveStrikes& strikes() const { return m_strikes; }
-    usize shieldCount() const { return m_shields.size(); }
+    usize shieldCount() const { return m_sim.shields.size(); }
     /** Persistent outgoing damage not owned by ordinary-opponent replay. A
      * completed player action can leave these areas active for later ticks. */
     bool pendingGameplay() const {
-        return m_strikes.count() != 0 || !m_items.empty() || !m_potions.empty() ||
-               !m_shields.empty();
+        return m_strikes.count() != 0 || !m_sim.items.empty() || !m_sim.potions.empty() ||
+               !m_sim.shields.empty();
     }
 
     /** Native base damage used to prepare the same visual strike descriptors. */
@@ -165,6 +168,7 @@ private:
     friend class CombatRollbackCheckpoint;
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
+    u64 m_localEpoch = 0;
     std::optional<s32> deathContactSlot(usize index, std::span<const PlayerRuntime> players,
                                         const Targets& targets) const;
     void beginPotion(const MissileImpact& impact);
@@ -193,8 +197,10 @@ private:
         f32 lifetime = 1;
         bool pojoTurbo = false;
         std::vector<s32> hit;
+        template <class D> friend void visitNativeState(D& digest, const ItemArea& value) {
+            digest.template fields<7>(value);
+        }
     };
-    std::vector<ItemArea> m_items;
     struct PotionBurst {
         MissileImpact impact;
         f32 elapsed = 0;
@@ -202,8 +208,10 @@ private:
         std::vector<s32> hit;
         std::vector<s32> blessed; ///< what its caster's class perk has reached
         bool struck = false;      ///< whether it has harmed anything
+        template <class D> friend void visitNativeState(D& digest, const PotionBurst& value) {
+            digest.template fields<6>(value);
+        }
     };
-    std::vector<PotionBurst> m_potions;
     static void enchantChests(PotionBurst& burst, f32 radius, f32 power, const Targets& targets);
     void healFrom(s32 owner, f32 harm, const Vec3& at, std::span<PlayerRuntime> players,
                   const Targets& targets);
@@ -289,16 +297,20 @@ private:
         u32 strike = 0;
         Mat4 local{1};
         bool bodyParent = false; ///< SFXX 1 bypasses the first animated node
+        template <class D> friend void visitNativeState(D& digest, const MoveAttachment& value) {
+            digest.template fields<5>(value);
+        }
     };
-    std::vector<MoveAttachment> m_moveAttachments;
     struct ParticleEffect {
         usize actor = 0;
         u32 effect = 0;
         u32 parent = 0;
         std::string node;
         Vec3 offset{0.0f};
+        template <class D> friend void visitNativeState(D& digest, const ParticleEffect& value) {
+            digest.template fields<5>(value);
+        }
     };
-    std::vector<ParticleEffect> m_particleEffects;
     void presentStrikeHit(usize index, const MoveStrike& row, const Vec3& at,
                           std::span<PlayerRuntime> players, bool sound = true);
     static bool isCreature(s32 id);
@@ -323,8 +335,10 @@ private:
     struct StrikeEffect {
         u32 strike = 0;
         u32 effect = 0;
+        template <class D> friend void visitNativeState(D& digest, const StrikeEffect& value) {
+            digest.template fields<2>(value);
+        }
     };
-    std::vector<StrikeEffect> m_strikeEffects;
     /** Whose strike a number is, and which of their class's, for what it shows on a hit. */
     struct StrikeSource {
         u32 strike = 0;
@@ -333,12 +347,17 @@ private:
         struct Contact {
             s32 target = -1;
             f32 remaining = 0;
+            template <class D> friend void visitNativeState(D& digest, const Contact& value) {
+                digest.template fields<2>(value);
+            }
         };
         std::vector<Contact> contacts;
         MultiplayerMode multiplayer = MultiplayerMode::Normal;
         u32 damageType = 0; ///< reflection can spend a launched strike's pass-through
+        template <class D> friend void visitNativeState(D& digest, const StrikeSource& value) {
+            digest.template fields<6>(value);
+        }
     };
-    std::vector<StrikeSource> m_strikeSources;
     std::vector<StrikeHit> advanceStrikes(f32 seconds, std::span<PlayerRuntime> players);
     std::vector<MissileTarget> strikeContacts(const StrikeHit& hit, const StrikeSource& source,
                                               const Targets& targets) const;
@@ -360,10 +379,49 @@ private:
             s32 kind = 0;
             s32 id = 0;
             f32 wait = 0.0f;
+            template <class D> friend void visitNativeState(D& digest, const Mark& value) {
+                digest.template fields<3>(value);
+            }
         };
         std::vector<Mark> marks;
         std::vector<s32> blessed; ///< what its bearer's class perk has reached
+        template <class D> friend void visitNativeState(D& digest, const PotionShield& value) {
+            digest.template fields<8>(value);
+        }
     };
-    std::vector<PotionShield> m_shields;
+    /** Live gameplay values; borrowed artwork and scene services stay in Resources. */
+    struct Simulation {
+        std::vector<ItemArea> items;
+        std::vector<PotionBurst> potions;
+        std::vector<MoveAttachment> moveAttachments;
+        std::vector<ParticleEffect> particleEffects;
+        std::vector<StrikeEffect> strikeEffects;
+        std::vector<StrikeSource> strikeSources;
+        std::vector<PotionShield> shields;
+        std::array<std::optional<FrameEventEmitter>, FrameEventEmitter::kNoSeat> deathSounds;
+        template <class D> friend void visitNativeState(D& digest, const Simulation& value) {
+            digest.template fields<8>(value);
+        }
+    } m_sim;
+
+public:
+    class LocalSnapshot {
+        friend class PlayerAttacks;
+        Simulation state;
+        MoveStrikes::LocalSnapshot strikes;
+        const PlayerAttacks* owner = nullptr;
+        std::weak_ptr<const u8> lifetime;
+        u64 epoch = 0;
+    };
+    /** Same bound owner only. Effects, projectiles, participants and hit targets
+     * belong to the enclosing scene history and must rewind alongside this value. */
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    void appendBindingDigest(NativeStateDigest& digest) const;
 };
 } // namespace gdl::game

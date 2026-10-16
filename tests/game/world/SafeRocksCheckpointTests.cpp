@@ -11,6 +11,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/SafeRocksCheckpoint.h"
 
 namespace {
@@ -28,8 +29,8 @@ void checkTargets(std::span<const CombatArenaTarget> actual,
                   std::span<const CombatArenaTarget> expected) {
     REQUIRE(actual.size() == expected.size());
     for (usize index = 0; index < actual.size(); ++index) {
-        CHECK(std::tie(actual[index].index, actual[index].placement, actual[index].active) ==
-              std::tie(expected[index].index, expected[index].placement, expected[index].active));
+        CHECK((std::tie(actual[index].index, actual[index].placement, actual[index].active) ==
+               std::tie(expected[index].index, expected[index].placement, expected[index].active)));
     }
 }
 
@@ -235,8 +236,10 @@ TEST_CASE("native arena cover checkpoints retain all authored tiers and stable r
     WorldLayout layout;
     ItemArchive items;
     test::FakeRenderDevice device;
-    REQUIRE(layout.load(test::assetOrSkip(relative).parent_path()));
-    REQUIRE(items.load(test::assetOrSkip(itemRelative).parent_path()));
+    const auto levelPath = test::assetOrSkip(relative).parent_path();
+    const auto itemPath = test::assetOrSkip(itemRelative).parent_path();
+    REQUIRE(layout.load(levelPath));
+    REQUIRE(items.load(itemPath));
     SafeRocks rocks;
     REQUIRE(rocks.bind(device, layout, items));
     rocks.bindAnimations(device, items);
@@ -292,9 +295,12 @@ struct PlagueFixture {
     usize animatedDrawCount = 0;
 
     PlagueFixture() {
-        REQUIRE(layout.load(test::assetOrSkip("LEVELS/LEVELK5/WORLDS.PS2").parent_path()));
-        REQUIRE(items.load(test::assetOrSkip("ITEMS/LEVELK5/objects.ngc").parent_path()));
-        REQUIRE(boss.load(test::assetOrSkip("MONSTERS/PBOSS/objects.ngc").parent_path()));
+        const auto levelPath = test::assetOrSkip("LEVELS/LEVELK5/WORLDS.PS2").parent_path();
+        const auto itemPath = test::assetOrSkip("ITEMS/LEVELK5/objects.ngc").parent_path();
+        const auto bossPath = test::assetOrSkip("MONSTERS/PBOSS/objects.ngc").parent_path();
+        REQUIRE(layout.load(levelPath));
+        REQUIRE(items.load(itemPath));
+        REQUIRE(boss.load(bossPath));
         REQUIRE(rocks.bind(device, layout, items));
         rocks.setPlayerCount(1);
         const std::array lenders{&boss.textures};
@@ -387,5 +393,157 @@ TEST_CASE(
     CHECK(std::ranges::all_of(seen, [](bool present) { return present; }));
     CHECK(guest.device.texturesCreated == uploads);
     CHECK(guest.device.textureUpdates == updates);
+}
+
+TEST_CASE("native cover history rewinds damage party gates and pending eruptions by value",
+          "[local-rewind][safe-rocks-local-rewind]") {
+    Fixture reference("safe-rock-native-reference");
+    Fixture corrected("safe-rock-native-corrected");
+    LocalStateHistory<SafeRocks::LocalSnapshot> history;
+    constexpr f32 kSeconds = 1.0f / 60;
+    std::array<SafeRocks::LocalSnapshot, 8> expectedLocal;
+    SafeRocks::LocalSnapshot observed;
+    s32 tick = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        const auto start = static_cast<u64>(tick);
+        REQUIRE(history.capture(start, [&](auto& saved) {
+            corrected.rocks.saveLocal(saved);
+            return true;
+        }));
+        const auto before = captured(corrected.owner);
+        auto stale = corrected.owner.prepareRestore(before);
+        REQUIRE(stale);
+        const s32 distance = 1 + window % 8;
+        const auto* saved = history.find(start);
+        REQUIRE(saved);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            mutate(corrected.rocks, tick + offset, kSeconds);
+            corrected.rocks.saveLocal(expectedLocal[static_cast<usize>(offset)]);
+        }
+        REQUIRE(corrected.rocks.restoreLocal(*saved));
+        for (s32 offset = 0; offset < distance; ++offset) {
+            mutate(reference.rocks, tick + offset, kSeconds);
+            corrected.rocks.activate(static_cast<usize>(offset % 4));
+            corrected.rocks.setPlayerCount(4);
+            corrected.rocks.hideForEruptions();
+            corrected.rocks.scheduleActivation(1, 0.01f);
+            corrected.rocks.update(kSeconds);
+        }
+        REQUIRE(corrected.rocks.restoreLocal(*saved));
+        CHECK_FALSE(corrected.owner.canCommit(*stale));
+        CHECK(captured(corrected.owner) == before);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            mutate(corrected.rocks, tick + offset, kSeconds);
+            corrected.rocks.saveLocal(observed);
+            CHECK(corrected.rocks.equalLocal(observed, expectedLocal[static_cast<usize>(offset)]));
+        }
+        CHECK(captured(corrected.owner) == captured(reference.owner));
+        checkTargets(corrected.rocks.arenaTargets(), reference.rocks.arenaTargets());
+        checkTargets(corrected.rocks.eruptionTargets(), reference.rocks.eruptionTargets());
+        CHECK(corrected.rocks.attackAnchors() == reference.rocks.attackAnchors());
+        CHECK(corrected.rocks.blocksBreath({7, 32, -10}, {7, 32, 10}) ==
+              reference.rocks.blocksBreath({7, 32, -10}, {7, 32, 10}));
+        tick += distance;
+    }
+}
+
+TEST_CASE("native cover snapshots reject foreign owners and replaced arena bindings",
+          "[local-rewind][safe-rocks-local-rewind]") {
+    Fixture first("safe-rock-native-fences-first");
+    Fixture second("safe-rock-native-fences-second");
+    SafeRocks::LocalSnapshot saved;
+    CHECK_FALSE(first.rocks.restoreLocal(saved));
+    CHECK_FALSE(first.rocks.equalLocal(saved, saved));
+    first.rocks.saveLocal(saved);
+    const auto before = captured(second.owner);
+    CHECK_FALSE(second.rocks.restoreLocal(saved));
+    CHECK_FALSE(second.rocks.equalLocal(saved, saved));
+    CHECK(captured(second.owner) == before);
+    first.rocks.bindAnimations(first.device, first.items);
+    CHECK_FALSE(first.rocks.restoreLocal(saved));
+    CHECK_FALSE(first.rocks.equalLocal(saved, saved));
+    first.rocks.saveLocal(saved);
+    first.rocks.clear();
+    CHECK_FALSE(first.rocks.restoreLocal(saved));
+    REQUIRE(first.rocks.bind(first.device, first.layout, first.items));
+    CHECK_FALSE(first.rocks.restoreLocal(saved));
+}
+
+TEST_CASE("native cover equality distinguishes dormant activation and subframe texture clocks",
+          "[local-rewind][safe-rocks-local-rewind][native-equality]") {
+    Fixture fixture("safe-rock-local-equality");
+    fixture.rocks.hideForEruptions();
+    SafeRocks::LocalSnapshot initial, scheduled, advanced, restored;
+    fixture.rocks.saveLocal(initial);
+    const auto obstacle = fixture.rocks.rock(0).obstacle;
+    const auto placement = fixture.rocks.rock(0).placement;
+    fixture.rocks.scheduleActivation(0, 0.5f);
+    fixture.rocks.saveLocal(scheduled);
+    CHECK(fixture.rocks.rock(0).obstacle == obstacle);
+    CHECK(fixture.rocks.rock(0).placement == placement);
+    CHECK_FALSE(fixture.rocks.equalLocal(initial, scheduled));
+    REQUIRE(fixture.rocks.restoreLocal(initial));
+    fixture.rocks.update(1.0f / 240);
+    fixture.rocks.saveLocal(advanced);
+    CHECK(fixture.rocks.textureClock() == 0); // same displayed frame, different fractional clock
+    CHECK_FALSE(fixture.rocks.equalLocal(initial, advanced));
+    REQUIRE(fixture.rocks.restoreLocal(initial));
+    fixture.rocks.saveLocal(restored);
+    CHECK(fixture.rocks.equalLocal(initial, restored));
+}
+
+TEST_CASE("native cover rewind retains shared boss texture animation and model bindings",
+          "[local-rewind][safe-rocks-local-rewind][assets]") {
+    PlagueFixture reference;
+    PlagueFixture corrected;
+    LocalStateHistory<SafeRocks::LocalSnapshot> history;
+    const auto resources = corrected.rocks.bodyResources();
+    const auto uploads = corrected.device.texturesCreated;
+    const auto updates = corrected.device.textureUpdates;
+    u64 tick = 0;
+    auto advance = [](SafeRocks& rocks, u64 step) {
+        rocks.update(1.0f / 60);
+        if (step % 11 == 0) {
+            rocks.capturePresentation();
+        }
+    };
+    for (u64 window = 0; window < 72; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(tick, [&](auto& saved) {
+            corrected.rocks.saveLocal(saved);
+            return true;
+        }));
+        const u64 distance = 1 + window % 8;
+        for (u64 offset = 0; offset < distance; ++offset) {
+            advance(reference.rocks, tick + offset);
+            corrected.rocks.hideForEruptions();
+            corrected.rocks.update(0.13f);
+        }
+        const auto* saved = history.find(tick);
+        REQUIRE(saved);
+        REQUIRE(corrected.rocks.restoreLocal(*saved));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            advance(corrected.rocks, tick + offset);
+        }
+        const auto expected = captured(reference.owner);
+        CHECK(captured(corrected.owner) == expected);
+        const u32 frame = (expected.textures.frame / 3) % 15;
+        reference.drawFrame(frame, -1);
+        corrected.drawFrame(frame, -1);
+        REQUIRE(reference.device.draws.size() == corrected.device.draws.size());
+        for (usize index = 0; index < reference.device.draws.size(); ++index) {
+            CHECK(reference.device.draws[index].vertices == corrected.device.draws[index].vertices);
+        }
+        const auto retained = corrected.rocks.bodyResources();
+        REQUIRE(retained.size() == resources.size());
+        for (usize index = 0; index < resources.size(); ++index) {
+            CHECK(retained[index].model == resources[index].model);
+            CHECK(retained[index].textures == resources[index].textures);
+        }
+        tick += distance;
+    }
+    CHECK(corrected.device.texturesCreated == uploads);
+    CHECK(corrected.device.textureUpdates == updates);
 }
 } // namespace

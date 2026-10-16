@@ -26,9 +26,21 @@
 
 namespace gdl::game {
 
+class NativeStateResources;
+
 /** Owns a character's costume, weapon, animation bindings and visual/audio resources.
  * Borrowed missile models and effect archives must not outlive this figure. */
 class PlayerFigure {
+    /** The native action machine and its gameplay attachment matrices. Borrowed
+     * animation trees remain in the immutable figure resources, not in history. */
+    struct ActionState {
+        PlayerAnimator animator;
+        u64 revision = 0;
+        std::vector<Mat4> transforms;
+        bool familiarPending = false;
+        bool familiarReleased = false;
+    };
+
 public:
     static constexpr std::string_view kShadowObject = "SHADOWL1";
     PlayerFigure() = default;
@@ -44,6 +56,31 @@ public:
     PlayerFigure(PlayerFigure&&) = delete;
     PlayerFigure& operator=(PlayerFigure&&) = delete;
     ~PlayerFigure() = default;
+
+    /** Native figure continuation, including Pojo's head pose and both companions.
+     * Equipment skins/models are derived from inventory when drawn, not copied.
+     * Costume/familiar clocks accompany the gameplay state for corrected drawing;
+     * artwork, voice banks, trails and GPU ownership remain outside history. */
+    class LocalSnapshot {
+        friend class PlayerFigure;
+        ActionState m_actions;
+        PowerupCompanion::LocalSnapshot m_companion;
+        PlayerFamiliar::LocalSnapshot m_familiar;
+        TextureAnimator::Clock m_costumeTextures;
+        f32 m_companionAlpha = 1;
+        std::weak_ptr<const u8> m_owner;
+    };
+    void saveLocal(LocalSnapshot& state) const;
+    bool canRestoreLocal(const LocalSnapshot& state) const;
+    bool restoreLocal(const LocalSnapshot& state);
+    /** Complete captured figure values under this immutable costume binding.
+     * Render-only equipment caches and disposable weapon ghosts are excluded. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    /** Observe already-loaded immutable artwork and cached lender textures only.
+     * Register every retained promotion figure as well as the currently worn one;
+     * effects and local history may still borrow an earlier figure's archives. */
+    bool registerNativeResources(NativeStateResources& resources) const;
 
     /** Exact action/attachment and companion continuation, including familiar
      * release latches and both companion presentation clocks. Costume texture
@@ -109,7 +146,7 @@ public:
     void animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed = PlayerDeed::None);
     /** Clears the last presentation interval when a scene tick may hold the figure. */
     void capturePresentation();
-    u64 animationRevision() const { return m_animationRevision; }
+    u64 animationRevision() const { return m_action.revision; }
     /** Synchronize the temporary companion before animation (the fire shield's blaze comes
      * from `weapons`). The archives must outlive this figure; switching off does not
      * invalidate missiles already in flight. */
@@ -192,22 +229,22 @@ public:
     /** Slot zero is earned, slot one is a timed powerup; both can be visible. */
     std::array<std::optional<CompanionVisual>, 2> companionVisuals(const Mat4& body,
                                                                    f32 alpha) const;
-    bool familiarReleased() const { return m_familiarReleased; }
+    bool familiarReleased() const { return m_action.familiarReleased; }
     const TreeModel& familiarMissile() const { return m_familiarMissile; }
     const std::filesystem::path& directory() const { return m_directory; }
-    void setStrafe(StrafeWay way) { m_animator.setStrafe(way); }
-    void setMelee(const MeleeSense& sense) { m_animator.setMelee(sense); }
-    void setAttackSpeed(bool rapid, bool speed) { m_animator.setAttackSpeed(rapid, speed); }
-    void setGuardArmor(f32 armor) { m_animator.setGuardArmor(armor); }
-    void setShielded(bool shielded) { m_animator.setShielded(shielded); }
-    void setPushed(bool pushed) { m_animator.setPushed(pushed); }
+    void setStrafe(StrafeWay way) { m_action.animator.setStrafe(way); }
+    void setMelee(const MeleeSense& sense) { m_action.animator.setMelee(sense); }
+    void setAttackSpeed(bool rapid, bool speed) { m_action.animator.setAttackSpeed(rapid, speed); }
+    void setGuardArmor(f32 armor) { m_action.animator.setGuardArmor(armor); }
+    void setShielded(bool shielded) { m_action.animator.setShielded(shielded); }
+    void setPushed(bool pushed) { m_action.animator.setPushed(pushed); }
     /** Whose combo the body is held or thrown in, and whether the dwarf's ride goes on. */
-    void setCombo(s32 grabberClass, bool ride) { m_animator.setCombo(grabberClass, ride); }
+    void setCombo(s32 grabberClass, bool ride) { m_action.animator.setCombo(grabberClass, ride); }
     /** Leaves the swing's ghosts of the weapon behind the body placed at `body` (the slow
      * swing, the spin and the middle power swing: action.c 816, 951, 976). */
     void updateTrail(const Mat4& body, s32 ticks);
     const WeaponTrail& trail() const { return m_trail; }
-    const PlayerAnimator& animator() const { return m_animator; }
+    const PlayerAnimator& animator() const { return m_action.animator; }
     const TreeModel& missile() const { return m_missile; }
     ItemArchive* missileArchive() { return m_missileArchive; }
     const ItemArchive* missileArchive() const { return m_missileArchive; }
@@ -226,6 +263,8 @@ public:
     }
 
 private:
+    bool appendState(NativeStateDigest& digest, const ActionState& actions,
+                     const TextureAnimator::Clock& textures, f32 companionAlpha) const;
     /** Drawing-only matrices; never replace the gameplay hand/attachment transforms. */
     void preparePresentation(f32 frameBlend) const;
     std::optional<Mat4> visualAttachment(const Mat4& body, s32 node) const;
@@ -248,12 +287,13 @@ private:
     TextureSet m_familiarTextures; ///< WEAPONS owns the class SFX archives' animated frames
     std::filesystem::path m_sharedTextureDirectory;
     ItemArchive m_costumeArchive;
+    std::string m_costumeResourceKey;
     TextureAnimator m_costumeTextures;
     AnimationSet m_actions;
+    std::string m_actionResourceKey;
     const TreeInfo* m_actionTree = nullptr;
     mutable TreeModel m_model;
-    PlayerAnimator m_animator;
-    u64 m_animationRevision = 0;
+    ActionState m_action;
     const TreeInfo* m_costume = nullptr;
     std::filesystem::path m_directory;
     TreeInfo m_weaponTree;
@@ -280,18 +320,16 @@ private:
     BlobShadow m_shadow;
     s32 m_handNode = -1;
     std::vector<s32> m_classNodeOfNode;
-    std::vector<Mat4> m_transforms;
     mutable TreePose m_visualPose;
     mutable std::vector<Mat4> m_visualTransforms;
     ItemArchive m_effects;
+    std::string m_effectResourceKey;
     PlayerFamiliar m_familiar;
     PowerupCompanion m_companion;
     WeaponTrail m_trail;
     f32 m_companionAlpha = 1;
     s32 m_backNode = -1; ///< what wings hang from: the root's first child's first child
     TreeModel m_familiarMissile;
-    bool m_familiarPending = false;
-    bool m_familiarReleased = false;
     TreeModel m_missile;
     ItemArchive* m_missileArchive = nullptr;
     std::string m_missileName;
@@ -300,6 +338,7 @@ private:
     std::filesystem::path m_effectDirectory;
     bool m_staysInHand = false;
     f32 m_phoenixSide = 0;
+    const std::shared_ptr<const u8> m_localOwner = std::make_shared<const u8>(0);
     std::shared_ptr<const u8> m_gameplayOwner = std::make_shared<const u8>(0);
 };
 

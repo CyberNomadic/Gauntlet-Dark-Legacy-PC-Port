@@ -3,10 +3,17 @@
 #include <algorithm>
 #include <format>
 
+#include "engine/io/NativeStateDigest.h"
+
 #include "game/combat/DamageTypes.h"
 #include "game/players/ClassData.h"
 
 namespace gdl::game {
+void visitNativeState(NativeStateDigest& digest, const WeaponGlow& value) {
+    const auto& [element, effect] = value;
+    digest.values(element, effect);
+}
+
 namespace {
 constexpr s32 kSorceressClass = 6;
 } // namespace

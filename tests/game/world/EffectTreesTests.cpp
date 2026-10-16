@@ -248,7 +248,8 @@ TEST_CASE("sparse effect trees opt into empty missing static objects without los
     effects.update(0.1f);
     REQUIRE(effects.count() == 1);
     const auto& effect = effects.effect(0);
-    CHECK(effect.model.nodeCount() == 1); // Keep valid meshes rather than dropping the whole model.
+    REQUIRE(effect.model);
+    CHECK(effect.model->nodeCount() == 1); // Keep valid meshes rather than dropping the whole model.
     REQUIRE(effect.particles.field().size() == 1);
     CHECK(effect.particles.field().particleCount() > 0);
     CHECK(Vec3(effect.particles.field().emitter(0).node()[3]) == Vec3(0, 3, 0));
@@ -528,7 +529,8 @@ TEST_CASE("retail potion fades keep the startup visible and remove each mesh at 
         const auto drawMeshes = [&] {
             device.draws.clear();
             const auto& effect = effects.effect(0);
-            auto model = effect.model;
+            auto model = *effect.model;
+            model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
             // Fire's sparks have their own texture/transform tracks and may
             // outlive its rings. Isolate meshes governed by these fade nodes.
             for (usize i = 0; i < tree.nodes.size(); ++i) {

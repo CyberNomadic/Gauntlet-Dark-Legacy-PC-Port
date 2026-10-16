@@ -47,13 +47,28 @@ public:
      * travel-boundary checks; sync the value at the native floor-carry phase. */
     static std::vector<Contact> contacts(const WorldLayout& layout, s32 players,
                                          const WorldCollision* collision = nullptr);
-    struct Pad : Contact {
-        mutable TreeModel model;
+    struct PadState : Contact {
         TreePose pose;
         AnimationPlayer animation;
         f32 previousFrame = 0;
         u64 previousGeneration = 0;
     };
+    struct Pad : PadState {
+        mutable TreeModel model;
+    };
+    class LocalSnapshot {
+        friend class LevelTransporters;
+        std::vector<PadState> pads;
+        TextureAnimator::Clock textures;
+        bool presentationAdvanced = false;
+        const LevelTransporters* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     /** Read-only draw anchors. Transforms use the current carried floor pose;
      * only the animation and shared texture clock interpolate. */
     struct Presentation {
@@ -94,6 +109,8 @@ public:
     static std::string_view soundForRealm(s32 realm);
 
 private:
+    void appendBinding(NativeStateDigest& digest) const;
+    static void appendPad(NativeStateDigest& digest, const PadState& pad);
     friend class LevelTransportersCheckpoint;
     std::vector<Pad> m_pads;
     const TreeInfo* m_tree = nullptr;

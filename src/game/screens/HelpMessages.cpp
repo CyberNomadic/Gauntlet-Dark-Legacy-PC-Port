@@ -1,5 +1,7 @@
 #include "game/screens/HelpMessages.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <format>
 
@@ -8,6 +10,17 @@
 #include "game/menu/ScrollBox.h"
 
 namespace gdl::game {
+
+void visitNativeState(NativeStateDigest& digest, const HelpMessages& value) {
+    digest.string("help-messages-native-v1");
+    const auto& [strings, lines, id, priority, player, number, speaker, ticksLeft, pauseLeft,
+                 posted] = value;
+    digest.flag(strings != nullptr);
+    if (strings) {
+        digest.value(*strings);
+    }
+    digest.values(lines, id, priority, player, number, speaker, ticksLeft, pauseLeft, posted);
+}
 
 namespace {
 

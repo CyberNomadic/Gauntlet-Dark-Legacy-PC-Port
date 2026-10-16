@@ -21,6 +21,8 @@ namespace gdl::game {
  * cleared with it or outlive it.
  */
 class WeaponGlow {
+    friend void visitNativeState(NativeStateDigest& digest, const WeaponGlow& value);
+
 public:
     struct Checkpoint {
         u32 element = 0;

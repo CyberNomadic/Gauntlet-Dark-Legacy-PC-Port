@@ -21,7 +21,13 @@ namespace gdl::game {
  * controls held meanwhile). It borrows the world, the level's messages and his figure.
  */
 class TowerWelcome {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const TowerWelcome& value) {
+        const auto& [cutCamera, cutTicks, pending, intro] = value;
+        visitor.values(cutCamera, cutTicks, pending, intro);
+    }
 public:
+    bool operator==(const TowerWelcome&) const = default;
+
     /** Where a new party's welcome has got to. */
     enum class Intro : u8 { None, Scroll, Crystal, Done };
 

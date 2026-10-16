@@ -4,6 +4,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -12,7 +16,10 @@ namespace gdl::game {
  * as it appears, and forgotten only once neither is worn.
  */
 class HeadGem {
+    friend void visitNativeState(NativeStateDigest&, const HeadGem&);
+
 public:
+    bool operator==(const HeadGem&) const = default;
     enum class Shown : u8 { None, HandOfDeath, HealthVamp };
     struct Checkpoint {
         bool handOfDeath = false;

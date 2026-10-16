@@ -23,10 +23,14 @@ public:
          * against its locally prebound stage before accepting a replay seed. */
         std::optional<std::vector<u8>> stage;
         bool valid() const;
+        /** Cross-owner links only, after independent trusted leaf validation.
+         * Read-only native observations may include boss adapter values that
+         * are deliberately outside this packet's ordinary restore domain. */
+        bool references() const;
         bool operator==(const State&) const = default;
     };
 
-    static constexpr u32 kVersion = 6;
+    static constexpr u32 kVersion = 7;
     static constexpr usize kHeaderBytes = 16;
     static constexpr usize kMaxBytes = 512 * 1024;
     /** Shared budgets for these explicit fields. Complete participant leaves

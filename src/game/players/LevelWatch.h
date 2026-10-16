@@ -27,11 +27,20 @@ struct LevelChange {
  * know where the experience came from.
  */
 class LevelWatch {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const LevelWatch& value) {
+        const auto& [marks] = value;
+        visitor.value(marks);
+    }
 public:
+    bool operator==(const LevelWatch&) const = default;
+
     struct Mark {
         s32 player = -1;
         s32 level = 1;
         bool operator==(const Mark&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Mark& value) {
+            visitor.template fields<2>(value);
+        }
     };
     struct Checkpoint {
         std::vector<Mark> marks;

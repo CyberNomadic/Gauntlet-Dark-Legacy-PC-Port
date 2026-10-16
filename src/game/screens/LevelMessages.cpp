@@ -5,6 +5,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
 namespace {
@@ -80,8 +81,9 @@ void LevelMessages::load(RenderDevice& device, TextureSet& textures,
 }
 
 void LevelMessages::clear() {
-    m_message.reset();
-    m_firstPage = 0;
+    m_localBinding = std::make_shared<const u8>(0);
+    m_sim.message.reset();
+    m_sim.firstPage = 0;
     m_controlLabels = {};
     m_scroll.close();
     m_scroll.setArt({});
@@ -111,17 +113,17 @@ bool LevelMessages::open(RenderDevice& device, std::string_view name, const Stri
         message.scale,
         strings != nullptr ? std::string(strings->get("scroll.pressButton")) : std::string{});
     if (opened) {
-        m_message = found;
-        m_firstPage = static_cast<u32>(page.value_or(0));
+        m_sim.message = found;
+        m_sim.firstPage = static_cast<u32>(page.value_or(0));
     }
     return opened;
 }
 
 std::optional<LevelMessages::Look> LevelMessages::look() const {
-    if (!active() || !m_message) {
+    if (!active() || !m_sim.message) {
         return std::nullopt;
     }
-    return Look{*m_message, m_firstPage + static_cast<u32>(m_scroll.page()), m_scroll.burnFrame(),
+    return Look{*m_sim.message, m_sim.firstPage + static_cast<u32>(m_scroll.page()), m_scroll.burnFrame(),
                 m_scroll.promptAlpha()};
 }
 
@@ -133,6 +135,51 @@ LevelMessages::Cues LevelMessages::step(s32 ticks, u32 accepted) {
     m_scroll.step(ticks, accepted);
     const bool stopVoice = (m_scroll.burning() && !wasBurning) || !m_scroll.active();
     return {stopVoice, stopVoice && !wasBurning};
+}
+
+void LevelMessages::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    m_scroll.saveLocal(saved.scroll);
+}
+
+bool LevelMessages::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding &&
+           m_scroll.canRestoreLocal(saved.scroll);
+}
+
+bool LevelMessages::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_scroll.restoreLocal(saved.scroll);
+    return true;
+}
+
+bool LevelMessages::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("level-messages-native-v1");
+    digest.values(m_font32, m_text, m_scrollText);
+    digest.fields<2>(saved ? saved->state : m_sim);
+    if (saved) {
+        m_scroll.appendLocalDigest(digest, saved->scroll);
+    } else {
+        m_scroll.appendNativeDigest(digest);
+    }
+    return digest.good();
+}
+
+bool LevelMessages::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool LevelMessages::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
 }
 
 } // namespace gdl::game

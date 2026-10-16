@@ -42,6 +42,12 @@ struct AmbientEar {
  */
 class AmbientSounds {
 public:
+    struct Request {
+        usize emitter = 0;
+        Vec3 position{0};
+        f32 loudness = 0;
+        f32 volume = 0;
+    };
     static constexpr s32 kSoundItem = 13;
     static constexpr f32 kPeak = 224.0f / 255.0f; ///< the original's loudest
     static constexpr f32 kSilentAt = 1.5f;        ///< radii out where a loop has faded away
@@ -62,6 +68,11 @@ public:
     void update(SoundPlayer& player, std::span<const Vec3> listeners, const AmbientEar& ear,
                 f32 levelVolume, std::optional<f32> volumeOverride = std::nullopt,
                 const WorldScene* world = nullptr);
+    /** Pure final-state query. No mixer polling, output mutation or retained position cache. */
+    std::vector<Request> requests(std::span<const Vec3> listeners, f32 levelVolume,
+                                  std::optional<f32> volumeOverride = std::nullopt,
+                                  const WorldScene* world = nullptr) const;
+    std::optional<f32> musicScale(std::span<const Request> requests) const;
     void stop(SoundPlayer& player);
     void clear();
 

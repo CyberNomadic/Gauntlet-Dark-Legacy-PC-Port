@@ -5,8 +5,33 @@
 
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl {
+
+void visitNativeState(NativeStateDigest& digest, const ParticleEmitter& state) {
+    const auto& [descriptor, node, particles, phase, age, saved, emitting, spriteScale, random,
+                 randomState] = state;
+    const auto& [delay, emitFrames, fadeFrames, forever, oneShot, dynamic, angle, direction, volume,
+                 rate, rateRandom, gravity, drag, speed, maxParticles, maxDirections, maxPositions,
+                 life, fade, red, green, blue, alpha, width, texture, additive, multiply, sorted,
+                 depthTest, depthWrite] = descriptor;
+    digest.values(delay, emitFrames, fadeFrames, forever, oneShot, dynamic, angle, direction,
+                  volume, rate, rateRandom, gravity, drag, speed, maxParticles, maxDirections,
+                  maxPositions, life, fade);
+    digest.fields<4>(red);
+    digest.fields<4>(green);
+    digest.fields<4>(blue);
+    digest.fields<4>(alpha);
+    digest.fields<4>(width);
+    digest.values(texture, additive, multiply, sorted, depthTest, depthWrite);
+    digest.value(node);
+    digest.wide(particles.size());
+    for (const auto& particle : particles) {
+        digest.fields<3>(particle);
+    }
+    digest.values(phase, age, saved, emitting, spriteScale, random, randomState);
+}
 
 namespace {
 

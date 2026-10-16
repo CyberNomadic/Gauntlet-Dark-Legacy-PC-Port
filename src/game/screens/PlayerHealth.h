@@ -25,7 +25,13 @@ enum class HurtKind : u8 {
  * and alternating last-health announcements; rendering and audio are synchronous outputs.
  * Like the scene it replaces, this cue sequence persists across level reopenings. */
 class PlayerHealth {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PlayerHealth& value) {
+        const auto& [painRandom] = value;
+        visitor.value(painRandom);
+    }
 public:
+    bool operator==(const PlayerHealth&) const = default;
+
     /** Cue selection belongs to the replay transaction too. Restoring this
      * stream never repeats audio; participant health/reaction state is separate.
      * Raw MT draws preserve the existing native sequence. */

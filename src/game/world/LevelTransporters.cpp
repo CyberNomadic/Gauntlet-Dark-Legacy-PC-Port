@@ -6,12 +6,17 @@
 #include <cmath>
 
 #include "engine/core/Log.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/world/ItemFigure.h"
 #include "game/world/ItemSupport.h"
 
 namespace gdl::game {
 namespace {
+template <class T>
+constexpr bool kExtraPadMember =
+    requires { T{LevelTransporters::Contact{}, TreePose{}, AnimationPlayer{}, f32{}, u64{}, {}}; };
+
 s32 parameter(const ItemInstance& instance, usize offset) {
     u32 value = 0;
     for (usize byte = 0; byte < sizeof(value); ++byte) {
@@ -20,6 +25,85 @@ s32 parameter(const ItemInstance& instance, usize offset) {
     return std::bit_cast<s32>(value);
 }
 } // namespace
+
+void LevelTransporters::appendBinding(NativeStateDigest& digest) const {
+    digest.string("LevelTransporters.native.1");
+    digest.resource(m_tree);
+    digest.resource(m_layout);
+    digest.resource(m_archive);
+    digest.resource(m_collision);
+    digest.value(m_players);
+    m_textures.appendBindingDigest(digest);
+}
+
+void LevelTransporters::appendPad(NativeStateDigest& digest, const PadState& pad) {
+    // C++ decomposition cannot span a base plus derived fields; the aggregate
+    // arity checks protect this exact native extension from silent omissions.
+    static_assert(requires { PadState{Contact{}, TreePose{}, AnimationPlayer{}, f32{}, u64{}}; });
+    static_assert(!kExtraPadMember<PadState>);
+    digest.fields<11>(static_cast<const Contact&>(pad));
+    digest.values(pad.pose, pad.animation, pad.previousFrame, pad.previousGeneration);
+}
+
+bool LevelTransporters::appendNativeDigest(NativeStateDigest& digest) const {
+    appendBinding(digest);
+    digest.fields<3>(m_textures.clock());
+    digest.value(m_presentationAdvanced);
+    digest.wide(m_pads.size());
+    for (const auto& pad : m_pads) {
+        appendPad(digest, pad);
+    }
+    return digest.good();
+}
+
+bool LevelTransporters::appendLocalDigest(NativeStateDigest& digest,
+                                         const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [pads, textures, advanced, owner, binding] = saved;
+    appendBinding(digest);
+    digest.fields<3>(textures);
+    digest.value(advanced);
+    digest.wide(pads.size());
+    for (const auto& pad : pads) {
+        appendPad(digest, pad);
+    }
+    return digest.good();
+}
+
+void LevelTransporters::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_checkpointBinding;
+    saved.textures = m_textures.clock();
+    saved.presentationAdvanced = m_presentationAdvanced;
+    saved.pads.resize(m_pads.size());
+    for (usize i = 0; i < m_pads.size(); ++i) {
+        saved.pads[i] = m_pads[i];
+    }
+}
+
+bool LevelTransporters::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_checkpointBinding &&
+           saved.pads.size() == m_pads.size();
+}
+
+bool LevelTransporters::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize i = 0; i < m_pads.size(); ++i) {
+        static_cast<PadState&>(m_pads[i]) = saved.pads[i];
+    }
+    m_textures.restoreClock(saved.textures);
+    m_presentationAdvanced = saved.presentationAdvanced;
+    // Geometry and texture selections are derived again at each draw; floor contacts
+    // retain their saved native phase until the next ordinary syncFloors call.
+    ++m_checkpointGeneration;
+    return true;
+}
 
 std::vector<LevelTransporters::Contact>
 LevelTransporters::contacts(const WorldLayout& layout, s32 players,

@@ -225,4 +225,107 @@ TEST_CASE("a boss meter is drawn from the boss's own archive across the top of t
     REQUIRE(device.draws.empty());
 }
 
+TEST_CASE("native boss meter rewind restores independent easing after wrong health branches",
+          "[boss-meters-local-rewind][native-equality]") {
+    std::array<HealthMeterReading, 3> readings;
+    for (auto& r : readings) {
+        r.definition = lichMeter();
+        r.health = r.maxHealth = 1200;
+    }
+    BossMeters reference, predicted;
+    reference.bind(readings, nullptr);
+    predicted.bind(readings, nullptr);
+    BossMeters::LocalSnapshot saved;
+    std::array<BossMeters::LocalSnapshot, 8> expected;
+    BossMeters::LocalSnapshot actual;
+    const auto advance = [&](BossMeters& meters, s32 tick) {
+        for (usize i = 0; i < readings.size(); ++i) {
+            readings[i].health = static_cast<f32>(200 + (tick * (13 + i)) % 900);
+        }
+        meters.update(1, readings, tick < 180, tick % 9 < 3);
+    };
+    s32 tick = 0;
+    for (s32 window = 0; window < 48; ++window) {
+        predicted.saveLocal(saved);
+        const s32 distance = 1 + window % 8;
+        for (s32 step = 0; step < distance; ++step) {
+            advance(predicted, tick + step);
+            predicted.saveLocal(expected[static_cast<usize>(step)]);
+        }
+        REQUIRE(predicted.restoreLocal(saved));
+        auto wrong = readings;
+        wrong[0].health = 0;
+        wrong[1].maxHealth = 5000;
+        for (s32 step = 0; step < distance; ++step) {
+            predicted.update(2, wrong, false, true);
+        }
+        REQUIRE(predicted.restoreLocal(saved));
+        for (s32 step = 0; step < distance; ++step, ++tick) {
+            advance(reference, tick);
+            advance(predicted, tick);
+            predicted.saveLocal(actual);
+            CHECK(predicted.equalLocal(expected[static_cast<usize>(step)], actual));
+            for (usize i = 0; i < readings.size(); ++i) {
+                CHECK(predicted.meter(i).shown() == reference.meter(i).shown());
+                CHECK(predicted.meter(i).look().visible == reference.meter(i).look().visible);
+                CHECK(predicted.meter(i).look().frozen == reference.meter(i).look().frozen);
+                CHECK(predicted.meter(i).fillWidths() == reference.meter(i).fillWidths());
+            }
+        }
+        REQUIRE(predicted.canRestoreLocal(saved));
+    }
+    CHECK_FALSE(reference.showing());
+}
+
+TEST_CASE("native boss meter histories reject foreign layouts and preserve first-health state",
+          "[boss-meters-local-rewind][native-equality]") {
+    BossMeter meter, foreign;
+    REQUIRE(meter.bind(lichMeter(), nullptr));
+    REQUIRE(foreign.bind(lichMeter(), nullptr));
+    BossMeter::LocalSnapshot saved;
+    CHECK_FALSE(meter.equalLocal(saved, saved));
+    CHECK_FALSE(meter.restoreLocal(saved));
+    meter.saveLocal(saved);
+    CHECK(meter.equalLocal(saved, saved));
+    CHECK_FALSE(foreign.equalLocal(saved, saved));
+    CHECK_FALSE(foreign.restoreLocal(saved));
+    meter.update(1, 5000, 5000, false, true);
+    REQUIRE(meter.restoreLocal(saved));
+    meter.update(1, 700, 1000, true, false);
+    CHECK(meter.shown() == 700);
+    REQUIRE(meter.restoreLocal(saved));
+    REQUIRE(meter.bind(lichMeter(), nullptr));
+    CHECK_FALSE(meter.equalLocal(saved, saved));
+    CHECK_FALSE(meter.restoreLocal(saved));
+    BossMeters many, other;
+    BossMeters::LocalSnapshot group;
+    many.saveLocal(group);
+    CHECK(many.equalLocal(group, group));
+    CHECK_FALSE(other.equalLocal(group, group));
+    CHECK_FALSE(other.restoreLocal(group));
+    REQUIRE(many.restoreLocal(group));
+    many.clear();
+    CHECK_FALSE(many.equalLocal(group, group));
+    CHECK_FALSE(many.restoreLocal(group));
+}
+
+TEST_CASE("native boss meter equality detects hidden first-update state and maximum health",
+          "[boss-meters-local-rewind][native-equality]") {
+    BossMeter meter;
+    REQUIRE(meter.bind(lichMeter(), nullptr));
+    BossMeter::LocalSnapshot before, after;
+    meter.saveLocal(before);
+    const auto look = meter.look();
+    meter.update(0, 0, 1, true, false);
+    meter.saveLocal(after);
+    CHECK(meter.look().visible == look.visible);
+    CHECK(meter.look().widths == look.widths);
+    CHECK_FALSE(meter.equalLocal(before, after)); // first-health latch only
+    meter.saveLocal(before);
+    meter.update(0, 0, 2, true, false);
+    meter.saveLocal(after);
+    CHECK(meter.look().widths == look.widths);
+    CHECK_FALSE(meter.equalLocal(before, after)); // maximum with no visible fill
+}
+
 } // namespace

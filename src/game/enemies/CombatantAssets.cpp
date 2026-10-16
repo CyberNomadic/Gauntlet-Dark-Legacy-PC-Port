@@ -25,6 +25,7 @@ CombatantAssets::~CombatantAssets() {
 }
 void CombatantAssets::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
+    m_localBinding = std::make_shared<const u8>(0);
     children.clear();
     meter.clear();
     meterArchive.reset();
@@ -41,7 +42,7 @@ void CombatantAssets::clear() {
     archive.clear();
     effectLifetimes.clear();
 }
-const TreeModel* CombatantAssets::prepareReplacement(RenderDevice& device, std::string_view node,
+TreeModel* CombatantAssets::prepareReplacement(RenderDevice& device, std::string_view node,
                                                      std::string_view object) {
     const auto index =
         tree != nullptr ? tree->findNode(node, kCombatantNodeNameLength) : std::nullopt;

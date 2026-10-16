@@ -35,6 +35,11 @@ struct GateEvent {
  */
 class LockedGates {
 public:
+    LockedGates() = default;
+    LockedGates(const LockedGates&) = delete;
+    LockedGates& operator=(const LockedGates&) = delete;
+    LockedGates(LockedGates&&) noexcept = default;
+    LockedGates& operator=(LockedGates&&) noexcept = default;
     static constexpr s32 kShut = 0; ///< the figure's sequences
     static constexpr s32 kOpening = 1;
     static constexpr s32 kOpen = 2;
@@ -54,14 +59,18 @@ public:
         ItemFigure figure;
         Obstacle box;
         ItemSupport support;
+        bool operator==(const Gate&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Gate& value) {
+            visitor.template fields<11>(value);
+        }
     };
 
     bool bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision);
     void clear();
     void syncFloors();
-    usize size() const { return m_gates.size(); }
-    const Gate& gate(usize index) const { return *m_gates[index]; }
+    usize size() const { return m_sim.gates.size(); }
+    const Gate& gate(usize index) const { return m_sim.gates[index]; }
     /** The authored opening cue for this realm and gate material/style. */
     static std::string_view openingSound(s32 realm, s32 subtype);
     void setPlayerCount(s32 players);
@@ -75,7 +84,29 @@ public:
 
 private:
     friend class LockedGatesCheckpoint;
-    std::vector<std::unique_ptr<Gate>> m_gates;
+    struct Simulation {
+        std::vector<Gate> gates;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    /** In-memory history for this owner and its current bound stage. */
+    class LocalSnapshot {
+        friend class LockedGates;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const LockedGates* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
     const WorldCollision* m_collision = nullptr;
     const WorldLayout* m_layout = nullptr; ///< borrowed immutable authored roster
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);

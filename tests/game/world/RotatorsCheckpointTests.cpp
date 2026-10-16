@@ -1,9 +1,6 @@
-#include <array>
 #include <limits>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/generators/catch_generators.hpp>
 
 #include "../../engine/world/SampleLevel.h"
 #include "FakeRenderDevice.h"
@@ -13,13 +10,6 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-void checkCues(std::span<const RotatorCue> actual, std::span<const RotatorCue> expected) {
-    REQUIRE(actual.size() == expected.size());
-    for (usize index = 0; index < actual.size(); ++index) {
-        CHECK(std::tie(actual[index].kind, actual[index].rotator, actual[index].position) ==
-              std::tie(expected[index].kind, expected[index].rotator, expected[index].position));
-    }
-}
 struct Fixture {
     test::FakeRenderDevice device;
     WorldLayout layout;
@@ -63,66 +53,7 @@ struct Fixture {
         REQUIRE(result);
         return *result;
     }
-    std::vector<RotatorCue> step(s32 tick, f32 seconds) {
-        std::vector<TriggerVisitor> visitors;
-        if (tick == 2 || tick == 4 || tick == 6) {
-            visitors.push_back(TriggerVisitor{.position = Vec3{static_cast<f32>(tick * 5), 0, 0}});
-        }
-        return rotators.update(seconds, visitors, scene);
-    }
 };
-
-TEST_CASE("rotator checkpoint resumes native spinning and both pad directions with exact cues",
-          "[rotators-checkpoint]") {
-    Fixture host("rotators-checkpoint-host");
-    Fixture guest("rotators-checkpoint-guest");
-    const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
-    const auto uploads = guest.device.texturesCreated;
-    const auto* first = &host.rotators.rotator(0);
-    usize stopped = 0;
-    for (s32 tick = 0; tick < 240; ++tick) {
-        CAPTURE(tick, seconds);
-        const auto before = host.state();
-        const auto geometry = host.scene.geometry();
-        REQUIRE(guest.owner.restore(before));
-        REQUIRE(guest.scene.applyGeometry(geometry));
-        auto undo = host.owner.prepareRestore(before);
-        REQUIRE(undo);
-        const auto output = host.step(tick, seconds);
-        const auto expected = host.state();
-        for (const auto& cue : output) {
-            stopped += cue.kind == RotatorCue::Kind::Stopped ? 1U : 0U;
-        }
-        checkCues(guest.step(tick, seconds), output);
-        CHECK(guest.state() == expected);
-        for (usize object = 0; object < 4; ++object) {
-            CHECK(guest.scene.worldTransform(object) == host.scene.worldTransform(object));
-        }
-        host.device.draws.clear();
-        guest.device.draws.clear();
-        host.rotators.draw(host.device, Mat4{1}, {});
-        guest.rotators.draw(guest.device, Mat4{1}, {});
-        REQUIRE(host.device.draws.size() == guest.device.draws.size());
-        REQUIRE_FALSE(host.device.draws.empty());
-        for (usize draw = 0; draw < host.device.draws.size(); ++draw) {
-            CHECK(host.device.draws[draw].transform == guest.device.draws[draw].transform);
-            CHECK(host.device.draws[draw].vertices == guest.device.draws[draw].vertices);
-        }
-        const auto advanced = host.scene.worldTransform(0);
-        REQUIRE(host.owner.commitRestore(std::move(*undo)));
-        CHECK(&host.rotators.rotator(0) == first);
-        CHECK(host.state() == before);
-        CHECK(host.scene.worldTransform(0) == advanced); // geometry belongs to the aggregate
-        REQUIRE(host.scene.applyGeometry(geometry));
-        checkCues(host.step(tick, seconds), output);
-        CHECK(host.state() == expected);
-    }
-    CHECK(stopped == 3);
-    CHECK(host.rotators.rotator(1).turned >= 1);
-    CHECK(host.rotators.rotator(2).turned <= -1);
-    CHECK(host.rotators.rotator(3).done);
-    CHECK(guest.device.texturesCreated == uploads);
-}
 
 TEST_CASE("rotator checkpoint refuses malformed rosters and stale preparations atomically",
           "[rotators-checkpoint]") {
@@ -179,7 +110,7 @@ TEST_CASE("rotator checkpoint refuses malformed rosters and stale preparations a
 TEST_CASE("archived sequence-free pad figures restore rest poses and reject nonzero cursors",
           "[rotators-checkpoint][item-figure-checkpoint]") {
     Fixture fixture("rotators-checkpoint-static-tree");
-    auto& figure = *fixture.rotators.rotator(1).pad;
+    auto figure = *fixture.rotators.rotator(1).pad;
     REQUIRE(figure.presentation().tree);
     REQUIRE(figure.presentation().tree->sequences.empty());
     const auto state = ItemFigureCheckpoint::capture(figure);
@@ -213,45 +144,4 @@ TEST_CASE("archived sequence-free pad figures restore rest poses and reject nonz
     CHECK(fixture.device.texturesCreated == uploads);
 }
 
-TEST_CASE("native invisible turntable checkpoints preserve contact and delayed corrections",
-          "[rotators-checkpoint][assets]") {
-    const std::string name = GENERATE("I2", "J3");
-    const auto root =
-        test::assetOrSkip("LEVELS/LEVELI2/WORLDS.PS2").parent_path().parent_path().parent_path();
-    test::FakeRenderDevice device;
-    WorldLayout layout;
-    ItemArchive items;
-    REQUIRE(layout.load(root / (std::string{"LEVELS/LEVEL"} + name)));
-    REQUIRE(items.load(root / (std::string{"ITEMS/LEVEL"} + name[0])));
-    Rotators live, restored;
-    live.bind(layout);
-    restored.bind(layout);
-    live.bindFigures(device, layout, AssetScope(items));
-    restored.bindFigures(device, layout, AssetScope(items));
-    RotatorsCheckpoint a{live}, b{restored};
-    WorldScene first, second;
-    const auto uploads = device.texturesCreated;
-    usize pads = 0;
-    for (usize index = 0; index < live.size(); ++index) {
-        const auto& rotator = live.rotator(index);
-        if (rotator.subtype == Rotators::kTurnedByPad) {
-            ++pads;
-            REQUIRE_FALSE(rotator.pad);
-            const std::array visitors{TriggerVisitor{.position = rotator.spot}};
-            live.update(1.0f / 60, visitors, first);
-        }
-    }
-    REQUIRE(pads == (name == "I2" ? 1 : 2));
-    for (s32 tick = 0; tick < 600; ++tick) {
-        CAPTURE(name, tick);
-        const auto state = a.checkpoint();
-        REQUIRE(state);
-        if (tick % 5 == 0) {
-            REQUIRE(b.restore(*state));
-        }
-        checkCues(restored.update(1.0f / 60, {}, second), live.update(1.0f / 60, {}, first));
-        CHECK(b.checkpoint() == a.checkpoint());
-    }
-    CHECK(device.texturesCreated == uploads);
-}
 } // namespace

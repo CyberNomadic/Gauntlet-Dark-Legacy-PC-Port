@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <string_view>
 
 #include "engine/assets/AnimationSet.h"
@@ -22,7 +23,28 @@ namespace gdl::game {
  * one after the other the way the original cycles them, and gesturing at once when asked.
  */
 class SumnerFigure {
+    struct Simulation {
+        s32 index = 0;
+        bool cutIn = false;
+        AnimationPlayer player;
+        TreePose pose;
+        f32 previousFrame = 0;
+        u64 previousGeneration = 0;
+        bool presentationAdvanced = false;
+    };
+
 public:
+    class LocalSnapshot {
+        friend class SumnerFigure;
+        Simulation state;
+        const SumnerFigure* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     static constexpr std::string_view kTree = "GWIZ";
     /** His sequences in the original's order; the first three are the idle cycle. */
     static constexpr std::array<std::string_view, 7> kSequences{
@@ -46,18 +68,18 @@ public:
     void play(s32 index);
     void update(f32 seconds);
     /** Marks fixed updates that hold his animation as well as those that advance it. */
-    void capturePresentation() { m_presentationAdvanced = false; }
+    void capturePresentation() { m_sim.presentationAdvanced = false; }
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 frameBlend = -1.0f) const;
 
     const Vec3& position() const { return m_position; }
     f32 yaw() const { return m_yaw; }
     /** The sequence playing, and the index the cycle asks for next. */
-    u32 sequence() const { return m_player.sequence(); }
+    u32 sequence() const { return m_sim.player.sequence(); }
     const TreeInfo* tree() const { return m_tree; }
-    const AnimationPlayer& animation() const { return m_player; }
+    const AnimationPlayer& animation() const { return m_sim.player; }
     const Mat4& placement() const { return m_transform; }
-    s32 index() const { return m_index; }
+    s32 index() const { return m_sim.index; }
     bool gesturing() const { return playing(kGestureIndex); }
     /** Whether the sequence of that index is the one playing. */
     bool playing(s32 index) const {
@@ -67,18 +89,14 @@ public:
     }
 
 private:
+    void appendState(NativeStateDigest& digest, const Simulation& state) const;
     u32 sequenceFor(s32 index) const;
 
     mutable TreeModel m_model;
     const TreeInfo* m_tree = nullptr;
     std::array<s32, kSequences.size()> m_sequences{-1, -1, -1, -1, -1, -1, -1};
-    s32 m_index = 0;
-    bool m_cutIn = false; ///< the next change starts at once rather than at the end
-    AnimationPlayer m_player;
-    TreePose m_pose;
-    f32 m_previousFrame = 0;
-    u64 m_previousGeneration = 0;
-    bool m_presentationAdvanced = false;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     Vec3 m_position{0.0f, 0.0f, 0.0f};
     f32 m_yaw = 0.0f;
     Mat4 m_transform{1.0f};

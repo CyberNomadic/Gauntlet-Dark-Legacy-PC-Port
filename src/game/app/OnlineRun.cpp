@@ -291,6 +291,20 @@ bool OnlineRun::pause(s32 device) {
     return false;
 #endif
 }
+u64 OnlineRun::simulatedTick() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.simulatedTick() : 0;
+#else
+    return 0;
+#endif
+}
+u64 OnlineRun::confirmedTick() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.confirmedTick() : 0;
+#else
+    return 0;
+#endif
+}
 void OnlineRun::resume() {
 #if GDL_ENABLE_NETPLAY
     if (m_impl) {
@@ -456,7 +470,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             }
         }
         const auto phase = run.nativePlay.update(devices);
-        const auto completed = run.nativePlay.completedTick();
+        const auto completed = run.nativePlay.simulatedTick();
         const auto epoch = session.match().context().epoch;
         if ((phase == NativeOnlinePlay::Phase::Playing ||
              phase == NativeOnlinePlay::Phase::Paused) &&
@@ -479,15 +493,17 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         case NativeOnlinePlay::Phase::Finished:
             // Keep the final input relay alive until the user leaves. Another
             // peer may still be executing this campaign's final native tick.
-            status(*run.device, run.nativePlay.outcome() == NativePlayDriver::Result::Leave
+            status(*run.device, run.nativePlay.outcome() == NativeRollbackDriver::Status::Leave
                                     ? "A player left. Online session ended. Escape exits."
                                     : "Online game finished. Escape exits.");
             break;
-        case NativeOnlinePlay::Phase::Failed:
-            status(*run.device, std::format("Online scene stopped ({}). Escape exits.",
-                                            static_cast<u32>(run.nativePlay.failure())));
+        case NativeOnlinePlay::Phase::Failed: {
+            const auto detail = run.nativePlay.failureDetail();
+            status(*run.device, std::format("{}{} Escape exits.", detail,
+                                            detail.ends_with('.') ? "" : "."));
             run.finished = true;
             break;
+        }
         default: break;
         }
     }
@@ -495,7 +511,8 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         status(*run.device, session.failureDetail().empty()
                                 ? std::format("Connection failed ({}). Escape exits.",
                                               static_cast<u32>(session.failure()))
-                                : session.failureDetail() + ". Escape exits.");
+                                : std::format("{}{} Escape exits.", session.failureDetail(),
+                                              session.failureDetail().ends_with('.') ? "" : "."));
     }
 #else
     (void)devices;

@@ -28,6 +28,7 @@
 #include "game/players/MagicPerks.h"
 
 namespace gdl::game {
+class NativeStateResources;
 
 /** A character who can pick things up: where they stand and how big they are. */
 struct Collector {
@@ -101,6 +102,10 @@ public:
         struct Floor {
             s32 object = -1;
             Mat4 local{1.0f}; ///< pickup placement in the supporting object's space
+            bool operator==(const Floor&) const = default;
+            template <class Digest> friend void visitNativeState(Digest& digest, const Floor& value) {
+                digest.template fields<2>(value);
+            }
         };
         std::optional<Floor> floor;
         std::string name;
@@ -116,7 +121,8 @@ public:
         f32 height = 0.0f;
         Vec3 position{0.0f, 0.0f, 0.0f};
         Mat4 transform{1.0f};
-        mutable TreeModel model;
+        // Stage-retained drawing cache; native state copies only this resource handle.
+        std::shared_ptr<TreeModel> model;
         mutable TreeParticles particles; ///< authored emitters, separate from pickup bursts
         TreePose pose;
         const TreeInfo* figure = nullptr; ///< the tree the model and pose come from
@@ -137,7 +143,9 @@ public:
         u64 previousGeneration = 0;
         bool presentationCaptured = false;
         u32 continuity = 1; ///< changes on visual cuts; scoped to this level's item lifetime
-        mutable TreePose presentationPose;
+        /** Native values and same-bound artwork identities, never mutable draw caches. */
+        bool operator==(const Item&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Item& value);
 
         /** Whether a party of `players` sees it. */
         bool shownTo(s32 players) const;
@@ -159,21 +167,65 @@ public:
         std::vector<std::pair<usize, usize>> emitters; ///< tree node, field emitter
         f32 secondsLeft = 0.0f; ///< the time left when the tree has no sequence
         bool emitting = true;
+        bool operator==(const Effect&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Effect& value);
     };
+
+private:
+    struct Simulation {
+        std::vector<Item> items;
+        std::vector<Effect> effects;
+        ParticleField bursts;
+        s32 players = 0;
+        f32 revealTime = 0;
+        bool revealing = false;
+        bool capturePending = false;
+        bool burstsAdvanced = false;
+        bool operator==(const Simulation&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+            digest.template fields<8>(value);
+        }
+    };
+
+public:
+    class LocalSnapshot {
+        friend class PlacedItems;
+        Simulation state;
+        std::vector<TextureAnimator::Clock> clocks;
+        const PlacedItems* owner = nullptr;
+        const WorldCollision* collision = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    PlacedItems() = default;
+    PlacedItems(const PlacedItems&) = delete;
+    PlacedItems& operator=(const PlacedItems&) = delete;
+    PlacedItems(PlacedItems&&) = default;
+    PlacedItems& operator=(PlacedItems&&) = default;
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
 
     /** Stands every powerup instance of the layout whose figure an archive holds; false
      * when none could be placed. The collision, when given, sets their height. */
     bool bind(RenderDevice& device, const WorldLayout& layout, const WorldCollision* collision,
               std::span<ItemArchive* const> archives);
     void clear();
-    usize size() const { return m_items.size(); }
-    const Item& item(usize index) const { return m_items[index]; }
+    usize size() const { return m_sim.items.size(); }
+    const Item& item(usize index) const { return m_sim.items[index]; }
+    /** Last derived draw pose, if rendered. Not native continuation state. */
+    const TreePose* presentationPoseOf(usize index) const {
+        return index < m_presentedPoses.size() ? &m_presentedPoses[index] : nullptr;
+    }
     /** Trusted presentation resources; archive order is part of the level's asset identity. */
     std::span<ItemArchive* const> archives() const { return m_archives; }
     f32 textureFrame(const Item& item) const;
     /** Read-only native bank; copy it before retaining a render-only picture. */
     const TextureAnimator* textureAnimator(const ItemArchive* archive) const;
-    bool particlesAdvanced() const { return m_burstsAdvanced; }
+    bool particlesAdvanced() const { return m_sim.burstsAdvanced; }
     /** Follow a container's animated socket without floor snapping. */
     void attach(usize index, const Mat4& transform, bool contained);
     /** Item number `index` is gone, as what lay in a chest blown apart is. */
@@ -185,7 +237,7 @@ public:
     std::optional<s32> strikePotion(usize index, f32 damage);
     static constexpr u32 kPotionKind = 0xF; ///< of a potion's flags: its colour
     usize visibleCount() const;
-    s32 playerCount() const { return m_players; }
+    s32 playerCount() const { return m_sim.players; }
 
     /** Shows the items a party of `players` sees. */
     void setPlayerCount(s32 players);
@@ -245,8 +297,8 @@ public:
     std::optional<usize> claim(const Vec3& position, f32 reach, f32 rise);
     /** Who let item `index` out of the chest or barrel that held it (the item's opener). */
     void setOpener(usize index, s32 player) {
-        if (index < m_items.size()) {
-            m_items[index].opener = player;
+        if (index < m_sim.items.size()) {
+            m_sim.items[index].opener = player;
         }
     }
     /** Lets a held pickup go from `position` at `velocity`, as `throwItem` throws one. */
@@ -271,31 +323,41 @@ public:
     static constexpr f32 kGroundDrag = 4.0f; ///< and touching down
     static constexpr f32 kThrownFloorReach =
         100.0f; ///< how far under a flying item the floor is looked for
-    usize effectCount() const { return m_effects.size(); }
-    const Effect& effect(usize index) const { return m_effects[index]; }
-    const ParticleField& bursts() const { return m_bursts; }
+    usize effectCount() const { return m_sim.effects.size(); }
+    const Effect& effect(usize index) const { return m_sim.effects[index]; }
+    const ParticleField& bursts() const { return m_sim.bursts; }
     /** Hides the crystals for reveal() to bring in. */
     void hideCrystals();
     /** Moves the reveal `seconds` on: crystals within its reach fade in. */
     void reveal(f32 seconds);
-    bool revealing() const { return m_revealing; }
+    bool revealing() const { return m_sim.revealing; }
     /** Particles alive over every burst. */
-    usize burstParticleCount() const { return m_bursts.particleCount(); }
+    usize burstParticleCount() const { return m_sim.bursts.particleCount(); }
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera = nullptr, TreeModel::Pass pass = TreeModel::Pass::All,
               f32 frameBlend = -1.0f) const;
 
 private:
     friend class PlacedItemsCheckpoint;
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     std::optional<std::vector<Pickup>>
     collectUsing(std::span<const Collector> collectors, const StagedPickupJudge& judge,
                  const std::function<bool(std::string_view, const Vec3&)>& burst);
     void startEffect(RenderDevice& device, std::string_view tree, const Vec3& position);
     static std::optional<s32> damagePotion(Item& item, const ItemInfo& info, f32 damage);
 
-    std::vector<Item> m_items;
-    std::vector<Effect> m_effects;
-    ParticleField m_bursts;
+    Simulation m_sim;
+    // Interpolated draw poses are scratch, not part of a pickup's native state.
+    // Each is evaluated again before use, including after a corrected item birth.
+    mutable std::vector<TreePose> m_presentedPoses;
+    struct FigureBinding {
+        const TreeInfo* tree = nullptr;
+        ItemArchive* archive = nullptr;
+        const RenderDevice* device = nullptr;
+        std::shared_ptr<TreeModel> model;
+        TreeParticles birthParticles;
+    };
+    std::vector<FigureBinding> m_figures;
     /** An archive's texture animations, shown on every item that came from it. */
     struct ArchiveMotion {
         ItemArchive* archive = nullptr;
@@ -327,11 +389,6 @@ private:
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
     const WorldCollision* m_collision = nullptr; ///< the floor thrown items land on
-    s32 m_players = 0;
-    f32 m_revealTime = 0.0f;
-    bool m_revealing = false;
-    bool m_capturePending = false;
-    bool m_burstsAdvanced = false;
 };
 
 } // namespace gdl::game

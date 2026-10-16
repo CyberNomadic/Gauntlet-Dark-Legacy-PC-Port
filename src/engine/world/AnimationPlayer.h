@@ -4,6 +4,7 @@
 #include "engine/core/Types.h"
 
 namespace gdl {
+class NativeStateDigest;
 
 /**
  * Plays one sequence of a tree on the game clock the way the original engine steps its
@@ -14,6 +15,10 @@ namespace gdl {
  */
 class AnimationPlayer {
 public:
+    /** Exact native clock comparison within one loaded asset binding. Not a
+     * cross-process identity or wire checkpoint comparison. */
+    bool equalLocal(const AnimationPlayer& other) const { return *this == other; }
+    bool operator==(const AnimationPlayer&) const = default;
     static constexpr f32 kRateUnit = 1.0f / 900.0f; ///< seconds per frame per unit of rate
     static constexpr f32 kDefaultRate = 30.0f;
     static constexpr f32 kSnapWindow = 0.125f; ///< nearer a whole frame than this snaps to it
@@ -82,6 +87,7 @@ public:
     f32 secondsPerFrame() const { return m_secondsPerFrame; }
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const AnimationPlayer&);
     const TreeSequenceInfo* m_sequence = nullptr;
     u32 m_index = 0;
     u64 m_generation = 0;

@@ -19,8 +19,8 @@ void checkEvents(std::span<const GateEvent> actual, std::span<const GateEvent> e
     for (usize index = 0; index < actual.size(); ++index) {
         const auto& a = actual[index];
         const auto& b = expected[index];
-        CHECK(std::tie(a.kind, a.gate, a.visitor, a.position) ==
-              std::tie(b.kind, b.gate, b.visitor, b.position));
+        CHECK((std::tie(a.kind, a.gate, a.visitor, a.position) ==
+               std::tie(b.kind, b.gate, b.visitor, b.position)));
     }
 }
 
@@ -216,5 +216,102 @@ TEST_CASE("native campaign gates retain the complete trusted geometry and figure
     REQUIRE(owner.commitRestore(std::move(*rewind)));
     CHECK(owner.checkpoint() == before);
     CHECK(device.texturesCreated == uploads);
+}
+TEST_CASE("gate local values undo speculative unlocking and moving support without rebinding",
+          "[local-rewind][fixture-local-rewind][gates-local-rewind]") {
+    const bool unseen = GENERATE(false, true);
+    Fixture native("gate-local-native", true, unseen);
+    Fixture replay("gate-local-replay", true, unseen);
+    std::array<LockedGates::LocalSnapshot, 16> history;
+    std::array<LockedGates::LocalSnapshot, 8> expectedLocal;
+    LockedGates::LocalSnapshot observed;
+    WorldCollision::LocalSnapshot floor;
+    const auto uploads = replay.device.texturesCreated;
+    const auto step = [](Fixture& fixture, s32 tick, bool wrong) {
+        const auto phase = static_cast<f32>(tick);
+        fixture.collision.setObjectTransform(
+            0, glm::translate(Mat4{1}, Vec3{0, (wrong ? 0.2f : -0.01f) * phase, 0}));
+        fixture.gates.setPlayerCount(wrong ? 1 : 2);
+        fixture.gates.capturePresentation();
+        const auto support = fixture.collision.objectTransform(0);
+        REQUIRE(support.has_value());
+        const Vec3 spot{*support * Vec4{0, 0, 0, 1}};
+        const std::array party{ChestVisitor{spot, 1, wrong || tick >= 5 ? 1 : 0},
+                               ChestVisitor{Vec3{20, 0, 0}, 1, !wrong && tick >= 12 ? 1 : 0}};
+        return fixture.gates.update(wrong ? 3 : 1, wrong ? 0.05f : 1.0f / 60, party);
+    };
+    bool refused = false, unlocked = false;
+    s32 tick = 0;
+    for (usize window = 0; window < 96; ++window) {
+        const auto distance = static_cast<s32>(window % 8 + 1);
+        CAPTURE(window, distance, unseen);
+        const auto before = replay.state();
+        auto stale = replay.owner.prepareRestore(before);
+        REQUIRE(stale);
+        auto& saved = history[window % history.size()];
+        replay.gates.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        CHECK_FALSE(native.gates.canRestoreLocal(saved));
+        CHECK_FALSE(native.gates.equalLocal(saved, saved));
+        for (s32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, false);
+            replay.gates.saveLocal(expectedLocal[static_cast<usize>(i)]);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.gates.restoreLocal(saved));
+        for (s32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        replay.gates.draw(replay.device, Mat4{1}, {}, 0.4f);
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.gates.restoreLocal(saved));
+        CHECK_FALSE(replay.owner.canCommit(*stale));
+        CHECK(replay.state() == before);
+        for (s32 i = 0; i < distance; ++i) {
+            const auto expected = step(native, tick + i, false);
+            checkEvents(step(replay, tick + i, false), expected);
+            for (const auto& event : expected) {
+                refused |= event.kind == GateEvent::Kind::Refused;
+                unlocked |= event.kind == GateEvent::Kind::Unlocked;
+            }
+            CHECK(replay.state() == native.state());
+            replay.gates.saveLocal(observed);
+            CHECK(replay.gates.equalLocal(observed, expectedLocal[static_cast<usize>(i)]));
+        }
+        tick += distance;
+    }
+    CHECK(refused);
+    CHECK(unlocked);
+    CHECK(replay.gates.gate(0).state == LockedGates::kOpen);
+    CHECK(replay.device.texturesCreated == uploads);
+    auto& saved = history.front();
+    replay.gates.saveLocal(saved);
+    replay.gates.clear();
+    CHECK_FALSE(replay.gates.restoreLocal(saved));
+    REQUIRE(replay.gates.bind(replay.device, replay.layout, AssetScope(replay.items),
+                              &replay.collision));
+    CHECK_FALSE(replay.gates.restoreLocal(saved));
+    CHECK_FALSE(replay.gates.equalLocal(saved, saved));
+}
+
+TEST_CASE("native gate equality includes refusal clocks without a visible geometry change",
+          "[local-rewind][gates-local-rewind][native-equality]") {
+    Fixture fixture("gate-local-equality");
+    LockedGates::LocalSnapshot initial, refused, restored;
+    CHECK_FALSE(fixture.gates.equalLocal(initial, initial));
+    fixture.gates.saveLocal(initial);
+    const auto figure = fixture.gates.gate(0).figure;
+    const auto box = fixture.gates.gate(0).box;
+    const std::array party{ChestVisitor{Vec3{0, 0, 0}, 1, 0}};
+    const auto events = fixture.gates.update(0, 0, party);
+    REQUIRE(events.size() == 1);
+    REQUIRE(events.front().kind == GateEvent::Kind::Refused);
+    fixture.gates.saveLocal(refused);
+    CHECK(fixture.gates.gate(0).figure.equalLocal(figure));
+    CHECK(fixture.gates.gate(0).box == box);
+    CHECK_FALSE(fixture.gates.equalLocal(initial, refused));
+    REQUIRE(fixture.gates.restoreLocal(initial));
+    fixture.gates.saveLocal(restored);
+    CHECK(fixture.gates.equalLocal(initial, restored));
 }
 } // namespace

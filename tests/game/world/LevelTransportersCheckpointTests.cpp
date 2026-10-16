@@ -104,6 +104,61 @@ void sameDraws(test::FakeRenderDevice& host, test::FakeRenderDevice& guest,
     }
 }
 
+TEST_CASE("native transporter history rewinds floor contacts animation and held presentation",
+          "[local-rewind][transporters-local-rewind]") {
+    const bool artwork = GENERATE(false, true);
+    TransportFixture native("trans-local-native", artwork), replay("trans-local-replay", artwork);
+    std::array<LevelTransporters::LocalSnapshot, 16> history;
+    WorldCollision::LocalSnapshot floor;
+    const auto* model = &replay.pads.pad(0).model;
+    const auto uploads = replay.device.texturesCreated;
+    const auto step = [](TransportFixture& fixture, u32 tick, bool wrong) {
+        fixture.pads.capturePresentation();
+        fixture.collision.setObjectTransform(
+            0, glm::rotate(glm::translate(Mat4{1}, Vec3{1, wrong ? -8.0f : tick * 0.01f, 2}),
+                           static_cast<f32>(tick % 30) * 0.02f, Vec3{0, 1, 0}));
+        fixture.collision.setSolid(0, tick % 3 != 0);
+        fixture.pads.syncFloors(fixture.collision);
+        if (wrong || tick % 5 != 0) {
+            fixture.pads.animate(wrong ? 0.2f : 1.0f / 60);
+        }
+    };
+    u32 tick = 0;
+    for (u32 window = 0; window < 80; ++window) {
+        CAPTURE(window, tick, artwork);
+        auto& saved = history[window % history.size()];
+        replay.pads.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.pads.restoreLocal(saved));
+        CHECK(replay.state() == native.state());
+        sameDraws(native.device, replay.device, native.pads, replay.pads, 0.35f);
+        for (u32 i = 0; i < distance; ++i) {
+            step(native, tick + i, false);
+            step(replay, tick + i, false);
+            CHECK(replay.state() == native.state());
+            CHECK(replay.pads.contact(native.pads.pad(0).position, 0.5f, 2) == 0);
+            for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+                sameDraws(native.device, replay.device, native.pads, replay.pads, alpha);
+            }
+        }
+        tick += distance;
+    }
+    CHECK(&replay.pads.pad(0).model == model);
+    CHECK(replay.device.texturesCreated == uploads);
+    CHECK(replay.device.textureUpdates == 0);
+    CHECK_FALSE(native.pads.restoreLocal(history[0]));
+    replay.bind();
+    CHECK_FALSE(replay.pads.restoreLocal(history[0]));
+    replay.pads.saveLocal(history[0]);
+    replay.pads.clear();
+    CHECK_FALSE(replay.pads.restoreLocal(history[0]));
+}
+
 TEST_CASE("transporter checkpoint resumes independent native floor clock and loop presentation",
           "[rollback][transporter-checkpoint]") {
     const s32 rate = GENERATE(30, 60);

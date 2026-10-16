@@ -5,6 +5,10 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -21,7 +25,10 @@ namespace gdl::game {
  * character shows it is being pushed (hud_flags 4, then 8; do_players, player.c 2300).
  */
 class Knockback {
+    friend void visitNativeState(NativeStateDigest&, const Knockback&);
+
 public:
+    bool operator==(const Knockback&) const = default;
     static constexpr u32 kKnockBack = 0x10;
     static constexpr u32 kKnockDown = 0x20;
     static constexpr u32 kBlownAway = 0x40;

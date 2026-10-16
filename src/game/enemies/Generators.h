@@ -24,6 +24,8 @@
 
 namespace gdl::game {
 
+class NativeStateResources;
+
 /** The level's scales on its generators. */
 struct GeneratorScales {
     f32 health = 1.0f;
@@ -41,6 +43,7 @@ struct GeneratorEvent {
     Mat4 placement{1};
     bool stateChanged = false;
     bool destroyed = false;
+    u64 instance = 0; ///< source lifetime, retained even by a destroying strike
     bool operator==(const GeneratorEvent&) const = default;
 };
 
@@ -89,11 +92,11 @@ public:
      * The normal level camera also limits attention distance; boss cameras omit it.
      * No view means every generator is visible. */
     void setView(std::optional<ViewVolume> view, std::optional<Vec3> attention = std::nullopt) {
-        m_view = view;
-        m_attention = attention;
+        m_sim.view = view;
+        m_sim.attention = attention;
     }
     /** Joined participants, including those waiting in the tower but not those who quit. */
-    void setPlayerCount(s32 players) { m_players = players; }
+    void setPlayerCount(s32 players) { m_sim.players = players; }
     /** Obstacles supplied here are fixtures; the other generators are included internally. */
     void update(s32 ticks, Enemies& enemies, std::span<const EnemyView> players,
                 std::span<const Obstacle> obstacles = {}, bool timeStopped = false);
@@ -118,7 +121,13 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 presentationAlpha = -1.0f);
 
-    usize count() const { return m_generators.size(); }
+    usize count() const { return m_sim.generators.size(); }
+    /** Native lifetime identity; zero means no retained slot at this index. */
+    u64 instanceOf(s32 id) const {
+        return id >= 0 && static_cast<usize>(id) < m_sim.generators.size()
+                   ? m_sim.generators[static_cast<usize>(id)].instance
+                   : 0;
+    }
     bool standing(s32 id) const;
     /** Whether the generator has a body to show in its state. */
     bool bodyShown(s32 id) const;
@@ -149,12 +158,12 @@ public:
     s32 intervalOf(s32 id) const;
     s32 countdownOf(s32 id) const;
     s32 bredOf(s32 id) const;
-    s32 livingOf(s32 id) const { return m_generators[static_cast<usize>(id)].living; }
+    s32 livingOf(s32 id) const { return m_sim.generators[static_cast<usize>(id)].living; }
     const Vec3& positionOf(s32 id) const;
     /** Actual native attachment, including a breaking generator's final pose. */
     s32 floorOf(s32 id) const {
-        return id >= 0 && static_cast<usize>(id) < m_generators.size()
-                   ? m_generators[static_cast<usize>(id)].support
+        return id >= 0 && static_cast<usize>(id) < m_sim.generators.size()
+                   ? m_sim.generators[static_cast<usize>(id)].support
                    : -1;
     }
     const Obstacle& boxOf(s32 id) const;
@@ -199,6 +208,7 @@ public:
         bool boss = false;
         bool operator==(const Slot&) const;
     };
+    const Slot& slot(usize index) const { return m_sim.generators[index]; }
 
     struct Checkpoint {
         static constexpr usize kMaxGenerators = 4096;
@@ -246,12 +256,14 @@ public:
 private:
     struct Bodies {
         s32 kind = -1;
+        const ItemArchive* archive = nullptr;
         std::array<TreeInfo, kStates + 1> trees;
         std::array<TreeModel, kStates + 1> models;
         TextureAnimator textures;
     };
     struct Generator : Slot {
-        std::unique_ptr<ItemFigure> bossFigure;
+        std::optional<ItemFigure> bossFigure;
+        u64 instance = 0;
     };
 
     Bodies* bodiesOf(s32 kind);
@@ -265,16 +277,57 @@ private:
     static void bindSupport(Generator& generator, const ItemInfo& info, const Vec3& authored,
                             const WorldCollision* collision);
 
-    const WorldCollision* m_collision = nullptr;
-    std::vector<Generator> m_generators;
-    std::optional<ViewVolume> m_view;
-    std::optional<Vec3> m_attention;
-    std::vector<std::unique_ptr<Bodies>> m_bodies;
-    GeneratorScales m_scales;
-    s32 m_players = 1;
-    u32 m_specialBirth = 0; ///< shared round-robin cursor, as in retail's enemy spawner
+    struct Simulation {
+        const WorldCollision* collision = nullptr;
+        std::vector<Generator> generators;
+        std::optional<ViewVolume> view;
+        std::optional<Vec3> attention;
+        std::vector<Bodies*> bodies;
+        GeneratorScales scales;
+        s32 players = 1;
+        u32 specialBirth = 0;
+        u64 nextInstance = 1;
+        bool bound = false;
+    } m_sim;
+    std::vector<std::unique_ptr<Bodies>> m_bodyCache;
+    struct BossPrototype {
+        const ItemArchive* archive = nullptr;
+        RenderDevice* device = nullptr;
+        std::string tree;
+        ItemFigure figure;
+    };
+    std::vector<BossPrototype> m_bossPrototypes;
     std::vector<Slot> m_roster;
-    bool m_bound = false;
+    u64 m_localEpoch = 0;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
+
+public:
+    class LocalSnapshot {
+        friend class Generators;
+        Simulation state;
+        std::vector<TextureAnimator::Clock> clocks;
+        std::weak_ptr<const u8> owner;
+        u64 epoch = 0;
+    };
+    /** Stage-local native value copies, including boss-born generators. Artwork
+     * and collision owners stay loaded; capture/restore never binds resources. */
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    /** Exact same-owner values across every retained slot, including boss art's
+     * native clocks/particles. Loaded artwork and draw caches stay outside. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Register immutable generated artwork after its source archives are registered. */
+    bool registerNativeResources(NativeStateResources& resources) const;
+    /** Complete retained native values, with semantic rather than address bindings. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    /** Foreign/stale history is refused before appending any bytes. */
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    static void appendSimulationDigest(
+        NativeStateDigest& digest, const Simulation& state,
+        std::optional<std::span<const TextureAnimator::Clock>> savedClocks = std::nullopt);
     u64 m_restoreGeneration = 0;
     // A Prepared may outlive its owner; address reuse must not revive it.
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);

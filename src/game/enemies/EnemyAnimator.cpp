@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
 
@@ -19,6 +21,33 @@ constexpr bool isHit(EnemyAction action) {
 }
 
 } // namespace
+
+auto EnemyAnimator::nativeValues(const EnemyAnimator& value) {
+    const auto& [tree, sequences, current, requested, walksIn, struck, powerStruck, threw,
+                 dead, idleSeconds, throwInterval, idleFraction, player, pose, previous,
+                 presentationBefore, frameBefore, generationBefore] = value;
+    return std::tie(tree, sequences, current, requested, walksIn, struck, powerStruck, threw,
+                    dead, idleSeconds, throwInterval, idleFraction, player, pose, previous,
+                    presentationBefore, frameBefore, generationBefore);
+}
+
+void visitNativeState(NativeStateDigest& digest, const EnemyAnimator& value) {
+    const auto append = [&]<class T>(const T& field) {
+        if constexpr (std::is_same_v<T, const TreeInfo*>) {
+            digest.resource(field);
+        } else {
+            digest.value(field);
+        }
+    };
+    std::apply([&](const auto&... fields) { (append(fields), ...); },
+               EnemyAnimator::nativeValues(value));
+}
+
+bool EnemyAnimator::equalLocal(const EnemyAnimator& other) const {
+    // Exact values, including retained poses after unbind, under the same trees.
+    // Only the hash substitutes semantic resources for these borrowed addresses.
+    return nativeValues(*this) == nativeValues(other);
+}
 
 bool EnemyAnimator::Checkpoint::valid() const {
     if (tree.size() > TreePose::Checkpoint::kMaxName || tree.find('\0') != std::string::npos ||
@@ -179,6 +208,10 @@ u32 EnemyAnimator::sequenceOf(Action action) const {
 
 void EnemyAnimator::update(s32 ticks, f32 seconds, bool contact) {
     holdPresentation();
+    updateCaptured(ticks, seconds, contact);
+}
+
+void EnemyAnimator::updateCaptured(s32 ticks, f32 seconds, bool contact) {
     m_struck = false;
     m_powerStruck = false;
     m_threw = false;

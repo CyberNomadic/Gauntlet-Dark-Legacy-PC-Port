@@ -5,11 +5,16 @@
 #include <vector>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/render/Image.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/render/RenderTypes.h"
 #include "engine/ui/Canvas.h"
+
+namespace gdl {
+class NativeStateDigest;
+}
 
 namespace gdl::game {
 
@@ -19,7 +24,31 @@ namespace gdl::game {
  * is drawn over the front. Runs on the original's tick clock: one frame every two ticks.
  */
 class BurnDialogueScroll {
+    struct Artwork {
+        Image source;
+        std::vector<const Image*> masks;
+        std::vector<const Texture*> ring;
+        NativeStateDigest::Digest sourceIdentity{};
+    };
+    struct Simulation {
+        std::shared_ptr<const Artwork> art;
+        Rect area;
+        s32 timer = 0;
+        bool active = false;
+    };
+
 public:
+    class LocalSnapshot {
+        friend class BurnDialogueScroll;
+        Simulation state;
+        const BurnDialogueScroll* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     static constexpr s32 kFrameCount = 21;
     static constexpr s32 kTicksPerFrame = 2;
 
@@ -31,15 +60,15 @@ public:
 
     /**
      * Starts burning `scroll` over `area`. `masks` are the burn frames (alpha zero is burnt),
-     * stretched over the scroll with filtering; `ring` the flame frames drawn on top. Keeps a
-     * GPU copy of the scroll.
+     * stretched over the scroll with filtering; `ring` the flame frames drawn on top. Retains immutable
+     * source pixels; the GPU copy is prepared only during rendering.
      */
     bool start(RenderDevice& device, const Rect& area, const Image& scroll,
                std::vector<const Image*> masks, std::vector<const Texture*> ring);
 
     void reset();
-    bool active() const { return m_active; }
-    s32 frame() const { return m_timer / kTicksPerFrame; }
+    bool active() const { return m_sim.active; }
+    s32 frame() const { return m_sim.timer / kTicksPerFrame; }
 
     /** Advances the effect; it ends once the last frame has played. */
     void step(s32 ticks);
@@ -52,21 +81,18 @@ public:
     static Image composite(const Image& scroll, const Image& mask);
 
     /** Alpha of the composited scroll at a texel, for tests. */
-    u8 compositeAlpha(u32 x, u32 y) const { return m_composite.pixel(x, y).a; }
+    u8 compositeAlpha(u32 x, u32 y) const;
 
 private:
-    void cutOut(s32 frame);
+    static bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state);
     static f32 maskAlpha(const Image& source, const Image& mask, u32 x, u32 y);
 
-    bool m_active = false;
-    Rect m_area;
-    Image m_source;
-    Image m_composite;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
+    // Derived presentation cache: never copied or uploaded during simulation rewind.
     std::unique_ptr<Texture> m_texture;
-    std::vector<const Image*> m_masks;
-    std::vector<const Texture*> m_ring;
-    s32 m_timer = 0;
-    s32 m_cutFrame = -1;
+    std::shared_ptr<const Artwork> m_uploadedArt;
+    const RenderDevice* m_device = nullptr;
     s32 m_uploadedFrame = -1;
 };
 

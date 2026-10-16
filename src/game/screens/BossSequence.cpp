@@ -4,6 +4,7 @@
 #include <format>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/enemies/BossCoins.h"
 #include "game/enemies/SkorneRelics.h"
@@ -11,6 +12,66 @@
 #include "game/world/PlayerFigure.h"
 
 namespace gdl::game {
+bool BossSequence::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("BossSequence.native.1");
+    digest.fields<4>(m_sim);
+    if (!m_victory.appendNativeDigest(digest)) {
+        return false;
+    }
+    digest.flag(m_legend != nullptr);
+    return m_legend ? m_legend->appendNativeDigest(digest) : digest.good();
+}
+
+bool BossSequence::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, victory, legend, owner, binding] = saved;
+    digest.string("BossSequence.native.1");
+    digest.fields<4>(state);
+    if (!m_victory.appendLocalDigest(digest, victory)) {
+        return false;
+    }
+    digest.flag(legend.has_value());
+    return legend ? m_legend->appendLocalDigest(digest, *legend) : digest.good();
+}
+
+void BossSequence::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+    m_victory.saveLocal(saved.victory);
+    if (m_legend != nullptr) {
+        if (!saved.legend) {
+            saved.legend.emplace();
+        }
+        m_legend->saveLocal(*saved.legend);
+    } else {
+        saved.legend.reset();
+    }
+}
+
+bool BossSequence::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding &&
+           m_victory.canRestoreLocal(saved.victory) &&
+           saved.legend.has_value() == (m_legend != nullptr) &&
+           (!m_legend || m_legend->canRestoreLocal(*saved.legend));
+}
+
+bool BossSequence::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_victory.restoreLocal(saved.victory);
+    if (m_legend) {
+        m_legend->restoreLocal(*saved.legend);
+    }
+    m_sim = saved.state;
+    return true;
+}
+
 namespace {
 constexpr std::string_view kBossKeyTree = "BOSSKEY";
 constexpr std::string_view kBossKeyLaterTree = "BOSSKEY2";
@@ -30,19 +91,52 @@ void BossSequence::bind(Resources resources) {
                                    resources.textures},
         LegendPresentation::Audio{
             [this](std::string_view name) { return m_resources->audio.playNamed(name); },
-            [this](SoundHandle handle) { m_resources->audio.stop(handle); }});
+            [this](SoundHandle handle) { m_resources->audio.stop(handle); },
+            [this](std::string_view name) { return m_resources->audio.hasNamed(name); },
+            [this](std::string_view name, bool looping, s32 player, s32 kind, u32 cue)
+                -> std::optional<SoundCueToken> {
+                auto& audio = m_resources->audio;
+                if (!audio.recording()) {
+                    return std::nullopt;
+                }
+                const auto scope = audio.soundScope(
+                    {14, static_cast<u64>(kind), 1, static_cast<u8>(player)}, cue);
+                if (looping) {
+                    return audio.beginNamedCue(name);
+                }
+                audio.playNamed(name);
+                return SoundCueToken{};
+            },
+            [this](std::string_view name, s32 player, s32 kind, SoundCueToken start) {
+                auto& audio = m_resources->audio;
+                if (audio.recording()) {
+                    audio.desireNamedLoop(
+                        {{14, static_cast<u64>(kind), start.event.tick, static_cast<u8>(player)},
+                         1, 1},
+                        name, SceneSoundPlayback::PlayOnceUntilCancelled, 1, 0, start);
+                }
+            }});
+}
+
+void BossSequence::gatherAudio() const {
+    if (m_legend) {
+        m_legend->gatherAudio();
+    }
 }
 void BossSequence::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     if (m_resources) {
         for (const SoundHandle voice : m_victoryVoices) {
             m_resources->audio.stop(voice);
         }
     }
-    m_victoryVoice = {};
+    m_victoryHandle = kNoSound;
+    m_sim.speech = {};
+    m_sim.speechCue = {};
     m_victoryVoices.clear();
     m_legend.reset(); // stops its loop while audio and effects remain available
     m_victory.clear();
-    m_shardPosition = Vec3{0};
+    m_sim.shardPosition = Vec3{0};
     m_resources.reset();
 }
 
@@ -147,7 +241,7 @@ void BossSequence::fallen(const Vec3& where, const Bosses& bosses,
         return;
     }
     if (m_legend != nullptr) {
-        m_legend->clear();
+        m_legend->reset();
     }
     const s32 order = LevelRef::orderOf(r.world.ref().realmId);
     u16 found = 0;
@@ -174,13 +268,14 @@ void BossSequence::fallen(const Vec3& where, const Bosses& bosses,
     }
     const char letter = r.world.ref().name.empty() ? 'G' : r.world.ref().name.front();
     m_victory.begin(level->bossType, letter, inRealm, found, false);
-    m_shardPosition = where + bosses.rewardOffset();
+    m_sim.shardPosition = where + bosses.rewardOffset();
     if (r.world.items().loaded()) {
         if (level->bossType < 42) {
             EffectTrees::Setting setting;
             setting.seconds = kBossKeySeconds;
             setting.then = kBossKeyLaterTree;
-            r.effects.startSet(r.device, r.world.items(), kBossKeyTree, m_shardPosition, setting);
+            r.effects.startSet(r.device, r.world.items(), kBossKeyTree, m_sim.shardPosition,
+                               setting);
         }
         std::vector<Vec3> standing;
         for (const PlayerRuntime& runtime : players) {
@@ -204,15 +299,18 @@ bool BossSequence::advanceVictory(s32 ticks, f32 seconds, std::span<const Player
         return false;
     }
     auto& r = *m_resources;
-    const auto result = m_victory.update(ticks, seconds, r.world.goldLeft(), strings,
-                                         m_victoryVoice.timing.playing());
+    const auto result =
+        m_victory.update(ticks, seconds, r.world.goldLeft(), strings, m_sim.speech.playing());
     for (const VictoryVoice& voice : result.voices) {
         // Wizard speech is serialized even if a caption is absent or finishes early.
-        const auto next = r.audio.speechNamed(voice.sound, m_victoryVoice);
-        if (next.handle != kNoSound && next.handle != m_victoryVoice.handle) {
+        const auto next =
+            r.audio.speechNamed(voice.sound, {m_victoryHandle, m_sim.speech, m_sim.speechCue});
+        if (next.handle != kNoSound && next.handle != m_victoryHandle) {
             m_victoryVoices.push_back(next.handle);
         }
-        m_victoryVoice = next;
+        m_victoryHandle = next.handle;
+        m_sim.speech = next.timing;
+        m_sim.speechCue = next.cue;
     }
     if (result.sparkle) {
         if (r.weapons.loaded()) {
@@ -231,7 +329,7 @@ BossCameraSubject BossSequence::victorySubject() const {
         return m_victory.wizardSubject();
     }
     BossCameraSubject subject;
-    subject.position = m_shardPosition;
+    subject.position = m_sim.shardPosition;
     subject.radius = 5.0f;
     subject.awake = true;
     subject.focus = BossCameraSubject::Focus::Shard;
@@ -273,7 +371,7 @@ void BossSequence::spewCoins(const CombatSpew& spew, LevelOpponents& opponents,
     const auto count = static_cast<s32>(std::ranges::count_if(
         players, [](const PlayerRuntime& runtime) { return !runtime.departed; }));
     for (const SpewedCoin& coin : BossCoins::spray(r.world.ref().realmId, count, spew.velocity,
-                                                   spew.halfAngle, m_coinRandom)) {
+                                                   spew.halfAngle, m_sim.coinRandom)) {
         r.world.throwItem(r.device, coin.name, spew.origin, coin.velocity,
                           BossCoins::kNoGrabSeconds);
     }

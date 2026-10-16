@@ -111,7 +111,7 @@ void PlayerAttacks::useItemAttack(usize index, std::span<PlayerRuntime> players)
     } else {
         m_resources->audio.playNamed(selected->sound);
     }
-    m_items.push_back(std::move(area));
+    m_sim.items.push_back(std::move(area));
 }
 
 void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
@@ -119,7 +119,7 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
     if (!m_resources) {
         return;
     }
-    for (auto& area : m_items) {
+    for (auto& area : m_sim.items) {
         if (area.actor >= players.size() || players[area.actor].life != PlayerLife::Standing) {
             area.elapsed = area.lifetime;
             continue;
@@ -145,7 +145,7 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
         }
     }
     targets.fixtures.settleBlasts(players, targets.fixtureEvents);
-    std::erase_if(m_items, [this](const ItemArea& area) {
+    std::erase_if(m_sim.items, [this](const ItemArea& area) {
         if (area.elapsed < area.lifetime) {
             return false;
         }

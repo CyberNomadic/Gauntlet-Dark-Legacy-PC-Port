@@ -1,0 +1,414 @@
+#include <array>
+#include <filesystem>
+#include <tuple>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
+#include "engine/io/NativeStateDigest.h"
+#include "engine/world/SampleLevel.h"
+#include "game/screens/BossSequence.h"
+#include "game/screens/LevelArrivalPresentation.h"
+#include "game/screens/PortalDeparture.h"
+#include "game/screens/SumnerVisit.h"
+#include "game/screens/TowerPromotion.h"
+#include "game/screens/TowerRelics.h"
+#include "game/world/ExitPortals.h"
+#include "game/world/LevelTransporters.h"
+#include "game/world/NativeStateResources.h"
+#include "game/world/SumnerFigure.h"
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+using Digest = NativeStateDigest::Digest;
+constexpr f32 kStep = 1.0f / 60;
+
+template <class T> Digest native(const T& value, const NativeStateResources& resources) {
+    NativeStateDigest sink(resources.resources());
+    if constexpr (requires { value.appendNativeDigest(sink); }) {
+        REQUIRE(value.appendNativeDigest(sink));
+    } else {
+        sink.value(value);
+    }
+    const auto result = sink.checkedFinish();
+    REQUIRE(result);
+    return *result;
+}
+
+template <class T>
+Digest captured(const T& value, const typename T::LocalSnapshot& saved,
+                const NativeStateResources& resources) {
+    NativeStateDigest sink(resources.resources());
+    REQUIRE(value.appendLocalDigest(sink, saved));
+    const auto result = sink.checkedFinish();
+    REQUIRE(result);
+    return *result;
+}
+
+struct Travel {
+    test::FakeRenderDevice device;
+    ItemArchive items;
+    WorldLayout layout;
+    WorldCollision floor;
+    LevelCatalog catalog;
+    LevelTransporters pads;
+    ExitPortals exits;
+    LevelArrivalPresentation arrival;
+    PortalDeparture departure;
+    NativeStateResources resources;
+
+    explicit Travel(std::string_view name) {
+        const auto path = test::sampleLevel(name);
+        std::filesystem::create_directories(path / "wdata");
+        writeTextFile(path / "wdata/TOWN.json", R"({"realm":7,"prefix":"levelG",
+          "levels":[{"name":"G1","title":"Town"}]})");
+        writeTextFile(path / "wdata/SECRET.json", R"({"realm":12,"prefix":"levelS",
+          "levels":[{"name":"S1","title":"Secret"}]})");
+        writeTextFile(path / "world.json", R"({
+          "objects":[{"name":"FLOOR","position":[0,0,0],"flags":4102}],
+          "itemInfos":[{"type":9,"name":"EXIT_PORTAL","radius":3},
+            {"type":9,"subtype":50,"name":"SECRET_ICON","radius":1},
+            {"type":11,"name":"TRANS","radius":2,"height":2}],
+          "itemInstances":[
+            {"info":0,"position":[0,0,0],"params":[0,0,0,0,103,49,0,0]},
+            {"info":1,"position":[20,0,0],"params":[0,0,0,0,83,49,0,0]},
+            {"info":2,"position":[-10,0,0],"params":[1,0,0,0,2,0,0,0]},
+            {"info":2,"position":[10,0,0],"params":[2,0,0,0,1,0,0,0]}]})");
+        writeTextFile(path / "animations.json", R"({
+          "textureAnimations":[{"name":"STONE","texture":0,"source":1,"frames":2,"rate":1}],
+          "trees":[
+            {"name":"EXIT_PORTAL","nodes":[{"name":"BODY","object":"WALL","position":[0,0,0]}],
+             "sequences":[{"name":"IDLE","frames":4,"frameRate":30},
+              {"name":"READY","frames":4,"frameRate":30},
+              {"name":"ACTIVE1","frames":4,"frameRate":30},
+              {"name":"ACTIVE2","frames":4,"frameRate":30},
+              {"name":"ACTIVE3","frames":4,"frameRate":30}]},
+            {"name":"SECRET_ICON","nodes":[{"name":"BODY","object":"WALL","position":[0,0,0]}],
+             "sequences":[{"name":"IDLE","frames":9,"frameRate":30}]},
+            {"name":"TRANS","nodes":[{"name":"BODY","object":"WALL","position":[0,0,0]}],
+             "sequences":[{"name":"ACTIVE","frames":8,"frameRate":30}]},
+            {"name":"STARTFX","nodes":[{"name":"BODY","object":"WALL","position":[0,0,0]}],
+             "sequences":[{"name":"START","frames":8,"frameRate":30}]},
+            {"name":"WIZARD","nodes":[{"name":"BODY","object":"WALL","position":[0,0,0]}],
+             "sequences":[{"name":"READY","frames":8,"frameRate":30}]}]})");
+        REQUIRE(items.load(path));
+        REQUIRE(layout.load(path));
+        REQUIRE(catalog.load(path));
+        floor.build({
+            {.vertices = {Vec3{-40, 0, -40}, Vec3{40, 0, 40}, Vec3{40, 0, -40}}, .object = 0},
+            {.vertices = {Vec3{-40, 0, -40}, Vec3{-40, 0, 40}, Vec3{40, 0, 40}}, .object = 0}});
+        floor.setMovingObjects(std::array<s32, 1>{0});
+        REQUIRE(exits.bind(device, layout, AssetScope(items), catalog, &floor));
+        pads.bind(device, layout, AssetScope(items), 2, &floor);
+        REQUIRE(exits.size() == 2);
+        REQUIRE(pads.size() == 2);
+        const std::array party{Vec3{-2, 0, 10}, Vec3{2, 0, 10}};
+        arrival.begin(device, items, party, WorldCamera{});
+        REQUIRE(arrival.effectCount() == 2);
+        departure.loadSkin(device, items.textures);
+        refresh();
+    }
+
+    void refresh() {
+        const auto created = device.texturesCreated;
+        REQUIRE(resources.registerBuiltinTexture(device.whiteTexture(), "opaque-white"));
+        REQUIRE(resources.registerArchive(items, "items/travel-fixture"));
+        REQUIRE(resources.registerLayout(layout, "travel-fixture"));
+        REQUIRE(resources.registerCollision(floor, "travel-fixture"));
+        REQUIRE(exits.registerNativeResources(resources));
+        CHECK(device.texturesCreated == created);
+    }
+
+    struct Saved {
+        WorldCollision::LocalSnapshot floor;
+        ExitPortals::LocalSnapshot exits;
+        LevelTransporters::LocalSnapshot pads;
+        LevelArrivalPresentation::LocalSnapshot arrival;
+        PortalDeparture::LocalSnapshot departure;
+    };
+    void save(Saved& state) const {
+        floor.saveLocal(state.floor);
+        exits.saveLocal(state.exits);
+        pads.saveLocal(state.pads);
+        arrival.saveLocal(state.arrival);
+        departure.saveLocal(state.departure);
+    }
+    void restore(const Saved& state) {
+        REQUIRE(floor.restoreLocal(state.floor));
+        REQUIRE(exits.restoreLocal(state.exits));
+        REQUIRE(pads.restoreLocal(state.pads));
+        REQUIRE(arrival.restoreLocal(state.arrival));
+        REQUIRE(departure.restoreLocal(state.departure));
+    }
+    auto digest() const {
+        return std::array{native(exits, resources), native(pads, resources),
+                          native(arrival, resources), native(departure, resources)};
+    }
+    auto digest(const Saved& saved) const {
+        return std::array{captured(exits, saved.exits, resources),
+                          captured(pads, saved.pads, resources),
+                          captured(arrival, saved.arrival, resources),
+                          captured(departure, saved.departure, resources)};
+    }
+    auto step(s32 tick, bool wrong) {
+        const f32 height = wrong ? -5 : static_cast<f32>(tick % 24) * 0.05f;
+        floor.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{0, height, 0}));
+        pads.syncFloors(floor);
+        pads.capturePresentation();
+        pads.animate(wrong ? 0.3f : kStep);
+        arrival.capturePresentation();
+        arrival.animate(wrong ? 0.3f : kStep);
+        arrival.advance(wrong ? 9 : 1, wrong, {0, 10, -10}, {0, 0, 10});
+        const std::array visitors{
+            PortalVisitor{{wrong ? 20.0f : 0.0f, height, 0}, 0.75f, 3, true},
+            PortalVisitor{{tick % 100 < 70 ? 10.0f : 0.0f, height, 0}, 0.75f, 1, true}};
+        exits.setAlpha("g1", wrong ? 0.1f : 0.8f);
+        if (wrong) {
+            exits.consume(1);
+        }
+        const auto leave = exits.update(wrong ? 5 : 1, wrong ? 0.3f : kStep, visitors);
+        if (wrong || tick == 100) {
+            departure.begin(device, items.textures);
+        }
+        departure.update(wrong ? 7 : 1);
+        return std::tuple{leave, exits.takeWaiting(), arrival.takeTitleLanded()};
+    }
+};
+
+TEST_CASE("travel native hashes survive independent bindings and one to eight tick corrections",
+          "[native-state-digest][scene-travel-native-digest][local-rewind]") {
+    Travel correct("travel-digest-correct"), reference("travel-digest-reference");
+    REQUIRE(correct.arrival.effectPresentation(0)->tree != reference.arrival.effectPresentation(0)->tree);
+    REQUIRE(correct.digest() == reference.digest());
+    s32 tick = 0;
+    bool sawWaiting = false;
+    for (s32 window = 0; window < 48; ++window) {
+        const s32 distance = window % 8 + 1;
+        CAPTURE(window, distance, tick);
+        Travel::Saved saved;
+        correct.save(saved);
+        const auto initial = correct.digest();
+        REQUIRE(correct.digest(saved) == initial);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            correct.step(tick + offset, true);
+        }
+        CHECK(correct.digest() != initial);
+        CHECK(correct.digest(saved) == initial);
+        correct.restore(saved);
+        CHECK(correct.digest() == initial);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            const auto expected = reference.step(tick + offset, false);
+            const auto actual = correct.step(tick + offset, false);
+            CHECK(actual == expected);
+            sawWaiting = sawWaiting || !std::get<1>(actual).empty();
+        }
+        REQUIRE(correct.digest() == reference.digest());
+        const auto stable = correct.digest();
+        for (const f32 alpha : {-1.0f, 0.0f, 0.37f, 1.0f}) {
+            correct.device.draws.clear();
+            correct.arrival.drawEffects(correct.device, Mat4{1}, {}, alpha);
+            correct.pads.draw(correct.device, Mat4{1}, {}, alpha);
+            correct.exits.draw(correct.device, Mat4{1}, {});
+            CHECK(correct.digest() == stable);
+        }
+        tick += distance;
+    }
+    CHECK(sawWaiting);
+    Travel::Saved saved;
+    correct.save(saved);
+    NativeStateDigest foreign(reference.resources.resources());
+    CHECK_FALSE(reference.exits.appendLocalDigest(foreign, saved.exits));
+    CHECK_FALSE(foreign.checkedFinish());
+    correct.exits.clear();
+    NativeStateDigest stale(correct.resources.resources());
+    CHECK_FALSE(correct.exits.appendLocalDigest(stale, saved.exits));
+    CHECK_FALSE(stale.checkedFinish());
+    NativeStateResources empty;
+    NativeStateDigest unknown(empty.resources());
+    CHECK_FALSE(reference.arrival.appendNativeDigest(unknown));
+    CHECK_FALSE(unknown.checkedFinish());
+}
+
+TEST_CASE("inactive entry camera and queued promotion clocks remain in the native digest",
+          "[native-state-digest][scene-travel-native-digest]") {
+    NativeStateResources resources;
+    StartCamera camera;
+    camera.start(WorldCamera{Vec3{0, 20, -30}}, Vec3{0});
+    const auto savedCamera = camera;
+    const auto initialCamera = native(camera, resources);
+    camera.update(1, false, {0, 10, -10}, {0, 0, 10});
+    CHECK(native(camera, resources) != initialCamera);
+    camera = savedCamera;
+    CHECK(native(camera, resources) == initialCamera);
+    camera.stop();
+    StartCamera neverStarted;
+    REQUIRE_FALSE(camera.active());
+    REQUIRE_FALSE(neverStarted.active());
+    CHECK(native(camera, resources) != native(neverStarted, resources));
+
+    std::array<PlayerRuntime, 1> party;
+    CharacterSave save;
+    save.progress().experience = levelExperience(30);
+    save.progress().promotedLevel = 29;
+    party[0].actor.spawn(0, save, nullptr, Vec3{0}, 0);
+    MessageTable strings;
+    TowerPromotion promotion;
+    promotion.begin(party, strings);
+    REQUIRE(promotion.active());
+    TowerPromotion::LocalSnapshot history;
+    promotion.saveLocal(history);
+    const auto initial = native(promotion, resources);
+    REQUIRE(promotion.shown() == 0);
+    promotion.update(1, false);
+    REQUIRE(promotion.shown() == 0);
+    CHECK(native(promotion, resources) != initial);
+    CHECK(captured(promotion, history, resources) == initial);
+    REQUIRE(promotion.restoreLocal(history));
+    CHECK(native(promotion, resources) == initial);
+    promotion.clear();
+    NativeStateDigest stale(resources.resources());
+    CHECK_FALSE(promotion.appendLocalDigest(stale, history));
+    CHECK_FALSE(stale.checkedFinish());
+}
+
+TEST_CASE("speculative first victory artwork cannot contaminate an earlier native snapshot",
+          "[native-state-digest][scene-travel-native-digest][local-rewind]") {
+    Travel fixture("travel-digest-victory");
+    BossVictoryPresentation victory;
+    BossVictoryPresentation::LocalSnapshot before;
+    victory.saveLocal(before);
+    const auto empty = native(victory, fixture.resources);
+    victory.begin(41, 'G', 1, 0, false);
+    victory.bindWizard(fixture.device, fixture.items, Vec3{0}, std::array{Vec3{2, 0, 2}});
+    fixture.refresh();
+    CHECK(native(victory, fixture.resources) != empty);
+    CHECK(captured(victory, before, fixture.resources) == empty);
+    REQUIRE(victory.restoreLocal(before));
+    CHECK(native(victory, fixture.resources) == empty);
+    victory.begin(41, 'G', 1, 0, false);
+    victory.bindWizard(fixture.device, fixture.items, Vec3{0}, std::array{Vec3{2, 0, 2}});
+    MessageTable strings;
+    victory.update(1, kStep, false, strings);
+    const auto stable = native(victory, fixture.resources);
+    for (const f32 alpha : {-1.0f, 0.0f, 0.37f, 1.0f}) {
+        victory.drawWizard(fixture.device, Mat4{1}, {}, nullptr, alpha);
+        CHECK(native(victory, fixture.resources) == stable);
+    }
+    BossVictory state;
+    state.begin(41, 'G', 1, 0, false);
+    const auto initial = native(state, fixture.resources);
+    const auto stage = state.stage();
+    state.update(1, {});
+    REQUIRE(state.stage() == stage);
+    CHECK(native(state, fixture.resources) != initial);
+}
+
+TEST_CASE("empty scene phase owners still hash latent native clocks and reject foreign history",
+          "[native-state-digest][scene-travel-native-digest]") {
+    NativeStateResources resources;
+    BossSequence boss;
+    BossSequence other;
+    BossSequence::LocalSnapshot saved;
+    boss.saveLocal(saved);
+    const auto initial = native(boss, resources);
+    CHECK(captured(boss, saved, resources) == initial);
+    NativeStateDigest foreign(resources.resources());
+    CHECK_FALSE(other.appendLocalDigest(foreign, saved));
+    CHECK_FALSE(foreign.checkedFinish());
+    boss.clear();
+    NativeStateDigest stale(resources.resources());
+    CHECK_FALSE(boss.appendLocalDigest(stale, saved));
+    CHECK_FALSE(stale.checkedFinish());
+
+    TowerRelics relics;
+    TowerRelics::LocalSnapshot relicHistory;
+    relics.saveLocal(relicHistory);
+    CHECK(native(relics, resources) == captured(relics, relicHistory, resources));
+    SumnerFigure wizard;
+    SumnerFigure::LocalSnapshot wizardHistory;
+    wizard.saveLocal(wizardHistory);
+    CHECK(native(wizard, resources) == captured(wizard, wizardHistory, resources));
+    PortalDeparture departure;
+    PortalDeparture::LocalSnapshot departureHistory;
+    departure.saveLocal(departureHistory);
+    test::FakeRenderDevice device;
+    TextureSet textures;
+    departure.begin(device, textures);
+    departure.update(1);
+    CHECK(native(departure, resources) != captured(departure, departureHistory, resources));
+    REQUIRE(departure.restoreLocal(departureHistory));
+    CHECK(native(departure, resources) == captured(departure, departureHistory, resources));
+}
+
+TEST_CASE("hint menu and cursor digests retain hidden progression and typed native layout",
+          "[native-state-digest][scene-travel-native-digest][local-rewind]") {
+    NativeStateResources resources;
+    SumnerHints hints;
+    const auto hintFile = test::scratchDirectory("native-hint-cursor") / "hints.json";
+    writeTextFile(hintFile,
+                  R"({"messages":[{"name":"G1","lines":["Guardian"]}],
+                       "lists":[{"name":"BOSS_HINTS","messages":[0]}]})");
+    REQUIRE(hints.load(hintFile));
+    HintKnowledge knowledge;
+    knowledge.worldsOpen = 1U << 7U;
+    hints.next(HintTopic::Guardians, knowledge, "GENERAL");
+    SumnerHints::LocalSnapshot hintHistory;
+    hints.saveLocal(hintHistory);
+    const auto initialHint = native(hints, resources);
+    const auto visibleIndex = hints.guardian();
+    hints.next(HintTopic::Guardians, knowledge, "GENERAL");
+    REQUIRE(hints.guardian() == visibleIndex);
+    CHECK(native(hints, resources) != initialHint); // the hidden search has widened
+    CHECK(captured(hints, hintHistory, resources) == initialHint);
+    REQUIRE(hints.restoreLocal(hintHistory));
+    CHECK(native(hints, resources) == initialHint);
+
+    const auto makeFont = [] {
+        std::vector<BitmapGlyph> glyphs;
+        for (s32 code = 33; code < 127; ++code) {
+            glyphs.push_back({code, 8, 0, 0});
+        }
+        return BitmapFont::fromGlyphs(10, 4, std::move(glyphs));
+    };
+    auto firstFont = makeFont();
+    auto secondFont = makeFont();
+    test::FakeTexture firstSheet{64, 64}, secondSheet{64, 64};
+    TextPainter firstPainter, secondPainter;
+    firstPainter.setFont(&firstFont, &firstSheet);
+    secondPainter.setFont(&secondFont, &secondSheet);
+    HintMenu first, second;
+    const HintMenuLabels labels{"HELP", {{"GENERAL", 39}, {"GUARDIANS", 40}},
+                                "BACK", "SELECT", "PLAYER"};
+    REQUIRE(first.open(firstPainter, {}, labels));
+    REQUIRE(second.open(secondPainter, {}, labels));
+    REQUIRE(native(first, resources) == native(second, resources));
+    HintMenu::LocalSnapshot saved;
+    first.saveLocal(saved);
+    const auto baseline = native(first, resources);
+    test::FakeRenderDevice device;
+    first.update(device, {}, 1);
+    REQUIRE(first.topics().selection() == second.topics().selection());
+    CHECK(native(first, resources) != baseline);
+    CHECK(captured(first, saved, resources) == baseline);
+    first.read(firstPainter, "ANSWER", {"FIRST", "SECOND"}, 0.8f, false, 16);
+    CHECK(native(first, resources) != baseline);
+    REQUIRE(first.restoreLocal(saved));
+    CHECK(native(first, resources) == baseline);
+    Canvas canvas;
+    canvas.begin(device, Mat4{1});
+    first.draw(canvas, firstPainter);
+    canvas.end();
+    CHECK(native(first, resources) == baseline);
+    NativeStateDigest foreign(resources.resources());
+    CHECK_FALSE(second.appendLocalDigest(foreign, saved));
+    CHECK_FALSE(foreign.checkedFinish());
+
+    SumnerVisit visit;
+    SumnerVisit::LocalSnapshot visitHistory;
+    visit.saveLocal(visitHistory);
+    CHECK(native(visit, resources) == captured(visit, visitHistory, resources));
+}
+} // namespace

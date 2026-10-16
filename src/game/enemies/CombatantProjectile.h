@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "game/enemies/CritterData.h"
@@ -22,6 +23,14 @@ struct CombatShot {
     f32 birthLife = 0.0f;   ///< a legend-item curb can shorten a projectile's first effect
     bool endVisual = false; ///< presentation only; silent flight endings reuse the impact cue
     char realm = 'G';
+    bool operator==(const CombatShot&) const = default;
+    friend void visitNativeState(NativeStateDigest& digest, const CombatShot& state) {
+        const auto& [data, critter, damageIndex, origin, forward, target, rate, scale,
+                     damageScale, birthLife, endVisual, realm] = state;
+        digest.resource(data);
+        digest.values(critter, damageIndex, origin, forward, target, rate, scale, damageScale,
+                      birthLife, endVisual, realm);
+    }
 };
 
 /** Launch math shared by combatant projectile attacks.

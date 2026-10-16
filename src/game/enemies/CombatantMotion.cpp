@@ -58,15 +58,15 @@ Vec3 travelWorld(const WorldCollision& collision, const Vec3& from, const Vec3& 
 }
 } // namespace
 void Combatant::rememberFloor() {
-    Actor& actor = m_actor;
+    Actor& actor = m_sim.actor;
     actor.floor.reset();
-    if (m_collision == nullptr || !present() || actor.parent != nullptr ||
+    if (m_sim.collision == nullptr || !present() || actor.parent != nullptr ||
         actor.stock->definition.boundsToHome) {
         return;
     }
-    const auto floor = m_collision->floorAt(actor.position, kSupportReach, kSupportReach);
+    const auto floor = m_sim.collision->floorAt(actor.position, kSupportReach, kSupportReach);
     if (floor) {
-        if (const auto placement = m_collision->objectTransform(floor->object)) {
+        if (const auto placement = m_sim.collision->objectTransform(floor->object)) {
             actor.floor = Actor::Floor{floor->object,
                                        Vec3{glm::inverse(*placement) * Vec4{actor.position, 1}}};
         }
@@ -74,12 +74,12 @@ void Combatant::rememberFloor() {
 }
 
 void Combatant::syncFloor() {
-    Actor& actor = m_actor;
-    if (!present() || m_collision == nullptr || !actor.floor) {
+    Actor& actor = m_sim.actor;
+    if (!present() || m_sim.collision == nullptr || !actor.floor) {
         return;
     }
-    const auto placement = m_collision->objectTransform(actor.floor->object);
-    if (!placement || !m_collision->solid(actor.floor->object)) {
+    const auto placement = m_sim.collision->objectTransform(actor.floor->object);
+    if (!placement || !m_sim.collision->solid(actor.floor->object)) {
         actor.floor.reset();
         return;
     }
@@ -131,8 +131,8 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
     // CritterBossAI (GC 0x80039ad8) probes the supporting floor every frame,
     // independently of locomotion. In A5 this is the descending elevator.
     // position is floor-space here; rootTransform adds the TYPE floorOffset.
-    if (bounded && m_collision != nullptr) {
-        if (const auto floor = m_collision->floorAt(critter.position, 4.0f, 1000.0f)) {
+    if (bounded && m_sim.collision != nullptr) {
+        if (const auto floor = m_sim.collision->floorAt(critter.position, 4.0f, 1000.0f)) {
             critter.position.y = floor->y;
         }
     }
@@ -148,7 +148,7 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
         critter.stepTarget = destination->position;
     }
     if (move != nullptr && move->speed != 0.0f && critter.state == State::Active) {
-        const f32 pace = move->speed * m_scales.speed * seconds;
+        const f32 pace = move->speed * m_sim.scales.speed * seconds;
         const f32 basis = movement.initialStepBasis ? critter.initialYaw : critter.yaw;
         if (move->type == MoveDefinition::kStepToPoint && critter.stepTarget.has_value()) {
             const Vec3 delta = *critter.stepTarget - critter.position;
@@ -221,15 +221,15 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
             if (length > 0) {
                 const f32 depth = std::clamp(
                     critter.definition->wallRadius() + other.radius - length, 1.0f, 3.0f);
-                m_pushes.push_back({other.player, *separation * (2.0f * depth / length)});
+                m_sim.pushes.push_back({other.player, *separation * (2.0f * depth / length)});
             }
         }
     }
     if (playerContact) {
         return true;
     }
-    if (m_collision != nullptr) {
-        to = travelWorld(*m_collision, critter.position, to, critter.definition->wallRadius());
+    if (m_sim.collision != nullptr) {
+        to = travelWorld(*m_sim.collision, critter.position, to, critter.definition->wallRadius());
     }
     if (blockedByItems(critter, to)) {
         return false;
@@ -238,7 +238,7 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
         return false;
     }
     for (const Combatant& peer : peers) {
-        const Actor& other = peer.m_actor;
+        const Actor& other = peer.m_sim.actor;
         if (&other == &critter || other.state == State::Inactive) {
             continue;
         }
@@ -271,14 +271,14 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
     // A wall it walks against or a floor it walks onto may hurt it: the swarm's harms, burns
     // and knocks at five and the felling kinds at fifteen (CritterWorldDamage). The port
     // deliberately limits burning-floor hits to once per quarter second.
-    if (m_hazards != nullptr && m_collision != nullptr && critter.state != State::Dying) {
-        const auto touch = m_hazards->touching(*m_collision, to, critter.definition->wallRadius(),
+    if (m_sim.hazards != nullptr && m_sim.collision != nullptr && critter.state != State::Dying) {
+        const auto touch = m_sim.hazards->touching(*m_sim.collision, to, critter.definition->wallRadius(),
                                                kWallProbeHeight);
         if (const auto harm = touch.has_value()
-                                  ? HazardSurfaces::enemyHarmOf(m_hazards->flagsOf(touch->object))
+                                  ? HazardSurfaces::enemyHarmOf(m_sim.hazards->flagsOf(touch->object))
                                   : std::nullopt) {
             EnemyHit hit;
-            if (HazardSurfaces::burning(m_hazards->flagsOf(touch->object))) {
+            if (HazardSurfaces::burning(m_sim.hazards->flagsOf(touch->object))) {
                 if (critter.burnGap > 0) {
                     return false;
                 }
@@ -347,8 +347,8 @@ bool Combatant::blockedBySwarm(Actor& critter, const Vec3& to) {
         return false;
     }
     if (critter.stock->definition.kind == CombatantKind::Golem && nearest->halfHeight <= 2) {
-        m_tramples.push_back(
-            {nearest->id, critter.definition->itemDamage() * m_scales.damage, contact});
+        m_sim.tramples.push_back(
+            {nearest->id, critter.definition->itemDamage() * m_sim.scales.damage, contact});
         return false;
     }
     return true;
@@ -360,7 +360,7 @@ bool Combatant::blockedBySwarm(Actor& critter, const Vec3& to) {
  * blows up; everything else solid stops it. */
 bool Combatant::blockedByItems(Actor& critter, const Vec3& to) {
     const bool breaks = critter.stock->definition.breaksItems;
-    const f32 blow = critter.definition->itemDamage() * m_scales.damage;
+    const f32 blow = critter.definition->itemDamage() * m_sim.scales.damage;
     const Vec3 delta = to - critter.position;
     return std::ranges::any_of(m_obstacles, [&](const CombatantObstacle& item) {
         // fn_8005D5C8: low generators may be crushed by golems/gargoyles,
@@ -417,7 +417,7 @@ bool Combatant::blockedByItems(Actor& critter, const Vec3& to) {
         if (item.kind == CombatantObstacle::Kind::Chest) {
             return false;
         }
-        m_rams.push_back(CombatantRam{item.id, blow});
+        m_sim.rams.push_back(CombatantRam{item.id, blow});
         const f32 felt = std::max(1.0f, std::round(blow - static_cast<f32>(item.armor)));
         return item.explodes || static_cast<f32>(item.health) > felt;
     });

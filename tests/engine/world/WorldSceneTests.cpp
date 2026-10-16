@@ -11,10 +11,13 @@
 #include "engine/assets/TextureSet.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/WorldScene.h"
+#include "engine/world/WorldStateCheckpoint.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "SampleLevel.h"
 #include "TestSupport.h"
 
@@ -47,6 +50,43 @@ struct Fixture {
                            background);
     }
 };
+
+struct DigestTextures {
+    std::vector<std::pair<const Texture*, u32>> slots;
+
+    explicit DigestTextures(Fixture& fixture) {
+        for (u32 slot = 0; slot < 3; ++slot) {
+            slots.emplace_back(&fixture.textures.texture(fixture.device, slot), slot);
+        }
+        for (u32 slot = 0; slot < 4; ++slot) {
+            slots.emplace_back(&fixture.lender.texture(fixture.device, slot), 100 + slot);
+        }
+        slots.emplace_back(&fixture.device.whiteTexture(), 200);
+    }
+    NativeStateDigest::Resources resources() {
+        return {this, [](NativeStateDigest& digest, std::type_index type, const void* pointer,
+                         void* context) {
+                    if (type != typeid(Texture)) return false;
+                    const auto& bindings = *static_cast<DigestTextures*>(context);
+                    for (const auto& [texture, identity] : bindings.slots) {
+                        if (texture == pointer) {
+                            digest.word(identity);
+                            return true;
+                        }
+                    }
+                    return false;
+                }};
+    }
+};
+
+std::optional<NativeStateDigest::Digest>
+sceneDigest(const WorldScene& scene, NativeStateDigest::Resources resources = {},
+            const WorldScene::LocalSnapshot* saved = nullptr) {
+    NativeStateDigest digest(resources);
+    if (saved) scene.appendLocalDigest(digest, *saved);
+    else scene.appendNativeDigest(digest);
+    return digest.checkedFinish();
+}
 
 TEST_CASE("geometry checkpoints restore hierarchy and visibility without retaining stale overrides",
           "[world][scene][geometry-replica]") {
@@ -843,6 +883,254 @@ TEST_CASE("a layout whose objects have no meshes builds nothing", "[world][scene
     REQUIRE(ghosts.load(dir));
     REQUIRE_FALSE(f.scene.build(ghosts, f.models, f.textures, f.device));
     REQUIRE(f.scene.placedCount() == 0);
+}
+
+TEST_CASE("world immutable digest caches retain native resources and rebuild configuration",
+          "[world][scene][native-immutable-digest][world-scene-digest]") {
+    Fixture first("world-digest-first"), second("world-digest-second");
+    REQUIRE(first.build());
+    REQUIRE(second.build());
+    DigestTextures firstTextures(first), secondTextures(second);
+    const auto initial = sceneDigest(first.scene, firstTextures.resources());
+    REQUIRE(initial);
+    REQUIRE(first.scene.textureOf(0) != second.scene.textureOf(0));
+    CHECK(sceneDigest(second.scene, secondTextures.resources()) == initial);
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
+    WorldScene::LocalSnapshot saved;
+    first.scene.saveLocal(saved);
+    CHECK(sceneDigest(first.scene, firstTextures.resources(), &saved) == initial);
+    CHECK_FALSE(sceneDigest(second.scene, secondTextures.resources(), &saved));
+
+    // Immutable scalar caches never authenticate pointer bindings on behalf of
+    // the current stage registry, even after a successful hash warmed them.
+    CHECK_FALSE(sceneDigest(first.scene));
+    auto different = firstTextures;
+    different.slots[0].second += 1000;
+    REQUIRE(sceneDigest(first.scene, different.resources()));
+    CHECK(sceneDigest(first.scene, different.resources()) != initial);
+    different = firstTextures;
+    different.slots.erase(different.slots.begin());
+    CHECK_FALSE(sceneDigest(first.scene, different.resources()));
+    CHECK(sceneDigest(first.scene, firstTextures.resources(), &saved) == initial);
+
+    for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
+        first.device.draws.clear();
+        first.scene.draw(first.device, Mat4{1}, CameraFrame{}, alpha);
+        CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
+    }
+    // Sample object 0 is a meshless parent, so controlling it changes nothing.
+    // Object 2 is a baked WALL; control must create an additional mutable unit.
+    const std::array<usize, 1> controlled{2};
+    REQUIRE_FALSE(first.scene.moving(2));
+    REQUIRE_FALSE(first.scene.setObjectVisible(2, true));
+    const auto units = first.scene.unitCount();
+    REQUIRE(first.build(controlled));
+    REQUIRE(first.scene.unitCount() == units + 1);
+    REQUIRE(first.scene.setObjectVisible(2, true));
+    CHECK_FALSE(first.scene.canRestoreLocal(saved));
+    CHECK_FALSE(sceneDigest(first.scene, firstTextures.resources(), &saved));
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) != initial);
+    REQUIRE(first.build());
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
+    const std::array<usize, 1> backdrop{9};
+    REQUIRE(first.build({}, backdrop));
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) != initial);
+    REQUIRE(first.build());
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
+
+    first.scene.clear();
+    WorldScene empty;
+    REQUIRE(sceneDigest(first.scene));
+    CHECK(sceneDigest(first.scene) == sceneDigest(empty));
+    CHECK(sceneDigest(first.scene) != initial);
+    REQUIRE(first.build());
+    CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
+}
+
+TEST_CASE("world immutable caches do not hide mutable placement unit or texture state",
+          "[world][scene][local-rewind][native-immutable-digest][world-scene-digest]") {
+    Fixture fixture("world-digest-mutable");
+    REQUIRE(fixture.build());
+    DigestTextures textures(fixture);
+    WorldScene::LocalSnapshot initialState;
+    fixture.scene.saveLocal(initialState);
+    const auto initial = sceneDigest(fixture.scene, textures.resources());
+    REQUIRE(initial);
+    const auto uploads = fixture.device.texturesCreated;
+    const auto updates = fixture.device.textureUpdates;
+    for (u32 field = 0; field < 10; ++field) {
+        CAPTURE(field);
+        REQUIRE(fixture.scene.restoreLocal(initialState));
+        switch (field) {
+        case 0:
+            fixture.scene.setObjectTransform(8, glm::translate(Mat4{1}, Vec3{0, 8, 50}));
+            break;
+        case 1:
+            fixture.scene.setObjectTransform(8, glm::translate(Mat4{1}, Vec3{0, 8, 50}), true);
+            break;
+        case 2: fixture.scene.setObjectAlpha(9, 0.75f); break;
+        case 3: REQUIRE(fixture.scene.setObjectVisible(11, false)); break;
+        case 4: fixture.scene.setTextureFrame(0, fixture.scene.textureOf(1)); break;
+        case 5: {
+            const std::array<const Texture*, 2> frames{
+                fixture.scene.textureOf(0), fixture.scene.textureOf(1)};
+            fixture.scene.setTextureCycle(0, frames, 0.5f, 0.25f);
+            break;
+        }
+        case 6:
+            fixture.scene.setTextureScroll(0, fixture.scene.textureOffset(0),
+                                           {0.25f, 0.5f}, {0.01f, 0.02f});
+            break;
+        case 7: fixture.scene.setTextureTime(12); break;
+        case 8: fixture.scene.setDarken(0.25f); break;
+        case 9: {
+            const std::array<PointLight, 1> lights{{{{0, 1, 50}, {1, 0.5f, 0.25f}, 4, 2}}};
+            fixture.scene.setPointLights(lights);
+            break;
+        }
+        default: FAIL("unexpected mutable field");
+        }
+        const auto changed = sceneDigest(fixture.scene, textures.resources());
+        REQUIRE(changed);
+        CHECK(changed != initial);
+        WorldScene::LocalSnapshot changedState;
+        fixture.scene.saveLocal(changedState);
+        CHECK_FALSE(fixture.scene.equalLocal(initialState, changedState));
+        CHECK(sceneDigest(fixture.scene, textures.resources(), &initialState) == initial);
+        CHECK(sceneDigest(fixture.scene, textures.resources(), &changedState) == changed);
+        REQUIRE(fixture.scene.restoreLocal(initialState));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == initial);
+        CHECK(sceneDigest(fixture.scene, textures.resources(), &changedState) == changed);
+        REQUIRE(fixture.scene.restoreLocal(changedState));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == changed);
+    }
+    // Previous pose changes while the current transform remains identical.
+    REQUIRE(fixture.scene.restoreLocal(initialState));
+    fixture.scene.setObjectTransform(8, glm::translate(Mat4{1}, Vec3{0, 8, 50}));
+    const auto unsettled = sceneDigest(fixture.scene, textures.resources());
+    fixture.scene.capturePresentation();
+    CHECK(sceneDigest(fixture.scene, textures.resources()) != unsettled);
+    CHECK(fixture.device.texturesCreated == uploads);
+    CHECK(fixture.device.textureUpdates == updates);
+}
+
+TEST_CASE("world static digest versions follow native history across corrections",
+          "[world][scene][local-rewind][native-immutable-digest][world-scene-digest]") {
+    Fixture fixture("world-digest-static-versions");
+    REQUIRE(fixture.build());
+    DigestTextures textures(fixture);
+    WorldCollision collision;
+    WorldAnimator animator;
+    animator.bind(fixture.layout);
+    TextureAnimator textureClock;
+    const std::shared_ptr<const u8> binding = std::make_shared<const u8>(0);
+    WorldStateCheckpoint construction(fixture.scene, collision, animator, binding);
+    REQUIRE(construction.bind(textureClock, fixture.layout));
+    const auto authored = construction.checkpoint();
+    REQUIRE(authored);
+    REQUIRE_FALSE(fixture.scene.moving(0));
+    REQUIRE_FALSE(fixture.scene.moving(9));
+    REQUIRE(fixture.scene.moving(8));
+    REQUIRE(fixture.scene.moving(10));
+    WorldScene::LocalSnapshot initialState;
+    fixture.scene.saveLocal(initialState);
+    const auto initial = sceneDigest(fixture.scene, textures.resources());
+    REQUIRE(initial);
+
+    // The diagnostic adapter is only a fixture constructor: ordinary gameplay
+    // cannot move static geometry. Hashing and all correction restores below use
+    // actual native snapshots, including independently retained static versions.
+    auto alternate = *authored;
+    alternate.placements[0].local[3].x += 2;
+    alternate.placements[0].previous[3].x -= 3;
+    alternate.placements[0].continuity = 9;
+    REQUIRE(construction.restore(alternate));
+    WorldScene::LocalSnapshot alternateState;
+    fixture.scene.saveLocal(alternateState);
+    const auto shifted = sceneDigest(fixture.scene, textures.resources());
+    REQUIRE(shifted);
+    CHECK(shifted != initial);
+    CHECK(sceneDigest(fixture.scene, textures.resources(), &initialState) == initial);
+    REQUIRE(construction.restore(alternate)); // New allocation, identical values.
+    WorldScene::LocalSnapshot sameValues;
+    fixture.scene.saveLocal(sameValues);
+    CHECK(fixture.scene.equalLocal(alternateState, sameValues));
+    CHECK(sceneDigest(fixture.scene, textures.resources(), &sameValues) == shifted);
+    for (u32 field = 0; field < 3; ++field) {
+        CAPTURE(field);
+        auto changed = alternate;
+        if (field == 0) changed.placements[0].local[3].z += 1;
+        if (field == 1) changed.placements[0].previous[3].z += 1;
+        if (field == 2) ++changed.placements[0].continuity;
+        REQUIRE(construction.restore(changed));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) != shifted);
+        CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
+    }
+    REQUIRE(fixture.scene.restoreLocal(alternateState));
+
+    fixture.scene.capturePresentation();
+    WorldScene::LocalSnapshot settledState;
+    fixture.scene.saveLocal(settledState);
+    const auto settled = sceneDigest(fixture.scene, textures.resources());
+    REQUIRE(settled);
+    CHECK(settled != shifted);
+    CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
+    const auto step = [&](u32 tick) {
+        fixture.scene.capturePresentation();
+        fixture.scene.setObjectTransform(8, glm::translate(Mat4{1}, Vec3{0, tick, 50}), tick % 5 == 0);
+        fixture.scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
+        REQUIRE(fixture.scene.setObjectVisible(11, tick % 3 != 0));
+        fixture.scene.setTextureScroll(0, {tick * 0.007f, 0}, {0, tick * 0.01f}, {0.01f, 0});
+        fixture.scene.setTextureTime(tick);
+    };
+    std::array<WorldScene::LocalSnapshot, 8> reference;
+    std::array<NativeStateDigest::Digest, 8> expected;
+    for (usize tick = 0; tick < reference.size(); ++tick) {
+        step(static_cast<u32>(tick + 1));
+        fixture.scene.saveLocal(reference[tick]);
+        const auto digest = sceneDigest(fixture.scene, textures.resources());
+        REQUIRE(digest);
+        expected[tick] = *digest;
+    }
+    const auto uploads = fixture.device.texturesCreated;
+    const auto updates = fixture.device.textureUpdates;
+    for (usize distance = 1; distance <= reference.size(); ++distance) {
+        CAPTURE(distance);
+        REQUIRE(fixture.scene.restoreLocal(settledState));
+        for (usize tick = 0; tick < distance; ++tick) step(static_cast<u32>(100 + tick));
+        REQUIRE(fixture.scene.restoreLocal(alternateState));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == shifted);
+        REQUIRE(fixture.scene.restoreLocal(initialState));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == initial);
+        CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
+        REQUIRE(fixture.scene.restoreLocal(settledState));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == settled);
+        for (usize tick = 0; tick < distance; ++tick) step(static_cast<u32>(tick + 1));
+        WorldScene::LocalSnapshot corrected;
+        fixture.scene.saveLocal(corrected);
+        CHECK(fixture.scene.equalLocal(corrected, reference[distance - 1]));
+        CHECK(sceneDigest(fixture.scene, textures.resources()) == expected[distance - 1]);
+        for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
+            fixture.device.draws.clear();
+            fixture.scene.draw(fixture.device, Mat4{1}, CameraFrame{}, alpha);
+            const auto draws = fixture.device.draws;
+            REQUIRE(fixture.scene.restoreLocal(alternateState));
+            REQUIRE(fixture.scene.restoreLocal(reference[distance - 1]));
+            fixture.device.draws.clear();
+            fixture.scene.draw(fixture.device, Mat4{1}, CameraFrame{}, alpha);
+            REQUIRE(fixture.device.draws.size() == draws.size());
+            for (usize draw = 0; draw < draws.size(); ++draw) {
+                test::checkRecordedDraw(fixture.device.draws[draw], draws[draw]);
+            }
+            CHECK(sceneDigest(fixture.scene, textures.resources()) == expected[distance - 1]);
+            CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
+        }
+    }
+    CHECK(fixture.device.texturesCreated == uploads);
+    CHECK(fixture.device.textureUpdates == updates);
+    fixture.scene.clear();
+    CHECK_FALSE(fixture.scene.canRestoreLocal(alternateState));
+    CHECK_FALSE(sceneDigest(fixture.scene, {}, &alternateState));
 }
 
 } // namespace

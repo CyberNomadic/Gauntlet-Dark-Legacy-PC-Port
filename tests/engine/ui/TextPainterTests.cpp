@@ -4,6 +4,7 @@
 
 #include "engine/assets/BitmapFont.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/ui/Canvas.h"
 #include "engine/ui/TextPainter.h"
 
@@ -16,6 +17,48 @@ using Catch::Approx;
 
 BitmapFont sampleFont() {
     return BitmapFont::fromGlyphs(10, 4, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+}
+
+TEST_CASE("painter identity follows layout content while excluding renderer bindings",
+          "[ui][text][native-text-digest]") {
+    auto font = sampleFont();
+    auto independentFont = sampleFont();
+    const test::FakeTexture firstSheet{32, 16};
+    const test::FakeTexture secondSheet{64, 32};
+    test::FakeRenderDevice device;
+    TextPainter a;
+    TextPainter b;
+    const auto hash = [](const TextPainter& painter) {
+        NativeStateDigest digest;
+        digest.value(painter);
+        REQUIRE(digest.good());
+        return digest.finish();
+    };
+    const auto empty = hash(a);
+    a.setFont(&font, &firstSheet);
+    b.setFont(&independentFont, &secondSheet);
+    const auto bound = hash(a);
+    CHECK(bound == hash(b));
+    CHECK(bound != empty);
+    Canvas canvas;
+    canvas.begin(device, Mat4{1});
+    a.draw(canvas, 10, 20, "A B", TextStyle{});
+    canvas.end();
+    REQUIRE_FALSE(device.draws.empty());
+    CHECK(hash(a) == bound);
+    const auto draws = device.draws.size();
+    const auto textures = device.texturesCreated;
+    CHECK(hash(a) == bound);
+    CHECK(device.draws.size() == draws);
+    CHECK(device.texturesCreated == textures);
+    // The painter borrows a font. Replacing it must invalidate the font's
+    // content identity without requiring another setFont call.
+    font = BitmapFont::fromGlyphs(12, 4, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+    CHECK(hash(a) != bound);
+    CHECK(hash(b) == bound);
+    b.setFont(&independentFont, nullptr);
+    CHECK_FALSE(b.ready());
+    CHECK(hash(b) != bound);
 }
 
 TEST_CASE("text is measured from glyph widths and the space width", "[ui][text]") {

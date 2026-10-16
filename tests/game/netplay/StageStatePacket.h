@@ -46,12 +46,16 @@ public:
         /** Explicit load-time operation on a locally captured, trusted stage.
          * No resource lookup, graphics upload, or live owner mutation. */
         static std::optional<Catalog> build(const State& trusted);
+        /** Read-only diagnostics retain every authored particle emitter. This
+         * does not expand packet encoding or native restore admission. */
+        static std::optional<Catalog> buildObservation(const State& trusted);
         const std::array<u8, 32>& fingerprint() const;
         bool valid() const;
 
     private:
         friend class StageStatePacket;
         struct Data;
+        static std::optional<Catalog> build(const State& trusted, bool observation);
         explicit Catalog(std::shared_ptr<const Data> data) : m_data(std::move(data)) {}
         std::shared_ptr<const Data> m_data;
     };

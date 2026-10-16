@@ -11,6 +11,11 @@ namespace gdl {
  * under the 2D layers, so screens can draw sprites over the world without clearing depth.
  */
 struct WorldCamera {
+    bool operator==(const WorldCamera&) const = default;
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const WorldCamera& value) {
+        visitor.template fields<4>(value);
+    }
+
     static constexpr f32 kNear = 0.25f;
     static constexpr f32 kFar = 2000.0f;
     static constexpr f32 kDepthRange = 0.45f; ///< world depths stay below the canvas' 0.5

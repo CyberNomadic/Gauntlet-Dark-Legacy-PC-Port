@@ -98,7 +98,8 @@ TEST_CASE("native potion art and private flights retain exact live and retired p
     const bool impact = GENERATE(false, true);
     test::FakeRenderDevice device;
     ItemArchive artwork;
-    REQUIRE(artwork.load(test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path()));
+    const auto weaponPath = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    REQUIRE(artwork.load(weaponPath));
     auto launch =
         PotionEmission::throwPotion({2, {0, 2, 0}, {0, 0, 1}, kind, 24, 1.1f, damage::kHeal}, 8);
     launch.archive = &artwork;

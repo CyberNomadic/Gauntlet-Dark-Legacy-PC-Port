@@ -12,6 +12,9 @@ namespace gdl::game {
 
 /** One level of the game, as the files name it. */
 struct LevelRef {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const LevelRef& value) {
+        visitor.template fields<8>(value);
+    }
     std::string realm;     ///< the realm's data file, such as TOWN
     s32 realmId = -1;      ///< the original's world id for the realm
     std::string name;      ///< the level's name in that file, such as G1

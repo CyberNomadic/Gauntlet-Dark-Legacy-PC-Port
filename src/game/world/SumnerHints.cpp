@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/players/LevelRecord.h"
 #include "game/players/Relics.h"
@@ -11,6 +12,31 @@
 #include "game/world/TowerAccess.h"
 
 namespace gdl::game {
+
+void SumnerHints::appendState(NativeStateDigest& digest, const Simulation& state) const {
+    const auto& [generalList, generalHint, guardian, legend, runestone] = state;
+    digest.string("SumnerHints.native.1");
+    digest.value(m_text);
+    digest.values(generalList, generalHint);
+    digest.fields<2>(guardian);
+    digest.fields<2>(legend);
+    digest.fields<2>(runestone);
+}
+
+bool SumnerHints::appendNativeDigest(NativeStateDigest& digest) const {
+    appendState(digest, m_sim);
+    return digest.good();
+}
+
+bool SumnerHints::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, owner, binding] = saved;
+    appendState(digest, state);
+    return digest.good();
+}
 
 namespace {
 
@@ -65,16 +91,17 @@ HintKnowledge HintKnowledge::ofParty(std::span<const ClassProgress> party) {
 }
 
 bool SumnerHints::load(const std::filesystem::path& file) {
-    m_generalList = -1;
-    m_generalHint = -1;
+    m_localBinding = std::make_shared<const u8>(0);
+    m_sim.generalList = -1;
+    m_sim.generalHint = -1;
     beginVisit();
     return m_text.load(file);
 }
 
 void SumnerHints::beginVisit() {
-    m_guardian = Cursor{0, 0};
-    m_legend = Cursor{0, 0};
-    m_runestone = Cursor{-1, 0};
+    m_sim.guardian = Cursor{0, 0};
+    m_sim.legend = Cursor{0, 0};
+    m_sim.runestone = Cursor{-1, 0};
 }
 
 /** The next hint of the list for the furthest wing open, then of the wings before it, and
@@ -82,22 +109,22 @@ void SumnerHints::beginVisit() {
 void SumnerHints::stepGeneral(const HintKnowledge& knowledge) {
     const MessageList* lists = m_text.findList(kGeneralList);
     for (s32 tries = 0; tries < 2 * (kLastGeneralList + 2); ++tries) {
-        if (m_generalList < 0) {
-            m_generalList = kLastGeneralList;
+        if (m_sim.generalList < 0) {
+            m_sim.generalList = kLastGeneralList;
         }
-        while (m_generalList > 0 && !knowledge.wingsOpen[static_cast<usize>(m_generalList - 1)]) {
-            m_generalHint = -1;
-            --m_generalList;
+        while (m_sim.generalList > 0 && !knowledge.wingsOpen[static_cast<usize>(m_sim.generalList - 1)]) {
+            m_sim.generalHint = -1;
+            --m_sim.generalList;
         }
-        ++m_generalHint;
+        ++m_sim.generalHint;
         const MessageInfo* message =
-            lists != nullptr ? m_text.listed(*lists, static_cast<usize>(m_generalList)) : nullptr;
+            lists != nullptr ? m_text.listed(*lists, static_cast<usize>(m_sim.generalList)) : nullptr;
         const auto count = message != nullptr ? static_cast<s32>(message->pages.size()) : 0;
-        if (m_generalHint < count) {
+        if (m_sim.generalHint < count) {
             return;
         }
-        m_generalHint = -1;
-        --m_generalList;
+        m_sim.generalHint = -1;
+        --m_sim.generalList;
     }
 }
 
@@ -203,37 +230,55 @@ HintPage SumnerHints::next(HintTopic topic, const HintKnowledge& knowledge,
         page.title = std::string(generalTitle);
         page.centred = true;
         const MessageList* lists = m_text.findList(kGeneralList);
-        const MessageInfo* message = lists != nullptr && m_generalList >= 0
-                                         ? m_text.listed(*lists, static_cast<usize>(m_generalList))
+        const MessageInfo* message = lists != nullptr && m_sim.generalList >= 0
+                                         ? m_text.listed(*lists, static_cast<usize>(m_sim.generalList))
                                          : nullptr;
-        if (message != nullptr && m_generalHint >= 0 &&
-            static_cast<usize>(m_generalHint) < message->pages.size()) {
+        if (message != nullptr && m_sim.generalHint >= 0 &&
+            static_cast<usize>(m_sim.generalHint) < message->pages.size()) {
             page.scale = message->scale;
-            page.passages.push_back(message->pages[static_cast<usize>(m_generalHint)]);
+            page.passages.push_back(message->pages[static_cast<usize>(m_sim.generalHint)]);
         }
         return page;
     }
     case HintTopic::Guardians: {
-        stepWorlds(m_guardian, kGuardianCount, knowledge.worldsOpen, knowledge.guardiansBeaten);
-        const auto entry = static_cast<usize>(m_guardian.index);
+        stepWorlds(m_sim.guardian, kGuardianCount, knowledge.worldsOpen, knowledge.guardiansBeaten);
+        const auto entry = static_cast<usize>(m_sim.guardian.index);
         return pageOf(kGuardianTitles, entry, kGuardianList, entry,
                       passagesFor(bitOf(kWorldOrder[entry]), knowledge.guardianTries), kPassageGap);
     }
     case HintTopic::Legends: {
-        stepWorlds(m_legend, kLegendCount, knowledge.worldsOpen, knowledge.legendsFound);
-        const auto entry = static_cast<usize>(m_legend.index);
+        stepWorlds(m_sim.legend, kLegendCount, knowledge.worldsOpen, knowledge.legendsFound);
+        const auto entry = static_cast<usize>(m_sim.legend.index);
         return pageOf(kLegendTitles, entry, kLegendList, entry,
                       passagesFor(bitOf(kWorldOrder[entry]), knowledge.legendTries), kPassageGap);
     }
     case HintTopic::Runestones: {
-        stepRunestones(m_runestone, knowledge.runestonesFound);
+        stepRunestones(m_sim.runestone, knowledge.runestonesFound);
         const auto stone =
-            static_cast<usize>(kRunestoneOrder[static_cast<usize>(m_runestone.index)] - 1);
+            static_cast<usize>(kRunestoneOrder[static_cast<usize>(m_sim.runestone.index)] - 1);
         return pageOf(kRunestoneTitles, stone, kRunestoneList, stone,
                       passagesFor(bitOf(static_cast<s32>(stone)), knowledge.runestoneTries), 0);
     }
     }
     return {};
+}
+
+void SumnerHints::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+}
+
+bool SumnerHints::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && saved.binding.lock() == m_localBinding;
+}
+
+bool SumnerHints::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    return true;
 }
 
 } // namespace gdl::game

@@ -59,6 +59,14 @@ public:
 
     /** GPU texture, created on first use; throws like image(). */
     const Texture& texture(RenderDevice& device, u32 index);
+    /** Already-created native slot only; no decode, cache population or GPU work. */
+    const Texture* cachedTexture(u32 index) const {
+        return index < m_textures.size() ? m_textures[index].get() : nullptr;
+    }
+    /** Already-decoded pixels only; native binding inspection must not decode. */
+    const Image* cachedImage(u32 index) const {
+        return index < m_images.size() && !m_images[index].pixels.empty() ? &m_images[index] : nullptr;
+    }
 
     /** Drops the GPU textures; call before the device goes away. */
     void releaseTextures();

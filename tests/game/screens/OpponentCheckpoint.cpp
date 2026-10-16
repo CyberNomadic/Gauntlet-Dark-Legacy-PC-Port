@@ -8,7 +8,7 @@ struct OpponentCheckpoint::Prepared::Data {
     Generators::Prepared generators;
     Enemies::Prepared enemies;
     EnemyMissiles::Prepared missiles;
-    std::optional<PlacedEnemies::Prepared> placements;
+    std::optional<PlacedEnemiesCheckpoint::Prepared> placements;
 };
 
 OpponentCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
@@ -27,7 +27,7 @@ OpponentCheckpoint::checkpoint(std::span<const EnemyMissiles::Resource> resource
     }
     Checkpoint result{std::move(*generators), std::move(*enemies), std::move(*missiles)};
     if (m_placements != nullptr) {
-        result.placements = m_placements->checkpoint();
+        result.placements = PlacedEnemiesCheckpoint::capture(*m_placements);
         if (!result.placements) {
             return std::nullopt;
         }
@@ -46,8 +46,9 @@ OpponentCheckpoint::prepareRestore(const Checkpoint& state,
     auto generators = m_generators.prepareRestore(state.generators);
     auto enemies = m_enemies.prepareRestore(state.enemies);
     auto missiles = m_missiles.prepareRestore(state.missiles, resources);
-    auto placements = m_placements != nullptr ? m_placements->prepareRestore(*state.placements)
-                                              : std::optional<PlacedEnemies::Prepared>{};
+    auto placements = m_placements != nullptr
+                          ? PlacedEnemiesCheckpoint::prepareRestore(*m_placements, *state.placements)
+                          : std::optional<PlacedEnemiesCheckpoint::Prepared>{};
     if (!generators || !enemies || !missiles || (m_placements != nullptr && !placements)) {
         return std::nullopt;
     }
@@ -60,7 +61,8 @@ bool OpponentCheckpoint::canCommit(const Prepared& prepared) const {
            m_enemies.canCommit(prepared.m_data->enemies) &&
            m_missiles.canCommit(prepared.m_data->missiles) &&
            (prepared.m_data->placements.has_value() == (m_placements != nullptr)) &&
-           (!prepared.m_data->placements || m_placements->canCommit(*prepared.m_data->placements));
+           (!prepared.m_data->placements ||
+            PlacedEnemiesCheckpoint::canCommit(*m_placements, *prepared.m_data->placements));
 }
 
 bool OpponentCheckpoint::commitRestore(Prepared&& prepared) {
@@ -74,7 +76,8 @@ bool OpponentCheckpoint::commitRestore(Prepared&& prepared) {
     if (!m_generators.commitRestore(std::move(data->generators)) ||
         !m_enemies.commitRestore(std::move(data->enemies)) ||
         !m_missiles.commitRestore(std::move(data->missiles)) ||
-        (data->placements && !m_placements->commitRestore(std::move(*data->placements)))) {
+        (data->placements &&
+         !PlacedEnemiesCheckpoint::commitRestore(*m_placements, std::move(*data->placements)))) {
         std::terminate();
     }
     return true;

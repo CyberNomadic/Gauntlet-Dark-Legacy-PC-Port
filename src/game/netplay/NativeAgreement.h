@@ -55,8 +55,16 @@ public:
     static constexpr auto kTimeout = std::chrono::seconds{10};
 
     static bool recognizes(std::span<const u8> bytes);
+    static bool recognizesTerminal(std::span<const u8> bytes);
+    /** Validate and return the exact source epoch/tick of a terminal packet.
+     * Tick zero is reserved for an epoch-wide failure, never a certificate. */
+    static std::optional<std::pair<u64, u64>> terminalContext(std::span<const u8> bytes);
     bool open(u8 localPeer, u64 epoch, const Owners& owners, std::span<const Link> links,
               u32 period = 60, Time now = Clock::now());
+    /** One exact terminal certificate, in a distinct wire domain from periodic
+     * reports even when its tick lies on the periodic schedule. */
+    bool openTerminal(u8 localPeer, u64 epoch, const Owners& owners, std::span<const Link> links,
+                      u64 terminalTick, Time now = Clock::now());
     Admission submit(u64 tick, const Digest& digest, Time now = Clock::now());
     Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
                       Time now = Clock::now());
@@ -69,6 +77,7 @@ public:
     Failure failure() const { return m_failure; }
     u64 failureTick() const { return m_failureTick; }
     u64 agreedTick() const { return m_agreed; }
+    std::optional<u64> terminalTick() const { return m_terminal; }
     u64 submitTick() const { return m_submit; }
     usize pendingTicks() const { return m_pending.size(); }
     usize queuedPackets() const;
@@ -94,6 +103,7 @@ private:
     u8 m_local = 0;
     u64 m_epoch = 0;
     u32 m_period = 0;
+    std::optional<u64> m_terminal;
     u64 m_submit = 0;
     u64 m_agreed = 0;
     Failure m_failure = Failure::None;

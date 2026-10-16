@@ -6,7 +6,7 @@
 namespace gdl::game {
 bool PlayScene::relicCeremonyOn() const {
     return m_towerRelics.active() && !spawning() && !m_promotion.active() &&
-           m_welcome.intro() != Intro::Crystal && m_welcome.intro() != Intro::Scroll;
+           m_sim.welcome.intro() != Intro::Crystal && m_sim.welcome.intro() != Intro::Scroll;
 }
 void PlayScene::beginTowerRelics() {
     std::vector<Relics> collection;

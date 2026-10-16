@@ -7,6 +7,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/screens/SumnerVisit.h"
 
@@ -159,6 +160,88 @@ TEST_CASE("missing Sumner resources cannot open a scroll", "[game][screens][sumn
     REQUIRE(f.approach(0.0f));
     REQUIRE_FALSE(f.visit.visit(3.0f, 0, true, f.text, &f.config, nullptr));
     REQUIRE_FALSE(f.visit.active());
+}
+
+TEST_CASE("native Sumner visit rewind restores greeting ownership hint progression and cues",
+          "[game][screens][sumner-visit][sumner-visit-local-rewind]") {
+    Fixture expected("sumner-local-reference");
+    Fixture corrected("sumner-local-corrected");
+    struct Cue {
+        bool greeting = false;
+        HintMenuEvent menu;
+    };
+    const auto tick = [](Fixture& f, s32 t) {
+        const s32 phase = t % 80;
+        const auto visitor = phase < 50 ? std::optional<s32>{(t / 80) % 4} : std::nullopt;
+        const bool greeting = f.approach(0.25f, visitor);
+        MenuInput input;
+        input.select = phase == 12 || phase == 17;
+        input.back = phase == 15 || phase == 20 || phase == 22;
+        return Cue{greeting, f.step(input, 1)};
+    };
+    s32 at = 0;
+    s32 greetings = 0;
+    s32 questions = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        const s32 delay = 1 + window % 8;
+        CAPTURE(window, at, delay);
+        SumnerVisit::LocalSnapshot saved;
+        corrected.visit.saveLocal(saved);
+        REQUIRE_FALSE(expected.visit.restoreLocal(saved));
+        std::vector<Cue> cues;
+        for (s32 t = at; t < at + delay; ++t) {
+            cues.push_back(tick(expected, t));
+            corrected.approach(3, std::nullopt);
+            corrected.approach(3, 3);
+            corrected.visit.answer(39, corrected.text, &corrected.strings, {});
+            MenuInput wrong;
+            wrong.back = true;
+            corrected.step(wrong, 11);
+        }
+        const auto created = corrected.device.texturesCreated;
+        const auto uploaded = corrected.device.textureUpdates;
+        REQUIRE(corrected.visit.restoreLocal(saved));
+        for (s32 t = at; t < at + delay; ++t) {
+            const auto actual = tick(corrected, t);
+            const auto& cue = cues[static_cast<usize>(t - at)];
+            CHECK(actual.greeting == cue.greeting);
+            CHECK(actual.menu.kind == cue.menu.kind);
+            CHECK(actual.menu.topic == cue.menu.topic);
+            greetings += actual.greeting ? 1 : 0;
+            questions += actual.menu.kind == HintMenuEvent::Kind::Asked ? 1 : 0;
+        }
+        CHECK(corrected.device.texturesCreated == created);
+        CHECK(corrected.device.textureUpdates == uploaded);
+        CHECK(corrected.visit.owner() == expected.visit.owner());
+        CHECK(corrected.visit.active() == expected.visit.active());
+        CHECK(corrected.visit.menu().revision() == expected.visit.menu().revision());
+        CHECK(corrected.visit.menu().reading() == expected.visit.menu().reading());
+        CHECK(corrected.visit.menu().page().definition().body ==
+              expected.visit.menu().page().definition().body);
+        CHECK(corrected.visit.texts().generalHint() == expected.visit.texts().generalHint());
+        const auto draw = [](Fixture& f) {
+            f.visit.prepare(f.device);
+            f.device.draws.clear();
+            Canvas canvas;
+            canvas.begin(f.device, Mat4{1});
+            f.visit.draw(canvas, f.text);
+            canvas.end();
+        };
+        draw(expected);
+        draw(corrected);
+        REQUIRE(corrected.device.draws.size() == expected.device.draws.size());
+        for (usize i = 0; i < expected.device.draws.size(); ++i) {
+            test::checkRecordedDraw(corrected.device.draws[i], expected.device.draws[i]);
+        }
+        at += delay;
+    }
+    CHECK(greetings >= 5);
+    CHECK(questions >= 10);
+    SumnerVisit::LocalSnapshot stale;
+    corrected.visit.saveLocal(stale);
+    corrected.visit.clear();
+    CHECK_FALSE(corrected.visit.restoreLocal(stale));
+    CHECK(corrected.visit.owner() == -1);
 }
 
 } // namespace

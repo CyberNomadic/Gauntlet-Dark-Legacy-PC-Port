@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -1042,18 +1043,21 @@ TEST_CASE("Wraith music resolves its numbered ADS parts and produces audio",
     soundscape.close();
 }
 
-/** One audible mono DSP frame followed by the format's unplayed transport trailer. */
-std::vector<u8> dspStream() {
+/** Audible mono DSP frames followed by the format's unplayed transport trailer. */
+std::vector<u8> dspStream(u32 frames = 1) {
     test::ByteWriter stream;
     stream.putFourcc("dhSS");
     for (const u32 value : {24U, 32U, 48000U, 1U, 8U, 0xFFFFFFFFU, 0U}) {
         stream.putU32(std::byteswap(value));
     }
-    stream.putFourcc("dbSS").putU32(std::byteswap(16U));
-    std::array<u8, 96> channel{};
-    channel[3] = 28;
+    stream.putFourcc("dbSS").putU32(std::byteswap((frames + 1) * 8));
+    stream.putU32(std::byteswap((frames + 1) * 14));
+    const std::array<u8, 92> channel{};
     const std::array<u8, 8> frame{0, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11};
-    stream.putBytes(channel).putBytes(frame).putBytes(frame);
+    stream.putBytes(channel);
+    for (u32 i = 0; i <= frames; ++i) {
+        stream.putBytes(frame);
+    }
     return stream.bytes();
 }
 
@@ -1117,11 +1121,12 @@ struct AreaFixture {
     AssetLocator assets;
     LevelSoundscape soundscape;
 
-    explicit AreaFixture(std::string_view name) : root(test::scratchDirectory(name)), assets(root) {
+    explicit AreaFixture(std::string_view name, u32 dspFrames = 1)
+        : root(test::scratchDirectory(name)), assets(root) {
         std::filesystem::create_directories(root / "STREAMS");
         // The fourth area's stream is not written: asked for, it has nothing to play.
         for (const std::string_view file : {"areaa", "areab_1", "areab_2", "areac"}) {
-            writeFile(root / "STREAMS" / std::format("{}.ads", file), dspStream());
+            writeFile(root / "STREAMS" / std::format("{}.ads", file), dspStream(dspFrames));
         }
         info.areas = 4;
         info.parts[0] = 1;
@@ -1517,4 +1522,653 @@ TEST_CASE("the dream's zones switch its music between eight areas",
     soundscape.close();
 }
 
+TEST_CASE("native soundscape rewind restores both logical queues without emitting audio",
+          "[soundscape-local-rewind]") {
+    const auto root = test::scratchDirectory("soundscape-local-speech");
+    writeSecondBank(root, "VOICE1", {"LINE", "OTHER"});
+    writeSecondBank(root, "CHARACTER", {"NAME"});
+    writeSecondBank(root, "COMMON", {"BARK"});
+    SoundSet character;
+    REQUIRE(character.load(root / "audio/CHARACTER"));
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape reference, predicted;
+    reference.open(root, nullptr, nullptr);
+    predicted.open(root, &output, nullptr);
+    LevelSoundscape::LocalSnapshot saved;
+    usize commands = 0;
+    // A missing-output reference and an actually failing output must make the
+    // same logical admission choices before and after every corrected branch.
+    SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+        ++commands;
+        if (event.kind == SoundPlayer::Event::Kind::Play) {
+            throw std::runtime_error("test optional narration output");
+        }
+    });
+    const std::array lines{std::string_view{"LINE"}, std::string_view{"OTHER"}};
+    const auto advance = [&](LevelSoundscape& sounds, s32 tick) {
+        sounds.holdNarration(tick % 19 >= 12);
+        if (tick % 11 == 0) {
+            sounds.announce(character, "NAME", false, lines, 0.5f);
+            sounds.barkNamed("BARK");
+        }
+        sounds.updateNarration(1.0f / 60);
+    };
+    s32 tick = 0;
+    for (s32 window = 0; window < 56; ++window) {
+        CAPTURE(window, tick);
+        predicted.saveLocal(saved);
+        predicted.holdNarration(false);
+        for (s32 step = 0; step < 1 + window % 8; ++step) {
+            predicted.queueNarration("OTHER");
+            predicted.barkNamed("BARK", 1, -1);
+            predicted.updateNarration(0.25f);
+        }
+        predicted.holdNarration(true);
+        const auto count = commands;
+        REQUIRE(predicted.restoreLocal(saved));
+        CHECK(commands == count);
+        for (s32 step = 0; step < 1 + window % 8; ++step, ++tick) {
+            advance(reference, tick);
+            advance(predicted, tick);
+            CHECK(std::ranges::equal(predicted.narrationTiming(), reference.narrationTiming()));
+            CHECK(std::ranges::equal(predicted.barkTiming(), reference.barkTiming()));
+            CHECK(predicted.narrationHeld() == reference.narrationHeld());
+            CHECK(predicted.narrationRoom(0.5f) == reference.narrationRoom(0.5f));
+            CHECK(predicted.barkRoom() == reference.barkRoom());
+        }
+        REQUIRE(predicted.canRestoreLocal(saved));
+    }
+    CHECK(commands > 0);
+    output.stopAll();
+    predicted.close();
+    reference.close();
+}
+
+TEST_CASE("native music requests agree with absent stalled and progressing mixers through rewind",
+          "[soundscape-local-rewind]") {
+    // Exceed the output's lookahead: a one-frame looping fixture
+    // repeatedly reinitializes both restoration filters while priming playback.
+    AreaFixture reference("soundscape-music-native-reference", 6144);
+    AreaFixture progressing("soundscape-music-native-progressing", 6144);
+    AreaFixture stalled("soundscape-music-native-stalled", 6144);
+    AreaFixture absent("soundscape-music-native-absent", 6144);
+    absent.soundscape.open(absent.root, nullptr, &absent.info);
+    absent.soundscape.startMusic(&absent.assets, 0.5f);
+    const auto advance = [](LevelSoundscape& sounds, s32 tick) {
+        if (tick % 17 == 0) {
+            sounds.selectMusicArea((tick / 17) % 3, MusicSwitch::AtPartEnd);
+        }
+        if (tick % 23 == 0) {
+            sounds.selectMusicArea((tick / 23 + 1) % 3, MusicSwitch::Faded);
+        }
+        if (tick % 29 == 0) {
+            sounds.duckMusic(0.5f, 0.2f);
+        }
+        if (tick == 35) {
+            sounds.stopCues();
+        }
+        sounds.bossAwake(tick % 47 < 20);
+        sounds.updateMusic(1.0f / 60);
+    };
+    s32 tick = 0;
+    for (s32 window = 0; window < 48; ++window) {
+        CAPTURE(window, tick);
+        const s32 distance = window % 8 + 1;
+        for (AreaFixture* fixture : {&progressing, &stalled, &absent}) {
+            LevelSoundscape::LocalSnapshot saved;
+            fixture->soundscape.saveLocal(saved);
+            fixture->soundscape.stopCues();
+            fixture->soundscape.startMusic(&fixture->assets, 0.5f);
+            fixture->soundscape.selectMusicArea(2, MusicSwitch::AtOnce);
+            fixture->soundscape.duckMusic(5, 0.8f);
+            for (s32 i = 0; i < distance; ++i) {
+                fixture->soundscape.updateMusic(1.0f / 60);
+            }
+            const auto handle = fixture->soundscape.music();
+            const auto voices = fixture->player.voiceCount();
+            usize commands = 0;
+            {
+                SoundPlayer::Capture capture(&fixture->player,
+                                             [&](const SoundPlayer::Event&) { ++commands; });
+                REQUIRE(fixture->soundscape.restoreLocal(saved));
+            }
+            CHECK(commands == 0);
+            CHECK(fixture->soundscape.music() == handle);
+            CHECK(fixture->player.voiceCount() == voices);
+            CHECK(fixture->soundscape.desiredMusic() == reference.soundscape.desiredMusic());
+        }
+        for (s32 i = 0; i < distance; ++i, ++tick) {
+            for (AreaFixture* fixture : {&reference, &progressing, &stalled, &absent}) {
+                if (tick == 40) {
+                    fixture->soundscape.startMusic(&fixture->assets, 0.5f);
+                }
+                advance(fixture->soundscape, tick);
+            }
+            if (tick % 3 == 0) {
+                progressing.drain();
+            }
+            CHECK(progressing.soundscape.desiredMusic() == reference.soundscape.desiredMusic());
+            CHECK(stalled.soundscape.desiredMusic() == reference.soundscape.desiredMusic());
+            CHECK(absent.soundscape.desiredMusic() == reference.soundscape.desiredMusic());
+            CHECK(absent.soundscape.music() == kNoSound);
+        }
+    }
+}
+
+TEST_CASE("native restored music resumes a discarded stop only at the next service",
+          "[soundscape-local-rewind]") {
+    AreaFixture f("soundscape-music-restored-stop", 6144);
+    LevelSoundscape::LocalSnapshot saved;
+    f.soundscape.selectMusicArea(2, MusicSwitch::AtOnce);
+    f.frames(1);
+    const auto wanted = f.soundscape.desiredMusic();
+    f.soundscape.saveLocal(saved);
+    f.soundscape.stopCues();
+    CHECK(f.soundscape.music() == kNoSound);
+    REQUIRE_FALSE(f.soundscape.desiredMusic().enabled);
+    usize commands = 0;
+    {
+        SoundPlayer::Capture capture(&f.player, [&](const SoundPlayer::Event&) { ++commands; });
+        REQUIRE(f.soundscape.restoreLocal(saved));
+    }
+    CHECK(commands == 0);
+    CHECK(f.soundscape.desiredMusic() == wanted);
+    CHECK(f.soundscape.music() == kNoSound);
+    f.frames(1);
+    CHECK(f.soundscape.musicArea() == 2);
+    CHECK(f.player.isPlaying(f.soundscape.music()));
+    f.soundscape.stopCues();
+    f.soundscape.saveLocal(saved);
+    f.soundscape.startMusic(&f.assets, 1);
+    const auto speculative = f.soundscape.music();
+    REQUIRE(f.player.isPlaying(speculative));
+    REQUIRE(f.soundscape.restoreLocal(saved));
+    CHECK(f.player.isPlaying(speculative));
+    f.frames(1);
+    CHECK(f.soundscape.music() == kNoSound);
+    CHECK_FALSE(f.player.isPlaying(speculative));
+}
+
+TEST_CASE("native soundscape history restores music zone party filters and guards loaded banks",
+          "[soundscape-local-rewind]") {
+    const auto root = test::scratchDirectory("soundscape-local-areas");
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"FLOOR","position":[0,0,0],"next":-1,"child":-1}],
+      "itemInfos":[{"type":13,"name":"ZONE"}],
+      "itemInstances":[{"info":0,"minPlayers":2,"position":[0,0,0],
+                       "params":[0,0,32,65,3,0,0,0,2,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(root));
+    LevelSoundscape sounds, foreign;
+    sounds.open(root, nullptr, nullptr);
+    foreign.open(root, nullptr, nullptr);
+    sounds.bindAmbience(layout);
+    sounds.setPlayerCount(1);
+    LevelSoundscape::LocalSnapshot saved;
+    CHECK_FALSE(sounds.restoreLocal(saved));
+    sounds.saveLocal(saved);
+    CHECK_FALSE(foreign.restoreLocal(saved));
+    sounds.setPlayerCount(2);
+    const std::array listeners{Vec3{0}};
+    sounds.updateMusicAreas(listeners);
+    REQUIRE(sounds.musicRequest() == 2);
+    REQUIRE(sounds.restoreLocal(saved));
+    sounds.updateMusicAreas(listeners);
+    CHECK(sounds.musicRequest() == 0);
+    REQUIRE(sounds.restoreLocal(saved));
+    sounds.stopCues();
+    REQUIRE(sounds.canRestoreLocal(saved));
+    REQUIRE(sounds.restoreLocal(saved));
+    sounds.bindAmbience(layout);
+    CHECK_FALSE(sounds.restoreLocal(saved));
+    sounds.saveLocal(saved);
+    sounds.suspend();
+    CHECK_FALSE(sounds.restoreLocal(saved));
+    sounds.saveLocal(saved);
+    sounds.close();
+    CHECK_FALSE(sounds.restoreLocal(saved));
+    sounds.open(root, nullptr, nullptr);
+    CHECK_FALSE(sounds.restoreLocal(saved));
+}
+
+TEST_CASE("scene soundscape captures finite cues and typed speech chains before output",
+          "[soundscape-local-rewind][scene-sound-events]") {
+    const auto root = test::scratchDirectory("soundscape-event-boundary");
+    writeSecondBank(root, "COMMON", {"NAMED", "S_PICKUPMAGIC", "S_STEPROCK1", "S_ENTRANCE"});
+    writeSecondBank(root, "WIZTOWER", {"PROMOTION"});
+    writeSecondBank(root, "VOICE1", {"NARRATION"});
+    writeSecondBank(root, "CHARACTER", {"NAME"});
+    SoundSet character;
+    REQUIRE(character.load(root / "audio/CHARACTER"));
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    SceneSoundEvents events;
+    events.open(21, &output);
+    sounds.recordTo(&events);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    events.beginTick(1);
+    LevelSoundscape::Speech first, second;
+    {
+        auto scope = events.scoped({1, 1, 1, 0}, 1);
+        CHECK(sounds.playNamed("NAMED") == kNoSound);
+        CHECK(sounds.playAt("NAMED", {2, 0, 0}, 0, 0.5f) == kNoSound);
+        CHECK(sounds.playFrom(character, "NAME") == kNoSound);
+        CHECK(sounds.playPromotion("PROMOTION") == kNoSound);
+        CHECK(sounds.narrate("NARRATION") == kNoSound);
+        sounds.playPickup();
+        sounds.playEntrance();
+        sounds.playFootstep(false);
+        first = sounds.speechNamed("NAMED");
+        second = sounds.speechPromotion("PROMOTION", first);
+        CHECK(first.handle == kNoSound);
+        CHECK(second.handle == kNoSound);
+        CHECK(first.timing.remainingSeconds == Catch::Approx(1));
+        CHECK(second.timing.remainingSeconds == Catch::Approx(2));
+        CHECK(first.cue);
+        CHECK(second.cue);
+        const auto missing = sounds.speechNamed("MISSING", second);
+        CHECK(missing.cue == second.cue);
+        CHECK(missing.timing == second.timing);
+        sounds.queueNarrationFrom(character, "NAME");
+        sounds.queueNarration("NARRATION");
+        sounds.bark(character, "NAME");
+    }
+    CHECK(commands == 0);
+    CHECK(output.voiceCount() == 0);
+    CHECK(sounds.narrationBacklog() == Catch::Approx(2));
+    CHECK(sounds.barkBacklog() == Catch::Approx(1));
+    const std::array journals{events.endTick()};
+    REQUIRE(journals.front().events.size() == 13);
+    CHECK(journals.front().events[9].payload.after == first.cue);
+    CHECK(journals.front().events[11].payload.after ==
+          SoundCueToken{journals.front().events[10].id});
+    const auto result = events.reconcile(1, journals);
+    REQUIRE(result);
+    CHECK(commands == 0);
+    events.dispatch(result);
+    CHECK(commands > 0);
+    const auto count = commands;
+    const auto replayed = events.reconcile(1, journals);
+    REQUIRE(replayed);
+    CHECK(replayed.actions.empty());
+    events.dispatch(replayed);
+    CHECK(commands == count);
+    CHECK(events.unsupportedCount() == 0);
+    events.close();
+    sounds.close();
+}
+
+TEST_CASE("native soundscape rewind restores narration predecessor independently of playback",
+          "[soundscape-local-rewind][scene-sound-events][native-equality]") {
+    const auto root = test::scratchDirectory("soundscape-event-predecessor");
+    writeSecondBank(root, "VOICE1", {"FIRST", "WRONG", "CORRECT"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    SceneSoundEvents events;
+    events.open(22, &output);
+    sounds.recordTo(&events);
+    const auto capture = [&](u64 tick, u32 cue, std::string_view line) {
+        events.beginTick(tick);
+        {
+            auto scope = events.scoped({1, 2, 1, 0}, cue);
+            sounds.queueNarration(line);
+        }
+        return events.endTick();
+    };
+    const auto first = capture(1, 1, "FIRST");
+    REQUIRE(first.events.size() == 1);
+    LevelSoundscape::LocalSnapshot saved;
+    sounds.saveLocal(saved);
+    LevelSoundscape::LocalSnapshot changed, correct, replayed;
+    sounds.saveLocal(changed);
+    CHECK(sounds.equalLocal(saved, changed));
+    LevelSoundscape foreign;
+    CHECK_FALSE(foreign.equalLocal(saved, changed));
+    const auto wrong = capture(2, 99, "WRONG");
+    REQUIRE(wrong.events.size() == 1);
+    sounds.saveLocal(changed);
+    CHECK_FALSE(sounds.equalLocal(saved, changed));
+    REQUIRE(sounds.restoreLocal(saved));
+    CHECK(sounds.narrationBacklog() == Catch::Approx(1));
+    const auto corrected = capture(2, 2, "CORRECT");
+    REQUIRE(corrected.events.size() == 1);
+    CHECK(corrected.events.front().payload.after == SoundCueToken{first.events.front().id});
+    CHECK(corrected.events.front().payload.after != SoundCueToken{wrong.events.front().id});
+    CHECK(sounds.narrationBacklog() == Catch::Approx(2));
+    sounds.saveLocal(correct);
+    CHECK_FALSE(sounds.equalLocal(correct, changed)); // Same queue duration, different predecessor.
+    REQUIRE(sounds.restoreLocal(saved));
+    CHECK(capture(2, 2, "CORRECT") == corrected);
+    sounds.saveLocal(replayed);
+    CHECK(sounds.equalLocal(correct, replayed));
+    sounds.holdNarration(true);
+    sounds.saveLocal(changed);
+    CHECK_FALSE(sounds.equalLocal(correct, changed));
+    REQUIRE(sounds.restoreLocal(correct));
+    sounds.duckMusic(1.25f, 0.5f);
+    sounds.saveLocal(changed);
+    CHECK_FALSE(sounds.equalLocal(correct, changed));
+    REQUIRE(sounds.restoreLocal(correct));
+    sounds.servicePresentation(1.0f / 60);
+    sounds.saveLocal(replayed);
+    CHECK(sounds.equalLocal(correct, replayed));
+    CHECK(output.voiceCount() == 0);
+    events.close();
+    CHECK_FALSE(sounds.equalLocal(correct, replayed));
+    sounds.close();
+}
+
+TEST_CASE("recorded soundscape reports uncovered mixer paths instead of emitting them",
+          "[soundscape-local-rewind][scene-sound-events]") {
+    const auto root = test::scratchDirectory("soundscape-event-coverage");
+    writeSecondBank(root, "COMMON", {"NAMED"});
+    writeBank(root, "VOICE1", {"LOOP"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    SceneSoundEvents events;
+    events.open(23, &output);
+    sounds.recordTo(&events);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    CHECK_THROWS_AS(sounds.playNamed("NAMED"), SceneSoundEvents::Unsupported);
+    events.beginTick(1);
+    {
+        auto scope = events.scoped({1, 1, 1, 0}, 1);
+        CHECK_THROWS_AS(sounds.playNamed("NAMED", 1, 37), SceneSoundEvents::Unsupported);
+        CHECK_THROWS_AS(sounds.queueNarration("LOOP"), SceneSoundEvents::Unsupported);
+        CHECK_THROWS_AS(sounds.isPlaying(37), SceneSoundEvents::Unsupported);
+        CHECK_THROWS_AS(sounds.holdSounds(), SceneSoundEvents::Unsupported);
+        CHECK_NOTHROW(sounds.updateMusic(1.0f / 60));
+        CHECK_NOTHROW(sounds.updateExitFlame(Vec3{0}, {}));
+        CHECK_THROWS_AS(sounds.stop(37), SceneSoundEvents::Unsupported);
+    }
+    CHECK(events.endTick().events.empty());
+    CHECK(events.unsupportedCount() == 6);
+    CHECK(commands == 0);
+    CHECK(sounds.narrationBacklog() == 0);
+    CHECK(output.voiceCount() == 0);
+    events.close();
+    sounds.close();
+}
+
+TEST_CASE("native soundscape restores opening and scroll lifetimes before final output",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-owned-rewind");
+    writeSecondBank(root, "COMMON",
+                    {"S_ELVMETL", "S_ELVMETSTPL", "SCROLL", "WRONG", "S_EXITFLAME", "S_HOURGLASS"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    SceneSoundEvents events;
+    events.open(71, &output);
+    sounds.recordTo(&events);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const auto gather = [&] {
+        sounds.gatherLoops({}, {}, 1, false, nullptr, Vec3{1, 0, 0}, Vec3{-1, 0, 0});
+        return events.endFrame();
+    };
+    events.beginTick(1);
+    sounds.opening({.target = 8, .sound = 0});
+    sounds.speakOverScroll("SCROLL");
+    sounds.duckMusic(0.5f, 0.5f);
+    const std::array initial{gather()};
+    REQUIRE(initial[0].loops.size() == 4);
+    CHECK(initial[0].finite.events.empty());
+    CHECK(commands == 0);
+    LevelSoundscape::LocalSnapshot saved;
+    sounds.saveLocal(saved);
+    for (u64 distance = 1; distance <= 8; ++distance) {
+        INFO(distance);
+        REQUIRE(sounds.restoreLocal(saved));
+        events.beginTick(2);
+        sounds.settled({.target = 8, .sound = 0});
+        sounds.speakOverScroll("WRONG");
+        const auto wrong = gather();
+        REQUIRE(wrong.loops.size() == 3);
+        REQUIRE(wrong.finite.events.size() == 1);
+        REQUIRE(sounds.restoreLocal(saved));
+        for (u64 tick = 2; tick < 2 + distance; ++tick) {
+            events.beginTick(tick);
+            sounds.updateMusic(1.0f / 30);
+            const auto corrected = gather();
+            CHECK(corrected.loops == initial[0].loops);
+            CHECK(corrected.finite.events.empty());
+        }
+        CHECK(commands == 0);
+    }
+    const auto result = events.reconcileFrames(1, initial);
+    REQUIRE(result);
+    events.dispatch(result);
+    CHECK(commands > 0);
+    const auto before = commands;
+    REQUIRE(sounds.restoreLocal(saved));
+    CHECK(commands == before);
+    events.beginTick(2);
+    sounds.stopVoice();
+    sounds.settled({.target = 8, .sound = 0});
+    sounds.gatherLoops({}, {}, 1, false, nullptr, {}, {});
+    const std::array ended{events.endFrame()};
+    CHECK(ended[0].loops.empty());
+    const auto stopped = events.reconcileFrames(2, ended);
+    REQUIRE(stopped);
+    events.dispatch(stopped);
+    CHECK(events.unsupportedCount() == 0);
+    sounds.close();
+}
+
+TEST_CASE("recorded sound attach waits for native narration and replaces legacy proximity loops",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-attach");
+    writeSecondBank(root, "COMMON", {"S_EXITFLAME", "S_HOURGLASS"});
+    writeSecondBank(root, "VOICE1", {"INTRO"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    const auto intro = sounds.queueNarration("INTRO");
+    REQUIRE(output.isPlaying(intro));
+    sounds.updateExitFlame(Vec3{0}, {});
+    sounds.updateHourglass(Vec3{0}, {});
+    REQUIRE(sounds.exitFlameOn());
+    REQUIRE(sounds.hourglassOn());
+    SceneSoundEvents events;
+    events.open(72, &output);
+    CHECK_FALSE(sounds.canAttachRecorder());
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    CHECK_THROWS_AS(sounds.recordTo(&events), SceneSoundEvents::Unsupported);
+    CHECK_FALSE(sounds.recordingSounds());
+    CHECK(sounds.canRestoreLocal(before));
+    CHECK(sounds.exitFlameOn());
+    CHECK(sounds.hourglassOn());
+    CHECK(sounds.narrationBacklog() == Catch::Approx(1));
+    sounds.updateNarration(1);
+    CHECK(sounds.canAttachRecorder());
+    sounds.recordTo(&events);
+    // Output progress is irrelevant: the native queue has drained even though
+    // this deliberately stalled mixer still holds the old introductory voice.
+    CHECK(output.isPlaying(intro));
+    CHECK_FALSE(sounds.exitFlameOn());
+    CHECK_FALSE(sounds.hourglassOn());
+    CHECK(sounds.narrationBacklog() == 0);
+    CHECK(sounds.namedTiming("S_EXITFLAME").remainingSeconds == Catch::Approx(1));
+    CHECK_FALSE(sounds.namedTiming("MISSING").playing());
+    sounds.close();
+}
+TEST_CASE("recorded frame camera seeding removes discarded branch pan from replay",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-replay-ear");
+    writeSecondBank(root, "COMMON", {"HIT"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    SceneSoundEvents events;
+    events.open(73, &output);
+    sounds.recordTo(&events);
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const auto capture = [&](u64 tick, const AmbientEar& ear) {
+        events.beginTick(tick);
+        sounds.prepareRecordedFrame(ear);
+        {
+            const auto scope = sounds.soundScope({1, 0, 1, 0}, 1);
+            sounds.playAt("HIT", Vec3{2, 0, 0}, 0);
+        }
+        return events.endFrame();
+    };
+    const auto original = capture(1, {});
+    REQUIRE(original.finite.events.size() == 1);
+    CHECK(original.finite.events[0].payload.pan == 1);
+    const auto wrong = capture(2, {{0, 0, 0}, {-1, 0, 0}});
+    CHECK(wrong.finite.events[0].payload.pan == -1);
+    REQUIRE(sounds.restoreLocal(before));
+    CHECK(capture(1, {}) == original);
+    CHECK(commands == 0);
+    sounds.close();
+}
+
+TEST_CASE("recorded frame preparation abandons a prior ambient duck on terminal branches",
+          "[soundscape-local-rewind][scene-sound-loops][music-areas]") {
+    AreaFixture f("soundscape-terminal-ambient", 2048);
+    writeSecondBank(f.root, "TOWAMB", {"FIRE"});
+    f.soundscape.open(f.root, &f.player, &f.info);
+    f.soundscape.startMusic(&f.assets, 1);
+    writeTextFile(f.root / "world.json", R"({
+      "objects":[{"name":"FLOOR","position":[0,0,0]}],
+      "itemInfos":[{"type":13}],
+      "itemInstances":[{"info":0,"name":"FIRE","position":[0,0,0],
+        "params":[0,0,128,64,0,0,0,0,1,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(f.root));
+    f.soundscape.bindAmbience(layout);
+    SceneSoundEvents events;
+    events.open(74, &f.player);
+    f.soundscape.recordTo(&events);
+    const std::array listeners{Vec3{0}};
+    for (u64 tick = 1; tick <= 65; ++tick) {
+        events.beginTick(tick);
+        f.soundscape.prepareRecordedFrame({});
+        f.soundscape.updateMusic(1.0f / 30);
+        if (tick <= 20) {
+            f.soundscape.gatherLoops(listeners, {}, 1, false, nullptr, {}, {});
+        } // A terminal outcome intentionally gathers no more stage desires.
+        const auto frame = events.endFrame();
+        CHECK(frame.loops.size() == (tick <= 20 ? 1U : 0U));
+        f.soundscape.servicePresentation(1.0f / 30);
+        if (tick == 20) {
+            CHECK(f.soundscape.musicLevel() == LevelSoundscape::kFullLevel / 2);
+        }
+    }
+    CHECK(f.soundscape.musicLevel() == LevelSoundscape::kFullLevel);
+    f.soundscape.close();
+}
+
+TEST_CASE("sound recorder attachment preflight preserves existing owned lifetimes on refusal",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-attach-preflight");
+    writeSecondBank(root, "COMMON", {"SCROLL", "S_ELVMETL", "S_ELVMETSTPL"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    CHECK(sounds.canAttachRecorder());
+    bool scroll = false;
+    SECTION("scroll owns a physical voice until explicitly closed") {
+        scroll = true;
+        sounds.speakOverScroll("SCROLL");
+    }
+    SECTION("opening owns its lifetime until the native target settles") {
+        sounds.opening({.target = 2, .sound = 0});
+    }
+    CHECK_FALSE(sounds.canAttachRecorder());
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    SceneSoundEvents events;
+    events.open(75, &output);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    CHECK_THROWS_AS(sounds.recordTo(&events), SceneSoundEvents::Unsupported);
+    CHECK(commands == 0);
+    CHECK_FALSE(sounds.recordingSounds());
+    CHECK(sounds.canRestoreLocal(before));
+    if (scroll) {
+        sounds.stopVoice();
+    } else {
+        sounds.settled({.target = 2, .sound = 0});
+    }
+    CHECK(sounds.canAttachRecorder());
+    sounds.recordTo(&events);
+    CHECK(sounds.recordingSounds());
+    CHECK_FALSE(sounds.canAttachRecorder());
+    CHECK_FALSE(sounds.canRestoreLocal(before));
+    sounds.close();
+}
+
+TEST_CASE("soundscape recorder refuses queued barks before changing any owned output",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-bark-attach");
+    writeSecondBank(root, "COMMON", {"HURT", "S_EXITFLAME", "S_HOURGLASS"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    REQUIRE(sounds.barkNamed("HURT") != kNoSound);
+    sounds.updateExitFlame(Vec3{0}, {});
+    sounds.updateHourglass(Vec3{0}, {});
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    SceneSoundEvents events;
+    events.open(76, &output);
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    CHECK_FALSE(sounds.canAttachRecorder());
+    CHECK_THROWS_AS(sounds.recordTo(&events), SceneSoundEvents::Unsupported);
+    CHECK(commands == 0);
+    CHECK_FALSE(sounds.recordingSounds());
+    CHECK(sounds.canRestoreLocal(before));
+    CHECK(sounds.barkBacklog() == Catch::Approx(1));
+    CHECK(sounds.exitFlameOn());
+    CHECK(sounds.hourglassOn());
+    sounds.updateNarration(1);
+    REQUIRE(sounds.canAttachRecorder());
+    sounds.recordTo(&events);
+    CHECK(sounds.recordingSounds());
+    CHECK_FALSE(sounds.canRestoreLocal(before));
+    sounds.close();
+}
+
+TEST_CASE("soundscape recorder refuses closed epochs before silencing proximity loops",
+          "[soundscape-local-rewind][scene-sound-loops]") {
+    const auto root = test::scratchDirectory("soundscape-closed-attach");
+    writeSecondBank(root, "COMMON", {"S_EXITFLAME"});
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &output, nullptr);
+    sounds.updateExitFlame(Vec3{0}, {});
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    SceneSoundEvents closed;
+    usize commands = 0;
+    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    CHECK_THROWS_AS(sounds.recordTo(&closed), SceneSoundEvents::Unsupported);
+    CHECK(commands == 0);
+    CHECK(sounds.canRestoreLocal(before));
+    CHECK_FALSE(sounds.recordingSounds());
+    CHECK(sounds.exitFlameOn());
+    sounds.close();
+}
 } // namespace

@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/screens/ChallengeHud.h"
 
@@ -51,5 +52,61 @@ TEST_CASE("hourglass uses the shipped sand animation and draws both cropped halv
     REQUIRE(device.draws.size() == 3);
     CHECK(device.draws[1].texture != first);
     hud.clear();
+}
+
+TEST_CASE("native hourglass rewind retains subframe sand clock without binding textures again",
+          "[secret][hud][challenge-hud-local-rewind][assets]") {
+    const auto directory = test::assetOrSkip("POWERUPS/textures.ngc").parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    REQUIRE(archive.load(directory));
+    ChallengeHud expected;
+    ChallengeHud corrected;
+    REQUIRE(expected.bind(device, archive));
+    REQUIRE(corrected.bind(device, archive));
+    const auto seconds = [](s32 t) { return t % 3 == 0 ? 1.0f / 120 : 1.0f / 40; };
+    s32 at = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        const s32 delay = 1 + window % 8;
+        CAPTURE(window, at, delay);
+        ChallengeHud::LocalSnapshot saved;
+        corrected.saveLocal(saved);
+        CHECK_FALSE(expected.restoreLocal(saved));
+        for (s32 t = at; t < at + delay; ++t) {
+            expected.step(seconds(t));
+            corrected.step(0.73f);
+        }
+        const auto created = device.texturesCreated;
+        const auto uploaded = device.textureUpdates;
+        REQUIRE(corrected.restoreLocal(saved));
+        for (s32 t = at; t < at + delay; ++t) {
+            corrected.step(seconds(t));
+        }
+        CHECK(device.texturesCreated == created);
+        CHECK(device.textureUpdates == uploaded);
+        const auto a = corrected.look(30, 60, true);
+        const auto b = expected.look(30, 60, true);
+        CHECK(a.elapsed == b.elapsed);
+        CHECK(a.fallingFrame == b.fallingFrame);
+        const auto draw = [&](ChallengeHud& hud) {
+            device.draws.clear();
+            Canvas canvas;
+            canvas.begin(device, Mat4{1});
+            hud.draw(canvas, 30, 60, true);
+            canvas.end();
+            return device.draws;
+        };
+        const auto reference = draw(expected);
+        const auto actual = draw(corrected);
+        REQUIRE(actual.size() == reference.size());
+        for (usize i = 0; i < actual.size(); ++i) {
+            test::checkRecordedDraw(actual[i], reference[i]);
+        }
+        at += delay;
+    }
+    ChallengeHud::LocalSnapshot stale;
+    corrected.saveLocal(stale);
+    corrected.clear();
+    REQUIRE_FALSE(corrected.restoreLocal(stale));
 }
 } // namespace

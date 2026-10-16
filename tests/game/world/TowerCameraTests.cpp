@@ -1,4 +1,6 @@
 #include <numbers>
+#include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -8,6 +10,7 @@
 #include "engine/core/Types.h"
 
 #include "game/world/TowerCamera.h"
+#include "game/netplay/LocalStateHistory.h"
 
 namespace {
 
@@ -153,6 +156,78 @@ TEST_CASE("a clearly nearer marker takes over and the camera turns to it over fi
     camera.reset(party, {}, CameraRange{}, CameraView{});
     REQUIRE(camera.marker() == -1);
     REQUIRE(camera.yaw() == 0.0f);
+}
+
+auto cameraValues(const TowerCamera::State& state) {
+    return std::tie(state.camera.position, state.camera.pitch, state.camera.yaw, state.camera.roll,
+                    state.attention, state.distance, state.marker, state.aimedMarker, state.yawRate,
+                    state.pitchRate, state.turnStep, state.ringPositions, state.ringDistances,
+                    state.ringIndex);
+}
+
+TEST_CASE("native follow-camera value history rewinds marker turns and party smoothing",
+          "[local-rewind][camera-local-rewind]") {
+    static_assert(std::is_trivially_copyable_v<TowerCamera::State>);
+    static_assert(sizeof(TowerCamera::State) <= 256);
+    const std::vector<WorldLocator> markers{marker({0, 0, 0}, 0.3f, kPi),
+                                            marker({100, 0, 0}, 0.6f, kPi / 2)};
+    std::array<CameraSubject, 4> party;
+    for (auto& player : party) {
+        player = standing(0, 0);
+    }
+    CameraRange range;
+    range.boundsMin = {-20, -20, -20};
+    range.boundsMax = {120, 20, 20};
+    const CameraView view;
+    TowerCamera camera;
+    TowerCamera reference;
+    camera.reset(party, markers, range, view);
+    reference.reset(party, markers, range, view);
+    LocalStateHistory<TowerCamera::State> history;
+    bool turned = false;
+    bool switched = false;
+    const auto step = [&](TowerCamera& owner, u64 tick, bool alternative) {
+        for (usize seat = 0; seat < party.size(); ++seat) {
+            const f32 x = tick % 360 < 180 ? 95.0f : 0.0f;
+            const f32 spread = static_cast<f32>((tick / 5 + seat * 4) % 15);
+            party[seat] = standing(x + (alternative ? -spread : spread), spread - 7);
+        }
+        owner.update(party, markers, range, view, 1.0f / 60);
+        if (tick % 29 == 13) {
+            owner.snapAttention(party, range);
+        }
+    };
+    for (u64 tick = 0; tick < 720; ++tick) {
+        REQUIRE(history.capture(tick, [&](auto& saved) {
+            saved = camera.localState();
+            return true;
+        }));
+        const auto before = camera.localState();
+        const u64 distance = tick % 8 + 1;
+        std::array<TowerCamera::State, 8> expected;
+        for (u64 frame = 0; frame < distance; ++frame) {
+            step(camera, tick + frame, true);
+            expected[frame] = camera.localState();
+        }
+        camera.restoreLocal(*history.find(tick));
+        CHECK(cameraValues(camera.localState()) == cameraValues(before));
+        for (u64 frame = 0; frame < distance; ++frame) {
+            step(camera, tick + frame, false);
+        }
+        camera.restoreLocal(*history.find(tick));
+        for (u64 frame = 0; frame < distance; ++frame) {
+            step(camera, tick + frame, true);
+            CHECK(cameraValues(camera.localState()) == cameraValues(expected[frame]));
+        }
+        camera.restoreLocal(*history.find(tick));
+        step(camera, tick, true);
+        step(reference, tick, true);
+        CHECK(cameraValues(camera.localState()) == cameraValues(reference.localState()));
+        turned = turned || camera.turning();
+        switched = switched || camera.marker() == 1;
+    }
+    CHECK(turned);
+    CHECK(switched);
 }
 
 } // namespace

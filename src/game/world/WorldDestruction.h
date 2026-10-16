@@ -13,7 +13,30 @@ namespace gdl::game {
 /** WorldObjectExplode / DoWorldAnimSub: carts and explosive scenery disappear along
  * their parent chain. A looping cart reappears at the start of its next pass. */
 class WorldDestruction {
+private:
+    struct Simulation {
+        std::vector<bool> destroyed;
+        std::vector<Vec3> explosions;
+        bool operator==(const Simulation&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+            digest.template fields<2>(value);
+        }
+    };
+
 public:
+    class LocalSnapshot {
+        friend class WorldDestruction;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const WorldDestruction* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
     void bind(const WorldLayout& layout);
     void clear();
     std::span<const usize> controlledObjects() const { return m_controlled; }
@@ -24,17 +47,17 @@ public:
     void update(std::span<const WorldAnimator::CycleEvent> events, WorldScene& scene,
                 WorldCollision& collision);
     std::vector<Vec3> takeExplosions();
-    bool hasExplosions() const { return !m_explosions.empty(); }
+    bool hasExplosions() const { return !m_sim.explosions.empty(); }
 
 private:
     friend class WorldDestructionCheckpoint;
+    bool appendDigest(NativeStateDigest& digest, const Simulation& state) const;
     bool valid(s32 object) const;
     bool below(usize descendant, s32 ancestor) const;
     void showSubtree(s32 object, bool visible, WorldScene& scene);
     std::vector<WorldObject> m_objects;
-    std::vector<bool> m_destroyed;
+    Simulation m_sim;
     std::vector<usize> m_controlled;
-    std::vector<Vec3> m_explosions;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
 };

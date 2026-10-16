@@ -10,6 +10,7 @@
 #include "engine/ui/TextPainter.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "game/menu/ScrollBox.h"
 
 namespace {
@@ -145,6 +146,88 @@ TEST_CASE("a narrow page still leaves room for the prompt", "[game][menu][scroll
     REQUIRE(box.open(device, {"A"}, 1.0f, "ABABABAB"));
     REQUIRE(box.area().width == 102.0f);
     REQUIRE(box.area().x == 205.0f);
+}
+
+TEST_CASE("scroll rewind preserves page holds pulse and burn through corrected button ticks",
+          "[game][menu][scroll][scroll-box-local-rewind]") {
+    const BitmapFont font = sampleFont();
+    const test::FakeTexture sheet{32, 16};
+    const test::FakeTexture ring{4, 4};
+    const Image image = Image::filled(4, 4, Color::white());
+    const Image mask = Image::filled(2, 2, Color::rgba(255, 255, 255, 0));
+    TextPainter text;
+    text.setFont(&font, &sheet);
+    ScrollBoxArt art;
+    art.backdrop = &sheet;
+    art.backdropImage = &image;
+    art.burnMasks = {&mask};
+    art.burnRing = {&ring};
+    for (s32 at = 0; at < 90; ++at) {
+        for (s32 delay = 1; delay <= 8; ++delay) {
+            CAPTURE(at, delay);
+            test::FakeRenderDevice device;
+            ScrollBox expected;
+            ScrollBox corrected;
+            for (auto* box : {&expected, &corrected}) {
+                box->setText(&text);
+                box->setArt(art);
+            }
+            const auto tick = [&](ScrollBox& box, s32 t) {
+                if (t == 1) {
+                    REQUIRE(box.open(device, {"A", "BB"}, 0.7f, "AB"));
+                } else {
+                    box.step(1, t % 3 == 0 ? 4U : 0U);
+                }
+            };
+            for (s32 t = 0; t < at; ++t) {
+                tick(expected, t);
+                tick(corrected, t);
+            }
+            ScrollBox::LocalSnapshot saved;
+            corrected.saveLocal(saved);
+            REQUIRE_FALSE(expected.restoreLocal(saved));
+            for (s32 t = at; t < at + delay; ++t) {
+                tick(expected, t);
+                if (t % 2 == 0) {
+                    corrected.close();
+                    REQUIRE(corrected.open(device, {"B"}, 1.2f, "AA"));
+                }
+                corrected.step(20, 1);
+            }
+            const auto created = device.texturesCreated;
+            const auto uploaded = device.textureUpdates;
+            REQUIRE(corrected.restoreLocal(saved));
+            for (s32 t = at; t < at + delay; ++t) {
+                tick(corrected, t);
+            }
+            CHECK(device.texturesCreated == created);
+            CHECK(device.textureUpdates == uploaded);
+            CHECK(corrected.active() == expected.active());
+            CHECK(corrected.page() == expected.page());
+            CHECK(corrected.pageCount() == expected.pageCount());
+            CHECK(corrected.area() == expected.area());
+            CHECK(corrected.lines() == expected.lines());
+            CHECK(corrected.promptAlpha() == expected.promptAlpha());
+            CHECK(corrected.burnFrame() == expected.burnFrame());
+            const auto draw = [&](ScrollBox& box) {
+                box.prepare(device);
+                device.draws.clear();
+                Canvas canvas;
+                canvas.begin(device, Mat4{1});
+                box.draw(canvas);
+                canvas.end();
+                return device.draws;
+            };
+            const auto a = draw(expected);
+            const auto b = draw(corrected);
+            REQUIRE(a.size() == b.size());
+            for (usize i = 0; i < a.size(); ++i) {
+                test::checkRecordedDraw(b[i], a[i]);
+            }
+            corrected.setArt(art);
+            CHECK_FALSE(corrected.restoreLocal(saved));
+        }
+    }
 }
 
 } // namespace

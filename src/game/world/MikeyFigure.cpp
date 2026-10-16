@@ -3,7 +3,18 @@
 #include <array>
 #include <string_view>
 
+#include "engine/io/NativeStateDigest.h"
+
 namespace gdl::game {
+void visitNativeState(NativeStateDigest& digest, const MikeyFigure& value) {
+    const auto& [figure, generation, shown, random] = value;
+    digest.values(figure, generation, shown, random);
+}
+
+bool MikeyFigure::registerNativeResources(NativeStateResources& resources) const {
+    return m_figure.registerNativeResources(resources);
+}
+
 void MikeyFigure::update(RenderDevice& device, ItemArchive& powerups, MikeyDecoy& decoy,
                          f32 seconds, EffectTrees& effects) {
     if (!decoy.shown()) {

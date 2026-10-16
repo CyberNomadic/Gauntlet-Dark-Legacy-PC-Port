@@ -2967,10 +2967,27 @@ TEST_CASE("tower returns award permanent familiars with locked controls and pers
     }
     REQUIRE(scene.figureDirectory(s32{3}) == costume);
     REQUIRE(scene.familiarTier(3) == 0);
+    PlayScene::LocalSnapshot beforePromotion;
+    REQUIRE(scene.saveLocal(beforePromotion));
+    const PlayerFigure* oldFigure = scene.runtime(3)->figure.get();
     scene.update(1.0 / 60.0, moving);
     REQUIRE(scene.familiarTier(3) == 1);
     REQUIRE(scene.actor(3)->save().progress().appearanceLevel() == 30);
     REQUIRE_FALSE(scene.animator(3)->entering());
+    const PlayerFigure* promotedFigure = scene.runtime(3)->figure.get();
+    REQUIRE(promotedFigure != oldFigure);
+    PlayScene::LocalSnapshot afterPromotion;
+    REQUIRE(scene.saveLocal(afterPromotion));
+    const auto uploads = device.texturesCreated;
+    REQUIRE(scene.restoreLocal(beforePromotion));
+    REQUIRE(scene.runtime(3)->figure.get() == oldFigure);
+    REQUIRE(scene.familiarTier(3) == 0);
+    scene.update(1.0 / 60.0, moving);
+    REQUIRE(scene.runtime(3)->figure.get() == promotedFigure);
+    REQUIRE(scene.familiarTier(3) == 1);
+    CHECK(device.texturesCreated == uploads);
+    REQUIRE(scene.restoreLocal(afterPromotion));
+    REQUIRE(scene.runtime(3)->figure.get() == promotedFigure);
     for (s32 frame = 0; frame < 1500 && scene.promotion().active(); ++frame) {
         scene.update(1.0 / 60.0, moving);
         REQUIRE(scene.actor(3)->position() == start);
@@ -4359,7 +4376,13 @@ TEST_CASE("Archer attack releases her arrow and both companion shots through the
         CAPTURE(effect.name, effect.position.x, effect.position.y, effect.position.z);
         REQUIRE(effect.tree);
         device.draws.clear();
-        effect.model.draw(device, Mat4{1}, effect.transform(), {}, effect.pose.matrices());
+        auto model = *effect.model;
+        model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
+        model.setFrame(effect.player.sequence(), static_cast<s32>(effect.player.frame()));
+        if (const auto* bank = visuals.textureAnimator(effect.archive, effect.lenders)) {
+            bank->apply(model, *effect.tree, effect.player.sequence(), effect.player.frame());
+        }
+        model.draw(device, Mat4{1}, effect.transform(), {}, effect.pose.matrices());
         CHECK_FALSE(device.draws.empty());
         bool visible = false;
         for (const auto& draw : device.draws) {

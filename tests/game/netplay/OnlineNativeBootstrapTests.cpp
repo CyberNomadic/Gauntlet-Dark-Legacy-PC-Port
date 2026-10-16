@@ -7,6 +7,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "game/netplay/OnlineSession.h"
+#include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/NativePlaySetup.h"
 
 namespace {
@@ -96,6 +97,7 @@ struct Network {
         Service service;
         Wire wire;
         OnlineSession session;
+        test::RollbackSessionHarness inputs;
         Client(Network& room, u8 peer, u8 players)
             : service(room, peer), wire(room, peer), session(service, wire, peer == 1, players) {}
     };
@@ -263,7 +265,7 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
         REQUIRE(client->session.nativeContract());
         CHECK(client->session.nativeContract()->rules == rules);
         CHECK(client->session.match().phase() == MatchSession::Phase::Offline);
-        CHECK_FALSE(client->session.match().advance());
+        CHECK_FALSE(client->inputs.advance());
     }
     network->complete();
     const auto expected = network->setups[1]->digest();
@@ -286,6 +288,7 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
     network->pump();
     for (auto& client : network->clients) {
         if (client) {
+            REQUIRE(client->inputs.bind(client->session.match()));
             REQUIRE(client->session.match().loaded());
         }
     }
@@ -301,13 +304,13 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
         for (const auto seat : client->session.seats()) {
             InputCommand input;
             input.epoch = match.context().epoch;
-            input.tick = match.inputTick();
+            input.tick = client->inputs.sampleTick();
             input.seat = seat;
             input.grant = match.context().grants[seat];
             input.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
             frame.push_back(input);
         }
-        REQUIRE(match.sample(frame));
+        REQUIRE(client->inputs.sample(frame));
         REQUIRE(client->session.flush());
     }
     network->pump();
@@ -315,15 +318,16 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
         if (!client) {
             continue;
         }
-        const auto frame = client->session.match().advance();
+        const auto frame = client->inputs.advance();
         REQUIRE(frame);
         for (const auto& row : network->room.members) {
             for (const auto seat : row.seats) {
-                CHECK((*frame)[seat].pressedButtons == static_cast<u32>(CommandPress::UsePotion));
+                CHECK(frame->commands[seat].pressedButtons == static_cast<u32>(CommandPress::UsePotion));
             }
         }
-        REQUIRE(client->session.match().completedNativeTick(1));
-        CHECK_FALSE(client->session.match().advance()); // no missing-input concealment
+        REQUIRE(client->inputs.complete());
+        CHECK(client->inputs.confirmedTick() == 1);
+        CHECK_FALSE(client->inputs.advance()); // No new local input has been sampled.
     }
 }
 
@@ -464,7 +468,7 @@ TEST_CASE("native bootstrap is bounded strict and scoped to the authenticated ro
     network->start();
     auto bytes = network->packet(1, 0);
     if (mutation == 0) {
-        bytes[4] = 2;
+        ++bytes[4]; // An unsupported version, independent of the current protocol value.
     }
     if (mutation == 1) {
         bytes[5] = 255;

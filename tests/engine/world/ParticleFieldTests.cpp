@@ -1,4 +1,5 @@
 #include <array>
+#include <limits>
 #include <utility>
 
 #include <catch2/catch_approx.hpp>
@@ -19,6 +20,41 @@
 namespace {
 
 using namespace gdl;
+
+TEST_CASE("native particle values remain observable beyond the diagnostic restore budget",
+          "[world][particles][simulation-observation-binding]") {
+    const test::FakeRenderDevice device;
+    ParticleField field;
+    ParticleDescriptor descriptor;
+    descriptor.oneShot = true;
+    descriptor.maxParticles = 1;
+    descriptor.particleLife = 30;
+    for (usize index = 0; index < 399; ++index) {
+        field.start(descriptor, Mat4{1}, &device.whiteTexture());
+        if (index == 255) {
+            const auto state = field.checkpoint();
+            REQUIRE(state.validValues());
+            REQUIRE(state.valid());
+            REQUIRE(field.canRestore(state));
+        }
+    }
+    field.step(1.0f / 30);
+    const auto state = field.checkpoint();
+    REQUIRE(state.entries.size() == 399);
+    REQUIRE(field.particleCount() == 399);
+    CHECK(state.validValues());
+    CHECK_FALSE(state.valid());
+    CHECK_FALSE(field.canRestore(state));
+    CHECK_FALSE(field.restore(state));
+    CHECK(field.checkpoint() == state);
+
+    auto malformed = state;
+    malformed.entries.back().emitter.node[3].y = std::numeric_limits<f32>::quiet_NaN();
+    CHECK_FALSE(malformed.validValues());
+    CHECK_FALSE(malformed.valid());
+    CHECK_FALSE(field.restore(malformed));
+    CHECK(field.checkpoint() == state);
+}
 
 TEST_CASE("animated world markers move new emissions without carrying existing particles",
           "[world][particles][particle-attachment]") {

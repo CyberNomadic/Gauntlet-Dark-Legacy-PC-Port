@@ -1,6 +1,9 @@
 #include "engine/world/WorldCollision.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <exception>
 #include <utility>
@@ -30,6 +33,21 @@ constexpr u32 kUnfilteredSurface = 0x40;
 constexpr s32 kPasses = 4;
 /** Heights within a cylinder at which walls are checked: about the knees and the chest. */
 constexpr std::array<f32, 2> kProbeFractions{0.25f, 0.75f};
+
+bool sameTransform(const Mat4& left, const Mat4& right) {
+    // Native history retains every scalar bit, including signed zero. Avoid
+    // comparing object storage/padding or treating distinct retained values as
+    // the same transform merely because floating-point equality does.
+    for (s32 column = 0; column < 4; ++column) {
+        for (s32 row = 0; row < 4; ++row) {
+            if (std::bit_cast<u32>(left[column][row]) !=
+                std::bit_cast<u32>(right[column][row])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 /** Barycentric bounds of a point projected onto the triangle's plane. */
 bool insideFace(const CollisionTriangle& triangle, const Vec3& point) {
@@ -320,6 +338,97 @@ bool WorldCollision::load(const std::filesystem::path& directory, const WorldLay
     return loaded();
 }
 
+const CanonicalDigestSink::Digest& WorldCollision::geometryDigest() const {
+    if (!m_geometryDigest) {
+        NativeStateDigest geometry;
+        geometry.string("WorldCollision.geometry/1");
+        const auto triangles = [&](const auto& values) {
+            geometry.wide(values.size());
+            for (const auto& value : values) geometry.fields<4>(value);
+        };
+        triangles(m_triangles);
+        geometry.wide(m_moving.size());
+        for (const auto& mover : m_moving) {
+            geometry.value(mover.object);
+            triangles(mover.local);
+        }
+        m_geometryDigest = geometry.finish();
+    }
+    return *m_geometryDigest;
+}
+
+bool WorldCollision::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("WorldCollision/2");
+    digest.bytes(geometryDigest());
+    for (usize i = 0; i < m_moving.size(); ++i) {
+        const auto& [object, local, placed, boundsMin, boundsMax, world] = m_moving[i];
+        digest.value(saved ? saved->transforms[i] : world);
+        (void)object; // Complete immutable roster is in geometryDigest().
+        (void)local;
+        // Placed triangles/bounds are derived by MovingObject::place from these
+        // exact local triangles and transform; the static grid derives from m_triangles.
+        (void)placed;
+        (void)boundsMin;
+        (void)boundsMax;
+    }
+    digest.values(saved ? saved->hidden : m_hidden,
+                  saved ? saved->contactOnly : m_contactOnly,
+                  saved ? saved->blockedFloorExits : m_blockedFloorExits);
+    return digest.good();
+}
+
+bool WorldCollision::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool WorldCollision::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [transforms, hidden, contactOnly, blockedFloorExits, owner, binding] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+void WorldCollision::saveLocal(LocalSnapshot& saved) const {
+    saved.transforms.resize(m_moving.size());
+    for (usize i = 0; i < m_moving.size(); ++i) {
+        saved.transforms[i] = m_moving[i].world;
+    }
+    saved.hidden = m_hidden;
+    saved.contactOnly = m_contactOnly;
+    saved.blockedFloorExits = m_blockedFloorExits;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+}
+
+bool WorldCollision::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
+           saved.transforms.size() == m_moving.size();
+}
+
+bool WorldCollision::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.transforms == right.transforms &&
+           left.hidden == right.hidden && left.contactOnly == right.contactOnly &&
+           left.blockedFloorExits == right.blockedFloorExits;
+}
+
+bool WorldCollision::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize i = 0; i < m_moving.size(); ++i) {
+        if (!sameTransform(m_moving[i].world, saved.transforms[i])) {
+            m_moving[i].place(saved.transforms[i]);
+        }
+    }
+    m_hidden = saved.hidden;
+    m_contactOnly = saved.contactOnly;
+    m_blockedFloorExits = saved.blockedFloorExits;
+    return true;
+}
+
 void WorldCollision::build(std::vector<CollisionTriangle> triangles) {
     clear();
     m_triangles = std::move(triangles);
@@ -327,6 +436,8 @@ void WorldCollision::build(std::vector<CollisionTriangle> triangles) {
 }
 
 void WorldCollision::append(std::span<const CollisionTriangle> triangles) {
+    m_localBinding = std::make_shared<const u8>(0);
+    m_geometryDigest.reset();
     m_triangles.insert(m_triangles.end(), triangles.begin(), triangles.end());
     index();
 }
@@ -358,6 +469,8 @@ void WorldCollision::MovingObject::place(const Mat4& world,
 }
 
 void WorldCollision::setMovingObjects(std::span<const s32> objects) {
+    m_localBinding = std::make_shared<const u8>(0);
+    m_geometryDigest.reset();
     for (const s32 object : objects) {
         if (moving(object)) {
             continue;
@@ -384,7 +497,12 @@ void WorldCollision::setMovingObjects(std::span<const s32> objects) {
 void WorldCollision::setObjectTransform(s32 object, const Mat4& world) {
     for (MovingObject& mover : m_moving) {
         if (mover.object == object) {
-            mover.place(world);
+            // World and trigger phases may synchronize the same placement more
+            // than once. The initial identity is already placed when this mover
+            // is constructed; its local triangles never change afterward.
+            if (!sameTransform(mover.world, world)) {
+                mover.place(world);
+            }
             return;
         }
     }
@@ -472,6 +590,8 @@ void WorldCollision::eachTriangle(f32 minX, f32 minZ, f32 maxX, f32 maxZ,
 }
 
 void WorldCollision::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
+    m_geometryDigest.reset();
     m_triangles.clear();
     m_moving.clear();
     m_hidden.clear();

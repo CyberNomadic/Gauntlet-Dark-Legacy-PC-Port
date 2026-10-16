@@ -1,3 +1,5 @@
+#include "engine/core/Log.h"
+
 #include "game/screens/SimulationObserver.h"
 #include "game/screens/StageResources.h"
 
@@ -16,15 +18,25 @@ void SimulationObserver::clear() {
 
 bool SimulationObserver::bind() {
     clear();
-    if (!m_scene.m_open || m_scene.m_device == nullptr || m_scene.m_world == nullptr ||
-        !StageResources::preload(*m_scene.m_world, m_scene.m_opponents.enemies(),
-                                 m_scene.m_opponents.critters(), m_scene.m_opponents.bosses())) {
+    const auto checked = [](bool valid, std::string_view step) {
+        if (!valid) {
+            log::warn("Simulation observation binding refused: {}", step);
+        }
+        return valid;
+    };
+    if (!checked(m_scene.m_open && m_scene.m_device != nullptr && m_scene.m_world != nullptr,
+                 "open scene") ||
+        !checked(StageResources::preload(*m_scene.m_world, m_scene.m_opponents.enemies(),
+                                         m_scene.m_opponents.critters(),
+                                         m_scene.m_opponents.bosses()),
+                 "stage resource preload")) {
         return false;
     }
     auto combat = std::make_unique<CombatResources>();
-    if (!combat->bindStage(*m_scene.m_device, *m_scene.m_world, m_scene.m_weapons,
-                           m_scene.m_classes, m_scene.m_players, m_scene.m_arsenal,
-                           m_scene.m_opponents, m_scene.m_effects)) {
+    if (!checked(combat->bindStage(*m_scene.m_device, *m_scene.m_world, m_scene.m_weapons,
+                                   m_scene.m_classes, m_scene.m_players, m_scene.m_arsenal,
+                                   m_scene.m_opponents, m_scene.m_effects),
+                 "combat resource catalog")) {
         return false;
     }
     auto world = std::make_unique<LevelWorldCheckpoint>(*m_scene.m_world);
@@ -34,22 +46,28 @@ bool SimulationObserver::bind() {
         m_scene.m_portals, m_scene.m_world->layout(), m_scene.m_world->items(),
         &m_scene.m_world->realmItems());
     auto transporters = std::make_unique<LevelTransportersCheckpoint>(m_scene.m_transporters);
-    if (!world->bindResources(*m_scene.m_device) || !fixtures->bindResources() ||
-        !portals->bindResources() || !transporters->bindResources()) {
+    if (!checked(world->bindObservation(*m_scene.m_device), "world resources") ||
+        !checked(fixtures->bindResources(), "fixture resources") ||
+        !checked(portals->bindResources(), "portal resources") ||
+        !checked(transporters->bindResources(), "transporter resources")) {
         return false;
     }
-    auto worldState = world->checkpoint();
+    auto worldState = world->observe();
     auto fixtureState = fixtures->checkpoint();
     auto cameraState = camera->checkpoint();
     auto portalState = portals->checkpoint();
     auto transporterState = transporters->checkpoint();
-    if (!worldState || !fixtureState || !cameraState || !portalState || !transporterState) {
+    if (!checked(worldState.has_value(), "world initial values") ||
+        !checked(fixtureState.has_value(), "fixture initial values") ||
+        !checked(cameraState.has_value(), "camera initial values") ||
+        !checked(portalState.has_value(), "portal initial values") ||
+        !checked(transporterState.has_value(), "transporter initial values")) {
         return false;
     }
-    auto catalog = StageStatePacket::Catalog::build(
+    auto catalog = StageStatePacket::Catalog::buildObservation(
         {std::move(*worldState), std::move(*fixtureState), std::move(*cameraState),
          std::move(*portalState), std::move(*transporterState)});
-    if (!catalog) {
+    if (!checked(catalog.has_value(), "stage immutable catalog")) {
         return false;
     }
     m_combatResources = std::move(combat);

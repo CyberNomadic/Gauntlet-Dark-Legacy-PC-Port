@@ -17,6 +17,10 @@ struct PointLight {
     Vec3 color{1.0f, 1.0f, 1.0f};
     f32 radius = 1.0f;
     f32 intensity = 2.0f; ///< how fast it saturates: the effects' 2, a player's lantern 10
+    bool operator==(const PointLight&) const = default;
+    template <class Digest> friend void visitNativeState(Digest& digest, const PointLight& value) {
+        digest.template fields<4>(value);
+    }
 
     /** What it adds to a surface at `point` facing `normal`: (1 - d^2/r^2) cos / d,
      * times the intensity, at most the whole colour. */
@@ -33,6 +37,10 @@ struct WorldLighting {
     Vec3 lightColor{0.45f, 0.45f, 0.45f};
     Vec3 direction{0.3f, 1.0f, 0.2f}; ///< towards the light
     std::vector<PointLight> points;   ///< this frame's, the newest first
+    bool operator==(const WorldLighting&) const = default;
+    template <class Digest> friend void visitNativeState(Digest& digest, const WorldLighting& value) {
+        digest.template fields<4>(value);
+    }
 
     static constexpr usize kMostPoints = 12;
 

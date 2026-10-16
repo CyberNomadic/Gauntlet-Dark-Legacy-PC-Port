@@ -15,6 +15,7 @@ public:
     struct Options {
         bool localOnly = false; ///< Offline tests; no relay or discovery access.
         std::string invitation; ///< Empty hosts; nonempty joins that host.
+        bool relayOnly = false; ///< Opt-in diagnostics: disable direct paths; conflicts with localOnly.
     };
     virtual Phase phase() const = 0;
     virtual std::string invitation() const = 0;

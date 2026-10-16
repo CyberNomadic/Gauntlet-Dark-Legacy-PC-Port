@@ -160,11 +160,12 @@ Enemies::Checkpoint varied() {
     state.blows = {
         {1, kGruntKind, 2, 3.5f, true, 0x87654321, {1, 2, 3}, EnemyMeleeWard::HealthVamp}};
     state.losses = {{2, kRatKind, 3, 1, 37, true, {3, 2, 1}}};
-    state.bursts = {{{4, 5, 6}, 7.5f, 3, kGruntKind, true}};
+    state.bursts = {{{4, 5, 6}, 7.5f, 3, kGruntKind, true, 91}};
     state.births = {{{-8, 9, -10}, kGruntKind, 3}, {{11, -12, 13}, kRatKind, 1}};
     state.cues = {{EnemyCue::Kind::Yell, kRatKind, {7, 8, 9}}};
-    state.feedback = {{kGruntKind, 3, 17, true, true, 0xABCDEF12, {-1, -2, -3}, 0.375f, 2.5f}};
-    state.deathEvents = {{DeathEvent::Kind::Unmoved, 4, 2, DeathForm::Black, 8.5f, {2, 4, 6}}};
+    state.feedback = {
+        {kGruntKind, 3, 17, true, true, 0xABCDEF12, {-1, -2, -3}, 0.375f, 2.5f, 3, 92}};
+    state.deathEvents = {{DeathEvent::Kind::Unmoved, 4, 2, DeathForm::Black, 8.5f, {2, 4, 6}, 93}};
     state.deathShots = {{5, kGarmBroodKind, {1, 3, 5}, {-2, -4, -6}}};
     state.tagged = {2, 1, 3};
     state.generatorEvents = {{11, EnemyGeneratorEvent::Kind::PatrolDetached}};
@@ -198,7 +199,7 @@ TEST_CASE("enemy pool wire preserves every slot field queue clock and all three 
     // Pin little-endian version, fixed native slot count, MT words and a full
     // 64-bit lifetime counter independently of the decoder under test.
     CHECK(std::vector<u8>(encoded->begin(), encoded->begin() + 8) ==
-          std::vector<u8>{2, 0, 0, 0, 25, 0, 0, 0});
+          std::vector<u8>{4, 0, 0, 0, 25, 0, 0, 0});
     const auto random = RandomCheckpoint::encode(state.random);
     REQUIRE(random);
     CHECK(std::equal(random->begin(), random->end(), encoded->begin() + 8));
@@ -245,6 +246,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     };
     reject(0, EnemyPoolCheckpoint::kVersion + 1);
     reject(0, 1); // the previous schema omitted the native birth queue
+    reject(0, 2); // cue source lifetimes were not represented
     reject(4, Enemies::kMost + 1);
     reject(8 + 624 * 4, 625);       // invalid MT cursor
     reject(kPool + 8, 0);           // no native slots
@@ -314,6 +316,34 @@ TEST_CASE("enemy birth wire validates every row and preserves the exhausted orde
     CHECK_FALSE(EnemyPoolCheckpoint::encode(state));
 }
 
+TEST_CASE("enemy cue diagnostics retain source lifetimes across a recycled slot",
+          "[enemy-pool-codec][native-combat-audio]") {
+    Enemies::Checkpoint state;
+    state.nextInstance = 3;
+    state.enemies[0].instance = 2;
+    state.enemies[0].kind = kRatKind;
+    state.cues.push_back({EnemyCue::Kind::Yell, kGruntKind, {1, 2, 3}, 0, 1});
+    REQUIRE(state.valid()); // the previous occupant emitted this before its slot was reused
+    const auto bytes = EnemyPoolCheckpoint::encode(state);
+    REQUIRE(bytes);
+    CHECK(EnemyPoolCheckpoint::decode(*bytes) == state);
+    auto invalid = state;
+    invalid.cues.front().instance = 0;
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.cues.front().enemy = -1;
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.cues.front().instance = state.nextInstance;
+    CHECK_FALSE(invalid.valid());
+    invalid = state;
+    invalid.cues.front().instance = 2; // current source kind must agree
+    CHECK_FALSE(invalid.valid());
+    invalid.cues.front().enemyKind = kRatKind;
+    REQUIRE(invalid.valid());
+    CHECK(EnemyPoolCheckpoint::encode(invalid) != bytes);
+}
+
 TEST_CASE("enemy pool wire refuses every truncated prefix without partial state",
           "[netplay][rollback][enemy-pool-codec]") {
     auto state = Enemies::Checkpoint{};
@@ -325,6 +355,48 @@ TEST_CASE("enemy pool wire refuses every truncated prefix without partial state"
         CHECK_FALSE(EnemyPoolCheckpoint::decode(std::span{*bytes}.first(size)));
     }
     CHECK(EnemyPoolCheckpoint::decode(*bytes) == state);
+}
+
+TEST_CASE("enemy hit death and bomber diagnostics preserve extinct source identities",
+          "[enemy-pool-codec][native-combat-audio]") {
+    Enemies::Checkpoint state;
+    state.nextInstance = 3;
+    state.enemies[0].instance = 2;
+    state.enemies[0].kind = kRatKind;
+    state.feedback.push_back({.kind = kGruntKind, .enemy = 0, .instance = 1});
+    state.deathEvents.push_back({.kind = DeathEvent::Kind::Killed, .enemy = 0, .instance = 1});
+    state.bursts.push_back({.enemy = 0, .kind = kGruntKind, .instance = 1});
+    REQUIRE(state.valid());
+    const auto encoded = EnemyPoolCheckpoint::encode(state);
+    REQUIRE(encoded);
+    CHECK(EnemyPoolCheckpoint::decode(*encoded) == state);
+    for (const s32 queue : {0, 1, 2}) {
+        CAPTURE(queue);
+        auto malformed = state;
+        const auto edit = [&](s32 slot, u64 instance) {
+            if (queue == 0) {
+                malformed.feedback[0].enemy = slot;
+                malformed.feedback[0].instance = instance;
+            } else if (queue == 1) {
+                malformed.deathEvents[0].enemy = slot;
+                malformed.deathEvents[0].instance = instance;
+            } else {
+                malformed.bursts[0].enemy = slot;
+                malformed.bursts[0].instance = instance;
+            }
+        };
+        edit(-1, 1);
+        CHECK_FALSE(malformed.valid());
+        edit(Enemies::kMost, 1);
+        CHECK_FALSE(malformed.valid());
+        edit(0, state.nextInstance);
+        CHECK_FALSE(malformed.valid());
+        edit(0, 2); // a matching live identity cannot claim a different species
+        CHECK_FALSE(malformed.valid());
+        edit(0, 0); // legacy offline synthetic events remain representable
+        REQUIRE(malformed.valid());
+        CHECK(EnemyPoolCheckpoint::encode(malformed) != encoded);
+    }
 }
 
 TEST_CASE(
@@ -361,7 +433,7 @@ TEST_CASE(
     constexpr usize kQueues = 8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 +
                               EnemyPoolCheckpoint::kMaxCombatants * 24;
     constexpr usize kTagged =
-        kQueues + 8 * 4 + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 44 + 32);
+        kQueues + 8 * 4 + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 56 + 40);
     word(tooManyEvents, kTagged, 1);
     tooManyEvents.insert(tooManyEvents.begin() + static_cast<s64>(kTagged + 4), 4, u8{0});
     CHECK_FALSE(EnemyPoolCheckpoint::decode(tooManyEvents));

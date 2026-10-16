@@ -4,6 +4,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -12,7 +16,10 @@ namespace gdl::game {
  * (AudioPlayerBreath, player.c 2487: `S_WAITINGL` in the tower, else `S_WAITING`).
  */
 class ExitWait {
+    friend void visitNativeState(NativeStateDigest&, const ExitWait&);
+
 public:
+    bool operator==(const ExitWait&) const = default;
     struct Checkpoint {
         s32 ticks = 0;
         bool valid() const { return ticks >= 0 && ticks <= 1'000'000; }

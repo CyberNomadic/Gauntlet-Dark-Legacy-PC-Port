@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "engine/assets/StringTable.h"
 
@@ -10,8 +11,10 @@ namespace gdl::game {
 /** Conservative compatibility gate for the native simulation experiment, not
  * an authentication mechanism or a proof of complete determinism. The runtime
  * identity pins the executable, OS/architecture/toolchain, numeric environment
- * and the explicitly identified loaded C/C++ math runtimes. Cross-platform
- * agreement is deliberately not implied. No native asset tree is read here. */
+ * and its C/C++ runtime linkage. Static MSVC builds pin the runtime inside the
+ * executable; dynamic builds also pin the identified loaded runtime files.
+ * Cross-platform agreement is deliberately not implied. No native asset tree
+ * is read here. */
 class NativeOnlineIdentity {
 public:
     struct Inputs {
@@ -24,6 +27,10 @@ public:
         std::string data;
         std::string language;
     };
+
+    /** Compile-selected runtime provenance included in the compatibility hash.
+     * This is not inferred from DLLs incidentally loaded by graphics/audio. */
+    static std::string_view runtimeProfile();
 
     /** Call once at process startup, before Application or any worker threads.
      * On Windows this disables the UCRT's CPU-dependent FMA3 math path, including
@@ -40,9 +47,10 @@ public:
      * not a proof for every possible input or a cross-platform guarantee. */
     static std::optional<Inputs> snapshot(const StringTable& strings, std::string* error = nullptr);
 
-    /** Load-time/background work: stream the actual executable and known loaded
-     * runtime files. Missing, unreadable or changing files fail without falling
-     * back to a release version, cwd, guessed library name or local path hash. */
+    /** Load-time/background work: stream the actual executable and, for dynamic
+     * builds, known loaded runtime files. Static MSVC builds verify that their
+     * referenced math/control functions belong to the executable. Missing,
+     * unreadable or changing files fail without a version/path-only fallback. */
     static std::optional<Result> capture(Inputs inputs, std::string* error = nullptr);
 
     /** Check on the simulation thread before using a completed background hash.

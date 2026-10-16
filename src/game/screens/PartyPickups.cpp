@@ -208,6 +208,7 @@ void PartyPickups::collect(RenderDevice& device, std::span<PlayerRuntime> player
         if (pickup.realm <= 0) {
             continue; // handed over as it was judged
         }
+        const auto audioScope = services.audio.soundScope({35, pickup.item, 1}, 1);
         if (static_cast<usize>(pickup.realm) < kRealmCount) {
             const s32 wanted = LevelTriggers::crystalsNeeded(pickup.realm);
             bool alreadyEnough = false;
@@ -257,6 +258,10 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     if (pickup.collector >= players.size()) {
         return std::nullopt;
     }
+    // Item slots are append-only within a loaded epoch. Another pickup's
+    // corrected-away sound must not renumber this item's event identity.
+    const auto audioScope = services.audio.soundScope(
+        {35, pickup.item, 1, static_cast<u8>(players[pickup.collector].actor.player())}, 2);
     if (pickup.subtype == static_cast<s32>(ItemKind::Gold) ||
         pickup.subtype == static_cast<s32>(ItemKind::Keys)) {
         return takeCurrency(pickup, players, services.world, services.fixtures, services.classes,

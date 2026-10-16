@@ -3,7 +3,83 @@
 #include <algorithm>
 #include <bit>
 
+#if (defined(_M_X64) || defined(__x86_64__)) && !defined(_M_ARM64EC)
+#define GDL_SHA256_X64 1
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+#else
+#define GDL_SHA256_X64 0
+#endif
+
 namespace gdl {
+namespace {
+#if GDL_SHA256_X64
+bool hasSha256Instructions() {
+#if defined(_MSC_VER)
+    int features[4]{};
+    __cpuid(features, 0);
+    if (features[0] < 7) return false;
+    __cpuidex(features, 7, 0);
+    return (static_cast<u32>(features[1]) & (1U << 29)) != 0;
+#else
+    unsigned int a = 0, b = 0, c = 0, d = 0;
+    return __get_cpuid_max(0, nullptr) >= 7 && __get_cpuid_count(7, 0, &a, &b, &c, &d) &&
+           (b & (1U << 29)) != 0;
+#endif
+}
+
+// Only this function may contain SHA extensions. Do not raise the baseline CPU
+// requirement for the executable; older x64 and other architectures use C++.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("sha"), noinline))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+void compressAccelerated(std::array<u32, 8>& state, const std::array<u32, 64>& words,
+                         const std::array<u32, 64>& constants) {
+    auto abef = _mm_setr_epi32(static_cast<s32>(state[5]), static_cast<s32>(state[4]),
+                              static_cast<s32>(state[1]), static_cast<s32>(state[0]));
+    auto cdgh = _mm_setr_epi32(static_cast<s32>(state[7]), static_cast<s32>(state[6]),
+                              static_cast<s32>(state[3]), static_cast<s32>(state[2]));
+    // SHA256RNDS2 returns ABEF after two rounds. The old ABEF is the new
+    // CDGH, so the next instruction swaps their roles. Only SSE2 plus the
+    // CPUID-checked SHA instructions are used; no AVX/SSSE3/SSE4 dependency.
+    // Instruction semantics: Intel SHA Extensions, SHA256RNDS2 input/output table.
+    for (usize i = 0; i < words.size(); i += 4) {
+        const auto message = _mm_add_epi32(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(words.data() + i)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(constants.data() + i)));
+        cdgh = _mm_sha256rnds2_epu32(cdgh, abef, message);
+        abef = _mm_sha256rnds2_epu32(abef, cdgh, _mm_shuffle_epi32(message, 0x0E));
+    }
+    std::array<u32, 4> first{}, second{};
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(first.data()), abef);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(second.data()), cdgh);
+    state[0] += first[3];
+    state[1] += first[2];
+    state[2] += second[3];
+    state[3] += second[2];
+    state[4] += first[1];
+    state[5] += first[0];
+    state[6] += second[1];
+    state[7] += second[0];
+}
+#endif
+} // namespace
+
+bool Sha256::hardwareAccelerationAvailable() {
+#if GDL_SHA256_X64
+    static const bool available = hasSha256Instructions();
+    return available;
+#else
+    return false;
+#endif
+}
+
 void Sha256::block(std::span<const u8, 64> bytes) {
     static constexpr std::array<u32, 64> kRound{
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -28,20 +104,34 @@ void Sha256::block(std::span<const u8, 64> bytes) {
         words[i] = words[i - 16] + (std::rotr(x, 7) ^ std::rotr(x, 18) ^ (x >> 3)) + words[i - 7] +
                    (std::rotr(y, 17) ^ std::rotr(y, 19) ^ (y >> 10));
     }
+#if GDL_SHA256_X64
+    if (m_backend == Backend::Automatic && hardwareAccelerationAvailable()) {
+        compressAccelerated(m_state, words, kRound);
+        return;
+    }
+#endif
     auto [a, b, c, d, e, f, g, h] = m_state;
-    for (usize i = 0; i < words.size(); ++i) {
+    const auto round = [](u32 a, u32 b, u32 c, u32& d, u32 e, u32 f, u32 g, u32& h,
+                          u32 constant, u32 word) {
         const u32 t1 = h + (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25)) +
-                       ((e & f) ^ (~e & g)) + kRound[i] + words[i];
+                       ((e & f) ^ (~e & g)) + constant + word;
         const u32 t2 =
             (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
-        h = g;
-        g = f;
-        f = e;
-        e = d + t1;
-        d = c;
-        c = b;
-        b = a;
-        a = t1 + t2;
+        d += t1;
+        h = t1 + t2;
+    };
+    // Rotate the argument names rather than moving all eight working words on
+    // every round. Eight rounds restore their original roles. This keeps the
+    // portable SHA stream identical without selecting CPU-specific instructions.
+    for (usize i = 0; i < words.size(); i += 8) {
+        round(a, b, c, d, e, f, g, h, kRound[i], words[i]);
+        round(h, a, b, c, d, e, f, g, kRound[i + 1], words[i + 1]);
+        round(g, h, a, b, c, d, e, f, kRound[i + 2], words[i + 2]);
+        round(f, g, h, a, b, c, d, e, kRound[i + 3], words[i + 3]);
+        round(e, f, g, h, a, b, c, d, kRound[i + 4], words[i + 4]);
+        round(d, e, f, g, h, a, b, c, kRound[i + 5], words[i + 5]);
+        round(c, d, e, f, g, h, a, b, kRound[i + 6], words[i + 6]);
+        round(b, c, d, e, f, g, h, a, kRound[i + 7], words[i + 7]);
     }
     const std::array<u32, 8> result{a, b, c, d, e, f, g, h};
     for (usize i = 0; i < result.size(); ++i) {
@@ -72,17 +162,15 @@ void Sha256::update(std::span<const u8> bytes) {
 }
 std::array<u8, 32> Sha256::finish() const {
     auto copy = *this;
-    const std::array<u8, 1> marker{0x80};
-    const std::array<u8, 1> zero{0};
-    copy.update(marker);
-    while (copy.m_used != 56) {
-        copy.update(zero);
+    // Finish in one bulk update. A short unordered-element digest otherwise
+    // spent dozens of update calls appending individual padding zeroes.
+    std::array<u8, 128> padding{};
+    padding[0] = 0x80;
+    const usize lengthAt = m_used < 56 ? 56 - m_used : 120 - m_used;
+    for (usize i = 0; i < 8; ++i) {
+        padding[lengthAt + 7 - i] = static_cast<u8>((m_size * 8) >> (i * 8));
     }
-    std::array<u8, 8> length{};
-    for (usize i = 0; i < length.size(); ++i) {
-        length[7 - i] = static_cast<u8>((m_size * 8) >> (i * 8));
-    }
-    copy.update(length);
+    copy.update(std::span<const u8>{padding}.first(lengthAt + 8));
     std::array<u8, 32> result{};
     for (usize i = 0; i < result.size(); ++i) {
         result[i] = static_cast<u8>(copy.m_state[i / 4] >> ((3 - i % 4) * 8));

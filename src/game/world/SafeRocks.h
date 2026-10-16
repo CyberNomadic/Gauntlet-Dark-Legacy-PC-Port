@@ -21,7 +21,7 @@ public:
     static constexpr s32 kSubtype = 41;
     static constexpr s32 kWhole = 3;
 
-    struct Rock {
+    struct RockState {
         s32 instance = -1;
         s32 health = 0;
         s32 baseHealth = 0;
@@ -34,8 +34,30 @@ public:
         Vec3 position{0.0f};
         Obstacle obstacle;
         Mat4 placement{1.0f};
+        bool operator==(const RockState&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const RockState& value) {
+            visitor.template fields<12>(value);
+        }
+    };
+    struct Rock : RockState {
         std::array<TreeModel, 4> models;
     };
+
+    /** Native values in the current bound arena; model and texture resources stay put. */
+    class LocalSnapshot {
+        friend class SafeRocks;
+        std::vector<RockState> rocks;
+        TextureAnimator::Clock textures;
+        std::weak_ptr<const u8> binding;
+        const SafeRocks* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
 
     bool bind(RenderDevice& device, const WorldLayout& layout, ItemArchive& items);
     /** Bind after the arena's lenders are loaded. K5's static rocks animate a texture
@@ -78,6 +100,7 @@ public:
               f32 presentationAlpha = -1.0f) const;
 
 private:
+    bool appendBindingDigest(NativeStateDigest& digest) const;
     friend class SafeRocksCheckpoint;
     std::vector<std::unique_ptr<Rock>> m_rocks;
     std::vector<u32> m_textureSlots;

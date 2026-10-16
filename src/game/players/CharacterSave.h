@@ -11,12 +11,17 @@
 #include "game/players/ClassData.h"
 #include "game/players/Progression.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 inline constexpr usize kCharacterNameLength = 6;
 
 /** One saved character: a name, its current class and costume, and progress with each class. */
 struct CharacterSave {
+    bool operator==(const CharacterSave&) const = default;
     std::string name;
     s32 character = 0; ///< class index
     s32 color = 0;
@@ -90,5 +95,7 @@ private:
     std::vector<SaveSlotInfo> m_slots;
     u16 m_classUnlocks = 0;
 };
+
+void visitNativeState(NativeStateDigest& digest, const CharacterSave& value);
 
 } // namespace gdl::game

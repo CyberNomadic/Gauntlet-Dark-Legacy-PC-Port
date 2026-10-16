@@ -10,8 +10,10 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/enemies/BossDefinition.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 
@@ -49,6 +51,131 @@ void makeMoltenBallsContactOnly(const WorldLayout& layout, WorldCollision& colli
 }
 
 } // namespace
+
+bool LevelWorld::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("LevelWorld/1");
+    digest.value(m_ref);
+    digest.resource(&m_layout);
+    digest.resource(&m_collision);
+    digest.values(m_movingObjects, saved ? saved->state : m_sim);
+    digest.fields<5>(m_cameraRange);
+    digest.wide(m_markers.size());
+    for (const auto& marker : m_markers) digest.fields<5>(marker);
+    m_textureAnimator.appendBindingDigest(digest);
+    digest.fields<3>(saved ? saved->textures : m_textureAnimator.clock());
+    if (saved) {
+        m_scene.appendLocalDigest(digest, saved->scene);
+        m_worldAnimator.appendLocalDigest(digest, saved->worldAnimator);
+        m_collision.appendLocalDigest(digest, saved->collision);
+        m_placedItems.appendLocalDigest(digest, saved->placedItems);
+        m_skorneArena.appendLocalDigest(digest, saved->skorneArena);
+        m_fallingScenery.appendLocalDigest(digest, saved->fallingScenery);
+        m_walls.appendLocalDigest(digest, saved->walls);
+        m_destruction.appendLocalDigest(digest, saved->destruction);
+        m_triggers.appendLocalDigest(digest, saved->triggers);
+        m_rotators.appendLocalDigest(digest, saved->rotators);
+    } else {
+        m_scene.appendNativeDigest(digest);
+        m_worldAnimator.appendNativeDigest(digest);
+        m_collision.appendNativeDigest(digest);
+        m_placedItems.appendNativeDigest(digest);
+        m_skorneArena.appendNativeDigest(digest);
+        m_fallingScenery.appendNativeDigest(digest);
+        m_walls.appendNativeDigest(digest);
+        m_destruction.appendNativeDigest(digest);
+        m_triggers.appendNativeDigest(digest);
+        m_rotators.appendNativeDigest(digest);
+    }
+    // Layout/art/world-data are immutable for this epoch. Their contract and
+    // semantic resource identities are authenticated before admitting history.
+    return digest.good();
+}
+
+bool LevelWorld::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool LevelWorld::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [state, scene, animator, collision, items, arena, falling, walls, destruction, triggers, rotators, textures, owner, binding] = saved;
+    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    return appendDigest(digest, &saved);
+}
+
+bool LevelWorld::registerNativeResources(NativeStateResources& resources) const {
+    return resources.refreshTextures(m_textures) &&
+           (!m_powerups.loaded() || resources.refreshArchive(m_powerups)) &&
+           m_placedItems.registerNativeResources(resources) &&
+           m_triggers.registerNativeResources(resources) &&
+           m_rotators.registerNativeResources(resources);
+}
+
+void LevelWorld::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_checkpointBinding;
+    saved.state = m_sim;
+    saved.textures = m_textureAnimator.clock();
+    m_scene.saveLocal(saved.scene);
+    m_worldAnimator.saveLocal(saved.worldAnimator);
+    m_collision.saveLocal(saved.collision);
+    m_placedItems.saveLocal(saved.placedItems);
+    m_skorneArena.saveLocal(saved.skorneArena);
+    m_fallingScenery.saveLocal(saved.fallingScenery);
+    m_walls.saveLocal(saved.walls);
+    m_destruction.saveLocal(saved.destruction);
+    m_triggers.saveLocal(saved.triggers);
+    m_rotators.saveLocal(saved.rotators);
+}
+
+bool LevelWorld::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_checkpointBinding &&
+           m_scene.canRestoreLocal(saved.scene) &&
+           m_worldAnimator.canRestoreLocal(saved.worldAnimator) &&
+           m_collision.canRestoreLocal(saved.collision) &&
+           m_placedItems.canRestoreLocal(saved.placedItems) &&
+           m_skorneArena.canRestoreLocal(saved.skorneArena) &&
+           m_fallingScenery.canRestoreLocal(saved.fallingScenery) &&
+           m_walls.canRestoreLocal(saved.walls) &&
+           m_destruction.canRestoreLocal(saved.destruction) &&
+           m_triggers.canRestoreLocal(saved.triggers) && m_rotators.canRestoreLocal(saved.rotators);
+}
+
+bool LevelWorld::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
+           left.textures == right.textures && m_scene.equalLocal(left.scene, right.scene) &&
+           m_worldAnimator.equalLocal(left.worldAnimator, right.worldAnimator) &&
+           m_collision.equalLocal(left.collision, right.collision) &&
+           m_placedItems.equalLocal(left.placedItems, right.placedItems) &&
+           m_skorneArena.equalLocal(left.skorneArena, right.skorneArena) &&
+           m_fallingScenery.equalLocal(left.fallingScenery, right.fallingScenery) &&
+           m_walls.equalLocal(left.walls, right.walls) &&
+           m_destruction.equalLocal(left.destruction, right.destruction) &&
+           m_triggers.equalLocal(left.triggers, right.triggers) &&
+           m_rotators.equalLocal(left.rotators, right.rotators);
+}
+
+bool LevelWorld::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    // Validate the bound stage before touching any child. Restores only copy native
+    // values or rebuild derived collision/draw caches; they never fire gameplay events.
+    m_sim = saved.state;
+    m_textureAnimator.restoreClock(saved.textures);
+    m_scene.restoreLocal(saved.scene);
+    m_worldAnimator.restoreLocal(saved.worldAnimator);
+    m_collision.restoreLocal(saved.collision);
+    m_placedItems.restoreLocal(saved.placedItems);
+    m_skorneArena.restoreLocal(saved.skorneArena);
+    m_fallingScenery.restoreLocal(saved.fallingScenery);
+    m_walls.restoreLocal(saved.walls);
+    m_destruction.restoreLocal(saved.destruction);
+    m_triggers.restoreLocal(saved.triggers);
+    m_rotators.restoreLocal(saved.rotators);
+    ++m_checkpointGeneration;
+    return true;
+}
 
 bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpackedRoot,
                       const LevelRef& level) {
@@ -135,8 +262,8 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
             }
         }
     }
-    if (!m_scene.build(m_layout, m_models, m_textures, device, m_lighting, lent, controlledObjects,
-                       backgroundObjects)) {
+    if (!m_scene.build(m_layout, m_models, m_textures, device, m_sim.lighting, lent,
+                       controlledObjects, backgroundObjects)) {
         clear();
         return false;
     }
@@ -148,8 +275,8 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
     m_worldAnimator.apply(m_scene);
     m_textureAnimator.bind(m_animations.textureAnimations(), m_textures, device, lent);
     m_textureAnimator.apply(m_scene);
-    m_particles.bind(m_layout, m_textures, device, lent);
-    m_frameRemainder = 0.0f;
+    m_sim.particles.bind(m_layout, m_textures, device, lent);
+    m_sim.frameRemainder = 0.0f;
     if (!m_collision.load(directory, m_layout)) {
         log::warn("Level: no collision; characters will walk through everything");
     }
@@ -179,7 +306,7 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
     m_worldAnimator.apply(m_scene);
     m_triggers.placeTargets(m_scene, &m_collision);
     syncCollision();
-    m_particles.syncNodes(m_scene);
+    m_sim.particles.syncNodes(m_scene);
     if (!m_powerups.load(unpackedRoot / kPowerups)) {
         log::warn("Level: without the powerups archive the pickups are absent");
     }
@@ -204,7 +331,7 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
               "triangles ({} moving objects), {} camera markers",
               m_scene.placedCount(), m_scene.batchCount(), m_scene.unitCount(),
               m_scene.triangleCount(), m_worldAnimator.size(), m_textureAnimator.size(),
-              m_particles.size(), m_placedItems.size(), m_triggers.size(),
+              m_sim.particles.size(), m_placedItems.size(), m_triggers.size(),
               m_collision.triangleCount(), m_collision.movingObjectCount(), m_markers.size());
     return true;
 }
@@ -262,7 +389,7 @@ void LevelWorld::startTriggers(std::span<const TriggerVisitor> visitors,
     }
     m_worldAnimator.apply(m_scene);
     syncCollision();
-    m_particles.syncNodes(m_scene);
+    m_sim.particles.syncNodes(m_scene);
     m_placedItems.snapPresentation();
 }
 
@@ -270,7 +397,7 @@ void LevelWorld::activateTrigger(s32 id, bool atOnce) {
     m_triggers.activate(id, atOnce, m_worldAnimator, m_scene, &m_collision);
     m_worldAnimator.apply(m_scene);
     syncCollision();
-    m_particles.syncNodes(m_scene);
+    m_sim.particles.syncNodes(m_scene);
     if (atOnce) {
         m_placedItems.snapPresentation();
     }
@@ -281,9 +408,9 @@ void LevelWorld::updateTriggers(f32 seconds, std::span<const TriggerVisitor> vis
     m_triggers.setCameraHeld(cameraHeld);
     m_triggers.update(seconds, visitors, m_worldAnimator, m_scene, &m_collision);
     std::vector<RotatorCue> cues = m_rotators.update(seconds, visitors, m_scene);
-    m_rotatorCues.insert(m_rotatorCues.end(), cues.begin(), cues.end());
+    m_sim.rotatorCues.insert(m_sim.rotatorCues.end(), cues.begin(), cues.end());
     syncCollision();
-    m_particles.syncNodes(m_scene);
+    m_sim.particles.syncNodes(m_scene);
 }
 
 void LevelWorld::update(f32 seconds, bool timeStopped) {
@@ -296,15 +423,15 @@ void LevelWorld::update(f32 seconds, bool timeStopped) {
     m_fallingScenery.update(seconds);
     m_walls.update(seconds);
     syncCollision();
-    m_particles.syncNodes(m_scene);
-    m_particles.step(seconds);
-    m_particlesAdvanced = seconds > 0;
+    m_sim.particles.syncNodes(m_scene);
+    m_sim.particles.step(seconds);
+    m_sim.particlesAdvanced = seconds > 0;
     m_placedItems.update(seconds);
     // Texture animations count whole game frames.
-    m_textureAdvance = std::max(seconds, 0.0f) * WorldAnimator::kFramesPerSecond;
-    m_frameRemainder += m_textureAdvance;
-    const f32 frames = std::floor(m_frameRemainder);
-    m_frameRemainder -= frames;
+    m_sim.textureAdvance = std::max(seconds, 0.0f) * WorldAnimator::kFramesPerSecond;
+    m_sim.frameRemainder += m_sim.textureAdvance;
+    const f32 frames = std::floor(m_sim.frameRemainder);
+    m_sim.frameRemainder -= frames;
     m_textureAnimator.step(m_scene, static_cast<u32>(frames));
 }
 
@@ -312,14 +439,14 @@ std::optional<f32> LevelWorld::presentedTextureFrameOffset(f32 alpha) const {
     if (alpha < 0) {
         return std::nullopt;
     }
-    return m_frameRemainder - m_textureAdvance * (1.0f - std::clamp(alpha, 0.0f, 1.0f));
+    return m_sim.frameRemainder - m_sim.textureAdvance * (1.0f - std::clamp(alpha, 0.0f, 1.0f));
 }
 
 /** Takes the light, the camera range and the sounds from the realm's data. */
 void LevelWorld::loadLevelData(const std::filesystem::path& unpackedRoot) {
-    m_lighting = WorldLighting{};
-    m_litNow = m_lighting;
-    m_ambientOffset = 0.0f;
+    m_sim.lighting = WorldLighting{};
+    m_sim.litNow = m_sim.lighting;
+    m_sim.ambientOffset = 0.0f;
     m_cameraRange = CameraRange{};
     m_level = nullptr;
     m_audio = nullptr;
@@ -331,9 +458,9 @@ void LevelWorld::loadLevelData(const std::filesystem::path& unpackedRoot) {
         return;
     }
     m_level = level;
-    m_lighting = WorldLighting::forLevel(*level);
-    m_litNow = m_lighting;
-    m_ambientOffset = 0.0f;
+    m_sim.lighting = WorldLighting::forLevel(*level);
+    m_sim.litNow = m_sim.lighting;
+    m_sim.ambientOffset = 0.0f;
     if (const LevelCameraInfo* camera = m_worldData.camera(level->cameraIndex); camera != nullptr) {
         m_cameraRange.radiusMin = camera->radiusMin;
         m_cameraRange.radiusMax = camera->radiusMax;
@@ -360,12 +487,12 @@ void LevelWorld::clear() {
     m_worldAnimator.clear();
     m_destruction.clear();
     m_textureAnimator.clear();
-    m_particles.clear();
-    m_particlesAdvanced = false;
+    m_sim.particles.clear();
+    m_sim.particlesAdvanced = false;
     m_triggers.clear();
     m_hazards.clear();
     m_rotators.clear();
-    m_rotatorCues.clear();
+    m_sim.rotatorCues.clear();
     m_movingObjects.clear();
     m_placedItems.clear();
     m_powerups.clear();
@@ -373,11 +500,11 @@ void LevelWorld::clear() {
     m_markers.clear();
     m_textures.releaseTextures();
     m_itemArchives.clear();
-    m_frameRemainder = 0.0f;
-    m_textureAdvance = 0.0f;
+    m_sim.frameRemainder = 0.0f;
+    m_sim.textureAdvance = 0.0f;
     m_level = nullptr;
     m_audio = nullptr;
-    m_playerCount = -1;
+    m_sim.playerCount = -1;
 }
 
 std::optional<WorldCamera> LevelWorld::entranceCamera(u32 startIndex) const {
@@ -401,24 +528,24 @@ std::optional<WorldCamera> LevelWorld::entranceCamera(u32 startIndex) const {
 }
 
 void LevelWorld::setPointLights(std::span<const PointLight> points) {
-    m_lighting.points.assign(points.begin(), points.end());
-    m_litNow.points = m_lighting.points;
+    m_sim.lighting.points.assign(points.begin(), points.end());
+    m_sim.litNow.points = m_sim.lighting.points;
     m_scene.setPointLights(points);
 }
 
 void LevelWorld::setAmbientOffset(f32 offset) {
-    if (offset == m_ambientOffset) {
+    if (offset == m_sim.ambientOffset) {
         return;
     }
-    m_ambientOffset = offset;
+    m_sim.ambientOffset = offset;
     // A level's light saturates what faces it, so taking the offset off the ambient term
     // alone would leave most of it as bright as ever; the original darkens the whole picture
     // with it, and so is everything lit here: the level's baked geometry through the scene,
     // what is lit as it is drawn through the light it is given. What glows is left alone.
     const f32 kept = std::clamp(1.0f + offset, 0.0f, 1.0f);
-    m_litNow = m_lighting;
-    m_litNow.ambient = m_lighting.ambient * kept;
-    m_litNow.lightColor = m_lighting.lightColor * kept;
+    m_sim.litNow = m_sim.lighting;
+    m_sim.litNow.ambient = m_sim.lighting.ambient * kept;
+    m_sim.litNow.lightColor = m_sim.lighting.lightColor * kept;
     m_scene.setDarken(1.0f - kept);
 }
 

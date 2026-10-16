@@ -67,7 +67,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     device.draws.clear();
     // The pickup's own blended pass identifies what waits for the fixtures: every part of
     // an alpha-textured mesh, fruit shadows sharing a mesh with their opaque food included.
-    item.model.draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
+    item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
                     TreeModel::Pass::Blended);
     std::vector<const Texture*> blendedTextures;
     for (const auto& draw : device.draws) {
@@ -102,11 +102,11 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     if (!std::string_view{name}.ends_with("ICON")) {
         for (usize node = 0; node < item.figure->nodes.size(); ++node) {
             if (item.figure->nodes[node].name == "CF_HILITE") {
-                item.model.setMeshAlpha(node, 0);
+                item.model->setMeshAlpha(node, 0);
             }
         }
         device.draws.clear();
-        item.model.draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1,
+        item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1,
                         TreeModel::Pass::Blended);
         REQUIRE_FALSE(device.draws.empty()); // fruit's flat ground shadow is still drawn
         for (const auto& draw : device.draws) {
@@ -151,7 +151,7 @@ TEST_CASE("the sprite filtering scenario starts beside the native G2 Fire Breath
     CHECK(glm::distance(start, breath->position) < 6);
     world.placedItems().draw(device, Mat4{1}, {});
     device.draws.clear();
-    breath->model.draw(device, Mat4{1}, breath->transform, {}, breath->pose.matrices(), nullptr, 1,
+    breath->model->draw(device, Mat4{1}, breath->transform, {}, breath->pose.matrices(), nullptr, 1,
                        TreeModel::Pass::Blended);
     REQUIRE_FALSE(device.draws.empty());
     CHECK(std::ranges::any_of(device.draws,
@@ -783,7 +783,7 @@ TEST_CASE("gas poisons food models and pickup values without moving or consuming
     for (const usize index : {apple, meat}) {
         const auto& item = items.item(index);
         REQUIRE(item.figure == &powerups.trees.tree(*powerups.trees.find(item.name)));
-        REQUIRE(item.model.bound());
+        REQUIRE(item.model->bound());
         REQUIRE(item.takeable());
     }
     items.update(0.1f);
@@ -842,7 +842,7 @@ TEST_CASE("the tower's crystals stand on the floor for a party large enough",
         ++gems;
         REQUIRE(item.subtype == ItemInfo::kCrystal);
         REQUIRE(item.minPlayers == 1);
-        REQUIRE(item.model.bound());
+        REQUIRE(item.model->bound());
         // Lifted onto the floor near where the level put it.
         const ItemInstance& source = layout.itemInstances()[static_cast<usize>(item.instance)];
         REQUIRE(item.position.x == source.position.x);
@@ -871,7 +871,7 @@ TEST_CASE("the tower's crystals stand on the floor for a party large enough",
     REQUIRE(Vec3{turned[3]} == Vec3{0.0f, 0.0f, 0.0f});
     // The sheen slides over the crystal: the archive's scroll on its texture has moved.
     constexpr u32 kSheenTexture = 181;
-    REQUIRE(items.item(firstGem).model.textureOffset(kSheenTexture) != Vec2{0.0f, 0.0f});
+    REQUIRE(items.item(firstGem).model->textureOffset(kSheenTexture) != Vec2{0.0f, 0.0f});
     items.draw(device, Mat4{1.0f}, WorldLighting{});
     REQUIRE(device.draws.size() >= usize{60}); // a shadow, the crystal, its shine and glow
     bool glowing = false;
@@ -1182,12 +1182,12 @@ TEST_CASE("a thrown item sails out, bounces to rest on the floor and can be take
     REQUIRE(coin.position == Vec3{0.0f, 3.0f, 0.0f}); // not on the floor yet
     REQUIRE_FALSE(coin.takeable());
     // These sprites spin through sequence-keyed texture frames, not geometry.
-    coin.model.draw(device, Mat4{1}, coin.transform);
+    coin.model->draw(device, Mat4{1}, coin.transform);
     REQUIRE_FALSE(device.draws.empty());
     const Texture* firstTexture = device.draws.back().texture;
     device.draws.clear();
     items.update(5.0f / 30.0f);
-    coin.model.draw(device, Mat4{1}, coin.transform);
+    coin.model->draw(device, Mat4{1}, coin.transform);
     REQUIRE_FALSE(device.draws.empty());
     REQUIRE(device.draws.back().texture != firstTexture);
     // It rises first, then falls and bounces.

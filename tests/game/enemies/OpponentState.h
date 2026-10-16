@@ -3,7 +3,7 @@
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/enemies/Generators.h"
-#include "game/enemies/PlacedEnemies.h"
+#include "game/enemies/PlacedEnemiesCheckpoint.h"
 
 namespace gdl::game {
 
@@ -14,7 +14,7 @@ struct OpponentState {
     Enemies::Checkpoint enemies;
     EnemyMissiles::Checkpoint missiles;
     /** Optional when a diagnostic fixture binds only the three active pools. */
-    std::optional<PlacedEnemies::Checkpoint> placements = std::nullopt;
+    std::optional<PlacedEnemiesCheckpoint::State> placements = std::nullopt;
     bool valid() const;
     bool operator==(const OpponentState&) const = default;
 

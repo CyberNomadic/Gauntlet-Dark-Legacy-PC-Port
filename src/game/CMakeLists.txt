@@ -11,7 +11,11 @@ add_library(game STATIC
     netplay/HostedRoom.cpp
     netplay/InputCommand.cpp
     netplay/InputTimeline.cpp
-    netplay/LockstepInputs.cpp
+    netplay/RollbackInputs.cpp
+    netplay/RollbackExchange.cpp
+    netplay/FrameEventLedger.cpp
+    world/SceneSoundEvents.cpp
+    world/NativeStateResources.cpp
     netplay/NativeAgreement.cpp
     netplay/ShotIdentity.cpp
     netplay/EffectIdentity.cpp
@@ -26,8 +30,7 @@ add_library(game STATIC
     netplay/CharacterProfile.cpp
     netplay/PartyCheckpoint.cpp
     netplay/PartyBootstrap.cpp
-    screens/MatchInputs.cpp
-    screens/NativePlayDriver.cpp
+    screens/NativeRollbackDriver.cpp
     screens/NativePlaySetup.cpp
     screens/NativeOnlinePlay.cpp
     screens/OnlineParty.cpp
@@ -36,6 +39,7 @@ add_library(game STATIC
     app/OnlineRun.cpp
     app/NativeOnlineIdentity.cpp
     screens/PlaySceneSimulation.cpp
+    screens/PlayerNativeState.cpp
     screens/PlayInput.h
     screens/SessionInputs.cpp
     world/StaticScenery.cpp
@@ -157,7 +161,6 @@ add_library(game STATIC
     world/LevelItemArchives.cpp
     world/ItemFigure.h
     world/ItemFigure.cpp
-    world/ItemFigureCheckpoint.cpp
     world/ItemSupport.cpp
     world/BodyCollision.cpp
     world/MoveStrikes.h
@@ -186,11 +189,8 @@ add_library(game STATIC
     enemies/CombatantBreath.cpp
     enemies/CombatantProjectile.cpp
     world/CombatantProjectiles.cpp
-    world/CombatantProjectilesCheckpoint.cpp
     enemies/Critters.cpp
     enemies/Combatant.cpp
-    enemies/CombatantCheckpoint.cpp
-    enemies/CrittersCheckpoint.cpp
     enemies/CombatantParts.cpp
     enemies/CombatantNodes.cpp
     enemies/CombatantGaze.cpp
@@ -215,19 +215,8 @@ add_library(game STATIC
     enemies/LegendItems.cpp
     world/Chests.h
     world/Chests.cpp
-    world/ChestsCheckpoint.cpp
     world/LockedGates.h
     world/LockedGates.cpp
-    world/LockedGatesCheckpoint.cpp
-    world/BreakablesCheckpoint.cpp
-    world/SafeRocksCheckpoint.cpp
-    world/StaticSceneryCheckpoint.cpp
-    world/RubbleCheckpoint.cpp
-    world/TrapsCheckpoint.cpp
-    world/FallingSceneryCheckpoint.cpp
-    world/DestructibleWallsCheckpoint.cpp
-    world/RotatorsCheckpoint.cpp
-    world/PlacedItemsCheckpoint.cpp
     world/Traps.h
     world/Traps.cpp
     world/TowerAccess.h
@@ -236,15 +225,11 @@ add_library(game STATIC
     world/ExitPortals.cpp
     world/LevelTransporters.h
     world/LevelTransporters.cpp
-    world/LevelTransportersCheckpoint.cpp
     world/LevelWorld.h
     world/LevelWorld.cpp
     world/WorldDestruction.cpp
-    world/WorldDestructionCheckpoint.cpp
     world/TowerCamera.h
     world/TowerCamera.cpp
-    world/TowerCameraCheckpoint.cpp
-    world/ExitPortalsCheckpoint.cpp
     world/BossCamera.h
     world/BossCamera.cpp
     world/CameraShake.h
@@ -257,7 +242,6 @@ add_library(game STATIC
     world/SumnerHints.cpp
     world/PlayerMissiles.h
     world/PlayerMissiles.cpp
-    world/PlayerMissilesCheckpoint.cpp
     world/MissileStreak.cpp
     world/TargetAssist.cpp
     world/BlobShadow.cpp
@@ -274,15 +258,14 @@ add_library(game STATIC
     screens/TowerCompletion.cpp
     screens/PlaySceneRelics.cpp
     screens/PlayScenePromotion.cpp
+    screens/PlaySceneRewind.cpp
     world/PlayerArsenal.cpp
-    world/PlayerArsenalCheckpoint.cpp
     world/PotionEmission.cpp
     world/LevelSoundscape.cpp
     world/VoiceQueue.cpp
     world/EffectTrees.h
     world/DynamicLights.cpp
     world/EffectTrees.cpp
-    world/EffectTreesCheckpoint.cpp
     world/PlacedItems.h
     world/PlacedItems.cpp
     world/AmbientSounds.h
@@ -365,14 +348,10 @@ add_library(game STATIC
     screens/OpponentSimulation.cpp
     screens/OpponentPlacements.cpp
     screens/PlayerAttacks.cpp
-    screens/PlayerAttacksCheckpoint.cpp
-    screens/OpponentCombatCheckpoint.cpp
     screens/EnemyMissileEmission.cpp
     screens/CritterCueEmission.cpp
     screens/PartyLighting.cpp
     screens/EnemyFeedbackEmission.cpp
-    screens/LevelFixturesCheckpoint.cpp
-    world/LevelWorldCheckpoint.cpp
     screens/PartyDamage.cpp
     screens/PlayerItemAttacks.cpp
     players/ItemAttack.cpp

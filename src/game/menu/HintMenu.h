@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <string>
 #include <vector>
 
@@ -46,7 +48,28 @@ struct HintMenuEvent {
  * backs out of the list.
  */
 class HintMenu {
+    struct Simulation {
+        HintMenuLabels labels;
+        MenuScreen screen;
+        const TextPainter* painter = nullptr;
+        OptionMenu topics;
+        OptionMenu page;
+        u8 revision = 0; ///< bounded input window is shorter than a complete revision cycle
+    };
+
 public:
+    class LocalSnapshot {
+        friend class HintMenu;
+        Simulation state;
+        const HintMenu* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+        BurnDialogueScroll::LocalSnapshot fire;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     static constexpr s32 kTopicsX = 128;
     static constexpr s32 kBackdropY = 8;
     static constexpr s32 kBackdropWidth = 480;
@@ -58,7 +81,10 @@ public:
     static constexpr s32 kPageTop = 112; ///< where a page's passages start when not centred
     static constexpr Color kInk = Color::rgba(92, 26, 3);
 
-    void setArt(HintMenuArt art) { m_art = std::move(art); }
+    void setArt(HintMenuArt art) {
+        m_localBinding = std::make_shared<const u8>(0);
+        m_art = std::move(art);
+    }
 
     /** Unrolls the list of topics; false without a font to draw with or a topic to ask. */
     bool open(const TextPainter& painter, const MenuScreen& screen, HintMenuLabels labels);
@@ -69,16 +95,16 @@ public:
     void close();
 
     /** Up while the list, a page or the burning scroll shows. */
-    bool active() const { return m_topics.isOpen() || m_page.isOpen() || m_fire.active(); }
-    bool reading() const { return m_page.isOpen() && !m_page.closing(); }
+    bool active() const { return m_sim.topics.isOpen() || m_sim.page.isOpen() || m_fire.active(); }
+    bool reading() const { return m_sim.page.isOpen() && !m_sim.page.closing(); }
     bool burning() const { return m_fire.active(); }
     /** Native-load check only; offline missing-art fallback remains supported. */
     bool burnReady() const {
         return BurnDialogueScroll::ready(m_art.scroll, m_art.burnMasks, m_art.burnRing);
     }
-    const OptionMenu& topics() const { return m_topics; }
-    const OptionMenu& page() const { return m_page; }
-    u8 revision() const { return m_revision; }
+    const OptionMenu& topics() const { return m_sim.topics; }
+    const OptionMenu& page() const { return m_sim.page; }
+    u8 revision() const { return m_sim.revision; }
     /** Wire row zero is absent; the four native topics occupy rows one to four. */
     u8 captureTopic(const MenuInput& input) const;
     bool acceptsTopic(u8 topic, u8 revision) const;
@@ -92,17 +118,14 @@ public:
     void draw(Canvas& canvas, const TextPainter& painter) const;
 
 private:
+    void appendState(NativeStateDigest& digest, const Simulation& state) const;
     MenuDefinition topicsDefinition(bool fadeBackdrop) const;
     void leave(RenderDevice& device);
 
     HintMenuArt m_art;
-    HintMenuLabels m_labels;
-    MenuScreen m_screen;
-    const TextPainter* m_painter = nullptr;
-    OptionMenu m_topics;
-    OptionMenu m_page;
     BurnDialogueScroll m_fire;
-    u8 m_revision = 0; ///< bounded input window is shorter than a complete revision cycle
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

@@ -23,6 +23,30 @@ TreeSequenceInfo sequence(s32 frames, s32 rate) {
     return info;
 }
 
+TEST_CASE("native animation comparison preserves hidden clocks and resource binding",
+          "[animation][local-rewind]") {
+    const auto source = sequence(7, 24);
+    const auto otherSource = source;
+    AnimationPlayer player;
+    player.start(source, 0);
+    const auto saved = player;
+    REQUIRE(player.equalLocal(saved));
+    player.advance(0.001f, true);
+    REQUIRE(player.frame() == saved.frame());
+    CHECK_FALSE(player.equalLocal(saved));
+    player = saved;
+    player.setSpeed(2);
+    CHECK_FALSE(player.equalLocal(saved));
+    player = saved;
+    player.setSmooth(true);
+    CHECK_FALSE(player.equalLocal(saved));
+    AnimationPlayer other;
+    other.start(otherSource, 0);
+    CHECK_FALSE(other.equalLocal(saved));
+    other = saved;
+    CHECK(other.equalLocal(saved));
+}
+
 TEST_CASE("animation checkpoints resume fractional clocks, transitions, loops and held endings",
           "[world][animation][rollback]") {
     const auto source = sequence(7, 24);

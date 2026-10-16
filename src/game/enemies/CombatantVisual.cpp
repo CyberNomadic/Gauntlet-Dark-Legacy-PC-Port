@@ -5,7 +5,7 @@
 namespace gdl::game {
 std::vector<CombatantVisual> Combatant::visuals(const CameraFrame* camera, bool healthBars) const {
     std::vector<CombatantVisual> result;
-    const Actor& actor = m_actor;
+    const Actor& actor = m_sim.actor;
     if (!present() || actor.stock == nullptr || actor.hidden) {
         return result;
     }
@@ -75,8 +75,8 @@ std::vector<CombatantVisual> Combatant::visuals(const CameraFrame* camera, bool 
         }
     };
     nodeState(actor);
-    for (const auto& child : m_children) {
-        const auto& branch = child->m_actor;
+    for (const auto& child : children()) {
+        const auto& branch = child->m_sim.actor;
         if (!branch.branch) {
             continue;
         }
@@ -175,8 +175,8 @@ std::vector<CombatantVisual> Combatant::visuals(const CameraFrame* camera, bool 
         }
     };
     broken(actor, 0);
-    for (usize i = 0; i < m_children.size(); ++i) {
-        broken(m_children[i]->m_actor, static_cast<u32>(i + 1));
+    for (usize i = 0; i < children().size(); ++i) {
+        broken(children()[i]->m_sim.actor, static_cast<u32>(i + 1));
     }
     if (const auto meter = healthBars ? meterPose(camera) : std::nullopt) {
         CombatantVisual visual;

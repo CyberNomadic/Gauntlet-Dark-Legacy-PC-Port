@@ -1,5 +1,7 @@
 #include "game/world/SkorneArena.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <array>
 #include <utility>
 
@@ -14,11 +16,69 @@ constexpr s32 kObstacle = 10;
 constexpr s32 kEntranceRock = 51;
 constexpr FallingProfile kProfile{}; ///< the masonry falls as most loose pieces do
 } // namespace
+bool SkorneArena::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("SkorneArena/1");
+    digest.value(m_bottom);
+    digest.value(saved ? saved->state : m_sim);
+    digest.wide(m_rocks.size());
+    for (usize i = 0; i < m_rocks.size(); ++i) {
+        digest.value(saved ? saved->motions[i] : m_rocks[i].motion);
+    }
+    // Rock models are immutable bound-stage draw resources, not mutable simulation.
+    return digest.good();
+}
+
+bool SkorneArena::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool SkorneArena::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [state, motions, binding, owner] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+void SkorneArena::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.motions.resize(m_rocks.size());
+    for (usize index = 0; index < m_rocks.size(); ++index) {
+        saved.motions[index] = m_rocks[index].motion;
+    }
+    saved.binding = m_localBinding;
+    saved.owner = this;
+}
+
+bool SkorneArena::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
+           saved.motions.size() == m_rocks.size();
+}
+
+bool SkorneArena::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
+           left.motions == right.motions;
+}
+
+bool SkorneArena::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    for (usize index = 0; index < m_rocks.size(); ++index) {
+        m_rocks[index].motion = saved.motions[index];
+    }
+    return true;
+}
+
 void SkorneArena::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
     m_rocks.clear();
-    m_phase = 0;
-    m_remainder = 0;
-    m_updateSeconds = 0;
+    m_sim.phase = 0;
+    m_sim.remainder = 0;
+    m_sim.updateSeconds = 0;
     m_bottom = 0;
 }
 void SkorneArena::bind(RenderDevice& device, const WorldLayout& layout, ModelSet& models,
@@ -54,33 +114,33 @@ void SkorneArena::bind(RenderDevice& device, const WorldLayout& layout, ModelSet
     }
 }
 void SkorneArena::cue(const Vec3& boss) {
-    if (m_phase >= 3) {
+    if (m_sim.phase >= 3) {
         return;
     }
-    ++m_phase;
+    ++m_sim.phase;
     for (auto& rock : m_rocks) {
         FallingPiece& motion = rock.motion;
         if (!motion.visible) {
             continue;
         }
-        if (m_phase == 3) {
+        if (m_sim.phase == 3) {
             const Vec3 delta = motion.position - boss;
             const f32 length = glm::length(Vec2{delta.x, delta.z});
             motion.velocity = length > 0 ? Vec3{delta.x, 0, delta.z} * (10.0f / length) : Vec3{0};
         }
         constexpr std::array<f32, 3> kLifts{20, 30, 50};
         constexpr std::array<f32, 3> kSpreads{10, 15, 100};
-        const f32 base = kLifts[static_cast<usize>(m_phase - 1)];
-        const f32 spread = kSpreads[static_cast<usize>(m_phase - 1)];
-        motion.velocity.y = base + Mt19937::float24(static_cast<u32>(m_random())) * spread;
+        const f32 base = kLifts[static_cast<usize>(m_sim.phase - 1)];
+        const f32 spread = kSpreads[static_cast<usize>(m_sim.phase - 1)];
+        motion.velocity.y = base + Mt19937::float24(static_cast<u32>(m_sim.random())) * spread;
     }
 }
 void SkorneArena::update(f32 seconds) {
-    m_updateSeconds = seconds;
-    if (m_phase == 0) {
+    m_sim.updateSeconds = seconds;
+    if (m_sim.phase == 0) {
         return;
     }
-    for (s32 frame = FallingPiece::framesDue(m_remainder, seconds); frame > 0; --frame) {
+    for (s32 frame = FallingPiece::framesDue(m_sim.remainder, seconds); frame > 0; --frame) {
         for (auto& rock : m_rocks) {
             rock.motion.advance(kProfile, m_bottom);
         }
@@ -89,7 +149,7 @@ void SkorneArena::update(f32 seconds) {
 void SkorneArena::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                        f32 presentationAlpha) const {
     const f32 alpha =
-        FallingPiece::presentationFraction(m_remainder, m_updateSeconds, presentationAlpha);
+        FallingPiece::presentationFraction(m_sim.remainder, m_sim.updateSeconds, presentationAlpha);
     for (const auto& rock : m_rocks) {
         if (rock.motion.visible) {
             rock.model.draw(device, clip,

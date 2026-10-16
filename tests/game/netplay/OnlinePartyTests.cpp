@@ -3,7 +3,6 @@
 #include "TestSupport.h"
 #include "game/app/Scenario.h"
 #include "game/netplay/OnlinePair.h"
-#include "game/screens/MatchInputs.h"
 #include "game/screens/OnlineParty.h"
 
 namespace {
@@ -106,17 +105,16 @@ TEST_CASE("online party keeps physical devices and save slots local while remapp
     CHECK_FALSE((*compact)[0].attack);
     CHECK((*compact)[0].move.magnitude == 1);
     CHECK((*compact)[1].move.magnitude == 0);
-    REQUIRE(MatchInputs::sample(pair.guest, *compact));
+    REQUIRE(pair.sample(pair.guest, *compact));
     pair.pump();
     for (usize tick = 0; tick <= pair.host.context().inputLead; ++tick) {
-        REQUIRE(MatchInputs::sample(pair.host, {}));
+        REQUIRE(pair.sample(pair.host, {}));
         pair.pump();
-        const u64 executedTick = pair.host.tick();
-        const auto inputs = MatchInputs::advance(pair.host);
+        const auto inputs = pair.advance(pair.host);
         REQUIRE(inputs);
-        REQUIRE(MatchInputs::advance(pair.guest));
-        REQUIRE(pair.host.completedNativeTick(executedTick));
-        REQUIRE(pair.guest.completedNativeTick(executedTick));
+        REQUIRE(pair.advance(pair.guest));
+        REQUIRE(pair.hostInputs.complete());
+        REQUIRE(pair.guestInputs.complete());
         CHECK_FALSE((*inputs)[0].attack);
         CHECK((*inputs)[0].move.magnitude == 0);
         CHECK_FALSE((*inputs)[1].attack);
@@ -194,17 +192,16 @@ TEST_CASE("two plus two local parties compact sparse device IDs without crossing
     devices[1].attack = true;
     const auto compact = guest.inputs(pair.guestSession, devices);
     REQUIRE(compact);
-    REQUIRE(MatchInputs::sample(pair.guest, *compact));
+    REQUIRE(pair.sample(pair.guest, *compact));
     pair.pump();
     for (usize tick = 0; tick <= pair.host.context().inputLead; ++tick) {
-        REQUIRE(MatchInputs::sample(pair.host, {}));
+        REQUIRE(pair.sample(pair.host, {}));
         pair.pump();
-        const u64 executedTick = pair.host.tick();
-        const auto inputs = MatchInputs::advance(pair.host);
+        const auto inputs = pair.advance(pair.host);
         REQUIRE(inputs);
-        REQUIRE(MatchInputs::advance(pair.guest));
-        REQUIRE(pair.host.completedNativeTick(executedTick));
-        REQUIRE(pair.guest.completedNativeTick(executedTick));
+        REQUIRE(pair.advance(pair.guest));
+        REQUIRE(pair.hostInputs.complete());
+        REQUIRE(pair.guestInputs.complete());
         for (const auto& input : *inputs) {
             CHECK_FALSE(input.attack);
         }

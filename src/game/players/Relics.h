@@ -4,6 +4,10 @@
 
 #include "engine/core/Types.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /**
@@ -64,5 +68,7 @@ private:
     static bool inRange(s32 index, s32 count) { return index >= 0 && index < count; }
     static u16 bit(s32 index) { return static_cast<u16>(1U << static_cast<u32>(index)); }
 };
+
+void visitNativeState(NativeStateDigest& digest, const Relics& value);
 
 } // namespace gdl::game

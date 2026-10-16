@@ -4,12 +4,40 @@
 
 #include "engine/assets/BitmapFont.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "TestSupport.h"
 
 namespace {
 
 using namespace gdl;
+
+auto nativeContent(const BitmapFont& font) {
+    NativeStateDigest digest;
+    digest.value(font);
+    REQUIRE(digest.good());
+    return digest.finish();
+}
+
+TEST_CASE("font content identity includes hidden glyph metrics and invalidates on replacement",
+          "[assets][font][native-text-digest]") {
+    auto a = BitmapFont::fromGlyphs(10, 4, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+    auto b = BitmapFont::fromGlyphs(10, 4, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+    const auto initial = nativeContent(a);
+    CHECK(nativeContent(b) == initial);
+    b = BitmapFont::fromGlyphs(10, 4, {{'A', 6, 0, 0}, {'B', 9, 6, 0}});
+    CHECK(nativeContent(b) != initial);
+    b = BitmapFont::fromGlyphs(10, 5, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+    CHECK(nativeContent(b) != initial);
+    b = BitmapFont::fromGlyphs(11, 4, {{'A', 6, 0, 0}, {'B', 8, 6, 0}});
+    CHECK(nativeContent(b) != initial);
+    b = BitmapFont::fromGlyphs(10, 4, {{'A', 6, 0, 0}, {'B', 8, 7, 0}});
+    CHECK(nativeContent(b) != initial);
+    const auto dir = test::scratchDirectory("font-native-content");
+    REQUIRE_FALSE(a.load(dir / "missing.json", 4));
+    CHECK(nativeContent(a) == nativeContent(BitmapFont::fromGlyphs(0, 4, {})));
+    CHECK(nativeContent(a) != initial);
+}
 
 TEST_CASE("glyphs are found by character code", "[assets][font]") {
     const BitmapFont font =

@@ -10,6 +10,8 @@ namespace gdl {
 /** MT19937 with a library-independent value checkpoint, not a serialized STL engine. */
 class Mt19937 {
 public:
+    bool operator==(const Mt19937&) const = default;
+
     using result_type = u32;
     static constexpr usize state_size = 624;
     static constexpr u32 default_seed = 5489U;

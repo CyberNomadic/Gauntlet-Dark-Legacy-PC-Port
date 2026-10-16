@@ -51,6 +51,11 @@ struct TrapHit {
  */
 class Traps {
 public:
+    Traps() = default;
+    Traps(const Traps&) = delete;
+    Traps& operator=(const Traps&) = delete;
+    Traps(Traps&&) noexcept = default;
+    Traps& operator=(Traps&&) noexcept = default;
     static constexpr s32 kResting = 0;
     static constexpr f32 kSecondsPerTickLeft = 1.0f / 30.0f; ///< a victim's respite
     static constexpr s32 kSpikes = 0;                        ///< the subtypes that pierce
@@ -81,6 +86,10 @@ public:
         ItemFigure figure;
         Obstacle box;
         ItemSupport support;
+        bool operator==(const Trap&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Trap& value) {
+            visitor.template fields<16>(value);
+        }
     };
 
     /** `timeScale` stretches every rest and `damageScale` every hurt, as the level says.
@@ -90,13 +99,13 @@ public:
               f32 damageScale = 1.0f);
     void clear();
     void syncFloors();
-    usize size() const { return m_traps.size(); }
-    const Trap& trap(usize index) const { return *m_traps[index]; }
+    usize size() const { return m_sim.traps.size(); }
+    const Trap& trap(usize index) const { return m_sim.traps[index]; }
     /** Traps that left their resting sequence during the latest update. */
-    std::span<const usize> wakes() const { return m_wakes; }
+    std::span<const usize> wakes() const { return m_sim.wakes; }
     void setPlayerCount(s32 players);
     /** Whether a trap is out of its rest (including harmless wind-up and recovery). */
-    bool armed(usize index) const { return m_traps[index]->action != kResting; }
+    bool armed(usize index) const { return m_sim.traps[index].action != kResting; }
 
     /** Potion magic's lesser valkyrie perk (fn_8005BA1C): back to its rest and held there
      * 600 ticks. True when it shows, which it does not for a trap held within sixty ticks
@@ -119,11 +128,34 @@ private:
     s32 restTicks(const Trap& trap);
     static bool touches(const Trap& trap, const TrapVictim& victim);
 
-    std::vector<std::unique_ptr<Trap>> m_traps;
-    std::vector<usize> m_wakes;
-    std::vector<f32> m_gaps; ///< per victim, seconds before they can be hurt again
-    std::minstd_rand m_random{1};
-    f32 m_timeScale = 1.0f;
+    struct Simulation {
+        std::vector<Trap> traps;
+        std::vector<usize> wakes;
+        std::vector<f32> gaps; ///< per victim, seconds before they can be hurt again
+        std::minstd_rand random{1};
+        f32 timeScale = 1.0f;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    /** In-memory history for this owner and its current bound stage. */
+    class LocalSnapshot {
+        friend class Traps;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const Traps* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Complete native value equality, only within this owner's current binding. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
     const WorldCollision* m_collision = nullptr;
     const WorldLayout* m_layout = nullptr;
     AssetScope m_scope;

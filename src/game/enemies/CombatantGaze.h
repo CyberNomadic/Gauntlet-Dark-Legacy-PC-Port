@@ -5,6 +5,7 @@
 
 #include "engine/assets/AnimationSet.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/world/TreePose.h"
 
@@ -21,6 +22,8 @@ class CombatantGaze {
 public:
     static constexpr f32 kChaseRate = kHalfPi; ///< radians a second the tracked bearing moves
 
+    bool equalLocal(const CombatantGaze& other) const { return *this == other; }
+
     /** Turns `pose`'s look nodes (of `tree`, placed in the world by `model`) toward `target`,
      * or back to the animation without one, `seconds` on from the last call. */
     void aim(TreePose& pose, const TreeInfo& tree, const Mat4& model,
@@ -34,7 +37,16 @@ private:
     struct Bearing {
         f32 yaw = 0.0f;
         f32 pitch = 0.0f;
+        bool operator==(const Bearing&) const = default;
+        friend void visitNativeState(NativeStateDigest& digest, const Bearing& state) {
+            digest.fields<2>(state);
+        }
     };
+    friend void visitNativeState(NativeStateDigest& digest, const CombatantGaze& state) {
+        const auto& [tracked] = state;
+        digest.value(tracked);
+    }
+    bool operator==(const CombatantGaze&) const = default;
     std::array<Bearing, 2> m_tracked{};
 };
 } // namespace gdl::game

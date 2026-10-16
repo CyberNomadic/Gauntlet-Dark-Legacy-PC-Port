@@ -2,6 +2,7 @@
 #include <optional>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "game/enemies/EnemyMind.h"
@@ -15,6 +16,9 @@ class CritterPatrol {
 public:
     static constexpr f32 kStartReach = 10.0f; ///< FindClosestWaypoint's reach at birth
     static constexpr f32 kReached = 1.0f;     ///< within this of a lookout it goes on to the next
+
+    /** Same borrowed route and exact pending patrol progress. */
+    bool equalLocal(const CritterPatrol& other) const { return *this == other; }
 
     /** Starts the round from the chained lookout nearest `position`; none within reach, and
      * there is no round. `sight` over nought bounds the target score of the players taken
@@ -31,6 +35,12 @@ public:
 
 private:
     friend class CombatantCheckpoint;
+    friend void visitNativeState(NativeStateDigest& digest, const CritterPatrol& state) {
+        const auto& [route, lookout, sight] = state;
+        digest.resource(route);
+        digest.values(lookout, sight);
+    }
+    bool operator==(const CritterPatrol&) const = default;
     /** Whether a lookout is part of a chain: it names another, not itself. */
     static bool chained(const LookoutRoute& route, usize index);
     const LookoutRoute* m_route = nullptr;

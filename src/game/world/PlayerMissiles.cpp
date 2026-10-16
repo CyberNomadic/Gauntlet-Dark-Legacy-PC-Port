@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/combat/DamageTypes.h"
 #include "game/players/PowerupEffects.h"
@@ -193,10 +194,10 @@ const PlayerMissiles::VisualHistory* PlayerMissiles::visualHistory(u32 effect) c
     if (effect == 0) {
         return nullptr;
     }
-    const auto found = std::ranges::find_if(m_visualHistory, [effect](const auto& history) {
+    const auto found = std::ranges::find_if(m_sim.visualHistory, [effect](const auto& history) {
         return history.effect == effect || history.rider == effect;
     });
-    return found != m_visualHistory.end() ? &*found : nullptr;
+    return found != m_sim.visualHistory.end() ? &*found : nullptr;
 }
 
 PlayerMissiles::FlightCheckpoint PlayerMissiles::flightCheckpoint(const Missile& missile) {
@@ -208,8 +209,8 @@ bool PlayerMissiles::restoreFlight(u64 instance, const FlightCheckpoint& checkpo
     if (m_device != nullptr || !checkpoint.valid()) {
         return false;
     }
-    const auto shot = std::ranges::find(m_missiles, instance, &Missile::instance);
-    if (shot == m_missiles.end() || shot->potion != 0 || shot->potionRelease || shot->flags != 0 ||
+    const auto shot = std::ranges::find(m_sim.missiles, instance, &Missile::instance);
+    if (shot == m_sim.missiles.end() || shot->potion != 0 || shot->potionRelease || shot->flags != 0 ||
         shot->multiplayer != MultiplayerMode::Normal || !shot->pierced.empty() ||
         !shot->playerContacts.empty()) {
         return false;
@@ -222,8 +223,8 @@ bool PlayerMissiles::restorePotionFlight(u64 instance, const FlightCheckpoint& c
     if (m_device != nullptr || !checkpoint.valid()) {
         return false;
     }
-    const auto shot = std::ranges::find(m_missiles, instance, &Missile::instance);
-    if (shot == m_missiles.end() || shot->potion < 1 || shot->potion > 4 ||
+    const auto shot = std::ranges::find(m_sim.missiles, instance, &Missile::instance);
+    if (shot == m_sim.missiles.end() || shot->potion < 1 || shot->potion > 4 ||
         shot->spec != &MissileSpec::potion() || (shot->flags & ~damage::kHeal) != 0 ||
         shot->release || shot->multiplayer != MultiplayerMode::Normal || !shot->pierced.empty() ||
         !shot->playerContacts.empty()) {
@@ -237,8 +238,8 @@ bool PlayerMissiles::restoreVisualFlight(u64 instance, const ParticleFlight& his
     if (m_device != nullptr || !history.valid() || history.retiring) {
         return false;
     }
-    const auto found = std::ranges::find(m_visualHistory, instance, &VisualHistory::instance);
-    if (found == m_visualHistory.end()) {
+    const auto found = std::ranges::find(m_sim.visualHistory, instance, &VisualHistory::instance);
+    if (found == m_sim.visualHistory.end()) {
         return false;
     }
     found->flight = history;
@@ -280,12 +281,12 @@ bool PlayerMissiles::launchPrepared(const MissileLaunch& launch, const EffectTre
 bool PlayerMissiles::launchWithVisuals(const MissileLaunch& launch,
                                        const EffectTrees::Prepared* body,
                                        const EffectTrees::Prepared* rider, bool prepared) {
-    if (m_nextInstance == 0 || launch.spec == nullptr || launch.speed <= 0.0f ||
+    if (m_sim.nextInstance == 0 || launch.spec == nullptr || launch.speed <= 0.0f ||
         launch.reach <= 0.0f) {
         return false;
     }
     Missile missile;
-    missile.instance = m_nextInstance++;
+    missile.instance = m_sim.nextInstance++;
     missile.owner = launch.owner;
     missile.position = launch.position;
     missile.velocity = launch.velocity.value_or(
@@ -358,13 +359,13 @@ bool PlayerMissiles::launchWithVisuals(const MissileLaunch& launch,
         ParticleFlight flight;
         flight.birth = flightCheckpoint(missile);
         if (flight.valid()) {
-            m_visualHistory.push_back({missile.instance, missile.owner, character.value_or(0),
+            m_sim.visualHistory.push_back({missile.instance, missile.owner, character.value_or(0),
                                        launch.release, missile.effect, missile.rider, flight,
                                        transformOf(missile), missile.velocity,
                                        potion ? launch.potion : 0, launch.potionRelease});
         }
     }
-    m_missiles.push_back(missile);
+    m_sim.missiles.push_back(missile);
     return true;
 }
 
@@ -399,17 +400,17 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                             std::span<const MissilePlayer> players) {
     m_visuals.capturePresentation();
     if (seconds > 0) {
-        std::erase_if(m_visualHistory, [seconds](const auto& history) {
+        std::erase_if(m_sim.visualHistory, [seconds](const auto& history) {
             return !std::isfinite(seconds) || seconds < 1.0f / 240 || seconds > 0.25f ||
                    (history.flight.totalSteps != 0 && history.flight.stepSeconds != seconds);
         });
-        for (auto& history : m_visualHistory) {
+        for (auto& history : m_sim.visualHistory) {
             history.flight.stepSeconds = seconds;
             ++history.flight.totalSteps;
         }
     }
-    m_ricochetIn = std::max(0.0f, m_ricochetIn - seconds);
-    for (Missile& missile : m_missiles) {
+    m_sim.ricochetIn = std::max(0.0f, m_sim.ricochetIn - seconds);
+    for (Missile& missile : m_sim.missiles) {
         missile.previousPosition = missile.position;
         missile.previousVelocity = missile.velocity;
         missile.previousTumble = missile.tumble;
@@ -449,11 +450,11 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                         impact.position = missile.position;
                         impact.owner = missile.owner;
                         impact.effect = {};
-                        impact.wallSound = m_ricochetIn <= 0 ? MissileWallSound::Ricochet
+                        impact.wallSound = m_sim.ricochetIn <= 0 ? MissileWallSound::Ricochet
                                                              : MissileWallSound::Silent;
-                        m_impacts.push_back(impact);
-                        if (m_ricochetIn <= 0) {
-                            m_ricochetIn = kReflectionTime;
+                        m_sim.impacts.push_back(impact);
+                        if (m_sim.ricochetIn <= 0) {
+                            m_sim.ricochetIn = kReflectionTime;
                         }
                         reflected = true;
                         break;
@@ -484,7 +485,7 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                     impact.direction = speed > 0 ? missile.velocity / speed : Vec3{0};
                     impact.stun = missile.multiplayer == MultiplayerMode::Stun;
                     impact.playerHitGap = penetrates ? kPlayerPassThroughGap : missile.playerHitGap;
-                    m_impacts.push_back(impact);
+                    m_sim.impacts.push_back(impact);
                     if (contact == missile.playerContacts.end()) {
                         missile.playerContacts.push_back({player.player, impact.playerHitGap});
                     } else {
@@ -514,7 +515,7 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                 if (!contact) {
                     continue;
                 }
-                m_impacts.push_back(MissileImpact{missile.position, missile.owner, missile.potion,
+                m_sim.impacts.push_back(MissileImpact{missile.position, missile.owner, missile.potion,
                                                   missile.potency, missile.damage, target.id,
                                                   missile.spec->impactTree, missile.wallSound,
                                                   missile.flags, target.node});
@@ -557,25 +558,25 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                             missile.velocity.y *= 0.4f;
                         }
                         missile.age += 1.0f;
-                        m_impacts.push_back({missile.position,
+                        m_sim.impacts.push_back({missile.position,
                                              missile.owner,
                                              0,
                                              0,
                                              0,
                                              -1,
                                              {},
-                                             m_ricochetIn <= 0 ? MissileWallSound::Ricochet
+                                             m_sim.ricochetIn <= 0 ? MissileWallSound::Ricochet
                                                                : MissileWallSound::Silent,
                                              missile.flags,
                                              -1,
                                              object});
-                        if (m_ricochetIn <= 0) {
-                            m_ricochetIn = 1.0f;
+                        if (m_sim.ricochetIn <= 0) {
+                            m_sim.ricochetIn = 1.0f;
                         }
                     }
                     continue;
                 }
-                m_impacts.push_back(MissileImpact{
+                m_sim.impacts.push_back(MissileImpact{
                     missile.position, missile.owner, missile.potion, missile.potency,
                     missile.damage, -1, missile.spec->impactTree, missile.wallSound, missile.flags,
                     -1, object,
@@ -584,7 +585,7 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
             }
         }
     }
-    for (const Missile& missile : m_missiles) {
+    for (const Missile& missile : m_sim.missiles) {
         m_visuals.placeAt(missile.effect, transformOf(missile),
                           missile.spec->spin == 0 ? std::optional{missile.velocity} : std::nullopt);
         m_visuals.placeAt(missile.rider, transformOf(missile),
@@ -599,8 +600,8 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
         }
         if (seconds > 0) {
             const auto history =
-                std::ranges::find(m_visualHistory, missile.instance, &VisualHistory::instance);
-            if (history != m_visualHistory.end()) {
+                std::ranges::find(m_sim.visualHistory, missile.instance, &VisualHistory::instance);
+            if (history != m_sim.visualHistory.end()) {
                 history->flight.retiring = missile.age >= kLifeSeconds;
                 history->flight.activeSteps += history->flight.retiring ? 0 : 1;
                 history->placement = transformOf(missile);
@@ -609,8 +610,8 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
         }
     }
     m_visuals.update(seconds);
-    std::erase_if(m_missiles, [](const Missile& m) { return m.age >= kLifeSeconds; });
-    std::erase_if(m_visualHistory, [&](const auto& history) {
+    std::erase_if(m_sim.missiles, [](const Missile& m) { return m.age >= kLifeSeconds; });
+    std::erase_if(m_sim.visualHistory, [&](const auto& history) {
         return !history.flight.valid() ||
                (m_device != nullptr && !m_visuals.playing(history.effect) &&
                 !m_visuals.playing(history.rider));
@@ -636,7 +637,7 @@ Mat4 PlayerMissiles::transformOf(const Missile& missile, f32 frameBlend) {
 
 void PlayerMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                           const CameraFrame* camera, f32 frameBlend) const {
-    for (const Missile& missile : m_missiles) {
+    for (const Missile& missile : m_sim.missiles) {
         if (missile.effect == 0 && missile.model != nullptr && missile.model->bound()) {
             Mat4 placement = transformOf(missile, frameBlend);
             if (camera != nullptr && missile.spec->spin == 0) {
@@ -651,7 +652,7 @@ void PlayerMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLig
     }
     m_visuals.draw(device, clip, lighting, camera, frameBlend);
     if (camera != nullptr) {
-        for (const Missile& missile : m_missiles) {
+        for (const Missile& missile : m_sim.missiles) {
             if (missile.streak.texture == nullptr) {
                 continue;
             }
@@ -672,16 +673,64 @@ void PlayerMissiles::draw(RenderDevice& device, const Mat4& clip, const WorldLig
 
 void PlayerMissiles::clear() {
     ++m_restoreGeneration;
-    m_visualHistory.clear();
-    m_ricochetIn = 0;
-    m_missiles.clear();
-    m_impacts.clear();
+    ++m_localEpoch;
+    m_sim.visualHistory.clear();
+    m_sim.ricochetIn = 0;
+    m_sim.missiles.clear();
+    m_sim.impacts.clear();
     m_visuals.clear();
     m_device = nullptr;
 }
 
 std::vector<MissileImpact> PlayerMissiles::takeImpacts() {
-    return std::exchange(m_impacts, {});
+    return std::exchange(m_sim.impacts, {});
+}
+
+void PlayerMissiles::saveLocal(LocalSnapshot& state) const {
+    state.owner.reset();
+    state.state = m_sim;
+    m_visuals.saveLocal(state.visuals);
+    state.device = m_device;
+    state.epoch = m_localEpoch;
+    state.owner = m_restoreOwner;
+}
+
+bool PlayerMissiles::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("PlayerMissiles.native.1");
+    digest.flag(m_device != nullptr);
+    digest.value(m_sim);
+    return m_visuals.appendNativeDigest(digest) && digest.good();
+}
+
+bool PlayerMissiles::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const {
+    if (!canRestoreLocal(state)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("PlayerMissiles.native.1");
+    digest.flag(state.device != nullptr);
+    digest.value(state.state);
+    return m_visuals.appendLocalDigest(digest, state.visuals) && digest.good();
+}
+
+bool PlayerMissiles::registerNativeResources(NativeStateResources& resources) const {
+    return m_visuals.registerNativeResources(resources);
+}
+
+bool PlayerMissiles::canRestoreLocal(const LocalSnapshot& state) const {
+    return !state.owner.expired() && state.owner.lock() == m_restoreOwner &&
+           state.epoch == m_localEpoch && state.device == m_device &&
+           m_visuals.canRestoreLocal(state.visuals);
+}
+
+bool PlayerMissiles::restoreLocal(const LocalSnapshot& state) {
+    if (!canRestoreLocal(state)) {
+        return false;
+    }
+    m_sim = state.state;
+    (void)m_visuals.restoreLocal(state.visuals);
+    ++m_restoreGeneration;
+    return true;
 }
 
 std::vector<Vec3> PlayerMissiles::spread(const Vec3& direction, s32 shots) {

@@ -8,8 +8,8 @@
 namespace gdl::game {
 
 /** Offline input boundary and shared PlayInput/command conversion. Offline play
- * owns all four seats locally. Native online matches use MatchInputs and exact
- * LockstepInputs frames on every peer, retaining only these conversion helpers.
+ * owns all four seats locally. Native online matches use the rollback driver's
+ * captured input history, retaining only these conversion helpers.
  * Character selection/shop transactions and room discovery are separate protocols. */
 class SessionInputs {
 public:
@@ -20,7 +20,7 @@ public:
     InputTimeline& timeline() { return m_timeline; }
     const InputTimeline& timeline() const { return m_timeline; }
     void beginEpoch() { m_timeline.beginEpoch(); }
-    /** Read local controls and consume remote commands at the same tick. Local
+    /** Read the locally owned offline controls at the current tick. Local
      * pointer/text input remains local, lossless, and valid only during this call. */
     Frame advance(const Frame& local);
 

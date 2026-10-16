@@ -9,8 +9,59 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+
+bool LevelTriggers::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto& figure : m_sim.figures) {
+        if (figure && !figure->registerNativeResources(resources)) {
+            return false;
+        }
+    }
+    return resources.good();
+}
+
+void visitNativeState(NativeStateDigest& digest, const TriggerRefusal& value) {
+    digest.fields<3>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const TriggerOpening& value) {
+    digest.fields<7>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const TriggerCameraCue& value) {
+    digest.fields<3>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const TriggerLesson& value) {
+    digest.fields<2>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const LevelTrigger& value) {
+    digest.fields<26>(value);
+}
+void visitNativeState(NativeStateDigest& digest, const LevelTriggers::Target& value) {
+    digest.fields<18>(value);
+}
+
+void LevelTriggers::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) {
+    digest.fields<13>(state);
+}
+
+bool LevelTriggers::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("LevelTriggers");
+    digest.value(m_parents);
+    appendSimulationDigest(digest, m_sim);
+    return digest.good();
+}
+
+bool LevelTriggers::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    digest.string("LevelTriggers");
+    digest.value(m_parents);
+    appendSimulationDigest(digest, saved.state);
+    return digest.good();
+}
 
 namespace {
 
@@ -182,7 +233,7 @@ struct LevelTriggers::Prepared::Data {
     std::shared_ptr<const u8> binding;
     u64 generation = 0;
     Checkpoint state;
-    std::vector<std::unique_ptr<ItemFigure>> figures;
+    std::vector<std::optional<ItemFigure>> figures;
     struct Resource {
         const ItemFigure* figure = nullptr;
         const ItemArchive* archive = nullptr;
@@ -197,45 +248,45 @@ LevelTriggers::Prepared::~Prepared() = default;
 
 std::optional<LevelTriggers::Checkpoint> LevelTriggers::checkpoint() const {
     Checkpoint result;
-    result.triggers = m_triggers;
-    result.targets = m_targets;
+    result.triggers = m_sim.triggers;
+    result.targets = m_sim.targets;
     result.parents = m_parents;
-    result.figures.reserve(m_figures.size());
-    for (const auto& figure : m_figures) {
+    result.figures.reserve(m_sim.figures.size());
+    for (const auto& figure : m_sim.figures) {
         auto value = figure ? figure->checkpoint() : std::nullopt;
         if (figure && !value) {
             return std::nullopt;
         }
         result.figures.push_back(std::move(value));
     }
-    result.refusals = m_refusals;
-    result.lessons = m_lessons;
-    result.openings = m_openings;
-    result.settled = m_settled;
-    result.cameraCues = m_cameraCues;
-    result.wakes = m_wakes;
-    result.frameRemainder = m_frameRemainder;
-    result.emptyToggleDelay = m_emptyToggleDelay;
-    result.playerCount = m_playerCount;
-    result.cameraHeld = m_cameraHeld;
+    result.refusals = m_sim.refusals;
+    result.lessons = m_sim.lessons;
+    result.openings = m_sim.openings;
+    result.settled = m_sim.settled;
+    result.cameraCues = m_sim.cameraCues;
+    result.wakes = m_sim.wakes;
+    result.frameRemainder = m_sim.frameRemainder;
+    result.emptyToggleDelay = m_sim.emptyToggleDelay;
+    result.playerCount = m_sim.playerCount;
+    result.cameraHeld = m_sim.cameraHeld;
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
 
 std::optional<LevelTriggers::Prepared>
 LevelTriggers::prepareRestore(const Checkpoint& state) const {
     if (!m_checkpointBinding || m_checkpointGeneration == std::numeric_limits<u64>::max() ||
-        !state.valid() || state.triggers.size() != m_triggers.size() ||
-        state.targets.size() != m_targets.size() || state.parents != m_parents ||
-        state.figures.size() != m_figures.size()) {
+        !state.valid() || state.triggers.size() != m_sim.triggers.size() ||
+        state.targets.size() != m_sim.targets.size() || state.parents != m_parents ||
+        state.figures.size() != m_sim.figures.size()) {
         return std::nullopt;
     }
-    for (usize index = 0; index < m_triggers.size(); ++index) {
-        if (!sameDefinition(state.triggers[index], m_triggers[index])) {
+    for (usize index = 0; index < m_sim.triggers.size(); ++index) {
+        if (!sameDefinition(state.triggers[index], m_sim.triggers[index])) {
             return std::nullopt;
         }
     }
-    for (usize index = 0; index < m_targets.size(); ++index) {
-        if (!sameDefinition(state.targets[index], m_targets[index])) {
+    for (usize index = 0; index < m_sim.targets.size(); ++index) {
+        if (!sameDefinition(state.targets[index], m_sim.targets[index])) {
             return std::nullopt;
         }
     }
@@ -244,16 +295,16 @@ LevelTriggers::prepareRestore(const Checkpoint& state) const {
     data->binding = m_checkpointBinding;
     data->generation = m_checkpointGeneration;
     data->state = state;
-    data->figures.reserve(m_figures.size());
-    data->resources.reserve(m_figures.size());
-    for (usize index = 0; index < m_figures.size(); ++index) {
-        const auto& source = m_figures[index];
+    data->figures.reserve(m_sim.figures.size());
+    data->resources.reserve(m_sim.figures.size());
+    for (usize index = 0; index < m_sim.figures.size(); ++index) {
+        const auto& source = m_sim.figures[index];
         const auto& value = state.figures[index];
         if (static_cast<bool>(source) != value.has_value()) {
             return std::nullopt;
         }
         if (!source) {
-            data->figures.push_back(nullptr);
+            data->figures.push_back(std::nullopt);
             data->resources.push_back({});
             continue;
         }
@@ -269,8 +320,8 @@ LevelTriggers::prepareRestore(const Checkpoint& state) const {
         if (!figure) {
             return std::nullopt;
         }
-        data->resources.push_back({source.get(), resources.archive, resources.tree});
-        data->figures.push_back(std::move(figure));
+        data->resources.push_back({&*source, resources.archive, resources.tree});
+        data->figures.emplace_back(std::move(*figure));
     }
     return Prepared{std::move(data)};
 }
@@ -280,12 +331,12 @@ bool LevelTriggers::canCommit(const Prepared& prepared) const {
         prepared.m_data->binding != m_checkpointBinding ||
         prepared.m_data->generation != m_checkpointGeneration ||
         m_checkpointGeneration == std::numeric_limits<u64>::max() ||
-        prepared.m_data->resources.size() != m_figures.size()) {
+        prepared.m_data->resources.size() != m_sim.figures.size()) {
         return false;
     }
-    for (usize index = 0; index < m_figures.size(); ++index) {
+    for (usize index = 0; index < m_sim.figures.size(); ++index) {
         const auto& resource = prepared.m_data->resources[index];
-        if (m_figures[index].get() != resource.figure) {
+        if ((m_sim.figures[index] ? &*m_sim.figures[index] : nullptr) != resource.figure) {
             return false;
         }
         if (resource.figure) {
@@ -310,27 +361,53 @@ bool LevelTriggers::commitRestore(Prepared&& prepared) {
     }
     auto data = std::move(prepared.m_data);
     auto& state = data->state;
-    m_triggers.swap(state.triggers);
-    m_targets.swap(state.targets);
+    m_sim.triggers.swap(state.triggers);
+    m_sim.targets.swap(state.targets);
     m_parents.swap(state.parents);
-    m_figures.swap(data->figures);
-    m_refusals.swap(state.refusals);
-    m_lessons.swap(state.lessons);
-    m_openings.swap(state.openings);
-    m_settled.swap(state.settled);
-    m_cameraCues.swap(state.cameraCues);
-    m_wakes.swap(state.wakes);
-    m_frameRemainder = state.frameRemainder;
-    m_emptyToggleDelay = state.emptyToggleDelay;
-    m_playerCount = state.playerCount;
-    m_cameraHeld = state.cameraHeld;
+    m_sim.figures.swap(data->figures);
+    m_sim.refusals.swap(state.refusals);
+    m_sim.lessons.swap(state.lessons);
+    m_sim.openings.swap(state.openings);
+    m_sim.settled.swap(state.settled);
+    m_sim.cameraCues.swap(state.cameraCues);
+    m_sim.wakes.swap(state.wakes);
+    m_sim.frameRemainder = state.frameRemainder;
+    m_sim.emptyToggleDelay = state.emptyToggleDelay;
+    m_sim.playerCount = state.playerCount;
+    m_sim.cameraHeld = state.cameraHeld;
     ++m_checkpointGeneration;
+    ++m_localEpoch;
     return true;
 }
 
 bool LevelTriggers::restore(const Checkpoint& state) {
     auto prepared = prepareRestore(state);
     return prepared && commitRestore(std::move(*prepared));
+}
+
+void LevelTriggers::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+    saved.epoch = m_localEpoch;
+}
+
+bool LevelTriggers::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding && saved.epoch == m_localEpoch;
+}
+
+bool LevelTriggers::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+}
+
+bool LevelTriggers::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_checkpointGeneration;
+    return true;
 }
 
 s32 LevelTriggers::crystalsNeeded(s32 realm) {
@@ -485,7 +562,7 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
         // The slot is a signed byte in the data: 255 (and anything high) means none.
         const u8 slot = instance.params[5];
         trigger.sound = slot >= 0x80 ? -1 : static_cast<s32>(slot);
-        m_triggers.push_back(trigger);
+        m_sim.triggers.push_back(trigger);
         if (trigger.target >= 0 && targetOf(trigger.target) == nullptr) {
             Target target;
             target.subtype = info.subtype;
@@ -511,7 +588,7 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
             if (target.animated) {
                 animator.hold(trigger.target);
             }
-            m_targets.push_back(target);
+            m_sim.targets.push_back(target);
         } else if (Target* target = targetOf(trigger.target); target != nullptr) {
             // Several switches may register one lift; zero endpoints are filled by
             // subsequent registrations, rather than discarding their parameters.
@@ -525,16 +602,16 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
         }
     }
     // Chains: a trigger's next is the one whose id it names, never one wanting crystals.
-    for (LevelTrigger& trigger : m_triggers) {
+    for (LevelTrigger& trigger : m_sim.triggers) {
         if (trigger.nextId == 0) {
             continue;
         }
-        for (usize j = 0; j < m_triggers.size(); ++j) {
-            const LevelTrigger& other = m_triggers[j];
+        for (usize j = 0; j < m_sim.triggers.size(); ++j) {
+            const LevelTrigger& other = m_sim.triggers[j];
             if (&other != &trigger && other.id == trigger.nextId &&
                 (other.flags & LevelTrigger::kRequirement) == 0) {
                 trigger.next = static_cast<s32>(j);
-                m_triggers[j].chained = true;
+                m_sim.triggers[j].chained = true;
                 break;
             }
         }
@@ -545,29 +622,18 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
 void LevelTriggers::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
-    m_figures.clear();
-    m_triggers.clear();
-    m_targets.clear();
+    m_sim = {};
     m_parents.clear();
-    m_refusals.clear();
-    m_lessons.clear();
-    m_openings.clear();
-    m_settled.clear();
-    m_cameraCues.clear();
-    m_wakes.clear();
-    m_frameRemainder = 0.0f;
-    m_emptyToggleDelay = 0.0f;
-    m_playerCount = -1;
-    m_cameraHeld = false;
+    m_localEpoch = 0;
 }
 
 void LevelTriggers::setPlayerCount(s32 players) {
-    m_playerCount = std::clamp(players, 0, kPlayerSlots);
-    refreshEligibility(m_playerCount);
+    m_sim.playerCount = std::clamp(players, 0, kPlayerSlots);
+    refreshEligibility(m_sim.playerCount);
 }
 
 void LevelTriggers::refreshEligibility(s32 players) {
-    for (LevelTrigger& trigger : m_triggers) {
+    for (LevelTrigger& trigger : m_sim.triggers) {
         trigger.enabled = shownToParty(trigger.minPlayers, players);
         if (!trigger.enabled) {
             trigger.occupied = false;
@@ -581,16 +647,16 @@ void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
                                 const AssetScope& scope) {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
-    m_figures.clear();
-    for (const auto& trigger : m_triggers) {
+    m_sim.figures.clear();
+    for (const auto& trigger : m_sim.triggers) {
         const auto& instance = layout.itemInstances()[static_cast<usize>(trigger.instance)];
         const auto& info = layout.itemInfos()[static_cast<usize>(instance.info)];
         constexpr u32 kNoGeometry = 2;
         if ((instance.flags & kNoGeometry) != 0) {
-            m_figures.push_back(nullptr);
+            m_sim.figures.push_back(std::nullopt);
             continue;
         }
-        auto figure = std::make_unique<ItemFigure>();
+        std::optional<ItemFigure> figure{std::in_place};
         // Marker-only triggers have no tree. Preserve authored height: these pads
         // may sit on a moving bridge rather than on the static collision floor.
         if (!figure->place(device, scope, info.name, instance, nullptr)) {
@@ -598,33 +664,33 @@ void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
         } else {
             figure->placeAt(trigger.placement);
         }
-        m_figures.push_back(std::move(figure));
+        m_sim.figures.push_back(std::move(figure));
     }
 }
 
 void LevelTriggers::draw(RenderDevice& device, const Mat4& clip,
                          const WorldLighting& lighting) const {
-    for (usize i = 0; i < m_figures.size(); ++i) {
-        if (m_figures[i] != nullptr && m_triggers[i].enabled) {
-            m_figures[i]->draw(device, clip, lighting);
+    for (usize i = 0; i < m_sim.figures.size(); ++i) {
+        if (m_sim.figures[i].has_value() && m_sim.triggers[i].enabled) {
+            m_sim.figures[i]->draw(device, clip, lighting);
         }
     }
 }
 
 std::vector<TriggerRefusal> LevelTriggers::takeRefusals() {
-    return std::exchange(m_refusals, {});
+    return std::exchange(m_sim.refusals, {});
 }
 
 std::vector<TriggerOpening> LevelTriggers::takeOpenings() {
-    return std::exchange(m_openings, {});
+    return std::exchange(m_sim.openings, {});
 }
 
 std::vector<TriggerOpening> LevelTriggers::takeSettled() {
-    return std::exchange(m_settled, {});
+    return std::exchange(m_sim.settled, {});
 }
 
 std::vector<TriggerCameraCue> LevelTriggers::takeCameraCues() {
-    return std::exchange(m_cameraCues, {});
+    return std::exchange(m_sim.cameraCues, {});
 }
 
 bool LevelTriggers::settled(s32 object) const {
@@ -639,7 +705,7 @@ TriggerOpening LevelTriggers::openingOf(const Target& target, bool atOnce) {
 }
 
 LevelTriggers::Target* LevelTriggers::targetOf(s32 object) {
-    for (Target& target : m_targets) {
+    for (Target& target : m_sim.targets) {
         if (target.object == object) {
             return &target;
         }
@@ -648,7 +714,7 @@ LevelTriggers::Target* LevelTriggers::targetOf(s32 object) {
 }
 
 const LevelTriggers::Target* LevelTriggers::targetOf(s32 object) const {
-    for (const Target& target : m_targets) {
+    for (const Target& target : m_sim.targets) {
         if (target.object == object) {
             return &target;
         }
@@ -747,15 +813,15 @@ bool LevelTriggers::openTarget(Target& target, bool open, bool atOnce, WorldAnim
 void LevelTriggers::fire(usize index, bool active, bool atOnce, WorldAnimator& animator,
                          WorldScene& scene, WorldCollision* collision) {
     usize followed = 0;
-    for (auto at = static_cast<s32>(index); at >= 0 && followed++ < m_triggers.size();
-         at = m_triggers[static_cast<usize>(at)].next) {
+    for (auto at = static_cast<s32>(index); at >= 0 && followed++ < m_sim.triggers.size();
+         at = m_sim.triggers[static_cast<usize>(at)].next) {
         fireNode(static_cast<usize>(at), active, atOnce, animator, scene, collision);
     }
 }
 
 void LevelTriggers::fireNode(usize index, bool active, bool atOnce, WorldAnimator& animator,
                              WorldScene& scene, WorldCollision* collision) {
-    LevelTrigger& trigger = m_triggers[index];
+    LevelTrigger& trigger = m_sim.triggers[index];
     if (trigger.forced || !trigger.enabled) {
         return;
     }
@@ -785,7 +851,7 @@ void LevelTriggers::fireNode(usize index, bool active, bool atOnce, WorldAnimato
                 trigger.toggleCooldown = kToggleDelay;
             } else if (!contact && (trigger.flags & 0x800U) != 0) {
                 // Empty-pad delay is one second per additional participant.
-                trigger.toggleCooldown = m_emptyToggleDelay;
+                trigger.toggleCooldown = m_sim.emptyToggleDelay;
             }
             trigger.fired = contact;
         } else {
@@ -797,19 +863,19 @@ void LevelTriggers::fireNode(usize index, bool active, bool atOnce, WorldAnimato
         if (openTarget(*target, open, atOnce, animator, scene, collision)) {
             target->spot = trigger.spot;
             target->sound = trigger.sound;
-            m_openings.push_back(openingOf(*target, atOnce));
+            m_sim.openings.push_back(openingOf(*target, atOnce));
         }
     } else if (contact || (trigger.flags & LevelTrigger::kToggles) != 0) {
         trigger.fired = contact;
     }
     if (trigger.fired && !wasFired && contact && !atOnce) {
-        m_cameraCues.push_back({trigger.id, trigger.target, (trigger.flags & 0x1000U) != 0});
+        m_sim.cameraCues.push_back({trigger.id, trigger.target, (trigger.flags & 0x1000U) != 0});
         if ((trigger.flags & LevelTrigger::kWakesStatue) != 0) {
-            m_wakes.push_back(trigger.spot);
+            m_sim.wakes.push_back(trigger.spot);
         }
     }
-    if (trigger.fired != wasFired && index < m_figures.size() && m_figures[index]) {
-        auto& figure = *m_figures[index];
+    if (trigger.fired != wasFired && index < m_sim.figures.size() && m_sim.figures[index]) {
+        auto& figure = *m_sim.figures[index];
         const s32 onSequence = atOnce ? 2 : 1;
         figure.play(trigger.fired ? onSequence : 3, false);
     }
@@ -842,23 +908,24 @@ void LevelTriggers::collectContacts(usize index, u32 mask, std::span<u32> contac
     // Contact identities travel through the entire chain. Each node's party-size,
     // floor and whole-party requirements govern that node, not later successors.
     usize followed = 0;
-    for (auto at = static_cast<s32>(index); at >= 0 && followed++ < m_triggers.size();
-         at = m_triggers[static_cast<usize>(at)].next) {
+    for (auto at = static_cast<s32>(index); at >= 0 && followed++ < m_sim.triggers.size();
+         at = m_sim.triggers[static_cast<usize>(at)].next) {
         contacts[static_cast<usize>(at)] |= mask;
     }
 }
 
 void LevelTriggers::shoot(usize index) {
-    if (index < m_triggers.size() && m_triggers[index].shootable) {
-        m_triggers[index].shot = true;
+    if (index < m_sim.triggers.size() && m_sim.triggers[index].shootable) {
+        m_sim.triggers[index].shot = true;
     }
 }
 
 void LevelTriggers::openMet(std::span<const TriggerVisitor> visitors, WorldAnimator& animator,
                             WorldScene& scene, WorldCollision* collision) {
-    refreshEligibility(m_playerCount >= 0 ? m_playerCount : static_cast<s32>(visitors.size()));
-    for (usize i = 0; i < m_triggers.size(); ++i) {
-        const LevelTrigger& trigger = m_triggers[i];
+    refreshEligibility(m_sim.playerCount >= 0 ? m_sim.playerCount
+                                              : static_cast<s32>(visitors.size()));
+    for (usize i = 0; i < m_sim.triggers.size(); ++i) {
+        const LevelTrigger& trigger = m_sim.triggers[i];
         if (trigger.enabled && (trigger.flags & LevelTrigger::kRequirement) != 0 &&
             qualifies(trigger, visitors)) {
             fire(i, true, true, animator, scene, collision);
@@ -868,7 +935,7 @@ void LevelTriggers::openMet(std::span<const TriggerVisitor> visitors, WorldAnima
 }
 
 void LevelTriggers::placeTargets(WorldScene& scene, WorldCollision* collision) {
-    for (Target& target : m_targets) {
+    for (Target& target : m_sim.targets) {
         if ((target.kind & LevelTrigger::kFades) != 0) {
             target.alpha = fadesAway(target) ? 0.0f : 1.0f;
             applyAlpha(target, scene, collision);
@@ -883,7 +950,7 @@ void LevelTriggers::placeTargets(WorldScene& scene, WorldCollision* collision) {
 
 void LevelTriggers::openAtOnce(std::span<const s32> ids, WorldAnimator& animator, WorldScene& scene,
                                WorldCollision* collision) {
-    for (const LevelTrigger& trigger : m_triggers) {
+    for (const LevelTrigger& trigger : m_sim.triggers) {
         if (std::ranges::find(ids, trigger.id) == ids.end()) {
             continue;
         }
@@ -891,20 +958,20 @@ void LevelTriggers::openAtOnce(std::span<const s32> ids, WorldAnimator& animator
         if (target != nullptr && openTarget(*target, true, true, animator, scene, collision)) {
             target->spot = trigger.spot;
             target->sound = trigger.sound;
-            m_openings.push_back(openingOf(*target, true));
+            m_sim.openings.push_back(openingOf(*target, true));
         }
     }
 }
 
 void LevelTriggers::activate(s32 id, bool atOnce, WorldAnimator& animator, WorldScene& scene,
                              WorldCollision* collision) {
-    for (usize i = 0; i < m_triggers.size(); ++i) {
-        if (m_triggers[i].id != id) {
+    for (usize i = 0; i < m_sim.triggers.size(); ++i) {
+        if (m_sim.triggers[i].id != id) {
             continue;
         }
         s32 at = static_cast<s32>(i);
-        for (usize guard = 0; at >= 0 && guard < m_triggers.size(); ++guard) {
-            auto& trigger = m_triggers[static_cast<usize>(at)];
+        for (usize guard = 0; at >= 0 && guard < m_sim.triggers.size(); ++guard) {
+            auto& trigger = m_sim.triggers[static_cast<usize>(at)];
             trigger.forced = true;
             trigger.fired = true;
             if (Target* target = targetOf(trigger.target)) {
@@ -912,7 +979,7 @@ void LevelTriggers::activate(s32 id, bool atOnce, WorldAnimator& animator, World
                 if (openTarget(*target, true, atOnce, animator, scene, collision)) {
                     target->spot = trigger.spot;
                     target->sound = trigger.sound;
-                    m_openings.push_back(openingOf(*target, atOnce));
+                    m_sim.openings.push_back(openingOf(*target, atOnce));
                 }
             }
             at = trigger.next;
@@ -922,32 +989,33 @@ void LevelTriggers::activate(s32 id, bool atOnce, WorldAnimator& animator, World
 
 void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors,
                            WorldAnimator& animator, WorldScene& scene, WorldCollision* collision) {
-    refreshEligibility(m_playerCount >= 0 ? m_playerCount : static_cast<s32>(visitors.size()));
-    m_emptyToggleDelay = visitors.empty() ? 0.0f : static_cast<f32>(visitors.size() - 1);
+    refreshEligibility(m_sim.playerCount >= 0 ? m_sim.playerCount
+                                              : static_cast<s32>(visitors.size()));
+    m_sim.emptyToggleDelay = visitors.empty() ? 0.0f : static_cast<f32>(visitors.size() - 1);
     u32 standingMask = 0;
     for (usize i = 0; i < visitors.size(); ++i) {
         standingMask |= visitorBit(visitors[i], i);
     }
-    std::vector<u32> contacts(m_triggers.size(), 0);
-    for (Target& target : m_targets) {
+    std::vector<u32> contacts(m_sim.triggers.size(), 0);
+    for (Target& target : m_sim.targets) {
         target.pressed = false;
         target.wholePartyReady = false;
     }
-    for (usize i = 0; i < m_triggers.size(); ++i) {
-        LevelTrigger& trigger = m_triggers[i];
+    for (usize i = 0; i < m_sim.triggers.size(); ++i) {
+        LevelTrigger& trigger = m_sim.triggers[i];
         if (collision != nullptr && trigger.floor >= 0) {
             if (const auto floor = collision->objectTransform(trigger.floor)) {
                 const Mat4 placement = *floor * trigger.localPlacement;
                 trigger.placement = placement;
                 trigger.spot = Vec3{placement[3]};
-                if (i < m_figures.size() && m_figures[i] != nullptr) {
-                    m_figures[i]->placeAt(placement);
+                if (i < m_sim.figures.size() && m_sim.figures[i].has_value()) {
+                    m_sim.figures[i]->placeAt(placement);
                 }
             }
         }
     }
-    for (usize i = 0; i < m_triggers.size(); ++i) {
-        LevelTrigger& trigger = m_triggers[i];
+    for (usize i = 0; i < m_sim.triggers.size(); ++i) {
+        LevelTrigger& trigger = m_sim.triggers[i];
         if (trigger.forced || !trigger.enabled) {
             continue;
         }
@@ -985,7 +1053,7 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
         // needs the whole party. Other root spots may contribute the missing bits.
         if ((trigger.flags & LevelTrigger::kWholeParty) != 0) {
             if (first != nullptr && !trigger.occupied && visitors.size() > 1) {
-                m_lessons.push_back(
+                m_sim.lessons.push_back(
                     TriggerLesson{first->party, (trigger.flags & LevelTrigger::kOnTarget) != 0});
             }
             trigger.occupied = first != nullptr;
@@ -998,20 +1066,20 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
         } else if ((trigger.flags & LevelTrigger::kRequirement) != 0 &&
                    trigger.refusalCooldown <= 0.0f) {
             // Told once what the spot wants, then not again for a while.
-            m_refusals.push_back(
+            m_sim.refusals.push_back(
                 TriggerRefusal{static_cast<s32>(i), trigger.id, trigger.needsCrystals()});
             trigger.refusalCooldown = kRefusalCooldown;
         }
     }
     // Evaluate each node once, after every contact root has supplied its visitors.
     // An unavailable linked node is skipped locally, not a break in the chain.
-    for (usize i = 0; i < m_triggers.size(); ++i) {
-        auto& trigger = m_triggers[i];
+    for (usize i = 0; i < m_sim.triggers.size(); ++i) {
+        auto& trigger = m_sim.triggers[i];
         if (trigger.forced || !trigger.enabled) {
             continue;
         }
         u32 mask = contacts[i];
-        if (m_cameraHeld || (trigger.flags & LevelTrigger::kKeepContact) != 0) {
+        if (m_sim.cameraHeld || (trigger.flags & LevelTrigger::kKeepContact) != 0) {
             mask |= trigger.heldContacts;
         }
         mask &= standingMask;
@@ -1031,22 +1099,22 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
     }
     // An unoccupied pad must not cancel another pad's contact, or reset a target
     // registered as a latch by its first switch.
-    for (Target& target : m_targets) {
+    for (Target& target : m_sim.targets) {
         if (!target.forced && (target.kind & 7U) == 0 && !target.pressed &&
             openTarget(target, false, false, animator, scene, collision)) {
-            m_openings.push_back(openingOf(target, false));
+            m_sim.openings.push_back(openingOf(target, false));
         }
     }
     stepMotion(seconds, scene, collision, true);
-    for (usize i = 0; i < m_figures.size(); ++i) {
-        if (m_figures[i] == nullptr || !m_triggers[i].enabled) {
+    for (usize i = 0; i < m_sim.figures.size(); ++i) {
+        if (!m_sim.figures[i] || !m_sim.triggers[i].enabled) {
             continue;
         }
-        auto& figure = *m_figures[i];
+        auto& figure = *m_sim.figures[i];
         figure.update(seconds);
-        if (m_triggers[i].fired && figure.sequence() == 1 && figure.finished()) {
+        if (m_sim.triggers[i].fired && figure.sequence() == 1 && figure.finished()) {
             figure.play(2, true);
-        } else if (!m_triggers[i].fired && figure.sequence() == 3 && figure.finished()) {
+        } else if (!m_sim.triggers[i].fired && figure.sequence() == 3 && figure.finished()) {
             figure.play(0, true);
         }
     }
@@ -1056,10 +1124,10 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
 void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* collision,
                                bool report) {
     // Fields thin out a step a game frame.
-    m_frameRemainder += seconds * kFrameRate;
-    const f32 frames = std::floor(m_frameRemainder);
-    m_frameRemainder -= frames;
-    for (Target& target : m_targets) {
+    m_sim.frameRemainder += seconds * kFrameRate;
+    const f32 frames = std::floor(m_sim.frameRemainder);
+    m_sim.frameRemainder -= frames;
+    for (Target& target : m_sim.targets) {
         if (!target.animated && (target.kind & LevelTrigger::kFades) == 0) {
             if (!target.settled) {
                 // GameCube items.c ProcessItemWobjs: 4.0 * gClockFrameStep.
@@ -1072,7 +1140,7 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
                     target.height = goal;
                     target.settled = true;
                     if (report && std::abs(distance) > kHeightTolerance) {
-                        m_settled.push_back(openingOf(target, false));
+                        m_sim.settled.push_back(openingOf(target, false));
                     }
                     if (!target.forced && target.open &&
                         (target.kind & LevelTrigger::kOscillates) != 0 &&
@@ -1101,7 +1169,7 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
         if (!target.settled && target.alpha == goal) {
             target.settled = true;
             if (report) {
-                m_settled.push_back(openingOf(target, false));
+                m_sim.settled.push_back(openingOf(target, false));
             }
         }
     }
@@ -1110,7 +1178,7 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
 void LevelTriggers::finishMotion(const WorldAnimator& animator, WorldCollision* collision,
                                  bool report) {
     // An animated target is done once its animation has run to the end.
-    for (Target& target : m_targets) {
+    for (Target& target : m_sim.targets) {
         if (target.settled || !target.animated) {
             continue;
         }
@@ -1118,7 +1186,7 @@ void LevelTriggers::finishMotion(const WorldAnimator& animator, WorldCollision* 
             track.has_value() && animator.finished(*track)) {
             target.settled = true;
             if (report) {
-                m_settled.push_back(openingOf(target, false));
+                m_sim.settled.push_back(openingOf(target, false));
             }
         }
         if (collision != nullptr && (target.kind & LevelTrigger::kStaysSolid) == 0) {
@@ -1126,7 +1194,7 @@ void LevelTriggers::finishMotion(const WorldAnimator& animator, WorldCollision* 
         }
     }
     if (collision != nullptr) {
-        for (const Target& target : m_targets) {
+        for (const Target& target : m_sim.targets) {
             // ProcessItemWobjs / PlayerNewFloor: active height targets, or animated
             // lifts carrying the whole party, prohibit changing floors until stopped.
             const bool heightTarget = !target.animated && (target.kind & LevelTrigger::kFades) == 0;
@@ -1157,9 +1225,9 @@ bool LevelTriggers::Motion::valid() const {
 
 LevelTriggers::Motion LevelTriggers::motion() const {
     Motion result;
-    result.frameRemainder = m_frameRemainder;
-    result.targets.reserve(m_targets.size());
-    for (const auto& target : m_targets) {
+    result.frameRemainder = m_sim.frameRemainder;
+    result.targets.reserve(m_sim.targets.size());
+    for (const auto& target : m_sim.targets) {
         result.targets.push_back({target.object, target.open, target.settled, target.pressed,
                                   target.wholePartyReady, target.returning, target.forced,
                                   target.alpha, target.height});
@@ -1168,11 +1236,11 @@ LevelTriggers::Motion LevelTriggers::motion() const {
 }
 
 bool LevelTriggers::acceptsMotion(const Motion& state) const {
-    if (!state.valid() || state.targets.size() != m_targets.size()) {
+    if (!state.valid() || state.targets.size() != m_sim.targets.size()) {
         return false;
     }
-    for (usize index = 0; index < m_targets.size(); ++index) {
-        const auto& target = m_targets[index];
+    for (usize index = 0; index < m_sim.targets.size(); ++index) {
+        const auto& target = m_sim.targets[index];
         const auto& cursor = state.targets[index];
         if (cursor.object != target.object || !std::isfinite(target.closedHeight) ||
             !std::isfinite(target.openHeight) ||
@@ -1188,8 +1256,8 @@ bool LevelTriggers::restoreMotion(const Motion& state) {
     if (m_checkpointGeneration == std::numeric_limits<u64>::max() || !acceptsMotion(state)) {
         return false;
     }
-    for (usize index = 0; index < m_targets.size(); ++index) {
-        auto& target = m_targets[index];
+    for (usize index = 0; index < m_sim.targets.size(); ++index) {
+        auto& target = m_sim.targets[index];
         const auto& cursor = state.targets[index];
         target.open = cursor.open;
         target.settled = cursor.settled;
@@ -1200,8 +1268,9 @@ bool LevelTriggers::restoreMotion(const Motion& state) {
         target.alpha = cursor.alpha;
         target.height = cursor.height;
     }
-    m_frameRemainder = state.frameRemainder;
+    m_sim.frameRemainder = state.frameRemainder;
     ++m_checkpointGeneration;
+    ++m_localEpoch;
     return true;
 }
 

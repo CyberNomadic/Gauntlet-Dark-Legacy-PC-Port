@@ -51,9 +51,9 @@ bool sameRoster(const RoomSnapshot& a, const RoomSnapshot& b) {
     });
 }
 constexpr u32 kNativeMagic = fourcc("GDNB");
-constexpr u8 kNativeVersion = 1;
+constexpr u8 kNativeVersion = 2;
 constexpr u8 kNativeInitialization = 1; // canonical NativePlaySetup initialization
-constexpr u8 kNativeInputMode = 1;      // reliable complete-frame simulation, never snapshots
+constexpr u8 kNativeInputMode = 2;      // native rollback with redundant authenticated inputs
 constexpr usize kNativeQueue = 12;      // offer, seal and commit for at most three guests
 enum class NativeKind : u8 { Offer, Seal, Acknowledge, Commit };
 bool digest(const std::string& value) {
@@ -213,7 +213,7 @@ bool OnlineSession::NativeIdentity::valid() const {
 }
 bool OnlineSession::NativeRules::valid() const {
     return scene > 0 && scene <= 65535 && scene % 256 != 0 &&
-           startupDelay <= LockstepInputs::kMaxDelay;
+           startupDelay <= RollbackInputs::kMaxDelay;
 }
 
 OnlineSession::OnlineSession(RoomService& service, PeerTransport& transport, bool host,
@@ -453,6 +453,31 @@ void OnlineSession::fail(Failure reason) {
     }
     m_failure = reason;
     m_phase = Phase::Failed;
+    if (m_failureDetail.empty()) {
+        // Keep the first local cause before leave() tears down callbacks/history.
+        // Match diagnostics contain no peer-controlled text or private room code.
+        m_failureDetail = m_match.failureDetail();
+    }
+    if (m_failureDetail.empty()) {
+        switch (reason) {
+        case Failure::None: break;
+        case Failure::Admission: m_failureDetail = "The room admission was rejected."; break;
+        case Failure::Service: m_failureDetail = "The room service connection ended."; break;
+        case Failure::Transport:
+            m_failureDetail = "The connection to another player failed or was lost.";
+            break;
+        case Failure::Protocol:
+            m_failureDetail = "Received invalid or incompatible online session data.";
+            break;
+        case Failure::RosterChanged:
+            m_failureDetail = "The room roster changed after the game started.";
+            break;
+        case Failure::Timeout:
+            m_failureDetail = "Timed out while joining or starting the online game.";
+            break;
+        case Failure::Match: m_failureDetail = "The online game stopped."; break;
+        }
+    }
     m_match.leave();
     m_match.flush(m_transport);
     closeLinks();
@@ -639,7 +664,9 @@ void OnlineSession::event(const PacketTransport::Event& event) {
         }
         return;
     }
-    const auto admission = m_match.receive(event.connection, event.bytes);
+    const auto statistics = m_transport.statistics(event.connection);
+    const auto admission = m_match.receive(event.connection, event.bytes, std::nullopt,
+                                          statistics ? statistics->pingMs : -1);
     if (admission != MatchSession::Admission::Accepted &&
         admission != MatchSession::Admission::Stale) {
         fail(Failure::Protocol);

@@ -7,6 +7,7 @@
 #include "../../engine/world/SampleLevel.h"
 #include "FakeRenderDevice.h"
 #include "game/combat/Damage.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/DestructibleWallsCheckpoint.h"
 
 namespace {
@@ -230,5 +231,104 @@ TEST_CASE("native breakaway wall checkpoints retain baked lighting and exact geo
         }
     }
     CHECK(device.texturesCreated == uploads);
+}
+TEST_CASE("native wall history preserves collision ownership stable surfaces and applied masks",
+          "[local-rewind][walls-local-rewind]") {
+    Fixture reference("walls-native-reference");
+    Fixture corrected("walls-native-corrected");
+    struct Snapshot {
+        DestructibleWalls::LocalSnapshot walls;
+        WorldCollision::LocalSnapshot collision;
+    };
+    LocalStateHistory<Snapshot> history;
+    std::array<DestructibleWalls::LocalSnapshot, 8> expected;
+    DestructibleWalls::LocalSnapshot observed;
+    const auto target = corrected.walls.target(0, 6000);
+    const auto* model = &corrected.walls.wall(0).model;
+    const auto uploads = corrected.device.texturesCreated;
+    s32 tick = 0;
+    for (s32 window = 0; window < 64; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(static_cast<u64>(tick), [&](auto& saved) {
+            corrected.walls.saveLocal(saved.walls);
+            corrected.collision.saveLocal(saved.collision);
+            return true;
+        }));
+        const auto before = corrected.state();
+        auto stale = corrected.owner.prepareRestore(before);
+        REQUIRE(stale);
+        const s32 distance = 1 + window % 8;
+        const auto* saved = history.find(static_cast<u64>(tick));
+        REQUIRE(saved);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            corrected.step(tick + offset, 1.0f / 60);
+            corrected.walls.saveLocal(expected[static_cast<usize>(offset)]);
+        }
+        REQUIRE(corrected.walls.restoreLocal(saved->walls));
+        REQUIRE(corrected.collision.restoreLocal(saved->collision));
+        std::vector<std::optional<s32>> hits;
+        for (s32 offset = 0; offset < distance; ++offset) {
+            hits.push_back(reference.step(tick + offset, 1.0f / 60));
+            corrected.walls.setPlayerCount(4, corrected.collision);
+            corrected.walls.strike(0, 1000, corrected.collision);
+            corrected.walls.update(0.51f);
+        }
+        const bool solid = corrected.collision.solid(corrected.walls.wall(0).object);
+        REQUIRE(corrected.walls.restoreLocal(saved->walls));
+        CHECK(corrected.collision.solid(corrected.walls.wall(0).object) == solid);
+        REQUIRE(corrected.collision.restoreLocal(saved->collision));
+        CHECK_FALSE(corrected.owner.canCommit(*stale));
+        CHECK(corrected.state() == before);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            CHECK(corrected.step(tick + offset, 1.0f / 60) == hits[static_cast<usize>(offset)]);
+            corrected.walls.saveLocal(observed);
+            CHECK(corrected.walls.equalLocal(observed, expected[static_cast<usize>(offset)]));
+        }
+        CHECK(corrected.state() == reference.state());
+        CHECK(corrected.collision.solid(corrected.walls.wall(0).object) ==
+              reference.collision.solid(reference.walls.wall(0).object));
+        CHECK(corrected.walls.target(0, 6000).surface.data() == target.surface.data());
+        CHECK(&corrected.walls.wall(0).model == model);
+        reference.device.draws.clear();
+        corrected.device.draws.clear();
+        reference.walls.draw(reference.device, Mat4{1}, {});
+        corrected.walls.draw(corrected.device, Mat4{1}, {});
+        REQUIRE(corrected.device.draws.size() == reference.device.draws.size());
+        for (usize draw = 0; draw < reference.device.draws.size(); ++draw) {
+            CHECK(corrected.device.draws[draw].vertices == reference.device.draws[draw].vertices);
+        }
+        tick += distance;
+    }
+    CHECK(corrected.device.texturesCreated == uploads);
+    DestructibleWalls::LocalSnapshot saved;
+    corrected.walls.saveLocal(saved);
+    CHECK_FALSE(reference.walls.restoreLocal(saved));
+    CHECK_FALSE(reference.walls.equalLocal(saved, saved));
+    corrected.walls.clear();
+    CHECK_FALSE(corrected.walls.restoreLocal(saved));
+    CHECK_FALSE(corrected.walls.equalLocal(saved, saved));
+    corrected.walls.bind(corrected.device, corrected.layout, corrected.models, corrected.textures,
+                         corrected.collision);
+    CHECK_FALSE(corrected.walls.restoreLocal(saved));
+}
+TEST_CASE("native wall equality includes pending reveal blinks before the model changes",
+          "[local-rewind][walls-local-rewind]") {
+    Fixture fixture("walls-native-hidden-reveal");
+    DestructibleWalls::LocalSnapshot before, after, restored;
+    fixture.walls.setPlayerCount(2, fixture.collision);
+    fixture.walls.saveLocal(before);
+    const auto health = fixture.walls.wall(0).health;
+    const auto transform = fixture.walls.wall(0).transform;
+    const auto white = fixture.walls.wall(0).white;
+    REQUIRE(fixture.walls.standing(0));
+    fixture.walls.reveal(0);
+    fixture.walls.saveLocal(after);
+    CHECK(fixture.walls.wall(0).health == health);
+    CHECK(fixture.walls.wall(0).transform == transform);
+    CHECK(fixture.walls.wall(0).white == white);
+    CHECK_FALSE(fixture.walls.equalLocal(before, after));
+    REQUIRE(fixture.walls.restoreLocal(before));
+    fixture.walls.saveLocal(restored);
+    CHECK(fixture.walls.equalLocal(before, restored));
 }
 } // namespace

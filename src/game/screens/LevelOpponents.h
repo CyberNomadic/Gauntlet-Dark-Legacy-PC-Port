@@ -2,6 +2,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -77,6 +78,20 @@ public:
     const PlacedEnemies& placements() const { return m_placements; }
     /** Original load-time tuning, unaffected by later changes to game options. */
     f32 difficultyGain() const { return m_resources ? m_resources->difficultyGain : 1.0f; }
+    /** Recorder attachment preflight, never a gameplay decision or mixer poll.
+     * Paused/silent legacy Death contact has no logical birth to carry across. */
+    bool hasLegacyAudio() const {
+        if (m_deathSound != kNoSound || m_resumeDeathSound ||
+            (m_sim.deathContact && !m_sim.deathSound)) {
+            return true;
+        }
+        for (const SoundHandle yell : m_yells) {
+            if (yell != kNoSound) {
+                return true;
+            }
+        }
+        return false;
+    }
     /** Outside-pool phases that can change bodies, items, or missile blockers.
      * Ordinary native enemies and generators alone do not trigger this gate. */
     bool hasUncapturedState() const;
@@ -89,9 +104,9 @@ public:
                 std::span<const MissileStop> stops = {},
                 std::span<const CombatantObstacle> walkedInto = {});
     /** The great ones' blows on barrels they walked into since the last call (by index). */
-    std::vector<CombatantRam> takeBarrelRams() { return std::exchange(m_barrelRams, {}); }
+    std::vector<CombatantRam> takeBarrelRams() { return std::exchange(m_sim.barrelRams, {}); }
     /** Swarm and combatant projectile blows on safe rocks, for the level. */
-    std::vector<RockHit> takeRockHits() { return std::exchange(m_rockHits, {}); }
+    std::vector<RockHit> takeRockHits() { return std::exchange(m_sim.rockHits, {}); }
     /** Where the swarm's blasts reached since the last call, for pickup damage. */
     std::vector<PickupBlastReach> takePickupBlasts() { return m_enemyMissiles.takePickupBlasts(); }
     /** Drain hits from the last projectile/attack phase before a level transition freezes
@@ -101,6 +116,8 @@ public:
     bool releaseDeath(s32 record, const Vec3& position, s32 count);
     /** Stops the contact-drain loop while simulation is paused. */
     void stopDeathSound();
+    /** Complete desired combat audio, once after the entire native tick. */
+    void gatherLoops() const;
     static std::vector<EnemyView> enemyViews(std::span<const PlayerRuntime> players);
     Vec3 resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to) const;
     /** Routes a contact by player identity; breath uses a shared quarter-second gate. */
@@ -146,6 +163,11 @@ public:
     Bosses& bosses() { return m_bosses; }
     const Bosses& bosses() const { return m_bosses; }
     const EnemyMissiles& missiles() const { return m_enemyMissiles; }
+    const CombatantProjectiles& combatantProjectiles() const { return m_combatantProjectiles; }
+    /** All retained coordinator values, not a projection of visible actors.
+     * Child populations have their own native visitors. */
+    bool appendNativeFollowupDigest(NativeStateDigest& digest) const;
+    bool appendNativeDigest(NativeStateDigest& digest) const;
     BossMeters& meter() { return m_bossMeter; }
     const BossMeters& meter() const { return m_bossMeter; }
     /** The lights the swarm's lobs and their bursts give off. */
@@ -175,8 +197,8 @@ private:
         u32 effect = 0;
         usize stage = 0; ///< the tree to turn to next
         Vec3 position{0.0f};
+        bool operator==(const Cloud&) const = default;
     };
-    std::vector<Cloud> m_clouds;
     /** The garm brood's death shot: its burst, then the shot that flies on from it. */
     struct DeathShot {
         u32 burst = 0; ///< the effect held where the corpse lay; nought once it is over
@@ -184,8 +206,8 @@ private:
         Vec3 position{0.0f};
         Vec3 velocity{0.0f};
         bool flying = false; ///< the shot's own effect has been sent on its way
+        bool operator==(const DeathShot&) const = default;
     };
-    std::vector<DeathShot> m_deathShots;
     void fireDeathShot(const EnemyDeathShot& shot);
     void advanceDeathShots();
     void hearFrom(std::span<const PlayerRuntime> players);
@@ -223,8 +245,6 @@ private:
     bool playBirths(const BirthPublisher& publish = {});
     PlacedEnemies m_placements;
     CritterStatues m_statues;
-    /** What each of the great ones carries, by its place in the pool. */
-    std::array<std::optional<usize>, Critters::kMost> m_carried{};
     struct Bag {
         std::optional<usize> item;
         std::string name;
@@ -235,9 +255,8 @@ private:
         f32 spin = 0;
         u32 effect = 0;
         bool landed = false;
+        bool operator==(const Bag&) const = default;
     };
-    std::vector<Bag> m_bags;
-    u32 m_bagSeed = 1;
     void updateBags(f32 seconds);
     void releaseBag(const Bag& bag);
     /** A great one slain lets what it carried go, a gargoyle its piece of the wings if it
@@ -248,14 +267,7 @@ private:
     Enemies m_enemies;
     Generators m_generators;
     Critters m_critters;
-    std::vector<CombatantRam> m_barrelRams;
-    std::vector<RockHit> m_rockHits;
-    /** Each player's hits on the swarm a generator bred since they last destroyed one (the
-     * original's hit_streak), by player id. */
-    static constexpr usize kPlayerIds = 4; ///< players are numbered 0 to 3
-    std::array<s32, kPlayerIds> m_hitStreak{};
-    /** Lessons waiting for the next update or final settling, by player id. */
-    std::vector<std::pair<s32, s32>> m_lessons;
+    static constexpr usize kPlayerIds = 4;   ///< players are numbered 0 to 3
     static constexpr s32 kStreakLesson = 10; ///< this many hits teach to destroy generators
     static constexpr s32 kGeneratorRamBase = 2000;
     static constexpr std::string_view kHitFlashSkin = "AAAWHITE"; ///< of POWERUPS
@@ -277,35 +289,104 @@ private:
         bool rootAttachment = false;
         Vec2 pitchYaw{0.0f};
         std::optional<s32> playerAttachment;
+        bool operator==(const CritterEffect&) const = default;
     };
-    std::vector<CritterEffect> m_critterEffects;
     struct MoveEffect {
         u32 effect = 0;
         s32 critter = -1;
         bool ofBoss = false;
+        bool operator==(const MoveEffect&) const = default;
     };
-    std::vector<MoveEffect> m_moveEffects;
-    std::vector<u32>
-        m_cueEffects; ///< all emitted cues, including detached effects borrowing artwork
-    std::array<u32, Enemies::kMost> m_deathEffects{};
     SoundHandle m_deathSound = kNoSound;
-    bool m_deathContact = false;
+    bool m_resumeDeathSound = false;  ///< offline output was stopped for pause
     std::vector<SoundHandle> m_yells; ///< suicides' cries, cut short when one is struck down
-    std::vector<Vec3> m_hearers;      ///< where the standing players are, for how loud
-    /** The scale the party's enemy shrinkers held the swarm at last update, for the sound
-     * of it rising back (SetPlayerVars). */
-    f32 m_shrink = 1.0f;
+    struct Yell {
+        FrameEventEmitter emitter;
+        u32 instance = 0; ///< simultaneous cries from this same enemy remain distinct
+        SoundCueToken start;
+        SpeechTiming timing;
+        f32 volume = 1;
+        f32 pan = 0;
+        bool operator==(const Yell&) const = default;
+    };
+    struct YellClock {
+        u64 source = 0;
+        u32 next = 1;
+        bool operator==(const YellClock&) const = default;
+    };
     /** Holds the swarm, the great ones and their missiles at the shrinkers' scale. */
     void shrinkOpponents(std::span<const PlayerRuntime> players);
 
-    std::array<f32, 4> m_critterExperienceOwed{};
     /** What players' blows on generators earned: who, how much, whether destroyed; drained
      * on the next settling. */
     struct GeneratorReward {
         s32 player = -1;
         s32 experience = 0;
         bool destroyed = false;
+        bool operator==(const GeneratorReward&) const = default;
     };
-    std::vector<GeneratorReward> m_generatorRewards;
+    /** Mutable coordinator state; archives, services and playback handles stay outside. */
+    struct Simulation {
+        std::vector<Cloud> clouds;
+        std::vector<DeathShot> deathShots;
+        /** Carried pickup indices, by critter pool slot. */
+        std::array<std::optional<usize>, Critters::kMost> carried{};
+        std::vector<Bag> bags;
+        u32 bagSeed = 1;
+        std::vector<CombatantRam> barrelRams;
+        std::vector<RockHit> rockHits;
+        /** Native hit_streak: hits on bred enemies since destroying a generator. */
+        std::array<s32, kPlayerIds> hitStreak{};
+        /** Pending lessons in dispatch order, by player identity. */
+        std::vector<std::pair<s32, s32>> lessons;
+        std::vector<CritterEffect> critterEffects;
+        std::vector<MoveEffect> moveEffects;
+        std::vector<u32>
+            cueEffects; ///< all emitted cues, including detached effects borrowing artwork
+        std::array<u32, Enemies::kMost> deathEffects{};
+        bool deathContact = false;
+        SoundCueToken deathSound;
+        std::vector<Yell> yells;
+        std::array<YellClock, Enemies::kMost> yellClocks;
+        std::vector<Vec3> hearers; ///< where the standing players are, for how loud
+        /** Last applied shrink scale, including the logical unshrink sound edge. */
+        f32 shrink = 1.0f;
+        std::array<f32, 4> critterExperienceOwed{};
+        std::vector<GeneratorReward> generatorRewards;
+        bool operator==(const Simulation&) const = default;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class LevelOpponents;
+        Simulation m_values;
+        PlacedEnemies::LocalSnapshot m_placements;
+        CritterStatues::LocalSnapshot m_statues;
+        Enemies::LocalSnapshot m_enemies;
+        Generators::LocalSnapshot m_generators;
+        Critters::LocalSnapshot m_critters;
+        Bosses::LocalSnapshot m_bosses;
+        BossMeters::LocalSnapshot m_meter;
+        EnemyMissiles::LocalSnapshot m_missiles;
+        CombatantProjectiles::LocalSnapshot m_projectiles;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+    };
+    /** Capture/restore the same loaded population. The caller rewinds world, players
+     * and effect trees together; no resource rebinding or sound commands occur here. */
+    bool saveLocal(LocalSnapshot& saved) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Exact native values from this same loaded population, including queued
+     * outputs and inactive slots; mixer handles and loaded artwork are external. */
+    bool equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const;
+    bool appendLocalFollowupDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    static void appendFollowupValues(NativeStateDigest& digest, const Simulation& values);
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);
+    u64 m_localEpoch = 1;
 };
 } // namespace gdl::game

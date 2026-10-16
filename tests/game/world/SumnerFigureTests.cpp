@@ -1,3 +1,4 @@
+#include <array>
 #include <filesystem>
 
 #include <catch2/catch_approx.hpp>
@@ -21,6 +22,101 @@ using namespace gdl::game;
 using Catch::Approx;
 
 constexpr f32 kStep = 1.0f / 30.0f;
+
+TEST_CASE("native Sumner history restores pending gestures idle cycles and fractional poses",
+          "[local-rewind][sumner-local-rewind]") {
+    const auto dir = test::scratchDirectory("sumner-local");
+    writeTextFile(dir / "body.obj",
+                  "v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nusemtl tex0\nf 1//1 2//1 3//1\n");
+    writeTextFile(dir / "objects.json", R"({"objects":[
+      {"index":0,"name":"BODY","file":"body.obj","meshTriangles":1}]})");
+    writeFile(dir / "skin.png", test::kTinyPng);
+    writeTextFile(dir / "textures.json", R"({"bitmaps":[
+      {"index":0,"name":"SKIN","file":"skin.png","width":2,"height":2}]})");
+    std::string sequences;
+    for (usize i = 0; i < SumnerFigure::kSequences.size(); ++i) {
+        if (i > 0) {
+            sequences += ',';
+        }
+        sequences += R"({"name":")" + std::string(SumnerFigure::kSequences[i]) +
+                     R"(","frames":4,"frameRate":30,"repeats":)" + (i < 3 ? "true" : "false") +
+                     R"(,"tracks":[{"node":0,"flags":32,"frames":[0,3],"values":[)" +
+                     std::to_string(i * 10) + ',' + std::to_string(i * 10 + 3) + "]}]}";
+    }
+    writeTextFile(dir / "animations.json", R"({"trees":[{"name":"GWIZ","nodes":[
+      {"name":"BODY","object":"BODY","parent":-1,"position":[0,0,0]}],"sequences":[)" +
+                                               sequences + "]}]}");
+    test::convertModelFixture(dir);
+    writeTextFile(dir / "world.json", R"({"objects":[{"name":"GROUND","position":[0,0,0]}],
+      "locators":[{"type":"event","delay":0,"position":[3,2,1],"rotation":[0,0.5,0]}]})");
+    WorldLayout layout;
+    ItemArchive items;
+    test::FakeRenderDevice device;
+    REQUIRE(layout.load(dir));
+    REQUIRE(items.load(dir));
+    SumnerFigure native, replay;
+    REQUIRE(native.load(device, items, layout));
+    REQUIRE(replay.load(device, items, layout));
+    std::array<SumnerFigure::LocalSnapshot, 16> history;
+    const auto uploads = device.texturesCreated;
+    const auto compare = [&] {
+        CHECK(replay.index() == native.index());
+        CHECK(replay.animation().checkpoint() == native.animation().checkpoint());
+        CHECK(replay.gesturing() == native.gesturing());
+        for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+            device.draws.clear();
+            native.draw(device, Mat4{1}, {}, alpha);
+            const auto expected = device.draws;
+            device.draws.clear();
+            replay.draw(device, Mat4{1}, {}, alpha);
+            REQUIRE(device.draws.size() == expected.size());
+            for (usize i = 0; i < expected.size(); ++i) {
+                CHECK(device.draws[i].texture == expected[i].texture);
+                CHECK(device.draws[i].state == expected[i].state);
+                CHECK(device.draws[i].vertices == expected[i].vertices);
+                CHECK(device.draws[i].transform == expected[i].transform);
+            }
+        }
+    };
+    const auto step = [](SumnerFigure& sumner, u32 tick, bool wrong) {
+        sumner.capturePresentation();
+        if (wrong || tick % 23 == 0) {
+            sumner.play(wrong ? 6 : static_cast<s32>((tick / 23) % 7));
+        }
+        if (wrong || tick % 11 != 0) {
+            sumner.update(wrong ? 0.5f : 1.0f / 60);
+        }
+        if (tick % 17 == 0) {
+            sumner.play(wrong ? 4 : 3); // Pending cut-in must survive without an update.
+        }
+    };
+    u32 tick = 0;
+    for (u32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        replay.saveLocal(saved);
+        const u32 distance = window % 8 + 1;
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        REQUIRE(replay.restoreLocal(saved));
+        compare();
+        for (u32 i = 0; i < distance; ++i) {
+            step(native, tick + i, false);
+            step(replay, tick + i, false);
+            compare();
+        }
+        tick += distance;
+    }
+    CHECK(device.texturesCreated == uploads);
+    CHECK(device.textureUpdates == 0);
+    CHECK_FALSE(native.restoreLocal(history[0]));
+    REQUIRE(replay.load(device, items, layout));
+    CHECK_FALSE(replay.restoreLocal(history[0]));
+    replay.saveLocal(history[0]);
+    replay.clear();
+    CHECK_FALSE(replay.restoreLocal(history[0]));
+}
 
 TEST_CASE("Sumner samples between ticks without advancing gestures or blending across cuts",
           "[game][world][sumner-interpolation]") {

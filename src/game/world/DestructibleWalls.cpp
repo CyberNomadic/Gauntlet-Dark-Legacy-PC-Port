@@ -1,5 +1,7 @@
 #include "game/world/DestructibleWalls.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -12,6 +14,76 @@
 #include "game/world/TargetAssist.h"
 
 namespace gdl::game {
+bool DestructibleWalls::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("DestructibleWalls/1");
+    digest.resource(m_layout);
+    digest.resource(m_textures);
+    digest.resource(m_collision);
+    digest.resource(m_white);
+    digest.wide(m_walls.size());
+    for (usize i = 0; i < m_walls.size(); ++i) {
+        const auto& wall = m_walls[i];
+        digest.value(saved ? saved->walls[i] : static_cast<const WallState&>(wall));
+        digest.values(wall.transform, wall.collisionCentre, wall.armor, wall.minPlayers, wall.object);
+        digest.wide(wall.surface.size());
+        for (const auto& triangle : wall.surface) digest.fields<4>(triangle);
+        const auto& [id, base, radius, height, surface, node, score, reach, potion, acquisition] =
+            wall.bounds;
+        digest.values(id, base, radius, height, node, score, reach, potion);
+        digest.wide(surface.size());
+        for (const auto& triangle : surface) digest.fields<4>(triangle);
+        digest.flag(acquisition.has_value());
+        if (acquisition) digest.fields<5>(*acquisition);
+        // The model's white override is derived from WallState::white on restore.
+    }
+    return digest.good();
+}
+
+bool DestructibleWalls::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool DestructibleWalls::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [walls, binding, owner] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+void DestructibleWalls::saveLocal(LocalSnapshot& saved) const {
+    saved.walls.resize(m_walls.size());
+    for (usize index = 0; index < m_walls.size(); ++index) {
+        saved.walls[index] = m_walls[index];
+    }
+    saved.binding = m_checkpointBinding;
+    saved.owner = this;
+}
+
+bool DestructibleWalls::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_checkpointBinding &&
+           saved.binding.lock() == m_checkpointBinding && saved.walls.size() == m_walls.size();
+}
+
+bool DestructibleWalls::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.walls == right.walls;
+}
+
+bool DestructibleWalls::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize index = 0; index < m_walls.size(); ++index) {
+        auto& wall = m_walls[index];
+        static_cast<WallState&>(wall) = saved.walls[index];
+        showWhite(wall, wall.white);
+    }
+    ++m_checkpointGeneration;
+    return true;
+}
+
 void DestructibleWalls::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_layout = nullptr;

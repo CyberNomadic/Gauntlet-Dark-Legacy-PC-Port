@@ -1,5 +1,8 @@
 #include "game/world/PlacedItems.h"
 
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -46,9 +49,125 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
 }
 } // namespace
 
+void visitNativeState(NativeStateDigest& digest, const PlacedItems::Item& value) {
+    const auto& [floor, name, instance, info, subtype, amount, health, flags, strength,
+                 minPlayers, radius, height, position, transform, model, particles, pose,
+                 figure, archive, player, alpha, visible, taken, contained, velocity, thrown,
+                 carried, opener, noGrabSeconds, previousTransform, previousFrame,
+                 previousAlpha, previousGeneration, presentationCaptured, continuity] = value;
+    digest.values(floor, name, instance, info, subtype, amount, health, flags, strength,
+                  minPlayers, radius, height, position, transform);
+    digest.resource(model.get());
+    digest.values(particles, pose);
+    digest.resource(figure);
+    digest.resource(archive);
+    digest.values(player, alpha, visible, taken, contained, velocity, thrown, carried, opener,
+                  noGrabSeconds, previousTransform, previousFrame, previousAlpha,
+                  previousGeneration, presentationCaptured, continuity);
+}
+
+void visitNativeState(NativeStateDigest& digest, const PlacedItems::Effect& value) {
+    const auto& [figure, position, player, pose, emitters, secondsLeft, emitting] = value;
+    digest.resource(figure);
+    digest.values(position, player, pose, emitters, secondsLeft, emitting);
+}
+
+bool PlacedItems::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("PlacedItems/1");
+    digest.resource(m_layout);
+    digest.resource(m_collision);
+    digest.wide(m_infos.size());
+    for (const auto& info : m_infos) digest.fields<19>(info);
+    digest.wide(m_archives.size());
+    for (const auto* archive : m_archives) {
+        digest.flag(archive != nullptr);
+        const bool loaded = archive != nullptr && archive->loaded();
+        digest.flag(loaded);
+        if (loaded) digest.resource(archive);
+    }
+    digest.value(saved ? saved->state : m_sim);
+    digest.wide(m_motions.size());
+    for (usize i = 0; i < m_motions.size(); ++i) {
+        const auto& [archive, animator] = m_motions[i];
+        digest.resource(archive);
+        animator.appendBindingDigest(digest);
+        digest.fields<3>(saved ? saved->clocks[i] : animator.clock());
+    }
+    // m_figures is only a retained immutable binding cache. Its insertion order
+    // may differ after abandoned predictions; active resource identities above
+    // name the actual archive/tree recipe, not the cache index or last drawn pose.
+    return digest.good();
+}
+
+bool PlacedItems::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool PlacedItems::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [state, clocks, owner, collision, binding] = saved;
+    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    return appendDigest(digest, &saved);
+}
+
+bool PlacedItems::registerNativeResources(NativeStateResources& resources) const {
+    for (const auto* archive : m_archives) {
+        if (archive && archive->loaded() && !resources.refreshArchive(*archive)) return false;
+    }
+    for (const auto& binding : m_figures) {
+        if (!binding.archive || !binding.tree || !binding.model) return false;
+        bool found = false;
+        for (u32 i = 0; i < binding.archive->trees.size(); ++i) {
+            if (&binding.archive->trees.tree(i) != binding.tree) continue;
+            const std::string key = "placed-item/tree/" + std::to_string(i);
+            if (!resources.registerModel(*binding.model, *binding.archive, key)) return false;
+            found = true;
+            break;
+        }
+        if (!found) return false;
+    }
+    return resources.good();
+}
+
+void PlacedItems::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.collision = m_collision;
+    saved.binding = m_checkpointBinding;
+    saved.state = m_sim;
+    saved.clocks.resize(m_motions.size());
+    for (usize i = 0; i < m_motions.size(); ++i) {
+        saved.clocks[i] = m_motions[i].animator.clock();
+    }
+}
+
+bool PlacedItems::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_checkpointBinding &&
+           saved.collision == m_collision && saved.clocks.size() == m_motions.size();
+}
+
+bool PlacedItems::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
+           left.clocks == right.clocks;
+}
+
+bool PlacedItems::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    for (usize i = 0; i < m_motions.size(); ++i) {
+        m_motions[i].animator.restoreClock(saved.clocks[i]);
+    }
+    // Geometry bindings are retained by the stage. Frame/texture selection is
+    // derived again for each item when drawing; no resource bind occurs here.
+    ++m_checkpointGeneration;
+    return true;
+}
+
 void PlacedItems::attach(usize index, const Mat4& transform, bool contained) {
-    if (index < m_items.size()) {
-        Item& item = m_items[index];
+    if (index < m_sim.items.size()) {
+        Item& item = m_sim.items[index];
         if (item.contained != contained ||
             glm::distance(item.position, Vec3{transform[3]}) > kPresentationCutDistance) {
             item.presentationCaptured = false;
@@ -62,9 +181,9 @@ void PlacedItems::attach(usize index, const Mat4& transform, bool contained) {
 }
 
 void PlacedItems::discard(usize index) {
-    if (index < m_items.size()) {
-        m_items[index].taken = true;
-        m_items[index].visible = false;
+    if (index < m_sim.items.size()) {
+        m_sim.items[index].taken = true;
+        m_sim.items[index].visible = false;
     }
 }
 
@@ -152,11 +271,11 @@ bool PlacedItems::bind(RenderDevice& device, const WorldLayout& layout,
                                       restCollision ? &*restCollision : nullptr),
                         kFloorLift);
         }
-        item.visible = item.shownTo(m_players);
-        m_items.push_back(std::move(item));
+        item.visible = item.shownTo(m_sim.players);
+        m_sim.items.push_back(std::move(item));
     }
     syncFloors();
-    return !m_items.empty();
+    return !m_sim.items.empty();
 }
 
 void PlacedItems::restOnFloor(Item& item, const WorldCollision* collision, f32 lift) {
@@ -179,7 +298,7 @@ void PlacedItems::syncFloors() {
     if (m_collision == nullptr) {
         return;
     }
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (!item.floor || item.taken || item.carried || item.contained || item.thrown) {
             continue;
         }
@@ -204,30 +323,32 @@ void PlacedItems::clear() {
     m_checkpointGeneration = 0;
     m_layout = nullptr;
     m_infos.clear();
-    m_items.clear();
-    m_effects.clear();
-    m_bursts.clear();
+    m_sim.items.clear();
+    m_presentedPoses.clear();
+    m_sim.effects.clear();
+    m_sim.bursts.clear();
     m_archives.clear();
     m_scope = {};
     m_motions.clear();
+    m_figures.clear();
     m_collision = nullptr;
-    m_revealTime = 0.0f;
-    m_revealing = false;
-    m_capturePending = false;
-    m_burstsAdvanced = false;
+    m_sim.revealTime = 0.0f;
+    m_sim.revealing = false;
+    m_sim.capturePending = false;
+    m_sim.burstsAdvanced = false;
 }
 
 usize PlacedItems::visibleCount() const {
     usize count = 0;
-    for (const Item& item : m_items) {
+    for (const Item& item : m_sim.items) {
         count += item.visible ? 1 : 0;
     }
     return count;
 }
 
 void PlacedItems::setPlayerCount(s32 players) {
-    m_players = players;
-    for (Item& item : m_items) {
+    m_sim.players = players;
+    for (Item& item : m_sim.items) {
         const bool wasVisible = item.visible;
         item.visible = !item.taken && !item.carried && item.shownTo(players);
         if (item.visible != wasVisible) {
@@ -238,7 +359,7 @@ void PlacedItems::setPlayerCount(s32 players) {
 }
 
 void PlacedItems::retireCrystals() {
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (item.subtype == ItemInfo::kCrystal) {
             item.taken = true;
             item.visible = false;
@@ -254,7 +375,7 @@ usize PlacedItems::poisonFood(RenderDevice& device, const Vec3& position, f32 ra
         return 0;
     }
     usize changed = 0;
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (item.subtype != static_cast<s32>(ItemKind::Food) ||
             !exposedWithin(item, position, radius)) {
             continue;
@@ -292,7 +413,7 @@ std::vector<PlacedItems::PerkChange> PlacedItems::bless(RenderDevice& device, co
         MagicPerkDeed deed = MagicPerkDeed::JunkToSilver;
     };
     std::vector<PerkChange> changes;
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (!exposedWithin(item, position, radius)) {
             continue;
         }
@@ -368,8 +489,8 @@ std::optional<s32> PlacedItems::damagePotion(Item& item, const ItemInfo& info, f
 
 std::vector<usize> PlacedItems::shootablePotions() const {
     std::vector<usize> found;
-    for (usize index = 0; index < m_items.size(); ++index) {
-        const Item& item = m_items[index];
+    for (usize index = 0; index < m_sim.items.size(); ++index) {
+        const Item& item = m_sim.items[index];
         if (static_cast<ItemKind>(item.subtype) == ItemKind::Potion && item.takeable() &&
             !item.thrown && item.info >= 0 && m_infos[static_cast<usize>(item.info)].armor >= 0) {
             found.push_back(index);
@@ -379,10 +500,10 @@ std::vector<usize> PlacedItems::shootablePotions() const {
 }
 
 std::optional<s32> PlacedItems::strikePotion(usize index, f32 damage) {
-    if (index >= m_items.size()) {
+    if (index >= m_sim.items.size()) {
         return std::nullopt;
     }
-    Item& item = m_items[index];
+    Item& item = m_sim.items[index];
     if (static_cast<ItemKind>(item.subtype) != ItemKind::Potion || !item.takeable() ||
         item.info < 0) {
         return std::nullopt;
@@ -399,7 +520,7 @@ std::vector<PlacedItems::BlastChange> PlacedItems::blast(RenderDevice& device, c
     if (damage <= 0) {
         return changes;
     }
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (!exposedWithin(item, position, radius)) {
             continue;
         }
@@ -450,9 +571,30 @@ bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
     }
     ItemArchive& archive = *hit->archive;
     const TreeInfo& figure = archive.trees.tree(hit->index);
-    if (!item.model.bind(figure, archive.models, archive.textures, device)) {
-        return false;
+    auto found = std::ranges::find_if(m_figures, [&](const FigureBinding& binding) {
+        return binding.tree == &figure && binding.archive == &archive && binding.device == &device;
+    });
+    if (found == m_figures.end()) {
+        FigureBinding binding;
+        binding.tree = &figure;
+        binding.archive = &archive;
+        binding.device = &device;
+        binding.model = std::make_shared<TreeModel>();
+        if (!binding.model->bind(figure, archive.models, archive.textures, device)) {
+            return false;
+        }
+        TreePose birthPose;
+        if (figure.sequences.empty()) {
+            birthPose.rest(figure);
+        } else {
+            birthPose.evaluate(figure, 0, 0);
+        }
+        binding.birthParticles.bind(figure, archive, device, Mat4{1}, birthPose.matrices());
+        binding.birthParticles.setLocalScales(birthPose.poses());
+        m_figures.push_back(std::move(binding));
+        found = std::prev(m_figures.end());
     }
+    item.model = found->model;
     item.figure = &figure;
     item.archive = &archive;
     if (figure.sequences.empty()) {
@@ -460,11 +602,12 @@ bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
     } else {
         item.player.start(figure.sequences[0], 0);
         item.pose.evaluate(figure, 0, 0.0f);
-        item.model.setFrame(0, 0);
+        item.model->setFrame(0, 0);
     }
     // AtreeNodeInit also instantiates type-4 children. QUEST_PARCH's
     // POOLFIRE is part of the pickup tree, not its collection effect.
-    item.particles.bind(figure, archive, device, item.transform, item.pose.matrices());
+    item.particles = found->birthParticles;
+    item.particles.step(0, item.transform, item.pose.matrices());
     item.particles.setLocalScales(item.pose.poses());
     return true;
 }
@@ -522,7 +665,7 @@ bool PlacedItems::placeRecord(RenderDevice& device, s32 record, const Vec3& posi
     if (collision != nullptr) {
         m_collision = collision;
     }
-    m_items.push_back(std::move(item));
+    m_sim.items.push_back(std::move(item));
     return true;
 }
 
@@ -534,7 +677,7 @@ bool PlacedItems::throwItem(RenderDevice& device, std::string_view name, const V
     if (!place(device, name, position, collision)) {
         return false;
     }
-    throwFrom(m_items.back(), position, velocity, collision, noGrabSeconds, strength);
+    throwFrom(m_sim.items.back(), position, velocity, collision, noGrabSeconds, strength);
     if (collision != nullptr) {
         m_collision = collision;
     }
@@ -560,8 +703,8 @@ void PlacedItems::throwFrom(Item& item, const Vec3& position, const Vec3& veloci
 std::optional<usize> PlacedItems::claim(const Vec3& position, f32 reach, f32 rise) {
     std::optional<usize> nearest;
     f32 best = reach;
-    for (usize i = 0; i < m_items.size(); ++i) {
-        const Item& item = m_items[i];
+    for (usize i = 0; i < m_sim.items.size(); ++i) {
+        const Item& item = m_sim.items[i];
         if (item.taken || item.carried || item.contained || item.thrown || item.minPlayers > 1 ||
             std::abs(item.position.y - position.y) >= rise) {
             continue;
@@ -573,19 +716,19 @@ std::optional<usize> PlacedItems::claim(const Vec3& position, f32 reach, f32 ris
         }
     }
     if (nearest.has_value()) {
-        m_items[*nearest].floor.reset();
-        m_items[*nearest].carried = true;
-        m_items[*nearest].visible = false;
+        m_sim.items[*nearest].floor.reset();
+        m_sim.items[*nearest].carried = true;
+        m_sim.items[*nearest].visible = false;
     }
     return nearest;
 }
 
 bool PlacedItems::release(usize index, const Vec3& position, const Vec3& velocity,
                           const WorldCollision* collision, f32 noGrabSeconds) {
-    if (index >= m_items.size() || !m_items[index].carried) {
+    if (index >= m_sim.items.size() || !m_sim.items[index].carried) {
         return false;
     }
-    releaseFrom(m_items[index], position, velocity, collision, noGrabSeconds, m_players);
+    releaseFrom(m_sim.items[index], position, velocity, collision, noGrabSeconds, m_sim.players);
     if (collision != nullptr) {
         m_collision = collision;
     }
@@ -609,17 +752,17 @@ void PlacedItems::releaseFrom(Item& item, const Vec3& position, const Vec3& velo
 }
 
 bool PlacedItems::goldLeft() const {
-    return std::ranges::any_of(m_items, [](const Item& item) {
+    return std::ranges::any_of(m_sim.items, [](const Item& item) {
         return item.visible && !item.taken && item.subtype == ItemInfo::kGold;
     });
 }
 
 std::optional<Pickup> PlacedItems::pickupFor(usize index,
                                              std::span<const Collector> collectors) const {
-    if (index >= m_items.size() || !m_items[index].takeable()) {
+    if (index >= m_sim.items.size() || !m_sim.items[index].takeable()) {
         return std::nullopt;
     }
-    const Item& item = m_items[index];
+    const Item& item = m_sim.items[index];
     usize taker = collectors.size();
     for (usize c = 0; c < collectors.size() && taker == collectors.size(); ++c) {
         if (item.touchedBy(collectors[c])) {
@@ -663,12 +806,12 @@ std::optional<std::vector<Pickup>>
 PlacedItems::collectUsing(std::span<const Collector> collectors, const StagedPickupJudge& judge,
                           const std::function<bool(std::string_view, const Vec3&)>& burst) {
     std::vector<Pickup> pickups;
-    for (usize i = 0; i < m_items.size(); ++i) {
+    for (usize i = 0; i < m_sim.items.size(); ++i) {
         const auto offered = pickupFor(i, collectors);
         if (!offered) {
             continue;
         }
-        Item& item = m_items[i];
+        Item& item = m_sim.items[i];
         const Pickup& pickup = *offered;
         if (judge) {
             const PickupDecision decision = judge(pickup);
@@ -749,12 +892,12 @@ void PlacedItems::startEffect(RenderDevice& device, std::string_view tree, const
                                 ? base * effect.pose.matrices()[n]
                                 : glm::translate(base, figure.worldPosition(n));
             effect.emitters.emplace_back(
-                n, m_bursts.start(descriptor, at,
-                                  texture != nullptr ? texture : &device.whiteTexture(),
-                                  static_cast<u32>(m_effects.size() * 8 + n + 1)));
+                n, m_sim.bursts.start(descriptor, at,
+                                      texture != nullptr ? texture : &device.whiteTexture(),
+                                      static_cast<u32>(m_sim.effects.size() * 8 + n + 1)));
         }
         if (!effect.emitters.empty()) {
-            m_effects.push_back(std::move(effect));
+            m_sim.effects.push_back(std::move(effect));
         }
     }
 }
@@ -762,7 +905,7 @@ void PlacedItems::startEffect(RenderDevice& device, std::string_view tree, const
 /** Shows every item the frames its archive's animations have reached and the way their
  * scrolls have slid, scrolls on one texture adding up. */
 void PlacedItems::applyTextureMotion() {
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (!item.visible || item.archive == nullptr) {
             continue;
         }
@@ -771,7 +914,7 @@ void PlacedItems::applyTextureMotion() {
                 continue;
             }
             if (item.figure != nullptr) {
-                motion.animator.apply(item.model, *item.figure, item.player.sequence(),
+                motion.animator.apply(*item.model, *item.figure, item.player.sequence(),
                                       static_cast<s32>(item.player.frame()));
                 motion.animator.apply(item.particles, *item.figure, item.player.sequence(),
                                       static_cast<s32>(item.player.frame()));
@@ -832,9 +975,9 @@ void PlacedItems::capturePresentation() {
     for (auto& motion : m_motions) {
         motion.animator.advance(0);
     }
-    m_capturePending = true;
-    m_burstsAdvanced = false;
-    for (Item& item : m_items) {
+    m_sim.capturePending = true;
+    m_sim.burstsAdvanced = false;
+    for (Item& item : m_sim.items) {
         item.previousTransform = item.transform;
         item.previousFrame = item.player.presentationFrame();
         item.previousGeneration = item.player.generation();
@@ -844,29 +987,29 @@ void PlacedItems::capturePresentation() {
 }
 
 void PlacedItems::snapPresentation() {
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         item.presentationCaptured = false;
         ++item.continuity;
     }
 }
 
 void PlacedItems::update(f32 seconds) {
-    if (!m_capturePending) {
+    if (!m_sim.capturePending) {
         capturePresentation();
     }
-    m_capturePending = false;
-    m_burstsAdvanced = seconds > 0;
+    m_sim.capturePending = false;
+    m_sim.burstsAdvanced = seconds > 0;
     syncFloors();
     // The archives' texture animations step once a game frame: the sheen on the crystals.
     for (ArchiveMotion& motion : m_motions) {
         motion.animator.advance(seconds);
     }
     // The figures on show play their sequence over and over.
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (item.visible && item.figure != nullptr && item.player.playing()) {
             item.player.advance(seconds, true);
             item.pose.evaluate(*item.figure, item.player.sequence(), item.player.frame());
-            item.model.setFrame(item.player.sequence(), static_cast<s32>(item.player.frame()));
+            item.model->setFrame(item.player.sequence(), static_cast<s32>(item.player.frame()));
         }
         item.noGrabSeconds = std::max(item.noGrabSeconds - seconds, 0.0f);
         if (item.thrown) {
@@ -880,7 +1023,7 @@ void PlacedItems::update(f32 seconds) {
     // even on a render frame without a whole free-running texture tick.
     applyTextureMotion();
     // A burst's emitters ride their nodes through the tree's sequence, then stop emitting.
-    for (Effect& effect : m_effects) {
+    for (Effect& effect : m_sim.effects) {
         if (!effect.emitting) {
             continue;
         }
@@ -891,7 +1034,7 @@ void PlacedItems::update(f32 seconds) {
             const Mat4 base = glm::translate(Mat4{1.0f}, effect.position);
             for (const auto& [node, emitter] : effect.emitters) {
                 if (node < effect.pose.matrices().size()) {
-                    m_bursts.setNode(emitter, base * effect.pose.matrices()[node]);
+                    m_sim.bursts.setNode(emitter, base * effect.pose.matrices()[node]);
                 }
             }
             over = effect.player.finished();
@@ -902,19 +1045,19 @@ void PlacedItems::update(f32 seconds) {
         if (over) {
             effect.emitting = false;
             for (const auto& [node, emitter] : effect.emitters) {
-                m_bursts.stop(emitter);
+                m_sim.bursts.stop(emitter);
             }
         }
     }
-    m_bursts.step(seconds);
+    m_sim.bursts.step(seconds);
     // A burst is over once nothing of it is left to show; then the field forgets them all.
-    std::erase_if(m_effects, [&](const Effect& effect) {
+    std::erase_if(m_sim.effects, [&](const Effect& effect) {
         return std::ranges::none_of(effect.emitters, [&](const std::pair<usize, usize>& ride) {
-            return m_bursts.active(ride.second);
+            return m_sim.bursts.active(ride.second);
         });
     });
-    if (m_effects.empty()) {
-        m_bursts.prune();
+    if (m_sim.effects.empty()) {
+        m_sim.bursts.prune();
     }
 }
 
@@ -939,7 +1082,11 @@ f32 PlacedItems::textureFrame(const Item& item) const {
 void PlacedItems::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                        const CameraFrame* camera, TreeModel::Pass pass, f32 frameBlend) const {
     const f32 blend = std::clamp(frameBlend, 0.0f, 1.0f);
-    for (const Item& item : m_items) {
+    if (frameBlend >= 0) {
+        m_presentedPoses.resize(m_sim.items.size());
+    }
+    for (usize index = 0; index < m_sim.items.size(); ++index) {
+        const Item& item = m_sim.items[index];
         if (item.visible) {
             const TreePose* pose = &item.pose;
             Mat4 transform = item.transform;
@@ -955,15 +1102,16 @@ void PlacedItems::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
                         item.previousGeneration == item.player.generation()
                             ? glm::mix(item.previousFrame, item.player.presentationFrame(), blend)
                             : item.player.presentationFrame();
-                    item.presentationPose.evaluate(*item.figure, item.player.sequence(),
-                                                   visualFrame, false, true);
-                    pose = &item.presentationPose;
+                    auto& presented = m_presentedPoses[index];
+                    presented.evaluate(*item.figure, item.player.sequence(), visualFrame, false,
+                                       true);
+                    pose = &presented;
                 }
             }
             if (item.figure != nullptr) {
                 for (const auto& motion : m_motions) {
                     if (motion.archive == item.archive) {
-                        motion.animator.apply(item.model, *item.figure, item.player.sequence(),
+                        motion.animator.apply(*item.model, *item.figure, item.player.sequence(),
                                               visualFrame,
                                               motion.animator.presentationOffset(frameBlend));
                         motion.animator.apply(item.particles, *item.figure, item.player.sequence(),
@@ -971,31 +1119,32 @@ void PlacedItems::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
                                               motion.animator.presentationOffset(frameBlend));
                     }
                 }
-                item.model.setPresentationFrame(item.player.sequence(), visualFrame);
+                item.model->setPresentationFrame(item.player.sequence(), visualFrame);
             }
-            item.model.draw(device, clip, transform, lighting, pose->matrices(), camera, alpha,
-                            pass);
+            item.model->draw(device, clip, transform, lighting, pose->matrices(), camera, alpha,
+                             pass);
             if (pass != TreeModel::Pass::DepthWriting && pass != TreeModel::Pass::Opaque) {
                 const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
                 item.particles.draw(device, clip, frame.right, frame.up,
-                                    m_burstsAdvanced ? frameBlend : -1.0f);
+                                    m_sim.burstsAdvanced ? frameBlend : -1.0f);
             }
         }
     }
     if (pass != TreeModel::Pass::DepthWriting && pass != TreeModel::Pass::Opaque) {
         const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
-        m_bursts.draw(device, clip, frame.right, frame.up, m_burstsAdvanced ? frameBlend : -1.0f);
+        m_sim.bursts.draw(device, clip, frame.right, frame.up,
+                          m_sim.burstsAdvanced ? frameBlend : -1.0f);
     }
 }
 
 void PlacedItems::hideCrystals() {
-    m_revealTime = 0.0f;
-    m_revealing = false;
-    for (Item& item : m_items) {
+    m_sim.revealTime = 0.0f;
+    m_sim.revealing = false;
+    for (Item& item : m_sim.items) {
         if (item.subtype == ItemInfo::kCrystal) {
             item.alpha = 0.0f;
             item.presentationCaptured = false;
-            m_revealing = true;
+            m_sim.revealing = true;
         }
     }
 }
@@ -1003,14 +1152,14 @@ void PlacedItems::hideCrystals() {
 /** The reveal spreads from the world's origin at its pace; a crystal it has reached gains a
  * step of alpha a frame until it is whole. */
 void PlacedItems::reveal(f32 seconds) {
-    if (!m_revealing) {
+    if (!m_sim.revealing) {
         return;
     }
-    m_revealTime += seconds;
-    const f32 reach = kRevealSpread * (kRevealLead + m_revealTime);
+    m_sim.revealTime += seconds;
+    const f32 reach = kRevealSpread * (kRevealLead + m_sim.revealTime);
     const f32 gain = seconds * kFrameRate * kRevealStep;
     bool left = false;
-    for (Item& item : m_items) {
+    for (Item& item : m_sim.items) {
         if (item.subtype != ItemInfo::kCrystal || item.alpha >= 1.0f) {
             continue;
         }
@@ -1021,7 +1170,7 @@ void PlacedItems::reveal(f32 seconds) {
         }
         left = left || item.alpha < 1.0f;
     }
-    m_revealing = left;
+    m_sim.revealing = left;
 }
 
 } // namespace gdl::game

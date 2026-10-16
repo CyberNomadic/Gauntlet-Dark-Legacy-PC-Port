@@ -5,8 +5,46 @@
 #include <unordered_set>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 namespace gdl::game {
+bool MoveStrikes::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("MoveStrikes.native.1");
+    digest.value(m_sim);
+    return digest.good();
+}
+
+bool MoveStrikes::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("MoveStrikes.native.1");
+    digest.value(saved.state);
+    return digest.good();
+}
+
+void MoveStrikes::saveLocal(LocalSnapshot& saved) const {
+    saved.state = m_sim;
+    saved.owner = this;
+    saved.lifetime = m_restoreOwner;
+    saved.epoch = m_localEpoch;
+}
+
+bool MoveStrikes::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto lifetime = saved.lifetime.lock();
+    return saved.owner == this && lifetime && lifetime == m_restoreOwner &&
+           saved.epoch == m_localEpoch;
+}
+
+bool MoveStrikes::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    ++m_restoreGeneration;
+    return true;
+}
 
 bool MoveStrikes::Checkpoint::valid() const {
     if (strikes.size() > kMaxStrikes) {
@@ -32,10 +70,10 @@ bool MoveStrikes::Checkpoint::valid() const {
     return true;
 }
 std::optional<MoveStrikes::Checkpoint> MoveStrikes::checkpoint() const {
-    if (m_strikes.size() > Checkpoint::kMaxStrikes) {
+    if (m_sim.strikes.size() > Checkpoint::kMaxStrikes) {
         return std::nullopt;
     }
-    Checkpoint state{m_strikes, m_next};
+    Checkpoint state{m_sim.strikes, m_sim.next};
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 std::optional<MoveStrikes::Prepared> MoveStrikes::prepareRestore(const Checkpoint& state) const {
@@ -58,8 +96,8 @@ bool MoveStrikes::commitRestore(Prepared&& state) noexcept {
     if (!canCommit(state)) {
         return false;
     }
-    m_strikes.swap(state.state.strikes);
-    m_next = state.state.next;
+    m_sim.strikes.swap(state.state.strikes);
+    m_sim.next = state.state.next;
     state.owner = nullptr;
     ++m_restoreGeneration;
     return true;
@@ -109,7 +147,7 @@ Vec3 MoveStrikes::originOf(const MoveStrike& strike, const Vec3& position, const
 u32 MoveStrikes::start(const MoveStrike& strike, s32 owner, const Vec3& position,
                        const Vec3& facing, f32 ownDamage, f32 effectSeconds) {
     Strike started;
-    started.id = m_next++;
+    started.id = m_sim.next++;
     started.owner = owner;
     started.flies = strike.type == MoveStrike::kFlies;
     started.expanding = strike.type == MoveStrike::kBursts;
@@ -135,7 +173,7 @@ u32 MoveStrikes::start(const MoveStrike& strike, s32 owner, const Vec3& position
         }
     }
     started.damageTime = effectSeconds - strike.delay;
-    m_strikes.push_back(started);
+    m_sim.strikes.push_back(started);
     return started.id;
 }
 
@@ -144,7 +182,7 @@ std::vector<StrikeHit> MoveStrikes::update(f32 seconds, const WorldCollision* co
     if (seconds <= 0) {
         return hits;
     }
-    for (Strike& strike : m_strikes) {
+    for (Strike& strike : m_sim.strikes) {
         const Vec3 from = strike.position;
         const auto hit = [&] {
             return StrikeHit{strike.id,     strike.owner, strike.position,
@@ -209,13 +247,13 @@ std::vector<StrikeHit> MoveStrikes::update(f32 seconds, const WorldCollision* co
             hits.push_back(hit());
         }
     }
-    std::erase_if(m_strikes, [](const Strike& strike) { return strike.secondsLeft <= 0.0f; });
+    std::erase_if(m_sim.strikes, [](const Strike& strike) { return strike.secondsLeft <= 0.0f; });
     return hits;
 }
 
 void MoveStrikes::placeArea(u32 id, const Mat4& placement) {
-    const auto found = std::ranges::find(m_strikes, id, &Strike::id);
-    if (found == m_strikes.end() || found->flies) {
+    const auto found = std::ranges::find(m_sim.strikes, id, &Strike::id);
+    if (found == m_sim.strikes.end() || found->flies) {
         return;
     }
     found->position = Vec3{placement[3]};
@@ -227,22 +265,23 @@ void MoveStrikes::placeArea(u32 id, const Mat4& placement) {
 }
 
 void MoveStrikes::stop(u32 id) {
-    std::erase_if(m_strikes, [id](const Strike& strike) { return strike.id == id; });
+    std::erase_if(m_sim.strikes, [id](const Strike& strike) { return strike.id == id; });
 }
 
 void MoveStrikes::clear() {
     ++m_restoreGeneration;
-    m_strikes.clear();
-    m_next = 1;
+    ++m_localEpoch;
+    m_sim.strikes.clear();
+    m_sim.next = 1;
 }
 
 void MoveStrikes::hitPlayer(u32 id, bool reflected, const Vec3& from) {
-    const auto found = std::ranges::find(m_strikes, id, &Strike::id);
-    if (found == m_strikes.end() || !found->flies) {
+    const auto found = std::ranges::find(m_sim.strikes, id, &Strike::id);
+    if (found == m_sim.strikes.end() || !found->flies) {
         return;
     }
     if (!reflected) {
-        m_strikes.erase(found);
+        m_sim.strikes.erase(found);
         return;
     }
     constexpr f32 kMostLife = 10.0f;
@@ -256,8 +295,8 @@ void MoveStrikes::hitPlayer(u32 id, bool reflected, const Vec3& from) {
 }
 
 const MoveStrikes::Strike* MoveStrikes::find(u32 id) const {
-    const auto found = std::ranges::find(m_strikes, id, &Strike::id);
-    return found != m_strikes.end() ? &*found : nullptr;
+    const auto found = std::ranges::find(m_sim.strikes, id, &Strike::id);
+    return found != m_sim.strikes.end() ? &*found : nullptr;
 }
 
 } // namespace gdl::game

@@ -7,6 +7,7 @@
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "game/screens/LevelMessages.h"
 
@@ -225,6 +226,82 @@ TEST_CASE("missing level message resources disable presentation without failing 
     f.messages.load(f.device, f.textures, f.root, nullptr);
     REQUIRE_FALSE(f.messages.text().ready());
     REQUIRE_FALSE(f.messages.active());
+}
+
+TEST_CASE("native level scroll rewind replays page and dismissal cues exactly once",
+          "[game][screens][level-messages][level-messages-local-rewind]") {
+    Fixture expected("level-messages-local-reference", true);
+    Fixture corrected("level-messages-local-corrected", true);
+    const auto tick = [](Fixture& f, s32 t) {
+        if (t % 100 == 0) {
+            REQUIRE(f.messages.open(f.device, "WELCOME", nullptr));
+        }
+        return f.messages.step(1, t % 5 == 0 ? 2U : 0U);
+    };
+    s32 at = 0;
+    s32 burns = 0;
+    s32 stops = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        const s32 delay = 1 + window % 8;
+        CAPTURE(window, at, delay);
+        LevelMessages::LocalSnapshot saved;
+        corrected.messages.saveLocal(saved);
+        REQUIRE_FALSE(expected.messages.restoreLocal(saved));
+        std::vector<LevelMessages::Cues> cues;
+        for (s32 t = at; t < at + delay; ++t) {
+            cues.push_back(tick(expected, t));
+            REQUIRE(corrected.messages.open(corrected.device, "WELCOME", nullptr, 1));
+            corrected.messages.step(15, 0);
+            corrected.messages.step(1, 1);
+            corrected.messages.prepare(corrected.device);
+            corrected.messages.step(40, 1);
+        }
+        const auto created = corrected.device.texturesCreated;
+        const auto uploaded = corrected.device.textureUpdates;
+        REQUIRE(corrected.messages.restoreLocal(saved));
+        for (s32 t = at; t < at + delay; ++t) {
+            const auto actual = tick(corrected, t);
+            const auto& cue = cues[static_cast<usize>(t - at)];
+            CHECK(actual.stopVoice == cue.stopVoice);
+            CHECK(actual.burnSound == cue.burnSound);
+            burns += actual.burnSound ? 1 : 0;
+            stops += actual.stopVoice ? 1 : 0;
+        }
+        CHECK(corrected.device.texturesCreated == created);
+        CHECK(corrected.device.textureUpdates == uploaded);
+        const auto a = corrected.messages.look();
+        const auto b = expected.messages.look();
+        REQUIRE(a.has_value() == b.has_value());
+        if (a) {
+            CHECK(a->message == b->message);
+            CHECK(a->page == b->page);
+            CHECK(a->burnFrame == b->burnFrame);
+            CHECK(a->promptAlpha == b->promptAlpha);
+        }
+        CHECK(corrected.messages.scroll().lines() == expected.messages.scroll().lines());
+        const auto draw = [](Fixture& f) {
+            f.messages.prepare(f.device);
+            f.device.draws.clear();
+            Canvas canvas;
+            canvas.begin(f.device, Mat4{1});
+            f.messages.draw(canvas);
+            canvas.end();
+        };
+        draw(expected);
+        draw(corrected);
+        REQUIRE(corrected.device.draws.size() == expected.device.draws.size());
+        for (usize i = 0; i < expected.device.draws.size(); ++i) {
+            test::checkRecordedDraw(corrected.device.draws[i], expected.device.draws[i]);
+        }
+        at += delay;
+    }
+    CHECK(burns >= 4);
+    CHECK(stops >= 8);
+    LevelMessages::LocalSnapshot stale;
+    corrected.messages.saveLocal(stale);
+    corrected.messages.clear();
+    CHECK_FALSE(corrected.messages.restoreLocal(stale));
+    CHECK_FALSE(corrected.messages.active());
 }
 
 } // namespace

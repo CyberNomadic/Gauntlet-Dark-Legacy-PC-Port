@@ -12,6 +12,8 @@
 
 #include "game/world/FallingPiece.h"
 
+namespace gdl { class NativeStateDigest; }
+
 namespace gdl::game {
 /** A piece giving way: where it stood and the sound it makes, which the caller plays. */
 struct FallingCue {
@@ -35,8 +37,7 @@ public:
     static constexpr s32 kRockSink = 53;                 ///< brushed, it sinks, hardly turning
     static constexpr f32 kSoundVolume = 224.0f / 255.0f; ///< sndFxPlay3DAtten's level
 
-    struct Piece {
-        TreeModel model;
+    struct PieceState {
         FallingPiece motion;
         FallingProfile profile;
         s32 subtype = 0;
@@ -46,7 +47,35 @@ public:
         Vec3 centre{0.0f}; ///< the record's collision offset from where it stands
         bool shown = true;
         bool started = false;
+        bool operator==(const PieceState&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const PieceState& value) {
+            digest.template fields<9>(value);
+        }
     };
+    struct Piece : PieceState {
+        TreeModel model;
+    };
+    struct Clock {
+        f32 remainder = 0;
+        f32 updateSeconds = 0;
+        bool operator==(const Clock&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Clock& value) {
+            digest.template fields<2>(value);
+        }
+    };
+    class LocalSnapshot {
+        friend class FallingScenery;
+        std::vector<PieceState> pieces;
+        Clock clock;
+        std::weak_ptr<const u8> binding;
+        const FallingScenery* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
 
     /** Binds every falling piece of `layout` from the level's meshes; `levelName` (such as
      * F1) picks the realm's breaking sounds. */
@@ -71,8 +100,8 @@ public:
     const Piece& piece(usize index) const { return m_pieces.at(index); }
     /** Native 30 Hz presentation clock, copied alongside the pieces when a
      * retained picture must outlive a simulation rewind. */
-    f32 frameRemainder() const { return m_remainder; }
-    f32 updateSeconds() const { return m_updateSeconds; }
+    f32 frameRemainder() const { return m_clock.remainder; }
+    f32 updateSeconds() const { return m_clock.updateSeconds; }
 
     /** The realm's sound for a rock or limb giving way (fn_8009D91C's table by the level's
      * realm letter, with its two level overrides); empty where the realm has none. */
@@ -82,6 +111,7 @@ public:
 
 private:
     friend class FallingSceneryCheckpoint;
+    bool appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const;
     static bool within(const Piece& piece, const Vec3& position, f32 radius);
     static bool canStart(const Piece& piece, const Vec3& position, f32 radius, bool shot);
     std::vector<FallingCue> start(const Vec3& position, f32 radius, bool shot);
@@ -89,8 +119,7 @@ private:
     std::vector<Piece> m_pieces;
     std::string_view m_breakSound;
     std::string_view m_leafSound;
-    f32 m_remainder = 0.0f;
-    f32 m_updateSeconds = 0.0f;
+    Clock m_clock;
     f32 m_bottom = 0.0f;
     const WorldLayout* m_layout = nullptr;
     const ModelSet* m_models = nullptr;

@@ -16,6 +16,9 @@ constexpr s32 kMineRealm = 9;
 } // namespace
 
 void TriggerCues::pause(LevelSoundscape& audio) {
+    if (audio.recordingSounds()) {
+        return; // The output dispatcher owns playback; native rotators keep their state.
+    }
     audio.stop(m_rotatorSound);
     m_rotatorSound = kNoSound;
 }
@@ -33,6 +36,16 @@ TriggerCues::RotatorSounds TriggerCues::rotatorSoundsOf(s32 realm) {
 void TriggerCues::handleRotators(LevelWorld& world, LevelSoundscape& audio, SoundPlayer* sounds) {
     const RotatorSounds named = rotatorSoundsOf(world.ref().realmId);
     for (const RotatorCue& cue : world.takeRotatorCues()) {
+        if (audio.recording()) {
+            if (cue.kind == RotatorCue::Kind::Stopped && !named.stopping.empty() &&
+                cue.rotator < world.rotators().size()) {
+                const auto& rotator = world.rotators().rotator(cue.rotator);
+                const auto scope = audio.soundScope(
+                    {12, static_cast<u64>(rotator.instance), 1, FrameEventEmitter::kNoSeat}, 1);
+                audio.playNamed(named.stopping);
+            }
+            continue;
+        }
         if (named.turning.empty() || sounds == nullptr) {
             continue;
         }
@@ -44,6 +57,25 @@ void TriggerCues::handleRotators(LevelWorld& world, LevelSoundscape& audio, Soun
             audio.stop(m_rotatorSound);
             m_rotatorSound = kNoSound;
             audio.playNamed(named.stopping);
+        }
+    }
+}
+
+void TriggerCues::gatherAudio(const LevelWorld& world, LevelSoundscape& audio) const {
+    if (!audio.recording()) {
+        return;
+    }
+    const auto named = rotatorSoundsOf(world.ref().realmId);
+    if (named.turning.empty()) {
+        return;
+    }
+    for (usize index = 0; index < world.rotators().size(); ++index) {
+        const auto& rotator = world.rotators().rotator(index);
+        if (rotator.subtype == Rotators::kTurnedByPad && rotator.started && !rotator.done) {
+            // Retail owns one aggregate handle, not one voice per rotating pad.
+            audio.desireNamedLoop({{12, 0, 1, FrameEventEmitter::kNoSeat}, 1, 1}, named.turning,
+                                  SceneSoundPlayback::RepeatWhileDesired);
+            return;
         }
     }
 }

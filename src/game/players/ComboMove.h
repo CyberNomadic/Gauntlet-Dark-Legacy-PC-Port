@@ -7,6 +7,10 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** One player's part in a two-player combo. */
@@ -31,6 +35,7 @@ struct ComboState {
     Vec3 saved{0.0f, 0.0f, 0.0f}; ///< where it stood when it was taken up (saved_pos)
 
     bool active() const { return role != ComboRole::None; }
+    bool operator==(const ComboState&) const = default;
 };
 
 /** What the grabber's body is doing this tick. */
@@ -128,5 +133,7 @@ public:
     static void tick(ComboState& flier, s32 ticks, f32 seconds);
     static void clear(ComboState& state) { state = ComboState{}; }
 };
+
+void visitNativeState(NativeStateDigest& digest, const ComboState& value);
 
 } // namespace gdl::game

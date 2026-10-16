@@ -27,7 +27,7 @@ void LevelOpponents::updateBags(f32 seconds) {
         return;
     }
     auto& resources = *m_resources;
-    for (Bag& bag : m_bags) {
+    for (Bag& bag : m_sim.bags) {
         bag.age += seconds;
         if (!bag.landed) {
             const f32 previousY = bag.position.y;
@@ -57,6 +57,6 @@ void LevelOpponents::updateBags(f32 seconds) {
             bag.effect = 0;
         }
     }
-    std::erase_if(m_bags, [](const Bag& bag) { return bag.effect == 0; });
+    std::erase_if(m_sim.bags, [](const Bag& bag) { return bag.effect == 0; });
 }
 } // namespace gdl::game

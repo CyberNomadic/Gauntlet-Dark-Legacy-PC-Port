@@ -5,11 +5,18 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** One player's in-level transporter fade. It cannot restart until they leave the pad. */
 class PlayerTransport {
+    friend void visitNativeState(NativeStateDigest&, const PlayerTransport&);
+
 public:
+    bool operator==(const PlayerTransport&) const = default;
     struct Checkpoint {
         Vec3 destination{0};
         s32 timer = 0;

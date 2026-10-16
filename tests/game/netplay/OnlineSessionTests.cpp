@@ -121,6 +121,7 @@ struct Client {
     Service service;
     Wire wire;
     OnlineSession session;
+    test::RollbackSessionHarness timeline;
     explicit Client(bool host = true, u8 localPlayers = 1)
         : session(service, wire, host, localPlayers) {
         if (localPlayers > 0 && localPlayers <= 4) {
@@ -255,7 +256,8 @@ std::vector<u8> prepare(MatchOwners owners = {1, 2, 0, 0}) {
     REQUIRE(bytes);
     return *bytes;
 }
-std::vector<InputCommand> inputs(const MatchSession& session, bool pressed = false) {
+std::vector<InputCommand> inputs(const MatchSession& session, const test::RollbackSessionHarness& timeline,
+                                 bool pressed = false) {
     std::vector<InputCommand> result;
     const auto& context = session.context();
     for (usize seat = 0; seat < context.owners.size(); ++seat) {
@@ -264,7 +266,7 @@ std::vector<InputCommand> inputs(const MatchSession& session, bool pressed = fal
         }
         InputCommand command;
         command.epoch = context.epoch;
-        command.tick = session.inputTick();
+        command.tick = timeline.sampleTick();
         command.grant = context.grants[seat];
         command.seat = static_cast<u8>(seat);
         command.direction = {1, 0};
@@ -338,7 +340,7 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
     host.wire.sent.clear();
     REQUIRE(host.session.match().prepare(7));
     host.service.next.error = "must not poll during flush";
-    const auto tick = host.session.match().tick();
+    const auto tick = host.session.match().nativeHead();
     const auto epoch = host.session.match().context().epoch;
 
     SECTION("congested output survives until the next flush") {
@@ -353,7 +355,7 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
         REQUIRE(host.session.flush());
         CHECK(host.wire.sent.size() == 1);
         CHECK(host.session.phase() == Phase::Active);
-        CHECK(host.session.match().tick() == tick);
+        CHECK(host.session.match().nativeHead() == tick);
         CHECK(host.session.match().context().epoch == epoch);
         CHECK(host.service.next.error == "must not poll during flush");
     }
@@ -366,136 +368,89 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
     }
 }
 
-TEST_CASE("native guest flush preserves every exact sampled frame through congestion",
+TEST_CASE("native guest flush preserves sampled edges and redundant inputs through congestion",
           "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair{{}, true, 2, 2};
-    pair.prepare();
-    pair.ready();
-    std::vector<std::vector<u8>> attempts;
+    pair.prepare(); pair.ready();
+    std::vector<RollbackExchange::Message> attempts;
     bool congested = true;
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
-        if (InputPacket::decode(bytes)) {
-            CHECK(delivery == PacketTransport::Delivery::Reliable);
-            attempts.emplace_back(bytes.begin(), bytes.end());
+        if (const auto packet = RollbackExchange::decode(bytes)) {
+            CHECK(delivery == PacketTransport::Delivery::Unreliable);
+            attempts.push_back(*packet);
             return congested ? PacketTransport::SendResult::Congested
                              : PacketTransport::SendResult::Sent;
         }
         return PacketTransport::SendResult::Sent;
     };
-    constexpr u64 count = 7;
-    const auto firstTick = pair.guest.inputTick();
+    const auto firstTick = pair.guestInputs.sampleTick();
     const auto polls = pair.guestWire.polls;
-    // Local sampling stays at most inputLead ahead of the next simulation tick.
-    // Only the agreed neutral startup frames can execute before input delivery.
-    const u64 buffered = static_cast<u64>(pair.guest.context().inputLead) + 1;
-    REQUIRE(buffered < count);
-    REQUIRE(firstTick == buffered);
-    std::vector<std::vector<u8>> expected;
-    std::array<u32, InputCommand::kSeats> presses{};
-    u64 tick = 1;
-    const auto consume = [&] {
-        const auto host = pair.host.advance();
-        const auto guest = pair.guest.advance();
-        REQUIRE(host);
-        REQUIRE(guest);
-        CHECK(InputPacket::encode(*host) == InputPacket::encode(*guest));
-        for (usize seat = 0; seat < host->size(); ++seat) {
-            CHECK((*host)[seat].tick == tick);
-            presses[seat] += (*host)[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
-            if (tick < firstTick) {
-                CHECK((*host)[seat].magnitude == 0);
-                CHECK((*host)[seat].pressedButtons == 0);
-            }
-        }
-        REQUIRE(pair.host.completedNativeTick(tick));
-        REQUIRE(pair.guest.completedNativeTick(tick));
-        ++tick;
-    };
-    const auto sample = [&](u64 index) {
-        const auto frame = inputs(pair.guest, index == 0);
-        REQUIRE(pair.guest.sample(frame));
-        REQUIRE(pair.host.sample(inputs(pair.host)));
-        const auto bytes = InputPacket::encode(frame);
-        REQUIRE(bytes);
-        expected.push_back(*bytes);
-    };
-    for (u64 index = 0; index < buffered; ++index) {
-        sample(index);
-        if (index + 1 < buffered) {
-            consume();
-        }
-    }
-    CHECK_FALSE(pair.guest.inputReady());
-    CHECK_FALSE(pair.guest.sample(inputs(pair.guest, true)));
-    CHECK_FALSE(pair.host.advance());
-    CHECK_FALSE(pair.guest.advance());
-    pair.guestService.closed = true; // Flush must not poll or resample.
+    REQUIRE(firstTick == 2);
+    const auto sampled = inputs(pair.guest, pair.guestInputs, true);
+    REQUIRE(pair.guestInputs.sample(sampled));
+    REQUIRE(pair.hostInputs.sample(inputs(pair.host, pair.hostInputs)));
+    pair.guestService.closed = true; // flush must not poll or resample
     REQUIRE(pair.guestSession.flush());
     REQUIRE(pair.guestSession.flush());
     REQUIRE(attempts.size() == 2);
-    CHECK(attempts[0] == expected[0]);
-    CHECK(attempts[1] == expected[0]);
-    attempts.clear();
-    congested = false;
-    REQUIRE(pair.guestSession.flush());
-    REQUIRE(pair.guestSession.flush());
-    CHECK(attempts == expected);
-    CHECK(pair.guest.inputTick() == firstTick + buffered);
+    for (const auto& attempt : attempts)
+        CHECK(InputPacket::encode(attempt.commands) == InputPacket::encode(sampled));
     CHECK(pair.guestWire.polls == polls);
-    CHECK(pair.guestSession.phase() == Phase::Active);
+    CHECK(pair.guestInputs.sampleTick() == firstTick + 1);
+    CHECK_FALSE(pair.guestInputs.sample(inputs(pair.guest, pair.guestInputs, true)));
     pair.guestService.closed = false;
+    congested = false;
     pair.pump();
-    while (tick < firstTick + buffered) {
-        consume();
+    std::array<u32, InputCommand::kSeats> presses{};
+    for (u64 tick = 1; tick <= 8; ++tick) {
+        if (tick > 1) {
+            REQUIRE(pair.guestInputs.sample(inputs(pair.guest, pair.guestInputs)));
+            REQUIRE(pair.hostInputs.sample(inputs(pair.host, pair.hostInputs)));
+            pair.pump();
+        }
+        const auto host = pair.hostInputs.advance();
+        const auto guest = pair.guestInputs.advance();
+        REQUIRE(host); REQUIRE(guest);
+        CHECK(InputPacket::encode(host->commands) == InputPacket::encode(guest->commands));
+        CHECK(host->predictedSeats == 0);
+        CHECK(guest->predictedSeats == 0);
+        for (usize seat = 0; seat < presses.size(); ++seat)
+            presses[seat] += host->commands[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        REQUIRE(pair.hostInputs.complete());
+        REQUIRE(pair.guestInputs.complete());
     }
-    for (u64 index = buffered; index < count; ++index) {
-        sample(index);
-        REQUIRE(pair.guestSession.flush());
-        REQUIRE(pair.guestSession.flush());
-        pair.pump();
-        consume();
-    }
-    CHECK(attempts == expected);
-    CHECK(attempts.size() == count);
-    CHECK(pair.guest.inputTick() == firstTick + count);
-    CHECK(tick == firstTick + count);
     CHECK(presses == std::array<u32, 4>{0, 0, 1, 1});
-    CHECK_FALSE(pair.host.advance());
-    CHECK_FALSE(pair.guest.advance());
     pair.guestWire.beforeSend = {};
 }
 
-TEST_CASE("native backpressure never invents or repeats an unsampled input tick",
+TEST_CASE("native backpressure resends retained input without resampling an edge",
           "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair;
-    pair.prepare();
-    pair.ready();
+    pair.prepare(); pair.ready();
     usize sends = 0;
+    std::vector<InputCommand> recorded;
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
-        if (InputPacket::decode(bytes)) {
-            CHECK(delivery == PacketTransport::Delivery::Reliable);
+        if (const auto packet = RollbackExchange::decode(bytes)) {
+            CHECK(delivery == PacketTransport::Delivery::Unreliable);
             ++sends;
+            recorded = packet->commands;
         }
         return PacketTransport::SendResult::Sent;
     };
-    for (usize sample = 0; sample < LockstepInputs::kWindow && pair.guest.inputReady(); ++sample) {
-        REQUIRE(pair.guest.sample(inputs(pair.guest)));
-        REQUIRE(pair.guestSession.flush());
-        REQUIRE(pair.guestSession.flush());
-        CHECK(sends == sample + 1);
-    }
-    REQUIRE_FALSE(pair.guest.inputReady());
-    const auto pendingTick = pair.guest.inputTick();
-    const auto sentBefore = sends;
+    const auto sampled = inputs(pair.guest, pair.guestInputs, true);
+    REQUIRE(pair.guestInputs.sample(sampled));
+    REQUIRE_FALSE(pair.guestInputs.sampleReady());
+    const auto pendingTick = pair.guestInputs.sampleTick();
     const auto polls = pair.guestWire.polls;
-    for (usize sample = 0; sample < 3; ++sample) {
-        CHECK_FALSE(pair.guest.sample(inputs(pair.guest, sample == 0)));
+    for (usize repeat = 0; repeat < 3; ++repeat) {
+        CHECK_FALSE(pair.guestInputs.sample(inputs(pair.guest, pair.guestInputs)));
         REQUIRE(pair.guestSession.flush());
-        CHECK(pair.guest.inputTick() == pendingTick);
-        CHECK(sends == sentBefore);
+        CHECK(pair.guestInputs.sampleTick() == pendingTick);
+        CHECK(InputPacket::encode(recorded) == InputPacket::encode(sampled));
     }
+    CHECK(sends == 3);
     CHECK(pair.guestWire.polls == polls);
-    CHECK(pair.host.tick() == 1);
+    CHECK(pair.host.nativeHead() == 1);
     pair.guestWire.beforeSend = {};
 }
 
@@ -506,13 +461,13 @@ TEST_CASE("an immediate guest input send failure stops the active session",
     pair.prepare();
     pair.ready();
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
-        if (InputPacket::decode(bytes)) {
+        if (RollbackExchange::recognizes(bytes)) {
             ++attempts;
             return PacketTransport::SendResult::Disconnected;
         }
         return PacketTransport::SendResult::Sent;
     };
-    REQUIRE(pair.guest.sample(inputs(pair.guest)));
+    REQUIRE(pair.guestInputs.sample(inputs(pair.guest, pair.guestInputs)));
     CHECK_FALSE(pair.guestSession.flush());
     CHECK(pair.guestSession.phase() == Phase::Failed);
     CHECK(pair.guestSession.failure() == Failure::Match);
@@ -547,23 +502,25 @@ TEST_CASE("online sessions handle split local seats, sparse rosters and unordere
     CHECK(guest.session.match().context().owners == MatchOwners{1, 0, 1, 2});
     CHECK(std::ranges::equal(host.session.seats(), std::array<u8, 2>{0, 2}));
     CHECK(std::ranges::equal(guest.session.seats(), std::array<u8, 1>{3}));
+    REQUIRE(host.timeline.bind(host.session.match()));
     REQUIRE(host.session.match().loaded());
-    CHECK_FALSE(host.session.match().advance());
+    CHECK_FALSE(host.timeline.advance());
+    REQUIRE(guest.timeline.bind(guest.session.match()));
     REQUIRE(guest.session.match().loaded());
     guest.session.update(0);
-    REQUIRE(guest.wire.sent.size() == 1);
     host.wire.sent.clear();
-    host.wire.message(1, guest.wire.sent.front().bytes);
+    for (const auto& packet : guest.wire.sent) host.wire.message(1, packet.bytes);
+    guest.wire.sent.clear();
     host.session.update(0);
-    REQUIRE(host.wire.sent.size() == 1);
-    guest.wire.message(99, host.wire.sent.front().bytes);
+    for (const auto& packet : host.wire.sent) guest.wire.message(99, packet.bytes);
+    host.wire.sent.clear();
     guest.session.update(0);
     CHECK(host.session.match().phase() == MatchSession::Phase::Running);
     CHECK(guest.session.match().phase() == MatchSession::Phase::Running);
-    REQUIRE(guest.session.match().advance());
-    REQUIRE(host.session.match().advance());
-    CHECK(guest.session.match().completedNativeTick(1));
-    CHECK(host.session.match().completedNativeTick(1));
+    REQUIRE(guest.timeline.advance());
+    REQUIRE(host.timeline.advance());
+    CHECK(guest.timeline.complete());
+    CHECK(host.timeline.complete());
 }
 
 TEST_CASE("online host has peer one even when it does not occupy seat zero",
@@ -632,7 +589,7 @@ TEST_CASE("early match data cannot bypass room start or the admitted owners",
         snapshot.started = true;
         guest.publish(snapshot);
         CHECK(guest.session.failure() == Failure::Protocol);
-        CHECK_FALSE(guest.session.match().advance());
+        CHECK_FALSE(guest.timeline.advance());
     }
 }
 
@@ -815,7 +772,7 @@ TEST_CASE("online state fails closed after a started member departs or changes",
     }
     CHECK(host.session.phase() == Phase::Failed);
     CHECK(host.session.match().phase() == MatchSession::Phase::Stopped);
-    CHECK_FALSE(host.session.match().advance());
+    CHECK_FALSE(host.timeline.advance());
     CHECK_FALSE(host.session.ready());
     host.session.leave();
     CHECK(host.service.leaves == 1);
@@ -843,7 +800,62 @@ TEST_CASE("online session timeouts never require blocking the frame thread",
     }
     CHECK(host.session.phase() == Phase::Failed);
     CHECK(host.session.failure() == Failure::Timeout);
+    CHECK_FALSE(host.session.failureDetail().empty());
     CHECK(host.service.leaves == 1);
+}
+
+TEST_CASE("online failure preserves terminal agreement diagnostics through teardown",
+          "[netplay][online-session][session-recovery]") {
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    REQUIRE(pair.hostInputs.advance());
+    REQUIRE(pair.hostInputs.complete());
+    const auto epoch = pair.host.context().epoch;
+    const auto now = MatchSession::Clock::now();
+    NativeAgreement::Digest first{};
+    REQUIRE(pair.host.observeNativeTerminal(epoch, 1, first, now));
+    CHECK_FALSE(pair.host.completeNativeBoundary(epoch, 1));
+    std::string expected;
+    SECTION("conflicting locally confirmed terminal") {
+        auto changed = first;
+        changed[0] = 1;
+        CHECK_FALSE(pair.host.observeNativeTerminal(epoch, 1, changed, now));
+        expected = "conflicting digest";
+    }
+    SECTION("permanent missing peer terminal certificate") {
+        pair.host.update(0, now + NativeAgreement::kTimeout);
+        expected = "timeout";
+    }
+    REQUIRE(pair.host.phase() == MatchSession::Phase::Stopped);
+    CHECK_FALSE(pair.host.nativeTerminalAgreed(epoch, 1));
+    CHECK_FALSE(pair.host.completeNativeBoundary(epoch, 1));
+    const auto detail = pair.host.failureDetail();
+    CHECK(detail.find(expected) != std::string::npos);
+    CHECK(detail.find("tick 1") != std::string::npos);
+    CHECK_FALSE(pair.hostSession.flush());
+    CHECK(pair.hostSession.phase() == Phase::Failed);
+    CHECK(pair.hostSession.failure() == Failure::Match);
+    CHECK(pair.hostSession.failureDetail() == detail);
+    pair.hostSession.leave();
+    pair.hostSession.update(60);
+    CHECK_FALSE(pair.hostSession.flush());
+    CHECK(pair.hostSession.failureDetail() == detail);
+    CHECK_FALSE(pair.hostInputs.advance());
+    CHECK_FALSE(pair.hostInputs.publish());
+
+    // Rejoining is a new room/transport/session, not revival of failed history.
+    test::OnlinePair next;
+    next.prepare();
+    next.ready();
+    CHECK(next.hostSession.failure() == Failure::None);
+    CHECK(next.hostSession.failureDetail().empty());
+    CHECK(next.host.failureDetail().empty());
+    CHECK(next.host.nativeConfirmed() == 0);
+    CHECK_FALSE(next.host.nativeTerminalAgreed(next.host.context().epoch, 1));
+    REQUIRE(next.hostInputs.advance());
+    REQUIRE(next.hostInputs.complete());
+    CHECK(next.host.nativeConfirmed() == 1);
 }
 
 TEST_CASE("online leave is asynchronous idempotent and bounded even without a service reply",
@@ -1004,7 +1016,7 @@ TEST_CASE("missing party acknowledgements time out without exposing simulation a
     CHECK(host.session.phase() == Phase::Starting);
     CHECK(host.session.party() == nullptr);
     CHECK_FALSE(host.session.match().prepare(1));
-    CHECK_FALSE(host.session.match().advance());
+    CHECK_FALSE(host.timeline.advance());
     host.session.update(OnlineSession::kStartTimeout);
     CHECK(host.session.failure() == Failure::Timeout);
 }

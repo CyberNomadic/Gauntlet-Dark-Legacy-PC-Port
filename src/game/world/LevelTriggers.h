@@ -19,6 +19,10 @@
 #include "game/players/Relics.h"
 #include "game/world/ItemFigure.h"
 
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 
 /** A player stood in a trigger's spot without what it asks for. */
@@ -133,6 +137,34 @@ struct LevelTrigger {
  */
 class LevelTriggers {
 public:
+    LevelTriggers() = default;
+    LevelTriggers(const LevelTriggers&) = delete;
+    LevelTriggers& operator=(const LevelTriggers&) = delete;
+    LevelTriggers(LevelTriggers&&) noexcept = default;
+    LevelTriggers& operator=(LevelTriggers&&) noexcept = default;
+
+    struct Target {
+        s32 subtype = 0;
+        s32 object = -1;
+        u32 kind = 0;
+        bool animated = false;
+        bool open = false;
+        bool settled = true;
+        bool pressed = false;
+        bool wholePartyReady = false;
+        bool returning = false;
+        bool forced = false;
+        f32 alpha = 1;
+        Vec3 origin{0};
+        f32 height = 0;
+        f32 closedHeight = 0;
+        f32 openHeight = 0;
+        std::vector<usize> subtree;
+        Vec3 spot{0};
+        s32 sound = -1;
+        bool operator==(const Target&) const = default;
+    };
+
     /** Exact state of this owner, including contacts and undelivered events.
      * Authored roster/figures must already be bound. Animator, world geometry
      * and collision are separate owners: restore never fires or poses them. */
@@ -140,27 +172,7 @@ public:
         static constexpr usize kMaxTriggers = 2048;
         static constexpr usize kMaxObjects = 65535;
         static constexpr usize kMaxEvents = 8192;
-        struct Target {
-            s32 subtype = 0;
-            s32 object = -1;
-            u32 kind = 0;
-            bool animated = false;
-            bool open = false;
-            bool settled = true;
-            bool pressed = false;
-            bool wholePartyReady = false;
-            bool returning = false;
-            bool forced = false;
-            f32 alpha = 1;
-            Vec3 origin{0};
-            f32 height = 0;
-            f32 closedHeight = 0;
-            f32 openHeight = 0;
-            std::vector<usize> subtree;
-            Vec3 spot{0};
-            s32 sound = -1;
-            bool operator==(const Target&) const = default;
-        };
+        using Target = LevelTriggers::Target;
         std::vector<LevelTrigger> triggers;
         std::vector<Target> targets;
         std::vector<s32> parents;
@@ -219,16 +231,18 @@ public:
     void bindFigures(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const;
     void clear();
-    usize size() const { return m_triggers.size(); }
-    const LevelTrigger& trigger(usize index) const { return m_triggers[index]; }
+    usize size() const { return m_sim.triggers.size(); }
+    const LevelTrigger& trigger(usize index) const { return m_sim.triggers[index]; }
     const ItemFigure* figure(usize index) const {
-        return index < m_figures.size() ? m_figures[index].get() : nullptr;
+        return index < m_sim.figures.size() && m_sim.figures[index] ? &*m_sim.figures[index]
+                                                                    : nullptr;
     }
+    bool registerNativeResources(NativeStateResources& resources) const;
     /** Joined participants, including the fallen. Whole-party contact still counts only the
      * standing visitors. Without an explicit count, isolated callers use their visitors. */
     void setPlayerCount(s32 players);
     /** Preserve switch contacts while an event camera holds the party in place. */
-    void setCameraHeld(bool held) { m_cameraHeld = held; }
+    void setCameraHeld(bool held) { m_sim.cameraHeld = held; }
     /** A thrown weapon, a burst or a blast has hit a shootable trigger: on the next update it
      * goes off as though the whole party stood in it (ItemDamage's trigger case). */
     void shoot(usize index);
@@ -293,19 +307,16 @@ public:
      * opening before the party (faded to nothing or run to the end of their animation); each is
      * handed out once. */
     std::vector<TriggerRefusal> takeRefusals();
-    std::vector<TriggerLesson> takeLessons() { return std::exchange(m_lessons, {}); }
+    std::vector<TriggerLesson> takeLessons() { return std::exchange(m_sim.lessons, {}); }
     std::vector<TriggerOpening> takeOpenings();
     std::vector<TriggerOpening> takeSettled();
     std::vector<TriggerCameraCue> takeCameraCues();
     /** The spots of the triggers flagged to wake a statue that went active since the last
      * call (fn_800606FC's 0x2000: the nearest placed enemy within ten is woken). */
-    std::vector<Vec3> takeWakes() { return std::exchange(m_wakes, {}); }
-    bool hasWakes() const { return !m_wakes.empty(); }
+    std::vector<Vec3> takeWakes() { return std::exchange(m_sim.wakes, {}); }
+    bool hasWakes() const { return !m_sim.wakes.empty(); }
 
 private:
-    std::vector<std::unique_ptr<ItemFigure>> m_figures;
-    using Target = Checkpoint::Target;
-
     Target* targetOf(s32 object);
     const Target* targetOf(s32 object) const;
     static TriggerOpening openingOf(const Target& target, bool atOnce);
@@ -327,21 +338,56 @@ private:
     void stepMotion(f32 seconds, WorldScene& scene, WorldCollision* collision, bool report);
     void finishMotion(const WorldAnimator& animator, WorldCollision* collision, bool report);
 
-    std::vector<LevelTrigger> m_triggers;
-    std::vector<Target> m_targets;
-    std::vector<s32> m_parents;
-    std::vector<TriggerRefusal> m_refusals;
-    std::vector<TriggerLesson> m_lessons;
-    std::vector<TriggerOpening> m_openings;
-    std::vector<TriggerOpening> m_settled;
-    std::vector<TriggerCameraCue> m_cameraCues;
-    std::vector<Vec3> m_wakes;
-    f32 m_frameRemainder = 0.0f;
-    f32 m_emptyToggleDelay = 0.0f;
-    s32 m_playerCount = -1; ///< negative: infer joined count from the standing visitor span
-    bool m_cameraHeld = false;
+    struct Simulation {
+        std::vector<LevelTrigger> triggers;
+        std::vector<Target> targets;
+        std::vector<std::optional<ItemFigure>> figures;
+        std::vector<TriggerRefusal> refusals;
+        std::vector<TriggerLesson> lessons;
+        std::vector<TriggerOpening> openings;
+        std::vector<TriggerOpening> settled;
+        std::vector<TriggerCameraCue> cameraCues;
+        std::vector<Vec3> wakes;
+        f32 frameRemainder = 0;
+        f32 emptyToggleDelay = 0;
+        s32 playerCount = -1;
+        bool cameraHeld = false;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    /** Same-owner values for native rewind. Geometry, collision and animator state
+     * belong to their own snapshots; restoring triggers never fires their commands. */
+    class LocalSnapshot {
+        friend class LevelTriggers;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const LevelTriggers* owner = nullptr;
+        u64 epoch = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Canonical actual native values. Resource addresses and owner/restore
+     * generations are excluded; the immutable hierarchy is included by value. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    /** Refuses foreign or stale snapshots before appending any bytes. */
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+
+private:
+    static void appendSimulationDigest(NativeStateDigest& digest, const Simulation& state);
+    std::vector<s32> m_parents; ///< immutable hierarchy of the bound layout
+    u64 m_localEpoch = 0;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
 };
+
+void visitNativeState(NativeStateDigest& digest, const TriggerRefusal& value);
+void visitNativeState(NativeStateDigest& digest, const TriggerOpening& value);
+void visitNativeState(NativeStateDigest& digest, const TriggerCameraCue& value);
+void visitNativeState(NativeStateDigest& digest, const TriggerLesson& value);
+void visitNativeState(NativeStateDigest& digest, const LevelTrigger& value);
+void visitNativeState(NativeStateDigest& digest, const LevelTriggers::Target& value);
 
 } // namespace gdl::game

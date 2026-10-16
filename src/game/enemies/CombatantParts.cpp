@@ -14,7 +14,7 @@ template <class T> void append(std::vector<T>& destination, std::vector<T>& sour
 } // namespace
 
 const Combatant* Combatant::child(s32 id) const {
-    for (const auto& part : m_children) {
+    for (const auto& part : children()) {
         if (part->id() == id) {
             return part.get();
         }
@@ -23,30 +23,30 @@ const Combatant* Combatant::child(s32 id) const {
 }
 
 void Combatant::inheritBodyPose() {
-    if (m_actor.parent != nullptr && m_actor.branch.has_value()) {
-        TreePose composed = m_actor.parent->m_actor.pose;
-        composed.overlaySubtree(m_actor.pose, *m_actor.branch);
-        m_actor.pose = std::move(composed);
+    if (m_sim.actor.parent != nullptr && m_sim.actor.branch.has_value()) {
+        TreePose composed = m_sim.actor.parent->m_sim.actor.pose;
+        composed.overlaySubtree(m_sim.actor.pose, *m_sim.actor.branch);
+        m_sim.actor.pose = std::move(composed);
     }
 }
 
 void Combatant::synchronizeChild() {
-    m_actor.smoothValid = false;
-    const Actor& parent = m_actor.parent->m_actor;
-    if (m_actor.moveEffect) {
+    m_sim.actor.smoothValid = false;
+    const Actor& parent = m_sim.actor.parent->m_sim.actor;
+    if (m_sim.actor.moveEffect) {
         CombatCue stop;
-        stop.critter = m_id;
+        stop.critter = m_sim.id;
         stop.stopMoveEffect = true;
-        m_cues.push_back(stop);
-        m_actor.moveEffect = false;
+        m_sim.cues.push_back(stop);
+        m_sim.actor.moveEffect = false;
     }
-    m_actor.move = -1;
-    m_actor.pattern = -1;
-    m_actor.forcedPattern = false;
-    m_actor.moveDone = true;
-    m_actor.player = parent.player;
-    m_actor.pose = parent.pose;
-    m_actor.areas.clear();
+    m_sim.actor.move = -1;
+    m_sim.actor.pattern = -1;
+    m_sim.actor.forcedPattern = false;
+    m_sim.actor.moveDone = true;
+    m_sim.actor.player = parent.player;
+    m_sim.actor.pose = parent.pose;
+    m_sim.actor.areas.clear();
 }
 
 void Combatant::aimGaze(Actor& critter, f32 seconds, std::span<const EnemyView> players) {
@@ -72,13 +72,13 @@ void Combatant::aimGaze(Actor& critter, f32 seconds, std::span<const EnemyView> 
 }
 
 void Combatant::collectChildEvents(Combatant& part) {
-    append(m_cues, part.m_cues);
-    append(m_blows, part.m_blows);
-    append(m_grabs, part.m_grabs);
-    append(m_losses, part.m_losses);
-    append(m_spews, part.m_spews);
-    append(m_shots, part.m_shots);
-    append(m_arenaActivations, part.m_arenaActivations);
+    append(m_sim.cues, part.m_sim.cues);
+    append(m_sim.blows, part.m_sim.blows);
+    append(m_sim.grabs, part.m_sim.grabs);
+    append(m_sim.losses, part.m_sim.losses);
+    append(m_sim.spews, part.m_sim.spews);
+    append(m_sim.shots, part.m_sim.shots);
+    append(m_sim.arenaActivations, part.m_sim.arenaActivations);
 }
 
 void Combatant::updateHitFlashes(Actor& actor, s32 ticks) {
@@ -89,40 +89,40 @@ void Combatant::updateHitFlashes(Actor& actor, s32 ticks) {
 }
 
 void Combatant::updateChildren(s32 ticks, f32 seconds, std::span<const EnemyView> players) {
-    if (m_children.empty()) {
+    if (children().empty()) {
         return;
     }
     constexpr s32 kSync = 1;
     const bool independent =
-        alive() && !m_actor.held && (moveType() == kSync || moveType() == MoveDefinition::kReady);
+        alive() && !m_sim.actor.held && (moveType() == kSync || moveType() == MoveDefinition::kReady);
     bool busy = false;
     bool intact = true;
     bool anyAlive = false;
-    for (auto& part : m_children) {
-        Actor& actor = part->m_actor;
+    for (auto& part : children()) {
+        Actor& actor = part->m_sim.actor;
         actor.position = position();
         actor.yaw = yaw();
         actor.scale = scale();
-        actor.curbSeconds = m_actor.curbSeconds;
-        const bool forced = alive() && m_actor.pattern >= 0 &&
-                            static_cast<usize>(m_actor.pattern) < part->data()->patterns().size();
+        actor.curbSeconds = m_sim.actor.curbSeconds;
+        const bool forced = alive() && m_sim.actor.pattern >= 0 &&
+                            static_cast<usize>(m_sim.actor.pattern) < part->data()->patterns().size();
         if (part->dying()) {
             part->update(ticks, seconds, players);
         } else if (forced) {
             // CritterMoveSetup asks GetTargetSub in parent-fallback mode. A body can
             // begin its pattern after this frame's independent head roster was pruned.
             if (actor.target < 0) {
-                actor.target = m_actor.target;
-                actor.targetDistance = m_actor.targetDistance;
+                actor.target = m_sim.actor.target;
+                actor.targetDistance = m_sim.actor.targetDistance;
             }
-            const auto& pattern = part->data()->patterns()[static_cast<usize>(m_actor.pattern)];
-            if (m_actor.patternStep < pattern.moves.size()) {
-                const auto step = static_cast<usize>(pattern.moves[m_actor.patternStep]);
-                if (!actor.forcedPattern || actor.pattern != m_actor.pattern ||
-                    actor.patternStep != m_actor.patternStep) {
+            const auto& pattern = part->data()->patterns()[static_cast<usize>(m_sim.actor.pattern)];
+            if (m_sim.actor.patternStep < pattern.moves.size()) {
+                const auto step = static_cast<usize>(pattern.moves[m_sim.actor.patternStep]);
+                if (!actor.forcedPattern || actor.pattern != m_sim.actor.pattern ||
+                    actor.patternStep != m_sim.actor.patternStep) {
                     part->startMove(actor, step, false);
-                    actor.pattern = m_actor.pattern;
-                    actor.patternStep = m_actor.patternStep;
+                    actor.pattern = m_sim.actor.pattern;
+                    actor.patternStep = m_sim.actor.patternStep;
                 } else if (actor.moveDone) {
                     // The step's move is asked for again every frame, so it starts over each
                     // time it ends while the body's step lasts (CritterAnimate, AnimateTree's
@@ -155,17 +155,17 @@ void Combatant::updateChildren(s32 ticks, f32 seconds, std::span<const EnemyView
              (actor.move >= 0 && part->data()->moves()[static_cast<usize>(actor.move)].attack()));
         collectChildEvents(*part);
     }
-    m_actor.childrenIntact = intact;
+    m_sim.actor.childrenIntact = intact;
     // With its last head dead the body falls with it (ProcessCritter: its health set under
     // nought, then CritterKill).
     if (alive() && !anyAlive) {
-        loseHealth(m_actor.health + 1.0f);
+        loseHealth(m_sim.actor.health + 1.0f);
         return;
     }
-    if (independent && busy && moveType() != kSync && m_actor.pattern < 0) {
+    if (independent && busy && moveType() != kSync && m_sim.actor.pattern < 0) {
         if (const auto sync = data()->moveOfType(kSync)) {
-            startMove(m_actor, *sync);
-            for (auto& part : m_children) {
+            startMove(m_sim.actor, *sync);
+            for (auto& part : children()) {
                 part->inheritBodyPose();
             }
         }

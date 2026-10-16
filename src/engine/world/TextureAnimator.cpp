@@ -10,10 +10,58 @@
 #include "engine/assets/TextureBindings.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/TreeModel.h"
 #include "engine/world/TreeParticles.h"
 
 namespace gdl {
+
+const CanonicalDigestSink::Digest& TextureAnimator::bindingValuesDigest() const {
+    const auto& [entries, authored, entryOfInfo, frame, remainder, advance, cached] = *this;
+    if (!cached) {
+        NativeStateDigest digest;
+        digest.string("TextureAnimator.binding-values.1");
+        digest.flag(authored != nullptr);
+        if (authored) {
+            digest.wide(authored->size());
+            for (const auto& info : *authored) {
+                digest.fields<9>(info);
+            }
+        }
+        digest.value(entryOfInfo);
+        digest.wide(entries.size());
+        for (const auto& entry : entries) {
+            const auto& [slot, frames, direction, period, rate, counter, initialCounter, keyed,
+                         offset, fade] = entry;
+            digest.values(slot, direction, period, rate, initialCounter, keyed, offset, fade);
+            static_cast<void>(frames);
+            static_cast<void>(counter);
+        }
+        m_bindingValuesDigest = digest.finish();
+    }
+    static_cast<void>(frame);
+    static_cast<void>(remainder);
+    static_cast<void>(advance);
+    return *m_bindingValuesDigest;
+}
+
+bool TextureAnimator::appendBindingDigest(NativeStateDigest& digest) const {
+    digest.string("TextureAnimator.binding.3");
+    digest.bytes(bindingValuesDigest());
+    digest.wide(m_entries.size());
+    for (const auto& entry : m_entries) {
+        digest.wide(entry.frames.size());
+        for (const auto* texture : entry.frames) {
+            digest.resource(texture);
+        }
+        // Counter is derived, but check that invariant instead of issuing a
+        // false certificate for a bank whose current phase contradicts its seed.
+        if (entry.counter != counterAt(entry, m_frame)) {
+            digest.invalidate();
+        }
+    }
+    return digest.good();
+}
 
 namespace {
 
@@ -46,7 +94,7 @@ void TextureAnimator::bind(std::span<const TextureAnimationInfo> animations, Tex
         entry.slot = static_cast<u32>(animation.texture);
         entry.period = std::abs(animation.frames);
         entry.rate = animation.rate;
-        entry.counter = animation.start;
+        entry.initialCounter = entry.counter = animation.start;
         entry.keyed = !animation.freeRunning();
         entry.offset = animation.offset;
         if (fade) {
@@ -103,12 +151,14 @@ void TextureAnimator::bind(std::span<const TextureAnimationInfo> animations, Tex
         }
         entry.period = static_cast<s32>(entry.frames.size());
         entry.counter %= entry.period;
+        entry.initialCounter = entry.counter;
         m_entryOfInfo[i] = static_cast<s32>(m_entries.size());
         m_entries.push_back(std::move(entry));
     }
 }
 
 void TextureAnimator::clear() {
+    m_bindingValuesDigest.reset();
     m_entries.clear();
     m_authored.reset();
     m_entryOfInfo.clear();
@@ -266,36 +316,59 @@ void TextureAnimator::step(u32 ticks) {
         }
     }
 }
+s32 TextureAnimator::counterAt(const Entry& entry, u32 frame) {
+    if (entry.keyed || entry.period <= 0) {
+        return entry.initialCounter;
+    }
+    const auto rate = static_cast<u32>(std::max(entry.rate, 1));
+    const u32 steps = frame / rate;
+    if (steps == 0) {
+        return entry.initialCounter;
+    }
+    // Scroll starts are signed and need not lie within one period. Native step
+    // preserves that exact value until the first increment, then uses C++'s
+    // signed remainder. Normalizing a reverse seek to [0,period) loses negative
+    // starts and can change the sampled UV offset after a rewind.
+    const s64 first = (static_cast<s64>(entry.initialCounter) + 1) % entry.period;
+    return static_cast<s32>((first + static_cast<s64>(steps) - 1) % entry.period);
+}
+
 void TextureAnimator::seek(u32 frame) {
     for (auto& entry : m_entries) {
-        if (entry.keyed || entry.period <= 0) {
-            continue;
-        }
-        const auto rate = static_cast<u32>(std::max(entry.rate, 1));
-        const s64 steps = static_cast<s64>(frame / rate) - static_cast<s64>(m_frame / rate);
-        const s64 counter = (static_cast<s64>(entry.counter) + steps) % entry.period;
-        entry.counter = static_cast<s32>(counter < 0 ? counter + entry.period : counter);
+        entry.counter = counterAt(entry, frame);
     }
     m_frame = frame;
     m_remainder = m_advance = 0;
 }
 
-bool TextureAnimator::Checkpoint::valid() const {
+bool TextureAnimator::Clock::valid() const {
     return frame <= 30U * 24U * 60U * 60U * 30U && std::isfinite(remainder) && remainder >= 0 &&
            remainder < 1 && std::isfinite(advance) && advance >= 0 && advance <= 450;
 }
 
 TextureAnimator::Checkpoint TextureAnimator::checkpoint() const {
+    return clock();
+}
+
+TextureAnimator::Clock TextureAnimator::clock() const {
     return {m_frame, m_remainder, m_advance};
+}
+
+void TextureAnimator::restoreClock(const Clock& clock) {
+    // Drawing and ordinary continuation usually sample the already-current bank.
+    // Recompute cycle counters only on a real seek, not once per mesh/companion.
+    if (m_frame != clock.frame) {
+        seek(clock.frame);
+    }
+    m_remainder = clock.remainder;
+    m_advance = clock.advance;
 }
 
 bool TextureAnimator::restore(const Checkpoint& state) {
     if (!state.valid()) {
         return false;
     }
-    seek(state.frame);
-    m_remainder = state.remainder;
-    m_advance = state.advance;
+    restoreClock(state);
     return true;
 }
 
@@ -416,12 +489,26 @@ void TextureAnimator::step(WorldScene& scene, u32 ticks) {
 
 void TextureAnimator::apply(TreeParticles& particles, const TreeInfo& tree, u32 sequence, f32 frame,
                             std::optional<f32> frameOffset) const {
+    applyParticles(particles, tree, sequence, frame, frameOffset, false);
+}
+
+void TextureAnimator::applyPresentation(TreeParticles& particles, const TreeInfo& tree,
+                                        u32 sequence, f32 frame,
+                                        std::optional<f32> frameOffset) const {
+    applyParticles(particles, tree, sequence, frame, frameOffset, true);
+}
+
+void TextureAnimator::applyParticles(TreeParticles& particles, const TreeInfo& tree, u32 sequence,
+                                    f32 frame, std::optional<f32> frameOffset,
+                                    bool presentationOnly) const {
     particles.clearTextureBlends();
     const auto show = [&](const TextureMotion& moved) {
         if (moved.frame != nullptr) {
-            if (frameOffset) {
-                particles.setTextureBlend(moved.slot, *moved.frame, moved.nextFrame,
-                                          moved.frameBlend);
+            if (presentationOnly || frameOffset.has_value()) {
+                particles.setTextureBlend(moved.slot, *moved.frame,
+                                          frameOffset ? moved.nextFrame : nullptr,
+                                          frameOffset ? moved.frameBlend : 0.0f,
+                                          !frameOffset.has_value());
             } else {
                 particles.setTextureFrame(moved.slot, *moved.frame);
             }

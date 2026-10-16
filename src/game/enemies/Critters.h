@@ -10,10 +10,12 @@
 
 #include "engine/assets/TextureSet.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/enemies/Combatant.h"
 
 namespace gdl::game {
+class NativeStateResources;
 /** Stable-id population of great creatures. Owns shared family assets and preserves
  * cross-family collision/update order; individual combat belongs to Combatant. */
 class Critters {
@@ -43,8 +45,8 @@ public:
     void close();
 
     /** The level's lookouts, for the kinds that walk a round of them (the generals). */
-    void setLookouts(LookoutRoute lookouts) { m_lookouts = std::move(lookouts); }
-    const LookoutRoute& lookouts() const { return m_lookouts; }
+    void setLookouts(LookoutRoute lookouts) { m_sim.lookouts = std::move(lookouts); }
+    const LookoutRoute& lookouts() const { return m_sim.lookouts; }
 
     /** Stands one of `kind` (a golem, a general, or a gargoyle by its form: "GAR_EAGL")
      * at `position` facing `yaw`. `sight` is its placement's sight radius, which at the
@@ -70,8 +72,8 @@ public:
     std::vector<CombatSpew> takeSpews();
     std::vector<CombatShot> takeShots();
     /** Their blows on what they walked into, since the last call. */
-    std::vector<CombatantRam> takeRams() { return std::exchange(m_rams, {}); }
-    std::vector<CombatPush> takePushes() { return std::exchange(m_pushes, {}); }
+    std::vector<CombatantRam> takeRams() { return std::exchange(m_sim.rams, {}); }
+    std::vector<CombatPush> takePushes() { return std::exchange(m_sim.pushes, {}); }
 
     f32 hurt(s32 id, const EnemyHit& hit);
     void damagedPlayer(s32 id, s32 player, f32 amount);
@@ -159,17 +161,50 @@ private:
     EnemyScales m_scales;
     char m_realm = 'G';
     std::string m_gargoyleForm; ///< the level roster's form, shared by statues and live actors
-    LookoutRoute m_lookouts;    ///< the level's, borrowed by the generals' rounds
-    std::vector<std::unique_ptr<CombatantAssets>> m_stocks;
+    struct Simulation {
+        LookoutRoute lookouts;                ///< stable address borrowed by the generals' patrols
+        std::vector<CombatantAssets*> stocks; ///< logical catalog, retained cache owns assets
+        std::vector<CombatBlow> blows;
+        std::vector<CombatGrab> grabs;
+        std::vector<CombatLoss> losses;
+        std::vector<CombatCue> cues;
+        std::vector<CombatSpew> spews;
+        std::vector<CombatShot> shots;
+        std::vector<CombatantRam> rams;
+        std::vector<CombatPush> pushes;
+    };
+
+public:
+    class LocalSnapshot {
+        friend class Critters;
+        Simulation m_state;
+        std::array<Combatant::LocalSnapshot, kMost> m_actors;
+        std::vector<TextureAnimator::Clock> m_clocks;
+        std::vector<std::weak_ptr<const u8>> m_assets;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
+        const WorldCollision* m_collision = nullptr;
+        const HazardSurfaces* m_hazards = nullptr;
+    };
+    bool saveLocal(LocalSnapshot& snapshot) const;
+    bool canRestoreLocal(const LocalSnapshot& snapshot) const;
+    /** Compares all retained actor slots, native queues and texture clocks. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& snapshot);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources,
+                                 std::string_view stablePrefix) const;
+
+private:
+    static void appendSimulationDigest(
+        NativeStateDigest& digest, const Simulation& state,
+        std::optional<std::span<const TextureAnimator::Clock>> savedClocks = {});
+    Simulation m_sim;
+    std::vector<std::unique_ptr<CombatantAssets>> m_stockCache;
     std::array<Combatant, kMost> m_critters;
-    std::vector<CombatBlow> m_blows;
-    std::vector<CombatGrab> m_grabs;
-    std::vector<CombatLoss> m_losses;
-    std::vector<CombatCue> m_cues;
-    std::vector<CombatSpew> m_spews;
-    std::vector<CombatShot> m_shots;
-    std::vector<CombatantRam> m_rams;
-    std::vector<CombatPush> m_pushes;
+    std::shared_ptr<const u8> m_localOwner = std::make_shared<const u8>(0);
+    u64 m_localEpoch = 0;
     const Texture* m_hitFlash = nullptr; ///< borrowed from the level
     /** Replaced on resource changes, independently of native animation clocks. */
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);

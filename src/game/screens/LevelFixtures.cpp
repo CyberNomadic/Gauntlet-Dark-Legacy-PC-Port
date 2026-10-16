@@ -14,6 +14,7 @@
 
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/TreeModel.h"
 
 #include "game/combat/DamageTypes.h"
@@ -23,6 +24,7 @@
 #include "game/screens/HelpMessages.h"
 #include "game/screens/PlayerPowerups.h"
 #include "game/world/DynamicLights.h"
+#include "game/world/NativeStateResources.h"
 namespace gdl::game {
 namespace {
 constexpr std::string_view kChestSound = "S_CHEST";
@@ -134,6 +136,113 @@ constexpr u32 kPoisonDamage = 0x800;
 constexpr u32 kExplosionDamage = 0x400;
 
 } // namespace
+bool LevelFixtures::appendSimulationDigest(NativeStateDigest& digest,
+                                            const Simulation& state) const {
+    digest.string("LevelFixtures.native.1");
+    digest.flag(m_resources.has_value());
+    if (m_resources) {
+        const auto& [device, world, weapons, effects, audio, difficulty] = *m_resources;
+        digest.resource(&world.layout());
+        digest.resource(&world.collision());
+        digest.flag(weapons.loaded());
+        if (weapons.loaded()) {
+            digest.resource(&weapons);
+        }
+        digest.value(difficulty);
+        // Borrowed mutable owners are composed once by the enclosing scene.
+        // Never hash mixer/device addresses or dereference another owner's
+        // current effect/world state while visiting a saved fixture tick.
+        static_cast<void>(device);
+        static_cast<void>(effects);
+        static_cast<void>(audio);
+    }
+    digest.fields<3>(state);
+    return digest.good();
+}
+
+bool LevelFixtures::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendSimulationDigest(digest, m_sim) && m_chests.appendNativeDigest(digest) &&
+           m_gates.appendNativeDigest(digest) && m_traps.appendNativeDigest(digest) &&
+           m_barrels.appendNativeDigest(digest) && m_safeRocks.appendNativeDigest(digest) &&
+           m_scenery.appendNativeDigest(digest) && m_rubble.appendNativeDigest(digest);
+}
+
+bool LevelFixtures::appendLocalDigest(NativeStateDigest& digest,
+                                      const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendSimulationDigest(digest, saved.state) &&
+           m_chests.appendLocalDigest(digest, saved.chests) &&
+           m_gates.appendLocalDigest(digest, saved.gates) &&
+           m_traps.appendLocalDigest(digest, saved.traps) &&
+           m_barrels.appendLocalDigest(digest, saved.barrels) &&
+           m_safeRocks.appendLocalDigest(digest, saved.safeRocks) &&
+           m_scenery.appendLocalDigest(digest, saved.scenery) &&
+           m_rubble.appendLocalDigest(digest, saved.rubble);
+}
+
+bool LevelFixtures::registerNativeResources(NativeStateResources& resources) const {
+    return m_chests.registerNativeResources(resources) &&
+           m_gates.registerNativeResources(resources) &&
+           m_traps.registerNativeResources(resources) &&
+           m_barrels.registerNativeResources(resources) &&
+           m_safeRocks.registerNativeResources(resources) &&
+           m_scenery.registerNativeResources(resources) && m_rubble.registerNativeResources(resources);
+}
+
+void LevelFixtures::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_checkpointBinding;
+    saved.state = m_sim;
+    m_chests.saveLocal(saved.chests);
+    m_gates.saveLocal(saved.gates);
+    m_traps.saveLocal(saved.traps);
+    m_barrels.saveLocal(saved.barrels);
+    m_safeRocks.saveLocal(saved.safeRocks);
+    m_scenery.saveLocal(saved.scenery);
+    m_rubble.saveLocal(saved.rubble);
+}
+
+bool LevelFixtures::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_checkpointBinding &&
+           m_chests.canRestoreLocal(saved.chests) && m_gates.canRestoreLocal(saved.gates) &&
+           m_traps.canRestoreLocal(saved.traps) && m_barrels.canRestoreLocal(saved.barrels) &&
+           m_safeRocks.canRestoreLocal(saved.safeRocks) &&
+           m_scenery.canRestoreLocal(saved.scenery) && m_rubble.canRestoreLocal(saved.rubble);
+}
+
+bool LevelFixtures::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
+           m_chests.equalLocal(left.chests, right.chests) &&
+           m_gates.equalLocal(left.gates, right.gates) &&
+           m_traps.equalLocal(left.traps, right.traps) &&
+           m_barrels.equalLocal(left.barrels, right.barrels) &&
+           m_safeRocks.equalLocal(left.safeRocks, right.safeRocks) &&
+           m_scenery.equalLocal(left.scenery, right.scenery) &&
+           m_rubble.equalLocal(left.rubble, right.rubble);
+}
+
+bool LevelFixtures::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    m_chests.restoreLocal(saved.chests);
+    m_gates.restoreLocal(saved.gates);
+    m_traps.restoreLocal(saved.traps);
+    m_barrels.restoreLocal(saved.barrels);
+    m_safeRocks.restoreLocal(saved.safeRocks);
+    m_scenery.restoreLocal(saved.scenery);
+    m_rubble.restoreLocal(saved.rubble);
+    // The enclosing scene also rewinds the world, players and effect pool.
+    // Never cancel/restart gas effects or dispatch contact callbacks here.
+    ++m_checkpointGeneration;
+    return true;
+}
+
 void LevelFixtures::bind(const Resources& resources) {
     clear();
     m_resources.emplace(resources);
@@ -154,7 +263,7 @@ void LevelFixtures::clear() {
     m_checkpointBinding = std::make_shared<const u8>(0);
     m_checkpointGeneration = 0;
     if (m_resources) {
-        for (const GasCloud& cloud : m_clouds) {
+        for (const GasCloud& cloud : m_sim.clouds) {
             m_resources->effects.stop(cloud.effect);
         }
     }
@@ -165,9 +274,9 @@ void LevelFixtures::clear() {
     m_safeRocks.clear();
     m_scenery.clear();
     m_rubble.clear();
-    m_doomedChests.clear();
-    m_clouds.clear();
-    m_blasts.clear();
+    m_sim.doomedChests.clear();
+    m_sim.clouds.clear();
+    m_sim.blasts.clear();
     m_resources.reset();
 }
 void LevelFixtures::setPlayerCount(s32 count) {
@@ -396,11 +505,11 @@ void LevelFixtures::blastFixtures(const Vec3& position, f32 reach, f32 damage, c
     for (usize i = 0; i < m_chests.size(); ++i) {
         const Chests::Chest& chest = m_chests.chest(i);
         if (chest.gone || !chest.shown || !chest.box.touchedBy(position, reach, 0.0f) ||
-            std::ranges::find(m_doomedChests, i) != m_doomedChests.end()) {
+            std::ranges::find(m_sim.doomedChests, i) != m_sim.doomedChests.end()) {
             continue;
         }
         if (chest.subtype == Chests::kTrappedChest) {
-            m_doomedChests.push_back(i);
+            m_sim.doomedChests.push_back(i);
             continue;
         }
         const Vec3 at = chest.figure.position();
@@ -541,7 +650,7 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
         }
     }
     // Trapped chests a blast set off go up now, one setting off the next in turn.
-    for (const usize chest : std::exchange(m_doomedChests, {})) {
+    for (const usize chest : std::exchange(m_sim.doomedChests, {})) {
         if (events == nullptr) {
             return {Boundary::DoomedChest, chest};
         }
@@ -635,6 +744,8 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
         if (events == nullptr) {
             return {Boundary::Trap, hit.trap};
         }
+        const auto audioScope = m_resources->audio.soundScope(
+            {36, hit.trap, 1, static_cast<u8>(players[hit.victim].actor.player())}, 1);
         // ItemTouch passes the authored elements and impact flags through damage_player;
         // tentacles knock down along their facing, whereas spikes carry their own flinch.
         const bool directed =
@@ -659,11 +770,11 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
                 return {Boundary::TrapWake, index};
             }
         }
-        if (!m_clouds.empty()) {
+        if (!m_sim.clouds.empty()) {
             return {Boundary::Cloud};
         }
         advanceCloudGaps(players, seconds);
-        if (!m_blasts.empty()) {
+        if (!m_sim.blasts.empty()) {
             return {Boundary::Blast};
         }
     } else {
@@ -697,6 +808,7 @@ bool LevelFixtures::enchantChest(usize index, f32 power) {
     if (!m_chests.transmute(index, record, power)) {
         return false;
     }
+    const auto audioScope = m_resources->audio.soundScope({37, index, 1}, 1);
     m_resources->audio.playNamed(kDeathDies);
     return true;
 }
@@ -899,6 +1011,7 @@ void LevelFixtures::strikeWall(usize index, f32 power, u32 flags) {
     auto& resources = *m_resources;
     const auto health = resources.world.strikeWall(index, power, flags);
     if (health) {
+        const auto audioScope = resources.audio.soundScope({38, index, 1}, 1);
         const bool destroyed = *health == 0;
         resources.audio.playNamed(destroyed ? "S_SECRETWALL" : resources.world.wallHitSound());
         const u32 element = damage::element(flags);
@@ -938,6 +1051,7 @@ bool LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
     if (!struck.has_value()) {
         return true;
     }
+    const auto audioScope = m_resources->audio.soundScope({39, barrel, 1}, 1);
     std::string sound{kWoodHitSound};
     if (struck->broken) {
         std::string_view stem = kBarrelBreakSound;
@@ -980,15 +1094,15 @@ bool LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
         const f32 seconds = effect(kBarrelBlast).value_or(kExplosionSeconds);
         effect(kBarrelSmoke);
         leaveRubble(Rubble::kBlownBarrel, m_barrels.transformOf(barrel));
-        m_blasts.push_back(Blast{.position = struck->position + Vec3{0, kBarrelBlastHeight, 0},
-                                 .radius = kBlastRadius,
-                                 .damage = kBarrelBlastDamage * trapDamageScale(),
-                                 .seconds = seconds,
-                                 .players = {},
-                                 .reached = {},
-                                 .opponents = {},
-                                 .playerReady = {},
-                                 .opponentReady = {}});
+        m_sim.blasts.push_back(Blast{.position = struck->position + Vec3{0, kBarrelBlastHeight, 0},
+                                     .radius = kBlastRadius,
+                                     .damage = kBarrelBlastDamage * trapDamageScale(),
+                                     .seconds = seconds,
+                                     .players = {},
+                                     .reached = {},
+                                     .opponents = {},
+                                     .playerReady = {},
+                                     .opponentReady = {}});
         break;
     }
     case BreakableStrike::Kind::Poison: {
@@ -1004,7 +1118,7 @@ bool LevelFixtures::strikeBarrel(usize barrel, f32 power, s32 byPlayer,
                                                      kBarrelGas, struck->position, setting);
         m_resources->effects.placeAt(
             id, glm::scale(glm::translate(Mat4{1}, struck->position), Vec3{3.5f, 1, 3.5f}));
-        m_clouds.push_back(
+        m_sim.clouds.push_back(
             GasCloud{struck->position, kGasDamage * trapDamageScale(), kGasSeconds, id});
         break;
     }
@@ -1048,15 +1162,15 @@ void LevelFixtures::blast(const Vec3& position, f32 radius, f32 damage,
     if (!m_resources.has_value()) {
         return;
     }
-    m_blasts.push_back(Blast{.position = position,
-                             .radius = radius,
-                             .damage = damage,
-                             .seconds = seconds,
-                             .players = {},
-                             .reached = {},
-                             .opponents = {},
-                             .playerReady = {},
-                             .opponentReady = {}});
+    m_sim.blasts.push_back(Blast{.position = position,
+                                 .radius = radius,
+                                 .damage = damage,
+                                 .seconds = seconds,
+                                 .players = {},
+                                 .reached = {},
+                                 .opponents = {},
+                                 .playerReady = {},
+                                 .opponentReady = {}});
     settleBlasts(players, events);
 }
 
@@ -1067,13 +1181,14 @@ void LevelFixtures::settleBlasts(std::span<PlayerRuntime> players, const Events&
         return;
     }
     // A step may set more off, appended to be started in their turn.
-    for (auto waiting = std::ranges::find(m_blasts, false, &Blast::started);
-         waiting != m_blasts.end(); waiting = std::ranges::find(m_blasts, false, &Blast::started)) {
-        const auto index = static_cast<usize>(std::distance(m_blasts.begin(), waiting));
+    for (auto waiting = std::ranges::find(m_sim.blasts, false, &Blast::started);
+         waiting != m_sim.blasts.end();
+         waiting = std::ranges::find(m_sim.blasts, false, &Blast::started)) {
+        const auto index = static_cast<usize>(std::distance(m_sim.blasts.begin(), waiting));
         Blast ring = *waiting;
         ring.started = true;
         feel(ring, players, events);
-        m_blasts[index] = std::move(ring);
+        m_sim.blasts[index] = std::move(ring);
     }
 }
 
@@ -1105,7 +1220,7 @@ void LevelFixtures::worldExplosion(const Vec3& position, std::span<PlayerRuntime
     ring.damage = 50.0f;
     ring.seconds = lifetime;
     ring.flags = tree == "WORLD_EXP" ? kPoisonDamage : 0x21;
-    m_blasts.push_back(std::move(ring));
+    m_sim.blasts.push_back(std::move(ring));
     if (realm == 9) {
         f32 distance = std::numeric_limits<f32>::max();
         for (const PlayerRuntime& player : players) {
@@ -1122,17 +1237,17 @@ void LevelFixtures::worldExplosion(const Vec3& position, std::span<PlayerRuntime
 void LevelFixtures::advanceBlasts(f32 seconds, std::span<PlayerRuntime> players,
                                   const Events& events) {
     // By index: a step may append what it sets off, which starts below.
-    for (const usize i : std::views::iota(usize{0}, m_blasts.size())) {
-        if (!m_blasts[i].started || m_blasts[i].done) {
+    for (const usize i : std::views::iota(usize{0}, m_sim.blasts.size())) {
+        if (!m_sim.blasts[i].started || m_sim.blasts[i].done) {
             continue;
         }
-        Blast ring = m_blasts[i];
+        Blast ring = m_sim.blasts[i];
         ring.elapsed += seconds;
         feel(ring, players, events);
-        m_blasts[i] = std::move(ring);
+        m_sim.blasts[i] = std::move(ring);
     }
     settleBlasts(players, events);
-    std::erase_if(m_blasts, [](const Blast& ring) { return ring.done; });
+    std::erase_if(m_sim.blasts, [](const Blast& ring) { return ring.done; });
 }
 
 void LevelFixtures::feel(Blast& ring, std::span<PlayerRuntime> players, const Events& events) {
@@ -1347,7 +1462,7 @@ void LevelFixtures::advanceCloudGaps(std::span<PlayerRuntime> players, f32 secon
 void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
                                  const Events& events) {
     advanceCloudGaps(players, seconds);
-    for (GasCloud& cloud : m_clouds) {
+    for (GasCloud& cloud : m_sim.clouds) {
         cloud.secondsLeft -= seconds;
         if (cloud.secondsLeft <= 0) {
             m_resources->effects.stop(cloud.effect);
@@ -1373,13 +1488,16 @@ void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
             }
         }
     }
-    std::erase_if(m_clouds, [](const GasCloud& cloud) { return cloud.secondsLeft <= 0.0f; });
+    std::erase_if(m_sim.clouds, [](const GasCloud& cloud) { return cloud.secondsLeft <= 0.0f; });
 }
 
 /** The original chest event order, with output and birth seams for a caller-owned rewind. */
 bool LevelFixtures::dispatchChestEvent(const ChestEvent& event, std::span<PlayerRuntime> players,
                                        const Events& events, const ChestPickupPublisher& pickup,
                                        const NamedPublisher& sound) {
+    const auto audioScope = m_resources->audio.soundScope(
+        {37, event.chest, 1, static_cast<u8>(players[event.visitor].actor.player())},
+        static_cast<u32>(event.kind) + 2);
     const auto play = [&](std::string_view name, f32 volume = 1) {
         if (sound) {
             sound(name, volume);
@@ -1453,6 +1571,8 @@ bool LevelFixtures::dispatchChestEvent(const ChestEvent& event, std::span<Player
 /** A gate's opening sounds from the realm's own bank, named after the level's letter. */
 void LevelFixtures::dispatchGateEvent(const GateEvent& event, std::span<PlayerRuntime> players,
                                       const Events& events, const NamedPublisher& publish) {
+    const auto audioScope =
+        m_resources->audio.soundScope({40, event.gate, 1}, static_cast<u32>(event.kind) + 1);
     if (event.kind == GateEvent::Kind::Unlocked) {
         players[event.visitor].actor.save().progress().inventory.spendKey();
         playGateSound(m_gates.gate(event.gate).subtype, publish);

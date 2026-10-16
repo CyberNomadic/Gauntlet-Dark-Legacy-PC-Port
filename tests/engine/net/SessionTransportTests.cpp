@@ -8,6 +8,7 @@
 
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/OnlineSession.h"
+#include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/NativePlaySetup.h"
 
 namespace {
@@ -53,9 +54,13 @@ void confirm(OnlineSession& session) {
     REQUIRE(setup);
     REQUIRE(session.confirmNativeSetup(setup->digest()));
 }
-template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessions, Step pump) {
+template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessions,
+                                         std::span<test::RollbackSessionHarness* const> inputs,
+                                         Step pump) {
+    REQUIRE(sessions.size() == inputs.size());
     for (u64 tick = 1; tick <= 32; ++tick) {
-        for (auto* session : sessions) {
+        for (usize i = 0; i < sessions.size(); ++i) {
+            auto* session = sessions[i];
             std::vector<InputCommand> commands;
             for (const auto seat : session->seats()) {
                 InputCommand command;
@@ -68,42 +73,51 @@ template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessio
                 command.pressedButtons = tick % 3 == 0 ? static_cast<u32>(CommandPress::Attack) : 0;
                 commands.push_back(command);
             }
-            REQUIRE(session->match().sample(commands));
+            REQUIRE(inputs[i]->sample(commands));
             REQUIRE(session->flush());
         }
-        std::vector<std::optional<LockstepInputs::Frame>> frames(sessions.size());
+        // Local execution may predict the remote seats. Keep pumping the actual
+        // provider and replaying its correction before inspecting confirmed output.
         until(
             [&] {
-                return std::ranges::all_of(frames,
-                                           [](const auto& frame) { return frame.has_value(); });
+                return std::ranges::all_of(inputs, [tick](const auto* input) {
+                    return input->tick() == tick + 1 && input->confirmedTick() >= tick;
+                });
             },
             [&] {
                 pump();
-                for (usize i = 0; i < sessions.size(); ++i) {
-                    if (!frames[i]) {
-                        frames[i] = sessions[i]->match().advance();
-                    }
+                for (usize i = 0; i < inputs.size(); ++i) {
+                    inputs[i]->advance(); // no second forward tick without a local sample
+                    REQUIRE(inputs[i]->complete());
+                    REQUIRE(sessions[i]->flush());
                 }
             });
         for (usize i = 0; i < sessions.size(); ++i) {
+            const auto& frame = inputs[i]->lastFrame();
+            REQUIRE(frame);
             for (u8 seat = 0; seat < InputCommand::kSeats; ++seat) {
-                if (sessions.front()->match().context().owners[seat] == 0) {
-                    continue;
-                }
-                const auto& command = (*frames[i])[seat];
+                if (sessions.front()->match().context().owners[seat] == 0) continue;
+                const auto& command = frame->commands[seat];
                 CHECK(command.tick == tick);
                 CHECK(command.seat == seat);
                 CHECK(command.direction == Vec2{1, 0});
                 CHECK(command.pressed(CommandPress::Attack) == (tick % 3 == 0));
                 const auto bytes = InputPacket::encode(std::span(&command, 1));
                 REQUIRE(bytes);
-                CHECK(bytes == InputPacket::encode(std::span(&(*frames.front())[seat], 1)));
+                CHECK(bytes == InputPacket::encode(
+                    std::span(&inputs.front()->lastFrame()->commands[seat], 1)));
             }
-            REQUIRE(sessions[i]->match().completedNativeTick(tick));
+            CHECK(sessions[i]->match().nativeConfirmed() == tick);
         }
     }
 }
 } // namespace
+
+TEST_CASE("contradictory transport path policies fail before opening a socket", "[netplay][iroh]") {
+    std::string error;
+    CHECK_FALSE(openSessionTransport({true, {}, true}, error));
+    CHECK(error == "Local-only and relay-only transports are mutually exclusive");
+}
 
 TEST_CASE(
     "provider adapter carries native admission loading inputs and departure without global pause",
@@ -149,11 +163,15 @@ TEST_CASE(
         pump);
     REQUIRE(host.match().prepare(1));
     until([&] { return guest.match().phase() == MatchSession::Phase::Loading; }, pump);
+    test::RollbackSessionHarness hostInputs;
+    REQUIRE(hostInputs.bind(host.match()));
     REQUIRE(host.match().loaded());
     for (s32 i = 0; i < 10; ++i) {
         pump();
     }
     CHECK(host.match().phase() == MatchSession::Phase::Loading);
+    test::RollbackSessionHarness guestInputs;
+    REQUIRE(guestInputs.bind(guest.match()));
     REQUIRE(guest.match().loaded());
     until(
         [&] {
@@ -163,7 +181,8 @@ TEST_CASE(
         pump);
     CHECK_FALSE(guest.match().requestPause());
     const std::array sessions{&host, &guest};
-    exchangeFrames(sessions, pump);
+    const std::array inputs{&hostInputs, &guestInputs};
+    exchangeFrames(sessions, inputs, pump);
     CHECK(host.match().phase() == MatchSession::Phase::Running);
     CHECK(guest.match().phase() == MatchSession::Phase::Running);
     guest.leave();
@@ -261,12 +280,18 @@ TEST_CASE("three independent provider peers admit a late third player and start 
                    second.match().phase() == MatchSession::Phase::Loading;
         },
         pump);
+    test::RollbackSessionHarness hostInputs;
+    REQUIRE(hostInputs.bind(host.match()));
     REQUIRE(host.match().loaded());
+    test::RollbackSessionHarness firstInputs;
+    REQUIRE(firstInputs.bind(first.match()));
     REQUIRE(first.match().loaded());
     for (usize i = 0; i < 50; ++i) {
         pump();
     }
     CHECK(host.match().phase() == MatchSession::Phase::Loading);
+    test::RollbackSessionHarness secondInputs;
+    REQUIRE(secondInputs.bind(second.match()));
     REQUIRE(second.match().loaded());
     until(
         [&] {
@@ -276,5 +301,6 @@ TEST_CASE("three independent provider peers admit a late third player and start 
         },
         pump);
     const std::array sessions{&host, &first, &second};
-    exchangeFrames(sessions, pump);
+    const std::array inputs{&hostInputs, &firstInputs, &secondInputs};
+    exchangeFrames(sessions, inputs, pump);
 }

@@ -28,8 +28,8 @@ public:
     static constexpr usize kMaxStages = 512;
     static constexpr usize kHeaderBytes = 44 + RandomCheckpoint::kBytes;
     static constexpr usize kFlightBytes = 124;
-    static constexpr usize kBurstBytes = 56;
-    static constexpr usize kHitBytes = 56;
+    static constexpr usize kBurstBytes = 64;
+    static constexpr usize kHitBytes = 64;
     static constexpr usize kRockBytes = 8;
     static constexpr usize kPickupBytes = 24;
     static constexpr usize kMaxBytes = kHeaderBytes + kMaxMissiles * kFlightBytes +

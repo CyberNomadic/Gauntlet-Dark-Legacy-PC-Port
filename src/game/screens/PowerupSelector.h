@@ -56,6 +56,10 @@ public:
     s32 labelY(s32 boxY) const { return boxY - kLabelRise + kSlide - m_slide; }
 
 private:
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PowerupSelector& value) {
+        const auto& [state, selection, slide, acquired] = value;
+        visitor.values(state, selection, slide, acquired);
+    }
     State m_state = State::Closed;
     s32 m_selection = -1;
     s32 m_slide = 0;

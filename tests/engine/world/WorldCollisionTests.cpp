@@ -1,4 +1,5 @@
 #include <array>
+#include <bit>
 #include <cmath>
 #include <filesystem>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/WorldCollision.h"
 
 #include "TestSupport.h"
@@ -37,6 +39,183 @@ std::vector<CollisionTriangle> room() {
         triangle({5, 0, -10}, {5, 3, -10}, {5, 3, 10}, west, 1),
         triangle({5, 0, -10}, {5, 3, 10}, {5, 0, 10}, west, 1),
     };
+}
+
+TEST_CASE("native collision geometry fingerprints refresh on every geometry binding change",
+          "[world][collision][native-immutable-digest]") {
+    const auto hash = [](const WorldCollision& collision) {
+        NativeStateDigest digest;
+        REQUIRE(collision.appendNativeDigest(digest));
+        REQUIRE(digest.checkedFinish());
+        return *digest.checkedFinish();
+    };
+    WorldCollision first, independent;
+    first.build(room());
+    independent.build(room());
+    const auto original = hash(first);
+    CHECK(hash(first) == original); // Warm cache.
+    CHECK(hash(independent) == original);
+    WorldCollision::LocalSnapshot old;
+    first.saveLocal(old);
+    for (u32 changed = 0; changed < 4; ++changed) {
+        CAPTURE(changed);
+        auto triangles = room();
+        if (changed == 0) triangles.back().normal.z = 0.125f;
+        if (changed == 1) triangles.back().vertices.back().y += 0.125f;
+        if (changed == 2) ++triangles.back().object;
+        if (changed == 3) triangles.back().objectFlags ^= 4;
+        first.build(triangles);
+        independent.build(triangles);
+        CHECK(hash(first) != original);
+        CHECK(hash(first) == hash(independent));
+        NativeStateDigest stale;
+        CHECK_FALSE(first.appendLocalDigest(stale, old));
+    }
+    first.build(room());
+    CHECK(hash(first) == original);
+    const auto added = triangle({-2, 2, -2}, {2, 2, -2}, {0, 2, 2}, {0, 1, 0}, 7);
+    first.append(std::array{added});
+    auto expanded = room();
+    expanded.push_back(added);
+    independent.build(expanded);
+    CHECK(hash(first) != original);
+    CHECK(hash(first) == hash(independent));
+    const auto staticGeometry = hash(first);
+    first.setMovingObjects(std::array<s32, 1>{7});
+    independent.setMovingObjects(std::array<s32, 1>{7});
+    CHECK(hash(first) != staticGeometry);
+    CHECK(hash(first) == hash(independent));
+    WorldCollision::LocalSnapshot anchored;
+    first.saveLocal(anchored);
+    const auto movingGeometry = hash(first);
+    first.setObjectTransform(7, glm::translate(Mat4{1}, Vec3{0, 3, 0}));
+    CHECK(hash(first) != movingGeometry);
+    NativeStateDigest saved;
+    REQUIRE(first.appendLocalDigest(saved, anchored));
+    CHECK(saved.finish() == movingGeometry);
+    REQUIRE(first.restoreLocal(anchored));
+    CHECK(hash(first) == movingGeometry);
+    first.clear();
+    independent.clear();
+    CHECK(hash(first) == hash(independent));
+    CHECK(hash(first) != movingGeometry);
+}
+
+TEST_CASE("repeated moving collision placement preserves first identity and corrected contact",
+          "[world][collision][local-rewind][collision-placement-reuse]") {
+    const auto hash = [](const WorldCollision& collision) {
+        NativeStateDigest digest;
+        REQUIRE(collision.appendNativeDigest(digest));
+        REQUIRE(digest.checkedFinish());
+        return *digest.checkedFinish();
+    };
+    WorldCollision collision;
+    collision.build(room());
+    collision.setMovingObjects(std::array<s32, 2>{0, 1});
+    const auto place = [&](u32 tick) {
+        const auto transform = glm::translate(Mat4{1}, Vec3{0, static_cast<f32>(tick), 0});
+        collision.setObjectTransform(0, transform);
+        collision.setObjectTransform(1, transform);
+    };
+    const auto contacts = [&](u32 tick) {
+        const auto height = static_cast<f32>(tick);
+        const auto floor = collision.floorAt({0, height + 1, 0}, 1, 2);
+        REQUIRE(floor);
+        CHECK(floor->object == 0);
+        CHECK(floor->y == height);
+        const Vec3 centre{4.8f, height, 1};
+        CHECK(collision.resolveWalls(centre, 0.5f, height + 0.2f, height + 2.8f) != centre);
+    };
+    // setMovingObjects must fully place the initial identity before an equal
+    // setter can skip rebuilding its triangles and broad-phase bounds.
+    contacts(0);
+    const auto initial = hash(collision);
+    place(0);
+    contacts(0);
+    CHECK(hash(collision) == initial);
+    WorldCollision::LocalSnapshot start;
+    collision.saveLocal(start);
+    std::array<WorldCollision::LocalSnapshot, 8> reference;
+    std::array<NativeStateDigest::Digest, 8> expected;
+    for (usize tick = 0; tick < reference.size(); ++tick) {
+        place(static_cast<u32>(tick + 1));
+        collision.saveLocal(reference[tick]);
+        expected[tick] = hash(collision);
+    }
+    for (usize distance = 1; distance <= reference.size(); ++distance) {
+        CAPTURE(distance);
+        REQUIRE(collision.restoreLocal(start));
+        for (usize tick = 0; tick < distance; ++tick) place(static_cast<u32>(100 + tick));
+        REQUIRE(collision.restoreLocal(start));
+        place(0);
+        contacts(0);
+        for (usize tick = 0; tick < distance; ++tick) {
+            place(static_cast<u32>(tick + 1));
+            place(static_cast<u32>(tick + 1));
+            contacts(static_cast<u32>(tick + 1));
+        }
+        WorldCollision::LocalSnapshot corrected;
+        collision.saveLocal(corrected);
+        CHECK(collision.equalLocal(corrected, reference[distance - 1]));
+        CHECK(hash(collision) == expected[distance - 1]);
+    }
+    REQUIRE(collision.restoreLocal(start));
+    collision.setSolid(0, false);
+    collision.setContactOnly(1, true);
+    collision.setFloorExitBlocked(1, true);
+    const auto masked = hash(collision);
+    place(0);
+    CHECK(hash(collision) == masked);
+    CHECK_FALSE(collision.floorAt({0, 1, 0}, 1, 2));
+    CHECK(collision.contactOnly(1));
+    CHECK(collision.floorExitBlocked(1));
+    const Vec3 centre{4.8f, 0, 1};
+    std::vector<WallContact> wallContacts;
+    CHECK(collision.resolveWalls(centre, 0.5f, 0.2f, 2.8f, &wallContacts) == centre);
+    CHECK_FALSE(wallContacts.empty());
+    REQUIRE(collision.restoreLocal(start));
+
+    const auto added = triangle({-2, 5, -2}, {2, 5, -2}, {0, 5, 2}, {0, 1, 0}, 7);
+    collision.append(std::array{added});
+    place(0); // Appending static geometry leaves existing moving caches intact.
+    contacts(0);
+    collision.setMovingObjects(std::array<s32, 2>{0, 7});
+    collision.setObjectTransform(7, Mat4{1});
+    const auto floor = collision.floorAt({0, 6, 0}, 1, 2);
+    REQUIRE(floor);
+    CHECK(floor->object == 7);
+    CHECK(floor->y == 5);
+    CHECK_FALSE(collision.canRestoreLocal(start));
+}
+
+TEST_CASE("collision placement reuse does not discard signed zero transform changes",
+          "[world][collision][local-rewind][collision-placement-reuse]") {
+    WorldCollision collision;
+    collision.build(room());
+    collision.setMovingObjects(std::array<s32, 1>{0});
+    WorldCollision::LocalSnapshot positive, negative;
+    collision.saveLocal(positive);
+    NativeStateDigest before;
+    REQUIRE(collision.appendNativeDigest(before));
+    Mat4 signedZero{1};
+    signedZero[3].x = -0.0f;
+    REQUIRE(signedZero == Mat4{1}); // Numeric equality is too weak for native state.
+    collision.setObjectTransform(0, signedZero);
+    REQUIRE(collision.objectTransform(0));
+    CHECK(std::signbit((*collision.objectTransform(0))[3].x));
+    collision.saveLocal(negative);
+    NativeStateDigest after;
+    REQUIRE(collision.appendNativeDigest(after));
+    CHECK(after.finish() != before.finish());
+    REQUIRE(collision.restoreLocal(positive));
+    CHECK_FALSE(std::signbit((*collision.objectTransform(0))[3].x));
+    NativeStateDigest restored;
+    REQUIRE(collision.appendNativeDigest(restored));
+    CHECK(restored.finish() == before.finish());
+    REQUIRE(collision.restoreLocal(negative));
+    collision.setObjectTransform(0, signedZero);
+    CHECK(std::bit_cast<u32>((*collision.objectTransform(0))[3].x) ==
+          std::bit_cast<u32>(signedZero[3].x));
 }
 
 TEST_CASE("the floor under a point is found within the probe range", "[world][collision]") {

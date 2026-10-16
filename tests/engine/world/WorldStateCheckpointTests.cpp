@@ -1,6 +1,10 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
+#include <iostream>
 #include <limits>
+#include <numeric>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -130,6 +134,391 @@ void sameDraw(Fixture& first, Fixture& second, f32 alpha) {
             CHECK(a.vertices[j].color == b.vertices[j].color);
         }
     }
+}
+
+TEST_CASE("native world history restores collision animation masks and rendered geometry together",
+          "[local-rewind][world-local-rewind]") {
+    Fixture reference("world-local-reference");
+    Fixture replay("world-local-replay");
+    struct Frame {
+        WorldScene::LocalSnapshot scene;
+        WorldCollision::LocalSnapshot collision;
+        WorldAnimator::LocalSnapshot animator;
+        TextureAnimator::Clock textures;
+    };
+    std::array<Frame, 16> history;
+    std::array<Frame, 8> expected;
+    Frame observed;
+    const auto step = [](Fixture& pool, u32 tick, bool wrong) {
+        if (tick % 11 == 0 || wrong) {
+            pool.animator.fire(8, !wrong, wrong);
+        }
+        if (tick % 7 == 0) {
+            pool.animator.cycle(8, !wrong);
+        }
+        pool.step(1.0f / 60, wrong ? tick + 9 : tick);
+        if (tick % 13 == 0 || wrong) {
+            const Mat4 transform =
+                glm::scale(glm::translate(Mat4{1}, Vec3{0, wrong ? -30.0f : 4.0f, 50}),
+                           Vec3{wrong ? 0.0f : 1.0f});
+            pool.scene.setObjectTransform(8, transform, true);
+            pool.collision.setObjectTransform(8, pool.scene.worldTransform(8));
+        }
+    };
+    u32 tick = 0;
+    for (u32 window = 0; window < 128; ++window) {
+        CAPTURE(window, tick);
+        auto& saved = history[window % history.size()];
+        replay.scene.saveLocal(saved.scene);
+        replay.collision.saveLocal(saved.collision);
+        replay.animator.saveLocal(saved.animator);
+        saved.textures = replay.textureClock.clock();
+        const u32 distance = window % 8 + 1;
+        // Compare native values under the same binding, not resource-normalized DTOs.
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, false);
+            replay.scene.saveLocal(expected[i].scene);
+            replay.collision.saveLocal(expected[i].collision);
+            replay.animator.saveLocal(expected[i].animator);
+        }
+        REQUIRE(replay.scene.restoreLocal(saved.scene));
+        REQUIRE(replay.collision.restoreLocal(saved.collision));
+        REQUIRE(replay.animator.restoreLocal(saved.animator));
+        replay.textureClock.restoreClock(saved.textures);
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay, tick + i, true);
+        }
+        // A draw must not leave stale composed transforms after correction.
+        replay.scene.draw(replay.device, Mat4{1}, CameraFrame{}, 0.5f);
+        REQUIRE(replay.scene.canRestoreLocal(saved.scene));
+        REQUIRE(replay.collision.canRestoreLocal(saved.collision));
+        REQUIRE(replay.animator.canRestoreLocal(saved.animator));
+        REQUIRE(replay.scene.restoreLocal(saved.scene));
+        REQUIRE(replay.collision.restoreLocal(saved.collision));
+        REQUIRE(replay.animator.restoreLocal(saved.animator));
+        replay.textureClock.restoreClock(saved.textures);
+        CHECK(replay.state() == reference.state());
+        sameDraw(reference, replay, 0.37f);
+        for (u32 i = 0; i < distance; ++i) {
+            step(reference, tick + i, false);
+            step(replay, tick + i, false);
+            replay.scene.saveLocal(observed.scene);
+            replay.collision.saveLocal(observed.collision);
+            replay.animator.saveLocal(observed.animator);
+            CHECK(replay.scene.equalLocal(observed.scene, expected[i].scene));
+            CHECK(replay.collision.equalLocal(observed.collision, expected[i].collision));
+            CHECK(replay.animator.equalLocal(observed.animator, expected[i].animator));
+            CHECK(replay.state() == reference.state());
+            sameDraw(reference, replay, 0.37f);
+            const Vec3 from{10, 4, 45}, to{10, 4, 55};
+            CHECK(replay.collision.sweepWalls(from, to, 1, 3, 9) ==
+                  reference.collision.sweepWalls(from, to, 1, 3, 9));
+        }
+        tick += distance;
+    }
+    CHECK(replay.device.textureUpdates == 0);
+}
+
+TEST_CASE("native world history rejects foreign owners and changed geometry bindings",
+          "[local-rewind][world-local-rewind]") {
+    Fixture a("world-local-owner"), b("world-local-other");
+    WorldScene::LocalSnapshot scene;
+    WorldCollision::LocalSnapshot collision;
+    WorldAnimator::LocalSnapshot animator;
+    CHECK_FALSE(a.scene.restoreLocal(scene));
+    CHECK_FALSE(a.collision.restoreLocal(collision));
+    CHECK_FALSE(a.animator.restoreLocal(animator));
+    CHECK_FALSE(a.scene.equalLocal(scene, scene));
+    CHECK_FALSE(a.collision.equalLocal(collision, collision));
+    CHECK_FALSE(a.animator.equalLocal(animator, animator));
+    a.scene.saveLocal(scene);
+    a.collision.saveLocal(collision);
+    a.animator.saveLocal(animator);
+    CHECK(a.scene.equalLocal(scene, scene));
+    CHECK(a.collision.equalLocal(collision, collision));
+    CHECK(a.animator.equalLocal(animator, animator));
+    CHECK_FALSE(b.scene.equalLocal(scene, scene));
+    CHECK_FALSE(b.collision.equalLocal(collision, collision));
+    CHECK_FALSE(b.animator.equalLocal(animator, animator));
+    CHECK_FALSE(b.scene.restoreLocal(scene));
+    CHECK_FALSE(b.collision.restoreLocal(collision));
+    CHECK_FALSE(b.animator.restoreLocal(animator));
+    a.collision.append(std::array{CollisionTriangle{.object = 9999}});
+    CHECK_FALSE(a.collision.restoreLocal(collision));
+    a.collision.saveLocal(collision);
+    a.collision.setMovingObjects(std::array<s32, 1>{9999});
+    CHECK_FALSE(a.collision.restoreLocal(collision));
+    a.scene.clear();
+    a.animator.clear();
+    CHECK_FALSE(a.scene.equalLocal(scene, scene));
+    CHECK_FALSE(a.animator.equalLocal(animator, animator));
+    CHECK_FALSE(a.scene.restoreLocal(scene));
+    CHECK_FALSE(a.animator.restoreLocal(animator));
+}
+
+TEST_CASE("native world history shares static placements without losing diagnostic edits",
+          "[local-rewind][world-local-rewind]") {
+    Fixture reference("world-local-static-reference"), replay("world-local-static-replay");
+    const auto initial = replay.state();
+    WorldScene::LocalSnapshot beforeDiagnostic;
+    replay.scene.saveLocal(beforeDiagnostic);
+    auto shifted = initial;
+    shifted.placements[0].local[3].x += 2;
+    shifted.placements[0].previous[3].x -= 3;
+    shifted.placements[0].continuity = 9;
+    REQUIRE_FALSE(replay.scene.moving(0));
+    REQUIRE_FALSE(replay.scene.moving(9));
+    REQUIRE(replay.scene.moving(8));
+    REQUIRE(replay.scene.moving(10)); // The nonanimated blade follows its animated ancestor.
+    REQUIRE(reference.checkpoint.restore(shifted));
+    REQUIRE(replay.checkpoint.restore(shifted));
+    WorldScene::LocalSnapshot unsettled;
+    replay.scene.saveLocal(unsettled);
+    // A diagnostic restore can recreate the retained static catalog without
+    // changing its contents. Native equality must not compare allocation identity.
+    REQUIRE(replay.checkpoint.restore(shifted));
+    WorldScene::LocalSnapshot sameStaticValues;
+    replay.scene.saveLocal(sameStaticValues);
+    CHECK(replay.scene.equalLocal(unsettled, sameStaticValues));
+    CHECK_FALSE(replay.scene.equalLocal(beforeDiagnostic, unsettled));
+    const auto step = [](WorldScene& scene, u32 tick) {
+        scene.capturePresentation();
+        scene.setObjectTransform(8,
+                                 glm::translate(Mat4{1}, Vec3{0, tick, 50}) *
+                                     glm::rotate(Mat4{1}, tick * 0.1f, Vec3{0, 1, 0}),
+                                 tick % 5 == 0);
+        scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
+        REQUIRE(scene.setObjectVisible(11, tick % 3 != 0));
+        scene.setTextureOffset(0, {tick * 0.007f, 0});
+    };
+    step(reference.scene, 1);
+    step(replay.scene, 1);
+    CHECK(replay.state() == reference.state());
+    WorldScene::LocalSnapshot settled;
+    replay.scene.saveLocal(settled);
+    u32 tick = 2;
+    for (u32 distance = 1; distance <= 8; ++distance) {
+        CAPTURE(distance);
+        WorldScene::LocalSnapshot saved;
+        replay.scene.saveLocal(saved);
+        for (u32 i = 0; i < distance; ++i) {
+            step(replay.scene, tick + 100 + i);
+        }
+        auto discarded = replay.state();
+        discarded.placements[0].local[3].x += 17;
+        discarded.placements[0].previous[3].x -= 11;
+        REQUIRE(replay.checkpoint.restore(discarded));
+        replay.scene.draw(replay.device, Mat4{1}, CameraFrame{}, 0.5f);
+        REQUIRE(replay.scene.restoreLocal(saved));
+        CHECK(replay.state() == reference.state());
+        sameDraw(reference, replay, 0.5f);
+        for (u32 i = 0; i < distance; ++i, ++tick) {
+            step(reference.scene, tick);
+            step(replay.scene, tick);
+            CHECK(replay.state() == reference.state());
+            sameDraw(reference, replay, 0.5f);
+        }
+    }
+    REQUIRE(replay.scene.restoreLocal(unsettled));
+    CHECK(replay.state() == shifted);
+    step(replay.scene, 1);
+    const auto settledState = replay.state();
+    REQUIRE(replay.scene.restoreLocal(settled));
+    CHECK(replay.state() == settledState);
+    REQUIRE(replay.scene.restoreLocal(beforeDiagnostic));
+    CHECK(replay.state() == initial);
+    CHECK(replay.scene.worldTransform(0) == initial.placements[0].local);
+}
+
+TEST_CASE("native world equality sees latent texture phases query masks and held animation",
+          "[local-rewind][world-local-rewind]") {
+    Fixture fixture("world-local-hidden-values");
+    WorldScene::LocalSnapshot sceneBefore, sceneAfter, sceneRestored;
+    WorldCollision::LocalSnapshot collisionBefore, collisionAfter, collisionRestored;
+    WorldAnimator::LocalSnapshot animatorBefore, animatorAfter, animatorRestored;
+    fixture.scene.saveLocal(sceneBefore);
+    fixture.collision.saveLocal(collisionBefore);
+    fixture.animator.saveLocal(animatorBefore);
+    const auto transform = fixture.scene.worldTransform(8);
+    const auto offset = fixture.scene.textureOffset(1);
+    fixture.scene.setTextureScroll(1, offset, {0.25f, 0.5f}, {0.01f, 0.02f});
+    fixture.scene.saveLocal(sceneAfter);
+    CHECK(fixture.scene.textureOffset(1) == offset);
+    CHECK_FALSE(fixture.scene.equalLocal(sceneBefore, sceneAfter));
+    fixture.collision.setContactOnly(1000, true);
+    fixture.collision.setFloorExitBlocked(1000, true);
+    fixture.collision.saveLocal(collisionAfter);
+    CHECK(fixture.collision.solid(1000));
+    CHECK_FALSE(fixture.collision.equalLocal(collisionBefore, collisionAfter));
+    fixture.animator.hold(8);
+    fixture.animator.saveLocal(animatorAfter);
+    CHECK(fixture.scene.worldTransform(8) == transform);
+    CHECK_FALSE(fixture.animator.equalLocal(animatorBefore, animatorAfter));
+    REQUIRE(fixture.scene.restoreLocal(sceneBefore));
+    REQUIRE(fixture.collision.restoreLocal(collisionBefore));
+    REQUIRE(fixture.animator.restoreLocal(animatorBefore));
+    fixture.scene.saveLocal(sceneRestored);
+    fixture.collision.saveLocal(collisionRestored);
+    fixture.animator.saveLocal(animatorRestored);
+    CHECK(fixture.scene.equalLocal(sceneBefore, sceneRestored));
+    CHECK(fixture.collision.equalLocal(collisionBefore, collisionRestored));
+    CHECK(fixture.animator.equalLocal(animatorBefore, animatorRestored));
+}
+
+TEST_CASE("world chrome coordinates stay finite for absent and collapsed mesh normals",
+          "[world][world-chrome][world-local-rewind]") {
+    const bool zeroNormal = GENERATE(false, true);
+    const bool collapsed = GENERATE(false, true);
+    const auto directory = test::sampleLevel("world-chrome-zero-normal");
+    writeTextFile(directory / "models/006_LIT.obj",
+                  std::string{"v 0 0 0 0.2 0.2 0.2\nv 1 0 0 0.2 0.2 0.2\n"
+                              "v 0 1 0 0.2 0.2 0.2\n"} +
+                      (zeroNormal ? "vn 0 0 0\n" : "vn 0 1 0\n") +
+                      "usemtl tex0\nf 1//1 2//1 3//1\n");
+    test::convertModelFixture(directory);
+    writeTextFile(directory / "world.json", R"({"objects":[
+      {"name":"LIT","position":[0,0,0],"next":-1,"child":-1,
+       "flags":4098,"objectFlags":32768}]})");
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout layout;
+    WorldScene scene;
+    REQUIRE(models.load(directory));
+    REQUIRE(textures.load(directory));
+    REQUIRE(layout.load(directory));
+    REQUIRE(scene.build(layout, models, textures, device));
+    REQUIRE(scene.moving(0));
+    if (collapsed) {
+        scene.setObjectTransform(0, glm::scale(Mat4{1}, Vec3{0}), true);
+    }
+    scene.draw(device, Mat4{1});
+    REQUIRE(device.draws.size() == 1);
+    REQUIRE(device.draws.front().vertices.size() == 3);
+    const auto index = models.find("LIT");
+    REQUIRE(index);
+    const auto& mesh = models.mesh(*index);
+    REQUIRE(mesh.prelit);
+    for (const auto& vertex : device.draws.front().vertices) {
+        CHECK(std::isfinite(vertex.uv.x));
+        CHECK(std::isfinite(vertex.uv.y));
+        CHECK(vertex.color == mesh.vertices.front().color);
+        CHECK(vertex.uv == (zeroNormal || collapsed ? Vec2{0.5f} : Vec2{0.5f, 0}));
+    }
+}
+
+TEST_CASE("Ghost Town world chrome draws contain finite texture coordinates",
+          "[assets][world-chrome][world-local-rewind]") {
+    const auto directory = test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout layout;
+    WorldScene scene;
+    REQUIRE(models.load(directory));
+    REQUIRE(textures.load(directory));
+    REQUIRE(layout.load(directory));
+    REQUIRE(scene.build(layout, models, textures, device));
+    scene.draw(device, Mat4{1}, CameraFrame::at(Vec3{0, 20, 0}), 0.5f);
+    REQUIRE_FALSE(device.draws.empty());
+    for (usize draw = 0; draw < device.draws.size(); ++draw) {
+        const auto& vertices = device.draws[draw].vertices;
+        for (usize vertex = 0; vertex < vertices.size(); ++vertex) {
+            if (!std::isfinite(vertices[vertex].uv.x) || !std::isfinite(vertices[vertex].uv.y)) {
+                CAPTURE(draw, vertex);
+                FAIL("non-finite world texture coordinate");
+            }
+        }
+    }
+}
+
+TEST_CASE("native level geometry reports reusable local history costs",
+          "[.][assets][local-rewind-timing][world-local-rewind-timing]") {
+    const auto level = GENERATE("G2", "G4", "L1");
+    const auto directory =
+        test::assetOrSkip(std::string{"LEVELS/LEVEL"} + level + "/WORLDS.PS2").parent_path();
+    test::FakeRenderDevice device;
+    device.recordDraws = false;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout layout;
+    WorldScene scene;
+    WorldCollision collision;
+    WorldAnimator animator;
+    REQUIRE(models.load(directory));
+    REQUIRE(textures.load(directory));
+    REQUIRE(layout.load(directory));
+    REQUIRE(scene.build(layout, models, textures, device));
+    REQUIRE(collision.load(directory, layout));
+    animator.bind(layout);
+    animator.apply(scene);
+    std::vector<s32> moving;
+    for (usize i = 0; i < layout.objects().size(); ++i) {
+        if (scene.moving(i)) {
+            moving.push_back(static_cast<s32>(i));
+        }
+    }
+    collision.setMovingObjects(moving);
+    std::cout << level << "_geometry_objects=" << layout.objects().size()
+              << " moving_placements=" << moving.size()
+              << " static_placements=" << layout.objects().size() - moving.size() << '\n';
+    const auto step = [&] {
+        scene.capturePresentation();
+        animator.step(1.0f / 60, scene);
+        for (const s32 object : moving) {
+            collision.setObjectTransform(object, scene.worldTransform(static_cast<usize>(object)));
+        }
+    };
+    step();
+    struct Frame {
+        WorldScene::LocalSnapshot scene;
+        WorldCollision::LocalSnapshot collision;
+        WorldAnimator::LocalSnapshot animator;
+    };
+    std::array<Frame, 16> history;
+    const auto save = [&](Frame& frame) {
+        scene.saveLocal(frame.scene);
+        collision.saveLocal(frame.collision);
+        animator.saveLocal(frame.animator);
+    };
+    for (auto& frame : history) {
+        save(frame);
+    }
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](auto start) {
+        return std::chrono::duration<f64, std::milli>(Clock::now() - start).count();
+    };
+    std::array<f64, 256> saves{}, restores{}, replays{};
+    for (usize i = 0; i < saves.size(); ++i) {
+        auto& frame = history[i % history.size()];
+        auto start = Clock::now();
+        save(frame);
+        saves[i] = elapsed(start);
+        for (usize j = 0; j < 8; ++j) {
+            step();
+        }
+        start = Clock::now();
+        const bool restored = scene.restoreLocal(frame.scene) &&
+                              collision.restoreLocal(frame.collision) &&
+                              animator.restoreLocal(frame.animator);
+        restores[i] = elapsed(start);
+        REQUIRE(restored);
+        start = Clock::now();
+        for (usize j = 0; j < 8; ++j) {
+            step();
+        }
+        replays[i] = elapsed(start);
+    }
+    const auto report = [&](std::string_view operation, auto values) {
+        std::ranges::sort(values);
+        std::cout << level << "_geometry_" << operation << " mean_ms="
+                  << std::accumulate(values.begin(), values.end(), 0.0) / values.size()
+                  << " p99_ms=" << values[values.size() * 99 / 100] << " max_ms=" << values.back()
+                  << '\n';
+    };
+    report("save", saves);
+    report("restore", restores);
+    report("replay8", replays);
 }
 
 TEST_CASE("world core checkpoints preserve native clocks, preceding poses and appended collision",

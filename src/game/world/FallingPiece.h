@@ -10,6 +10,10 @@ namespace gdl::game {
 struct FallingProfile {
     f32 gravityStep = 2.0f; ///< taken off the vertical velocity each frame
     f32 spin = 0.34906585f; ///< radians a second of pitch and roll, twenty degrees
+    bool operator==(const FallingProfile&) const = default;
+    template <class Digest> friend void visitNativeState(Digest& digest, const FallingProfile& value) {
+        digest.template fields<2>(value);
+    }
 
     static constexpr s32 kLeafFall = 49;
     static constexpr s32 kRockSink = 53;
@@ -49,9 +53,16 @@ public:
     Vec3 velocity{0.0f};
     usize instance = 0;
     bool visible = true;
+    bool operator==(const FallingPiece&) const = default;
 
 private:
     friend class FallingSceneryCheckpoint;
+    template <class Digest> friend void visitNativeState(Digest& digest, const FallingPiece& value) {
+        const auto& [position, rotation, velocity, instance, visible, previousPosition,
+                     previousRotation] = value;
+        digest.values(position, rotation, velocity, instance, visible, previousPosition,
+                      previousRotation);
+    }
     Vec3 m_previousPosition{0.0f};
     Vec3 m_previousRotation{0.0f};
 };

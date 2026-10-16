@@ -15,7 +15,13 @@ struct PlayerRuntime;
 /** Retail gamemain.c::fn_800521E8 (0x800521E8): the timed defeat caption.
  * The scene owns the background and plays the emitted voice cue. */
 class GameOver {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const GameOver& value) {
+        const auto& [caption, ticks, active] = value;
+        visitor.values(caption, ticks, active);
+    }
 public:
+    bool operator==(const GameOver&) const = default;
+
     static constexpr s32 kVoiceTick = 60;
     static constexpr s32 kLetterTicks = 8;
     static constexpr s32 kDurationTicks = 240;

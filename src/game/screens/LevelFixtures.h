@@ -229,8 +229,11 @@ private:
         f32 damage = 0.0f;
         f32 secondsLeft = 0.0f;
         u32 effect = 0;
+        bool operator==(const GasCloud&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const GasCloud& value) {
+            visitor.template fields<4>(value);
+        }
     };
-    std::vector<GasCloud> m_clouds;
     /** A blast yet to be felt: one barrel's sets off the next, in turn. */
     struct Blast {
         Vec3 position{0.0f, 0.0f, 0.0f};
@@ -246,10 +249,21 @@ private:
         std::vector<s32> opponents; ///< the opponents it has, by the scene's ids
         std::vector<std::pair<usize, f32>> playerReady; ///< poison repeats after 0.5s
         std::vector<std::pair<s32, f32>> opponentReady;
+        bool operator==(const Blast&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Blast& value) {
+            visitor.template fields<13>(value);
+        }
     };
     /** One step of a blast's ring, as it stands `elapsed` into its life. */
     void feel(Blast& ring, std::span<PlayerRuntime> players, const Events& events);
-    std::vector<Blast> m_blasts;
+
+    struct Simulation {
+        std::vector<GasCloud> clouds;
+        std::vector<Blast> blasts;
+        std::vector<usize> doomedChests;
+        bool operator==(const Simulation&) const = default;
+    };
+    Simulation m_sim;
 
     Chests m_chests;
     LockedGates m_gates;
@@ -258,8 +272,36 @@ private:
     SafeRocks m_safeRocks;
     StaticScenery m_scenery;
     Rubble m_rubble;
-    std::vector<usize> m_doomedChests; ///< trapped chests a blast set off, to go up next update
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
+
+public:
+    class LocalSnapshot {
+        friend class LevelFixtures;
+        Simulation state;
+        Chests::LocalSnapshot chests;
+        LockedGates::LocalSnapshot gates;
+        Traps::LocalSnapshot traps;
+        Breakables::LocalSnapshot barrels;
+        SafeRocks::LocalSnapshot safeRocks;
+        StaticScenery::LocalSnapshot scenery;
+        Rubble::LocalSnapshot rubble;
+        const LevelFixtures* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    /** Complete native values under this owner and its current stage binding.
+     * World, player, effect and audio owners are compared by the enclosing scene. */
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    /** Actual coordinator and child history values. World/effects/audio remain
+     * separate owners and must also be visited by the enclosing scene. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
 };
 } // namespace gdl::game

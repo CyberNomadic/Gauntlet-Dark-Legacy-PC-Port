@@ -9,8 +9,11 @@
 
 #include "engine/assets/StringTable.h"
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 
 namespace gdl {
+
+class NativeStateDigest;
 
 /** One message of an unpacked text rom: its pages, drawn in one of the rom's fonts. */
 struct MessageInfo {
@@ -54,10 +57,14 @@ public:
     std::string_view fontOf(const MessageInfo& message) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const MessageTable&);
     std::vector<std::string> m_fonts;
     std::vector<MessageInfo> m_messages;
     std::vector<MessageList> m_lists;
     std::unordered_map<std::string, u32> m_byName;
+    mutable std::optional<CanonicalDigestSink::Digest> m_nativeContent;
 };
+
+void visitNativeState(NativeStateDigest&, const MessageTable&);
 
 } // namespace gdl

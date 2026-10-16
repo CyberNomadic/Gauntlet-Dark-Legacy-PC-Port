@@ -42,6 +42,8 @@ void PlayScene::updateTransporters(s32 ticks, f32 seconds, bool held) {
             destination && transport.begin(*destination)) {
             const auto sound = LevelTransporters::soundForRealm(m_world->ref().realmId);
             if (!sound.empty()) {
+                const auto audioScope =
+                    m_audio.soundScope({43, 0, 1, static_cast<u8>(actor.player())}, 1);
                 m_audio.playNamed(sound);
             }
         }

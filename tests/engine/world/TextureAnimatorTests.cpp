@@ -1,5 +1,6 @@
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -10,6 +11,7 @@
 #include "engine/assets/TextureSet.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/WorldScene.h"
 
@@ -53,6 +55,46 @@ struct Fixture {
         REQUIRE(scene.build(layout, models, textures, device, WorldLighting{}, lenders));
     }
 };
+
+struct DigestTextures {
+    std::vector<std::pair<const Texture*, u32>> slots;
+
+    explicit DigestTextures(Fixture& fixture) {
+        for (u32 slot = 0; slot < 3; ++slot) {
+            slots.emplace_back(&fixture.textures.texture(fixture.device, slot), slot);
+        }
+        for (u32 slot = 1; slot < 3; ++slot) {
+            slots.emplace_back(&fixture.lender.texture(fixture.device, slot), 100 + slot);
+        }
+    }
+    NativeStateDigest::Resources resources() {
+        return {this, [](NativeStateDigest& digest, std::type_index type, const void* pointer,
+                         void* context) {
+                    if (type != typeid(Texture)) {
+                        return false;
+                    }
+                    const auto& bindings = *static_cast<DigestTextures*>(context);
+                    for (const auto& [texture, identity] : bindings.slots) {
+                        if (texture == pointer) {
+                            digest.word(identity);
+                            return true;
+                        }
+                    }
+                    return false;
+                }};
+    }
+};
+
+std::optional<NativeStateDigest::Digest>
+bindingDigest(const TextureAnimator& animator, NativeStateDigest::Resources resources = {},
+              std::optional<TextureAnimator::Clock> clock = {}) {
+    NativeStateDigest digest(resources);
+    animator.appendBindingDigest(digest);
+    if (clock) {
+        digest.fields<3>(*clock);
+    }
+    return digest.checkedFinish();
+}
 
 TEST_CASE("texture animations cycle frames and slide coordinates once a game frame",
           "[world][animation]") {
@@ -361,4 +403,240 @@ TEST_CASE("a cycle ends where its frames cannot be read", "[world][animation]") 
     REQUIRE(f.scene.textureOf(0) == &f.textures.texture(f.device, 2));
 }
 
+TEST_CASE("local texture clocks rewind fractional cycles and scrolling without rebinding",
+          "[world][animation][local-rewind]") {
+    Fixture f("texture-local-clock");
+    const std::vector<TextureAnimationInfo> animations{
+        cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 1, 2, "TORCH00"),
+        cycle("STONE", 0, 1, 2, 0, 1),
+        cycle("GLASS", 1, TextureAnimationInfo::kScrollU, -4, 2, 0),
+    };
+    f.animator.bind(animations, f.textures, f.device, f.lenders);
+    REQUIRE(f.animator.size() == 3);
+    const auto uploads = f.device.texturesCreated;
+    f.animator.advance(1.0f / 60);
+    const auto saved = f.animator.clock();
+    std::array<TextureAnimator::Clock, 8> expected;
+    std::array<std::array<s32, 3>, 8> counters{};
+    for (usize tick = 0; tick < expected.size(); ++tick) {
+        f.animator.advance(1.0f / 60);
+        expected[tick] = f.animator.clock();
+        for (usize entry = 0; entry < counters[tick].size(); ++entry) {
+            counters[tick][entry] = f.animator.counter(entry);
+        }
+    }
+    for (s32 repeat = 0; repeat < 2; ++repeat) {
+        f.animator.restoreClock(saved);
+        CHECK(f.animator.clock() == saved);
+        for (usize tick = 0; tick < expected.size(); ++tick) {
+            f.animator.advance(1.0f / 60);
+            CHECK(f.animator.clock() == expected[tick]);
+            for (usize entry = 0; entry < counters[tick].size(); ++entry) {
+                CHECK(f.animator.counter(entry) == counters[tick][entry]);
+            }
+        }
+    }
+    f.animator.restoreClock({});
+    CHECK(f.animator.counter(0) == 1);
+    CHECK(f.animator.counter(1) == 0);
+    CHECK(f.animator.counter(2) == 2);
+    CHECK(f.device.texturesCreated == uploads);
+}
+
+TEST_CASE("texture rewind preserves signed and out of range native start counters",
+          "[world][animation][local-rewind][texture-signed-start]") {
+    Fixture f("texture-signed-start");
+    for (const s32 source : {TextureAnimationInfo::kScrollU, TextureAnimationInfo::kScrollV, 0}) {
+        for (const s32 start : {-9, -1, 0, 3, 4, 9}) {
+            for (const s32 rate : {-2, 0, 1, 3}) {
+                for (const bool keyed : {false, true}) {
+                    CAPTURE(source, start, rate, keyed);
+                    auto info = cycle("STONE", 0, source, source >= 0 ? 2 : 4, start, rate);
+                    info.flag = keyed ? 0 : TextureAnimationInfo::kFreeRunning;
+                    const std::array animations{info};
+                    TextureAnimator reference, replay;
+                    reference.bind(animations, f.textures, f.device);
+                    replay.bind(animations, f.textures, f.device);
+                    REQUIRE(reference.size() == 1);
+                    REQUIRE(replay.size() == 1);
+                    std::array<s32, 48> counters;
+                    std::array<Vec2, 48> offsets;
+                    std::array<TextureAnimator::Clock, 48> clocks;
+                    for (usize frame = 0; frame < counters.size(); ++frame) {
+                        counters[frame] = reference.counter(0);
+                        clocks[frame] = reference.clock();
+                        if (source < 0) {
+                            offsets[frame] = reference.motion(0).offset;
+                        }
+                        reference.step(); // Independent oracle: unchanged native increment.
+                    }
+                    for (const u32 frame : {0U, 1U, 2U, 3U, 8U, 9U, 40U, 19U, 0U, 39U, 4U, 1U}) {
+                        CAPTURE(frame);
+                        replay.seek(frame);
+                        for (u32 follow = 0; follow < 4; ++follow) {
+                            const usize index = frame + follow;
+                            CHECK(replay.counter(0) == counters[index]);
+                            CHECK(replay.clock() == clocks[index]);
+                            if (source < 0) {
+                                CHECK(replay.motion(0).offset == offsets[index]);
+                            }
+                            replay.step();
+                        }
+                        replay.restoreClock(clocks[frame]);
+                        CHECK(replay.counter(0) == counters[frame]);
+                        if (source < 0) {
+                            CHECK(replay.motion(0).offset == offsets[frame]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const std::array negative{cycle("GLASS", 1, TextureAnimationInfo::kScrollU, 4, -1, 1)};
+    f.animator.bind(negative, f.textures, f.device);
+    const auto birth = f.animator.clock();
+    CHECK(f.animator.motion(0).offset.x == Approx(-0.25f));
+    f.animator.step();
+    CHECK(f.animator.counter(0) == 0);
+    f.animator.restoreClock(birth);
+    CHECK(f.animator.counter(0) == -1);
+    CHECK(f.animator.motion(0).offset.x == Approx(-0.25f));
+}
+
+TEST_CASE("texture binding fingerprints retain authored values and resolve current resources",
+          "[world][animation][native-immutable-digest][texture-binding-digest]") {
+    Fixture first("texture-binding-digest-first");
+    Fixture second("texture-binding-digest-second");
+    DigestTextures firstTextures(first), secondTextures(second);
+    std::vector<TextureAnimationInfo> definitions{
+        cycle("STONE", 0, 1, 2, 0, 2),
+        cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 1, 2, "TORCH00"),
+        cycle("GLASS", 1, TextureAnimationInfo::kScrollU, -4, -1, 0),
+        cycle("LOST", 0, TextureAnimationInfo::kByName, 3, 0, 1, "NOPE"),
+    };
+    const auto independentDefinitions = definitions;
+    REQUIRE(definitions.data() != independentDefinitions.data());
+    first.animator.bind(definitions, first.textures, first.device, first.lenders);
+    second.animator.bind(independentDefinitions, second.textures, second.device, second.lenders);
+    REQUIRE(first.animator.size() == 3);
+    REQUIRE(first.animator.cycleFrame(0, 0) != second.animator.cycleFrame(0, 0));
+    const auto initial = bindingDigest(first.animator, firstTextures.resources());
+    REQUIRE(initial);
+    CHECK(bindingDigest(second.animator, secondTextures.resources()) == initial);
+    CHECK(bindingDigest(first.animator, firstTextures.resources()) == initial);
+
+    // A warmed scalar fingerprint does not cache pointer lookup success or the
+    // semantic IDs supplied by a particular stage registry.
+    CHECK_FALSE(bindingDigest(first.animator));
+    auto changedResources = firstTextures;
+    changedResources.slots[1].second += 1000;
+    REQUIRE(bindingDigest(first.animator, changedResources.resources()));
+    CHECK(bindingDigest(first.animator, changedResources.resources()) != initial);
+    changedResources = firstTextures;
+    changedResources.slots.erase(changedResources.slots.begin() + 1);
+    CHECK_FALSE(bindingDigest(first.animator, changedResources.resources()));
+    CHECK(bindingDigest(first.animator, firstTextures.resources()) == initial);
+
+    // The caller's input vector is not the animator's immutable authored bank.
+    definitions[0].name = "CHANGED";
+    CHECK(bindingDigest(first.animator, firstTextures.resources()) == initial);
+    for (u32 field = 0; field < 9; ++field) {
+        CAPTURE(field);
+        definitions = independentDefinitions;
+        auto& value = definitions[0];
+        switch (field) {
+        case 0: value.name = "OTHER"; break;
+        case 1: value.frameName = "AUTHORED"; break;
+        case 2: value.texture = 1; break;
+        case 3: value.source = 0; break;
+        case 4: value.frames = 1; break;
+        case 5: value.start = 1; break;
+        case 6: value.rate = 3; break;
+        case 7: value.offset = 4; break;
+        case 8: value.flag = 0; break;
+        default: FAIL("unexpected authored field");
+        }
+        first.animator.bind(definitions, first.textures, first.device, first.lenders);
+        REQUIRE(bindingDigest(first.animator, firstTextures.resources()));
+        CHECK(bindingDigest(first.animator, firstTextures.resources()) != initial);
+        first.animator.bind(independentDefinitions, first.textures, first.device, first.lenders);
+        CHECK(bindingDigest(first.animator, firstTextures.resources()) == initial);
+    }
+    // A dropped unresolved record is still authored binding data, not omitted
+    // merely because no drawable entry was created for it.
+    definitions = independentDefinitions;
+    definitions.back().name = "OTHER_MISSING";
+    first.animator.bind(definitions, first.textures, first.device, first.lenders);
+    REQUIRE(first.animator.size() == 3);
+    CHECK(bindingDigest(first.animator, firstTextures.resources()) != initial);
+
+    first.animator.clear();
+    TextureAnimator empty;
+    REQUIRE(bindingDigest(first.animator));
+    CHECK(bindingDigest(first.animator) == bindingDigest(empty));
+    CHECK(bindingDigest(first.animator) != initial);
+    first.animator.bind(independentDefinitions, first.textures, first.device, first.lenders);
+    CHECK(bindingDigest(first.animator, firstTextures.resources()) == initial);
+}
+
+TEST_CASE("texture binding cache never substitutes for mutable clocks or counter validation",
+          "[world][animation][local-rewind][native-immutable-digest][texture-binding-digest]") {
+    Fixture fixture("texture-binding-clock");
+    DigestTextures textures(fixture);
+    const std::array definitions{
+        cycle("STONE", 0, 1, 2, 0, 2),
+        cycle("GLASS", 1, TextureAnimationInfo::kScrollU, 5, -1, 0),
+    };
+    fixture.animator.bind(definitions, fixture.textures, fixture.device);
+    const auto immutable = bindingDigest(fixture.animator, textures.resources());
+    REQUIRE(immutable);
+    fixture.animator.advance(1.0f / 60);
+    const auto saved = fixture.animator.clock();
+    const auto captured = bindingDigest(fixture.animator, textures.resources(), saved);
+    REQUIRE(captured);
+    std::array<NativeStateDigest::Digest, 8> expected;
+    for (usize tick = 0; tick < expected.size(); ++tick) {
+        fixture.animator.advance(1.0f / 60);
+        const auto next =
+            bindingDigest(fixture.animator, textures.resources(), fixture.animator.clock());
+        REQUIRE(next);
+        expected[tick] = *next;
+        CHECK(bindingDigest(fixture.animator, textures.resources()) == immutable);
+        CHECK(bindingDigest(fixture.animator, textures.resources(), saved) == captured);
+    }
+    const auto uploads = fixture.device.texturesCreated;
+    for (usize replay = 1; replay <= expected.size(); ++replay) {
+        fixture.animator.advance(0.25f);
+        CHECK(bindingDigest(fixture.animator, textures.resources(), fixture.animator.clock()) !=
+              captured);
+        fixture.animator.restoreClock(saved);
+        CHECK(bindingDigest(fixture.animator, textures.resources(), fixture.animator.clock()) ==
+              captured);
+        for (usize tick = 0; tick < replay; ++tick) {
+            fixture.animator.advance(1.0f / 60);
+        }
+        CHECK(bindingDigest(fixture.animator, textures.resources(), fixture.animator.clock()) ==
+              expected[replay - 1]);
+        for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
+            fixture.animator.motion(0, fixture.animator.presentationOffset(alpha));
+            CHECK(bindingDigest(fixture.animator, textures.resources()) == immutable);
+        }
+    }
+    CHECK(fixture.device.texturesCreated == uploads);
+
+    // Absolute seeks can reach the u32 boundary even though admitted gameplay
+    // clocks cannot. Wrapping the unchanged native increment contradicts the
+    // original seed; the warmed binding cache must still reject that phase.
+    const std::array wrap{cycle("GLASS", 1, TextureAnimationInfo::kScrollU, 5, 1, 0)};
+    fixture.animator.bind(wrap, fixture.textures, fixture.device);
+    fixture.animator.seek(std::numeric_limits<u32>::max());
+    REQUIRE(bindingDigest(fixture.animator));
+    fixture.animator.step();
+    CHECK(fixture.animator.frame() == 0);
+    CHECK(fixture.animator.counter(0) == 2);
+    CHECK_FALSE(bindingDigest(fixture.animator));
+    fixture.animator.seek(0);
+    CHECK(bindingDigest(fixture.animator));
+}
 } // namespace

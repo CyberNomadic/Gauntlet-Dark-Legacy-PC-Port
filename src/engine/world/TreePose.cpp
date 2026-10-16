@@ -7,9 +7,20 @@
 
 #include "engine/core/Assert.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/WorldCamera.h"
 
 namespace gdl {
+
+void visitNativeState(NativeStateDigest& digest, const TreePose& state) {
+    const auto& [tree, poses, matrices] = state;
+    digest.resource(tree);
+    digest.wide(poses.size());
+    for (const auto& pose : poses) {
+        digest.fields<4>(pose);
+    }
+    digest.value(matrices);
+}
 
 namespace {
 

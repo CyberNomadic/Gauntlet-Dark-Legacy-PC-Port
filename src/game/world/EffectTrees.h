@@ -20,6 +20,8 @@
 
 namespace gdl::game {
 
+class NativeStateResources;
+
 /**
  * Effects that are an archive's animation tree played once where something happened, such
  * as a potion's burst of magic: the tree's meshes posed by its first sequence, its object
@@ -128,8 +130,10 @@ public:
         RenderDevice* device = nullptr;
     };
 
-    /** One effect playing. */
-    struct Effect {
+    struct Effect;
+    /** Native values copied by local rewind. Artwork stays shared; its mutable
+     * draw cache is derived from these values immediately before drawing. */
+    struct EffectState {
         u64 instance = 0;
         u32 continuity = 1;
         std::string name;
@@ -155,7 +159,7 @@ public:
         const TreeInfo* tree = nullptr;
         ItemArchive* archive = nullptr;
         std::vector<TextureSet*> lenders; ///< borrowed; same lifetime contract as archive
-        TreeModel model;
+        std::shared_ptr<TreeModel> model;
         TreePose pose;
         AnimationPlayer player;
         f32 secondsLeft = 0.0f; ///< for a tree without a sequence
@@ -177,7 +181,6 @@ public:
         u64 previousGeneration = 0;
         f32 previousFrame = 0;
         bool presentationCaptured = false;
-        mutable TreePose presentationPose; ///< visual-only sample, never emitter or contact input
         std::optional<Provenance> provenance;
         /** Prevalidated future topology for a restored chain. Artwork remains
          * borrowed from the immutable pool catalog; CPU birth state is owned.
@@ -185,6 +188,11 @@ public:
         std::shared_ptr<const Effect> morphPrototype;
         Mat4 transform() const;
         f32 opacity() const;
+    };
+
+    /** One effect playing, with a disposable interpolated pose outside history. */
+    struct Effect : EffectState {
+        mutable TreePose presentationPose;
     };
 
     /** Immutable prebound topology, independent of any live pool entry. A bank-only
@@ -315,6 +323,8 @@ public:
     void update(f32 seconds);
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera = nullptr, f32 frameBlend = -1.0f) const;
+    /** End the current effects without discarding this stage's reusable artwork. */
+    void reset();
     void clear();
 
     usize count() const { return m_effects.size(); }
@@ -342,13 +352,13 @@ public:
                                     std::span<TextureSet* const> textureLenders = {}) const;
 
 private:
-    static Checkpoint captureEffect(const Effect& effect);
+    static Checkpoint captureEffect(const EffectState& effect);
     static void initializeTree(Effect& effect, const Setting& setting);
     static void initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
                                     const Texture& texture, u32 textureSlot, const Mat4& attachment,
                                     u32 seed);
-    static bool bindVisuals(Effect& effect);
-    static f32 secondsLeftOf(const Effect& effect);
+    bool bindVisuals(Effect& effect);
+    static f32 secondsLeftOf(const EffectState& effect);
     /** An archive's texture animations, shared by its effects. */
     struct Motion {
         ItemArchive* archive = nullptr;
@@ -356,14 +366,60 @@ private:
         TextureAnimator animator;
     };
 
+    struct Visual {
+        RenderDevice* device = nullptr;
+        ItemArchive* archive = nullptr;
+        const TreeInfo* tree = nullptr;
+        std::vector<TextureSet*> lenders;
+        bool missingObjectsAreEmpty = false;
+        bool emitParticles = false;
+        std::shared_ptr<TreeModel> model;
+        TreeParticles particles;
+    };
+
+public:
+    class LocalSnapshot {
+    private:
+        friend class EffectTrees;
+        std::vector<EffectState> effects;
+        std::vector<Motion*> motions;
+        std::vector<TextureAnimator::Clock> clocks;
+        std::vector<TextureSet*> lenders;
+        bool presentationAdvanced = false;
+        u32 nextId = 1;
+        u64 nextInstance = 1;
+        std::weak_ptr<const u8> owner;
+        u64 epoch = 0;
+    };
+    /** Same-owner, same-resource-epoch in-memory history. No wire validation,
+     * resource rebinding, or animation seeking is involved. Archives and lenders
+     * must outlive this pool; clear it before unloading their resources. */
+    void saveLocal(LocalSnapshot& state) const;
+    bool canRestoreLocal(const LocalSnapshot& state) const;
+    bool restoreLocal(const LocalSnapshot& state);
+    /** Complete native values, with semantic borrowed-resource bindings. */
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    /** Archives/lender banks must already have stable keys in the registry. */
+    bool registerNativeResources(NativeStateResources& registry) const;
+
+private:
+    static void appendMotionDigest(NativeStateDigest& digest, const Motion& motion,
+                                   const TextureAnimator::Clock& clock);
+    Motion& nativeBank(RenderDevice& device, ItemArchive& archive,
+                       std::span<TextureSet* const> lenders);
+
     std::vector<std::unique_ptr<Effect>> m_effects;
-    std::vector<std::unique_ptr<Motion>> m_motions;
+    std::vector<Motion*> m_motions;
+    std::vector<std::unique_ptr<Motion>> m_motionCache;
+    std::vector<Visual> m_visualCache;
     std::vector<TextureSet*> m_lenders;
     bool m_presentationAdvanced = false;
     u32 m_nextId = 1;
     u64 m_nextInstance = 1; ///< independent of resettable local effect handles
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 1;
+    u64 m_localEpoch = 1;
 };
 
 } // namespace gdl::game

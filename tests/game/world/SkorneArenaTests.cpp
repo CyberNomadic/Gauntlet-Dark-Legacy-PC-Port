@@ -1,12 +1,16 @@
+#include <array>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/SkorneArena.h"
 
 namespace {
@@ -85,5 +89,129 @@ TEST_CASE("altar entrance loads all twenty-two loose masonry meshes", "[skorne][
     REQUIRE(arena.size() == 22);
     arena.draw(device, Mat4{1}, {});
     REQUIRE(device.draws.size() >= 22);
+}
+struct RewindFixture {
+    test::FakeRenderDevice device;
+    WorldLayout layout;
+    ModelSet models;
+    TextureSet textures;
+    SkorneArena arena;
+
+    explicit RewindFixture(std::string_view name) {
+        const auto directory = test::sampleLevel(name);
+        writeTextFile(directory / "world.json", R"({
+          "objects":[{"name":"WALL","position":[0,0,0]}],
+          "bounds":{"min":[-20,-10,-20],"max":[20,20,20]},
+          "itemInfos":[{"type":10,"subtype":51}],
+          "itemInstances":[
+            {"info":0,"name":"WALL","position":[10,0,0]},
+            {"info":0,"name":"WALL","position":[-10,2,5]},
+            {"info":0,"name":"WALL","position":[0,-1,0]}]})");
+        REQUIRE(layout.load(directory));
+        REQUIRE(models.load(directory));
+        REQUIRE(textures.load(directory));
+        arena.bind(device, layout, models, textures);
+        REQUIRE(arena.size() == 3);
+    }
+    void step(u64 tick) {
+        if (tick == 3 || tick == 12 || tick == 40) {
+            arena.cue({0, 0, 0});
+        }
+        arena.update(tick % 13 == 0 ? 0.0f : 1.0f / 60);
+    }
+};
+
+TEST_CASE("native altar rewind retains random lifts cues fractional clocks and falling poses",
+          "[local-rewind][skorne-arena-local-rewind]") {
+    RewindFixture reference("skorne-native-reference");
+    RewindFixture corrected("skorne-native-corrected");
+    LocalStateHistory<SkorneArena::LocalSnapshot> history;
+    std::array<SkorneArena::LocalSnapshot, 8> expected;
+    SkorneArena::LocalSnapshot observed;
+    const auto uploads = corrected.device.texturesCreated;
+    const auto updates = corrected.device.textureUpdates;
+    u64 tick = 0;
+    for (u64 window = 0; window < 160; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(tick, [&](auto& saved) {
+            corrected.arena.saveLocal(saved);
+            return true;
+        }));
+        const u64 distance = 1 + window % 8;
+        const auto* saved = history.find(tick);
+        REQUIRE(saved);
+        for (u64 offset = 0; offset < distance; ++offset) {
+            corrected.step(tick + offset);
+            corrected.arena.saveLocal(expected[offset]);
+        }
+        REQUIRE(corrected.arena.restoreLocal(*saved));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            reference.step(tick + offset);
+            corrected.arena.cue({-20, 10, 20});
+            corrected.arena.update(0.13f);
+        }
+        REQUIRE(corrected.arena.restoreLocal(*saved));
+        for (u64 offset = 0; offset < distance; ++offset) {
+            corrected.step(tick + offset);
+            corrected.arena.saveLocal(observed);
+            CHECK(corrected.arena.equalLocal(observed, expected[offset]));
+        }
+        CHECK(corrected.arena.phase() == reference.arena.phase());
+        for (usize index = 0; index < reference.arena.size(); ++index) {
+            CHECK(corrected.arena.position(index) == reference.arena.position(index));
+            CHECK(corrected.arena.visible(index) == reference.arena.visible(index));
+        }
+        for (const f32 alpha : {-1.0f, 0.0f, 0.5f, 1.0f}) {
+            reference.device.draws.clear();
+            corrected.device.draws.clear();
+            reference.arena.draw(reference.device, Mat4{1}, {}, alpha);
+            corrected.arena.draw(corrected.device, Mat4{1}, {}, alpha);
+            REQUIRE(corrected.device.draws.size() == reference.device.draws.size());
+            for (usize draw = 0; draw < reference.device.draws.size(); ++draw) {
+                CHECK(corrected.device.draws[draw].vertices ==
+                      reference.device.draws[draw].vertices);
+                CHECK(corrected.device.draws[draw].transform ==
+                      reference.device.draws[draw].transform);
+                CHECK(corrected.device.draws[draw].state == reference.device.draws[draw].state);
+            }
+        }
+        tick += distance;
+    }
+    CHECK(corrected.arena.phase() == 3);
+    CHECK_FALSE(corrected.arena.visible(0));
+    CHECK_FALSE(corrected.arena.visible(1));
+    CHECK_FALSE(corrected.arena.visible(2));
+    CHECK(corrected.device.texturesCreated == uploads);
+    CHECK(corrected.device.textureUpdates == updates);
+    SkorneArena::LocalSnapshot saved;
+    corrected.arena.saveLocal(saved);
+    CHECK_FALSE(reference.arena.restoreLocal(saved));
+    CHECK_FALSE(reference.arena.equalLocal(saved, saved));
+    corrected.arena.clear();
+    CHECK_FALSE(corrected.arena.restoreLocal(saved));
+    CHECK_FALSE(corrected.arena.equalLocal(saved, saved));
+    corrected.arena.bind(corrected.device, corrected.layout, corrected.models, corrected.textures);
+    CHECK_FALSE(corrected.arena.restoreLocal(saved));
+}
+
+TEST_CASE("native altar equality retains lift randomness and subframe clocks before movement",
+          "[local-rewind][skorne-arena-local-rewind]") {
+    RewindFixture fixture("skorne-native-hidden-values");
+    SkorneArena::LocalSnapshot before, lifted, fractional, restored;
+    fixture.arena.saveLocal(before);
+    const auto position = fixture.arena.position(0);
+    fixture.arena.cue({0, 0, 0});
+    fixture.arena.saveLocal(lifted);
+    CHECK(fixture.arena.position(0) == position);
+    CHECK_FALSE(fixture.arena.equalLocal(before, lifted));
+    fixture.arena.update(1.0f / 240);
+    fixture.arena.saveLocal(fractional);
+    CHECK(fixture.arena.position(0) == position);
+    CHECK_FALSE(fixture.arena.equalLocal(lifted, fractional));
+    REQUIRE(fixture.arena.restoreLocal(before));
+    fixture.arena.cue({0, 0, 0});
+    fixture.arena.update(1.0f / 240);
+    fixture.arena.saveLocal(restored);
+    CHECK(fixture.arena.equalLocal(fractional, restored));
 }
 } // namespace

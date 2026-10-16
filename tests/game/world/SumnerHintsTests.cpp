@@ -221,4 +221,63 @@ TEST_CASE("the native hints name the Lich first and tell of the green gas",
     REQUIRE(stone.title == "The First Runestone");
 }
 
+TEST_CASE("native hint rewind retains every topic cursor and widened search across visits",
+          "[game][world][hints][sumner-hints-local-rewind]") {
+    const auto file = sampleHints("hints-local-rewind");
+    SumnerHints expected;
+    SumnerHints corrected;
+    REQUIRE(expected.load(file));
+    REQUIRE(corrected.load(file));
+    HintKnowledge knowledge;
+    knowledge.worldsOpen = worlds({1, 2, 7});
+    knowledge.guardiansBeaten = worlds({2, 7});
+    knowledge.legendsFound = worlds({1, 7});
+    knowledge.runestonesFound = 0x17B;
+    knowledge.wingsOpen = {true, true, true};
+    knowledge.guardianTries = {worlds({1, 2}), worlds({2})};
+    knowledge.legendTries = {worlds({2}), worlds({2})};
+    const auto tick = [&](SumnerHints& hints, s32 t) {
+        if (t % 37 == 0) {
+            hints.beginVisit();
+        }
+        return hints.next(static_cast<HintTopic>(t % 4), knowledge, "A HINT");
+    };
+    s32 at = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        const s32 delay = 1 + window % 8;
+        CAPTURE(window, at, delay);
+        SumnerHints::LocalSnapshot saved;
+        corrected.saveLocal(saved);
+        CHECK_FALSE(expected.restoreLocal(saved));
+        std::vector<HintPage> pages;
+        for (s32 t = at; t < at + delay; ++t) {
+            pages.push_back(tick(expected, t));
+            corrected.beginVisit();
+            corrected.next(HintTopic::General, {}, "WRONG");
+            corrected.next(HintTopic::Runestones, {}, "WRONG");
+        }
+        REQUIRE(corrected.restoreLocal(saved));
+        for (s32 t = at; t < at + delay; ++t) {
+            const auto actual = tick(corrected, t);
+            const auto& page = pages[static_cast<usize>(t - at)];
+            CHECK(actual.title == page.title);
+            CHECK(actual.passages == page.passages);
+            CHECK(actual.scale == page.scale);
+            CHECK(actual.centred == page.centred);
+            CHECK(actual.gap == page.gap);
+        }
+        CHECK(corrected.generalList() == expected.generalList());
+        CHECK(corrected.generalHint() == expected.generalHint());
+        CHECK(corrected.guardian() == expected.guardian());
+        CHECK(corrected.legend() == expected.legend());
+        CHECK(corrected.runestone() == expected.runestone());
+        at += delay;
+    }
+    SumnerHints::LocalSnapshot saved;
+    corrected.saveLocal(saved);
+    REQUIRE(corrected.load(file));
+    CHECK_FALSE(corrected.restoreLocal(saved));
+    CHECK(corrected.generalHint() == -1);
+}
+
 } // namespace

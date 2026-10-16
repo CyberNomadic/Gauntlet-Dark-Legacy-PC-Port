@@ -7,6 +7,7 @@
 
 #include "../../engine/world/SampleLevel.h"
 #include "FakeRenderDevice.h"
+#include "game/netplay/LocalStateHistory.h"
 #include "game/world/FallingSceneryCheckpoint.h"
 
 namespace {
@@ -16,8 +17,8 @@ using namespace gdl::game;
 void checkCues(std::span<const FallingCue> a, std::span<const FallingCue> b) {
     REQUIRE(a.size() == b.size());
     for (usize index = 0; index < a.size(); ++index) {
-        CHECK(std::tie(a[index].position, a[index].sound) ==
-              std::tie(b[index].position, b[index].sound));
+        CHECK((std::tie(a[index].position, a[index].sound) ==
+               std::tie(b[index].position, b[index].sound)));
     }
 }
 struct Fixture {
@@ -171,5 +172,91 @@ TEST_CASE("native forest falling checkpoint retains the full original model rost
     REQUIRE(owner.commitRestore(std::move(*undo)));
     CHECK(owner.checkpoint() == state);
     CHECK(device.texturesCreated == uploads);
+}
+TEST_CASE("native falling scenery rewinds start cues half-frame motion and retirement",
+          "[local-rewind][falling-local-rewind]") {
+    Fixture reference("falling-native-reference");
+    Fixture corrected("falling-native-corrected");
+    LocalStateHistory<FallingScenery::LocalSnapshot> history;
+    std::array<FallingScenery::LocalSnapshot, 8> expected;
+    FallingScenery::LocalSnapshot observed;
+    const auto* piece = &corrected.scenery.piece(0);
+    const auto* model = &piece->model;
+    const auto uploads = corrected.device.texturesCreated;
+    s32 tick = 0;
+    for (s32 window = 0; window < 96; ++window) {
+        CAPTURE(window, tick);
+        REQUIRE(history.capture(static_cast<u64>(tick), [&](auto& saved) {
+            corrected.scenery.saveLocal(saved);
+            return true;
+        }));
+        const auto before = corrected.state();
+        auto stale = corrected.owner.prepareRestore(before);
+        REQUIRE(stale);
+        const s32 distance = 1 + window % 8;
+        const auto* saved = history.find(static_cast<u64>(tick));
+        REQUIRE(saved);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            corrected.step(tick + offset, 1.0f / 60);
+            corrected.scenery.saveLocal(expected[static_cast<usize>(offset)]);
+        }
+        REQUIRE(corrected.scenery.restoreLocal(*saved));
+        std::vector<std::vector<FallingCue>> cues;
+        for (s32 offset = 0; offset < distance; ++offset) {
+            cues.push_back(reference.step(tick + offset, 1.0f / 60));
+            corrected.scenery.setPlayerCount(4);
+            corrected.scenery.touch({0, 0, 0}, 100);
+            corrected.scenery.shoot({40, 0, 0}, 100);
+            corrected.scenery.update(0.13f);
+        }
+        REQUIRE(corrected.scenery.restoreLocal(*saved));
+        CHECK_FALSE(corrected.owner.canCommit(*stale));
+        CHECK(corrected.state() == before);
+        for (s32 offset = 0; offset < distance; ++offset) {
+            checkCues(corrected.step(tick + offset, 1.0f / 60), cues[static_cast<usize>(offset)]);
+            corrected.scenery.saveLocal(observed);
+            CHECK(corrected.scenery.equalLocal(observed, expected[static_cast<usize>(offset)]));
+        }
+        CHECK(corrected.state() == reference.state());
+        CHECK(&corrected.scenery.piece(0) == piece);
+        CHECK(&corrected.scenery.piece(0).model == model);
+        for (const f32 alpha : {-1.0f, 0.0f, 0.5f, 1.0f}) {
+            reference.device.draws.clear();
+            corrected.device.draws.clear();
+            reference.scenery.draw(reference.device, Mat4{1}, {}, alpha);
+            corrected.scenery.draw(corrected.device, Mat4{1}, {}, alpha);
+            REQUIRE(corrected.device.draws.size() == reference.device.draws.size());
+            for (usize draw = 0; draw < reference.device.draws.size(); ++draw) {
+                CHECK(corrected.device.draws[draw].vertices ==
+                      reference.device.draws[draw].vertices);
+            }
+        }
+        tick += distance;
+    }
+    CHECK(corrected.device.texturesCreated == uploads);
+    FallingScenery::LocalSnapshot saved;
+    corrected.scenery.saveLocal(saved);
+    CHECK_FALSE(reference.scenery.restoreLocal(saved));
+    CHECK_FALSE(reference.scenery.equalLocal(saved, saved));
+    corrected.scenery.clear();
+    CHECK_FALSE(corrected.scenery.restoreLocal(saved));
+    CHECK_FALSE(corrected.scenery.equalLocal(saved, saved));
+    corrected.scenery.bind(corrected.device, corrected.layout, corrected.models, corrected.textures,
+                           "D2");
+    CHECK_FALSE(corrected.scenery.restoreLocal(saved));
+}
+TEST_CASE("native falling equality retains subframe time without a changed piece position",
+          "[local-rewind][falling-local-rewind]") {
+    Fixture fixture("falling-native-hidden-clock");
+    FallingScenery::LocalSnapshot before, after, restored;
+    fixture.scenery.saveLocal(before);
+    const auto position = fixture.scenery.piece(0).motion.position;
+    fixture.scenery.update(1.0f / 240);
+    fixture.scenery.saveLocal(after);
+    CHECK(fixture.scenery.piece(0).motion.position == position);
+    CHECK_FALSE(fixture.scenery.equalLocal(before, after));
+    REQUIRE(fixture.scenery.restoreLocal(before));
+    fixture.scenery.saveLocal(restored);
+    CHECK(fixture.scenery.equalLocal(before, restored));
 }
 } // namespace

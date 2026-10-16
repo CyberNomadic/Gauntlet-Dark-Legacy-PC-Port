@@ -4,12 +4,32 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
+
+void visitNativeState(NativeStateDigest& digest, const ItemFigure& figure) {
+    const auto& [resources, textureClock, tree, archive, poseSequence, poseFrame, poseGeneration,
+                 continuity, pose, previousTransform, previousFrame, previousGeneration, captured,
+                 advanced, player, particles, textureSequence, textureFrame, gateParticles,
+                 position, yaw, transform, placement, index, loop, holdPose] = figure.m_sim;
+    // The model/cache behind resources is derived from these immutable asset
+    // bindings and the value clocks. Its current draw sample is not tick state.
+    digest.flag(resources != nullptr);
+    digest.resource(tree);
+    digest.resource(archive);
+    digest.fields<3>(textureClock);
+    digest.values(poseSequence, poseFrame, poseGeneration, continuity, pose, previousTransform,
+                  previousFrame, previousGeneration, captured, advanced, player, particles,
+                  textureSequence, textureFrame, gateParticles, position, yaw, transform, placement,
+                  index, loop, holdPose);
+}
 
 namespace {
 
@@ -61,6 +81,86 @@ bool levelWith(const Obstacle& box, const Vec3& position) {
 
 } // namespace
 
+ItemFigure::ItemFigure(const ItemFigure& other)
+    : m_bindings(other.m_bindings), m_sim(other.m_sim) {}
+
+ItemFigure& ItemFigure::operator=(const ItemFigure& other) {
+    if (this != &other) {
+        m_sim = other.m_sim;
+        m_bindings = other.m_bindings;
+        m_presentationPose = {};
+    }
+    return *this;
+}
+
+bool ItemFigure::equalLocal(const ItemFigure& other) const {
+    const auto values = [](const Simulation& s) {
+        return std::tie(s.tree, s.archive, s.textureClock, s.poseSequence, s.poseFrame,
+                        s.poseGeneration, s.continuity, s.previousTransform, s.previousFrame,
+                        s.previousGeneration, s.presentationCaptured, s.presentationAdvanced,
+                        s.textureSequence, s.textureFrame, s.gateParticles, s.position, s.yaw,
+                        s.transform, s.placement, s.index, s.loop, s.holdPose);
+    };
+    // Empty figures have no artwork binding. Otherwise comparison requires the
+    // actual shared prototype; equal names do not authenticate an asset owner.
+    return (m_sim.tree == nullptr || m_sim.resources == other.m_sim.resources) &&
+           values(m_sim) == values(other.m_sim) && m_sim.pose.equalLocal(other.m_sim.pose) &&
+           m_sim.player.equalLocal(other.m_sim.player) &&
+           m_sim.particles.equalLocal(other.m_sim.particles);
+}
+
+bool ItemFigure::registerNativeResources(NativeStateResources& registry) const {
+    std::vector<const ItemArchive*> refreshed;
+    const auto refresh = [&](const ItemArchive* archive) {
+        if (!archive || std::ranges::find(refreshed, archive) != refreshed.end()) {
+            return true;
+        }
+        if (!registry.refreshArchive(*archive)) {
+            return false;
+        }
+        refreshed.push_back(archive);
+        return true;
+    };
+    if (!refresh(m_sim.archive)) {
+        return false;
+    }
+    const auto registerStatic = [&](const TreeInfo& tree, const ItemArchive& archive,
+                                     u32 flags) {
+        if (tree.nodes.size() != 1) {
+            return false;
+        }
+        const auto object = archive.models.find(tree.nodes.front().object);
+        return object && registry.registerStaticTree(tree, archive, *object, flags);
+    };
+    // Diagnostic prototype copies may own a static tree without a lazy binding
+    // cache. Native copies normally find this same tree in the retained cache.
+    if (m_sim.resources && m_sim.resources->staticTree &&
+        (!m_sim.archive || m_sim.resources->staticTree->nodes.size() != 1 ||
+         !registerStatic(*m_sim.resources->staticTree, *m_sim.archive,
+                           m_sim.resources->staticTree->nodes.front().objectFlags))) {
+        return false;
+    }
+    for (const auto& binding : *m_bindings) {
+        if (!binding.archive || !binding.tree || !refresh(binding.archive)) {
+            return false;
+        }
+        if (binding.staticModel) {
+            // AssetScope may resolve a suffix (NAME -> NAMEL1); the generated
+            // node records that actual object, unlike the requested cache name.
+            if (!registerStatic(*binding.tree, *binding.archive, binding.flags)) {
+                return false;
+            }
+        }
+    }
+    return registry.good();
+}
+
+TextureAnimator& ItemFigure::textures() const {
+    auto& result = m_sim.resources->textures;
+    result.restoreClock(m_sim.textureClock);
+    return result;
+}
+
 bool ItemFigure::Checkpoint::valid() const {
     constexpr f32 kMagnitude = TreePose::Checkpoint::kMaxMagnitude;
     const auto bounded = [](f32 value) {
@@ -93,44 +193,44 @@ bool ItemFigure::Checkpoint::valid() const {
 }
 
 std::optional<ItemFigure::Checkpoint> ItemFigure::checkpoint() const {
-    auto pose = m_pose.checkpoint();
-    if (m_tree == nullptr || m_archive == nullptr || !pose) {
+    auto pose = m_sim.pose.checkpoint();
+    if (m_sim.tree == nullptr || m_sim.archive == nullptr || !pose) {
         return std::nullopt;
     }
-    Checkpoint state{m_player.checkpoint(),
+    Checkpoint state{m_sim.player.checkpoint(),
                      std::move(*pose),
                      m_presentationPose.checkpoint(),
-                     m_textures.checkpoint(),
-                     m_particles.checkpoint(),
-                     m_poseSequence,
-                     m_poseFrame,
-                     m_poseGeneration,
-                     m_continuity,
-                     m_previousTransform,
-                     m_previousFrame,
-                     m_previousGeneration,
-                     m_presentationCaptured,
-                     m_presentationAdvanced,
-                     m_textureSequence,
-                     m_textureFrame,
-                     m_gateParticles,
-                     m_position,
-                     m_yaw,
-                     m_transform,
-                     m_placement,
-                     m_index,
-                     m_loop,
-                     m_holdPose};
+                     textures().checkpoint(),
+                     m_sim.particles.checkpoint(),
+                     m_sim.poseSequence,
+                     m_sim.poseFrame,
+                     m_sim.poseGeneration,
+                     m_sim.continuity,
+                     m_sim.previousTransform,
+                     m_sim.previousFrame,
+                     m_sim.previousGeneration,
+                     m_sim.presentationCaptured,
+                     m_sim.presentationAdvanced,
+                     m_sim.textureSequence,
+                     m_sim.textureFrame,
+                     m_sim.gateParticles,
+                     m_sim.position,
+                     m_sim.yaw,
+                     m_sim.transform,
+                     m_sim.placement,
+                     m_sim.index,
+                     m_sim.loop,
+                     m_sim.holdPose};
     return state.valid() ? std::optional{std::move(state)} : std::nullopt;
 }
 
 std::unique_ptr<ItemFigure> ItemFigure::restored(const Checkpoint& state) const {
-    if (m_tree == nullptr || m_archive == nullptr || !state.valid() ||
-        state.pose.tree != m_tree->name || !m_particles.canRestore(state.particles)) {
+    if (m_sim.tree == nullptr || m_sim.archive == nullptr || !state.valid() ||
+        state.pose.tree != m_sim.tree->name || !m_sim.particles.canRestore(state.particles)) {
         return nullptr;
     }
     const auto sequence = [&](u32 index) -> const TreeSequenceInfo* {
-        return index < m_tree->sequences.size() ? &m_tree->sequences[index] : nullptr;
+        return index < m_sim.tree->sequences.size() ? &m_sim.tree->sequences[index] : nullptr;
     };
     const auto validFrame = [&](u32 index, f32 frame) {
         const auto* info = sequence(index);
@@ -139,7 +239,7 @@ std::unique_ptr<ItemFigure> ItemFigure::restored(const Checkpoint& state) const 
     // Authored static trees and model-only fallbacks have no sequence at all;
     // their stopped animation clock and visual cursors remain at zero. An
     // existing sequence with zero frames is a different, animated empty state.
-    const bool staticPose = m_tree->sequences.empty();
+    const bool staticPose = m_sim.tree->sequences.empty();
     if (staticPose ? (state.animation.playing || state.animation.sequence != 0 ||
                       state.animation.time != 0 || state.animation.frame != 0 ||
                       state.animation.transitionLength != 0 ||
@@ -151,49 +251,55 @@ std::unique_ptr<ItemFigure> ItemFigure::restored(const Checkpoint& state) const 
         return nullptr;
     }
     auto result = std::make_unique<ItemFigure>();
-    if (m_staticTree) {
-        result->m_staticTree = std::make_unique<TreeInfo>(*m_staticTree);
+    if (m_sim.resources->staticTree) {
+        result->m_sim.resources->staticTree =
+            std::make_unique<TreeInfo>(*m_sim.resources->staticTree);
     }
-    result->m_tree = result->m_staticTree ? result->m_staticTree.get() : m_tree;
-    result->m_archive = m_archive;
-    result->m_model = m_model;
-    result->m_textures = m_textures;
-    result->m_particles = m_particles;
-    const auto* playing =
-        state.animation.playing ? &result->m_tree->sequences[state.animation.sequence] : nullptr;
-    if (!result->m_player.restore(state.animation, playing) ||
-        !result->m_pose.restore(*result->m_tree, state.pose) ||
+    result->m_sim.tree = result->m_sim.resources->staticTree
+                             ? result->m_sim.resources->staticTree.get()
+                             : m_sim.tree;
+    result->m_sim.archive = m_sim.archive;
+    result->m_sim.resources->model = m_sim.resources->model;
+    result->m_sim.resources->textures = textures();
+    result->m_sim.particles = m_sim.particles;
+    const auto* playing = state.animation.playing
+                              ? &result->m_sim.tree->sequences[state.animation.sequence]
+                              : nullptr;
+    if (!result->m_sim.player.restore(state.animation, playing) ||
+        !result->m_sim.pose.restore(*result->m_sim.tree, state.pose) ||
         (state.presentationPose &&
-         !result->m_presentationPose.restore(*result->m_tree, *state.presentationPose)) ||
-        !result->m_textures.restore(state.textures) ||
-        !result->m_particles.restore(state.particles)) {
+         !result->m_presentationPose.restore(*result->m_sim.tree, *state.presentationPose)) ||
+        !result->textures().restore(state.textures) ||
+        !result->m_sim.particles.restore(state.particles)) {
         return nullptr;
     }
-    result->m_poseSequence = state.poseSequence;
-    result->m_poseFrame = state.poseFrame;
-    result->m_poseGeneration = state.poseGeneration;
-    result->m_continuity = state.continuity;
-    result->m_previousTransform = state.previousTransform;
-    result->m_previousFrame = state.previousFrame;
-    result->m_previousGeneration = state.previousGeneration;
-    result->m_presentationCaptured = state.presentationCaptured;
-    result->m_presentationAdvanced = state.presentationAdvanced;
-    result->m_textureSequence = state.textureSequence;
-    result->m_textureFrame = state.textureFrame;
-    result->m_gateParticles = state.gateParticles;
-    result->m_position = state.position;
-    result->m_yaw = state.yaw;
-    result->m_transform = state.transform;
-    result->m_placement = state.placement;
-    result->m_index = state.index;
-    result->m_loop = state.loop;
-    result->m_holdPose = state.holdPose;
-    result->m_model.setFrame(state.animation.sequence, static_cast<s32>(state.animation.frame));
+    result->m_sim.textureClock = state.textures;
+    result->m_sim.poseSequence = state.poseSequence;
+    result->m_sim.poseFrame = state.poseFrame;
+    result->m_sim.poseGeneration = state.poseGeneration;
+    result->m_sim.continuity = state.continuity;
+    result->m_sim.previousTransform = state.previousTransform;
+    result->m_sim.previousFrame = state.previousFrame;
+    result->m_sim.previousGeneration = state.previousGeneration;
+    result->m_sim.presentationCaptured = state.presentationCaptured;
+    result->m_sim.presentationAdvanced = state.presentationAdvanced;
+    result->m_sim.textureSequence = state.textureSequence;
+    result->m_sim.textureFrame = state.textureFrame;
+    result->m_sim.gateParticles = state.gateParticles;
+    result->m_sim.position = state.position;
+    result->m_sim.yaw = state.yaw;
+    result->m_sim.transform = state.transform;
+    result->m_sim.placement = state.placement;
+    result->m_sim.index = state.index;
+    result->m_sim.loop = state.loop;
+    result->m_sim.holdPose = state.holdPose;
+    result->m_sim.resources->model.setFrame(state.animation.sequence,
+                                            static_cast<s32>(state.animation.frame));
     // Reapply the saved cursor, not refreshTextures(): a held empty state can
     // deliberately retain a different texture/pose sequence from its mesh.
-    result->m_textures.apply(result->m_model, *result->m_tree, state.textureSequence,
-                             state.textureFrame);
-    result->m_textures.apply(result->m_particles, *result->m_tree, state.textureSequence,
+    result->textures().apply(result->m_sim.resources->model, *result->m_sim.tree,
+                             state.textureSequence, state.textureFrame);
+    result->textures().apply(result->m_sim.particles, *result->m_sim.tree, state.textureSequence,
                              state.textureFrame);
     return result;
 }
@@ -312,51 +418,70 @@ std::optional<f32> Obstacle::contact(const Vec3& from, const Vec3& to, f32 radiu
 
 bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_view name,
                        const ItemInstance& instance, const WorldCollision* collision) {
-    m_position = instance.position;
+    m_sim.position = instance.position;
     if (collision != nullptr) {
         if (const auto floor = collision->floorAt(instance.position, kFloorReachAbove,
                                                   kFloorReachBelow, kFloorReachRadius);
             floor.has_value()) {
-            m_position.y = floor->y + kFloorLift;
+            m_sim.position.y = floor->y + kFloorLift;
         }
     }
-    m_transform = itemPlacement(m_position, instance.rotation);
-    m_yaw = std::atan2(m_transform[2].x, m_transform[2].z);
-    m_placement = m_transform;
-    m_tree = nullptr;
-    m_archive = &items;
-    m_poseSequence = 0;
-    m_poseFrame = 0;
-    m_poseGeneration = 0;
-    ++m_continuity;
-    m_staticTree.reset();
-    m_index = -1;
-    m_player.stop();
-    m_particles = {};
-    m_textures.clear();
-    m_textureSequence = 0;
-    m_textureFrame = 0;
-    m_gateParticles = false;
-    m_presentationCaptured = false;
-    m_presentationAdvanced = false;
+    m_sim.transform = itemPlacement(m_sim.position, instance.rotation);
+    m_sim.yaw = std::atan2(m_sim.transform[2].x, m_sim.transform[2].z);
+    m_sim.placement = m_sim.transform;
+    m_sim.tree = nullptr;
+    m_sim.archive = &items;
+    m_sim.poseSequence = 0;
+    m_sim.poseFrame = 0;
+    m_sim.poseGeneration = 0;
+    ++m_sim.continuity;
+    m_sim.textureClock = {};
+    m_sim.index = -1;
+    m_sim.player.stop();
+    m_sim.particles = {};
+
+    m_sim.textureSequence = 0;
+    m_sim.textureFrame = 0;
+    m_sim.gateParticles = false;
+    m_sim.presentationCaptured = false;
+    m_sim.presentationAdvanced = false;
+    // A draw pose belongs to one tree topology and is never a rewind input.
+    m_presentationPose = {};
     const auto tree = items.loaded() ? items.trees.find(name) : std::nullopt;
     if (!tree.has_value()) {
+        m_sim.resources = std::make_shared<Resources>();
         return false;
     }
-    m_tree = &items.trees.tree(*tree);
-    const bool mesh = m_model.bind(*m_tree, items.models, items.textures, device);
-    const bool wantsMesh = std::ranges::any_of(m_tree->nodes, [](const TreeNodeInfo& node) {
+    m_sim.tree = &items.trees.tree(*tree);
+    const auto cached = std::ranges::find_if(*m_bindings, [&](const CachedBinding& binding) {
+        return binding.archive == &items && binding.device == &device &&
+               binding.tree == m_sim.tree && !binding.staticModel;
+    });
+    if (cached != m_bindings->end()) {
+        m_sim.resources = cached->resources;
+        m_sim.pose.rest(*m_sim.tree);
+        m_sim.particles = cached->particles;
+        m_sim.particles.step(0, m_sim.transform, m_sim.pose.matrices());
+        play(0, true);
+        return true;
+    }
+    m_sim.resources = std::make_shared<Resources>();
+    const bool mesh =
+        m_sim.resources->model.bind(*m_sim.tree, items.models, items.textures, device);
+    const bool wantsMesh = std::ranges::any_of(m_sim.tree->nodes, [](const TreeNodeInfo& node) {
         return !node.object.empty() || std::ranges::any_of(node.objectFrames, [](const auto& run) {
             return !run.object.empty();
         });
     });
-    m_pose.rest(*m_tree);
-    m_particles.bind(*m_tree, items, device, m_transform, m_pose.matrices());
-    if (!mesh && (wantsMesh || m_particles.field().size() == 0)) {
-        m_tree = nullptr;
+    m_sim.pose.rest(*m_sim.tree);
+    m_sim.particles.bind(*m_sim.tree, items, device, m_sim.transform, m_sim.pose.matrices());
+    if (!mesh && (wantsMesh || m_sim.particles.field().size() == 0)) {
+        m_sim.tree = nullptr;
         return false;
     }
-    m_textures.bind(items.trees.textureAnimations(), items.textures, device);
+    textures().bind(items.trees.textureAnimations(), items.textures, device);
+    m_bindings->push_back({&items, &device, std::string{name}, false, 0, m_sim.tree,
+                           m_sim.resources, m_sim.particles});
     play(0, true);
     return true;
 }
@@ -371,7 +496,7 @@ bool ItemFigure::place(RenderDevice& device, const AssetScope& scope, std::strin
     const bool placed = place(device, none, name, instance, collision);
     // This placeholder is not an authored archive in the level's resource
     // catalog. Empty figures retain their placement, not a synthetic binding.
-    m_archive = nullptr;
+    m_sim.archive = nullptr;
     return placed;
 }
 
@@ -390,139 +515,164 @@ bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& sco
         return false;
     }
     ItemArchive& items = *model->archive;
-    m_archive = &items;
-    m_staticTree = std::make_unique<TreeInfo>();
-    m_staticTree->name = name;
+    m_sim.archive = &items;
+    const auto cached = std::ranges::find_if(*m_bindings, [&](const CachedBinding& binding) {
+        return binding.archive == &items && binding.device == &device && binding.name == name &&
+               binding.staticModel && binding.flags == objectFlags;
+    });
+    if (cached != m_bindings->end()) {
+        m_sim.resources = cached->resources;
+        m_sim.tree = cached->tree;
+        m_sim.pose.rest(*m_sim.tree);
+        m_sim.holdPose = false;
+        m_sim.index = 0;
+        return true;
+    }
+    m_sim.resources->staticTree = std::make_shared<TreeInfo>();
+    m_sim.resources->staticTree->name = name;
     TreeNodeInfo node;
     node.name = name;
     node.object = model->name;
     node.objectFlags = objectFlags;
-    m_staticTree->nodes.push_back(std::move(node));
-    if (!m_model.bind(*m_staticTree, items.models, items.textures, device)) {
-        m_staticTree.reset();
+    m_sim.resources->staticTree->nodes.push_back(std::move(node));
+    if (!m_sim.resources->model.bind(*m_sim.resources->staticTree, items.models, items.textures,
+                                     device)) {
+        m_sim.resources->staticTree.reset();
         return false;
     }
-    m_tree = m_staticTree.get();
-    m_pose.rest(*m_tree);
-    m_textures.bind(items.trees.textureAnimations(), items.textures, device);
-    m_holdPose = false;
-    m_index = 0;
+    m_sim.tree = m_sim.resources->staticTree.get();
+    m_sim.pose.rest(*m_sim.tree);
+    textures().bind(items.trees.textureAnimations(), items.textures, device);
+    m_sim.holdPose = false;
+    m_sim.index = 0;
+    m_bindings->push_back(
+        {&items, &device, std::string{name}, true, objectFlags, m_sim.tree, m_sim.resources, {}});
     return true;
 }
 
 void ItemFigure::gateParticlesOnSequence(bool enabled) {
     // AnimateNode's particle branch (80011334): sequence zero sets 0x200000
     // to suppress births, while MBDrawPsys continues aging existing particles.
-    m_gateParticles = enabled;
-    m_particles.setEmitting(!enabled || m_index != 0);
+    m_sim.gateParticles = enabled;
+    m_sim.particles.setEmitting(!enabled || m_sim.index != 0);
 }
 
 void ItemFigure::tilt(f32 pitch, f32 yaw) {
-    m_transform = itemPlacement(m_position, Vec3{pitch, m_yaw + yaw, 0.0f});
+    m_sim.transform = itemPlacement(m_sim.position, Vec3{pitch, m_sim.yaw + yaw, 0.0f});
 }
 
 void ItemFigure::placeAt(const Mat4& placement) {
-    if (glm::distance(Vec3{m_transform[3]}, Vec3{placement[3]}) > kPresentationCutDistance) {
-        ++m_continuity;
+    if (glm::distance(Vec3{m_sim.transform[3]}, Vec3{placement[3]}) > kPresentationCutDistance) {
+        ++m_sim.continuity;
     }
-    m_transform = placement;
-    m_placement = placement;
-    m_position = Vec3{placement[3]};
-    m_yaw = std::atan2(placement[2].x, placement[2].z);
+    m_sim.transform = placement;
+    m_sim.placement = placement;
+    m_sim.position = Vec3{placement[3]};
+    m_sim.yaw = std::atan2(placement[2].x, placement[2].z);
 }
 
 void ItemFigure::play(s32 index, bool loop) {
-    const bool hadPose = m_index >= 0;
-    m_index = index;
-    m_loop = loop;
-    m_particles.setEmitting(!m_gateParticles || index != 0);
-    if (m_tree == nullptr || index < 0 || static_cast<usize>(index) >= m_tree->sequences.size()) {
+    const bool hadPose = m_sim.index >= 0;
+    m_sim.index = index;
+    m_sim.loop = loop;
+    m_sim.particles.setEmitting(!m_sim.gateParticles || index != 0);
+    if (m_sim.tree == nullptr) {
         return;
     }
-    m_player.start(m_tree->sequences[static_cast<usize>(index)], static_cast<u32>(index));
-    const auto& sequence = m_tree->sequences[static_cast<usize>(index)];
+    if (index < 0 || static_cast<usize>(index) >= m_sim.tree->sequences.size()) {
+        // Particle-only trees still own free-running texture cycles.
+        refreshTextures();
+        return;
+    }
+    m_sim.player.start(m_sim.tree->sequences[static_cast<usize>(index)], static_cast<u32>(index));
+    const auto& sequence = m_sim.tree->sequences[static_cast<usize>(index)];
     // Atree's empty state changes object visibility, not the previous pose.
     // CHEST OPEN must retain the final ACTIVE lid/socket transforms.
-    m_holdPose = hadPose && sequence.frames == 0 && sequence.tracks.empty();
-    if (!m_holdPose) {
-        m_pose.evaluate(*m_tree, static_cast<u32>(index), 0.0f);
-        m_poseSequence = static_cast<u32>(index);
-        m_poseFrame = 0;
-        m_poseGeneration = m_player.generation();
+    m_sim.holdPose = hadPose && sequence.frames == 0 && sequence.tracks.empty();
+    if (!m_sim.holdPose) {
+        m_sim.pose.evaluate(*m_sim.tree, static_cast<u32>(index), 0.0f);
+        m_sim.poseSequence = static_cast<u32>(index);
+        m_sim.poseFrame = 0;
+        m_sim.poseGeneration = m_sim.player.generation();
     }
-    m_model.setFrame(static_cast<u32>(index), 0);
-    m_particles.setLocalScales(m_pose.poses());
+    m_sim.resources->model.setFrame(static_cast<u32>(index), 0);
+    m_sim.particles.setLocalScales(m_sim.pose.poses());
     refreshTextures();
 }
 
 void ItemFigure::capturePresentation() {
-    m_previousTransform = m_transform;
-    m_previousFrame = m_player.presentationFrame();
-    m_textures.advance(0);
-    m_previousGeneration = m_player.generation();
-    m_presentationCaptured = true;
-    m_presentationAdvanced = false;
+    m_sim.previousTransform = m_sim.transform;
+    m_sim.previousFrame = m_sim.player.presentationFrame();
+    textures().advance(0);
+    m_sim.textureClock = m_sim.resources->textures.clock();
+    m_sim.previousGeneration = m_sim.player.generation();
+    m_sim.presentationCaptured = true;
+    m_sim.presentationAdvanced = false;
 }
 
 void ItemFigure::update(f32 seconds) {
-    if (m_tree == nullptr) {
+    if (m_sim.tree == nullptr) {
         return;
     }
-    m_player.advance(seconds, m_loop);
-    if (!m_holdPose && m_player.playing()) {
-        m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
-        m_poseSequence = m_player.sequence();
-        m_poseFrame = m_player.frame();
-        m_poseGeneration = m_player.generation();
+    m_sim.player.advance(seconds, m_sim.loop);
+    if (!m_sim.holdPose && m_sim.player.playing()) {
+        m_sim.pose.evaluate(*m_sim.tree, m_sim.player.sequence(), m_sim.player.frame());
+        m_sim.poseSequence = m_sim.player.sequence();
+        m_sim.poseFrame = m_sim.player.frame();
+        m_sim.poseGeneration = m_sim.player.generation();
     }
-    m_model.setFrame(m_player.sequence(), static_cast<s32>(m_player.frame()));
-    m_textures.advance(seconds);
+    m_sim.resources->model.setFrame(m_sim.player.sequence(),
+                                    static_cast<s32>(m_sim.player.frame()));
+    textures().advance(seconds);
+    m_sim.textureClock = m_sim.resources->textures.clock();
     refreshTextures();
-    m_particles.setLocalScales(m_pose.poses());
-    m_particles.step(seconds, m_transform, m_pose.matrices());
-    m_presentationAdvanced = seconds > 0;
+    m_sim.particles.setLocalScales(m_sim.pose.poses());
+    m_sim.particles.step(seconds, m_sim.transform, m_sim.pose.matrices());
+    m_sim.presentationAdvanced = seconds > 0;
 }
 
 void ItemFigure::refreshTextures() {
-    if (m_player.sequence() >= m_tree->sequences.size()) {
-        return;
-    }
     // DoSeqTexMods changes alternate textures only when the sequence has texmods.
     // An empty OFF state retains ONB's final transparent frame, rather than restoring
     // the archive's luminous FFGEN14 default. Free-running textures still advance.
-    const auto& sequence = m_tree->sequences[m_player.sequence()];
-    if (!m_holdPose || sequence.textureAnimationCount > 0) {
-        m_textureSequence = m_player.sequence();
-        m_textureFrame = static_cast<s32>(m_player.frame());
+    if (m_sim.player.sequence() < m_sim.tree->sequences.size()) {
+        const auto& sequence = m_sim.tree->sequences[m_sim.player.sequence()];
+        if (!m_sim.holdPose || sequence.textureAnimationCount > 0) {
+            m_sim.textureSequence = m_sim.player.sequence();
+            m_sim.textureFrame = static_cast<s32>(m_sim.player.frame());
+        }
     }
-    m_textures.apply(m_model, *m_tree, m_textureSequence, m_textureFrame);
-    m_textures.apply(m_particles, *m_tree, m_textureSequence, m_textureFrame);
+    // Missing sequences do not suppress clock-driven cycles. Updating the base
+    // binding here keeps non-interpolated cutouts independent of draw cadence.
+    textures().apply(m_sim.resources->model, *m_sim.tree, m_sim.textureSequence,
+                     m_sim.textureFrame);
+    textures().apply(m_sim.particles, *m_sim.tree, m_sim.textureSequence, m_sim.textureFrame);
 }
 
 ItemFigure::Presentation ItemFigure::presentation() const {
-    return {m_tree,
-            m_archive,
-            m_poseSequence,
-            m_poseFrame,
-            m_poseGeneration,
-            m_player.sequence(),
-            m_player.frame(),
-            m_textureSequence,
-            static_cast<f32>(m_textureFrame),
-            static_cast<f32>(m_textures.frame()),
-            m_continuity,
-            m_tree != nullptr && m_model.bound()};
+    return {m_sim.tree,
+            m_sim.archive,
+            m_sim.poseSequence,
+            m_sim.poseFrame,
+            m_sim.poseGeneration,
+            m_sim.player.sequence(),
+            m_sim.player.frame(),
+            m_sim.textureSequence,
+            static_cast<f32>(m_sim.textureFrame),
+            static_cast<f32>(textures().frame()),
+            m_sim.continuity,
+            m_sim.tree != nullptr && m_sim.resources->model.bound()};
 }
 
 bool ItemFigure::finished() const {
-    return m_tree == nullptr || !m_player.playing() || m_player.finished();
+    return m_sim.tree == nullptr || !m_sim.player.playing() || m_sim.player.finished();
 }
 
 std::optional<Mat4> ItemFigure::nodeTransform(std::string_view name) const {
-    if (m_tree != nullptr) {
-        for (usize i = 0; i < m_tree->nodes.size(); ++i) {
-            if (m_tree->nodes[i].name == name && i < m_pose.matrices().size()) {
-                return m_transform * m_pose.matrices()[i];
+    if (m_sim.tree != nullptr) {
+        for (usize i = 0; i < m_sim.tree->nodes.size(); ++i) {
+            if (m_sim.tree->nodes[i].name == name && i < m_sim.pose.matrices().size()) {
+                return m_sim.transform * m_sim.pose.matrices()[i];
             }
         }
     }
@@ -530,24 +680,27 @@ std::optional<Mat4> ItemFigure::nodeTransform(std::string_view name) const {
 }
 
 f32 ItemFigure::progress() const {
-    return m_player.frameCount() > 1
-               ? std::clamp((m_player.frame() + 1) / static_cast<f32>(m_player.frameCount()), 0.0f,
-                            1.0f)
+    return m_sim.player.frameCount() > 1
+               ? std::clamp((m_sim.player.frame() + 1) /
+                                static_cast<f32>(m_sim.player.frameCount()),
+                            0.0f, 1.0f)
                : 1.0f;
 }
 
 const TreeSequenceInfo* ItemFigure::sequenceInfo(s32 index) const {
-    if (m_tree == nullptr || index < 0 || static_cast<usize>(index) >= m_tree->sequences.size()) {
+    if (m_sim.tree == nullptr || index < 0 ||
+        static_cast<usize>(index) >= m_sim.tree->sequences.size()) {
         return nullptr;
     }
-    return &m_tree->sequences[static_cast<usize>(index)];
+    return &m_sim.tree->sequences[static_cast<usize>(index)];
 }
 
 s32 ItemFigure::ticksOf(s32 index) const {
-    if (m_tree == nullptr || index < 0 || static_cast<usize>(index) >= m_tree->sequences.size()) {
+    if (m_sim.tree == nullptr || index < 0 ||
+        static_cast<usize>(index) >= m_sim.tree->sequences.size()) {
         return 0;
     }
-    const TreeSequenceInfo& info = m_tree->sequences[static_cast<usize>(index)];
+    const TreeSequenceInfo& info = m_sim.tree->sequences[static_cast<usize>(index)];
     const f32 rate =
         info.frameRate > 0 ? static_cast<f32>(info.frameRate) : AnimationPlayer::kDefaultRate;
     return static_cast<s32>(std::ceil(static_cast<f32>(info.frames) * rate *
@@ -557,39 +710,44 @@ s32 ItemFigure::ticksOf(s32 index) const {
 void ItemFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 alpha, f32 scale, const CameraFrame* camera, TreeModel::Pass pass,
                       f32 presentationAlpha) const {
-    if (m_tree != nullptr) {
-        Mat4 placement = m_transform;
-        const TreePose* pose = &m_pose;
-        f32 visualFrame = static_cast<f32>(m_textureFrame);
-        if (presentationAlpha >= 0 && m_presentationCaptured) {
+    if (m_sim.tree != nullptr) {
+        Mat4 placement = m_sim.transform;
+        const TreePose* pose = &m_sim.pose;
+        f32 visualFrame = static_cast<f32>(m_sim.textureFrame);
+        if (presentationAlpha >= 0 && m_sim.presentationCaptured) {
             const f32 blend = std::clamp(presentationAlpha, 0.0f, 1.0f);
-            if (glm::distance(Vec3{m_previousTransform[3]}, Vec3{m_transform[3]}) <=
+            if (glm::distance(Vec3{m_sim.previousTransform[3]}, Vec3{m_sim.transform[3]}) <=
                 kPresentationCutDistance) {
-                placement = blendPlacement(m_previousTransform, m_transform, blend);
+                placement = blendPlacement(m_sim.previousTransform, m_sim.transform, blend);
             }
-            if (!m_holdPose && m_player.playing()) {
+            if (!m_sim.holdPose && m_sim.player.playing()) {
                 const f32 frame =
-                    m_previousGeneration == m_player.generation()
-                        ? glm::mix(m_previousFrame, m_player.presentationFrame(), blend)
-                        : m_player.presentationFrame();
-                m_presentationPose.evaluate(*m_tree, m_player.sequence(), frame, false, true);
+                    m_sim.previousGeneration == m_sim.player.generation()
+                        ? glm::mix(m_sim.previousFrame, m_sim.player.presentationFrame(), blend)
+                        : m_sim.player.presentationFrame();
+                m_presentationPose.evaluate(*m_sim.tree, m_sim.player.sequence(), frame, false,
+                                            true);
                 pose = &m_presentationPose;
                 visualFrame = frame;
             }
         }
-        m_textures.apply(m_model, *m_tree, m_textureSequence, visualFrame,
-                         m_textures.presentationOffset(presentationAlpha));
-        if (!m_holdPose) {
-            m_model.setPresentationFrame(m_player.sequence(), visualFrame);
+        textures().apply(m_sim.resources->model, *m_sim.tree, m_sim.textureSequence, visualFrame,
+                         textures().presentationOffset(presentationAlpha));
+        if (!m_sim.holdPose) {
+            m_sim.resources->model.setPresentationFrame(m_sim.player.sequence(), visualFrame);
+        } else {
+            m_sim.resources->model.setFrame(m_sim.player.sequence(),
+                                            static_cast<s32>(m_sim.player.frame()));
         }
-        m_model.draw(device, clip, glm::scale(placement, Vec3{scale}), lighting, pose->matrices(),
-                     camera, alpha, pass);
+        m_sim.resources->model.draw(device, clip, glm::scale(placement, Vec3{scale}), lighting,
+                                    pose->matrices(), camera, alpha, pass);
         if (pass != TreeModel::Pass::DepthWriting) {
             const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
-            m_textures.apply(m_particles, *m_tree, m_textureSequence, visualFrame,
-                             m_textures.presentationOffset(presentationAlpha));
-            m_particles.draw(device, clip, frame.right, frame.up,
-                             m_presentationAdvanced ? presentationAlpha : -1.0f);
+            textures().applyPresentation(m_sim.particles, *m_sim.tree, m_sim.textureSequence,
+                                         visualFrame,
+                                         textures().presentationOffset(presentationAlpha));
+            m_sim.particles.draw(device, clip, frame.right, frame.up,
+                                 m_sim.presentationAdvanced ? presentationAlpha : -1.0f);
         }
     }
 }
@@ -605,8 +763,8 @@ Mat4 itemPlacement(const Vec3& position, const Vec3& rotation) {
 
 Obstacle ItemFigure::obstacle(const ItemInfo& info) const {
     Obstacle box;
-    box.centre = m_position;
-    box.yaw = m_yaw;
+    box.centre = m_sim.position;
+    box.yaw = m_sim.yaw;
     // A record without a box is as wide as its radius.
     box.halfAcross = info.xSize > 0.0f ? info.xSize : info.radius;
     box.halfAlong = info.zSize > 0.0f ? info.zSize : info.radius;

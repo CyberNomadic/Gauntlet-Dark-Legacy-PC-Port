@@ -299,4 +299,104 @@ TEST_CASE("native gargoyle statue wakes and retires identically after fractional
     CHECK(replay.takeRisen() == native.takeRisen());
 }
 
+TEST_CASE("native statue rewind restores wrong wake branches across compaction and pending births",
+          "[critter-statues-local-rewind][native-equality]") {
+    StatueFixture fixture;
+    CritterStatues::LocalSnapshot saved;
+    std::array<CritterStatues::LocalSnapshot, 8> uninterrupted;
+    CritterStatues::LocalSnapshot actual;
+    const auto uploads = fixture.device.texturesCreated;
+    const auto updates = fixture.device.textureUpdates;
+    const auto advance = [](CritterStatues& statues, s32 tick) {
+        if (tick == 0 || tick == 10 || tick == 24) {
+            statues.wake(statues.count() > 1 ? 1 : 0);
+        }
+        statues.update(1, 1.0f / 60, [tick](const Vec3&, f32) { return tick % 4 != 0; });
+        if (tick % 13 == 12) {
+            statues.takeRisen();
+        }
+    };
+    bool sawRisen = false, sawCompaction = false;
+    s32 tick = 0;
+    for (s32 window = 0; window < 24; ++window) {
+        CAPTURE(window, tick);
+        const auto before = fixture.replay.checkpoint();
+        REQUIRE(before);
+        fixture.replay.saveLocal(saved);
+        const s32 distance = 1 + window % 8;
+        for (s32 step = 0; step < distance; ++step) {
+            advance(fixture.replay, tick + step);
+            fixture.replay.saveLocal(uninterrupted[static_cast<usize>(step)]);
+        }
+        REQUIRE(fixture.replay.restoreLocal(saved));
+        auto diagnostic = fixture.replay.prepareRestore(*before);
+        REQUIRE(diagnostic);
+        for (usize i = 0; i < fixture.replay.count(); ++i) {
+            fixture.replay.wake(i);
+        }
+        fixture.replay.setContactGridBounds({-900, 0, -800}, {700, 0, 600});
+        for (s32 step = 0; step < distance; ++step) {
+            fixture.replay.update(2, 1.0f / 30, {});
+        }
+        fixture.replay.takeRisen();
+        REQUIRE(fixture.replay.restoreLocal(saved));
+        CHECK_FALSE(fixture.replay.canCommit(*diagnostic));
+        CHECK(fixture.replay.checkpoint() == before);
+        for (s32 step = 0; step < distance; ++step, ++tick) {
+            advance(fixture.native, tick);
+            advance(fixture.replay, tick);
+            fixture.replay.saveLocal(actual);
+            CHECK(fixture.replay.equalLocal(uninterrupted[static_cast<usize>(step)], actual));
+            const auto expected = fixture.native.checkpoint();
+            REQUIRE(expected);
+            CHECK(fixture.replay.checkpoint() == expected);
+            sawRisen |= !expected->risen.empty();
+            sawCompaction |= expected->statues.size() < 3;
+        }
+        REQUIRE(fixture.replay.canRestoreLocal(saved));
+    }
+    CHECK(sawRisen);
+    CHECK(sawCompaction);
+    CHECK(fixture.device.texturesCreated == uploads);
+    CHECK(fixture.device.textureUpdates == updates);
+}
+
+TEST_CASE("native statue history refuses different pools loads and diagnostic replacement",
+          "[critter-statues-local-rewind][native-equality]") {
+    StatueFixture fixture;
+    CritterStatues::LocalSnapshot saved;
+    CHECK_FALSE(fixture.native.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.native.restoreLocal(saved));
+    fixture.native.saveLocal(saved);
+    CHECK(fixture.native.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.replay.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.replay.restoreLocal(saved));
+    REQUIRE(fixture.native.restoreLocal(saved));
+    REQUIRE(fixture.native.restoreLocal(saved));
+    REQUIRE(fixture.native.restore(*fixture.native.checkpoint()));
+    CHECK_FALSE(fixture.native.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.native.restoreLocal(saved));
+    fixture.native.saveLocal(saved);
+    REQUIRE(fixture.native.add(fixture.device, fixture.archive, statueAt(90), nullptr));
+    CHECK_FALSE(fixture.native.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.native.restoreLocal(saved));
+    fixture.native.saveLocal(saved);
+    fixture.native.clear();
+    CHECK_FALSE(fixture.native.equalLocal(saved, saved));
+    CHECK_FALSE(fixture.native.restoreLocal(saved));
+}
+
+TEST_CASE("native statue equality sees contact-grid policy before any actor moves",
+          "[critter-statues-local-rewind][native-equality]") {
+    StatueFixture fixture;
+    CritterStatues::LocalSnapshot before, after;
+    fixture.native.saveLocal(before);
+    fixture.native.setContactGridBounds({-500, 0, -500}, {700, 0, 700});
+    fixture.native.saveLocal(after);
+    CHECK_FALSE(fixture.native.equalLocal(before, after));
+    REQUIRE(fixture.native.restoreLocal(before));
+    fixture.native.saveLocal(after);
+    CHECK(fixture.native.equalLocal(before, after));
+}
+
 } // namespace

@@ -1,5 +1,7 @@
 #include "engine/world/WorldAnimator.h"
 
+#include "engine/io/NativeStateDigest.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -39,7 +41,80 @@ void WorldAnimator::bind(const WorldLayout& layout) {
     }
 }
 
+const CanonicalDigestSink::Digest& WorldAnimator::trackDigest() const {
+    if (!m_trackDigest) {
+        NativeStateDigest tracks;
+        tracks.string("WorldAnimator.tracks/1");
+        tracks.wide(m_tracks.size());
+        for (const auto& track : m_tracks) {
+            tracks.fields<4>(track.track);
+            tracks.value(track.origin);
+        }
+        m_trackDigest = tracks.finish();
+    }
+    return *m_trackDigest;
+}
+
+bool WorldAnimator::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("WorldAnimator/2");
+    digest.bytes(trackDigest());
+    digest.wide(m_tracks.size());
+    for (usize i = 0; i < m_tracks.size(); ++i) {
+        const auto& track = m_tracks[i];
+        digest.value(saved ? saved->cursors[i] : static_cast<const Cursor&>(track));
+    }
+    digest.value(saved ? saved->cycles : m_cycleEvents);
+    return digest.good();
+}
+
+bool WorldAnimator::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool WorldAnimator::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
+    [[maybe_unused]] const auto& [cursors, cycles, owner, binding] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+void WorldAnimator::saveLocal(LocalSnapshot& saved) const {
+    saved.cursors.resize(m_tracks.size());
+    for (usize i = 0; i < m_tracks.size(); ++i) {
+        saved.cursors[i] = m_tracks[i];
+    }
+    saved.cycles = m_cycleEvents;
+    saved.owner = this;
+    saved.binding = m_localBinding;
+}
+
+bool WorldAnimator::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
+           saved.cursors.size() == m_tracks.size();
+}
+
+bool WorldAnimator::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.cursors == right.cursors &&
+           left.cycles == right.cycles;
+}
+
+bool WorldAnimator::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    for (usize i = 0; i < m_tracks.size(); ++i) {
+        static_cast<Cursor&>(m_tracks[i]) = saved.cursors[i];
+    }
+    m_cycleEvents = saved.cycles;
+    return true;
+}
+
 void WorldAnimator::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
+    m_trackDigest.reset();
     m_tracks.clear();
     m_cycleEvents.clear();
 }

@@ -23,11 +23,15 @@ PartyMotion::Events PlayScene::motionEvents() {
         .perform = [this](usize i, PartyMotion::Action action) { perform(i, action); },
         .select =
             [this](usize i, const SelectorInput& input, s32 elapsed) {
+                const auto audioScope = m_audio.soundScope(
+                    {32, 0, 1, static_cast<u8>(m_players[i].actor.player())}, 1);
                 m_hud.stepSelector(m_players[i].actor, input, elapsed, m_audio,
                                    m_world->ref().isSecret());
             },
         .advanceTurbo =
             [this](usize i, s32 elapsed, f32 duration) {
+                const auto audioScope = m_audio.soundScope(
+                    {32, 0, 1, static_cast<u8>(m_players[i].actor.player())}, 2);
                 m_attacks.updateTurbo(i, elapsed, duration, m_players, [this](s32 id, usize index) {
                     // The meter full, the lesson waits for fifteen in
                     // view (pmotion.c 1756); the combo's for a party
@@ -100,6 +104,8 @@ usize PlayScene::standingCount() const {
 
 /** Carries out what a member's movement set off: a throw, a swing, a potion, a footstep. */
 void PlayScene::perform(usize i, PartyMotion::Action action) {
+    const auto audioScope = m_audio.soundScope(
+        {33, 0, 1, static_cast<u8>(m_players[i].actor.player())}, static_cast<u32>(action) + 1);
     switch (action) {
     case PartyMotion::Action::NoPotion: postHelp(HelpMessages::kNoPotion, i); break;
     case PartyMotion::Action::Ram: m_attacks.ramBarrels(i, m_players, attackTargets()); break;
@@ -170,8 +176,8 @@ Vec3 PlayScene::limitStep(usize index, const Vec3& before, const Vec3& after) co
         return after;
     }
     // Use the unshaken gameplay camera, never the promotion/victory cut.
-    const auto& camera = bossCameraOn() ? m_bossCamera.camera() : m_camera.camera();
-    const auto& attention = bossCameraOn() ? m_bossCamera.attention() : m_camera.attention();
+    const auto& camera = bossCameraOn() ? m_sim.bossCamera.camera() : m_camera.camera();
+    const auto& attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
     const auto& actor = m_players[index].actor;
     return CameraMovementLimit::constrain(before, after, attention, camera, cameraView(),
                                           actor.followPoint() - actor.position());

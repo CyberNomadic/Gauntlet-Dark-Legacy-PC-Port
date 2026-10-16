@@ -85,7 +85,7 @@ void Combatant::strikeWith(Actor& critter, s32 id, const MoveDefinition& move, s
         CombatBlow blow;
         blow.player = view.player;
         blow.critter = id;
-        blow.damage = dealt(damage->damage * m_scales.damage);
+        blow.damage = dealt(damage->damage * m_sim.scales.damage);
         blow.breath = breath.has_value();
         blow.gated = gated;
         blow.flags = damage->flags;
@@ -101,7 +101,7 @@ void Combatant::strikeWith(Actor& critter, s32 id, const MoveDefinition& move, s
         } else if (!gated) {
             critter.struckThisMove.push_back(view.player);
         }
-        m_blows.push_back(blow);
+        m_sim.blows.push_back(blow);
     }
 }
 
@@ -125,13 +125,13 @@ void Combatant::shoot(const Actor& critter, s32 id, const MoveDefinition& move, 
     }
     shot.rate = attackRate(critter);
     shot.scale = critter.scale;
-    shot.damageScale = m_scales.damage;
+    shot.damageScale = m_sim.scales.damage;
     shot.endVisual = critter.stock->definition.projectileEndVisual;
     if ((damage->behaviorFlags & AttackDefinition::kCurbed) != 0 && critter.curbSeconds > 0.0f) {
         shot.birthLife = critter.curbSeconds;
     }
-    shot.realm = m_realm;
-    m_shots.push_back(shot);
+    shot.realm = m_sim.realm;
+    m_sim.shots.push_back(shot);
 }
 
 /** Where the target stood when the move looked, the record's offset turned with the body
@@ -153,9 +153,9 @@ void Combatant::plant(const Actor& critter, s32 id, s32 damageIndex) {
     shot.forward = Vec3{std::sin(critter.yaw), 0.0f, std::cos(critter.yaw)};
     shot.rate = attackRate(critter);
     shot.scale = critter.scale;
-    shot.damageScale = m_scales.damage;
-    shot.realm = m_realm;
-    m_shots.push_back(shot);
+    shot.damageScale = m_sim.scales.damage;
+    shot.realm = m_sim.realm;
+    m_sim.shots.push_back(shot);
 }
 
 void Combatant::cue(Actor& critter, s32 id, s32 index, const Vec3& position,
@@ -178,7 +178,7 @@ void Combatant::cue(Actor& critter, s32 id, s32 index, const Vec3& position,
             critter.skinAge = 0;
         }
         out.tree = !skin && record->shows() ? record->tree : std::string{};
-        out.sound = record->soundFor(m_realm);
+        out.sound = record->soundFor(m_sim.realm);
         out.soundPosition = Vec3{modelTransform(critter)[3]};
         // A dying great one's sounds carry whole; the rest fade with distance.
         out.attenuated = critter.move < 0 || data.moves()[static_cast<usize>(critter.move)].type !=
@@ -262,7 +262,7 @@ void Combatant::cue(Actor& critter, s32 id, s32 index, const Vec3& position,
             out.follows = true;
         }
         if (!out.tree.empty() || !out.sound.empty() || out.shakes || out.arena) {
-            m_cues.push_back(std::move(out));
+            m_sim.cues.push_back(std::move(out));
         }
         at = record->link;
     }

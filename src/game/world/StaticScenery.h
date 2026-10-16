@@ -13,6 +13,11 @@ namespace gdl::game {
  * These are solid placed items, not exit triggers or breakable scenery. */
 class StaticScenery {
 public:
+    StaticScenery() = default;
+    StaticScenery(const StaticScenery&) = delete;
+    StaticScenery& operator=(const StaticScenery&) = delete;
+    StaticScenery(StaticScenery&&) noexcept = default;
+    StaticScenery& operator=(StaticScenery&&) noexcept = default;
     struct Prop {
         s32 instance = -1;
         s32 minPlayers = 1;
@@ -20,6 +25,10 @@ public:
         ItemFigure figure;
         ItemSupport support;
         Obstacle box;
+        bool operator==(const Prop&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Prop& value) {
+            visitor.template fields<6>(value);
+        }
     };
     void bind(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope,
               const WorldCollision* collision);
@@ -31,15 +40,37 @@ public:
     std::vector<Obstacle> obstacles() const;
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera, TreeModel::Pass pass, f32 presentationAlpha) const;
-    usize size() const { return m_props.size(); }
-    const Prop& prop(usize index) const { return *m_props[index]; }
+    usize size() const { return m_sim.props.size(); }
+    const Prop& prop(usize index) const { return m_sim.props[index]; }
 
 private:
     friend class StaticSceneryCheckpoint;
+    struct Simulation {
+        std::vector<Prop> props;
+        bool operator==(const Simulation&) const = default;
+    } m_sim;
+
+public:
+    /** In-memory history for this owner and its current bound stage. */
+    class LocalSnapshot {
+        friend class StaticScenery;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const StaticScenery* owner = nullptr;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    bool appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) const;
     const WorldCollision* m_collision = nullptr;
     const WorldLayout* m_layout = nullptr;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;
-    std::vector<std::unique_ptr<Prop>> m_props;
 };
 } // namespace gdl::game

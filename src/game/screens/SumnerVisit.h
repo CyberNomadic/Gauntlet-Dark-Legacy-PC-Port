@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <optional>
 
 #include "engine/assets/ItemArchive.h"
@@ -17,7 +19,26 @@ namespace gdl::game {
  * Borrows menu artwork and the text painter; clear before their owners release them.
  * The scene chooses visitors and applies sound/gesture cues, but no scene is retained. */
 class SumnerVisit {
+    struct Simulation {
+        s32 owner = -1;
+        f32 greetingLeft = -1.0f;
+        bool hintsGiven = false;
+    };
+
 public:
+    class LocalSnapshot {
+        friend class SumnerVisit;
+        Simulation state;
+        const SumnerVisit* owner = nullptr;
+        std::weak_ptr<const u8> binding;
+        HintMenu::LocalSnapshot menu;
+        SumnerHints::LocalSnapshot hints;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     static constexpr f32 kGreetingSeconds = 2.0f;
 
     SumnerVisit() = default;
@@ -55,7 +76,7 @@ public:
     bool nativeReady(const TextPainter& text) const {
         return m_hints.loaded() && text.ready() && m_menu.burnReady();
     }
-    s32 owner() const { return m_owner; }
+    s32 owner() const { return m_sim.owner; }
     const HintMenu& menu() const { return m_menu; }
     const SumnerHints& texts() const { return m_hints; }
 
@@ -66,9 +87,8 @@ private:
     SumnerHints m_hints;
     HintMenu m_menu;
     ModelSprite m_arrow; ///< menu art points here; this owner must not move
-    s32 m_owner = -1;
-    f32 m_greetingLeft = -1.0f;
-    bool m_hintsGiven = false;
+    Simulation m_sim;
+    std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
 };
 
 } // namespace gdl::game

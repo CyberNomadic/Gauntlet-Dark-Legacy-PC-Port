@@ -2,11 +2,15 @@
 
 #include <array>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 #include "engine/core/Types.h"
+#include "engine/io/CanonicalDigestSink.h"
 
 namespace gdl {
+
+class NativeStateDigest;
 
 /** One character cell: its code and where it sits in the font texture; height is the font's. */
 struct BitmapGlyph {
@@ -33,12 +37,16 @@ public:
     const BitmapGlyph* glyph(u8 code) const;
 
 private:
+    friend void visitNativeState(NativeStateDigest&, const BitmapFont&);
     void index();
 
     s32 m_height = 0;
     s32 m_spaceWidth = 0;
     std::vector<BitmapGlyph> m_glyphs;
     std::array<s16, 256> m_lookup{};
+    mutable std::optional<CanonicalDigestSink::Digest> m_nativeContent;
 };
+
+void visitNativeState(NativeStateDigest&, const BitmapFont&);
 
 } // namespace gdl

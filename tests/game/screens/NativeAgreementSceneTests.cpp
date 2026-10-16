@@ -1,4 +1,8 @@
+#include <algorithm>
+#include <chrono>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -6,8 +10,10 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "engine/core/Log.h"
 #include "game/netplay/CharacterProfile.h"
 #include "game/netplay/PlacedEnemyCheckpoint.h"
+#include "game/players/Progression.h"
 #include "game/screens/OpponentResources.h"
 #include "game/screens/PlayScene.h"
 
@@ -24,7 +30,8 @@ struct Fixture {
     LevelWorld world;
     PlayScene scene;
 
-    explicit Fixture(std::string_view name = "G1") {
+    explicit Fixture(std::string_view name = "G1", s32 players = 1,
+                     std::optional<CharacterSave> initial = std::nullopt) {
         REQUIRE(catalog.load(root));
         const auto level = catalog.byName(name);
         REQUIRE(level);
@@ -32,12 +39,16 @@ struct Fixture {
         GameContext context;
         context.config = &config;
         context.levels = &catalog;
+        context.tower = world.isTower() ? &world : nullptr;
         context.unpackedRoot = root;
-        CharacterSave save;
+        CharacterSave save = initial.value_or(CharacterSave{});
         save.name = "WATCH";
         save.progress().health = 2000;
         REQUIRE(CharacterProfile::capture(save));
-        const std::vector<PartyMember> party{{0, save}};
+        std::vector<PartyMember> party;
+        for (s32 player = 0; player < players; ++player) {
+            party.push_back({player, save});
+        }
         PlayOptions options;
         options.welcome = false;
         REQUIRE(scene.open(device, context, world, party, options));
@@ -83,22 +94,37 @@ TEST_CASE("native watchdog observes boss generators without a restore-domain cer
     REQUIRE_FALSE(generators.checkpoint()); // Restore admission is unchanged.
 }
 
-TEST_CASE("native watchdog observes missile physics without a model manifest or packet cap",
+TEST_CASE("native watchdog covers stored player cooldowns and inactive saved classes",
+          "[native-agreement-scene][native-state-digest][assets]") {
+    auto fixture = std::make_unique<Fixture>();
+    auto& player = const_cast<PlayerRuntime&>(fixture->scene.participants().front());
+    const PlayerSimulation saved = player.simulation();
+    const auto before = fixture->digest();
+    player.surfaceGap = 0.25f;
+    CHECK(fixture->digest() != before);
+    player.simulation() = saved;
+    CHECK(fixture->digest() == before);
+    player.entrySave.progress().health += 1;
+    CHECK(fixture->digest() != before);
+    player.simulation() = saved;
+    CHECK(fixture->digest() == before);
+}
+
+TEST_CASE("native watchdog rejects unknown missile resources instead of omitting them",
           "[native-agreement-scene][assets]") {
     auto fixture = std::make_unique<Fixture>();
     auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
     TreeModel firstArt;
-    TreeModel otherArt;
     const auto before = fixture->digest();
     missiles.launch(EnemyMissileKind::arrow(), {0, 10, 0}, {0, 10, 30}, 1, &firstArt, 0);
     REQUIRE(missiles.count() == 1);
     REQUIRE_FALSE(missiles.checkpoint(OpponentResources::missiles(fixture->scene.enemies())));
+    CHECK_FALSE(fixture->scene.nativeAgreementDigest());
+    // A legitimate art-free native flight is still hashable. Unregistered
+    // non-null resources cannot be silently collapsed into that state.
+    const_cast<EnemyMissile&>(missiles.missile(0)).model = nullptr;
     const auto launched = fixture->digest();
     CHECK(launched != before);
-    // Process-local artwork addresses must not influence agreement. Both are
-    // legal borrowed models, but neither belongs to the replay stock manifest.
-    const_cast<EnemyMissile&>(missiles.missile(0)).model = &otherArt;
-    CHECK(fixture->digest() == launched);
     missiles.update(1.0f / 60, nullptr, {});
     REQUIRE(missiles.count() == 1);
     CHECK(fixture->digest() != launched);
@@ -107,6 +133,58 @@ TEST_CASE("native watchdog observes missile physics without a model manifest or 
     REQUIRE(missiles.burstCount() == 1);
     missiles.clear(); // Clear borrowers before the local artwork owners die.
     CHECK(fixture->digest() != withBlast);
+}
+
+TEST_CASE("native watchdog compares full blast parameters with unchanged flight and burst counts",
+          "[native-agreement-scene][native-state-digest][assets]") {
+    auto fixture = std::make_unique<Fixture>();
+    auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
+    EnemyMissiles::LocalSnapshot empty;
+    missiles.saveLocal(empty);
+    missiles.burst({0, 0, 0}, 5, 10, 0, 1, -1);
+    const auto first = fixture->digest();
+    REQUIRE(missiles.restoreLocal(empty));
+    missiles.burst({0, 0, 0}, 8, 10, 0, 1, -1);
+    REQUIRE(missiles.burstCount() == 1);
+    REQUIRE(missiles.count() == 0);
+    CHECK(fixture->digest() != first);
+}
+
+TEST_CASE("native watchdog includes trigger inputs waiting for their next native update",
+          "[native-agreement-scene][native-state-digest][assets]") {
+    auto fixture = std::make_unique<Fixture>();
+    const auto before = fixture->digest();
+    REQUIRE(fixture->world.triggers().size() > 0);
+    // Change only the queued contact bit, not any public geometry/camera result.
+    auto& trigger = const_cast<LevelTrigger&>(fixture->world.triggers().trigger(0));
+    trigger.shot = !trigger.shot;
+    CHECK(fixture->digest() != before);
+}
+
+TEST_CASE("native coordinator digest matches its saved values and rewinds pending rewards",
+          "[native-agreement-scene][native-state-digest][local-rewind][assets]") {
+    auto fixture = std::make_unique<Fixture>();
+    auto& opponents = const_cast<LevelOpponents&>(fixture->scene.opponents());
+    LevelOpponents::LocalSnapshot saved;
+    REQUIRE(opponents.saveLocal(saved));
+    NativeStateDigest initial;
+    REQUIRE(opponents.appendNativeFollowupDigest(initial));
+    NativeStateDigest history;
+    REQUIRE(opponents.appendLocalFollowupDigest(history, saved));
+    CHECK(initial.checkedFinish() == history.checkedFinish());
+    REQUIRE(opponents.generators().count() > 0);
+    opponents.strikeGenerator(0, 1, 0, fixture->scene.participants());
+    NativeStateDigest changed;
+    REQUIRE(opponents.appendNativeFollowupDigest(changed));
+    CHECK(initial.checkedFinish() != changed.checkedFinish());
+    REQUIRE(opponents.restoreLocal(saved));
+    NativeStateDigest restored;
+    REQUIRE(opponents.appendNativeFollowupDigest(restored));
+    CHECK(initial.checkedFinish() == restored.checkedFinish());
+    auto other = std::make_unique<Fixture>();
+    NativeStateDigest foreign;
+    CHECK_FALSE(other->scene.opponents().appendLocalFollowupDigest(foreign, saved));
+    CHECK_FALSE(foreign.checkedFinish());
 }
 
 TEST_CASE("native watchdog walks the entire pending placement roster beyond wire limits",
@@ -120,7 +198,7 @@ TEST_CASE("native watchdog walks the entire pending placement roster beyond wire
     std::vector<PlacedEnemies::Placement> roster(PlacedEnemyCheckpoint::kMaxPlacements + 1,
                                                  placement);
     placements.bind(roster);
-    const auto local = placements.checkpoint();
+    const auto local = PlacedEnemiesCheckpoint::capture(placements);
     REQUIRE(local);
     REQUIRE_FALSE(PlacedEnemyCheckpoint::canonicalDigest(*local));
     const auto complete = fixture->digest();
@@ -148,4 +226,122 @@ TEST_CASE("native watchdog includes a real boss encounter without claiming full 
     const auto position = fighter.position();
     CHECK(fixture->scene.bosses().position() != nullptr);
     CHECK(*fixture->scene.bosses().position() == position);
+}
+
+TEST_CASE("first native watchdog after promotion registers the original retained figure",
+          "[native-agreement-scene][native-promotion-resources][local-rewind][assets]") {
+    test::assetOrSkip("PLAYERS/JES/SFXYEL/ANIM.PS2");
+    CharacterSave save;
+    save.character = 7;
+    save.progress().experience = levelExperience(30);
+    save.progress().promotedLevel = 29;
+    auto fixture = std::make_unique<Fixture>("L1", 1, save);
+    auto& scene = fixture->scene;
+    REQUIRE(scene.promotion().active());
+    auto* original = scene.participants().front().figure.get();
+    REQUIRE(original);
+    auto* originalEffects = original->effects();
+    REQUIRE(originalEffects);
+
+    // Keep a genuine class effect alive across the native costume replacement.
+    // The first figure is retained by ownership, but has no promotion-cache entry.
+    auto& effects = const_cast<EffectTrees&>(scene.effects());
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    const auto effect = effects.startSet(fixture->device, *originalEffects, "JES_PWRA2",
+                                          scene.actor(0)->position(), setting);
+    REQUIRE(effect != 0);
+
+    PlayScene::LocalSnapshot beforePromotion;
+    for (usize tick = 0; tick < 1500 && scene.runtime(0)->figure.get() == original; ++tick) {
+        // Keep the exact pre-award tick, without constructing a digest/registry.
+        REQUIRE(scene.saveLocal(beforePromotion));
+        REQUIRE(scene.update(1.0 / 60.0, {}) == PlayOutcome::Running);
+    }
+    const auto* promoted = scene.runtime(0)->figure.get();
+    REQUIRE(promoted);
+    REQUIRE(promoted != original);
+    REQUIRE(scene.actor(0)->save().progress().appearanceLevel() == 30);
+    const auto retainedEffect = [&] {
+        for (usize index = 0; index < effects.count(); ++index) {
+            const auto& entry = effects.effect(index);
+            if (entry.id == effect) {
+                return entry.archive == originalEffects;
+            }
+        }
+        return false;
+    };
+    REQUIRE(retainedEffect());
+
+    // Deliberately the first hash: prior registration must not hide the missing
+    // old owner. The helper also verifies no uploads, texture creation or draws.
+    const auto afterPromotion = fixture->digest();
+    const auto textures = fixture->device.texturesCreated;
+    const auto uploads = fixture->device.textureUpdates;
+    REQUIRE(scene.restoreLocal(beforePromotion));
+    REQUIRE(scene.runtime(0)->figure.get() == original);
+    REQUIRE(retainedEffect());
+    REQUIRE(scene.update(1.0 / 60.0, {}) == PlayOutcome::Running);
+    REQUIRE(scene.runtime(0)->figure.get() == promoted);
+    REQUIRE(retainedEffect());
+    CHECK(fixture->digest() == afterPromotion);
+    CHECK(fixture->device.texturesCreated == textures);
+    CHECK(fixture->device.textureUpdates == uploads);
+}
+
+TEST_CASE("native watchdog profiling retains the exact unprofiled state digest",
+          "[native-agreement-scene][native-digest-profile][assets]") {
+    auto fixture = std::make_unique<Fixture>();
+    const auto expected = fixture->scene.nativeAgreementDigest();
+    REQUIRE(expected);
+    PlayScene::NativeDigestProfile profile;
+    CHECK(fixture->scene.nativeAgreementDigest(&profile) == expected);
+    REQUIRE(profile.samples.size() == 23);
+    CHECK(profile.samples.front().owner == "resources");
+    CHECK(profile.samples.back().owner == "camera-speech");
+    for (const auto& sample : profile.samples) {
+        CAPTURE(sample.owner);
+        CHECK(sample.microseconds >= 0);
+    }
+    CHECK(fixture->scene.nativeAgreementDigest() == expected);
+}
+
+TEST_CASE("native watchdog measures warm registry and actual state hashing in a loaded stage",
+          "[.][native-digest-benchmark][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 4);
+    for (usize tick = 0; tick < 648; ++tick) {
+        REQUIRE(fixture->scene.update(1.0 / 60.0, {}) == PlayOutcome::Running);
+    }
+    REQUIRE_FALSE(fixture->scene.spawning());
+    REQUIRE_FALSE(fixture->scene.startCamera().active());
+    REQUIRE_FALSE(fixture->scene.enemies().targets().empty());
+    REQUIRE(fixture->scene.nativeAgreementDigest()); // Exclude initial binding/index costs.
+    std::vector<double> samples;
+    std::map<std::string_view, std::vector<double>> owners;
+    PlayScene::NativeDigestProfile profile;
+    constexpr usize count = 128;
+    samples.reserve(count);
+    for (usize index = 0; index < count; ++index) {
+        fixture->scene.update(1.0 / 60.0, {});
+        const auto began = std::chrono::steady_clock::now();
+        const auto result = fixture->scene.nativeAgreementDigest();
+        const auto ended = std::chrono::steady_clock::now();
+        REQUIRE(result);
+        samples.push_back(std::chrono::duration<double, std::micro>(ended - began).count());
+        REQUIRE(fixture->scene.nativeAgreementDigest(&profile) == result);
+        for (const auto& sample : profile.samples) {
+            owners[sample.owner].push_back(sample.microseconds);
+        }
+    }
+    std::ranges::sort(samples);
+    log::info("native-watchdog-us level=G2 players=4 enemies={} generators={} samples={} "
+              "p50={} p95={} max={}", fixture->scene.enemies().targets().size(),
+              fixture->scene.generators().count(), count, samples[count / 2],
+              samples[count * 95 / 100], samples.back());
+    for (auto& [name, timings] : owners) {
+        REQUIRE(timings.size() == count);
+        std::ranges::sort(timings);
+        log::info("native-watchdog-owner-us owner={} samples={} p50={} p95={} max={}",
+                  name, count, timings[count / 2], timings[count * 95 / 100], timings.back());
+    }
 }

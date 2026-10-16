@@ -13,7 +13,7 @@ bool Combatant::replaceNodeModel(RenderDevice& device, std::string_view node,
     if (!present()) {
         return false;
     }
-    Actor& actor = m_actor;
+    Actor& actor = m_sim.actor;
     const auto index = actor.stock->tree->findNode(node, kCombatantNodeNameLength);
     if (!index) {
         return false;
@@ -29,7 +29,6 @@ bool Combatant::replaceNodeModel(RenderDevice& device, std::string_view node,
     if (replacement.resource == nullptr) {
         return false;
     }
-    replacement.model = *replacement.resource;
     std::erase_if(actor.modelReplacements,
                   [&](const auto& previous) { return previous.node == *index; });
     actor.modelReplacements.push_back(std::move(replacement));
@@ -82,7 +81,7 @@ f32 Combatant::damageNode(s32 index, f32 amount, u32 flags) {
         return amount;
     }
     const auto at = static_cast<usize>(index);
-    Actor& actor = m_actor;
+    Actor& actor = m_sim.actor;
     if (at >= actor.hitNodes.size()) {
         return 0;
     }
@@ -111,9 +110,9 @@ f32 Combatant::damageNode(s32 index, f32 amount, u32 flags) {
                 shot.forward = {std::sin(actor.yaw), 0, std::cos(actor.yaw)};
                 shot.rate = attackRate(actor);
                 shot.scale = actor.scale;
-                shot.damageScale = m_scales.damage;
-                shot.realm = m_realm;
-                m_shots.push_back(shot);
+                shot.damageScale = m_sim.scales.damage;
+                shot.realm = m_sim.realm;
+                m_sim.shots.push_back(shot);
             } else {
                 cue(actor, id(), damage->sound, origin);
             }
@@ -173,11 +172,11 @@ void Combatant::drawBrokenModels(const Actor& actor, RenderDevice& device, const
                                                           kCombatantNodeNameLength);
             flashing |= node == replacement.node && actor.hitNodes[i].flashTicks > 0;
         }
-        replacement.model.resetTextures();
-        replacement.model.setAppearance(flashing && flash != nullptr, actor.tint);
+        replacement.resource->resetTextures();
+        replacement.resource->setAppearance(flashing && flash != nullptr, actor.tint);
         const Texture* mask = flashing ? flash : nullptr;
-        replacement.model.setMaskedTexture(frozen != nullptr ? frozen : mask);
-        replacement.model.draw(device, clip, placement * pose.matrices()[replacement.node],
+        replacement.resource->setMaskedTexture(frozen != nullptr ? frozen : mask);
+        replacement.resource->draw(device, clip, placement * pose.matrices()[replacement.node],
                                lighting, {}, nullptr, actor.alpha);
     }
     for (usize i = 0; i < actor.hitNodes.size(); ++i) {

@@ -156,4 +156,48 @@ TEST_CASE("canonical digest copies and finishing retain independent continuation
     CHECK(assigned.finish() != sink.finish());
     CHECK(hexDigest(sink.finish()) == kVectors.back().digest);
 }
+
+TEST_CASE("canonical scalar writes retain the bytewise stream across partial buffer boundaries",
+          "[netplay][canonical-digest][sha256]") {
+    const auto prefix = digestBytes(4097);
+    for (usize count : {usize{0}, usize{1}, usize{3}, usize{55}, usize{56}, usize{63},
+                        usize{64}, usize{4087}, usize{4088}, usize{4089}, usize{4090},
+                        usize{4091}, usize{4092}, usize{4093}, usize{4094}, usize{4095},
+                        usize{4096}, usize{4097}}) {
+        CAPTURE(count);
+        CanonicalDigestSink fast, bytewise;
+        fast.append(std::span<const u8>{prefix}.first(count));
+        bytewise.append(std::span<const u8>{prefix}.first(count));
+        const auto oldWord = [&](u32 value) {
+            for (u32 shift = 0; shift < 32; shift += 8) {
+                bytewise.push_back(static_cast<u8>(value >> shift));
+            }
+        };
+        for (u32 value : {0U, 0x12345678U, 0x80000000U, 0xffffffffU}) {
+            fast.word(value);
+            oldWord(value);
+            fast.push_back(0x91);
+            bytewise.push_back(0x91);
+            const u64 wide = (static_cast<u64>(~value) << 32) | value;
+            fast.wide(wide);
+            oldWord(static_cast<u32>(wide));
+            oldWord(static_cast<u32>(wide >> 32));
+            CHECK(fast.size() == bytewise.size());
+            CHECK(fast.finish() == bytewise.finish());
+        }
+        // Copies read only the initialized prefix, including a partially full
+        // buffer left by a scalar straddling its boundary.
+        auto copied = fast;
+        CanonicalDigestSink assigned;
+        assigned.append(prefix);
+        assigned = fast;
+        fast.word(42);
+        oldWord(42);
+        copied.word(42);
+        assigned.word(42);
+        CHECK(fast.finish() == bytewise.finish());
+        CHECK(copied.finish() == bytewise.finish());
+        CHECK(assigned.finish() == bytewise.finish());
+    }
+}
 } // namespace

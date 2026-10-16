@@ -25,6 +25,10 @@ struct RotatorCue {
     Kind kind = Kind::Turning;
     usize rotator = 0;
     Vec3 position{0.0f, 0.0f, 0.0f};
+    bool operator==(const RotatorCue&) const = default;
+    template <class Digest> friend void visitNativeState(Digest& digest, const RotatorCue& value) {
+        digest.template fields<3>(value);
+    }
 };
 
 /**
@@ -35,6 +39,12 @@ struct RotatorCue {
  */
 class Rotators {
 public:
+    Rotators() = default;
+    Rotators(const Rotators&) = delete;
+    Rotators& operator=(const Rotators&) = delete;
+    Rotators(Rotators&&) noexcept = default;
+    Rotators& operator=(Rotators&&) noexcept = default;
+
     static constexpr s32 kSpinning = 0;
     static constexpr s32 kTurnedByPad = 2;
     static constexpr f32 kTicksPerSecond = 60.0f; ///< the record's pace is a turn per tick
@@ -52,14 +62,18 @@ public:
         f32 height = 0.0f;
         bool started = false;
         bool done = false;
-        std::unique_ptr<ItemFigure> pad;
+        std::optional<ItemFigure> pad;
+        bool operator==(const Rotator&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Rotator& value) {
+            digest.template fields<13>(value);
+        }
     };
 
     void bind(const WorldLayout& layout);
     void bindFigures(RenderDevice& device, const WorldLayout& layout, const AssetScope& scope);
     void clear();
-    usize size() const { return m_rotators.size(); }
-    const Rotator& rotator(usize index) const { return m_rotators[index]; }
+    usize size() const { return m_sim.rotators.size(); }
+    const Rotator& rotator(usize index) const { return m_sim.rotators[index]; }
     /** Turns what turns for `seconds`, starting pads that are stepped on. */
     std::vector<RotatorCue> update(f32 seconds, std::span<const TriggerVisitor> visitors,
                                    WorldScene& scene);
@@ -85,7 +99,35 @@ private:
     static void place(const Rotator& rotator, WorldScene& scene);
     static std::optional<RotatorCue::Kind> advance(Rotator& rotator, f32 ticks, WorldScene& scene);
 
-    std::vector<Rotator> m_rotators;
+    struct Simulation {
+        std::vector<Rotator> rotators;
+        bool operator==(const Simulation&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+            digest.template fields<1>(value);
+        }
+    } m_sim;
+
+public:
+    /** Native rotator values and pad clocks; world transforms and returned cues are
+     * separate owners and must be restored by the enclosing scene. */
+    class LocalSnapshot {
+        friend class Rotators;
+        Simulation state;
+        std::weak_ptr<const u8> binding;
+        const Rotators* owner = nullptr;
+        u64 epoch = 0;
+    };
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
+    bool registerNativeResources(NativeStateResources& resources) const;
+
+private:
+    u64 m_localEpoch = 0;
+    bool appendDigest(NativeStateDigest& digest, const Simulation& state) const;
     const WorldLayout* m_layout = nullptr;
     std::shared_ptr<const u8> m_checkpointBinding = std::make_shared<const u8>(0);
     u64 m_checkpointGeneration = 0;

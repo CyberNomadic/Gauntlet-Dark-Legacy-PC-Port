@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <numbers>
 #include <string>
+#include <type_traits>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -45,6 +46,84 @@ std::filesystem::path spawnFixture(std::string_view name, bool animated = true, 
                                                 R"(,"position":[0,0,0]}],"sequences":[)" +
                                                 sequence + "]}]}");
     return root;
+}
+
+TEST_CASE("native arrival history restores effects intro cameras and queued title cues",
+          "[local-rewind][arrival-local-rewind]") {
+    static_assert(std::is_trivially_copyable_v<StartCamera>);
+    ItemArchive archive;
+    REQUIRE(archive.load(spawnFixture("arrival-local", true, true)));
+    test::FakeRenderDevice device;
+    const std::array party{Vec3{-2, 0, 10}, Vec3{2, 0, 10}};
+    const Vec3 follow{0, 10, -10}, attention{0, 0, 10};
+    for (const auto mode : {StartCamera::Mode::Standard, StartCamera::Mode::Legacy}) {
+        LevelArrivalPresentation native, replay;
+        native.begin(device, archive, party, WorldCamera{}, mode);
+        replay.begin(device, archive, party, WorldCamera{}, mode);
+        std::array<LevelArrivalPresentation::LocalSnapshot, 16> history;
+        const auto uploads = device.texturesCreated;
+        const auto compare = [&] {
+            CHECK(replay.active() == native.active());
+            CHECK(replay.titleScale() == native.titleScale());
+            CHECK(replay.effectCount() == native.effectCount());
+            CHECK(replay.camera().phase() == native.camera().phase());
+            CHECK(replay.camera().ticksLeft() == native.camera().ticksLeft());
+            CHECK(replay.camera().attention() == native.camera().attention());
+            CHECK(replay.camera().camera().position == native.camera().camera().position);
+            CHECK(replay.camera().camera().yaw == native.camera().camera().yaw);
+            CHECK(replay.camera().camera().pitch == native.camera().camera().pitch);
+            CHECK(replay.camera().camera().roll == native.camera().camera().roll);
+            for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+                device.draws.clear();
+                native.drawEffects(device, Mat4{1}, {}, alpha);
+                const auto expected = device.draws;
+                device.draws.clear();
+                replay.drawEffects(device, Mat4{1}, {}, alpha);
+                REQUIRE(device.draws.size() == expected.size());
+                for (usize i = 0; i < expected.size(); ++i) {
+                    CHECK(device.draws[i].texture == expected[i].texture);
+                    CHECK(device.draws[i].state == expected[i].state);
+                    CHECK(device.draws[i].transform == expected[i].transform);
+                    CHECK(device.draws[i].vertices == expected[i].vertices);
+                }
+            }
+        };
+        const auto step = [&](LevelArrivalPresentation& arrival, u32 tick, bool wrong) {
+            arrival.capturePresentation();
+            if (wrong || tick % 7 != 0) {
+                arrival.animate(wrong ? 0.5f : 1.0f / 60);
+            }
+            arrival.advance(wrong ? 12 : 1, wrong, wrong ? Vec3{40, 50, 60} : follow,
+                            wrong ? Vec3{-10, 3, 12} : attention);
+            return (wrong || tick % 13 == 0) && arrival.takeTitleLanded();
+        };
+        u32 tick = 0;
+        for (u32 window = 0; window < 64; ++window) {
+            CAPTURE(window, tick, static_cast<s32>(mode));
+            auto& saved = history[window % history.size()];
+            replay.saveLocal(saved);
+            const u32 distance = window % 8 + 1;
+            for (u32 i = 0; i < distance; ++i) {
+                step(replay, tick + i, true);
+            }
+            REQUIRE(replay.restoreLocal(saved));
+            compare();
+            for (u32 i = 0; i < distance; ++i) {
+                CHECK(step(replay, tick + i, false) == step(native, tick + i, false));
+                compare();
+            }
+            tick += distance;
+        }
+        CHECK(replay.takeTitleLanded() == native.takeTitleLanded());
+        CHECK(device.texturesCreated == uploads);
+        CHECK(device.textureUpdates == 0);
+        CHECK_FALSE(native.restoreLocal(history[0]));
+        replay.begin(device, archive, party);
+        CHECK_FALSE(replay.restoreLocal(history[0]));
+        replay.saveLocal(history[0]);
+        replay.clear();
+        CHECK_FALSE(replay.restoreLocal(history[0]));
+    }
 }
 
 TEST_CASE("arrival without art still holds the party for the spawn interval",

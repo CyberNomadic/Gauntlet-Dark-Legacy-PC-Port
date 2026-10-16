@@ -7,11 +7,57 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/AnimationPlayer.h"
 
 #include "game/world/DynamicLights.h"
 
 namespace gdl::game {
+void LegendPresentation::appendState(NativeStateDigest& digest, const Simulation& state) {
+    const auto& [ownedEffects, player, kind, realm, held, flying, attached, gestureOwed,
+                 released, brandished, flightLeft, flightPosition, frozenTexture,
+                 flightCue, flightSound] = state;
+    digest.string("LegendPresentation.native.1");
+    digest.values(ownedEffects, player, kind, realm, held, flying, attached, gestureOwed,
+                  released, brandished, flightLeft, flightPosition);
+    digest.resource(frozenTexture);
+    digest.values(flightCue, flightSound);
+}
+
+bool LegendPresentation::appendNativeDigest(NativeStateDigest& digest) const {
+    appendState(digest, m_sim);
+    return digest.good();
+}
+
+bool LegendPresentation::appendLocalDigest(NativeStateDigest& digest,
+                                          const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, owner, binding] = saved;
+    appendState(digest, state);
+    return digest.good();
+}
+
+void LegendPresentation::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+}
+
+bool LegendPresentation::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding;
+}
+
+bool LegendPresentation::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.state;
+    return true;
+}
 
 LegendPresentation::LegendPresentation(EffectTrees& effects, Assets assets, Audio audio)
     : m_effects(effects), m_assets(assets), m_audio(std::move(audio)) {}
@@ -21,30 +67,35 @@ LegendPresentation::~LegendPresentation() {
 }
 
 void LegendPresentation::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
+    reset();
+}
+
+void LegendPresentation::reset() {
     stopLoop();
-    for (const u32 id : m_ownedEffects) {
+    for (const u32 id : m_sim.ownedEffects) {
         m_effects.stop(id);
     }
-    m_ownedEffects.clear();
-    m_player = -1;
-    m_kind = -1;
-    m_realm = 'A';
-    m_held = 0;
-    m_flying = 0;
-    m_attached = 0;
-    m_gestureOwed = false;
-    m_released = false;
-    m_brandished = false;
-    m_flightLeft = 0.0f;
-    m_flightPosition = Vec3{0};
-    m_frozenTexture = nullptr;
+    m_sim.ownedEffects.clear();
+    m_sim.player = -1;
+    m_sim.kind = -1;
+    m_sim.realm = 'A';
+    m_sim.held = 0;
+    m_sim.flying = 0;
+    m_sim.attached = 0;
+    m_sim.gestureOwed = false;
+    m_sim.released = false;
+    m_sim.brandished = false;
+    m_sim.flightLeft = 0.0f;
+    m_sim.flightPosition = Vec3{0};
+    m_sim.frozenTexture = nullptr;
 }
 
 u32 LegendPresentation::start(ItemArchive& archive, std::string_view tree, const Vec3& position,
                               const EffectTrees::Setting& setting) {
     const u32 id = m_effects.startSet(m_assets.device, archive, tree, position, setting);
     if (id != 0) {
-        m_ownedEffects.push_back(id);
+        m_sim.ownedEffects.push_back(id);
     }
     return id;
 }
@@ -54,51 +105,52 @@ void LegendPresentation::carry(s32 player, s32 realm, s32 kind,
     if (!bearer || bearer->player != player) {
         return;
     }
-    if (m_player != player || m_kind != kind) {
-        clear();
-        m_player = player;
-        m_kind = kind;
-        m_realm = static_cast<char>('A' + std::clamp(realm - 1, 0, 25));
+    if (m_sim.player != player || m_sim.kind != kind) {
+        reset();
+        m_sim.player = player;
+        m_sim.kind = kind;
+        m_sim.realm = static_cast<char>('A' + std::clamp(realm - 1, 0, 25));
     }
-    if (!m_released) {
+    if (!m_sim.released) {
         hold(*bearer);
     }
 }
 
 s32 LegendPresentation::occupiedHand() const {
-    return LegendShow::heldInHand(m_kind) && m_held != 0 && m_effects.playing(m_held) ? m_player
-                                                                                      : -1;
+    return LegendShow::heldInHand(m_sim.kind) && m_sim.held != 0 && m_effects.playing(m_sim.held)
+               ? m_sim.player
+               : -1;
 }
 
 void LegendPresentation::show(LegendCue cue, s32 player, s32 realm, s32 kind,
                               const std::optional<Bearer>& bearer) {
     if (cue == LegendCue::Brandished) {
         carry(player, realm, kind, bearer);
-        if (!m_brandished && bearer && m_player == player) {
-            m_brandished = true;
+        if (!m_sim.brandished && bearer && m_sim.player == player) {
+            m_sim.brandished = true;
             brandish(*bearer);
             playSound(LegendShow::Sound::PickedUp);
         }
         return;
     }
-    if (player != m_player) {
+    if (player != m_sim.player) {
         return;
     }
     switch (cue) {
     case LegendCue::Thrown:
-        if (m_player >= 0 && !m_released) {
-            m_gestureOwed = true;
+        if (m_sim.player >= 0 && !m_sim.released) {
+            m_sim.gestureOwed = true;
             playSound(LegendShow::Sound::Thrown);
         }
         break;
     case LegendCue::WornOff:
         // world_update restores PBOSSEYEBALL and clears blindness silently;
         // it does not take the other items' kill/ALSTP/PDN sound branch.
-        if (m_kind == 38) {
+        if (m_sim.kind == 38) {
             break;
         }
         stopLoop();
-        if (LegendShow::flightOf(m_kind) == LegendShow::Flight::AtBoss) {
+        if (LegendShow::flightOf(m_sim.kind) == LegendShow::Flight::AtBoss) {
             playSound(LegendShow::Sound::Landed);
         }
         playSound(LegendShow::Sound::WornOff);
@@ -109,16 +161,16 @@ void LegendPresentation::show(LegendCue cue, s32 player, s32 realm, s32 kind,
 }
 
 void LegendPresentation::hold(const Bearer& bearer) {
-    if (m_held == 0 && m_assets.items.loaded() &&
+    if (m_sim.held == 0 && m_assets.items.loaded() &&
         m_assets.items.trees.find(LegendShow::kHeldTree).has_value()) {
         EffectTrees::Setting setting;
         setting.seconds = LegendShow::kHeldSeconds;
         setting.unlit = true;
         setting.depthWrite = false;
-        m_held = start(m_assets.items, LegendShow::kHeldTree, bearer.holdPoint, setting);
+        m_sim.held = start(m_assets.items, LegendShow::kHeldTree, bearer.holdPoint, setting);
     }
-    if (m_held != 0) {
-        m_effects.placeAt(m_held,
+    if (m_sim.held != 0) {
+        m_effects.placeAt(m_sim.held,
                           bearer.holdTransform.value_or(glm::translate(Mat4{1}, bearer.holdPoint)));
     }
 }
@@ -154,136 +206,137 @@ LegendPresentation::Update LegendPresentation::update(f32 seconds,
                                                       const std::optional<Bearer>& bearer,
                                                       const std::optional<Target>& target) {
     Update result;
-    std::erase_if(m_ownedEffects, [this](u32 id) { return !m_effects.playing(id); });
+    std::erase_if(m_sim.ownedEffects, [this](u32 id) { return !m_effects.playing(id); });
     followTarget(target);
-    if (m_player < 0) {
+    if (m_sim.player < 0) {
         return result;
     }
-    const bool hasBearer = bearer.has_value() && bearer->player == m_player;
-    const bool wasReleased = m_released;
-    if (m_gestureOwed && hasBearer) {
+    const bool hasBearer = bearer.has_value() && bearer->player == m_sim.player;
+    const bool wasReleased = m_sim.released;
+    if (m_sim.gestureOwed && hasBearer) {
         if (!bearer->canGesture) {
-            m_gestureOwed = false;
+            m_sim.gestureOwed = false;
             release(*bearer, target);
         } else if (bearer->casting) {
-            m_gestureOwed = false;
+            m_sim.gestureOwed = false;
         } else {
-            result.gesture = LegendShow::gestureOf(m_kind);
+            result.gesture = LegendShow::gestureOf(m_sim.kind);
         }
     }
     if (hasBearer && bearer->released) {
         release(*bearer, target);
     }
-    if ((m_kind == 37 || m_kind == 42) && !wasReleased && m_released) {
+    if ((m_sim.kind == 37 || m_sim.kind == 42) && !wasReleased && m_sim.released) {
         result.landed = true;
     }
-    if (m_held != 0 && hasBearer) {
-        if (m_effects.playing(m_held)) {
+    if (m_sim.held != 0 && hasBearer) {
+        if (m_effects.playing(m_sim.held)) {
             hold(*bearer);
         } else {
-            m_held = 0;
+            m_sim.held = 0;
         }
-    } else if (m_held != 0) {
-        m_effects.stop(m_held);
-        m_held = 0;
+    } else if (m_sim.held != 0) {
+        m_effects.stop(m_sim.held);
+        m_sim.held = 0;
     }
-    if (m_flying != 0 && !m_effects.playing(m_flying)) {
-        m_flying = 0;
+    if (m_sim.flying != 0 && !m_effects.playing(m_sim.flying)) {
+        m_sim.flying = 0;
         stopLoop();
     }
-    if (m_flying != 0 && LegendShow::flightOf(m_kind) == LegendShow::Flight::Flies) {
-        m_flightLeft -= seconds;
-        if (m_kind == 38) {
+    if (m_sim.flying != 0 && LegendShow::flightOf(m_sim.kind) == LegendShow::Flight::Flies) {
+        m_sim.flightLeft -= seconds;
+        if (m_sim.kind == 38) {
             // ProcessEffects' 0x40000000 branch recomputes velocity toward
             // the target node each update; a launch-time travel timer misses
             // the moving eye during PBOSS's roar.
             if (target && seconds > 0) {
                 const Vec3 destination = target->position + Vec3{0, target->height * 0.5f, 0};
-                const Vec3 delta = destination - m_flightPosition;
+                const Vec3 delta = destination - m_sim.flightPosition;
                 const f32 distance = glm::length(delta);
                 const f32 step = LegendShow::kSpeed * seconds;
-                const Vec3 next =
-                    distance <= step ? destination : m_flightPosition + delta * (step / distance);
+                const Vec3 next = distance <= step
+                                      ? destination
+                                      : m_sim.flightPosition + delta * (step / distance);
                 // PlayerMotion supplies colrad=2 (GC 0x80347b98). ProcessEffects
                 // sweeps against CritterMoveNodeCol; reaching the eye's exact
                 // moving origin is not required to hit and replace its mesh.
                 constexpr f32 kJavelinRadius = 2;
-                const bool contact = target->touches
-                                         ? target->touches(m_flightPosition, next, kJavelinRadius)
-                                         : distance <= step;
+                const bool contact =
+                    target->touches ? target->touches(m_sim.flightPosition, next, kJavelinRadius)
+                                    : distance <= step;
                 if (contact) {
                     land(target);
                     result.landed = true;
                 } else {
-                    m_flightPosition = next;
-                    m_effects.placeAt(m_flying, glm::translate(Mat4{1}, m_flightPosition),
+                    m_sim.flightPosition = next;
+                    m_effects.placeAt(m_sim.flying, glm::translate(Mat4{1}, m_sim.flightPosition),
                                       distance > 0 ? std::optional{delta / distance}
                                                    : std::nullopt);
                 }
             }
-            if (m_flightLeft <= 0 && m_flying != 0) {
-                m_effects.stop(m_flying);
-                m_flying = 0;
+            if (m_sim.flightLeft <= 0 && m_sim.flying != 0) {
+                m_effects.stop(m_sim.flying);
+                m_sim.flying = 0;
                 stopLoop(); // A flight that never reaches its target is not a hit.
             }
-        } else if (m_flightLeft <= 0.0f) {
+        } else if (m_sim.flightLeft <= 0.0f) {
             land(target);
             result.landed = true;
         }
-    } else if (m_flying != 0 && hasBearer &&
-               LegendShow::flightOf(m_kind) == LegendShow::Flight::WithBearer) {
+    } else if (m_sim.flying != 0 && hasBearer &&
+               LegendShow::flightOf(m_sim.kind) == LegendShow::Flight::WithBearer) {
         const Mat4 root =
             glm::rotate(glm::translate(Mat4{1}, bearer->position),
                         std::atan2(bearer->facing.x, bearer->facing.z), Vec3{0, 1, 0});
-        m_effects.placeAt(m_flying, glm::translate(root, Vec3{0, 0, LegendShow::kAhead}));
+        m_effects.placeAt(m_sim.flying, glm::translate(root, Vec3{0, 0, LegendShow::kAhead}));
     }
     return result;
 }
 
 void LegendPresentation::release(const Bearer& bearer, const std::optional<Target>& target) {
-    if (m_released) {
+    if (m_sim.released) {
         return;
     }
-    m_released = true;
-    m_effects.stop(m_held);
-    m_held = 0;
+    m_sim.released = true;
+    m_effects.stop(m_sim.held);
+    m_sim.held = 0;
     if (!m_assets.items.loaded() || !target.has_value()) {
         return;
     }
     EffectTrees::Setting setting;
     setting.unlit = true;
     setting.depthWrite = false;
-    switch (LegendShow::flightOf(m_kind)) {
+    switch (LegendShow::flightOf(m_sim.kind)) {
     case LegendShow::Flight::Flies: {
         const Vec3 from = bearer.position + bearer.facing + Vec3{0.0f, LegendShow::kLift, 0.0f};
         const Vec3 to = target->position + Vec3{0.0f, target->height * 0.5f, 0.0f};
         const f32 distance = glm::length(to - from);
-        m_flightPosition = from;
-        m_flightLeft = m_kind == 38
-                           ? LegendShow::kFlightSeconds
-                           : std::min(distance / LegendShow::kSpeed, LegendShow::kFlightSeconds);
-        if (distance > 0.0f && m_kind != 38) {
+        m_sim.flightPosition = from;
+        m_sim.flightLeft =
+            m_sim.kind == 38 ? LegendShow::kFlightSeconds
+                             : std::min(distance / LegendShow::kSpeed, LegendShow::kFlightSeconds);
+        if (distance > 0.0f && m_sim.kind != 38) {
             setting.velocity = (to - from) * (LegendShow::kSpeed / distance);
         }
         setting.seconds = LegendShow::kFlightSeconds;
-        m_flying = start(m_assets.items, LegendShow::kProjectileTree, from, setting);
+        m_sim.flying = start(m_assets.items, LegendShow::kProjectileTree, from, setting);
         break;
     }
     case LegendShow::Flight::AtBoss:
-        setting.seconds = LegendShow::burstSecondsOf(m_kind);
-        setting.then = std::string(LegendShow::burstTreeOf(m_kind));
-        m_flying = start(m_assets.items, LegendShow::restingTreeOf(m_kind),
-                         target->position + LegendShow::bossOffsetOf(m_kind), setting);
+        setting.seconds = LegendShow::burstSecondsOf(m_sim.kind);
+        setting.then = std::string(LegendShow::burstTreeOf(m_sim.kind));
+        m_sim.flying = start(m_assets.items, LegendShow::restingTreeOf(m_sim.kind),
+                             target->position + LegendShow::bossOffsetOf(m_sim.kind), setting);
         break;
     case LegendShow::Flight::WithBearer:
-        setting.seconds = LegendShow::burstSecondsOf(m_kind);
-        setting.then = std::string(LegendShow::burstTreeOf(m_kind));
-        m_flying = start(m_assets.items, LegendShow::kProjectileTree,
-                         bearer.position + bearer.facing * LegendShow::kAhead, setting);
+        setting.seconds = LegendShow::burstSecondsOf(m_sim.kind);
+        setting.then = std::string(LegendShow::burstTreeOf(m_sim.kind));
+        m_sim.flying = start(m_assets.items, LegendShow::kProjectileTree,
+                             bearer.position + bearer.facing * LegendShow::kAhead, setting);
         break;
     }
-    const ParticleDescriptor trail = LegendShow::trailOf(m_kind);
-    if (m_flying != 0 && !trail.texture.empty()) {
+    const ParticleDescriptor trail = LegendShow::trailOf(m_sim.kind);
+    if (m_sim.flying != 0 && !trail.texture.empty()) {
         TextureSet* textures = &m_assets.items.textures;
         auto slot = textures->find(trail.texture);
         if (!slot.has_value()) {
@@ -295,7 +348,7 @@ void LegendPresentation::release(const Bearer& bearer, const std::optional<Targe
             slot = textures->find(trail.texture);
         }
         if (slot.has_value()) {
-            m_effects.attachTrail(m_flying, trail, textures->texture(m_assets.device, *slot));
+            m_effects.attachTrail(m_sim.flying, trail, textures->texture(m_assets.device, *slot));
         } else {
             log::warn("Legend item: missing trail texture {}", trail.texture);
         }
@@ -304,26 +357,26 @@ void LegendPresentation::release(const Bearer& bearer, const std::optional<Targe
 }
 
 void LegendPresentation::land(const std::optional<Target>& target) {
-    if (m_kind == 34) {
+    if (m_sim.kind == 34) {
         TextureSet& textures = m_assets.items.textures;
         if (const auto slot = textures.find("SEETHROUGH"); slot.has_value()) {
-            m_frozenTexture = &textures.texture(m_assets.device, *slot);
+            m_sim.frozenTexture = &textures.texture(m_assets.device, *slot);
         }
     }
-    m_effects.stop(m_flying);
-    m_flying = 0;
+    m_effects.stop(m_sim.flying);
+    m_sim.flying = 0;
     stopLoop();
     if (target.has_value() && m_assets.items.loaded() &&
         m_assets.items.trees.find(LegendShow::kBurstTree).has_value()) {
         EffectTrees::Setting setting;
-        if (m_kind == 36) {
+        if (m_sim.kind == 36) {
             setting.seconds = 28.0f;
         }
         const u32 effect =
             start(m_assets.items, LegendShow::kBurstTree,
                   target->position + Vec3{0.0f, target->height * 0.5f, 0.0f}, setting);
-        if (m_kind == 36) {
-            m_attached = effect;
+        if (m_sim.kind == 36) {
+            m_sim.attached = effect;
             followTarget(target);
         }
     }
@@ -331,23 +384,39 @@ void LegendPresentation::land(const std::optional<Target>& target) {
 }
 
 void LegendPresentation::followTarget(const std::optional<Target>& target) {
-    if (m_attached == 0) {
+    if (m_sim.attached == 0) {
         return;
     }
-    if (!target.has_value() || !m_effects.playing(m_attached)) {
-        m_effects.stop(m_attached);
-        m_attached = 0;
+    if (!target.has_value() || !m_effects.playing(m_sim.attached)) {
+        m_effects.stop(m_sim.attached);
+        m_sim.attached = 0;
         return;
     }
     const Mat4 root = target->root.value_or(glm::translate(Mat4{1.0f}, target->position));
-    m_effects.placeAt(m_attached, glm::translate(root, Vec3{0.0f, 6.0f, 0.0f}));
+    m_effects.placeAt(m_sim.attached, glm::translate(root, Vec3{0.0f, 6.0f, 0.0f}));
 }
 
 void LegendPresentation::playSound(LegendShow::Sound sound, bool looping) {
-    if (!m_audio.play) {
+    if (!m_audio.play && !m_audio.record) {
         return;
     }
-    for (const std::string& name : LegendShow::soundNamesOf(sound, m_realm)) {
+    for (const std::string& name : LegendShow::soundNamesOf(sound, m_sim.realm)) {
+        if (m_audio.available && !m_audio.available(name)) {
+            continue;
+        }
+        if (m_audio.record) {
+            if (const auto recorded = m_audio.record(name, looping, m_sim.player, m_sim.kind,
+                                                    static_cast<u32>(sound) + 1)) {
+                if (looping) {
+                    m_sim.flightCue = *recorded;
+                    m_sim.flightSound = name;
+                }
+                return;
+            }
+        }
+        if (!m_audio.play) {
+            return;
+        }
         if (const SoundHandle handle = m_audio.play(name); handle != kNoSound) {
             if (looping) {
                 stopLoop();
@@ -355,14 +424,25 @@ void LegendPresentation::playSound(LegendShow::Sound sound, bool looping) {
             }
             return;
         }
+        if (m_audio.available) {
+            return; // A known cue's playback failure must not select another bank/name.
+        }
     }
 }
 
 void LegendPresentation::stopLoop() {
+    m_sim.flightCue = {};
+    m_sim.flightSound.clear();
     if (m_loop != kNoSound && m_audio.stop) {
         m_audio.stop(m_loop);
     }
     m_loop = kNoSound;
+}
+
+void LegendPresentation::gatherAudio() const {
+    if (m_sim.flightCue && m_audio.desire) {
+        m_audio.desire(m_sim.flightSound, m_sim.player, m_sim.kind, m_sim.flightCue);
+    }
 }
 
 } // namespace gdl::game

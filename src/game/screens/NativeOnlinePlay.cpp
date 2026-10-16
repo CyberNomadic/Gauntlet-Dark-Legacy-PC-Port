@@ -10,6 +10,19 @@
 
 namespace gdl::game {
 namespace {
+std::string_view failureDescription(NativeOnlinePlay::Failure failure) {
+    switch (failure) {
+    case NativeOnlinePlay::Failure::None: return {};
+    case NativeOnlinePlay::Failure::Session: return "Online session ended";
+    case NativeOnlinePlay::Failure::Scene: return "Native simulation could not safely continue";
+    case NativeOnlinePlay::Failure::Assets: return "Required stage assets could not be loaded";
+    case NativeOnlinePlay::Failure::Input: return "Online input could not be admitted";
+    case NativeOnlinePlay::Failure::Presentation: return "Online transition could not be presented";
+    case NativeOnlinePlay::Failure::Party: return "Online character progress disagrees";
+    }
+    return "Online scene stopped";
+}
+
 std::optional<MatchParty> profilesOf(std::span<const PartyMember> members,
                                      const MatchOwners& owners) {
     MatchParty profiles;
@@ -61,8 +74,51 @@ struct NativeOnlinePlay::Data {
     struct Level {
         LevelWorld world;
         PlayScene scene;
-        NativePlayDriver driver;
-        ~Level() { scene.close(); }
+        NativeRollbackDriver driver;
+        MatchSession* match = nullptr;
+        u64 boundEpoch = 0;
+
+        void unbind() {
+            if (match != nullptr && boundEpoch != 0) {
+                match->detachNativeInputs(boundEpoch);
+            }
+            match = nullptr;
+            boundEpoch = 0;
+            driver.clear();
+            scene.endRecordedAudio();
+        }
+        ~Level() {
+            unbind();
+            scene.close();
+        }
+        bool bind(MatchSession& session) {
+            const auto& agreed = session.context();
+            if (!scene.beginRecordedAudio(agreed.epoch) ||
+                !driver.bind(scene, agreed, session.localPeer(),
+                             NativeRollbackDriver::AudioMode::Required)) {
+                return false;
+            }
+            if (!session.attachNativeInputs(agreed.epoch,
+                    [this](const RollbackExchange::Message& message, std::optional<u8> transit) {
+                        const auto admitted = [](RollbackInputs::Admission result) {
+                            return result == RollbackInputs::Admission::Accepted ||
+                                   result == RollbackInputs::Admission::Duplicate ||
+                                   result == RollbackInputs::Admission::Stale;
+                        };
+                        if (!message.commands.empty() &&
+                            !admitted(driver.submit(message.origin, message.commands))) {
+                            return false;
+                        }
+                        return !transit ||
+                               admitted(driver.observePeerTick(message.origin, message.epoch,
+                                                               message.nextTick, *transit));
+                    })) {
+                return false;
+            }
+            match = &session;
+            boundEpoch = agreed.epoch;
+            return true;
+        }
     };
     struct Boundary {
         u64 sourceEpoch = 0;
@@ -91,6 +147,11 @@ struct NativeOnlinePlay::Data {
     std::unique_ptr<Level> level, parent;
     std::optional<LevelRef> current, secretParent;
     std::optional<Boundary> boundary;
+    struct ConfirmedTerminal {
+        NativeRollbackDriver::Status outcome;
+        u64 tick;
+    };
+    std::optional<ConfirmedTerminal> terminal;
     std::optional<ShopSetup> shopSetup;
     PlayOptions options;
     OnlineLevelEntry entry;
@@ -98,7 +159,8 @@ struct NativeOnlinePlay::Data {
     AfterLevelScene shop;
     Phase phase = Phase::Closed;
     Failure failure = Failure::None;
-    NativePlayDriver::Result outcome = NativePlayDriver::Result::Held;
+    std::string failureDetail;
+    NativeRollbackDriver::Status outcome = NativeRollbackDriver::Status::Held;
     u64 epoch = 0, entryEpoch = 0, completionEpoch = 0;
     u32 pausedDevices = 0;
     bool advanced = false, afterShop = false, saveAfterShop = false, shopFinished = false;
@@ -123,6 +185,7 @@ struct NativeOnlinePlay::Data {
         level.reset();
         parent.reset();
         boundary.reset();
+        terminal.reset();
         current.reset();
         secretParent.reset();
         shopSetup.reset();
@@ -136,13 +199,31 @@ struct NativeOnlinePlay::Data {
         options = {};
         phase = Phase::Closed;
         failure = Failure::None;
-        outcome = NativePlayDriver::Result::Held;
+        failureDetail.clear();
+        outcome = NativeRollbackDriver::Status::Held;
         epoch = entryEpoch = completionEpoch = 0;
         pausedDevices = 0;
         advanced = afterShop = saveAfterShop = shopFinished = false;
         completedProgress = false;
     }
     Phase fail(Failure reason) {
+        if (phase == Phase::Failed) {
+            return phase;
+        }
+        // Preserve the first cause before leaving releases the session's owners.
+        // In particular, do not replace a desync/timeout with its teardown error.
+        if (session != nullptr) {
+            failureDetail = session->failureDetail();
+            if (failureDetail.empty()) {
+                // A local observer may fail before OnlineSession's next flush
+                // promotes its match failure. Preserve that cause as well.
+                failureDetail = session->match().failureDetail();
+            }
+        }
+        if (failureDetail.empty()) {
+            failureDetail = failureDescription(reason);
+        }
+        log::error("Online stage stopped at epoch {}: {}", epoch, failureDetail);
         quiet();
         entry.close();
         completion.close();
@@ -163,7 +244,7 @@ struct NativeOnlinePlay::Data {
                                         next.shop ? &*next.shop : nullptr, next.challengeWon);
     }
     bool travel() {
-        if (!level || boundary || outcome != NativePlayDriver::Result::Travel) {
+        if (!level || boundary || outcome != NativeRollbackDriver::Status::Travel) {
             fail(Failure::Scene);
             return false;
         }
@@ -183,7 +264,7 @@ struct NativeOnlinePlay::Data {
         }
         Boundary next;
         next.sourceEpoch = epoch;
-        next.sourceTick = level->driver.completedTick();
+        next.sourceTick = level->driver.confirmedTick();
         next.scene = *id;
         next.members = scene.party();
         const auto* info = world.level();
@@ -237,6 +318,16 @@ struct NativeOnlinePlay::Data {
             next.shop = shopState;
         }
         boundary = std::move(next);
+        if (const auto* pending = session->match().pendingNativeContext();
+            pending != nullptr && !boundary->matches(*pending)) {
+            fail(Failure::Scene);
+            return false;
+        }
+        if (!session->match().completeNativeBoundary(boundary->sourceEpoch,
+                                                     boundary->sourceTick)) {
+            fail(Failure::Session);
+            return false;
+        }
         options = {};
         options.welcome = false;
         options.arriving = true;
@@ -366,6 +457,7 @@ struct NativeOnlinePlay::Data {
                     return false;
                 }
                 secretParent = current;
+                level->unbind();
                 level->scene.suspendForChallenge();
                 parent = std::move(level);
             } else if (returning) {
@@ -433,7 +525,7 @@ struct NativeOnlinePlay::Data {
         if (returning) {
             level = std::move(parent);
             level->scene.resumeFromChallenge(members);
-            if (!level->driver.bind(level->scene, match)) {
+            if (!level->bind(match)) {
                 fail(Failure::Scene);
                 return false;
             }
@@ -442,7 +534,7 @@ struct NativeOnlinePlay::Data {
             if (!candidate->world.load(*device, context.unpackedRoot, *destination) ||
                 !candidate->scene.open(*device, context, candidate->world, members, options) ||
                 !candidate->scene.nativePresentationReady() ||
-                !candidate->driver.bind(candidate->scene, match)) {
+                !candidate->bind(match)) {
                 fail(Failure::Assets);
                 return false;
             }
@@ -451,7 +543,8 @@ struct NativeOnlinePlay::Data {
         epoch = next.epoch;
         current = *destination;
         boundary.reset();
-        outcome = NativePlayDriver::Result::Held;
+        outcome = NativeRollbackDriver::Status::Held;
+        terminal.reset();
         if (returning) {
             secretParent.reset();
         }
@@ -583,6 +676,12 @@ struct NativeOnlinePlay::Data {
             // execute this terminal frame; application departure is explicit.
             return phase;
         }
+        if (boundary && match.pendingNativeContext()) {
+            if (!boundary->matches(*match.pendingNativeContext()) ||
+                !match.completeNativeBoundary(boundary->sourceEpoch, boundary->sourceTick)) {
+                return fail(Failure::Scene);
+            }
+        }
         if (match.phase() == MatchSession::Phase::Loading && match.context().epoch != epoch) {
             phase = Phase::Loading;
             if (!load(localDevices)) {
@@ -590,6 +689,9 @@ struct NativeOnlinePlay::Data {
             }
         }
         if (match.phase() != MatchSession::Phase::Running) {
+            if (level && level->scene.recordedAudioEpoch() != 0) {
+                level->scene.serviceRecordedAudio(1.0f / 60);
+            }
             return phase;
         }
         if (epoch == 0 || epoch != match.context().epoch) {
@@ -606,44 +708,81 @@ struct NativeOnlinePlay::Data {
             return fail(Failure::Scene);
         }
         const auto local = selection->inputs(*session, localDevices);
-        if (!local || !level->driver.sample(match, *local)) {
+        if (!local || !level->driver.sample(*local)) {
             return fail(Failure::Input);
         }
-        if (!session->flush()) {
+        if (!match.publishNativeInputs(level->driver.redundantInputs(), level->driver.nextTick()) ||
+            !session->flush()) {
             return fail(Failure::Session);
         }
-        const auto result = level->driver.advance(match);
-        if (result == NativePlayDriver::Result::Failed) {
+        const auto end = match.nativeEndTick();
+        const auto result = level->driver.advance(!end || level->driver.nextTick() <= *end);
+        if (result.status == NativeRollbackDriver::Status::Failed) {
+            log::error("Native rollback failed at epoch {} tick {}: {}", epoch,
+                       level->driver.nextTick(), static_cast<u32>(level->driver.failure()));
             return fail(Failure::Scene);
         }
-        const auto completed = level->driver.completedTick();
-        // completedNativeTick can adopt an already-received next epoch. Never
-        // label the old scene's final observation as belonging to the new scene.
-        if (result != NativePlayDriver::Result::Held && match.context().epoch == epoch &&
-            match.phase() == MatchSession::Phase::Running && completed != 0 &&
-            completed % MatchSession::kNativeAgreementPeriod == 0) {
-            const auto digest = level->scene.nativeAgreementDigest();
-            if (!digest || !match.observeNative(completed, *digest)) {
+        if (!match.publishNativeInputs(level->driver.redundantInputs(), level->driver.nextTick()) ||
+            !match.confirmNativeTick(epoch, level->driver.confirmedTick())) {
+            return fail(Failure::Session);
+        }
+        // These are retained observations from their corrected tick, not a hash
+        // of today's speculative head mislabeled as an older confirmed frame.
+        for (const auto& observation : result.digests) {
+            if (!match.observeNative(observation.tick, observation.digest)) {
                 log::error("Native simulation agreement failed at epoch {} tick {}", epoch,
-                           completed);
+                           observation.tick);
                 return fail(Failure::Scene);
             }
         }
-        if (result == NativePlayDriver::Result::Travel) {
-            outcome = result;
-            travel();
-        } else if (result == NativePlayDriver::Result::GameOver ||
-                   result == NativePlayDriver::Result::Leave) {
-            outcome = result;
-            quiet();
-            phase = Phase::Finished;
+        const bool terminalResult = result.status == NativeRollbackDriver::Status::Travel ||
+                                    result.status == NativeRollbackDriver::Status::GameOver ||
+                                    result.status == NativeRollbackDriver::Status::Leave;
+        if (terminalResult) {
+            if (terminal || !result.terminalDigest ||
+                result.terminalDigest->tick != level->driver.confirmedTick() ||
+                !match.observeNativeTerminal(epoch, result.terminalDigest->tick,
+                                             result.terminalDigest->digest)) {
+                return fail(Failure::Scene);
+            }
+            terminal = ConfirmedTerminal{result.status, result.terminalDigest->tick};
+        } else if (result.terminalDigest) {
+            return fail(Failure::Scene);
+        }
+        if (!result.audio) {
+            return fail(Failure::Scene);
+        }
+        for (const auto& action : result.actions) {
+            if (!level->scene.dispatchOutput(action)) {
+                return fail(Failure::Scene);
+            }
+        }
+        level->scene.dispatchRecordedAudio(*result.audio);
+        level->scene.serviceRecordedAudio(1.0f / 60);
+        if (end && level->driver.confirmedTick() >= *end &&
+            (!terminal || terminal->outcome != NativeRollbackDriver::Status::Travel) &&
+            !boundary) {
+            return fail(Failure::Scene);
+        }
+        if (terminal && match.nativeTerminalAgreed(epoch, terminal->tick)) {
+            // Keep the source scene/input journal alive while every peer checks
+            // the exact terminal state, including boundaries between periodic
+            // hashes. Receipt of input alone cannot release a campaign barrier.
+            outcome = terminal->outcome;
+            terminal.reset();
+            if (outcome == NativeRollbackDriver::Status::Travel) {
+                travel();
+            } else {
+                quiet();
+                phase = Phase::Finished;
+            }
         } else if (!boundary) {
-            outcome = result;
-            advanced = result == NativePlayDriver::Result::Advanced;
+            outcome = terminal ? NativeRollbackDriver::Status::Held : result.status;
+            advanced = !terminal && result.status == NativeRollbackDriver::Status::Advanced;
             phase = Phase::Playing;
             entry.close();
         }
-        // completedNativeTick may have adopted a queued source-fenced epoch.
+        // Confirmed travel may have adopted a queued source-fenced epoch.
         // The old scene and terminal party remain intact until load validates it.
         if (phase != Phase::Failed && match.context().epoch != epoch) {
             if (!boundary || !boundary->matches(match.context())) {
@@ -776,6 +915,14 @@ bool NativeOnlinePlay::pause(s32 device) {
     for (const auto seat : data.session->seats()) {
         const auto local = data.selection->device(*data.session, seat);
         if (local && (device == -1 || *local == device)) {
+            // The overlay also consumes taps collected while prediction was
+            // blocked. Already published frames remain immutable; another
+            // local device keeps its own pending controls.
+            if (data.level && data.level->boundEpoch != 0 &&
+                !data.level->driver.clearPendingInput(seat)) {
+                data.fail(Failure::Scene);
+                return false;
+            }
             mask |= 1U << static_cast<u32>(*local);
         }
     }
@@ -835,14 +982,24 @@ NativeOnlinePlay::Phase NativeOnlinePlay::phase() const {
 NativeOnlinePlay::Failure NativeOnlinePlay::failure() const {
     return m_data->failure;
 }
-NativePlayDriver::Result NativeOnlinePlay::outcome() const {
+std::string_view NativeOnlinePlay::failureDetail() const {
+    return m_data->failureDetail;
+}
+NativeRollbackDriver::Status NativeOnlinePlay::outcome() const {
     return m_data->outcome;
 }
 const PlayScene* NativeOnlinePlay::scene() const {
     return m_data->level ? &m_data->level->scene : nullptr;
 }
-u64 NativeOnlinePlay::completedTick() const {
-    return m_data->level ? m_data->level->driver.completedTick() : 0;
+u64 NativeOnlinePlay::simulatedTick() const {
+    const auto next = m_data->level ? m_data->level->driver.nextTick() : 0;
+    return next > 0 ? next - 1 : 0;
+}
+u64 NativeOnlinePlay::confirmedTick() const {
+    return m_data->level ? m_data->level->driver.confirmedTick() : 0;
+}
+NativeRollbackDriver::Statistics NativeOnlinePlay::rollbackStatistics() const {
+    return m_data->level ? m_data->level->driver.statistics() : NativeRollbackDriver::Statistics{};
 }
 OnlineLevelEntry::Phase NativeOnlinePlay::entryPhase() const {
     return m_data->entry.phase();

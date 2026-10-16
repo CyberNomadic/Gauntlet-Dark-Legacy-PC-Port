@@ -8,12 +8,13 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from installer.install import retry_locked
 from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_new_version, validated_assets
-from release import check_frozen_installer, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files
+from release import build_release, check_frozen_installer, dependency_notices, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files
 from installer.releases import runtime_name
 
 
@@ -84,6 +85,69 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual([name for _, name in files], [
             "gauntlet.exe", "data/config.json", "data/text/en.json", "licenses/lz4.txt"])
         self.assertEqual(files[-1][0], self.root / "data/licenses/lz4.txt")
+
+    def test_dependency_notices_use_configured_triplet_and_install_directory(self):
+        binary = self.root / "build"
+        binary.mkdir()
+        installed = self.root / "custom vcpkg installed"
+        old = installed / "x64-windows/share/old-dependency/copyright"
+        old.parent.mkdir(parents=True)
+        old.write_text("Old dynamic inventory", encoding="utf-8")
+        for triplet in ("x64-windows-static", "x64-linux"):
+            with self.subTest(triplet=triplet):
+                notice = installed / triplet / "share/glfw3/copyright"
+                notice.parent.mkdir(parents=True)
+                notice.write_text("Configured dependency notice", encoding="utf-8")
+                for triplet_type in ("STRING", "UNINITIALIZED"):
+                    for installed_type in ("PATH", "UNINITIALIZED"):
+                        with self.subTest(triplet_type=triplet_type, installed_type=installed_type):
+                            (binary / "CMakeCache.txt").write_text(
+                                f"VCPKG_TARGET_TRIPLET:{triplet_type}={triplet}\n"
+                                f"VCPKG_INSTALLED_DIR:{installed_type}={installed}\n", encoding="utf-8")
+                            self.assertEqual(dependency_notices(binary), [(notice, "licenses/vcpkg/glfw3.txt")])
+        self.assertEqual(old.read_text(encoding="utf-8"), "Old dynamic inventory")
+
+    def test_dependency_notices_use_build_local_default_install_directory(self):
+        binary = self.root / "build"
+        notice = binary / "vcpkg_installed/x64-windows/share/glfw3/copyright"
+        notice.parent.mkdir(parents=True)
+        notice.write_text("Dynamic development notice", encoding="utf-8")
+        (binary / "CMakeCache.txt").write_text(
+            "VCPKG_TARGET_TRIPLET:STRING=x64-windows\n", encoding="utf-8")
+        self.assertEqual(dependency_notices(binary), [(notice, "licenses/vcpkg/glfw3.txt")])
+
+    def test_dependency_notices_never_fall_back_to_neighboring_triplet(self):
+        binary = self.root / "build"
+        notice = binary / "vcpkg_installed/x64-windows/share/glfw3/copyright"
+        notice.parent.mkdir(parents=True)
+        notice.write_text("Stale dynamic notice", encoding="utf-8")
+        cache = binary / "CMakeCache.txt"
+        for triplet in ("", "../x64-windows", "x64-windows/../x64-windows", "x64 windows"):
+            with self.subTest(triplet=triplet):
+                cache.write_text(f"VCPKG_TARGET_TRIPLET:STRING={triplet}\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Missing or invalid configured"):
+                    dependency_notices(binary)
+        cache.write_text("VCPKG_TARGET_TRIPLET:STRING=x64-windows-static\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Missing vcpkg license inventory"):
+            dependency_notices(binary)
+        cache.unlink()
+        with self.assertRaisesRegex(ValueError, "Missing or invalid configured"):
+            dependency_notices(binary)
+
+    def test_release_reconfigures_dedicated_cache_fresh_before_building(self):
+        args = SimpleNamespace(output=self.root / "publication", allow_dirty=False)
+        with mock.patch("release.ROOT", self.root), mock.patch("release.platform.machine", return_value="AMD64"), mock.patch(
+                "release.sys.platform", "win32"), mock.patch("release.devenv.WINDOWS", True), mock.patch(
+                "release.version", return_value=self.tag[1:]), mock.patch(
+                "release.subprocess.check_output", side_effect=["commit\n", ""]), mock.patch(
+                "release.devenv.release_preset", return_value="windows-ninja-release"), mock.patch(
+                "release.devenv.run", side_effect=RuntimeError("stop before configure")) as run:
+            with self.assertRaisesRegex(RuntimeError, "stop before configure"):
+                build_release(args)
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["cmake", "--preset", "windows-ninja-release", "--fresh"])
+        self.assertEqual(command[command.index("-B") + 1], str(self.root / "build/release-windows-x64"))
 
     def test_project_license_and_attribution_ship_verbatim_in_payload(self):
         root = Path(__file__).resolve().parents[2]

@@ -43,6 +43,8 @@ public:
     bool settings(const RoomSettings& value);
     NetplayMenu::View lobby() const;
     bool playing() const;
+    u64 simulatedTick() const;
+    u64 confirmedTick() const;
     bool pause(s32 device);
     void resume();
     bool hasCompletedProgress() const;

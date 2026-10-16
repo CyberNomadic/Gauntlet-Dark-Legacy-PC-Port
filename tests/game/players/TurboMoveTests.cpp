@@ -564,7 +564,8 @@ TEST_CASE("native B and C turbo rows resume all checkpoint boundaries with ident
     const s32 character = GENERATE(0, 1, 3, 6);
     const Action action = GENERATE(Action::TurboStrong, Action::TurboFull);
     ClassDataSet classes;
-    REQUIRE(classes.load(test::assetOrSkip("PDATA/WAR.WAD").parent_path()));
+    const auto classPath = test::assetOrSkip("PDATA/WAR.WAD").parent_path();
+    REQUIRE(classes.load(classPath));
     const ClassStats* stats = classes.stats(character);
     REQUIRE(stats);
     Fixture original;

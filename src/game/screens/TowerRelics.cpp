@@ -6,10 +6,56 @@
 #include <limits>
 
 #include "engine/core/Log.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "game/menu/ScrollBox.h"
 
 namespace gdl::game {
+bool TowerRelics::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("TowerRelics.native.1");
+    digest.fields<18>(m_sim);
+    return m_figures.appendNativeDigest(digest) && m_wizard.appendNativeDigest(digest);
+}
+
+bool TowerRelics::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    const auto& [state, figures, wizard, owner, binding] = saved;
+    digest.string("TowerRelics.native.1");
+    digest.fields<18>(state);
+    return m_figures.appendLocalDigest(digest, figures) && m_wizard.appendLocalDigest(digest, wizard);
+}
+
+bool TowerRelics::registerNativeResources(NativeStateResources& resources) const {
+    return m_figures.registerNativeResources(resources) && m_wizard.registerNativeResources(resources);
+}
+
+void TowerRelics::saveLocal(LocalSnapshot& saved) const {
+    saved.owner = this;
+    saved.binding = m_localBinding;
+    saved.state = m_sim;
+    m_figures.saveLocal(saved.figures);
+    m_wizard.saveLocal(saved.wizard);
+}
+
+bool TowerRelics::canRestoreLocal(const LocalSnapshot& saved) const {
+    const auto binding = saved.binding.lock();
+    return saved.owner == this && binding && binding == m_localBinding &&
+           m_figures.canRestoreLocal(saved.figures) && m_wizard.canRestoreLocal(saved.wizard);
+}
+
+bool TowerRelics::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_figures.restoreLocal(saved.figures);
+    m_wizard.restoreLocal(saved.wizard);
+    m_sim = saved.state;
+    return true;
+}
+
 namespace {
 constexpr u16 kRunes = 0x1fff;
 constexpr u16 kWindowShards = 0x1fe;
@@ -65,20 +111,21 @@ std::string_view TowerRelics::Entry::voice() const {
     return kind == Kind::Rune ? "S_FNDRUNEYOU" : kShardVoices.at(static_cast<usize>(index));
 }
 void TowerRelics::clear() {
-    m_entries.clear();
-    m_captions.clear();
-    m_current = 0;
-    m_page = 0;
-    m_pendingCeremonies = 0;
-    m_runes = m_shards = 0;
-    m_ticks = -kLeadTicks;
-    m_spoken = false;
-    m_phase = Phase::Speech;
-    m_placementLeft = 0;
+    m_localBinding = std::make_shared<const u8>(0);
+    m_sim.entries.clear();
+    m_sim.captions.clear();
+    m_sim.current = 0;
+    m_sim.page = 0;
+    m_sim.pendingCeremonies = 0;
+    m_sim.runes = m_sim.shards = 0;
+    m_sim.ticks = -kLeadTicks;
+    m_sim.spoken = false;
+    m_sim.phase = Phase::Speech;
+    m_sim.placementLeft = 0;
     m_figures.clear();
     m_wizard.clear();
-    m_speechCamera.reset();
-    m_placementCamera.reset();
+    m_sim.speechCamera.reset();
+    m_sim.placementCamera.reset();
     m_device = nullptr;
     m_world = nullptr;
 }
@@ -89,27 +136,27 @@ void TowerRelics::begin(std::span<const Relics> party, const MessageTable& strin
     for (const auto& relics : party) {
         runes |= relics.runes;
         shards |= relics.shards;
-        m_runes |= static_cast<u16>(relics.runes & ~relics.pendingRunes);
-        m_shards |= static_cast<u16>(relics.shards & ~relics.pendingShards);
+        m_sim.runes |= static_cast<u16>(relics.runes & ~relics.pendingRunes);
+        m_sim.shards |= static_cast<u16>(relics.shards & ~relics.pendingShards);
     }
-    m_runes &= kRunes;
-    m_shards &= kWindowShards;
-    m_pendingCeremonies = TowerCompletion::pending(party);
+    m_sim.runes &= kRunes;
+    m_sim.shards &= kWindowShards;
+    m_sim.pendingCeremonies = TowerCompletion::pending(party);
     const auto append = [&](Entry entry) {
-        m_entries.push_back(entry);
+        m_sim.entries.push_back(entry);
         std::string caption;
         const auto message = strings.find(entry.kind == Kind::Rune ? "NEWRUNES" : "NEWSHARDS");
         const auto page = entry.kind == Kind::Rune ? 0U : static_cast<usize>(entry.index);
         if (message && page < strings.message(*message).pages.size()) {
             caption = strings.message(*message).pages[page];
         }
-        m_captions.push_back({std::move(caption)});
+        m_sim.captions.push_back({std::move(caption)});
     };
     // Glass first, then the rune pedestal; a party member's banked collection
     // already supplies the shared display, even if another member just found it.
     for (s32 i = 1; i <= 8; ++i) {
         const Entry entry{Kind::Shard, i};
-        if ((shards & ~m_shards & entry.bit()) != 0) {
+        if ((shards & ~m_sim.shards & entry.bit()) != 0) {
             append(entry);
         }
     }
@@ -121,7 +168,7 @@ void TowerRelics::begin(std::span<const Relics> party, const MessageTable& strin
             appendFollowup(TowerCompletion::Kind::Underworld, strings);
         }
         const Entry entry{Kind::Rune, i};
-        if ((runes & ~m_runes & entry.bit()) != 0) {
+        if ((runes & ~m_sim.runes & entry.bit()) != 0) {
             append(entry);
         }
     }
@@ -129,10 +176,10 @@ void TowerRelics::begin(std::span<const Relics> party, const MessageTable& strin
     prepareEntry();
 }
 void TowerRelics::appendFollowup(TowerCompletion::Kind kind, const MessageTable& strings) {
-    if ((m_pendingCeremonies & TowerCompletion::bit(kind)) == 0) {
+    if ((m_sim.pendingCeremonies & TowerCompletion::bit(kind)) == 0) {
         return;
     }
-    m_entries.push_back({Kind::Followup, static_cast<s32>(kind)});
+    m_sim.entries.push_back({Kind::Followup, static_cast<s32>(kind)});
     std::vector<std::string> pages;
     if (const auto message = strings.find(TowerCompletion::message(kind))) {
         pages = strings.message(*message).pages;
@@ -140,7 +187,7 @@ void TowerRelics::appendFollowup(TowerCompletion::Kind kind, const MessageTable&
     if (pages.empty()) {
         pages.emplace_back();
     }
-    m_captions.push_back(std::move(pages));
+    m_sim.captions.push_back(std::move(pages));
 }
 void TowerRelics::acknowledge(Relics& relics, const Entry& entry) {
     if (entry.kind == Kind::Followup) {
@@ -151,19 +198,20 @@ void TowerRelics::acknowledge(Relics& relics, const Entry& entry) {
     mask &= static_cast<u16>(~entry.bit());
 }
 void TowerRelics::bind(RenderDevice& device, LevelWorld& world, const Vec3& partyCentre) {
+    m_localBinding = std::make_shared<const u8>(0);
     m_device = &device;
     m_world = &world;
-    if (m_runes == kRunes &&
-        (m_pendingCeremonies & TowerCompletion::bit(TowerCompletion::Kind::Garm)) == 0) {
+    if (m_sim.runes == kRunes &&
+        (m_sim.pendingCeremonies & TowerCompletion::bit(TowerCompletion::Kind::Garm)) == 0) {
         world.activateTrigger(255, true);
     }
     for (s32 i = 0; i < Relics::kRuneCount; ++i) {
-        if ((m_runes & Entry{Kind::Rune, i}.bit()) != 0) {
+        if ((m_sim.runes & Entry{Kind::Rune, i}.bit()) != 0) {
             place({Kind::Rune, i}, true);
         }
     }
     for (s32 i = 1; i <= 8; ++i) {
-        if ((m_shards & Entry{Kind::Shard, i}.bit()) != 0) {
+        if ((m_sim.shards & Entry{Kind::Shard, i}.bit()) != 0) {
             place({Kind::Shard, i}, true);
         }
     }
@@ -172,9 +220,9 @@ void TowerRelics::bind(RenderDevice& device, LevelWorld& world, const Vec3& part
         const f32 distance = glm::dot(marker.position - partyCentre, marker.position - partyCentre);
         if (marker.kind == LocatorKind::Event && distance < nearest) {
             nearest = distance;
-            m_wizardPosition = marker.position;
-            m_wizardYaw = marker.rotation.y + kPi;
-            m_wizardMarker = marker.delay;
+            m_sim.wizardPosition = marker.position;
+            m_sim.wizardYaw = marker.rotation.y + kPi;
+            m_sim.wizardMarker = marker.delay;
         }
     }
     updateLights();
@@ -205,11 +253,11 @@ f32 TowerRelics::place(const Entry& entry, bool settled) {
     return 0;
 }
 void TowerRelics::prepareSpeech() {
-    m_ticks = -kLeadTicks;
-    m_spoken = false;
-    m_page = 0;
-    m_phase = Phase::Speech;
-    m_wizard.clear();
+    m_sim.ticks = -kLeadTicks;
+    m_sim.spoken = false;
+    m_sim.page = 0;
+    m_sim.phase = Phase::Speech;
+    m_wizard.reset();
     if (!active() || m_world == nullptr || m_device == nullptr) {
         return;
     }
@@ -221,17 +269,17 @@ void TowerRelics::prepareSpeech() {
                        current()->followup() >= TowerCompletion::Kind::TwelveWaiting);
     s32 bank = rune ? 2 : 1;
     do {
-        m_speechCamera =
-            cameraAt(m_world->layout(), bases[static_cast<usize>(bank)] + m_wizardMarker);
-    } while (!m_speechCamera && --bank >= 0);
-    m_placementCamera = cameraAt(m_world->layout(), current()->camera());
+        m_sim.speechCamera =
+            cameraAt(m_world->layout(), bases[static_cast<usize>(bank)] + m_sim.wizardMarker);
+    } while (!m_sim.speechCamera && --bank >= 0);
+    m_sim.placementCamera = cameraAt(m_world->layout(), current()->camera());
     EffectTrees::Setting setting;
     setting.persistent = true;
-    setting.yaw = m_wizardYaw;
+    setting.yaw = m_sim.wizardYaw;
     setting.unlit = true;
     setting.depthWrite = false;
     setting.additive = true;
-    m_wizard.startSet(*m_device, m_world->items(), "WIZARD", m_wizardPosition, setting);
+    m_wizard.startSet(*m_device, m_world->items(), "WIZARD", m_sim.wizardPosition, setting);
 }
 void TowerRelics::prepareEntry() {
     prepareSpeech();
@@ -239,25 +287,25 @@ void TowerRelics::prepareEntry() {
         !TowerCompletion::reveals(current()->followup())) {
         return;
     }
-    m_phase = Phase::Reveal;
-    m_revealStarted = false;
-    m_ticks = 0;
-    m_wizard.clear();
+    m_sim.phase = Phase::Reveal;
+    m_sim.revealStarted = false;
+    m_sim.ticks = 0;
+    m_wizard.reset();
     if (m_world != nullptr) {
-        m_placementCamera = cameraAt(m_world->layout(), current()->camera());
-        if (!m_placementCamera) {
-            m_placementCamera =
+        m_sim.placementCamera = cameraAt(m_world->layout(), current()->camera());
+        if (!m_sim.placementCamera) {
+            m_sim.placementCamera =
                 cameraAt(m_world->layout(),
                          current()->followup() == TowerCompletion::Kind::Window ? 202U : 203U);
         }
-        if (!m_placementCamera) {
-            m_placementCamera = cameraAt(m_world->layout(), 201);
+        if (!m_sim.placementCamera) {
+            m_sim.placementCamera = cameraAt(m_world->layout(), 201);
         }
     }
 }
 const std::optional<WorldCamera>& TowerRelics::camera() const {
-    return m_phase == Phase::Placement || m_phase == Phase::Reveal ? m_placementCamera
-                                                                   : m_speechCamera;
+    return m_sim.phase == Phase::Placement || m_sim.phase == Phase::Reveal ? m_sim.placementCamera
+                                                                           : m_sim.speechCamera;
 }
 void TowerRelics::capturePresentation() {
     m_figures.capturePresentation();
@@ -273,32 +321,33 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
     if (!active()) {
         return cue;
     }
-    if (m_phase == Phase::Reveal) {
-        if (!m_revealStarted) {
-            m_revealStarted = true;
+    if (m_sim.phase == Phase::Reveal) {
+        if (!m_sim.revealStarted) {
+            m_sim.revealStarted = true;
             if (m_world != nullptr && current()->followup() == TowerCompletion::Kind::Garm) {
                 m_world->activateTrigger(255, false);
             }
         }
-        m_ticks += std::max(ticks, 0);
+        m_sim.ticks += std::max(ticks, 0);
         updateLights();
-        if (m_ticks >= TowerCompletion::kRevealTicks) {
+        if (m_sim.ticks >= TowerCompletion::kRevealTicks) {
             prepareSpeech();
         }
         return cue;
     }
-    if (m_phase == Phase::Speech) {
-        m_ticks += std::max(ticks, 0);
-        if (m_ticks >= 0 && !m_spoken) {
-            m_spoken = true;
+    if (m_sim.phase == Phase::Speech) {
+        m_sim.ticks += std::max(ticks, 0);
+        if (m_sim.ticks >= 0 && !m_sim.spoken) {
+            m_sim.spoken = true;
             cue.voice = current()->voice();
-        } else if (m_spoken &&
-                   m_ticks >= static_cast<s32>(caption().size() * 2) +
-                                  (m_page + 1 < m_captions[m_current].size() ? kPageHoldTicks
-                                                                             : kReadingTicks)) {
-            if (m_page + 1 < m_captions[m_current].size()) {
-                ++m_page;
-                m_ticks = 0;
+        } else if (m_sim.spoken &&
+                   m_sim.ticks >= static_cast<s32>(caption().size() * 2) +
+                                      (m_sim.page + 1 < m_sim.captions[m_sim.current].size()
+                                           ? kPageHoldTicks
+                                           : kReadingTicks)) {
+            if (m_sim.page + 1 < m_sim.captions[m_sim.current].size()) {
+                ++m_sim.page;
+                m_sim.ticks = 0;
                 return cue;
             }
             if (voicePlaying) {
@@ -308,31 +357,31 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
                 finish(cue);
                 return cue;
             }
-            m_phase = Phase::Placement;
-            m_wizard.clear();
-            m_placementLeft = place(*current(), false) + kPlacementHold;
-            m_hitIn = current()->kind == Kind::Shard ? kShardStrikeSeconds : 0.0f;
+            m_sim.phase = Phase::Placement;
+            m_wizard.reset();
+            m_sim.placementLeft = place(*current(), false) + kPlacementHold;
+            m_sim.hitIn = current()->kind == Kind::Shard ? kShardStrikeSeconds : 0.0f;
             cue.placement = true;
             cue.sound = "S_RUNEFALL";
             if (current()->kind == Kind::Shard) {
                 cue.sound =
-                    (m_shards | current()->bit()) == kWindowShards ? "S_SHRDS127" : "S_SHRD8";
+                    (m_sim.shards | current()->bit()) == kWindowShards ? "S_SHRDS127" : "S_SHRD8";
             }
         }
     } else {
-        m_placementLeft -= std::max(seconds, 0.0f);
-        if (m_hitIn > 0) {
-            m_hitIn -= std::max(seconds, 0.0f);
-            if (m_hitIn <= 0) {
+        m_sim.placementLeft -= std::max(seconds, 0.0f);
+        if (m_sim.hitIn > 0) {
+            m_sim.hitIn -= std::max(seconds, 0.0f);
+            if (m_sim.hitIn <= 0) {
                 cue.sound = "S_STNDGLASS"; // the pane struck, while the shard still flies
             }
         }
-        if (m_placementLeft <= 0) {
+        if (m_sim.placementLeft <= 0) {
             if (current()->kind == Kind::Rune) {
                 cue.sound = "S_RUNEHIT";
-            } else if (m_hitIn > 0) {
+            } else if (m_sim.hitIn > 0) {
                 cue.sound = "S_STNDGLASS";
-                m_hitIn = 0;
+                m_sim.hitIn = 0;
             }
             finish(cue);
         }
@@ -342,25 +391,25 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
 void TowerRelics::finish(Cue& cue) {
     cue.completed = *current();
     if (current()->kind == Kind::Followup) {
-        m_pendingCeremonies &= static_cast<u16>(~current()->bit());
+        m_sim.pendingCeremonies &= static_cast<u16>(~current()->bit());
     } else {
-        auto& mask = current()->kind == Kind::Rune ? m_runes : m_shards;
+        auto& mask = current()->kind == Kind::Rune ? m_sim.runes : m_sim.shards;
         mask |= current()->bit();
     }
-    ++m_current;
+    ++m_sim.current;
     prepareEntry();
     updateLights();
 }
 std::string_view TowerRelics::caption() const {
-    return active() ? m_captions[m_current][m_page] : std::string_view{};
+    return active() ? m_sim.captions[m_sim.current][m_sim.page] : std::string_view{};
 }
 f32 TowerRelics::revealAlpha(TowerCompletion::Kind kind) const {
-    if ((m_pendingCeremonies & TowerCompletion::bit(kind)) == 0) {
+    if ((m_sim.pendingCeremonies & TowerCompletion::bit(kind)) == 0) {
         return 1;
     }
     if (active() && current()->kind == Kind::Followup && current()->followup() == kind) {
-        return m_phase == Phase::Reveal
-                   ? std::clamp(static_cast<f32>(m_ticks) / TowerCompletion::kRevealTicks, 0.0f,
+        return m_sim.phase == Phase::Reveal
+                   ? std::clamp(static_cast<f32>(m_sim.ticks) / TowerCompletion::kRevealTicks, 0.0f,
                                 1.0f)
                    : 1.0f;
     }
@@ -373,8 +422,9 @@ void TowerRelics::updateLights() {
     const auto& objects = m_world->layout().objects();
     for (usize i = 0; i < objects.size(); ++i) {
         if (objects[i].name == "L1XPLIGHTRAY01") {
-            m_world->setObjectAlpha(
-                i, m_shards == kWindowShards ? revealAlpha(TowerCompletion::Kind::Window) : 0.0f);
+            m_world->setObjectAlpha(i, m_sim.shards == kWindowShards
+                                           ? revealAlpha(TowerCompletion::Kind::Window)
+                                           : 0.0f);
         }
     }
 }
@@ -386,19 +436,19 @@ void TowerRelics::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
 void TowerRelics::drawWizard(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                              const WorldCamera& camera, f32 frameBlend) const {
     const auto frame = CameraFrame::of(camera);
-    if (active() && m_phase == Phase::Speech) {
+    if (active() && m_sim.phase == Phase::Speech) {
         m_wizard.draw(device, clip, lighting, &frame, frameBlend);
     }
 }
 void TowerRelics::drawCaption(Canvas& canvas, const TextPainter& text, f32 width,
                               f32 height) const {
-    if (!active() || m_phase != Phase::Speech || !text.ready()) {
+    if (!active() || m_sim.phase != Phase::Speech || !text.ready()) {
         return;
     }
     TextStyle style;
     style.scale = 0.667f;
     f32 y = height * 312.0f / 384.0f;
-    auto remaining = static_cast<usize>(std::max(m_ticks, 0) / 2);
+    auto remaining = static_cast<usize>(std::max(m_sim.ticks, 0) / 2);
     for (const auto& line : ScrollBox::splitLines(caption())) {
         const auto visible = std::min(remaining, line.size());
         const auto x = text.leftEdge(-static_cast<s32>(width / 2), line, style.scale);

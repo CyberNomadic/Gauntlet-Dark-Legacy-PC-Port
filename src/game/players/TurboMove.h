@@ -8,12 +8,19 @@
 #include "game/players/ClassData.h"
 #include "game/players/PlayerAnimator.h"
 #include "game/players/TurboMeter.h"
+namespace gdl {
+class NativeStateDigest;
+}
+
 namespace gdl::game {
 /** A character's data-driven attack timeline. Owns pending strikes, delayed payment,
  * visibility windows and volley progress; knows nothing about a scene, renderer or audio.
  * Events run synchronously, with payment settled before the first damaging strike. */
 class TurboMove {
+    friend void visitNativeState(NativeStateDigest&, const TurboMove&);
+
 public:
+    bool operator==(const TurboMove&) const = default;
     static constexpr usize kMaxCheckpointRows = 128;
     static constexpr s32 kMaxCheckpointVolleys = 65536;
     struct Checkpoint {

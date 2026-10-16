@@ -25,6 +25,16 @@ public:
 
     enum class Phase : u8 { Off, ComingUp, Covering, Clearing };
     enum class Area : u8 { AboveStatus, FullScreen };
+    struct State {
+        Phase phase = Phase::Off;
+        f32 opacity = 0;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const State& state) {
+            visitor.template fields<2>(state);
+        }
+        bool operator==(const State&) const = default;
+    };
+    const State& state() const { return m_state; }
+    void restoreLocal(const State& state) { m_state = state; }
 
     /** Finds the picture in the unpacked static archive; false (with a warning) without it,
      * in which case the screen covers the view in black. */
@@ -39,11 +49,11 @@ public:
     void clearAway();
     void update(f32 seconds);
 
-    Phase phase() const { return m_phase; }
-    bool showing() const { return m_phase != Phase::Off; }
-    bool covering() const { return m_phase == Phase::Covering; }
+    Phase phase() const { return m_state.phase; }
+    bool showing() const { return m_state.phase != Phase::Off; }
+    bool covering() const { return m_state.phase == Phase::Covering; }
     /** How much of the view the picture hides, 0 to 1. */
-    f32 opacity() const { return m_opacity; }
+    f32 opacity() const { return m_state.opacity; }
 
     /** Draws the picture over a view `width` across, on the canvas's virtual screen. */
     void draw(Canvas& canvas, f32 width, f32 height = 384.0f, Area area = Area::AboveStatus) const;
@@ -54,8 +64,7 @@ public:
 private:
     TextureSet m_textures;
     const Texture* m_picture = nullptr;
-    Phase m_phase = Phase::Off;
-    f32 m_opacity = 0.0f;
+    State m_state;
 };
 
 } // namespace gdl::game

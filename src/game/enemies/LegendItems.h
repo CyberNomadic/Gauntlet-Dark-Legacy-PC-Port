@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/world/ParticleSystem.h"
 
@@ -33,9 +34,13 @@ struct LegendWeakness {
     f32 recoverySeconds = 0.0f; ///< world-update recovery timer after the roar, zero if none
     f32 scale = 1.0f;           ///< how big it stands afterwards
     bool beheads = false;       ///< the scimitar targets the lion head, not a share of body health
+    bool operator==(const LegendWeakness&) const = default;
 
     bool harms() const { return healthShare > 0.0f || damage > 0.0f; }
     bool curbs() const { return curbSeconds > 0.0f; }
+    friend void visitNativeState(NativeStateDigest& digest, const LegendWeakness& value) {
+        digest.fields<10>(value);
+    }
 };
 
 /** The weakness of the boss `kind`, or null for one no item touches. */
@@ -65,6 +70,9 @@ public:
     static constexpr s32 kBrandishTicks = 60;
     static constexpr s32 kShortRoarWait = 60;
     static constexpr s32 kLongRoarWait = 180;
+
+    /** Includes hidden wait/wear clocks and one-shot cue latches. */
+    bool equalLocal(const LegendRite& other) const { return *this == other; }
 
     /** Begins for `player`, who carries the item of `weakness`. */
     void begin(s32 player, const LegendWeakness& weakness);
@@ -98,6 +106,12 @@ public:
     static constexpr f32 kDarkening = -0.8f; ///< what it takes off the ambient light
 
 private:
+    friend void visitNativeState(NativeStateDigest& digest, const LegendRite& value) {
+        digest.values(value.m_stage, value.m_weakness, value.m_player, value.m_ticks,
+                      value.m_roarDue, value.m_roared, value.m_brandished, value.m_thrown,
+                      value.m_wearLeft);
+    }
+    bool operator==(const LegendRite&) const = default;
     Stage m_stage = Stage::None;
     LegendWeakness m_weakness;
     s32 m_player = -1;

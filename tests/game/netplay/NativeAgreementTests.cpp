@@ -308,6 +308,52 @@ TEST_CASE("native agreement authenticates report and verdict roles and rejects s
     }
 }
 
+TEST_CASE("terminal agreement has one exact u64 tick and a separate periodic wire domain",
+          "[netplay][native-agreement][native-terminal-agreement]") {
+    const u64 tick = GENERATE(u64{31}, u64{60}, u64{3601}, u64{1} << 40);
+    const bool mismatch = GENERATE(false, true);
+    NativeAgreement host, guest, periodic;
+    const NativeAgreement::Owners owners{1, 2, 0, 0};
+    const std::array hostLinks{NativeAgreement::Link{2, 102}};
+    const std::array guestLinks{NativeAgreement::Link{1, kHost}};
+    REQUIRE(host.openTerminal(1, kEpoch, owners, hostLinks, tick, Time{}));
+    REQUIRE(guest.openTerminal(2, kEpoch, owners, guestLinks, tick, Time{}));
+    REQUIRE(periodic.open(1, kEpoch, owners, hostLinks, kPeriod, Time{}));
+    CHECK(host.canSubmit());
+    CHECK(host.submit(tick + 1, digest(tick), Time{}) == Admission::Invalid);
+    REQUIRE(host.submit(tick, digest(tick), Time{}) == Admission::Accepted);
+    CHECK_FALSE(host.canSubmit());
+    auto remote = digest(tick);
+    if (mismatch) remote.back() ^= 1;
+    REQUIRE(guest.submit(tick, remote, Time{}) == Admission::Accepted);
+    Wire report;
+    REQUIRE(guest.flush(report, Time{}));
+    REQUIRE(report.sent.size() == 1);
+    const auto& bytes = report.sent.front().bytes;
+    CHECK(NativeAgreement::recognizesTerminal(bytes));
+    CHECK(NativeAgreement::terminalContext(bytes) == std::pair{kEpoch, tick});
+    CHECK(periodic.receive(102, bytes, Time::max()) == Admission::Stale);
+    CHECK_FALSE(periodic.failed());
+    CHECK(host.receive(102, packet(1, kEpoch, tick, digest(tick)), Time::max()) == Admission::Stale);
+    CHECK_FALSE(host.failed());
+    CHECK(host.receive(102, bytes, Time{}) == (mismatch ? Admission::Failed : Admission::Accepted));
+    Wire verdict;
+    CHECK(host.flush(verdict, Time{}) == !mismatch);
+    REQUIRE(verdict.sent.size() == 1);
+    CHECK(NativeAgreement::recognizesTerminal(verdict.sent.front().bytes));
+    CHECK(guest.receive(kHost, verdict.sent.front().bytes, Time{}) ==
+          (mismatch ? Admission::Failed : Admission::Accepted));
+    if (mismatch) {
+        CHECK(host.failure() == Failure::Mismatch);
+        CHECK(guest.failure() == Failure::Mismatch);
+    } else {
+        CHECK(host.agreedTick() == tick);
+        CHECK(guest.agreedTick() == tick);
+        CHECK(host.submit(tick, digest(tick), Time{}) == Admission::Duplicate);
+        CHECK_FALSE(host.canSubmit());
+    }
+}
+
 TEST_CASE("native agreement wire is exact bounded canonical little endian",
           "[netplay][native-agreement]") {
     Room room;
@@ -581,4 +627,40 @@ TEST_CASE("native agreement retains a bounded duplicate history and does not rev
     CHECK(room.streams[1].receive(102, packet(1, kEpoch, latest, digest(999)), room.now) ==
           Admission::Failed);
     CHECK(room.streams[1].failure() == Failure::Conflict);
+}
+
+TEST_CASE("terminal epoch-wide failures retain routing context without a certificate tick",
+          "[netplay][native-agreement][native-terminal-agreement]") {
+    NativeAgreement failed;
+    const std::array guestLinks{NativeAgreement::Link{1, kHost}};
+    REQUIRE(failed.openTerminal(2, kEpoch, {1, 2, 0, 0}, guestLinks, 31, Time{}));
+    const std::array<u8, 1> malformed{};
+    REQUIRE(failed.receive(kHost, malformed, Time{}) == Admission::Invalid);
+    REQUIRE(failed.failure() == Failure::Protocol);
+    REQUIRE(failed.failureTick() == 0);
+    Wire wire;
+    CHECK_FALSE(failed.flush(wire, Time{}));
+    REQUIRE(wire.sent.size() == 1);
+    const auto& bytes = wire.sent.front().bytes;
+    REQUIRE(NativeAgreement::recognizesTerminal(bytes));
+    const auto context = NativeAgreement::terminalContext(bytes);
+    REQUIRE(context);
+    CHECK(context->first == kEpoch);
+    CHECK(context->second == 0);
+
+    const std::array hostLinks{NativeAgreement::Link{2, 102}};
+    NativeAgreement current;
+    REQUIRE(current.openTerminal(1, kEpoch, {1, 2, 0, 0}, hostLinks, 31, Time{}));
+    CHECK(current.receive(102, bytes, Time{}) == Admission::Failed);
+    CHECK(current.failure() == Failure::Protocol);
+    CHECK(current.failureTick() == 0);
+    NativeAgreement next;
+    REQUIRE(next.openTerminal(1, kEpoch + 1, {1, 2, 0, 0}, hostLinks, 31, Time{}));
+    CHECK(next.receive(102, bytes, Time{}) == Admission::Stale);
+    CHECK_FALSE(next.failed());
+
+    auto invalid = bytes;
+    invalid[5] = 1; // A report, unlike a failure, must name a nonzero tick.
+    invalid[6] = 0;
+    CHECK_FALSE(NativeAgreement::terminalContext(invalid));
 }

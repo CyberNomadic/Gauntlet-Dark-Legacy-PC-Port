@@ -25,7 +25,13 @@ namespace gdl::game {
  * EXIT_OFF figure and its glow (the tower's L1NSNC<letter><n>_ACTIVE object) is put out.
  */
 class TowerAccess {
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const TowerAccess& value) {
+        const auto& [crystals, beaten, gatesDone, shards, runes, anyone, sumner] = value;
+        visitor.values(crystals, beaten, gatesDone, shards, runes, anyone, sumner);
+    }
 public:
+    bool operator==(const TowerAccess&) const = default;
+
     static constexpr s32 kWorldCount = 14;
     static constexpr s32 kTowerWorld = 13;
     static constexpr s32 kTempleWorld = 5;

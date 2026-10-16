@@ -9,6 +9,7 @@
 #include "engine/ui/TextPainter.h"
 
 #include "FakeRenderDevice.h"
+#include "RecordedDrawChecks.h"
 #include "game/menu/HintMenu.h"
 
 namespace {
@@ -151,6 +152,85 @@ TEST_CASE("the hint scroll draws its page's passages in ink on the scroll", "[ga
         }
     }
     REQUIRE(ink);
+}
+
+TEST_CASE("hint menu rewind restores revisions semantic topics pages and burn clocks",
+          "[game][menu][hints][hint-menu-local-rewind]") {
+    for (s32 at = 0; at < 70; ++at) {
+        for (s32 delay = 1; delay <= 8; ++delay) {
+            CAPTURE(at, delay);
+            Fixture expected;
+            Fixture corrected;
+            const auto tick = [](Fixture& f, s32 t) {
+                t %= 60;
+                if (t == 0) {
+                    REQUIRE(f.menu.open(f.painter, MenuScreen{}, labels()));
+                }
+                MenuInput input;
+                input.back = t == 8 || t == 10;
+                const u8 topic = t == 3 ? 2 : 0;
+                const auto event = f.menu.update(f.device, input, 1, topic, f.menu.revision());
+                if (event.kind == HintMenuEvent::Kind::Asked) {
+                    f.menu.read(f.painter, "THE LICH", {"ONE", "TWO"}, 0.8f, false, 16);
+                }
+                return event;
+            };
+            for (s32 t = 0; t < at; ++t) {
+                tick(expected, t);
+                tick(corrected, t);
+            }
+            HintMenu::LocalSnapshot saved;
+            corrected.menu.saveLocal(saved);
+            REQUIRE_FALSE(expected.menu.restoreLocal(saved));
+            std::vector<HintMenuEvent> events;
+            for (s32 t = at; t < at + delay; ++t) {
+                events.push_back(tick(expected, t));
+                corrected.menu.close();
+                REQUIRE(corrected.menu.open(corrected.painter, MenuScreen{}, labels()));
+                corrected.menu.read(corrected.painter, "WRONG", {"THREE"}, 1, true, 0);
+                corrected.menu.update(corrected.device, press(false, false, true), 10);
+                corrected.menu.update(corrected.device, press(false, false, true), 10);
+                corrected.menu.prepare(corrected.device);
+            }
+            const auto created = corrected.device.texturesCreated;
+            const auto uploaded = corrected.device.textureUpdates;
+            REQUIRE(corrected.menu.restoreLocal(saved));
+            for (s32 t = at; t < at + delay; ++t) {
+                const auto event = tick(corrected, t);
+                CHECK(event.kind == events[static_cast<usize>(t - at)].kind);
+                CHECK(event.topic == events[static_cast<usize>(t - at)].topic);
+            }
+            CHECK(corrected.device.texturesCreated == created);
+            CHECK(corrected.device.textureUpdates == uploaded);
+            CHECK(corrected.menu.revision() == expected.menu.revision());
+            CHECK(corrected.menu.active() == expected.menu.active());
+            CHECK(corrected.menu.reading() == expected.menu.reading());
+            CHECK(corrected.menu.burning() == expected.menu.burning());
+            CHECK(corrected.menu.topics().selection() == expected.menu.topics().selection());
+            CHECK(corrected.menu.topics().backdropReleased() ==
+                  expected.menu.topics().backdropReleased());
+            CHECK(corrected.menu.page().definition().body ==
+                  expected.menu.page().definition().body);
+            CHECK(corrected.menu.acceptsTopic(2, corrected.menu.revision()) ==
+                  expected.menu.acceptsTopic(2, expected.menu.revision()));
+            const auto draw = [](Fixture& f) {
+                f.menu.prepare(f.device);
+                f.device.draws.clear();
+                Canvas canvas;
+                canvas.begin(f.device, Mat4{1});
+                f.menu.draw(canvas, f.painter);
+                canvas.end();
+            };
+            draw(expected);
+            draw(corrected);
+            REQUIRE(corrected.device.draws.size() == expected.device.draws.size());
+            for (usize i = 0; i < expected.device.draws.size(); ++i) {
+                test::checkRecordedDraw(corrected.device.draws[i], expected.device.draws[i]);
+            }
+            corrected.menu.setArt({});
+            CHECK_FALSE(corrected.menu.restoreLocal(saved));
+        }
+    }
 }
 
 } // namespace

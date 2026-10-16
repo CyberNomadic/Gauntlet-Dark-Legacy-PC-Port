@@ -218,4 +218,79 @@ TEST_CASE("native Ghost Town scenery checkpoint restores trusted static exit sig
     }
     CHECK(device.texturesCreated == uploads);
 }
+TEST_CASE("scenery local values rewind supported figures hidden clocks and disabled geometry",
+          "[local-rewind][fixture-local-rewind][scenery-local-rewind]") {
+    const bool missing = GENERATE(false, true);
+    Fixture native("scenery-local-native", missing);
+    Fixture replay("scenery-local-replay", missing);
+    std::array<StaticScenery::LocalSnapshot, 16> history;
+    std::array<StaticScenery::LocalSnapshot, 8> expectedLocal;
+    StaticScenery::LocalSnapshot observed;
+    WorldCollision::LocalSnapshot floor;
+    const auto uploads = replay.device.texturesCreated;
+    s32 tick = 0;
+    for (usize window = 0; window < 96; ++window) {
+        const auto distance = static_cast<s32>(window % 8 + 1);
+        CAPTURE(window, distance, missing);
+        const auto before = replay.state();
+        auto& saved = history[window % history.size()];
+        replay.scenery.saveLocal(saved);
+        replay.collision.saveLocal(floor);
+        CHECK_FALSE(native.scenery.canRestoreLocal(saved));
+        CHECK_FALSE(native.scenery.equalLocal(saved, saved));
+        for (s32 i = 0; i < distance; ++i) {
+            replay.step(tick + i, 1.0f / 60);
+            replay.scenery.saveLocal(expectedLocal[static_cast<usize>(i)]);
+        }
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.scenery.restoreLocal(saved));
+        for (s32 i = 0; i < distance; ++i) {
+            replay.step(tick + i + 100, 0.25f);
+        }
+        replay.scenery.draw(replay.device, Mat4{1}, {}, nullptr, TreeModel::Pass::All, 0.3f);
+        REQUIRE(replay.collision.restoreLocal(floor));
+        REQUIRE(replay.scenery.restoreLocal(saved));
+        CHECK(replay.state() == before);
+        for (s32 i = 0; i < distance; ++i) {
+            native.step(tick + i, 1.0f / 60);
+            replay.step(tick + i, 1.0f / 60);
+            CHECK(replay.state() == native.state());
+            replay.scenery.saveLocal(observed);
+            CHECK(replay.scenery.equalLocal(observed, expectedLocal[static_cast<usize>(i)]));
+            CHECK(replay.scenery.obstacles().size() == native.scenery.obstacles().size());
+        }
+        tick += distance;
+    }
+    CHECK(replay.device.texturesCreated == uploads);
+    auto& saved = history.front();
+    replay.scenery.saveLocal(saved);
+    auto stale = replay.owner.prepareRestore(replay.state());
+    REQUIRE(stale);
+    REQUIRE(replay.scenery.restoreLocal(saved));
+    CHECK_FALSE(replay.owner.canCommit(*stale));
+    replay.scenery.clear();
+    CHECK_FALSE(replay.scenery.restoreLocal(saved));
+    CHECK_FALSE(replay.scenery.equalLocal(saved, saved));
+}
+
+TEST_CASE("native scenery equality includes detached support with unchanged figure and obstacle",
+          "[local-rewind][scenery-local-rewind][native-equality]") {
+    Fixture fixture("scenery-local-equality");
+    StaticScenery::LocalSnapshot attached, detached, restored;
+    CHECK_FALSE(fixture.scenery.equalLocal(attached, attached));
+    fixture.scenery.saveLocal(attached);
+    const auto figure = fixture.scenery.prop(0).figure;
+    const auto box = fixture.scenery.prop(0).box;
+    fixture.collision.clear();
+    fixture.scenery.syncFloors();
+    REQUIRE(fixture.scenery.prop(0).support.object() == -1);
+    fixture.scenery.saveLocal(detached);
+    CHECK(fixture.scenery.prop(0).figure.equalLocal(figure));
+    CHECK(fixture.scenery.prop(0).box == box);
+    CHECK_FALSE(fixture.scenery.equalLocal(attached, detached));
+    // The external collision owner is restored separately by a whole-scene rewind.
+    REQUIRE(fixture.scenery.restoreLocal(attached));
+    fixture.scenery.saveLocal(restored);
+    CHECK(fixture.scenery.equalLocal(attached, restored));
+}
 } // namespace

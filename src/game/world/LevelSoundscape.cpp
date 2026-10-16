@@ -30,12 +30,202 @@ constexpr char kSkyRealm = 'K';
 // In CATHEDRAL the ICE slot contains the heavy-door creak recordings.
 constexpr std::array<std::string_view, 6> kOpeningMaterials{"MET", "ROPE",  "CHAIN",
                                                             "ICE", "STONE", "*ROCK"};
+constexpr u32 kAmbientOwner = 10;
+constexpr u32 kOpeningOwner = 11;
+constexpr u32 kScrollOwner = 16;
+constexpr u32 kSharedLoopOwner = 13;
 
 } // namespace
+
+void LevelSoundscape::saveLocal(LocalSnapshot& saved) const {
+    saved.m_values = m_sim;
+    m_narration.saveLocal(saved.m_narration);
+    m_barks.saveLocal(saved.m_barks);
+    saved.m_owner = m_lifetime;
+    saved.m_epoch = m_localEpoch;
+}
+bool LevelSoundscape::appendNativeDigest(NativeStateDigest& digest) const {
+    digest.string("LevelSoundscape.native.1");
+    digest.value(m_sim);
+    return m_narration.appendNativeDigest(digest) && m_barks.appendNativeDigest(digest) && digest.good();
+}
+bool LevelSoundscape::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    digest.string("LevelSoundscape.native.1");
+    digest.value(saved.m_values);
+    return m_narration.appendLocalDigest(digest, saved.m_narration) &&
+           m_barks.appendLocalDigest(digest, saved.m_barks) && digest.good();
+}
+bool LevelSoundscape::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch &&
+           m_narration.canRestoreLocal(saved.m_narration) && m_barks.canRestoreLocal(saved.m_barks);
+}
+bool LevelSoundscape::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.m_values;
+    m_narration.restoreLocal(saved.m_narration);
+    m_barks.restoreLocal(saved.m_barks);
+    m_areas.setPlayerCount(m_sim.players);
+    m_ambience.setPlayerCount(m_sim.players);
+    return true;
+}
+bool LevelSoundscape::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_values == right.m_values &&
+           m_narration.equalLocal(left.m_narration, right.m_narration) &&
+           m_barks.equalLocal(left.m_barks, right.m_barks);
+}
+
+void LevelSoundscape::recordTo(SceneSoundEvents* events) {
+    if (events != m_events) {
+        requirePresentation("changing the scene sound recorder during a native tick");
+        if (events != nullptr) {
+            if (events->epoch() == 0 || events->recording()) {
+                events->unsupported("attaching scene sound recording requires an open idle epoch");
+            }
+            // A live opening or scroll has no pre-existing logical birth. Attach
+            // before it starts rather than silently lose or restart that lifetime.
+            if (!canAttachRecorder()) {
+                events->unsupported("attach scene sound recording before owned cues begin");
+            }
+            if (m_output != nullptr) {
+                m_ambience.stop(*m_output);
+            }
+            stopLoop(m_exitFlame);
+            stopLoop(m_hourglass);
+            m_voice = kNoSound;
+        }
+        ++m_localEpoch;
+        m_events = events;
+        m_narration.recordTo(events);
+        m_barks.recordTo(events);
+    }
+}
+
+bool LevelSoundscape::canAttachRecorder() const {
+    return m_events == nullptr && m_openings.empty() && m_voice == kNoSound &&
+           m_narration.backlog() == 0 && m_barks.backlog() == 0;
+}
+
+void LevelSoundscape::prepareRecordedFrame(const AmbientEar& ear) {
+    m_ear = ear;
+    m_ambientDuck.reset();
+}
+
+void LevelSoundscape::requirePresentation(std::string_view operation) const {
+    if (m_events != nullptr && m_events->recording()) {
+        m_events->unsupported(operation);
+    }
+}
+
+bool LevelSoundscape::hasNamed(std::string_view name) {
+    u32 call = 0;
+    return bankOf(name, call) != nullptr;
+}
+
+SpeechTiming LevelSoundscape::namedTiming(std::string_view name) {
+    u32 call = 0;
+    if (auto* bank = bankOf(name, call)) {
+        return SpeechTiming::of(bank->sequence(call));
+    }
+    return {};
+}
+
+SoundCueToken LevelSoundscape::beginNamedCue(std::string_view name) {
+    if (m_events == nullptr) {
+        return {};
+    }
+    u32 call = 0;
+    if (auto* bank = bankOf(name, call)) {
+        return m_events->beginCue(bank->sequence(call));
+    }
+    return {};
+}
+
+bool LevelSoundscape::desireNamedLoop(const FrameLoopKey& key, std::string_view name,
+                                      SceneSoundPlayback playback, f32 volume, f32 pan,
+                                      SoundCueToken start) {
+    if (m_events == nullptr) {
+        return false;
+    }
+    u32 call = 0;
+    if (auto* bank = bankOf(name, call)) {
+        m_events->desireLoop(key, bank->sequence(call), playback, volume, pan, start);
+        return true;
+    }
+    return false;
+}
+
+void LevelSoundscape::gatherLoops(std::span<const Vec3> listeners, const AmbientEar& ear,
+                                  f32 volume, bool ducked, const WorldScene* world,
+                                  const std::optional<Vec3>& exit,
+                                  const std::optional<Vec3>& hourglass) {
+    if (m_events == nullptr) {
+        return;
+    }
+    m_ear = ear;
+    const auto requests = m_ambience.requests(
+        listeners, volume, ducked ? std::optional<f32>{kDuckedLevel} : std::nullopt, world);
+    m_ambientDuck = m_ambience.musicScale(requests);
+    for (const auto& request : requests) {
+        if (request.loudness <= 0) {
+            continue;
+        }
+        const auto& emitter = m_ambience.emitter(request.emitter);
+        m_events->desireLoop({{kAmbientOwner, static_cast<u64>(emitter.instance), 1}, 1, 1},
+                             emitter.bank->sequence(emitter.sound),
+                             SceneSoundPlayback::RepeatWhileDesired, request.volume,
+                             AmbientSounds::panOf(request.position, ear));
+    }
+    if (!m_sim.cuesEnabled) {
+        return;
+    }
+    const auto owned = [&](const Simulation::OwnedCue& cue, u32 nameSpace) {
+        u32 call = 0;
+        auto* bank = cue.promotion ? promotionBankOf(cue.name, call) : bankOf(cue.name, call);
+        if (bank != nullptr && cue.start) {
+            m_events->desireLoop({{nameSpace, static_cast<u64>(std::max(cue.target, 0)), 1}, 1, 1},
+                                 bank->sequence(call), SceneSoundPlayback::PlayOnceUntilCancelled,
+                                 1.0f, 0, cue.start);
+        }
+    };
+    for (const auto& cue : m_sim.openings) {
+        owned(cue, kOpeningOwner);
+    }
+    if (m_sim.scroll) {
+        owned(*m_sim.scroll, kScrollOwner);
+    }
+    if (exit) {
+        desireNamedLoop({{kSharedLoopOwner, 0, 1}, 1, 1}, "S_EXITFLAME",
+                        SceneSoundPlayback::RepeatWhileDesired, kLoopVolume,
+                        AmbientSounds::panOf(*exit, ear));
+    }
+    if (hourglass) {
+        desireNamedLoop({{kSharedLoopOwner, 0, 1}, 2, 1}, "S_HOURGLASS",
+                        SceneSoundPlayback::RepeatWhileDesired, kHourglassVolume,
+                        AmbientSounds::panOf(*hourglass, ear));
+    }
+}
+
+void LevelSoundscape::servicePresentation(f32 seconds) {
+    requirePresentation("servicing scene presentation during native capture");
+    if (m_ambientDuck) {
+        duckAmbientMusic(AmbientSounds::kMusicDuckHold, *m_ambientDuck);
+    }
+    serviceMusic(seconds);
+    if (m_events != nullptr) {
+        m_events->servicePlayback();
+    }
+}
 
 void LevelSoundscape::open(const std::filesystem::path& root, SoundPlayer* output,
                            const LevelAudioInfo* info, char realm, bool boss) {
     close();
+    m_sim.cuesEnabled = true;
     m_realm = realm;
     m_boss = boss;
     m_output = output;
@@ -57,6 +247,9 @@ void LevelSoundscape::open(const std::filesystem::path& root, SoundPlayer* outpu
 }
 
 void LevelSoundscape::bindAmbience(const WorldLayout& layout, const WorldScene* world) {
+    requirePresentation("rebinding ambient resources during a native tick");
+    ++m_localEpoch;
+    m_sim.players = 1;
     if (m_output != nullptr) {
         m_ambience.stop(*m_output);
     }
@@ -71,6 +264,7 @@ void LevelSoundscape::bindAmbience(const WorldLayout& layout, const WorldScene* 
 }
 
 void LevelSoundscape::setPlayerCount(s32 count) {
+    m_sim.players = count;
     m_ambience.setPlayerCount(count);
     m_areas.setPlayerCount(count);
 }
@@ -78,6 +272,9 @@ void LevelSoundscape::setPlayerCount(s32 count) {
 void LevelSoundscape::updateAmbience(std::span<const Vec3> listeners, const AmbientEar& ear,
                                      f32 volume, bool ducked, const WorldScene* world) {
     m_ear = ear;
+    if (m_events != nullptr) {
+        return; // The root gathers one complete final desire after all replay work.
+    }
     if (m_output != nullptr) {
         // Motion loops belong to their still-moving target, not to the menu's
         // clock. Restore only the records that survived a gameplay pause.
@@ -89,12 +286,17 @@ void LevelSoundscape::updateAmbience(std::span<const Vec3> listeners, const Ambi
         m_ambience.update(*m_output, listeners, ear, volume,
                           ducked ? std::optional<f32>{kDuckedLevel} : std::nullopt, world);
         if (const auto scale = m_ambience.musicScale(); scale.has_value()) {
-            duckMusic(AmbientSounds::kMusicDuckHold, *scale);
+            duckAmbientMusic(AmbientSounds::kMusicDuckHold, *scale);
         }
     }
 }
 
 void LevelSoundscape::pauseAmbience() {
+    requirePresentation("pausing ambient mixer voices during a native tick");
+    if (m_events != nullptr) {
+        m_events->pausePlayback();
+        return;
+    }
     if (m_output != nullptr) {
         m_ambience.stop(*m_output);
     }
@@ -113,19 +315,24 @@ void LevelSoundscape::pauseAmbience() {
 }
 
 void LevelSoundscape::holdSounds() {
+    requirePresentation("holding mixer voices during a native tick");
     if (m_output != nullptr) {
         m_output->setCategoryPaused(SoundCategory::Effects, true);
     }
 }
 
 void LevelSoundscape::releaseSounds() {
+    requirePresentation("releasing mixer voices during a native tick");
     if (m_output != nullptr) {
         m_output->setCategoryPaused(SoundCategory::Effects, false);
+    }
+    if (m_events != nullptr) {
+        m_events->resumePlayback();
     }
 }
 
 void LevelSoundscape::updateMusicAreas(std::span<const Vec3> listeners, const WorldScene* world) {
-    if (const std::optional<MusicCue> cue = m_areas.update(listeners, m_musicArea, world);
+    if (const std::optional<MusicCue> cue = m_areas.update(listeners, m_sim.music.area, world);
         cue.has_value()) {
         selectMusicArea(cue->area, cue->how);
     }
@@ -171,34 +378,66 @@ std::vector<std::unique_ptr<StreamSource>> LevelSoundscape::openArea(s32 area) c
 }
 
 void LevelSoundscape::startMusic(const AssetLocator* assets, f32 volume) {
-    if (m_output == nullptr || assets == nullptr || m_stream.empty()) {
+    requirePresentation("starting a music stream during a native tick");
+    if (assets == nullptr || m_stream.empty()) {
         return;
     }
     // BGMusicStart: the first area at full level, with nothing else asked for.
     m_assets = assets;
     m_musicVolume = volume;
-    m_musicOn = true;
-    m_musicArea = 0;
-    m_musicSwitch = MusicSwitch::AtPartEnd;
-    m_musicLevel = kFullLevel;
-    m_musicFrames = 0.0f;
-    m_musicDuck = 0.0f;
-    playArea(0);
+    m_sim.music.area = 0;
+    m_sim.music.how = MusicSwitch::AtPartEnd;
+    m_sim.music.enabled = true;
+    m_sim.duck = 0;
+    m_sim.duckScale = 1;
+    m_sim.cuesEnabled = true;
+    m_sim.music.start = ++m_sim.music.revision;
+    applyMusicRequest();
 }
 
 void LevelSoundscape::selectMusicArea(s32 area, MusicSwitch how) {
-    m_musicArea = area;
-    m_musicSwitch = how;
+    m_sim.music.area = area;
+    m_sim.music.how = how;
+    ++m_sim.music.revision;
+}
+
+void LevelSoundscape::applyMusicRequest() {
+    const MusicRequest& requested = m_sim.music;
+    if (m_musicPlayback.applied == requested) {
+        return;
+    }
+    const bool restart =
+        requested.start != m_musicPlayback.applied.start || !m_musicPlayback.applied.enabled;
+    m_musicPlayback.applied = requested;
+    m_musicPlayback.area = requested.area;
+    m_musicPlayback.how = requested.how;
+    if (!requested.enabled) {
+        stopMusic();
+        m_musicOn = false;
+        m_musicSilent = false;
+        m_playingArea = -1;
+        return;
+    }
+    m_musicOn = true;
+    if (restart) {
+        m_musicPlayback.level = kFullLevel;
+        m_musicPlayback.frames = 0;
+        m_musicPlayback.ambientDuck = 0;
+        if (m_output != nullptr && m_assets != nullptr) {
+            playArea(std::clamp(requested.area, 0, m_streamAreas - 1));
+        }
+    }
 }
 
 void LevelSoundscape::followMusic(const AssetLocator* assets, s32 area, s32 level, f32 volume) {
+    requirePresentation("following mixer music during a native tick");
     if (m_output == nullptr || assets == nullptr || area < -1 || area >= m_streamAreas ||
         level < 0 || level > kFullLevel) {
         return;
     }
     m_assets = assets;
     m_musicVolume = volume;
-    m_musicLevel = level;
+    m_musicPlayback.level = level;
     if (area == -1) {
         stopMusic();
         m_playingArea = -1;
@@ -213,27 +452,47 @@ void LevelSoundscape::followMusic(const AssetLocator* assets, s32 area, s32 leve
 }
 
 void LevelSoundscape::bossAwake(bool awake) {
-    if (awake && !m_bossAwake) {
+    if (awake && !m_sim.bossAwake) {
         selectMusicArea(1, MusicSwitch::Faded);
     }
-    m_bossAwake = awake;
+    m_sim.bossAwake = awake;
 }
 
 void LevelSoundscape::duckMusic(f32 seconds, f32 scale) {
     // AudioClampMusicVol: the scale is kept between a fifth and the whole.
     constexpr f32 kLeastScale = 0.2f;
-    m_musicDuck = std::max(seconds, 0.0f);
-    m_musicDuckScale = scale < kLeastScale ? kLeastScale : std::min(scale, 1.0f);
+    m_sim.duck = std::max(seconds, 0.0f);
+    m_sim.duckScale = scale < kLeastScale ? kLeastScale : std::min(scale, 1.0f);
+}
+
+void LevelSoundscape::duckAmbientMusic(f32 seconds, f32 scale) {
+    m_musicPlayback.ambientDuck = std::max(seconds, 0.0f);
+    m_musicPlayback.ambientDuckScale = std::clamp(scale, 0.2f, 1.0f);
 }
 
 void LevelSoundscape::updateMusic(f32 seconds) {
-    if (m_output == nullptr || !m_musicOn) {
+    // A single-area level ignores alternate selections regardless of whether
+    // this machine has an audio device or has consumed a stream callback.
+    if (m_streamAreas <= 1 && m_sim.music.area != 0) {
+        m_sim.music.area = 0;
+        m_sim.music.how = MusicSwitch::AtPartEnd;
+    }
+    m_sim.duck = std::max(m_sim.duck - seconds, 0.0f);
+    if (recording()) {
+        return; // Native request normalization above is independent of the mixer.
+    }
+    serviceMusic(seconds);
+}
+
+void LevelSoundscape::serviceMusic(f32 seconds) {
+    applyMusicRequest();
+    if (m_output == nullptr || m_assets == nullptr || !m_musicOn) {
         return;
     }
-    m_musicDuck = std::max(m_musicDuck - seconds, 0.0f);
-    m_musicFrames += seconds * kMusicRate;
-    while (m_musicFrames >= 1.0f) {
-        m_musicFrames -= 1.0f;
+    m_musicPlayback.ambientDuck = std::max(m_musicPlayback.ambientDuck - seconds, 0.0f);
+    m_musicPlayback.frames += seconds * kMusicRate;
+    while (m_musicPlayback.frames >= 1.0f) {
+        m_musicPlayback.frames -= 1.0f;
         stepMusic();
     }
 }
@@ -241,16 +500,19 @@ void LevelSoundscape::updateMusic(f32 seconds) {
 void LevelSoundscape::stepMusic() {
     setupStreams();
     s32 target = kFullLevel;
-    if (m_musicSwitch == MusicSwitch::Faded && m_musicArea != m_playingArea && m_streamAreas > 1) {
-        target = m_musicLevel > kFadedLevel ? m_musicLevel - kFadeStep : m_musicLevel;
-    } else if (m_musicDuck > 0.0f) {
-        target = static_cast<s32>(static_cast<f32>(kFullLevel) * m_musicDuckScale);
+    if (m_musicPlayback.how == MusicSwitch::Faded && m_musicPlayback.area != m_playingArea &&
+        m_streamAreas > 1) {
+        target = m_musicPlayback.level > kFadedLevel ? m_musicPlayback.level - kFadeStep
+                                                     : m_musicPlayback.level;
+    } else if (m_sim.duck > 0.0f || m_musicPlayback.ambientDuck > 0.0f) {
+        const auto scale = m_sim.duck > 0 ? m_sim.duckScale : m_musicPlayback.ambientDuckScale;
+        target = static_cast<s32>(static_cast<f32>(kFullLevel) * scale);
     }
-    const s32 step = std::clamp(target - m_musicLevel, -kRiseStep, kRiseStep);
+    const s32 step = std::clamp(target - m_musicPlayback.level, -kRiseStep, kRiseStep);
     if (step == 0) {
         return;
     }
-    m_musicLevel += step;
+    m_musicPlayback.level += step;
     if (m_music != kNoSound) {
         m_output->setVolume(m_music, musicVolume());
     }
@@ -263,16 +525,16 @@ void LevelSoundscape::setupStreams() {
         m_playingArea = m_followArea;
         m_followArea = -1;
     }
-    const s32 area = std::clamp(m_musicArea, 0, m_streamAreas - 1);
+    const s32 area = std::clamp(m_musicPlayback.area, 0, m_streamAreas - 1);
     if (m_music != kNoSound) {
-        if (m_musicArea == m_playingArea) {
+        if (m_musicPlayback.area == m_playingArea) {
             if (m_followArea >= 0) {
                 m_playlist->follow({});
                 m_followArea = -1;
             }
             return;
         }
-        if (m_musicSwitch == MusicSwitch::AtPartEnd) {
+        if (m_musicPlayback.how == MusicSwitch::AtPartEnd) {
             // The original starts the area when its stream's end callback comes; the
             // playlist takes the area's parts over at that boundary instead.
             if (m_streamAreas > 1 && m_playlist != nullptr && m_followArea != area) {
@@ -287,15 +549,15 @@ void LevelSoundscape::setupStreams() {
             }
             return;
         }
-        if (m_musicSwitch == MusicSwitch::Faded && m_musicLevel > kFadedLevel) {
+        if (m_musicPlayback.how == MusicSwitch::Faded && m_musicPlayback.level > kFadedLevel) {
             return;
         }
         if (m_streamAreas <= 1) {
-            m_musicArea = 0;
-            m_musicSwitch = MusicSwitch::AtPartEnd;
+            m_musicPlayback.area = 0;
+            m_musicPlayback.how = MusicSwitch::AtPartEnd;
             return;
         }
-    } else if (m_musicSilent && m_musicArea == m_playingArea) {
+    } else if (m_musicSilent && m_musicPlayback.area == m_playingArea) {
         return;
     }
     playArea(area);
@@ -306,7 +568,7 @@ void LevelSoundscape::playArea(s32 area) {
     stopMusic();
     m_playingArea = area;
     // Playing an area's stream clears what was asked (sMusicSubState goes to nought).
-    m_musicSwitch = MusicSwitch::AtPartEnd;
+    m_musicPlayback.how = MusicSwitch::AtPartEnd;
     m_musicSilent = parts.empty();
     if (parts.empty()) {
         return;
@@ -322,7 +584,7 @@ void LevelSoundscape::playArea(s32 area) {
 }
 
 f32 LevelSoundscape::musicVolume() const {
-    return static_cast<f32>(m_musicLevel) / static_cast<f32>(kFullLevel) * m_musicVolume;
+    return static_cast<f32>(m_musicPlayback.level) / static_cast<f32>(kFullLevel) * m_musicVolume;
 }
 
 void LevelSoundscape::stopMusic() {
@@ -334,23 +596,34 @@ void LevelSoundscape::stopMusic() {
 }
 
 void LevelSoundscape::stop(SoundHandle handle) {
+    requirePresentation("stopping a physical sound handle during a native tick");
     if (m_output != nullptr && handle != kNoSound) {
         m_output->stop(handle);
     }
 }
 
 void LevelSoundscape::stopVoice() {
+    if (m_events != nullptr) {
+        m_sim.scroll.reset();
+        return;
+    }
     stop(m_voice);
     m_voice = kNoSound;
 }
 
 void LevelSoundscape::stopCues() {
+    // Defeat/departure also stops cues within a live scene. Mixer state is not
+    // rewind state; only bank/owner changes invalidate logical local history.
     // AudioStopSelect: the stream is let go of until the next start.
-    stopMusic();
-    m_musicOn = false;
-    m_musicSilent = false;
-    m_playingArea = -1;
-    m_assets = nullptr;
+    m_sim.music.enabled = false;
+    ++m_sim.music.revision;
+    m_sim.cuesEnabled = false;
+    m_sim.openings.clear();
+    m_sim.scroll.reset();
+    if (m_events != nullptr) {
+        return;
+    }
+    applyMusicRequest();
     stopVoice();
     for (const Opening& sound : m_openings) {
         stop(sound.handle);
@@ -362,6 +635,10 @@ void LevelSoundscape::stopCues() {
 
 void LevelSoundscape::suspend() {
     stopCues();
+    if (m_events != nullptr && !recording()) {
+        m_events->pausePlayback();
+        stopMusic();
+    }
     m_narration.clear();
     m_barks.clear();
     for (const SoundHandle handle : m_voices) {
@@ -374,8 +651,16 @@ void LevelSoundscape::suspend() {
 }
 
 void LevelSoundscape::close() {
+    requirePresentation("closing scene sound banks during a native tick");
+    if (m_events != nullptr) {
+        m_events->close(); // Borrowed clips must not outlive the banks below.
+        recordTo(nullptr);
+    }
+    ++m_localEpoch;
+    m_sim.players = 1;
     suspend();
     m_ear = {};
+    m_ambientDuck.reset();
     m_ambience.clear();
     m_areas.clear();
     m_objectFlags.clear();
@@ -390,16 +675,16 @@ void LevelSoundscape::close() {
     m_streamAreas = 1;
     m_streamParts.fill(0);
     m_musicVolume = 1.0f;
-    m_musicArea = 0;
-    m_musicSwitch = MusicSwitch::AtPartEnd;
-    m_musicLevel = kFullLevel;
-    m_musicFrames = 0.0f;
-    m_musicDuck = 0.0f;
-    m_musicDuckScale = 1.0f;
-    m_bossAwake = false;
+    m_sim.music = {};
+    m_sim.duck = 0;
+    m_sim.duckScale = 1;
+    m_musicPlayback = {};
+    m_assets = nullptr;
+    m_sim.bossAwake = false;
     m_output = nullptr;
     m_narration.bind(nullptr);
     m_barks.bind(nullptr);
+    recordTo(nullptr);
 }
 
 SoundHandle LevelSoundscape::track(SoundHandle handle) {
@@ -424,11 +709,36 @@ SoundSet* LevelSoundscape::bankOf(std::string_view name, u32& sound) {
 }
 
 bool LevelSoundscape::isPlaying(SoundHandle handle) const {
+    requirePresentation("polling mixer playback from a native tick");
     return m_output != nullptr && m_output->isPlaying(handle);
 }
 
-SoundHandle LevelSoundscape::playNamed(std::string_view name, f32 volume, SoundHandle after) {
+SoundHandle LevelSoundscape::playSequence(const SoundSequence& sequence, f32 volume, f32 pan,
+                                          SoundHandle after) {
+    if (m_events != nullptr) {
+        if (after != kNoSound) {
+            m_events->unsupported("physical sound predecessor requires a logical speech cue");
+        }
+        m_events->emit(sequence, volume, pan);
+        return kNoSound;
+    }
     if (m_output == nullptr) {
+        return kNoSound;
+    }
+    const auto handle = m_output->playAfter(after, sequence, volume, SoundCategory::Effects);
+    if (handle != kNoSound && pan != 0) {
+        m_output->setPan(handle, pan);
+    }
+    return handle;
+}
+
+SoundHandle LevelSoundscape::playNamed(std::string_view name, f32 volume, SoundHandle after) {
+    return playNamedPanned(name, volume, 0, after);
+}
+
+SoundHandle LevelSoundscape::playNamedPanned(std::string_view name, f32 volume, f32 pan,
+                                             SoundHandle after) {
+    if (m_output == nullptr && m_events == nullptr) {
         return kNoSound;
     }
     u32 sound = 0;
@@ -437,8 +747,9 @@ SoundHandle LevelSoundscape::playNamed(std::string_view name, f32 volume, SoundH
         return kNoSound;
     }
     try {
-        return track(
-            m_output->playAfter(after, bank->sequence(sound), volume, SoundCategory::Effects));
+        return track(playSequence(bank->sequence(sound), volume, pan, after));
+    } catch (const SceneSoundEvents::Unsupported&) {
+        throw;
     } catch (const std::exception& e) {
         log::warn("Tower: sound {}: {}", name, e.what());
         return kNoSound;
@@ -448,14 +759,10 @@ SoundHandle LevelSoundscape::playNamed(std::string_view name, f32 volume, SoundH
 SoundHandle LevelSoundscape::playAt(std::string_view name, const Vec3& position, f32 playerDistance,
                                     f32 volume) {
     const f32 heard = volume * attenuation(playerDistance);
-    if (heard <= 0 || m_output == nullptr) {
+    if (heard <= 0 || (m_output == nullptr && m_events == nullptr)) {
         return kNoSound;
     }
-    const auto handle = playNamed(name, heard);
-    if (handle != kNoSound) {
-        m_output->setPan(handle, AmbientSounds::panOf(position, m_ear));
-    }
-    return handle;
+    return playNamedPanned(name, heard, AmbientSounds::panOf(position, m_ear));
 }
 
 f32 LevelSoundscape::lengthOf(std::string_view name) {
@@ -468,33 +775,38 @@ f32 LevelSoundscape::lengthOf(std::string_view name) {
 }
 
 SoundHandle LevelSoundscape::playFrom(SoundSet& bank, std::string_view name, f32 volume) {
-    if (m_output != nullptr) {
+    if (m_output != nullptr || m_events != nullptr) {
         if (const auto found = bank.find(name); found.has_value()) {
-            return track(m_output->play(bank.sequence(*found), volume, SoundCategory::Effects));
+            return track(playSequence(bank.sequence(*found), volume));
         }
     }
     return kNoSound;
 }
 
+SoundHandle LevelSoundscape::playFromCall(SoundSet& bank, u32 call, f32 volume) {
+    if (m_output == nullptr && m_events == nullptr) {
+        return kNoSound;
+    }
+    return track(playSequence(bank.sequence(call), volume));
+}
+
 SoundHandle LevelSoundscape::playPromotion(std::string_view name, SoundHandle after) {
     u32 sound = 0;
-    if (m_output != nullptr) {
+    if (m_output != nullptr || m_events != nullptr) {
         if (SoundSet* bank = promotionBankOf(name, sound)) {
-            return track(
-                m_output->playAfter(after, bank->sequence(sound), 1.0f, SoundCategory::Effects));
+            return track(playSequence(bank->sequence(sound), 1, 0, after));
         }
     }
     return after;
 }
 
 SoundHandle LevelSoundscape::narrate(std::string_view name, Narrator which, SoundHandle after) {
-    if (m_output == nullptr) {
+    if (m_output == nullptr && m_events == nullptr) {
         return kNoSound;
     }
     u32 sound = 0;
     if (SoundSet* bank = narrationBankOf(name, which, sound)) {
-        return track(
-            m_output->playAfter(after, bank->sequence(sound), 1.0f, SoundCategory::Effects));
+        return track(playSequence(bank->sequence(sound), 1, 0, after));
     }
     return kNoSound;
 }
@@ -527,7 +839,19 @@ SoundSet* LevelSoundscape::promotionBankOf(std::string_view name, u32& sound) {
 LevelSoundscape::Speech LevelSoundscape::speech(SoundSet& bank, u32 sound, const Speech& after) {
     const auto sequence = bank.sequence(sound);
     Speech result = after;
-    result.timing.append(SpeechTiming::of(sequence));
+    const auto timing = SpeechTiming::of(sequence);
+    result.timing.append(timing);
+    if (m_events != nullptr) {
+        if (!timing.playing()) {
+            return after;
+        }
+        if (after.handle != kNoSound && !after.cue) {
+            m_events->unsupported("speech chain lacks its logical predecessor cue");
+        }
+        result.cue = m_events->emit(sequence, 1, 0, after.cue);
+        result.handle = kNoSound;
+        return result;
+    }
     if (m_output != nullptr) {
         // Optional playback must not erase a decoded line's gameplay duration.
         // Keep source decoding outside this catch: an invalid bank is not an
@@ -552,6 +876,8 @@ LevelSoundscape::Speech LevelSoundscape::speechNamed(std::string_view name, cons
     if (bank != nullptr) {
         try {
             return speech(*bank, sound, after);
+        } catch (const SceneSoundEvents::Unsupported&) {
+            throw;
         } catch (const std::exception& e) {
             log::warn("Tower: sound {}: {}", name, e.what());
         }
@@ -654,8 +980,8 @@ SoundHandle LevelSoundscape::barkNamed(std::string_view name, f32 volume, f32 ma
 }
 
 void LevelSoundscape::playPickup() {
-    if (m_output != nullptr && m_pickup.has_value()) {
-        track(m_output->play(m_common.sequence(*m_pickup), 1.0f, SoundCategory::Effects));
+    if ((m_output != nullptr || m_events != nullptr) && m_pickup.has_value()) {
+        track(playSequence(m_common.sequence(*m_pickup)));
     }
 }
 
@@ -672,9 +998,8 @@ void LevelSoundscape::playFootstep(bool second, Footing footing, f32 distance) {
     }
     const auto kind = kStepKinds[static_cast<usize>(footing)];
     if (const auto found = m_common.find(std::format("S_STEP{}{}", kind, second ? 2 : 1));
-        found.has_value() && m_output != nullptr) {
-        track(
-            m_output->play(m_common.sequence(*found), kStepVolume * heard, SoundCategory::Effects));
+        found.has_value() && (m_output != nullptr || m_events != nullptr)) {
+        track(playSequence(m_common.sequence(*found), kStepVolume * heard));
     }
 }
 
@@ -697,18 +1022,15 @@ void LevelSoundscape::playEntrance() {
 SoundHandle LevelSoundscape::playSerpent(const Vec3& position, const Vec3& attention,
                                          f32 playerDistance, const AmbientEar& ear) {
     constexpr f32 kWakeDistance = 40.0f;
-    if (glm::distance(position, attention) >= kWakeDistance || m_output == nullptr) {
+    if (glm::distance(position, attention) >= kWakeDistance ||
+        (m_output == nullptr && m_events == nullptr)) {
         return kNoSound;
     }
     const f32 heard = attenuation(playerDistance);
     if (heard <= 0.0f) {
         return kNoSound;
     }
-    const auto handle = playNamed("S_SERPENT", kMotionVolume * heard);
-    if (handle != kNoSound) {
-        m_output->setPan(handle, AmbientSounds::panOf(position, ear));
-    }
-    return handle;
+    return playNamedPanned("S_SERPENT", kMotionVolume * heard, AmbientSounds::panOf(position, ear));
 }
 
 void LevelSoundscape::announceTitle(u32 levelFlags) {
@@ -734,15 +1056,13 @@ SoundHandle LevelSoundscape::announceRune(bool nearby, const Vec3& attention,
     if (!sound) {
         return kNoSound;
     }
-    const auto handle = track(m_narration.queue(m_narrator.sequence(*sound), kVolume));
-    if (m_output != nullptr && handle != kNoSound) {
-        m_output->setPan(handle, AmbientSounds::panOf(attention, ear));
-    }
-    return handle;
+    return track(m_narration.queue(m_narrator.sequence(*sound), kVolume,
+                                   AmbientSounds::panOf(attention, ear)));
 }
 
 void LevelSoundscape::placeLoop(PlacedLoop& loop, const std::optional<Vec3>& spot,
                                 const AmbientEar& ear) {
+    requirePresentation("placed sounds require a desired-loop event boundary");
     if (!spot.has_value() || m_output == nullptr) {
         stopLoop(loop);
         return;
@@ -761,14 +1081,35 @@ void LevelSoundscape::stopLoop(PlacedLoop& loop) {
 }
 
 void LevelSoundscape::updateExitFlame(const std::optional<Vec3>& stander, const AmbientEar& ear) {
+    if (m_events != nullptr) {
+        return; // Final root gather supplies the portal's current stander.
+    }
     placeLoop(m_exitFlame, stander, ear);
 }
 
 void LevelSoundscape::updateHourglass(const std::optional<Vec3>& wearer, const AmbientEar& ear) {
+    if (m_events != nullptr) {
+        return;
+    }
     placeLoop(m_hourglass, wearer, ear);
 }
 
 void LevelSoundscape::speakOverScroll(std::string_view name) {
+    if (m_events != nullptr) {
+        auto scope = soundScope({kScrollOwner, 0, 1}, 1);
+        u32 call = 0;
+        auto* bank = bankOf(name, call);
+        const bool promotion = bank == nullptr;
+        if (promotion) {
+            bank = promotionBankOf(name, call);
+        }
+        m_sim.scroll.reset();
+        if (bank != nullptr) {
+            const auto cue = m_events->beginCue(bank->sequence(call));
+            m_sim.scroll = Simulation::OwnedCue{std::string{name}, cue, -1, promotion};
+        }
+        return;
+    }
     stopVoice();
     m_voice = playNamed(name);
     if (m_voice == kNoSound) {
@@ -777,6 +1118,7 @@ void LevelSoundscape::speakOverScroll(std::string_view name) {
 }
 
 void LevelSoundscape::opening(const TriggerOpening& event) {
+    auto scope = soundScope({kOpeningOwner, static_cast<u64>(std::max(event.target, 0)), 1}, 1);
     // ProcessItemWobjs tests its signed sound slot before bridge and motion dispatch too.
     if (event.atOnce || event.sound < 0) {
         return;
@@ -792,12 +1134,23 @@ void LevelSoundscape::opening(const TriggerOpening& event) {
         playMotion(event.sound, event.target, false);
         return;
     }
+    if (m_events != nullptr) {
+        const auto name = openingName(event.sound, false);
+        const auto start = beginNamedCue(name);
+        if (start) {
+            std::erase_if(m_sim.openings,
+                          [&](const auto& cue) { return cue.target == event.target; });
+            m_sim.openings.push_back({name, start, event.target});
+        }
+        return;
+    }
     if (const SoundHandle handle = playOpening(event.sound, false); handle != kNoSound) {
         m_openings.push_back(Opening{event.target, event.sound, handle});
     }
 }
 
 void LevelSoundscape::settled(const TriggerOpening& event) {
+    auto scope = soundScope({kOpeningOwner, static_cast<u64>(std::max(event.target, 0)), 1}, 2);
     if (event.subtype == 20 || event.subtype == 22) {
         return;
     }
@@ -805,6 +1158,11 @@ void LevelSoundscape::settled(const TriggerOpening& event) {
         if (!event.atOnce) {
             playMotion(event.sound, event.target, true);
         }
+        return;
+    }
+    if (m_events != nullptr) {
+        std::erase_if(m_sim.openings, [&](const auto& cue) { return cue.target == event.target; });
+        playOpening(event.sound, true);
         return;
     }
     for (usize i = 0; i < m_openings.size();) {
@@ -819,17 +1177,20 @@ void LevelSoundscape::settled(const TriggerOpening& event) {
 }
 
 SoundHandle LevelSoundscape::playOpening(s32 slot, bool settled) {
+    return playNamed(openingName(slot, settled));
+}
+
+std::string LevelSoundscape::openingName(s32 slot, bool settled) const {
     if (slot < 0 || static_cast<usize>(slot) >= kOpeningMaterials.size()) {
-        return kNoSound;
+        return {};
     }
     // GC 800a1614 constructs the sixth pair without a realm suffix, and
     // selects the B-suffixed elevator names in boss arenas.
     const auto material = kOpeningMaterials[static_cast<usize>(slot)];
     if (material.starts_with('*')) {
-        return playNamed(std::format("S_{}{}", material.substr(1), settled ? "STOP" : "ROTATE"));
+        return std::format("S_{}{}", material.substr(1), settled ? "STOP" : "ROTATE");
     }
-    return playNamed(
-        std::format("S_ELV{}{}{}{}", material, settled ? "STP" : "", m_realm, m_boss ? "B" : ""));
+    return std::format("S_ELV{}{}{}{}", material, settled ? "STP" : "", m_realm, m_boss ? "B" : "");
 }
 
 /** AudioWorldObjectMotion (items.c 5236-5246): the trap slot sounds at either edge of the

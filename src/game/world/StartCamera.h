@@ -9,6 +9,13 @@ namespace gdl::game {
 /** Level-entry hold and handoff. Normal levels use angular/radius interpolation;
  * special/boss cameras retain their separate legacy path. */
 class StartCamera {
+    template <class Visitor> friend void visitNativeState(Visitor& digest, const StartCamera& value) {
+        const auto& [phase, mode, ticks, rideTicks, from, fromAttention, toAttention,
+                     fromDistance, toDistance, yawDelta, pitchDelta, camera, attention] = value;
+        digest.values(phase, mode, ticks, rideTicks, from, fromAttention, toAttention,
+                      fromDistance, toDistance, yawDelta, pitchDelta, camera, attention);
+    }
+
 public:
     static constexpr s32 kHoldTicks = 180; ///< three seconds on the 60 Hz tick clock
     static constexpr s32 kRideTicks = 20;  ///< ten 30 Hz camera updates
