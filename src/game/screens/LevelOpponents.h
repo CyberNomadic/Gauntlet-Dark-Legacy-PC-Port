@@ -72,7 +72,10 @@ public:
     void close();
     /** What the camera takes in and where it looks: what is on screen, and the placed
      * enemies it comes to see stand (fn_80060114). */
-    void watch(const ViewVolume& view, const Vec3& attention);
+    /** What the swarm and the generators count as on screen; the placed enemies the view
+     * comes to see stand as well, unless `standPlaced` is off (the entrance, when
+     * fn_80060114 waits for the level's earlyenemies). */
+    void watch(const ViewVolume& view, const Vec3& attention, bool standPlaced = true);
     usize pendingPlacements() const { return m_placements.count(); }
     PlacedEnemies& placements() { return m_placements; }
     const PlacedEnemies& placements() const { return m_placements; }

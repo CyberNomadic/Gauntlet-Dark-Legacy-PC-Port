@@ -88,8 +88,7 @@ void PlayerActor::spawn(s32 player, const CharacterSave& save, const ClassStats*
     m_followHeight = kDefaultFollowHeight;
     m_attentionHeight = kDefaultFollowHeight;
     if (stats != nullptr) {
-        const s32 level = experienceLevel(save.experience());
-        speedStat = static_cast<f32>(displayStats(*stats, level, save.progress()).speed());
+        speedStat = static_cast<f32>(characterStats(*stats, save).speed());
         if (stats->width > 0.0f) {
             m_radius = stats->width * 0.5f;
         }

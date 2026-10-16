@@ -263,6 +263,9 @@ bool ClassDataSet::load(const std::filesystem::path& directory) {
 }
 
 const ClassStats* ClassDataSet::stats(s32 classIndex) const {
+    // A hidden costume plays on its base class's record: there is no seventeenth PDATA
+    // file, and the original keeps Sumner as the wizard with a costume tag.
+    classIndex = baseClassOf(classIndex);
     if (classIndex < 0 || classIndex >= kClassCount) {
         return nullptr;
     }

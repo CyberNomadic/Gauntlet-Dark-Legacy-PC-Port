@@ -866,8 +866,9 @@ void EnemyMissiles::update(f32 seconds, const WorldCollision* collision,
             Vec3 destination = to;
             if (collision != nullptr && !missile.kind.throughWorld) {
                 std::vector<WallContact> contacts;
-                const Vec3 pushed =
-                    collision->resolveWalls(to, radius, to.y - radius, to.y + radius, &contacts);
+                const Vec3 pushed = collision->resolveWalls(
+                    to, radius, to.y - radius, to.y + radius, &contacts, std::nullopt,
+                    WorldCollision::WallPush::All, WorldCollision::kMissileQueryFlags);
                 struckWorld = glm::distance(pushed, to) > 0.001f;
                 if (struckWorld) {
                     destination = pushed;

@@ -472,7 +472,7 @@ private:
     void drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& eye, f32 frameBlend,
                      f32 opponentBlend);
     bool scriptedCamera() const;
-    void watchOpponents();
+    void watchOpponents(bool standPlaced = true);
     void gatherLights();
     void beginChallenge();
     void collectChallengeCoin(usize item);

@@ -14,6 +14,10 @@ class NativeStateDigest;
 }
 
 namespace gdl::game {
+class CharacterSave;
+}
+
+namespace gdl::game {
 
 inline constexpr s32 kMaxLevel = 99;
 inline constexpr s32 kStartingHealth = 500;
@@ -79,6 +83,10 @@ StatBlock displayStats(const ClassStats& stats, s32 level, const ClassProgress& 
 
 /** What every stat reads for the hidden master class. */
 StatBlock masteryStats();
+
+/** The stats a character plays with: the master's are all 999 whatever `stats` says
+ * (PlayerUpdateAtts), the rest `displayStats` at the save's level with its bonuses. */
+StatBlock characterStats(const ClassStats& stats, const CharacterSave& save);
 
 /** Flat damage absorption from the current armor attribute, including level and shop gains. */
 f32 armorDefense(const ClassStats& stats, const ClassProgress& progress);

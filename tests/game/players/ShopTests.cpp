@@ -967,7 +967,7 @@ TEST_CASE("Sumner shops using Wizard data without a fictitious SUM class record"
     auto save = shopper();
     save.character = kSumnerClass;
     const std::array<PartyMember, 1> party{{{0, save}}};
-    REQUIRE(data.stats(kSumnerClass) == nullptr);
+    REQUIRE(data.stats(kSumnerClass) == data.stats(kWizardClass));
     session.start(party, {}, {}, data, catalog());
     REQUIRE(session.lanes().size() == 1);
     REQUIRE(session.lanes()[0].stats.powerupTime == 1.25f);

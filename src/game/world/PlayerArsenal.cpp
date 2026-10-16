@@ -208,8 +208,7 @@ std::optional<PlayerMissiles::WeaponThrow> PlayerArsenal::weaponThrow(const Play
     s32 stat = 0;
     Vec3 hand{0.0f, 0.0f, 0.0f};
     if (stats != nullptr) {
-        const StatBlock block =
-            displayStats(*stats, experienceLevel(save.experience()), save.progress());
+        const StatBlock block = characterStats(*stats, save);
         stat = MissileSpec::byMagic(save.character) ? block.magic() : block.strength();
         hand = stats->weaponOffset;
     }
@@ -448,8 +447,7 @@ void PlayerArsenal::launchSuperShot(PlayerActor& actor, PlayerFigure* body,
     }
     s32 stat = 0;
     if (const auto* stats = m_resources->classes.stats(actor.save().character)) {
-        const auto block = displayStats(*stats, experienceLevel(actor.save().experience()),
-                                        actor.save().progress());
+        const auto block = characterStats(*stats, actor.save());
         stat = MissileSpec::byMagic(actor.save().character) ? block.magic() : block.strength();
     }
     MissileLaunch launch;
@@ -577,8 +575,7 @@ void PlayerArsenal::launchGauntlet(const PlayerActor& actor, PlayerFigure* body,
     }
     s32 stat = 0;
     if (const auto* stats = m_resources->classes.stats(actor.save().character)) {
-        const auto block = displayStats(*stats, experienceLevel(actor.save().experience()),
-                                        actor.save().progress());
+        const auto block = characterStats(*stats, actor.save());
         stat = MissileSpec::byMagic(actor.save().character) ? block.magic() : block.strength();
     }
     static constexpr std::array<MissileSpec, 2> kSpecs{
@@ -718,10 +715,7 @@ f32 PlayerArsenal::magicPowerOf(const PlayerActor& actor) const {
     const CharacterSave& save = actor.save();
     const ClassStats* stats =
         m_resources.has_value() ? m_resources->classes.stats(save.character) : nullptr;
-    const s32 magic =
-        stats != nullptr
-            ? displayStats(*stats, experienceLevel(save.experience()), save.progress()).magic()
-            : 0;
+    const s32 magic = stats != nullptr ? characterStats(*stats, save).magic() : 0;
     return PowerupEffects::of(save.progress().inventory).magicPower(magic);
 }
 

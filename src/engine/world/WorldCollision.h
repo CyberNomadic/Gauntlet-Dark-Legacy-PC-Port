@@ -54,6 +54,9 @@ public:
     // FloorCollide / PlayerWallCollide / EnemyWallCollide pass these masks to WorldCollide.
     static constexpr u32 kFloorQueryFlags = 0x23C;
     static constexpr u32 kWallQueryFlags = 0x13A;
+    /** WeaponWallCollide's 0x23E less 0x200 (the secondary channel never counts as a hit):
+     * a shot passes the 0x100 player-only fences and stops on floor-flagged barriers. */
+    static constexpr u32 kMissileQueryFlags = 0x3E;
     /** WorldObjCollide's secondary channel, not the solid floor result. */
     static constexpr u32 kLiquidSurface = 0x200;
 
@@ -122,8 +125,8 @@ public:
      */
     Vec3 resolveWalls(const Vec3& centre, f32 radius, f32 bottom, f32 top,
                       std::vector<WallContact>* contacts = nullptr,
-                      std::optional<f32> minimumY = std::nullopt,
-                      WallPush push = WallPush::All) const;
+                      std::optional<f32> minimumY = std::nullopt, WallPush push = WallPush::All,
+                      u32 mask = kWallQueryFlags) const;
     /** All surface contacts of a cylinder, including sloped faces and caps.
      * Unlike wall resolution this does not approximate contact at two heights. */
     std::vector<WallContact> surfaceContacts(const Vec3& centre, f32 radius, f32 bottom,

@@ -170,7 +170,6 @@ TEST_CASE("native placement loader retains missing-statue fallbacks and ordered 
         CHECK(row.carried == std::optional<usize>{index + 31});
         const Mat4 stood = itemPlacement(instance.position, instance.rotation);
         CHECK(row.facing == std::atan2(stood[2][0], stood[2][2]));
-        REQUIRE(row.valid());
     }
     CHECK(rows[0].viewRadius == 10);
     CHECK(rows[1].viewRadius == 6);

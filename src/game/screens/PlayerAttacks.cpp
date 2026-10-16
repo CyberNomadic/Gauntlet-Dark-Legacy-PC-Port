@@ -359,8 +359,7 @@ f32 PlayerAttacks::meleeDamageOf(usize index, std::span<const PlayerRuntime> pla
     if (stats == nullptr) {
         return PlayerMissiles::kLeastDamage;
     }
-    const StatBlock block =
-        displayStats(*stats, experienceLevel(save.experience()), save.progress());
+    const StatBlock block = characterStats(*stats, save);
     // PlyrSfxDoDamageSub (80089B30) scales negative DAMG amounts by Player+0x104
     // (stat_damage), not +0x114 (stat_missile_dmg). Even caster effects use Strength;
     // their ordinary projectiles use Magic separately in PlayerArsenal.

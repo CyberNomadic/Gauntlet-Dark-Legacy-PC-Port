@@ -1,5 +1,7 @@
 #include "game/players/Progression.h"
 
+#include "game/players/CharacterSave.h"
+
 #include <algorithm>
 
 #include "engine/core/Types.h"
@@ -78,6 +80,13 @@ StatBlock masteryStats() {
     StatBlock block;
     block.values.fill(kMaxStat);
     return block;
+}
+
+StatBlock characterStats(const ClassStats& stats, const CharacterSave& save) {
+    if (save.character == kSumnerClass) {
+        return masteryStats();
+    }
+    return displayStats(stats, experienceLevel(save.experience()), save.progress());
 }
 
 f32 armorDefense(const ClassStats& stats, const ClassProgress& progress) {

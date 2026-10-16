@@ -80,7 +80,9 @@ TEST_CASE("class stats load from their files", "[game][players]") {
     REQUIRE(classes.stats(2)->weaponGlowScales[0] == Vec3{0.0f});
     REQUIRE(classes.stats(2)->magicMax == 999.0f);
     REQUIRE(classes.stats(1) == nullptr);
-    REQUIRE(classes.stats(kSumnerClass) == nullptr);
+    // Sumner plays on the wizard's record: there is no seventeenth file.
+    REQUIRE(classes.stats(kSumnerClass) == classes.stats(2));
+    REQUIRE(classes.stats(kSumnerClass) != nullptr);
     REQUIRE(classes.stats(-1) == nullptr);
 
     ClassDataSet empty;

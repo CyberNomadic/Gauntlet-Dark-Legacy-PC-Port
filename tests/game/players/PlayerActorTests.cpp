@@ -12,6 +12,7 @@
 #include "game/players/CharacterSave.h"
 #include "game/players/ClassData.h"
 #include "game/players/PlayerActor.h"
+#include "game/players/Progression.h"
 
 namespace {
 
@@ -94,6 +95,25 @@ TEST_CASE("an actor walks at its class speed, facing its heading, relative to th
     // Model space is placed at the feet, turned to the heading.
     const Vec4 nose = actor.transform() * Vec4{0.0f, 0.0f, 1.0f, 1.0f};
     REQUIRE(nose.z == Approx(actor.position().z + 1.0f));
+}
+
+TEST_CASE("Sumner walks at the master's pace on his base class's record",
+          "[game][players][actor][sumner]") {
+    // PlayerUpdateAtts gives the hidden master 999 in every attribute before the class
+    // table is consulted: his pace is the greatest, 5 + 0.999 * 7.5, not the record's.
+    PlayerActor actor;
+    CharacterSave save;
+    save.name = "AB";
+    save.character = kSumnerClass;
+    const ClassStats stats = warrior();
+    actor.spawn(0, save, &stats, Vec3{0.0f}, 0.0f);
+    REQUIRE(actor.speed() == Approx(5.0f + 0.999f * 7.5f));
+    REQUIRE(actor.radius() == Approx(0.75f)); // the body is the record's
+    const StatBlock block = characterStats(stats, save);
+    REQUIRE(block.speed() == 999);
+    REQUIRE(block.magic() == 999);
+    save.character = 0;
+    REQUIRE(characterStats(stats, save).speed() == 350);
 }
 
 TEST_CASE("attention anchors remain separate from collision and camera-follow heights",

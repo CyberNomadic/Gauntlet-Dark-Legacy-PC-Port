@@ -385,7 +385,7 @@ TEST_CASE("combat packet round trips complete nonempty native owners and adapter
     CHECK((*encoded)[1] == 'B');
     CHECK((*encoded)[2] == 'S');
     CHECK((*encoded)[3] == 'T');
-    CHECK((*encoded)[4] == 6);
+    CHECK((*encoded)[4] == Packet::kVersion);
     const auto decoded = Packet::decode(*encoded);
     REQUIRE(decoded);
     CHECK(*decoded == state);

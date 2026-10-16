@@ -943,7 +943,7 @@ std::vector<WallContact> WorldCollision::surfaceContacts(const Vec3& centre, f32
 
 Vec3 WorldCollision::resolveWalls(const Vec3& centre, f32 radius, f32 bottom, f32 top,
                                   std::vector<WallContact>* contacts, std::optional<f32> minimumY,
-                                  WallPush push) const {
+                                  WallPush push, u32 mask) const {
     Vec3 out = centre;
     const f32 reach = radius * 2.0f;
     for (s32 pass = 0; pass < kPasses; ++pass) {
@@ -951,7 +951,7 @@ Vec3 WorldCollision::resolveWalls(const Vec3& centre, f32 radius, f32 bottom, f3
         eachTriangle(
             out.x - reach, out.z - reach, out.x + reach, out.z + reach,
             [&](const CollisionTriangle& triangle) {
-                if ((triangle.objectFlags & kWallQueryFlags) == 0 ||
+                if ((triangle.objectFlags & mask) == 0 ||
                     (triangle.objectFlags & kLiquidSurface) != 0 ||
                     std::abs(triangle.normal.y) >= kFloorNormalY) {
                     return; // a floor or a ceiling

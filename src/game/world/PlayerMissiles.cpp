@@ -532,9 +532,11 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                 continue;
             }
             std::vector<WallContact> contacts;
+            // WeaponWallCollide: the fences only the party walks against let shots by.
             const Vec3 pushed = collision->resolveWalls(
                 missile.position, radius, missile.position.y - radius * 0.5f,
-                missile.position.y + radius * 0.5f, &contacts);
+                missile.position.y + radius * 0.5f, &contacts, std::nullopt,
+                WorldCollision::WallPush::All, WorldCollision::kMissileQueryFlags);
             const bool wall = glm::distance(pushed, missile.position) > 1e-4f;
             const auto floor =
                 collision->projectileFloorAt(missile.position, radius, radius * 0.5f);

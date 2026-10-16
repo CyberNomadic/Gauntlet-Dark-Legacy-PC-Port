@@ -3,6 +3,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -192,6 +193,21 @@ TEST_CASE("G4 breakaway meshes retain their baked lighting after a hit",
             device.draws.clear();
             wall.model.draw(device, Mat4{1}, wall.transform, {});
             REQUIRE(device.draws.size() == mesh.parts.size());
+            for (const auto& draw : device.draws) {
+                CHECK(draw.state.darken == 0.0f);
+            }
+            // The special's darkening reaches the baked colour too (the original darkens
+            // the whole window), so a secret wall no longer stands out bright.
+            WorldLighting dimmed;
+            dimmed.darken = 0.5f;
+            device.draws.clear();
+            wall.model.draw(device, Mat4{1}, wall.transform, dimmed);
+            REQUIRE(device.draws.size() == mesh.parts.size());
+            for (const auto& draw : device.draws) {
+                CHECK(draw.state.darken == 0.5f);
+            }
+            device.draws.clear();
+            wall.model.draw(device, Mat4{1}, wall.transform, {});
             for (usize p = 0; p < mesh.parts.size(); ++p) {
                 const auto& part = mesh.parts[p];
                 REQUIRE(device.draws[p].vertices.size() == part.indices.size());

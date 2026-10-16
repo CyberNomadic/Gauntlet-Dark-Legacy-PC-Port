@@ -168,6 +168,7 @@ public:
     usize loadedCount() const { return m_loadedCount; }
 
     /** The stats of a class, or nullptr when its file was missing. */
+    /** The class's record; a hidden costume's (Sumner's) is its base class's. */
     const ClassStats* stats(s32 classIndex) const;
 
 private:

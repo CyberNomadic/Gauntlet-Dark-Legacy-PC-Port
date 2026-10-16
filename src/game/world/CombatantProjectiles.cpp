@@ -331,8 +331,10 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 // WeaponWallCollide uses half the player-contact radius.
                 const f32 worldRadius = 0.5f * radius;
                 std::vector<WallContact> contacts;
-                const Vec3 pushed = collision->resolveWalls(to, worldRadius, to.y - worldRadius,
-                                                            to.y + worldRadius, &contacts);
+                const Vec3 pushed = collision->resolveWalls(
+                    to, worldRadius, to.y - worldRadius, to.y + worldRadius, &contacts,
+                    std::nullopt, WorldCollision::WallPush::All,
+                    WorldCollision::kMissileQueryFlags);
                 wall = glm::length(pushed - to) > kWallTolerance;
                 if (wall) {
                     normal = glm::normalize(pushed - to);

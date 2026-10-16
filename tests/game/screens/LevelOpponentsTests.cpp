@@ -2911,14 +2911,14 @@ TEST_CASE("a running suicide cries audibly and scatters animated fragments when 
         }
     }
     REQUIRE(fragments != nullptr);
-    fragments->model.draw(device, Mat4{1}, fragments->transform(), WorldLighting{},
+    fragments->model->draw(device, Mat4{1}, fragments->transform(), WorldLighting{},
                           fragments->pose.matrices());
     REQUIRE_FALSE(device.draws.empty());
     REQUIRE_FALSE(device.draws.front().vertices.empty());
     const Vec3 firstVertex = device.draws.front().vertices.front().position;
     device.draws.clear();
     effects.update(0.3f);
-    fragments->model.draw(device, Mat4{1}, fragments->transform(), WorldLighting{},
+    fragments->model->draw(device, Mat4{1}, fragments->transform(), WorldLighting{},
                           fragments->pose.matrices());
     REQUIRE_FALSE(device.draws.empty());
     CHECK(glm::distance(device.draws.front().vertices.front().position, firstVertex) > 0.1f);

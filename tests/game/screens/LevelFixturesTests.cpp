@@ -1533,7 +1533,7 @@ TEST_CASE("a trapped chest has a short raised fireball and independently animate
     CHECK(debris->transform() == orientation);
     CHECK(f.effects.remaining(debris->id) == Catch::Approx(2.5f));
     f.device.draws.clear();
-    fireball->model.draw(f.device, Mat4{1}, fireball->transform(), {}, fireball->pose.matrices());
+    fireball->model->draw(f.device, Mat4{1}, fireball->transform(), {}, fireball->pose.matrices());
     REQUIRE_FALSE(f.device.draws.empty());
     CHECK_FALSE(f.device.draws.front().vertices.empty());
     f.effects.update(1.1f);

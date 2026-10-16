@@ -586,7 +586,7 @@ void PlayScene::updateEnemies(s32 ticks, f32 seconds) {
 
 /** What the enemies count as on screen is what the view shows, and the placed ones it comes
  * to see stand. */
-void PlayScene::watchOpponents() {
+void PlayScene::watchOpponents(bool standPlaced) {
     const CameraView view = cameraView();
     const WorldCamera camera = viewCamera();
     Vec3 attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
@@ -594,7 +594,8 @@ void PlayScene::watchOpponents() {
         // TriggerCamUpdate uses the shot's eye as gCameras[0].attn for placement range.
         attention = camera.position;
     }
-    m_opponents.watch(ViewVolume::of(camera, view.horizontalFov, view.aspect), attention);
+    m_opponents.watch(ViewVolume::of(camera, view.horizontalFov, view.aspect), attention,
+                      standPlaced);
 }
 
 LevelOpponents::Events PlayScene::opponentEvents() {
@@ -1140,7 +1141,11 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     // around it and the start camera holds, then rides in; the title slides up until the
     // ride, when it sits.
     if (spawning()) {
-        watchOpponents();
+        // The entrance holds the enemies still: nothing breeds and nothing fights until the
+        // party is in play. world_update's earlyenemies (the Mountain's Peak) lifts only
+        // fn_80060114's gate, so there the placed enemies the camera comes to see stand.
+        const LevelInfo* level = m_world->level();
+        watchOpponents(level != nullptr && level->earlyEnemies);
         m_arrival.animate(seconds);
         for (const PlayerRuntime& runtime : m_players) {
             const std::unique_ptr<PlayerFigure>& figure = runtime.figure;
@@ -1150,13 +1155,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         }
         m_bossSequence.advanceLegend(0, m_opponents.bosses(), m_players);
         m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
-        // The entrance holds the enemies still, unless the level has them early (world_update's
-        // earlyenemies: the Mountain's Peak).
-        if (const LevelInfo* level = m_world->level(); level != nullptr && level->earlyEnemies) {
-            updateEnemies(ticks, seconds);
-        } else {
-            m_opponents.bosses().arm(seconds);
-        }
+        m_opponents.bosses().arm(seconds);
         updateAmbience();
         const bool cameraHandoff = m_arrival.camera().active();
         // Ride to the camera that will actually take over. A boss entrance must not
@@ -1450,7 +1449,13 @@ std::vector<TriggerVisitor> PlayScene::visitors() const {
         visitor.gargoylePieces = actor.save().progress().relics.gargoylePieces;
         visitor.sumner = actor.save().character == kSumnerClass;
         visitor.party = static_cast<s32>(i);
-        if (const auto floor = m_world->collision().floorAt(visitor.position, 0.5f, 1.0f)) {
+        // The original tests a pad's floor against the object the player rides
+        // (floor_name2), which at a lift's deck edge is not always what a fresh probe
+        // beneath the feet finds.
+        if (m_players[i].floor.object >= 0) {
+            visitor.floorObject = m_players[i].floor.object;
+        } else if (const auto floor =
+                       m_world->collision().floorAt(visitor.position, 0.5f, 1.0f)) {
             visitor.floorObject = floor->object;
         }
         out.push_back(visitor);

@@ -37,9 +37,12 @@ struct WorldLighting {
     Vec3 lightColor{0.45f, 0.45f, 0.45f};
     Vec3 direction{0.3f, 1.0f, 0.2f}; ///< towards the light
     std::vector<PointLight> points;   ///< this frame's, the newest first
+    /** How much of everything's colour is taken away (the original darkens the whole
+     * window with the special's ambient value), baked colour included; glows excepted. */
+    f32 darken = 0.0f;
     bool operator==(const WorldLighting&) const = default;
     template <class Digest> friend void visitNativeState(Digest& digest, const WorldLighting& value) {
-        digest.template fields<4>(value);
+        digest.template fields<5>(value);
     }
 
     static constexpr usize kMostPoints = 12;

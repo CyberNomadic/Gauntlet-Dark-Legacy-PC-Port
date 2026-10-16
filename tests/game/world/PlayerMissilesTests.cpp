@@ -994,6 +994,40 @@ TEST_CASE("a missile is lobbed to come down half a unit under its start at its r
     REQUIRE(missiles.takeImpacts().empty());
 }
 
+TEST_CASE("a shot flies through a fence only the party walks against and stops on a "
+          "floor-flagged barrier, as WeaponWallCollide's mask has it",
+          "[game][world][missiles][wall-mask]") {
+    // A 0x100 fence across z = 10 (the party's walls, not a weapon's), then a barrier
+    // across z = 20 flagged as floor alone (0x4: a weapon's, not the party's).
+    CollisionTriangle fence;
+    fence.object = 7;
+    fence.objectFlags = 0x100;
+    fence.normal = Vec3{0.0f, 0.0f, -1.0f};
+    fence.vertices = {Vec3{-20.0f, -5.0f, 10.0f}, Vec3{20.0f, -5.0f, 10.0f},
+                      Vec3{0.0f, 40.0f, 10.0f}};
+    CollisionTriangle barrier = fence;
+    barrier.object = 8;
+    barrier.objectFlags = 0x4;
+    barrier.vertices = {Vec3{-20.0f, -5.0f, 20.0f}, Vec3{20.0f, -5.0f, 20.0f},
+                        Vec3{0.0f, 40.0f, 20.0f}};
+    WorldCollision collision;
+    collision.build({fence, barrier});
+    // The party is stopped by the fence and walks through the barrier.
+    CHECK(collision.resolveWalls(Vec3{0.0f, 1.0f, 9.8f}, 0.75f, 1.0f, 4.0f).z < 9.8f);
+    CHECK(collision.resolveWalls(Vec3{0.0f, 1.0f, 19.8f}, 0.75f, 1.0f, 4.0f).z == 19.8f);
+    PlayerMissiles missiles;
+    REQUIRE(missiles.launch(axeFrom(Vec3{0.0f, 3.0f, 0.0f})));
+    for (s32 i = 0; i < 60 && missiles.count() > 0; ++i) {
+        missiles.update(kStep, &collision);
+    }
+    REQUIRE(missiles.count() == 0);
+    const std::vector<MissileImpact> impacts = missiles.takeImpacts();
+    REQUIRE(impacts.size() == 1);
+    CHECK(impacts[0].position.z > 18.0f);
+    CHECK(impacts[0].position.z < 20.5f);
+    CHECK(impacts[0].worldObject == 8);
+}
+
 TEST_CASE("walls and floors stop a missile where it strikes", "[game][world][missiles]") {
     // A wall across z = 10 facing the thrower, and a floor far below.
     CollisionTriangle wall;

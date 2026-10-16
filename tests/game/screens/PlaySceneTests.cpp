@@ -3319,6 +3319,59 @@ TEST_CASE("Chimera scenario walks up the stairs before lowering the occupied pla
     CHECK(scene.viewCamera().position.z > scene.actor(0)->position().z);
 }
 
+TEST_CASE("the Peak's placed enemies stand during the entrance while nothing breeds or "
+          "fights, and elsewhere they wait for it to end",
+          "[game][screens][entrance][early-enemies][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELB2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("LEVELS/LEVELB1/WORLDS.PS2");
+    // world_update's earlyenemies lifts only fn_80060114's gate: the placed enemies the
+    // camera sees are created during the start camera; the swarm breeds for and fights
+    // nobody, the party not being in play (its players are not yet state 1).
+    const bool early = GENERATE(true, false);
+    CAPTURE(early);
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    const auto level = levels.byName(early ? "B2" : "B1");
+    REQUIRE(level.has_value());
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    REQUIRE(world.level() != nullptr);
+    REQUIRE(world.level()->earlyEnemies == early);
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.progress().health = 1000;
+    const std::array party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    REQUIRE(scene.spawning());
+    const usize waiting = scene.opponents().pendingPlacements();
+    const PlayScene::Inputs still{};
+    s32 frames = 0;
+    for (; frames < 60 * 40 && scene.spawning(); ++frames) {
+        scene.update(1.0 / 60.0, still);
+        REQUIRE(scene.actor(0)->save().health() == 1000);
+        for (usize g = 0; g < scene.generators().count(); ++g) {
+            REQUIRE(scene.generators().bredOf(static_cast<s32>(g)) == 0);
+        }
+    }
+    REQUIRE_FALSE(scene.spawning());
+    REQUIRE(frames > 0);
+    if (early) {
+        CHECK(scene.opponents().pendingPlacements() < waiting);
+    } else {
+        CHECK(scene.opponents().pendingPlacements() == waiting);
+    }
+}
+
 TEST_CASE("Garm's entrance rides to the boss camera without a floor detour or handoff cut",
           "[game][screens][camera][garm-arrival][assets]") {
     const auto root =
