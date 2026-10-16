@@ -798,7 +798,11 @@ std::optional<FloorHit> WorldCollision::surfaceAt(const Vec3& position, f32 abov
                          return;
                      }
                      if (!best.has_value() || y > best->y) {
-                         best = FloorHit{y, triangle.normal, triangle.object, triangle.objectFlags};
+                         best = FloorHit{y,
+                                         triangle.normal,
+                                         triangle.object,
+                                         triangle.objectFlags,
+                                         {point.x, y, point.y}};
                      }
                  });
     return best;
@@ -832,7 +836,15 @@ Vec3 WorldCollision::sweepWalls(const Vec3& from, const Vec3& to, f32 radius, f3
                     return; // separating from the solid face
                 }
                 for (const f32 fraction : kProbeFractions) {
-                    const f32 height = bottom + (top - bottom) * fraction;
+                    // The native player sphere cannot hit below minimumY.
+                    // A triangle's high far end passing the broad-phase test
+                    // must not let its low near end collide with a knee probe
+                    // outside that volume (e.g. Ice Camp's sloping rails).
+                    const f32 height =
+                        std::max(bottom + (top - bottom) * fraction, minimumY.value_or(bottom));
+                    if (height > top) {
+                        continue;
+                    }
                     const Vec3 origin{position.x, height, position.y};
                     if (glm::dot(origin - triangle.vertices[0], triangle.normal) < 0) {
                         continue; // entering through the back face is allowed
@@ -965,7 +977,13 @@ Vec3 WorldCollision::resolveWalls(const Vec3& centre, f32 radius, f32 bottom, f3
                 const f32 normalLength = glm::length(wallNormal);
                 wallNormal = normalLength > kEpsilon ? wallNormal / normalLength : Vec2{1.0f, 0.0f};
                 for (const f32 fraction : kProbeFractions) {
-                    const f32 height = bottom + (top - bottom) * fraction;
+                    // Match the swept contact interval; a later overlap check
+                    // must not push a player back off a successfully boarded rail.
+                    const f32 height =
+                        std::max(bottom + (top - bottom) * fraction, minimumY.value_or(bottom));
+                    if (height > top) {
+                        continue;
+                    }
                     const Slice slice = sliceAt(triangle, height);
                     if (!slice.valid) {
                         continue;

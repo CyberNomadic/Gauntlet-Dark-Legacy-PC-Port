@@ -136,6 +136,65 @@ struct NativeWalk {
     }
 };
 
+TEST_CASE("Ice Camp railway ledge contacts do not strand a player outside their floor",
+          "[native-traversal][ice-rail-ledge][assets]") {
+    const s32 hz = GENERATE(30, 60, 120);
+    NativeWalk walk("I2", {-51.0781f, 34.0156f, 79.7188f}, 1.0f / static_cast<f32>(hz));
+    const auto root = test::assetOrSkip("PDATA/WAR.WAD").parent_path().parent_path();
+    ClassDataSet classes;
+    REQUIRE(classes.load(root / "PDATA"));
+    // CAVECARTE#05, the railway tunnel below the starting area. A footprint
+    // reached the narrow side ledge (1211) without its centre ever reaching
+    // that floor, then every reverse step was rejected.
+    for (s32 character = 0; character < kClassCount; ++character) {
+        const auto* stats = classes.stats(character == kSumnerClass ? kWizardClass : character);
+        REQUIRE(stats);
+        walk.stand({-51.0781f, 34.0156f, 79.7188f}, character, *stats);
+        const Vec3 start = walk.party[0].actor.position();
+        for (s32 tick = 0; tick < hz / 2; ++tick) {
+            walk.step({0, -1});
+        }
+        const Vec3 end = walk.party[0].actor.position();
+        for (s32 tick = 0; tick < hz; ++tick) {
+            walk.step({0, 1});
+        }
+        const Vec3 returned = walk.party[0].actor.position();
+        CAPTURE(hz, character, start.x, start.y, start.z, end.x, end.y, end.z, returned.x,
+                returned.y, returned.z);
+        CHECK(returned.z > start.z - 0.3f);
+        CHECK(returned.y <= start.y + 0.1f);
+    }
+}
+
+TEST_CASE("Ice Camp tunnel side strip can rejoin the sloping railroad",
+          "[native-traversal][ice-rail-reboard][assets]") {
+    const s32 hz = GENERATE(30, 60, 120);
+    const bool maximumSpeed = GENERATE(false, true);
+    const Vec3 start{43.234375f, 28.8499f, 50.8984375f};
+    NativeWalk walk("I2", start, 1.0f / static_cast<f32>(hz));
+    const auto root = test::assetOrSkip("PDATA/WAR.WAD").parent_path().parent_path();
+    ClassDataSet classes;
+    REQUIRE(classes.load(root / "PDATA"));
+    // CAVECARTE#08: leave side strip I2#086 for the raised rail deck I2#087.
+    // The rail has a long side triangle whose distant high end used to admit
+    // a knee-height wall contact below the player's native collision volume.
+    for (s32 character = 0; character < kClassCount; ++character) {
+        const auto* stats = classes.stats(character == kSumnerClass ? kWizardClass : character);
+        REQUIRE(stats);
+        CAPTURE(hz, character, maximumSpeed);
+        walk.stand(start, character, *stats);
+        if (maximumSpeed) {
+            walk.party[0].actor.setPaceBonus(PlayerActor::kMaxSpeed);
+        }
+        walk.walk({start.x, start.z - 2});
+        CHECK(walk.party[0].actor.position().y > 29.8f);
+        // Clear the rail with the whole footprint before checking descent.
+        walk.walk({start.x, start.z + 1});
+        walk.wait(hz / 2);
+        CHECK(walk.party[0].actor.position().y < 29.1f);
+    }
+}
+
 TEST_CASE("G1 first lift can be boarded from its lower landing and left above",
           "[native-traversal][g1-first-lift][assets]") {
     const f32 offset = GENERATE(-2.0f, 0.0f, 2.0f);
@@ -212,7 +271,15 @@ TEST_CASE("G1 second lift can descend and recover from its broken fence corner",
         walk.walk({-21, -145});
         walk.walk({-17.75f, -145});
     } else {
-        walk.walk({walk.party[0].actor.position().x, -152});
+        // The low lift rim no longer blocks walking onto the lower ground.
+        // Fence 1187 spans x=-27.05..-21.73 at z=-157.2, y=18.1..23.2:
+        // return around its east tip, not straight through this five-unit wall.
+        for (s32 frame = 0; frame < hz / 3; ++frame) {
+            walk.step({0, 1});
+        }
+        CHECK(walk.party[0].actor.position().z < -157.2f);
+        walk.walk({-21, -159});
+        walk.walk({-21, -152});
     }
     walk.walk({-17.75f, -152});
     walk.walk({-11, -152});

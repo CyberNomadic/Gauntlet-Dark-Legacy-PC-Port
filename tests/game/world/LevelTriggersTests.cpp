@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <set>
 #include <string_view>
@@ -1000,10 +1001,16 @@ TEST_CASE("unkeyed trigger targets translate their geometry to signed height end
     WorldScene scene;
     REQUIRE(scene.build(layout, models, textures, device));
     REQUIRE(scene.moving(0));
+    // A second controller can already have moved/turned this node. Height updates
+    // own only Y, including their initial placement and their settled ticks.
+    const Mat4 turned = glm::rotate(glm::translate(Mat4{1}, Vec3{2, 10, -3}), 0.7f, Vec3{0, 1, 0});
+    scene.setObjectTransform(0, turned);
     WorldAnimator animator;
     animator.bind(layout);
     LevelTriggers triggers;
     triggers.bind(layout, animator, nullptr);
+    triggers.placeTargets(scene, nullptr);
+    CHECK(scene.localTransform(0) == turned);
     const std::array visitors{TriggerVisitor{.position = Vec3{0}}};
     triggers.update(0.25f, visitors, animator, scene, nullptr);
     CHECK(scene.worldTransform(0)[3].y == Approx(9));
@@ -1016,6 +1023,11 @@ TEST_CASE("unkeyed trigger targets translate their geometry to signed height end
     triggers.update(1, {}, animator, scene, nullptr);
     CHECK(scene.worldTransform(0)[3].y == Approx(8));
     CHECK(triggers.takeSettled().empty());
+    CHECK(scene.localTransform(0)[0] == turned[0]);
+    CHECK(scene.localTransform(0)[1] == turned[1]);
+    CHECK(scene.localTransform(0)[2] == turned[2]);
+    CHECK(scene.localTransform(0)[3].x == turned[3].x);
+    CHECK(scene.localTransform(0)[3].z == turned[3].z);
 }
 
 TEST_CASE("switch art missing from the level's own item archive comes from the realm's",
@@ -1339,6 +1351,135 @@ TEST_CASE("lift pads activate from the lowered deck rather than their authored m
     world.updateTriggers(kStep, visitors);
     CHECK(world.triggers().trigger(index).fired);
     CHECK(world.triggers().opened(trigger.target));
+}
+
+TEST_CASE("Ice Camp retains its pillar rotation and its final switch raises the runestone",
+          "[triggers][rotators][ice-runestone][assets]") {
+    const auto root = test::assetOrSkip("WDATA/ICE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    world.setPlayerCount(1);
+    world.startTriggers({});
+    // The earlier switch behind the ice wall has already raised the approach bridge.
+    world.activateTrigger(1, true);
+    usize liftSwitch = world.triggers().size();
+    for (usize i = 0; i < world.triggers().size(); ++i) {
+        if (world.triggers().trigger(i).instance == 491) {
+            liftSwitch = i;
+        }
+    }
+    REQUIRE(liftSwitch < world.triggers().size());
+    PlayerActor actor;
+    const auto approachSwitch = [&] {
+        actor.spawn(0, {}, nullptr, Vec3{-7.46875f, 26.3f, -24.9453125f}, 0);
+        actor.settle(world.collision());
+        for (s32 frame = 0; frame < 180 && !world.triggers().trigger(liftSwitch).fired; ++frame) {
+            const Vec3 toward = world.triggers().trigger(liftSwitch).spot - actor.position();
+            const Vec2 direction = glm::normalize(Vec2{toward.x, toward.z});
+            actor.update(MoveInput{.direction = direction, .magnitude = 1}, 0, kStep,
+                         &world.collision());
+            actor.fall(kStep, world.collision());
+            const std::array visitors{TriggerVisitor{
+                .position = actor.position(), .radius = actor.radius(), .height = actor.height()}};
+            world.update(kStep);
+            world.updateTriggers(kStep, visitors);
+        }
+    };
+    const std::array onPad{TriggerVisitor{.position = Vec3{-32.09375f, 16.5447f, -35.28125f}}};
+    for (s32 frame = 0; frame < 300; ++frame) {
+        world.update(kStep);
+        world.updateTriggers(kStep, frame == 0 ? std::span<const TriggerVisitor>{onPad}
+                                               : std::span<const TriggerVisitor>{});
+    }
+    REQUIRE(world.layout().objects()[247].name == "I2ELEV43");
+    REQUIRE(world.layout().objects()[248].name == "I2ELEV6");
+    const auto& pillar = world.rotators().rotator(4);
+    REQUIRE(pillar.object == 247);
+    REQUIRE(pillar.done);
+    CHECK(world.scene().worldTransform(247)[0].x == Approx(std::cos(pillar.turned)));
+    CHECK(world.scene().worldTransform(247)[0].z == Approx(-std::sin(pillar.turned)));
+    REQUIRE(world.collision().objectTransform(247));
+    CHECK(*world.collision().objectTransform(247) == world.scene().worldTransform(247));
+
+    REQUIRE_FALSE(world.triggers().trigger(liftSwitch).fired);
+    const auto before = world.collision().floorAt(Vec3{-16.3f, 42, -28.5f}, 0, 20);
+    REQUIRE(before);
+    REQUIRE(before->object == 248);
+    // Walk from the approach bridge to the final switch instead of activating it directly.
+    approachSwitch();
+    CAPTURE(actor.position().x, actor.position().y, actor.position().z);
+    REQUIRE(world.triggers().trigger(liftSwitch).fired);
+    for (s32 frame = 0; frame < 90; ++frame) {
+        world.update(kStep);
+        world.updateTriggers(kStep, {});
+    }
+    CHECK(world.triggers().opened(248));
+    const auto raised = world.collision().floorAt(Vec3{-16.3f, 42, -28.5f}, 0, 20);
+    REQUIRE(raised);
+    CHECK(raised->object == 248);
+    CHECK(raised->y == Approx(before->y + 3.5f));
+    CHECK(world.scene().worldTransform(247)[0].x == Approx(std::cos(pillar.turned)));
+
+    actor.spawn(0, {}, nullptr, Vec3{-16.3f, 41.2f, -24}, 0);
+    actor.settle(world.collision());
+    bool tookRune = false;
+    for (s32 frame = 0; frame < 60 && !tookRune; ++frame) {
+        actor.update(MoveInput{.direction = Vec2{0, -1}, .magnitude = 1}, 0, kStep,
+                     &world.collision());
+        actor.fall(kStep, world.collision());
+        const std::array collectors{Collector{actor.position(), actor.radius(), actor.height()}};
+        for (const auto& pickup : world.collect(device, collectors)) {
+            tookRune |= world.placedItems().item(pickup.item).instance == 505;
+        }
+    }
+    CAPTURE(actor.position().x, actor.position().y, actor.position().z);
+    CHECK(tookRune);
+}
+
+TEST_CASE("Ice Camp spinning platforms retain their switch-controlled height",
+          "[triggers][rotators][ice-runestone][assets]") {
+    const s32 instance = GENERATE(480, 471, 472, 473);
+    const auto root = test::assetOrSkip("WDATA/ICE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    world.startTriggers({});
+    usize index = world.triggers().size();
+    for (usize i = 0; i < world.triggers().size(); ++i) {
+        if (world.triggers().trigger(i).instance == instance) {
+            index = i;
+        }
+    }
+    REQUIRE(index < world.triggers().size());
+    const auto& trigger = world.triggers().trigger(index);
+    const auto object = static_cast<usize>(trigger.target);
+    const f32 initialHeight = world.scene().worldTransform(object)[3].y;
+    const f32 raisedHeight = world.layout().worldPosition(object).y;
+    REQUIRE(initialHeight < raisedHeight);
+    for (s32 frame = 0; frame < 60; ++frame) {
+        world.update(kStep);
+        world.updateTriggers(kStep, {});
+    }
+    CHECK(world.scene().worldTransform(object)[3].y == Approx(initialHeight));
+    CHECK(world.scene().worldTransform(object)[0].z != Approx(0));
+    const std::array visitors{TriggerVisitor{.position = trigger.spot}};
+    world.updateTriggers(kStep, visitors);
+    REQUIRE(trigger.fired);
+    CHECK(world.scene().worldTransform(object)[3].y > initialHeight);
+    CHECK(world.scene().worldTransform(object)[3].y < raisedHeight);
+    for (s32 frame = 0; frame < 90; ++frame) {
+        world.update(kStep);
+        world.updateTriggers(kStep, {});
+    }
+    CHECK(world.scene().worldTransform(object)[3].y == Approx(raisedHeight));
+    REQUIRE(world.collision().objectTransform(trigger.target));
+    CHECK(*world.collision().objectTransform(trigger.target) ==
+          world.scene().worldTransform(object));
 }
 
 TEST_CASE("the Mine's lift is walkable across its green centre, which is a child of its ring",

@@ -70,6 +70,28 @@ TEST_CASE("a still floor carries nothing, and neither does one left behind",
     CHECK(players[0].actor.position() == Vec3{1, 0, 1});
 }
 
+TEST_CASE("a lower moving landing owns a rider while the body is still descending",
+          "[game][screens][floor-riding]") {
+    WorldCollision collision;
+    collision.build(square({-5, -5}, {5, 5}, 0, 7, FloorRiding::kMoving | kFloorQuery));
+    const std::array<s32, 1> moving{7};
+    collision.setMovingObjects(moving);
+    collision.setObjectTransform(7, Mat4{1});
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, {0, 2.5f, 0}, 0);
+    FloorRiding::land(players, 0, players[0].actor.position(), collision);
+    REQUIRE(players[0].floor.object == 7);
+    collision.setObjectTransform(7, glm::translate(Mat4{1}, Vec3{1, -0.2f, 0}));
+    FloorRiding::carry(players[0], collision);
+    CHECK(players[0].actor.position().x == Approx(1));
+    CHECK(players[0].actor.position().y == Approx(2.3f));
+    players[0].actor.fall(1.0f / 30, collision);
+    CHECK(players[0].actor.position().y == Approx(2.3f - PlayerActor::kFallSpeed / 30));
+    players[0].actor.place({1, 10, 0});
+    FloorRiding::land(players, 0, players[0].actor.position(), collision);
+    CHECK(players[0].floor.object == -1);
+}
+
 TEST_CASE("a member may not step onto a moving floor while another rides one kept apart",
           "[game][screens][floor-riding]") {
     constexpr s32 kLift = 7;

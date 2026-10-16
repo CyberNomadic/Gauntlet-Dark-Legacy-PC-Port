@@ -259,9 +259,12 @@ bool Rotators::advanceMotion(f32 seconds, WorldScene& scene) {
 }
 
 void Rotators::place(const Rotator& rotator, WorldScene& scene) {
-    scene.setObjectTransform(static_cast<usize>(rotator.object),
-                             glm::rotate(glm::translate(Mat4{1.0f}, rotator.origin), rotator.turned,
-                                         Vec3{0.0f, 1.0f, 0.0f}));
+    const auto object = static_cast<usize>(rotator.object);
+    // YawMat3 (800be4f4) leaves translation intact. Ice Camp's gears also have
+    // height switches; rotating must not put them back at their authored height.
+    const Vec3 position = scene.localTransform(object)[3];
+    scene.setObjectTransform(object, glm::rotate(glm::translate(Mat4{1.0f}, position),
+                                                 rotator.turned, Vec3{0.0f, 1.0f, 0.0f}));
 }
 
 void Rotators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const {

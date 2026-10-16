@@ -232,6 +232,9 @@ TEST_CASE("the floor under a point is found within the probe range", "[world][co
     // A footprint touching the edge can approach it, never walk away from it.
     const auto edge = collision.floorAt({10.4f, 1, 0}, 2, 3, 0.75f);
     REQUIRE(edge);
+    CHECK(edge->point.x == Approx(10));
+    CHECK(edge->point.y == Approx(edge->y));
+    CHECK(edge->point.z == Approx(0));
     CHECK_FALSE(collision.floorAt({10.8f, 1, 0}, 2, 3, 0.75f));
     CHECK(collision.floorAhead({10.4f, 1, 0}, {-0.1f, 0, 0}, 2, 3, 0.75f));
     CHECK_FALSE(collision.floorAhead({10.4f, 1, 0}, {0.1f, 0, 0}, 2, 3, 0.75f));
@@ -583,6 +586,23 @@ TEST_CASE("wall clearance excludes only faces wholly below the caller's volume",
           Approx(-4.5f));
     CHECK(collision.resolveWalls({0, 0, -4.8f}, 0.5f, 0.2f, 2.8f, nullptr, 2.0f).z ==
           Approx(-4.5f));
+}
+
+TEST_CASE("wall clearance is local along a sloping rail, not the tallest vertex of its face",
+          "[world][collision][wall-clearance][sloping-rail]") {
+    WorldCollision collision;
+    collision.build({triangle({5, 0, -10}, {5, 1, -10}, {5, 3, 10}, {-1, 0, 0}, 7),
+                     triangle({5, 0, -10}, {5, 3, 10}, {5, 0, 10}, {-1, 0, 0}, 7)});
+    std::vector<WallContact> contacts;
+    // The local rail top is 1.5, below the player's sphere bottom at 2.
+    // Its far end reaching 3 must not make its low end a wall.
+    CHECK(collision.sweepWalls({0, 0, -5}, {9, 0, -5}, 0.5f, 0.2f, 4.8f, &contacts, 2).x ==
+          Approx(9));
+    CHECK(collision.resolveWalls({4.8f, 0, -5}, 0.5f, 0.2f, 4.8f, &contacts, 2).x == Approx(4.8f));
+    CHECK(contacts.empty());
+    CHECK(collision.sweepWalls({0, 0, 5}, {9, 0, 5}, 0.5f, 0.2f, 4.8f, nullptr, 2).x ==
+          Approx(4.5f));
+    CHECK(collision.resolveWalls({4.8f, 0, 5}, 0.5f, 0.2f, 4.8f, nullptr, 2).x == Approx(4.5f));
 }
 
 TEST_CASE("floor edges retain tangential travel without bridging disconnected floors",

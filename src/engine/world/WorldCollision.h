@@ -39,6 +39,7 @@ struct FloorHit {
     Vec3 normal{0.0f, 1.0f, 0.0f};
     s32 object = -1;
     u32 objectFlags = 0;
+    Vec3 point{0}; ///< actual contact on the triangle, not the probe's X/Z
 };
 
 /**
@@ -119,7 +120,7 @@ public:
     /**
      * Pushes a vertical cylinder of `radius` standing from `bottom` to `top` out of the walls
      * it overlaps and returns the corrected centre. Sliding along walls falls out of it, so a
-     * mover just steps and then corrects. `minimumY` excludes faces wholly below
+     * mover just steps and then corrects. `minimumY` excludes contacts below
      * the caller's wall volume, as in sweepWalls. StaticOnly retains animated-wall contacts
      * without overlap pushout. Movement against those walls is still blocked by sweepWalls.
      */
@@ -135,7 +136,7 @@ public:
      * `bottom` and `top` are world-space probe heights; the destination's y is unchanged.
      * Faces block approaches from their normal side only. Opposing faces make a wall
      * solid on both sides; crossing a thin wall cannot select its far side. An optional
-     * `minimumY` excludes faces wholly below a caller's physical collision volume. */
+     * `minimumY` clips contact probes to a caller's physical collision volume. */
     Vec3 sweepWalls(const Vec3& from, const Vec3& to, f32 radius, f32 bottom, f32 top,
                     std::vector<WallContact>* contacts = nullptr,
                     std::optional<f32> minimumY = std::nullopt) const;

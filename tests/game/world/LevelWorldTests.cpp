@@ -604,6 +604,7 @@ TEST_CASE("Temple spawning and entrance movement reject the wall-only underlay",
         actor.spawn(0, {}, nullptr, start->position, 0);
         for (s32 frame = 0; frame < 1200; ++frame) {
             actor.update({glm::normalize(direction), 1}, 0, 1.0f / 60, &collision);
+            actor.fall(1.0f / 60, collision);
         }
         CAPTURE(direction.x, direction.y, actor.position().x, actor.position().z);
         CHECK(actor.position().y >= -4);

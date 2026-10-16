@@ -554,6 +554,11 @@ void WorldScene::setObjectTransform(usize object, const Mat4& local, bool presen
     }
 }
 
+const Mat4& WorldScene::localTransform(usize object) const {
+    static const Mat4 kIdentity{1.0f};
+    return object < m_placements.size() ? m_placements[object].local : kIdentity;
+}
+
 const Mat4& WorldScene::worldTransform(usize object) const {
     static const Mat4 kIdentity{1.0f};
     if (object >= m_placements.size()) {

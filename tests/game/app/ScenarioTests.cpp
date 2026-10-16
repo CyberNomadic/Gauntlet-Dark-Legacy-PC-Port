@@ -54,6 +54,18 @@ TEST_CASE("platform and Death statue scenarios load the affected level locations
     REQUIRE_FALSE(pillar.partyMembers().front().slot);
 }
 
+TEST_CASE("Ice Camp railway scenario starts the reported class beside the early tunnel",
+          "[scenario][ice-rail-ledge]") {
+    const auto scenario = Scenario::load(test::dataDirectory().parent_path() /
+                                         "tests/scenarios/level-i2-railway-ledge.json");
+    REQUIRE(scenario.level == "I2");
+    CHECK(scenario.tower.position == Vec3{43.234375f, 28.8499f, 50.8984375f});
+    const auto party = scenario.partyMembers();
+    REQUIRE(party.size() == 1);
+    CHECK(party.front().save.character == classIndexOf("KNI").value());
+    CHECK_FALSE(party.front().slot);
+}
+
 TEST_CASE("fully unlocked tower scenario supplies a maxed green Knight without pending ceremonies",
           "[scenario][tower-access]") {
     const auto scenario = Scenario::load(test::dataDirectory().parent_path() /

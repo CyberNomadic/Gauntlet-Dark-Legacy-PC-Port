@@ -130,6 +130,65 @@ TEST_CASE("Stop Time holds native looping platforms through entry and switch cam
     }
 }
 
+TEST_CASE("walking onto Ice Camp's runestone switch raises its lift during the camera shot",
+          "[switch-camera][ice-runestone][assets]") {
+    const auto root = test::assetOrSkip("WDATA/ICE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.levels = &catalog;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{-12, 26.3f, -28.375f};
+    const std::array party{PartyMember{0, CharacterSave{}}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    scene.enemies().close();
+    scene.generators().clear();
+    for (s32 frame = 0; frame < 600 && scene.spawning(); ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    REQUIRE_FALSE(scene.spawning());
+    REQUIRE_FALSE(scene.switchCutscene().active());
+    REQUIRE_FALSE(world.triggers().opened(248));
+    const f32 initialHeight = world.scene().worldTransform(248)[3].y;
+    bool sawShot = false;
+    bool roseDuringShot = false;
+    for (s32 frame = 0; frame < 600; ++frame) {
+        PlayScene::Inputs inputs{};
+        if (!world.triggers().opened(248)) {
+            const Vec3 toward = Vec3{-14.75f, 26.5f, -28.375f} - scene.actor(0)->position();
+            const f32 heading = std::atan2(toward.x, toward.z) - scene.viewCamera().yaw;
+            inputs[0].move = MoveInput{Vec2{std::sin(heading), std::cos(heading)}, 1};
+        }
+        scene.update(1.0 / 60, inputs);
+        if (scene.switchCutscene().showing() && scene.switchCutscene().target() == 248) {
+            sawShot = true;
+            roseDuringShot |= world.scene().worldTransform(248)[3].y > initialHeight;
+        }
+        if (sawShot && !scene.switchCutscene().active()) {
+            break;
+        }
+    }
+    CAPTURE(scene.actor(0)->position().x, scene.actor(0)->position().y,
+            scene.actor(0)->position().z);
+    CHECK(sawShot);
+    CHECK(roseDuringShot);
+    CHECK(world.triggers().opened(248));
+    CHECK(world.triggers().settled(248));
+    CHECK(world.scene().worldTransform(248)[3].y == Approx(initialHeight + 3.5f));
+    const auto support = world.collision().floorAt(Vec3{-16.3f, 42, -28.5f}, 0, 20);
+    REQUIRE(support);
+    CHECK(support->object == 248);
+    CHECK(support->y == Approx(40.0390625f));
+}
+
 TEST_CASE("a player activates and crosses the first Underworld descending pillar",
           "[pillar-crossing][assets]") {
     const auto root =

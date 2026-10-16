@@ -171,21 +171,57 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
     // Go in steps no longer than half the body, so no wall is ever stepped clean through.
     const auto steps = std::max(1, static_cast<s32>(std::ceil(distance / (m_radius * 0.5f))));
     const Vec3 stride = offset / static_cast<f32>(steps);
+    auto sourceFloor = collision->floorAt(m_position, kFloorEdgeReach, kDrop + 1, kFloorEdgeReach);
+    const auto footprint = collision->floorAt(m_position, kFloorEdgeReach, kDrop + 1, m_radius);
+    if (footprint && (!sourceFloor || (sourceFloor->y < m_position.y - kFloorEdgeReach &&
+                                       footprint->y > sourceFloor->y))) {
+        sourceFloor = footprint;
+    }
+    const f32 sourceHeight = sourceFloor ? sourceFloor->y : m_position.y;
+    // PlayerCollideFloor compares against floor_base, not an interpolated body
+    // height. Same-object steps have one extra unit of tolerance. Keep this
+    // reference for the entire displacement: subdivision must not turn one
+    // permitted step into a ladder of arbitrarily high steps.
+    const auto reachable = [&](const std::optional<FloorHit>& hit) {
+        const bool same =
+            hit && sourceFloor && sourceFloor->object >= 0 && hit->object == sourceFloor->object;
+        return hit && std::abs(hit->y - sourceHeight) <= kStepUp + (same ? 1.0f : 0.0f);
+    };
+    const auto ground = [&](Vec3 point, f32 margin, const Vec3* direction = nullptr) {
+        point.y = sourceHeight;
+        // FloorCollide casts down from effectpos (feet + class coly).
+        // BTriLineCol rejects a floor above that origin, even when its height
+        // difference would otherwise pass the floor_base tolerance.
+        const f32 above = std::min(kStepUp + 1, m_position.y + m_followHeight - sourceHeight);
+        auto hit = direction ? collision->floorAhead(point, *direction, above, kDrop + 1, margin)
+                             : collision->floorAt(point, above, kDrop + 1, margin);
+        return reachable(hit) ? hit : std::optional<FloorHit>{};
+    };
     for (s32 i = 0; i < steps; ++i) {
         // PlayerWallCollide tests a sphere at coly + 1 with the class's full
-        // width as its radius. Keep our horizontal sweep, but exclude faces
-        // wholly below that volume, such as a lowered lift's deck sides.
+        // width as its radius. Keep our horizontal sweep, but exclude contacts
+        // below that volume, such as a lowered lift's deck sides.
         const f32 wallMinimum = minimumWallY(m_position.y);
         Vec3 target = m_position + stride;
         target = collision->sweepWalls(m_position, target, m_radius, target.y + kFootClearance,
                                        target.y + m_height - kFootClearance, &m_wallContacts,
                                        wallMinimum);
-        auto floor = collision->floorAt(target, kStepUp, kDrop, kFloorEdgeReach);
+        auto floor = ground(target, kFloorEdgeReach);
         if (!floor) {
-            // Floor contact spans the body's radius, not just a ray under its
-            // centre. Only a landing ahead supports crossing a seam; support
-            // behind us must not allow walking away from a cliff.
-            floor = collision->floorAhead(target, target - m_position, kStepUp, kDrop, m_radius);
+            // Prefer a landing in the travel direction when crossing a seam,
+            // rather than letting the higher departure edge pin us in place.
+            const Vec3 step = target - m_position;
+            floor = ground(target, m_radius, &step);
+        }
+        if (!floor) {
+            // Include contacts behind the centre too. PlayerCollideFloor uses
+            // them to project an outward move back onto the supporting edge;
+            // discarding them left a straddling player unable to turn back.
+            floor = ground(target, m_radius);
+        }
+        if (sourceFloor && collision->floorExitBlocked(sourceFloor->object) &&
+            (!floor || floor->object != sourceFloor->object)) {
+            return;
         }
         if (!floor.has_value()) {
             const auto edge =
@@ -196,20 +232,52 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
             target = collision->sweepWalls(m_position, *edge, m_radius, edge->y + kFootClearance,
                                            edge->y + m_height - kFootClearance, &m_wallContacts,
                                            wallMinimum);
-            const auto support = collision->floorAt(target, kStepUp, kDrop, kFloorEdgeReach);
+            const auto support = ground(target, kFloorEdgeReach);
             if (!support) {
                 return;
             }
-            target.y = support->y;
+            target.y = std::max(m_position.y, support->y);
         } else {
-            target.y = floor->y;
+            // PlayerCollideFloor keeps the actual triangle contact. A footprint
+            // overlapping a ledge is not permission to walk parallel to it in
+            // empty space: project an outward/tangential step onto that edge.
+            // A step toward the contact can still cross a small landing seam.
+            const Vec3 gap{target.x - floor->point.x, 0, target.z - floor->point.z};
+            if (glm::length(gap) > kFloorEdgeReach && glm::dot(gap, target - m_position) >= 0) {
+                target.x = floor->point.x;
+                target.z = floor->point.z;
+                target = collision->sweepWalls(
+                    m_position, target, m_radius, m_position.y + kFootClearance,
+                    m_position.y + m_height - kFootClearance, &m_wallContacts, wallMinimum);
+                floor = ground(target, kFloorEdgeReach);
+                if (!floor) {
+                    return;
+                }
+            }
+            target.y = std::max(m_position.y, floor->y);
         }
+        // PlayerMotion scales the horizontal displacement for uphill travel.
+        // Re-probe the shorter step rather than lifting at the old endpoint.
+        const f32 horizontal = std::hypot(target.x - m_position.x, target.z - m_position.z);
+        const f32 rise = target.y - m_position.y;
+        if (horizontal > 0.01f && rise > 0.1f * horizontal) {
+            const f32 scale = horizontal / std::hypot(horizontal, rise);
+            target.x = m_position.x + (target.x - m_position.x) * scale;
+            target.z = m_position.z + (target.z - m_position.z) * scale;
+            if (const auto support = ground(target, kFloorEdgeReach);
+                support && support->normal.y < 0.999f) {
+                target.y = std::max(m_position.y, support->y);
+            }
+        }
+        // Descending is resolved once by fall(), at the native 16 units/second.
+        // Snapping down here bypassed that limit for walking and every shove.
         m_position = target;
     }
 }
 
 bool PlayerActor::fall(f32 seconds, const WorldCollision& collision) {
-    auto floor = collision.floorAt(m_position, kStepUp, kDrop, kFloorEdgeReach);
+    const f32 above = std::min(kStepUp, m_followHeight);
+    auto floor = collision.floorAt(m_position, above, kDrop, kFloorEdgeReach);
     // A footprint still supported by a lift must not sink to lower ground
     // under its centre. Keep a centre contact already at foot height, so a
     // nearby surface cannot lift the body before it actually steps onto it.
@@ -219,10 +287,10 @@ bool PlayerActor::fall(f32 seconds, const WorldCollision& collision) {
         floor = footprint;
     }
     if (!floor) {
-        floor = collision.floorAt(m_position, kStepUp, kDrop, m_radius);
+        floor = collision.floorAt(m_position, above, kDrop, m_radius);
     }
     if (!floor) {
-        floor = collision.floorAt(m_position, kStepUp, kFallReach, kFloorEdgeReach);
+        floor = collision.floorAt(m_position, above, kFallReach, kFloorEdgeReach);
     }
     if (floor.has_value() && floor->y >= m_position.y) {
         m_position.y = floor->y; // a floor that rose under it lifts it at once

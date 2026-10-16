@@ -71,6 +71,8 @@ public:
     /** Moves an animated object: `local` replaces its offset from its parent, and everything
      * under it follows. Objects that are not animated stay where the layout put them. */
     void setObjectTransform(usize object, const Mat4& local, bool presentationCut = false);
+    /** Current tick transform relative to the parent, without render interpolation. */
+    const Mat4& localTransform(usize object) const;
     /** Captures the current local transforms before one fixed simulation update.
      * Drawing may interpolate these; collision always reads the current transforms. */
     void capturePresentation();

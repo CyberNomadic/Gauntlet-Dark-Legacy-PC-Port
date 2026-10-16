@@ -76,6 +76,15 @@ constexpr f32 kFloorRadius = 1.0f;
 constexpr f32 kFloorLift = 0.1f;
 constexpr s32 kPlayerSlots = 4;
 
+void placeHeight(WorldScene& scene, s32 object, f32 height) {
+    const auto index = static_cast<usize>(object);
+    Mat4 placement = scene.localTransform(index);
+    // ProcessItemWobjs (80062a00) writes only the node's Y translation.
+    // A separate rotator can own the same node's basis, including after it stops.
+    placement[3].y = height;
+    scene.setObjectTransform(index, placement);
+}
+
 u32 visitorBit(const TriggerVisitor& visitor, usize index) {
     const auto slot = visitor.party >= 0 ? static_cast<usize>(visitor.party) : index;
     return slot < static_cast<usize>(kPlayerSlots) ? 1U << slot : 0;
@@ -803,9 +812,7 @@ bool LevelTriggers::openTarget(Target& target, bool open, bool atOnce, WorldAnim
         }
     } else if (atOnce) {
         target.height = open ? target.openHeight : target.closedHeight;
-        scene.setObjectTransform(
-            static_cast<usize>(target.object),
-            glm::translate(Mat4{1}, target.origin + Vec3{0, target.height, 0}));
+        placeHeight(scene, target.object, target.origin.y + target.height);
     }
     return true;
 }
@@ -941,9 +948,7 @@ void LevelTriggers::placeTargets(WorldScene& scene, WorldCollision* collision) {
             applyAlpha(target, scene, collision);
         }
         if (!target.animated && (target.kind & LevelTrigger::kFades) == 0) {
-            scene.setObjectTransform(
-                static_cast<usize>(target.object),
-                glm::translate(Mat4{1}, target.origin + Vec3{0, target.height, 0}));
+            placeHeight(scene, target.object, target.origin.y + target.height);
         }
     }
 }
@@ -1153,9 +1158,7 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
                     collision->setSolid(target.object, target.settled);
                 }
             }
-            scene.setObjectTransform(
-                static_cast<usize>(target.object),
-                glm::translate(Mat4{1}, target.origin + Vec3{0, target.height, 0}));
+            placeHeight(scene, target.object, target.origin.y + target.height);
         }
         if ((target.kind & LevelTrigger::kFades) == 0) {
             continue;

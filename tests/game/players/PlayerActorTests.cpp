@@ -299,10 +299,140 @@ TEST_CASE("walking crosses small cracks between separately packed slope triangle
         for (s32 tick = 0; tick < 400; ++tick) {
             const Vec3 before = actor.position();
             actor.update(push(sign, 0, 0.03f), 0, 1.0f / 30.0f, &collision);
+            actor.fall(1.0f / 30.0f, collision);
             REQUIRE((actor.position().x - before.x) * sign > 0.004f);
             REQUIRE(actor.position().y == Approx(actor.position().x * 0.5f).margin(0.02f));
         }
     }
+}
+
+TEST_CASE("walking down a step uses the same descent limit as a lowered floor",
+          "[game][players][actor][walking-height]") {
+    const Vec3 up{0, 1, 0};
+    WorldCollision collision;
+    collision.build({triangle({-10, 0, -4}, {0, 0, -4}, {0, 0, 4}, up),
+                     triangle({-10, 0, -4}, {0, 0, 4}, {-10, 0, 4}, up),
+                     triangle({0, -2.5f, -4}, {10, -2.5f, -4}, {10, -2.5f, 4}, up),
+                     triangle({0, -2.5f, -4}, {10, -2.5f, 4}, {0, -2.5f, 4}, up)});
+    for (const f32 seconds : {1.0f / 30, 1.0f / 60, 1.0f / 120}) {
+        PlayerActor actor;
+        actor.spawn(0, {}, nullptr, {-1, 0, 0}, 0);
+        for (s32 tick = 0; tick < static_cast<s32>(2 / seconds); ++tick) {
+            const Vec3 before = actor.position();
+            actor.update(push(1, 0), 0, seconds, &collision);
+            actor.fall(seconds, collision);
+            INFO("seconds " << seconds << " tick " << tick);
+            REQUIRE(before.y - actor.position().y <= PlayerActor::kFallSpeed * seconds + 0.0001f);
+        }
+        CHECK(actor.position().x > 2);
+        CHECK(actor.position().y == Approx(-2.5f));
+    }
+}
+
+TEST_CASE("a footprint contact cannot walk alongside a raised ledge in empty space",
+          "[game][players][actor][walking-height]") {
+    const Vec3 up{0, 1, 0};
+    WorldCollision collision;
+    collision.build({triangle({-4, 0, -4}, {4, 0, -4}, {4, 0, 0}, up),
+                     triangle({-4, 0, -4}, {4, 0, 0}, {-4, 0, 0}, up),
+                     triangle({-4, 1, 0}, {0, 1, 0}, {0, 1, 10}, up),
+                     triangle({-4, 1, 0}, {0, 1, 10}, {-4, 1, 10}, up)});
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, {0.4f, 0, -1}, 0);
+    for (s32 tick = 0; tick < 30; ++tick) {
+        actor.update(push(0, 1), 0, 1.0f / 30, &collision);
+        actor.fall(1.0f / 30, collision);
+        if (actor.position().z > 0.5f) {
+            REQUIRE(collision.floorAt(actor.position(), 0.05f, 0.05f, PlayerActor::kFloorEdgeReach)
+                        .has_value());
+        }
+    }
+    CHECK(actor.position().z > 2);
+    for (s32 tick = 0; tick < 30; ++tick) {
+        actor.update(push(0, -1), 0, 1.0f / 30, &collision);
+        actor.fall(1.0f / 30, collision);
+    }
+    CHECK(actor.position().z < 0);
+    CHECK(actor.position().y == 0);
+}
+
+TEST_CASE("uphill travel accounts for the height gained instead of racing up the ramp",
+          "[game][players][actor][walking-height]") {
+    const Vec3 normal = glm::normalize(Vec3{-1, 1, 0});
+    WorldCollision collision;
+    collision.build({triangle({-20, -20, -10}, {20, 20, -10}, {20, 20, 10}, normal),
+                     triangle({-20, -20, -10}, {20, 20, 10}, {-20, -20, 10}, normal)});
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, {0, 0, 0}, 0);
+    constexpr f32 kSeconds = 1.0f / 30;
+    actor.update(push(1, 0), 0, kSeconds, &collision);
+    actor.fall(kSeconds, collision);
+    CHECK(actor.position().x == Approx(actor.speed() * kSeconds / std::sqrt(2.0f)).margin(0.001f));
+    CHECK(actor.position().y == Approx(actor.position().x).margin(0.001f));
+}
+
+TEST_CASE("subdividing a displacement cannot climb several full steps at once",
+          "[game][players][actor][walking-height]") {
+    std::vector<CollisionTriangle> faces;
+    for (s32 step = 0; step < 4; ++step) {
+        const f32 x = static_cast<f32>(step) * 0.3f;
+        const f32 y = static_cast<f32>(step) * 2.5f;
+        faces.push_back(triangle({x, y, -3}, {x + 0.3f, y, -3}, {x + 0.3f, y, 3}, {0, 1, 0}));
+        faces.push_back(triangle({x, y, -3}, {x + 0.3f, y, 3}, {x, y, 3}, {0, 1, 0}));
+    }
+    WorldCollision collision;
+    collision.build(std::move(faces));
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, {0.1f, 0, 0}, 0);
+    actor.slide({2, 0, 0}, &collision);
+    CHECK(actor.position().y <= PlayerActor::kStepUp);
+}
+
+TEST_CASE("retail's extra step tolerance is restricted to the current floor object",
+          "[game][players][actor][walking-height]") {
+    for (const bool sameObject : {false, true}) {
+        const Vec3 up{0, 1, 0};
+        std::vector faces{triangle({-10, 0, -4}, {0, 0, -4}, {0, 0, 4}, up),
+                          triangle({-10, 0, -4}, {0, 0, 4}, {-10, 0, 4}, up),
+                          triangle({0, -3.5f, -4}, {10, -3.5f, -4}, {10, -3.5f, 4}, up),
+                          triangle({0, -3.5f, -4}, {10, -3.5f, 4}, {0, -3.5f, 4}, up)};
+        faces[0].object = faces[1].object = 1;
+        faces[2].object = faces[3].object = sameObject ? 1 : 2;
+        WorldCollision collision;
+        collision.build(std::move(faces));
+        PlayerActor actor;
+        actor.spawn(0, {}, nullptr, {-1, 0, 0}, 0);
+        for (s32 tick = 0; tick < 60; ++tick) {
+            actor.update(push(1, 0), 0, 1.0f / 30, &collision);
+            actor.fall(1.0f / 30, collision);
+        }
+        CAPTURE(sameObject, actor.position().x, actor.position().y);
+        if (sameObject) {
+            CHECK(actor.position().x > 1);
+            CHECK(actor.position().y == Approx(-3.5f));
+        } else {
+            CHECK(actor.position().x <= PlayerActor::kFloorEdgeReach);
+            CHECK(actor.position().y == 0);
+        }
+    }
+}
+
+TEST_CASE("a floor above the collision centre cannot be climbed or pull an idle player up",
+          "[game][players][actor][walking-height]") {
+    const Vec3 up{0, 1, 0};
+    WorldCollision collision;
+    collision.build({triangle({-10, 0, -4}, {10, 0, -4}, {10, 0, 4}, up),
+                     triangle({-10, 0, -4}, {10, 0, 4}, {-10, 0, 4}, up),
+                     triangle({0, 2.75f, -4}, {10, 2.75f, -4}, {10, 2.75f, 4}, up),
+                     triangle({0, 2.75f, -4}, {10, 2.75f, 4}, {0, 2.75f, 4}, up)});
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, {-1, 0, 0}, 0);
+    for (s32 tick = 0; tick < 30; ++tick) {
+        actor.update(push(1, 0), 0, 1.0f / 30, &collision);
+        actor.fall(1.0f / 30, collision);
+        CHECK(actor.position().y == 0);
+    }
+    CHECK(actor.position().x > 1);
 }
 
 TEST_CASE("a body footprint can step onto a nearby higher landing without walking off cliffs",

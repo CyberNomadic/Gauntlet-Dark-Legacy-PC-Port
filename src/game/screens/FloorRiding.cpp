@@ -51,8 +51,15 @@ std::optional<FloorHit> FloorRiding::support(const PlayerActor& actor,
                                footprint->y > hit->y))) {
         hit = footprint;
     }
+    if (!hit) {
+        hit = collision.floorAt(actor.position(), kProbeAbove, kProbeBelow, actor.radius());
+    }
+    // PlayerNewFloor adopts the accepted floor before PlayerMotion finishes
+    // lowering the body to it. A legal downward step can leave the feet more
+    // than one unit above the landing for several ticks.
     return hit ? hit
-               : collision.floorAt(actor.position(), kProbeAbove, kProbeBelow, actor.radius());
+               : collision.floorAt(actor.position(), kProbeAbove, PlayerActor::kDrop + 1,
+                                   PlayerActor::kFloorEdgeReach);
 }
 
 void FloorRiding::land(std::span<PlayerRuntime> players, usize index, const Vec3& from,
