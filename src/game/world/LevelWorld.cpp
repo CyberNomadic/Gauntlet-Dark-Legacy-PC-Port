@@ -546,6 +546,7 @@ void LevelWorld::setAmbientOffset(f32 offset) {
     m_sim.litNow = m_sim.lighting;
     m_sim.litNow.ambient = m_sim.lighting.ambient * kept;
     m_sim.litNow.lightColor = m_sim.lighting.lightColor * kept;
+    m_sim.litNow.darken = 1.0f - kept; // the secret walls' and fixtures' baked colour as well
     m_scene.setDarken(1.0f - kept);
 }
 
