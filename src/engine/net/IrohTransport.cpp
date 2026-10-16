@@ -62,7 +62,12 @@ std::unique_ptr<SessionTransport> openSessionTransport(const SessionTransport::O
         return nullptr;
     }
     const std::vector<u8> invitation(options.invitation.begin(), options.invitation.end());
-    const u32 mode = options.localOnly ? 1 : options.relayOnly ? 2 : 0;
+    u32 mode = 0;
+    if (options.localOnly) {
+        mode = 1;
+    } else if (options.relayOnly) {
+        mode = 2;
+    }
     auto* handle = gdl_iroh_create(invitation.data(), invitation.size(), mode);
     if (!handle) {
         error = "Invalid invitation or network worker unavailable";
