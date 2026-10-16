@@ -152,7 +152,9 @@ impl Handle {
             return None;
         }
         if mode == TransportMode::RelayOnly
-            && ticket.as_ref().is_some_and(|ticket| ticket.address.relay_urls().next().is_none())
+            && ticket
+                .as_ref()
+                .is_some_and(|ticket| ticket.address.relay_urls().next().is_none())
         {
             return None;
         }
