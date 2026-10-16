@@ -191,16 +191,17 @@ std::vector<GateEvent> LockedGates::update(s32 ticks, f32 seconds,
                 }
                 gate.state = kOpening;
                 gate.openingTicks = 0;
+                // The key spent, the door blocks nobody from this moment: PlayerCollideItem's
+                // door case bars only an unspent one.
+                gate.box.solid = false;
                 gate.figure.play(kOpening, false);
                 events.push_back(event);
                 break;
             }
         } else if (gate.state == kOpening) {
             gate.openingTicks += ticks;
-            gate.box.solid = gate.openingTicks <= kPassableTicks;
             if (gate.figure.finished()) {
                 gate.state = kOpen;
-                gate.box.solid = false;
                 gate.figure.play(kOpen, true);
             }
         }
@@ -213,6 +214,19 @@ std::vector<Obstacle> LockedGates::obstacles() const {
     for (auto& gate : m_sim.gates) {
         if (gate.shown && gate.box.solid) {
             boxes.push_back(gate.box);
+        }
+    }
+    return boxes;
+}
+
+std::vector<Obstacle> LockedGates::shotStops() const {
+    // fn_8005F0F4 keeps a door in a shot's way until it has swung open.
+    std::vector<Obstacle> boxes;
+    for (auto& gate : m_sim.gates) {
+        if (gate.shown && gate.blocksPassage && gate.state != kOpen) {
+            Obstacle box = gate.box;
+            box.solid = true;
+            boxes.push_back(box);
         }
     }
     return boxes;

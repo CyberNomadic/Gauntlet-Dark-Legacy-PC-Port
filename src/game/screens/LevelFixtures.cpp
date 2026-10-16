@@ -297,7 +297,7 @@ std::vector<Obstacle> LevelFixtures::obstacles() const {
 }
 std::vector<Obstacle> LevelFixtures::inertStops() const {
     std::vector<Obstacle> stops = m_chests.obstacles();
-    const std::vector<Obstacle> gates = m_gates.obstacles();
+    const std::vector<Obstacle> gates = m_gates.shotStops();
     stops.insert(stops.end(), gates.begin(), gates.end());
     for (usize i = 0; i < m_traps.size(); ++i) {
         const Traps::Trap& trap = m_traps.trap(i);

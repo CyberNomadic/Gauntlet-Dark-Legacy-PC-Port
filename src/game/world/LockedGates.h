@@ -30,8 +30,9 @@ struct GateEvent {
 
 /**
  * A level's locked gates, worked the way the original works them: each is a gate item that
- * stands shut across the way until someone against it has a key to spend, then swings open
- * and, half a second into its opening, no longer bars anyone.
+ * stands shut across the way until someone against it has a key to spend; the key spent, it
+ * bars nobody from that moment (PlayerCollideItem's door blocks only an unspent one), while
+ * a shot still stops on it until it has swung open (fn_8005F0F4's contact).
  */
 class LockedGates {
 public:
@@ -43,7 +44,6 @@ public:
     static constexpr s32 kShut = 0; ///< the figure's sequences
     static constexpr s32 kOpening = 1;
     static constexpr s32 kOpen = 2;
-    static constexpr s32 kPassableTicks = 30; ///< into its opening, from when it bars no one
     static constexpr f32 kRefusalSeconds = 2.5f;
 
     /** One gate. */
@@ -78,6 +78,8 @@ public:
     std::vector<GateEvent> update(s32 ticks, f32 seconds, std::span<const ChestVisitor> party);
     /** The boxes of the gates that still bar the way. */
     std::vector<Obstacle> obstacles() const;
+    /** What stops a shot: a door still shut or swinging (fn_8005F0F4's contact). */
+    std::vector<Obstacle> shotStops() const;
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 presentationAlpha = -1.0f) const;
     void capturePresentation();

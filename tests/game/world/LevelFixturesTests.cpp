@@ -334,8 +334,7 @@ TEST_CASE("floor attachments move trap damage and fixture collision without revi
     REQUIRE(barrels.struckBy(expected, expected, 1));
     const std::array visitors{ChestVisitor{expected, 1, 1}};
     REQUIRE(gates.update(1, 0, visitors).size() == 1);
-    gates.update(LockedGates::kPassableTicks, 1, {});
-    CHECK(gates.obstacles().empty());
+    CHECK(gates.obstacles().empty()); // the key spent, it bars nobody at once
     collision.setObjectTransform(1, initial);
     gates.syncFloors();
     CHECK(gates.obstacles().empty());
@@ -850,11 +849,16 @@ TEST_CASE("a gate bars the way until a key is spent on it", "[game][world][fixtu
     REQUIRE(events.size() == 1);
     REQUIRE(events[0].kind == GateEvent::Kind::Unlocked);
     REQUIRE(gates.gate(0).state != LockedGates::kShut);
+    // The key spent, the way is open at once (PlayerCollideItem's door case), while a shot
+    // still stops on the door until it has swung open (fn_8005F0F4).
+    REQUIRE(gates.obstacles().empty());
+    REQUIRE(gates.shotStops().size() == 1);
     for (s32 i = 0; i < 40; ++i) {
         REQUIRE(gates.update(2, 1.0f / 30.0f, party).empty());
     }
     REQUIRE(gates.gate(0).state == LockedGates::kOpen);
     REQUIRE(gates.obstacles().empty());
+    REQUIRE(gates.shotStops().empty());
 }
 
 TEST_CASE("gate opening cues follow realm and subtype rather than metal-first fallback",
