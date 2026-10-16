@@ -315,7 +315,8 @@ TEST_CASE("plain replay preparation matches the live arsenal for every class and
                 s32 stat = 0;
                 Vec3 hand{0};
                 if (stats != nullptr) {
-                    const auto block = displayStats(*stats, level, save.progress());
+                    // The master's stats are all 999 whatever record he plays on.
+                    const auto block = characterStats(*stats, save);
                     stat = MissileSpec::byMagic(character) ? block.magic() : block.strength();
                     hand = stats->weaponOffset;
                 }
