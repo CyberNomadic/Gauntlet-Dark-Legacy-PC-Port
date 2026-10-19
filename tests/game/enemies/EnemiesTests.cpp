@@ -1067,6 +1067,36 @@ TEST_CASE("a knockback can carry an overlapping enemy away from a player",
     CHECK(enemies.takeBlows().empty());
 }
 
+TEST_CASE("a pushed enemy is as open to the next blow as it was to the first",
+          "[game][enemies][enemy-contact][knockback][assets]") {
+    // damage_enemy refuses only a decoration, a dying enemy and IT; one thrown by a hit
+    // keeps taking damage while it is carried away, so a player's attacks pushing enemies
+    // backwards never make them immune.
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), nullptr, 1, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const auto id = enemies.spawn({.kind = kGruntKind, .tier = 3, .placed = true}, {});
+    REQUIRE(id);
+    const f32 whole = enemies.healthOf(*id);
+    EnemyHit knock;
+    knock.damage = 2;
+    knock.flags = EnemyHit::kKnockDown;
+    knock.direction = {0, 0, 1};
+    knock.player = 0;
+    CHECK(enemies.hurt(*id, knock) > 0);
+    const f32 once = enemies.healthOf(*id);
+    REQUIRE(once < whole);
+    const Vec3 before = enemies.positionOf(*id);
+    const std::array players{playerAt(before + Vec3{0, 0, -1})};
+    for (s32 frame = 0; frame < 3; ++frame) {
+        enemies.update(kTicks, kStep, players);
+        CHECK(enemies.hurt(*id, knock) > 0);
+    }
+    CHECK(enemies.positionOf(*id).z > before.z);
+    CHECK(enemies.healthOf(*id) == Catch::Approx(once - 3 * (whole - once)));
+}
+
 TEST_CASE("swarm contact does not expose an invisible party without a sight target",
           "[game][enemies][enemy-contact][multiplayer][assets]") {
     test::FakeRenderDevice device;
