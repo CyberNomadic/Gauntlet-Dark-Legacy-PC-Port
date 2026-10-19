@@ -118,8 +118,10 @@ public:
     /** Worm pits allow enemies to walk across, but remain targets and block other births. */
     std::vector<Obstacle> enemyObstacles() const;
 
+    /** The bodies are items (SetItemGeo sorts every item node): an alpha-textured one
+     * such as the vermin's skull pile waits for the blended pass, after the solids. */
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
-              f32 presentationAlpha = -1.0f);
+              f32 presentationAlpha = -1.0f, TreeModel::Pass pass = TreeModel::Pass::All);
 
     usize count() const { return m_sim.generators.size(); }
     /** Native lifetime identity; zero means no retained slot at this index. */

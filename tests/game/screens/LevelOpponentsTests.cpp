@@ -3430,3 +3430,67 @@ TEST_CASE("the imp's archive lends the three birth bursts",
 }
 
 } // namespace
+
+TEST_CASE("the vermin generator's alpha-textured skull pile is blended by its alpha after "
+          "the solids rather than cut by coverage",
+          "[game][screens][opponents][generators][blended][assets]") {
+    // SetItemGeo gives every item node the sort flag, and setPrimAlpha blends a sorted
+    // alpha-textured item by its texture's alpha. Coverage instead turns the skull pile's
+    // faint halo into an opaque plate (the Cavern's odd generator base).
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELB3/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("B3")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    LevelOpponents opponents;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, {}, 0);
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    auto& gens = opponents.generators();
+    REQUIRE(gens.count() > 0);
+    ItemArchive* vermin = opponents.enemies().archive(0);
+    REQUIRE(vermin != nullptr);
+    std::vector<const Texture*> verminTextures;
+    for (u32 i = 0; i < vermin->textures.size(); ++i) {
+        verminTextures.push_back(&vermin->textures.texture(device, i));
+    }
+    const auto ofVermin = [&](const Texture* texture) {
+        return std::ranges::find(verminTextures, texture) != verminTextures.end();
+    };
+    device.draws.clear();
+    gens.draw(device, Mat4{1}, world.lighting(), -1.0f, TreeModel::Pass::Opaque);
+    const usize solids = device.draws.size();
+    for (const auto& draw : device.draws) {
+        CHECK(draw.state.alphaToCoverage);
+        CHECK_FALSE(ofVermin(draw.texture));
+    }
+    device.draws.clear();
+    gens.draw(device, Mat4{1}, world.lighting(), -1.0f, TreeModel::Pass::Blended);
+    const usize blended = device.draws.size();
+    REQUIRE(blended > 0);
+    // Every alpha-textured body waits here (the other kinds' as well, their textures
+    // opaque throughout); the vermin's pile is among them, its texture fading out.
+    bool pile = false;
+    for (const auto& draw : device.draws) {
+        CHECK_FALSE(draw.state.alphaToCoverage);
+        CHECK(draw.state.blend == BlendMode::Alpha);
+        CHECK(draw.state.depthWrite);
+        if (!ofVermin(draw.texture)) {
+            continue;
+        }
+        pile = true;
+        const auto* image = dynamic_cast<const test::FakeTexture*>(draw.texture);
+        REQUIRE(image != nullptr);
+        CHECK(image->pixels[3] == 0); // clear at its corner
+    }
+    CHECK(pile);
+    device.draws.clear();
+    gens.draw(device, Mat4{1}, world.lighting());
+    CHECK(device.draws.size() == solids + blended); // the whole, in one pass
+    opponents.close();
+}

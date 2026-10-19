@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "engine/assets/AssetScope.h"
+#include "engine/assets/ObjectFlags.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
 
@@ -565,6 +566,10 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
             TreeNodeInfo node;
             node.name = base;
             node.object = object->name;
+            // SetItemGeo gives every item's node the sort flag: an alpha-textured body such
+            // as the vermin's skull pile is then blended by its texture's alpha after the
+            // solids, rather than cut by coverage, which turns its faint halo opaque.
+            node.objectFlags = object_flags::kSorted;
             tree.nodes.push_back(node);
             bodies->models[static_cast<usize>(state)].bind(tree, archive->models, archive->textures,
                                                            device, lenders);
@@ -1149,14 +1154,14 @@ std::vector<Obstacle> Generators::enemyObstacles() const {
 }
 
 void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
-                      f32 presentationAlpha) {
+                      f32 presentationAlpha, TreeModel::Pass pass) {
     for (const Generator& generator : m_sim.generators) {
         if (generator.presence != Generator::Presence::Shown) {
             continue;
         }
         if (generator.boss) {
             if (generator.state > 0 && generator.bossFigure.has_value()) {
-                generator.bossFigure->draw(device, clip, lighting);
+                generator.bossFigure->draw(device, clip, lighting, 1.0f, 1.0f, nullptr, pass);
             }
             continue;
         }
@@ -1171,7 +1176,7 @@ void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
         }
         bodies->textures.apply(model, bodies->trees[state], 0, 0.0f,
                                bodies->textures.presentationOffset(presentationAlpha));
-        model.draw(device, clip, generator.placement, lighting);
+        model.draw(device, clip, generator.placement, lighting, {}, nullptr, 1.0f, pass);
     }
 }
 
