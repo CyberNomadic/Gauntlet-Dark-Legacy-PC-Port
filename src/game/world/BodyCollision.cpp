@@ -96,12 +96,14 @@ Vec3 BodyCollision::resolveMovement(const PlayerActor& player, const Vec3& from,
     Vec3 resolved = resolve(from, to, player.radius(), player.height(), bodies);
     resolved = resolveItems(from, resolved, player.radius(), player.height(), generators);
     if (collision != nullptr) {
-        // Match walking's vertical span and low-face filter. Animated contacts
-        // have already been swept; this overlap recheck is static world only.
-        resolved = collision->resolveWalls(
-            resolved, player.radius(), resolved.y + PlayerActor::kFootClearance,
-            resolved.y + player.height() - PlayerActor::kFootClearance, nullptr,
-            player.minimumWallY(resolved.y), WorldCollision::WallPush::StaticOnly);
+        // A body's push can leave the player in a wall: put PlayerWallCollide's sphere
+        // back out of the still faces it is in front of. Animated contacts have already
+        // been swept. A face the player stands behind is air to it (BTriLineCol), so it
+        // is never put through a one-sided railing.
+        const Vec3 lift{0.0f, player.followPoint().y - player.position().y +
+                                  PlayerActor::kWallSphereLift,
+                        0.0f};
+        resolved = collision->resolveSphere(resolved + lift, player.reach(), true) - lift;
         const Vec3 checked = resolve(from, resolved, player.radius(), player.height(), bodies);
         if (glm::distance(checked, resolved) > 1e-4f) {
             return {from.x, to.y, from.z};

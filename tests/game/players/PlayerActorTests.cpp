@@ -597,4 +597,32 @@ TEST_CASE("pushing against opposing faces of a thin wall cannot select its far s
     CHECK(actor.position().z == Approx(1).margin(0.001f));
 }
 
+TEST_CASE("a body on the plane of a one-sided railing at a floor's edge can walk back in",
+          "[game][players][actor][railing]") {
+    // The Shipyard's crow's nest rails its floor with boards facing outward. Pulled onto the
+    // floor's edge against a wall, a body stands on the boards' plane; a face it stands on
+    // is behind it, not in front, so it is free to step back and never wedged there.
+    const Vec3 up{0, 1, 0};
+    WorldCollision collision;
+    collision.build({triangle({-10, 0, -10}, {0, 0, -10}, {0, 0, 10}, up),
+                     triangle({-10, 0, -10}, {0, 0, 10}, {-10, 0, 10}, up),
+                     triangle({0, 0, -10}, {0, 4, 10}, {0, 4, -10}, {1, 0, 0}),
+                     triangle({0, 0, -10}, {0, 0, 10}, {0, 4, 10}, {1, 0, 0})});
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, {0, 0, 0}, 0);
+    for (s32 tick = 0; tick < 30; ++tick) {
+        actor.update(push(-1, 0), 0, 1.0f / 60, &collision);
+        actor.fall(1.0f / 60, collision);
+    }
+    CHECK(actor.position().x < -2);
+    // In front of the boards there is no floor: the body cannot leave by them either.
+    actor.place({-0.5f, 0, 0});
+    for (s32 tick = 0; tick < 30; ++tick) {
+        actor.update(push(1, 0), 0, 1.0f / 60, &collision);
+        actor.fall(1.0f / 60, collision);
+    }
+    CHECK(actor.position().x <= 0.0f);
+    CHECK(actor.position().y == 0);
+}
+
 } // namespace

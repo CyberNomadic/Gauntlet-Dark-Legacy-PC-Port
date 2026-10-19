@@ -1060,9 +1060,10 @@ TEST_CASE("the opponent movement recheck preserves player wall clearance",
     }
     CHECK(actor.position().x == Catch::Approx(2.0f).margin(0.001f));
     // This is not a bypass of the second wall check: an opponent could push
-    // a body into a full-height wall, and that position must still be corrected.
+    // a body into a full-height wall, and that position must still be corrected, to a
+    // width from the wall as PlayerWallCollide's sphere stands.
     const Vec3 blocked = opponents.resolveMovement(actor, actor.position(), {3.8f, 0, 0});
-    CHECK(blocked.x == Catch::Approx(4.0f - actor.radius()));
+    CHECK(blocked.x == Catch::Approx(4.0f - actor.reach()));
     opponents.close();
 }
 

@@ -907,4 +907,23 @@ TEST_CASE("the floor under a point outranks a nearer edge, and an edge within th
     CHECK(collision.floorUnder({-5, 7, 0}, 5.5f, 1.5f).has_value()); // the sphere's reach
 }
 
+TEST_CASE("a sphere is pushed out of a wall it is in front of and never through one it is "
+          "behind or on",
+          "[world][collision][sphere-push]") {
+    // SlideAlongWall corrects along the face's normal, and BTriLineCol never hits a face
+    // from behind: a body beside a one-sided railing is never put through it.
+    WorldCollision collision;
+    collision.build({
+        triangle({5, 0, -10}, {5, 8, -10}, {5, 8, 10}, {-1, 0, 0}),
+        triangle({5, 0, -10}, {5, 8, 10}, {5, 0, 10}, {-1, 0, 0}),
+    });
+    CHECK(collision.resolveSphere({4, 3.5f, 0}, 1.5f).x == Approx(3.5f));
+    CHECK(collision.resolveSphere({2, 3.5f, 0}, 1.5f).x == Approx(2.0f));   // clear of it
+    CHECK(collision.resolveSphere({6, 3.5f, 0}, 1.5f).x == Approx(6.0f));   // behind it
+    CHECK(collision.resolveSphere({5, 3.5f, 0}, 1.5f).x == Approx(5.0f));   // on it
+    CHECK(collision.resolveSphere({4, 10, 0}, 1.5f).x == Approx(4.0f));     // over its top
+    CHECK(collision.resolveSphere({4, 3.5f, -11.2f}, 1.5f).x == Approx(4.0f)); // past its end
+    CHECK(collision.resolveSphere({4, 3.5f, -10.5f}, 1.5f).x == Approx(3.5f)); // its corner
+}
+
 } // namespace

@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -26,6 +27,9 @@ using Json = nlohmann::json;
 
 constexpr f32 kEpsilon = 0.001f;
 constexpr f32 kSweepEpsilon = 1.0e-6f;
+/** A centre this near a face's plane stands on it, not in front of it: a body pulled onto
+ * a floor's edge where a one-sided railing stands is not held there by the railing. */
+constexpr f32 kOnPlane = 0.01f;
 // FastWallCollide (8000D308) accepts these inclusive normal-Y bounds;
 // WorldObjCollide bypasses the normal filter for world-object flag 0x40.
 constexpr f32 kRayWallNormalY = 0.866f;
@@ -1097,8 +1101,8 @@ std::optional<std::pair<f32, Vec3>> sphereMeetsFront(const CollisionTriangle& tr
     const Vec3& normal = triangle.normal;
     const f32 start = glm::dot(from - origin, normal);
     const f32 end = glm::dot(from + step - origin, normal);
-    if (start < 0.0f || end > start || (start > radius && end > radius)) {
-        return std::nullopt; // behind it, parting from it, or never within reach
+    if (start < kOnPlane || end > start || (start > radius && end > radius)) {
+        return std::nullopt; // behind or on it, parting from it, or never within reach
     }
     std::optional<std::pair<f32, Vec3>> best;
     const auto offer = [&](f32 time, const Vec3& point) {
@@ -1230,6 +1234,92 @@ std::optional<FloorHit> WorldCollision::floorUnder(const Vec3& origin, f32 depth
                      }
                  });
     return face ? face : edge;
+}
+
+namespace {
+
+/** The point of the triangle nearest `point`. */
+Vec3 closestOnTriangle(const CollisionTriangle& triangle, const Vec3& point) {
+    const Vec3& origin = triangle.vertices[0];
+    const Vec3 foot = point - triangle.normal * glm::dot(point - origin, triangle.normal);
+    if (insideFace(triangle, foot)) {
+        return foot;
+    }
+    Vec3 best = origin;
+    f32 bestDistance = std::numeric_limits<f32>::max();
+    for (usize i = 0; i < triangle.vertices.size(); ++i) {
+        const Vec3& a = triangle.vertices[i];
+        const Vec3& b = triangle.vertices[(i + 1) % triangle.vertices.size()];
+        const Vec3 edge = b - a;
+        const f32 length = glm::dot(edge, edge);
+        const f32 t = length > kSweepEpsilon
+                          ? std::clamp(glm::dot(point - a, edge) / length, 0.0f, 1.0f)
+                          : 0.0f;
+        const Vec3 candidate = a + edge * t;
+        const f32 distance = glm::dot(candidate - point, candidate - point);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+Vec3 WorldCollision::resolveSphere(const Vec3& centre, f32 radius, bool staticOnly,
+                                   u32 mask) const {
+    radius = std::max(0.0f, radius);
+    Vec3 out = centre;
+    for (s32 pass = 0; pass < kPasses; ++pass) {
+        bool pushed = false;
+        const auto consider = [&](const CollisionTriangle& triangle, f32 localNormalY) {
+            if (contactOnly(triangle.object) || (triangle.objectFlags & mask) == 0 ||
+                (triangle.objectFlags & kLiquidSurface) != 0) {
+                return;
+            }
+            if ((triangle.objectFlags & kUnfilteredSurface) == 0 &&
+                (localNormalY < -kRayWallNormalY || localNormalY > kRayWallNormalY)) {
+                return;
+            }
+            const f32 start = glm::dot(out - triangle.vertices[0], triangle.normal);
+            if (start < kOnPlane || start >= radius) {
+                return; // behind or on the face, or clear of its plane
+            }
+            const Vec3 nearest = closestOnTriangle(triangle, out);
+            if (glm::dot(nearest - out, nearest - out) >= radius * radius) {
+                return;
+            }
+            out += triangle.normal * (radius - start);
+            pushed = true;
+        };
+        const f32 minX = out.x - radius;
+        const f32 minZ = out.z - radius;
+        const f32 maxX = out.x + radius;
+        const f32 maxZ = out.z + radius;
+        for (const u32 index : candidates(minX, minZ, maxX, maxZ)) {
+            const CollisionTriangle& triangle = m_triangles[index];
+            if (solid(triangle.object)) {
+                consider(triangle, triangle.normal.y);
+            }
+        }
+        if (!staticOnly) {
+            for (const MovingObject& mover : m_moving) {
+                if (!mover.overlaps(minX, minZ, maxX, maxZ) || !solid(mover.object)) {
+                    continue;
+                }
+                for (usize i = 0; i < mover.placed.size(); ++i) {
+                    if (mover.placed[i].normal != Vec3{0}) {
+                        consider(mover.placed[i], mover.local[i].normal.y);
+                    }
+                }
+            }
+        }
+        if (!pushed) {
+            break;
+        }
+    }
+    return out;
 }
 
 bool WorldCollision::wallBetween(const Vec3& from, const Vec3& to) const {

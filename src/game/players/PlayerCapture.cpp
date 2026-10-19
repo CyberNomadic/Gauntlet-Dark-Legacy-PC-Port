@@ -87,8 +87,10 @@ std::optional<f32> PlayerCapture::update(f32 seconds, PlayerActor& actor,
                                           std::clamp(m_velocity.y, 0.0f, kLimit) - kDescent,
                                           std::clamp(m_velocity.z, -kLimit, kLimit)} *
                                          dt;
-        to = collision.resolveWalls(to, actor.radius(), to.y + PlayerActor::kFootClearance,
-                                    to.y + actor.height());
+        const Vec3 lift{0.0f, actor.followPoint().y - actor.position().y +
+                                  PlayerActor::kWallSphereLift,
+                        0.0f};
+        to = collision.resolveSphere(to + lift, actor.reach()) - lift;
         // Parenting bypasses floor collision. Skorne's wrist carries the body below
         // the altar before releasing it, so a foot-only downward probe would never
         // see the platform again. Retain the pre-grab support envelope while finding

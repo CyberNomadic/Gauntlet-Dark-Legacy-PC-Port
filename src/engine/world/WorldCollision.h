@@ -164,6 +164,14 @@ public:
      * an edge contact). A floor above the origin is behind the sweep and never counts.
      */
     std::optional<FloorHit> floorUnder(const Vec3& origin, f32 depth, f32 radius) const;
+    /**
+     * Pushes PlayerWallCollide's sphere out of the walls it overlaps, as SlideAlongWall
+     * corrects a step: out along each face's normal by what of the width is within its
+     * plane, and only for faces the centre is in front of, so a body is never put through
+     * a face it stands behind. `staticOnly` leaves the moving objects' faces alone.
+     */
+    Vec3 resolveSphere(const Vec3& centre, f32 radius, bool staticOnly = false,
+                       u32 mask = kWallQueryFlags) const;
     /** Finite wall-query segment, approaching the stored normal's front side.
      * Uses FastWallCollide's slope filter rather than a horizontal body sweep.
      * A positive radius uses EnemyWallCollide's swept sphere, including edge contacts. */

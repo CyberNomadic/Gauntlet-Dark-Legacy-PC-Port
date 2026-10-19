@@ -205,9 +205,9 @@ void PartyCombo::fly(std::span<PlayerRuntime> players, usize flier, s32 ticks, f
     PlayerActor& actor = runtime.actor;
     const Vec3 before = actor.position();
     const Vec3 meant = before + actor.facing() * (ComboMove::kFlightSpeed * seconds);
-    Vec3 to = collision.loaded() ? collision.resolveWalls(meant, actor.radius(),
-                                                          meant.y + PlayerActor::kFootClearance,
-                                                          meant.y + actor.height())
+    const Vec3 lift{0.0f, actor.followPoint().y - actor.position().y + PlayerActor::kWallSphereLift,
+                    0.0f};
+    Vec3 to = collision.loaded() ? collision.resolveSphere(meant + lift, actor.reach()) - lift
                                  : meant;
     const Vec3 pushed{to.x - meant.x, 0.0f, to.z - meant.z};
     const bool wall = std::hypot(pushed.x, pushed.z) > PartyCollision::kCoincident;
