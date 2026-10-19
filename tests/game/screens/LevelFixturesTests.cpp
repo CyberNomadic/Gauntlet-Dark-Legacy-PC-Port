@@ -2049,6 +2049,46 @@ TEST_CASE("native trap properties reach player damage and reactions",
     }
 }
 
+TEST_CASE("a barrel's blast neither floors nor pushes a player mid-turbo, and does once the "
+          "move is over",
+          "[game][screens][level-fixtures][turbo][assets]") {
+    // damage_player is skipped whole while player_can_be_damaged says no (an action of
+    // category eleven or over: turbo, special, combo); the knockdown goes with it.
+    Fixture f;
+    const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
+                          .parent_path()
+                          .parent_path()
+                          .parent_path()
+                          .parent_path();
+    test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("G1");
+    REQUIRE(level);
+    REQUIRE(f.world.load(f.device, root, *level));
+    REQUIRE_FALSE(f.world.isTower());
+    f.players[0].figure = PlayerFigure::load(f.device, root, f.players[0].actor.save(), false);
+    REQUIRE(f.players[0].figure);
+    auto& figure = *f.players[0].figure;
+    figure.animate(0, 2, 1.0f / 30, PlayerDeed::TurboFull);
+    REQUIRE(figure.animator().damageProtected());
+    REQUIRE_FALSE(PlayerHealth::canBeDamaged(f.players[0]));
+    const Vec3 barrel{0.5f, 0.0f, 0.0f}; // beside them, so there is a way to throw them
+    f.fixtures.blast(barrel, 2, 5, f.players, f.events);
+    CHECK(f.players[0].reaction == PlayerDeed::None);
+    CHECK_FALSE(f.players[0].knockback.pending());
+    s32 frames = 0;
+    while (figure.animator().damageProtected() && frames < 300) {
+        figure.animate(0, 2, 1.0f / 30);
+        ++frames;
+    }
+    REQUIRE(frames > 0);
+    REQUIRE(PlayerHealth::canBeDamaged(f.players[0]));
+    f.fixtures.blast(barrel, 2, 5, f.players, f.events);
+    CHECK(f.players[0].reaction != PlayerDeed::None);
+    CHECK(f.players[0].knockback.pending());
+}
+
 TEST_CASE("armor items prevent fixture knockdown before the health callback",
           "[game][items][level-fixtures][assets]") {
     Fixture f;

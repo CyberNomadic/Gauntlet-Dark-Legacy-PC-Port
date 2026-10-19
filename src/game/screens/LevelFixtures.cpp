@@ -1305,10 +1305,12 @@ void LevelFixtures::feel(Blast& ring, std::span<PlayerRuntime> players, const Ev
             }
             // A blast that gets through knocks its victim off their feet: onto their face
             // when it came from behind them, onto their back otherwise; one of under five
-            // floors nobody.
+            // floors nobody. Nothing of it reaches a player mid-turbo, special or combo:
+            // damage_player is skipped whole while player_can_be_damaged says no.
             const bool guarding =
                 players[i].figure != nullptr && players[i].figure->animator().guarding();
             if ((ring.flags & EnemyHit::kKnockDown) != 0 && felt.damage >= kRingKnockFrom &&
+                PlayerHealth::canBeDamaged(players[i]) &&
                 PlayerHealth::guarded(players[i], felt.damage, true) > kKnockdownFrom &&
                 !PowerupEffects::of(actor.save().progress().inventory).preventsKnockback() &&
                 !guarding && !m_resources->world.isTower()) {
