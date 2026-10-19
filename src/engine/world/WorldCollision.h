@@ -24,6 +24,15 @@ struct CollisionTriangle {
     u32 objectFlags = 6; ///< level flags; synthetic triangles default to wall and floor queries
 };
 
+/** A swept sphere's first wall: whose face, its normal and the point met, how far along. */
+struct SphereHit {
+    s32 object = -1;
+    u32 objectFlags = 0;
+    Vec3 normal{0.0f, 1.0f, 0.0f};
+    Vec3 point{0.0f, 0.0f, 0.0f};
+    f32 time = 0.0f; ///< of the sweep, nought to one
+};
+
 /** A wall a body was pushed out of: whose it is and the nearest point of it. */
 struct WallContact {
     s32 object = -1;
@@ -140,6 +149,21 @@ public:
     Vec3 sweepWalls(const Vec3& from, const Vec3& to, f32 radius, f32 bottom, f32 top,
                     std::vector<WallContact>* contacts = nullptr,
                     std::optional<f32> minimumY = std::nullopt) const;
+    /**
+     * PlayerWallCollide's sphere, swept from `from` to `to` against the walls (faces within
+     * the wall band of slope, approached from their front): the first it meets. A face the
+     * centre starts behind never counts, as BTriLineCol has it, so nothing holds a body
+     * inside a wall. Contact-only objects are left out.
+     */
+    std::optional<SphereHit> sweepSphere(const Vec3& from, const Vec3& to, f32 radius,
+                                         u32 mask = kWallQueryFlags) const;
+    /**
+     * FloorCollide's sphere, swept down from `origin` by `depth`: the highest floor face
+     * under the point within the sweep and the sphere's reach below it; failing a face,
+     * the nearest floor edge within `radius` (CTriListCollide ranks a crossing far before
+     * an edge contact). A floor above the origin is behind the sweep and never counts.
+     */
+    std::optional<FloorHit> floorUnder(const Vec3& origin, f32 depth, f32 radius) const;
     /** Finite wall-query segment, approaching the stored normal's front side.
      * Uses FastWallCollide's slope filter rather than a horizontal body sweep.
      * A positive radius uses EnemyWallCollide's swept sphere, including edge contacts. */

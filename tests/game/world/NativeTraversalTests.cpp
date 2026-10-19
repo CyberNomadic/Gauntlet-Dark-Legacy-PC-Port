@@ -85,7 +85,7 @@ struct NativeWalk {
         }
         actor.fall(seconds, world.collision());
         const std::array visitors{TriggerVisitor{.position = actor.position(),
-                                                 .radius = actor.radius(),
+                                                 .radius = actor.reach(), // as PlayScene has it
                                                  .floorObject = party[0].floor.object,
                                                  .height = actor.height()}};
         world.updateTriggers(seconds, visitors);
@@ -95,7 +95,7 @@ struct NativeWalk {
         const auto& actor = party[0].actor;
         for (s32 frame = 0; frame < static_cast<s32>(8.0f / seconds); ++frame) {
             const Vec2 delta = goal - Vec2{actor.position().x, actor.position().z};
-            if (glm::length(delta) < 0.3f) {
+            if (glm::length(delta) < 0.5f) {
                 return;
             }
             step(glm::normalize(delta));
@@ -139,14 +139,15 @@ struct NativeWalk {
 TEST_CASE("Ice Camp railway ledge contacts do not strand a player outside their floor",
           "[native-traversal][ice-rail-ledge][assets]") {
     const s32 hz = GENERATE(30, 60, 120);
-    NativeWalk walk("I2", {-51.0781f, 34.0156f, 79.7188f}, 1.0f / static_cast<f32>(hz));
     const auto root = test::assetOrSkip("PDATA/WAR.WAD").parent_path().parent_path();
     ClassDataSet classes;
     REQUIRE(classes.load(root / "PDATA"));
     // CAVECARTE#05, the railway tunnel below the starting area. A footprint
     // reached the narrow side ledge (1211) without its centre ever reaching
-    // that floor, then every reverse step was rejected.
+    // that floor, then every reverse step was rejected. Each class walks a fresh
+    // level, so the tunnel's cart meets none of them.
     for (s32 character = 0; character < kClassCount; ++character) {
+        NativeWalk walk("I2", {-51.0781f, 34.0156f, 79.7188f}, 1.0f / static_cast<f32>(hz));
         const auto* stats = classes.stats(character == kSumnerClass ? kWizardClass : character);
         REQUIRE(stats);
         walk.stand({-51.0781f, 34.0156f, 79.7188f}, character, *stats);
@@ -171,7 +172,6 @@ TEST_CASE("Ice Camp tunnel side strip can rejoin the sloping railroad",
     const s32 hz = GENERATE(30, 60, 120);
     const bool maximumSpeed = GENERATE(false, true);
     const Vec3 start{43.234375f, 28.8499f, 50.8984375f};
-    NativeWalk walk("I2", start, 1.0f / static_cast<f32>(hz));
     const auto root = test::assetOrSkip("PDATA/WAR.WAD").parent_path().parent_path();
     ClassDataSet classes;
     REQUIRE(classes.load(root / "PDATA"));
@@ -179,6 +179,7 @@ TEST_CASE("Ice Camp tunnel side strip can rejoin the sloping railroad",
     // The rail has a long side triangle whose distant high end used to admit
     // a knee-height wall contact below the player's native collision volume.
     for (s32 character = 0; character < kClassCount; ++character) {
+        NativeWalk walk("I2", start, 1.0f / static_cast<f32>(hz));
         const auto* stats = classes.stats(character == kSumnerClass ? kWizardClass : character);
         REQUIRE(stats);
         CAPTURE(hz, character, maximumSpeed);
@@ -248,42 +249,19 @@ TEST_CASE("G1 second lift can descend and recover from its broken fence corner",
     REQUIRE(brokeFence);
     for (s32 frame = 0; frame < 3 * hz; ++frame) {
         walk.step(glm::normalize(Vec2{-1, end}));
-        if (end > 0 && frame >= 30 && frame <= 42) {
-            UNSCOPED_INFO("entry frame " << frame << " carry(" << walk.carried.x << ","
-                                         << walk.carried.y << "," << walk.carried.z << ") walk("
-                                         << walk.travelled.x << "," << walk.travelled.y << ","
-                                         << walk.travelled.z << ") land(" << walk.landed.x << ","
-                                         << walk.landed.y << "," << walk.landed.z << ") fall("
-                                         << walk.party[0].actor.position().x << ","
-                                         << walk.party[0].actor.position().y << ","
-                                         << walk.party[0].actor.position().z << ") floor "
-                                         << walk.party[0].floor.object << " blocked "
-                                         << walk.world.collision().floorExitBlocked(273));
-        }
     }
-    // The north-left strut and fence form a narrowing wedge toward -Z, not a
-    // shortcut onto the deck. Their normals allow backing out toward +Z first;
-    // native fn_80088714 also stops a move against opposing second-wall normals.
-    // Round the north end before boarding through the open middle of that edge.
-    if (end > 0) {
-        // At z=-145, fence 1187 is at x=-22.5625. Keeping the pressed corner's
-        // x coordinate asks the body to overlap it; move inward while backing out.
-        walk.walk({-21, -145});
-        walk.walk({-17.75f, -145});
-    } else {
-        // The low lift rim no longer blocks walking onto the lower ground.
-        // Fence 1187 spans x=-27.05..-21.73 at z=-157.2, y=18.1..23.2:
-        // return around its east tip, not straight through this five-unit wall.
-        for (s32 frame = 0; frame < hz / 3; ++frame) {
-            walk.step({0, 1});
-        }
-        CHECK(walk.party[0].actor.position().z < -157.2f);
-        walk.walk({-21, -159});
-        walk.walk({-21, -152});
+    // Pressed into either west corner while the deck descends, the body is held on the
+    // lift until it stops (PlayerCollideFloor refuses every other floor while the lift's
+    // flags hold), then its corner step takes it the one to two units down onto the
+    // ground west of the lift. In the south-west corner it meets fence 1187
+    // (x=-27.05..-21.73 at z=-157.2, y=18.1..23.2) and the cage wall a width apart: a wall
+    // it already overlaps pushes it out rather than holding it. Either way it stands free
+    // on the ground; the rim and the fence leave no way of its width back onto the deck.
+    for (s32 frame = 0; frame < hz / 3; ++frame) {
+        walk.step({0, -1});
     }
-    walk.walk({-17.75f, -152});
-    walk.walk({-11, -152});
     CHECK(walk.party[0].floor.object != 273);
+    walk.walk({-24, -145});
 }
 
 TEST_CASE("G2 entrance bridge can be crossed both ways by every class",

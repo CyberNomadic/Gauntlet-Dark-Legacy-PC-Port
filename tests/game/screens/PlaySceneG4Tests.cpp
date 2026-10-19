@@ -79,7 +79,7 @@ TEST_CASE("G4 exit scenario walks both prerequisite switches and climbs the fina
         for (s32 frame = 0; frame < 20 * hz; ++frame) {
             const Vec3 position = scene.actor(0)->position();
             const Vec2 delta = goal - Vec2{position.x, position.z};
-            if (glm::length(delta) < 0.3f) {
+            if (glm::length(delta) < 0.5f) { // a body stops a width from a wall
                 return;
             }
             const f32 heading = std::atan2(delta.x, delta.y) - scene.viewCamera().yaw;

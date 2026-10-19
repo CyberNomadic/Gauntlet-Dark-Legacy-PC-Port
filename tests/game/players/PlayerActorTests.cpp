@@ -29,7 +29,7 @@ CollisionTriangle triangle(const Vec3& a, const Vec3& b, const Vec3& c, const Ve
     return out;
 }
 
-/** A 20x20 floor at y = 0 with a wall along x = 5 facing -x, three units tall. */
+/** A 20x20 floor at y = 0 with a wall along x = 5 facing -x, five units tall. */
 WorldCollision room() {
     const Vec3 up{0.0f, 1.0f, 0.0f};
     const Vec3 west{-1.0f, 0.0f, 0.0f};
@@ -37,8 +37,8 @@ WorldCollision room() {
     collision.build({
         triangle({-10, 0, -10}, {10, 0, -10}, {10, 0, 10}, up),
         triangle({-10, 0, -10}, {10, 0, 10}, {-10, 0, 10}, up),
-        triangle({5, 0, -10}, {5, 3, -10}, {5, 3, 10}, west),
-        triangle({5, 0, -10}, {5, 3, 10}, {5, 0, 10}, west),
+        triangle({5, 0, -10}, {5, 5, -10}, {5, 5, 10}, west),
+        triangle({5, 0, -10}, {5, 5, 10}, {5, 0, 10}, west),
     });
     return collision;
 }
@@ -164,13 +164,17 @@ TEST_CASE("walls stop an actor and missing floors keep it where it stands",
     for (s32 i = 0; i < 3; ++i) {
         actor.update(push(1.0f, 0.0f), 0.0f, 1.0f, &collision);
     }
-    REQUIRE(actor.position().x == Approx(5.0f - actor.radius()).margin(0.01f));
+    // PlayerWallCollide's sphere is as wide as the class: the wall stops it a width out.
+    REQUIRE(actor.position().x == Approx(5.0f - actor.reach()).margin(0.01f));
     REQUIRE(actor.position().z == Approx(0.0f).margin(1e-4f));
 
-    actor.spawn(0, save, nullptr, Vec3{-9.5f, 0.0f, 0.0f}, 0.0f);
-    actor.update(push(-1.0f, 0.0f), 0.0f, 1.0f, &collision);
-    REQUIRE(actor.position().x >= -10.0f); // it walks to the floor's edge and no further
-    REQUIRE(actor.position().x < -9.5f);
+    // A drop beyond the floor's edge stops it a width short of the edge (PlayerCollideFloor
+    // looks a width ahead and takes the overhang off the step).
+    actor.spawn(0, save, nullptr, Vec3{-8.0f, 0.0f, 0.0f}, 0.0f);
+    for (s32 i = 0; i < 60; ++i) {
+        actor.update(push(-1.0f, 0.0f), 0.0f, 1.0f / 60.0f, &collision);
+    }
+    REQUIRE(actor.position().x == Approx(-10.0f + actor.reach()).margin(0.01f));
 
     // Without collision the actor is free to go anywhere.
     const f32 edge = actor.position().x;
@@ -199,8 +203,10 @@ TEST_CASE("a player slides along a cliff without stepping down it or stopping it
         actor.update(push(1, 1), angle, 1.0f / 60, &floor);
     }
     const Vec3 local = Vec3(glm::inverse(rotation) * Vec4(actor.position(), 1));
-    CHECK(local.x <= PlayerActor::kFloorEdgeReach + 0.001f);
-    CHECK(local.x > -0.2f);
+    // Starting nearer the drop than its width, it backs off along its way until a width
+    // ahead of it is floor again (the look-ahead's overhang comes off the step), and goes
+    // on along the edge.
+    CHECK(local.x == Approx(-actor.reach() / std::sqrt(2.0f)).margin(0.05f));
     CHECK(local.z > 1);
     CHECK(local.y == 0);
 }
@@ -213,8 +219,10 @@ TEST_CASE("cliff sliding cannot pass through a wall or cling to a removed floor"
     for (s32 frame = 0; frame < 120; ++frame) {
         actor.update(push(1, 1), 0, 1.0f / 60, &collision);
     }
-    CHECK(actor.position().x <= 5 - actor.radius() + 0.001f);
-    CHECK(actor.position().z <= 10 + PlayerActor::kFloorEdgeReach);
+    CHECK(actor.position().x <= 5 - actor.reach() + 0.001f);
+    // Against a wall, PlayerCollideFloor looks no further ahead: the body reaches the very
+    // edge and is held on it.
+    CHECK(actor.position().z <= 10 + 0.01f);
     // No remaining floor means the separate falling path must handle it.
     collision.clear();
     CHECK_FALSE(collision.slideAlongFloor({0, 0, 0}, {0.2f, 0, 0.2f}, 1.5f, 3, 0.03f));
@@ -246,10 +254,10 @@ TEST_CASE("a knock slides the body along the ground, never through a wall or off
     CHECK(actor.position() == Vec3{0.0f, 0.0f, 2.0f}); // along the ground only
     CHECK(actor.yaw() == 0.0f);                        // a slide does not turn it
     actor.slide(Vec3{20.0f, 0.0f, 0.0f}, &collision);
-    CHECK(actor.position().x == Approx(5.0f - actor.radius()).margin(0.01f));
+    CHECK(actor.position().x == Approx(5.0f - actor.reach()).margin(0.01f));
     actor.place(Vec3{-9.5f, 0.0f, 0.0f});
     actor.slide(Vec3{-5.0f, 0.0f, 0.0f}, &collision);
-    CHECK(actor.position().x >= -10.0f);
+    CHECK(actor.position().x == -9.5f); // already nearer the edge than its width: held
     CHECK(actor.position().y == 0.0f);
     actor.turnTo(1.0f);
     CHECK(actor.yaw() == 1.0f);
@@ -435,8 +443,11 @@ TEST_CASE("a floor above the collision centre cannot be climbed or pull an idle 
     CHECK(actor.position().x > 1);
 }
 
-TEST_CASE("a body footprint can step onto a nearby higher landing without walking off cliffs",
+TEST_CASE("a body bridges a gap narrower than itself onto a nearby higher landing",
           "[game][players][actor][terrain-seams]") {
+    // A gap under the point with floor of the same step a width beyond it is bridged by
+    // the feet, where the original's rule, meeting no such seam in its own levels, would
+    // hold the body a width short of the gap's edge.
     const Vec3 up{0, 1, 0};
     WorldCollision collision;
     collision.build({triangle({-10, 0, -4}, {0, 0, -4}, {0, 0, 4}, up),
@@ -561,8 +572,7 @@ TEST_CASE("clearing a low side does not permit walking beyond an unsupported edg
         actor.update(push(1, 0), 0, 1.0f / 60, &collision);
         actor.fall(1.0f / 60, collision);
     }
-    CHECK(actor.position().x > -actor.radius());
-    CHECK(actor.position().x <= PlayerActor::kFloorEdgeReach);
+    CHECK(actor.position().x == Approx(-actor.reach()).margin(0.01f)); // a width short
     CHECK(actor.position().y == 0);
 }
 

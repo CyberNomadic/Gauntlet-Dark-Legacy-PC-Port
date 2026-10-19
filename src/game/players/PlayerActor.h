@@ -38,6 +38,18 @@ public:
     static constexpr f32 kFallSpeed = 16.0f;   ///< how fast a body sinks to a floor gone lower
     static constexpr f32 kFallReach = 1000.0f; ///< how far under it a floor is looked for
     static constexpr f32 kFootClearance = 0.2f;
+    static constexpr f32 kWallSphereLift = 1.0f; ///< the wall sphere sits this over the centre
+    static constexpr f32 kSecondSweep = 0.95f;   ///< of the width, for the sweep after a slide
+    static constexpr f32 kSlideLimit = 1.75f;    ///< widths of correction a slide may make
+    static constexpr f32 kFloorProbe = 3.0f;     ///< FloorCollide looks this and a half height down
+    static constexpr f32 kSameFloorStep = 1.0f;  ///< more step on the floor already stood on
+    /** PlayerCollideFloor's thousandth, widened to the port's packed-vertex seam: a
+     * contact this near the point counts as under it. */
+    static constexpr f32 kContactEpsilon = 1.0f / 32.0f;
+    static constexpr f32 kSlopeAllowance = 4.0f; ///< a sloped floor ahead within this is fine
+    static constexpr f32 kClimbFraction = 0.1f;  ///< a rise over this of the step shortens it
+    static constexpr f32 kSlopeScaleFrom = 0.01f;
+    static constexpr u32 kSlopedFloor = 0x8; ///< the floor flag ModifyPlayerDpos treats as slope
     // Two packed 1/64-unit offsets of contact margin across separately reconstructed
     // collision edges. Tower stair joins differ by hundredths; real gaps still stop us.
     static constexpr f32 kFloorEdgeReach = 1.0f / 32.0f;
@@ -75,6 +87,9 @@ public:
         f32 followHeight = kDefaultFollowHeight;
         f32 attentionHeight = kDefaultFollowHeight;
         bool moving = false;
+        f32 floorBase = 0;    ///< PlayerCollideFloor's floor_base: the floor stood on
+        s32 floorObject = -1; ///< its object, for the extra step and a lift's hold
+        u32 floorFlags = 0;   ///< that object's level flags
         std::vector<Contact> contacts;
         bool valid() const;
         bool operator==(const Checkpoint&) const = default;
@@ -94,7 +109,15 @@ public:
     static f32 headingOf(const MoveInput& input, f32 cameraYaw);
 
     /** Moves the character to `position`, as something solid in its way pushes it. */
-    void place(const Vec3& position) { m_position = position; }
+    void place(const Vec3& position) {
+        m_position = position;
+        m_floorBase = position.y;
+    }
+    /** Carried to `position` by the floor it rides, which it keeps standing on. */
+    void carry(const Vec3& position) {
+        m_floorBase += position.y - m_position.y;
+        m_position = position;
+    }
     /** Turn in place toward an assisted attack target without moving the feet. */
     void faceToward(const Vec3& point);
     /** Faces `yaw` at once, as a hit turns the body it knocks. */
@@ -114,6 +137,11 @@ public:
     const CharacterSave& save() const { return m_save; }
     CharacterSave& save() { return m_save; }
     const Vec3& position() const { return m_position; }
+    /** The floor it stands on or sinks to (floor_base), that floor's object (PlayerNewFloor's
+     * floor_name2; none before it has stood anywhere) and the object's level flags. */
+    f32 floorBase() const { return m_floorBase; }
+    s32 floorObject() const { return m_floorObject; }
+    u32 floorFlags() const { return m_floorFlags; }
     f32 yaw() const { return m_yaw; }
     /** The pace, with what a speed powerup adds, never past the class range's most. */
     f32 speed() const { return std::clamp(m_speed + m_paceBonus, kMinSpeed, kMaxSpeed); }
@@ -144,8 +172,11 @@ public:
     Mat4 transform() const;
 
 private:
-    /** Steps the body by `offset` along the ground, as walking and sliding both do. */
+    /** Steps the body by `offset` along the ground, as walking and sliding both do:
+     * PlayerMotion's wall sweep, then its floor rule. */
     void travel(const Vec3& offset, const WorldCollision* collision);
+    static void slideAlongWall(Vec3& dpos, const Vec3& centre, const SphereHit& wall, f32 width);
+    void noteContact(s32 object, const Vec3& point);
 
     s32 m_player = 0;
     CharacterSave m_save;
@@ -158,6 +189,9 @@ private:
     f32 m_followHeight = kDefaultFollowHeight;
     f32 m_attentionHeight = kDefaultFollowHeight;
     bool m_moving = false;
+    f32 m_floorBase = 0.0f;
+    s32 m_floorObject = -1;
+    u32 m_floorFlags = 0;
     std::vector<WallContact> m_wallContacts;
 };
 

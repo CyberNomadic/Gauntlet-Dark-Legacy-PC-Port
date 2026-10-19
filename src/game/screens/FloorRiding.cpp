@@ -18,7 +18,7 @@ void FloorRiding::carry(PlayerRuntime& runtime, const WorldCollision& collision)
     // The body keeps its place and facing in the floor's own space.
     const Mat4 moved = *now * glm::inverse(*floor.placement);
     PlayerActor& actor = runtime.actor;
-    actor.place(Vec3{moved * Vec4{actor.position(), 1.0f}});
+    actor.carry(Vec3{moved * Vec4{actor.position(), 1.0f}});
     const f32 yaw = actor.yaw();
     const Vec3 facing = Mat3{moved} * Vec3{std::sin(yaw), 0.0f, std::cos(yaw)};
     if (facing.x != 0.0f || facing.z != 0.0f) {
@@ -40,26 +40,10 @@ bool FloorRiding::keptApart(std::span<const PlayerRuntime> players, usize index,
 
 std::optional<FloorHit> FloorRiding::support(const PlayerActor& actor,
                                              const WorldCollision& collision) {
-    auto hit =
-        collision.floorAt(actor.position(), kProbeAbove, kProbeBelow, PlayerActor::kFloorEdgeReach);
-    // Keep ownership consistent with the footprint supporting the feet,
-    // even when lower ground lies beneath the body's centre. A centre
-    // contact already at foot height wins over an adjacent near-level face.
-    const auto footprint = collision.floorAt(actor.position(), PlayerActor::kFloorEdgeReach,
-                                             kProbeBelow, actor.radius());
-    if (footprint && (!hit || (hit->y < actor.position().y - PlayerActor::kFloorEdgeReach &&
-                               footprint->y > hit->y))) {
-        hit = footprint;
-    }
-    if (!hit) {
-        hit = collision.floorAt(actor.position(), kProbeAbove, kProbeBelow, actor.radius());
-    }
-    // PlayerNewFloor adopts the accepted floor before PlayerMotion finishes
-    // lowering the body to it. A legal downward step can leave the feet more
-    // than one unit above the landing for several ticks.
-    return hit ? hit
-               : collision.floorAt(actor.position(), kProbeAbove, PlayerActor::kDrop + 1,
-                                   PlayerActor::kFloorEdgeReach);
+    // FloorCollide's sphere from the collision centre: the face under the point, else the
+    // nearest edge within the body's width.
+    return collision.floorUnder(actor.followPoint(),
+                                PlayerActor::kFloorProbe + actor.height() * 0.5f, actor.reach());
 }
 
 void FloorRiding::land(std::span<PlayerRuntime> players, usize index, const Vec3& from,

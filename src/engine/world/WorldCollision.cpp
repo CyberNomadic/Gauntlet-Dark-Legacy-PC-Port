@@ -1026,6 +1026,212 @@ Vec3 WorldCollision::resolveWalls(const Vec3& centre, f32 radius, f32 bottom, f3
     return out;
 }
 
+namespace {
+
+/** The earliest time in [0, 1] a sphere of `radius` moving `from` by `step` touches the
+ * point `vertex`; none when it never does within the step. */
+std::optional<f32> sphereMeetsPoint(const Vec3& from, const Vec3& step, f32 radius,
+                                    const Vec3& vertex) {
+    const Vec3 offset = from - vertex;
+    const f32 c = glm::dot(offset, offset) - radius * radius;
+    if (c <= 0.0f) {
+        return 0.0f; // touching already
+    }
+    const f32 a = glm::dot(step, step);
+    const f32 b = 2.0f * glm::dot(offset, step);
+    if (a <= kSweepEpsilon || b >= 0.0f) {
+        return std::nullopt; // still, or moving away
+    }
+    const f32 discriminant = b * b - 4.0f * a * c;
+    if (discriminant < 0.0f) {
+        return std::nullopt;
+    }
+    const f32 t = (-b - std::sqrt(discriminant)) / (2.0f * a);
+    return t >= 0.0f && t <= 1.0f ? std::optional{t} : std::nullopt;
+}
+
+/** The earliest time the moving sphere touches the segment `a`-`b` between its ends, and
+ * where on the segment. */
+std::optional<std::pair<f32, Vec3>> sphereMeetsSegment(const Vec3& from, const Vec3& step,
+                                                       f32 radius, const Vec3& a,
+                                                       const Vec3& b) {
+    const Vec3 edge = b - a;
+    const f32 length = glm::length(edge);
+    if (length <= kSweepEpsilon) {
+        return std::nullopt;
+    }
+    const Vec3 along = edge / length;
+    const Vec3 w = from - a;
+    const Vec3 wSide = w - along * glm::dot(w, along);
+    const Vec3 stepSide = step - along * glm::dot(step, along);
+    const f32 c = glm::dot(wSide, wSide) - radius * radius;
+    f32 t = 0.0f;
+    if (c > 0.0f) {
+        const f32 aa = glm::dot(stepSide, stepSide);
+        const f32 bb = 2.0f * glm::dot(wSide, stepSide);
+        if (aa <= kSweepEpsilon || bb >= 0.0f) {
+            return std::nullopt;
+        }
+        const f32 discriminant = bb * bb - 4.0f * aa * c;
+        if (discriminant < 0.0f) {
+            return std::nullopt;
+        }
+        t = (-bb - std::sqrt(discriminant)) / (2.0f * aa);
+        if (t < 0.0f || t > 1.0f) {
+            return std::nullopt;
+        }
+    }
+    const f32 foot = glm::dot(from + step * t - a, along);
+    if (foot < 0.0f || foot > length) {
+        return std::nullopt; // past an end: the vertex test has it
+    }
+    return std::pair{t, a + along * foot};
+}
+
+/** BTriLineCol for a wall: the first contact of the sphere with the triangle's front, as a
+ * time along the step and the point of the face met. */
+std::optional<std::pair<f32, Vec3>> sphereMeetsFront(const CollisionTriangle& triangle,
+                                                     const Vec3& from, const Vec3& step,
+                                                     f32 radius) {
+    const Vec3& origin = triangle.vertices[0];
+    const Vec3& normal = triangle.normal;
+    const f32 start = glm::dot(from - origin, normal);
+    const f32 end = glm::dot(from + step - origin, normal);
+    if (start < 0.0f || end > start || (start > radius && end > radius)) {
+        return std::nullopt; // behind it, parting from it, or never within reach
+    }
+    std::optional<std::pair<f32, Vec3>> best;
+    const auto offer = [&](f32 time, const Vec3& point) {
+        if (!best || time < best->first) {
+            best = std::pair{time, point};
+        }
+    };
+    if (start <= radius) {
+        const Vec3 foot = from - normal * start;
+        if (insideFace(triangle, foot)) {
+            offer(0.0f, foot);
+        }
+    } else {
+        const f32 time = (start - radius) / (start - end);
+        const Vec3 foot = from + step * time - normal * radius;
+        if (insideFace(triangle, foot)) {
+            offer(time, foot);
+        }
+    }
+    for (usize i = 0; i < triangle.vertices.size(); ++i) {
+        const Vec3& a = triangle.vertices[i];
+        const Vec3& b = triangle.vertices[(i + 1) % triangle.vertices.size()];
+        if (const auto edge = sphereMeetsSegment(from, step, radius, a, b)) {
+            offer(edge->first, edge->second);
+        }
+        if (const auto corner = sphereMeetsPoint(from, step, radius, a)) {
+            offer(*corner, a);
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+std::optional<SphereHit> WorldCollision::sweepSphere(const Vec3& from, const Vec3& to, f32 radius,
+                                                     u32 mask) const {
+    radius = std::max(0.0f, radius);
+    const Vec3 step = to - from;
+    std::optional<SphereHit> best;
+    const auto consider = [&](const CollisionTriangle& triangle, f32 localNormalY) {
+        if (contactOnly(triangle.object) || (triangle.objectFlags & mask) == 0 ||
+            (triangle.objectFlags & kLiquidSurface) != 0) {
+            return;
+        }
+        // CTriListCollide keeps the wall band by the object's own normal.
+        if ((triangle.objectFlags & kUnfilteredSurface) == 0 &&
+            (localNormalY < -kRayWallNormalY || localNormalY > kRayWallNormalY)) {
+            return;
+        }
+        const auto met = sphereMeetsFront(triangle, from, step, radius);
+        if (met && (!best || met->first < best->time)) {
+            best = SphereHit{triangle.object, triangle.objectFlags, triangle.normal, met->second,
+                             met->first};
+        }
+    };
+    const f32 minX = std::min(from.x, to.x) - radius;
+    const f32 minZ = std::min(from.z, to.z) - radius;
+    const f32 maxX = std::max(from.x, to.x) + radius;
+    const f32 maxZ = std::max(from.z, to.z) + radius;
+    for (const u32 index : candidates(minX, minZ, maxX, maxZ)) {
+        const CollisionTriangle& triangle = m_triangles[index];
+        if (solid(triangle.object)) {
+            consider(triangle, triangle.normal.y);
+        }
+    }
+    for (const MovingObject& mover : m_moving) {
+        if (!mover.overlaps(minX, minZ, maxX, maxZ) || !solid(mover.object)) {
+            continue;
+        }
+        for (usize i = 0; i < mover.placed.size(); ++i) {
+            if (mover.placed[i].normal != Vec3{0}) {
+                consider(mover.placed[i], mover.local[i].normal.y);
+            }
+        }
+    }
+    return best;
+}
+
+std::optional<FloorHit> WorldCollision::floorUnder(const Vec3& origin, f32 depth,
+                                                   f32 radius) const {
+    radius = std::max(0.0f, radius);
+    const f32 lowest = origin.y - depth - radius;
+    std::optional<FloorHit> face;
+    std::optional<FloorHit> edge;
+    f32 edgeDistance = radius * radius;
+    eachTriangle(origin.x - radius, origin.z - radius, origin.x + radius, origin.z + radius,
+                 [&](const CollisionTriangle& triangle) {
+                     if ((triangle.objectFlags & kFloorQueryFlags) == 0 ||
+                         (triangle.objectFlags & kLiquidSurface) != 0 ||
+                         triangle.normal.y < kFloorNormalY) {
+                         return;
+                     }
+                     const Vec3& v = triangle.vertices[0];
+                     const auto heightAt = [&](const Vec2& point) {
+                         return v.y - (triangle.normal.x * (point.x - v.x) +
+                                       triangle.normal.z * (point.y - v.z)) /
+                                          triangle.normal.y;
+                     };
+                     const Vec2 here{origin.x, origin.z};
+                     if (insideXZ(triangle, here.x, here.y)) {
+                         const f32 y = heightAt(here);
+                         if (y <= origin.y && y >= lowest && (!face || y > face->y)) {
+                             face = FloorHit{y, triangle.normal, triangle.object,
+                                             triangle.objectFlags, {here.x, y, here.y}};
+                         }
+                         return;
+                     }
+                     if (face.has_value() || radius <= 0.0f) {
+                         return; // a face under the point outranks every edge
+                     }
+                     for (usize i = 0; i < triangle.vertices.size(); ++i) {
+                         const Vec3& a = triangle.vertices[i];
+                         const Vec3& b = triangle.vertices[(i + 1) % triangle.vertices.size()];
+                         const Vec2 point = closestOnSegment({a.x, a.z}, {b.x, b.z}, here);
+                         const Vec2 delta = point - here;
+                         const f32 distance = glm::dot(delta, delta);
+                         if (distance > edgeDistance) {
+                             continue;
+                         }
+                         const f32 y = heightAt(point);
+                         // The sphere reaches less far down away from its centre line.
+                         const f32 reach = std::sqrt(std::max(0.0f, radius * radius - distance));
+                         if (y > origin.y || y < origin.y - depth - reach) {
+                             continue;
+                         }
+                         edgeDistance = distance;
+                         edge = FloorHit{y, triangle.normal, triangle.object, triangle.objectFlags,
+                                         {point.x, y, point.y}};
+                     }
+                 });
+    return face ? face : edge;
+}
+
 bool WorldCollision::wallBetween(const Vec3& from, const Vec3& to) const {
     return wallBetween(from, to, 0);
 }

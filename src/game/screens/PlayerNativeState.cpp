@@ -67,9 +67,9 @@ void visitNativeState(NativeStateDigest& digest, const ComboState& value) {
 
 void visitNativeState(NativeStateDigest& digest, const PlayerActor& value) {
     const auto& [player, save, position, yaw, speed, paceBonus, radius, height, followHeight,
-                 attentionHeight, moving, contacts] = value;
+                 attentionHeight, moving, floorBase, floorObject, floorFlags, contacts] = value;
     digest.values(player, save, position, yaw, speed, paceBonus, radius, height, followHeight,
-                  attentionHeight, moving, contacts);
+                  attentionHeight, moving, floorBase, floorObject, floorFlags, contacts);
 }
 
 void visitNativeState(NativeStateDigest& digest, const Knockback& value) {

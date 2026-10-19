@@ -213,7 +213,7 @@ TEST_CASE("G1 upper landing calls the lift before walking down to the bridge log
         actor.fall(kStep, world.collision());
         FloorRiding::land(party, 0, before, world.collision());
         const std::array visitors{TriggerVisitor{.position = actor.position(),
-                                                 .radius = actor.radius(),
+                                                 .radius = actor.reach(), // as PlayScene has it
                                                  .floorObject = party[0].floor.object,
                                                  .height = actor.height()}};
         world.updateTriggers(kStep, visitors);
@@ -229,7 +229,8 @@ TEST_CASE("G1 upper landing calls the lift before walking down to the bridge log
         CAPTURE(goal.x, goal.y, actor.position().x, actor.position().y, actor.position().z);
         FAIL("walking route did not reach its waypoint");
     };
-    walk({49.4f, -209.84f});
+    // The body stops a width from the parapet's neighbours; the switch reaches it there.
+    walk({50.3f, -209.84f});
     for (s32 frame = 0; frame < 30 && !world.triggers().trigger(call).fired; ++frame) {
         step({-1, 0});
     }
@@ -1382,8 +1383,9 @@ TEST_CASE("Ice Camp retains its pillar rotation and its final switch raises the 
             actor.update(MoveInput{.direction = direction, .magnitude = 1}, 0, kStep,
                          &world.collision());
             actor.fall(kStep, world.collision());
-            const std::array visitors{TriggerVisitor{
-                .position = actor.position(), .radius = actor.radius(), .height = actor.height()}};
+            const std::array visitors{TriggerVisitor{.position = actor.position(),
+                                                     .radius = actor.reach(), // as PlayScene has it
+                                                     .height = actor.height()}};
             world.update(kStep);
             world.updateTriggers(kStep, visitors);
         }

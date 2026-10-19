@@ -153,7 +153,7 @@ TEST_CASE("a travelling lift keeps riders aboard without freezing movement on it
         actor.place(Vec3{1, 0, 0});
     }
     SECTION("no floor") {
-        actor.place(Vec3{-6, 0, 0});
+        actor.place(Vec3{-7, 0, 0}); // beyond the width FloorCollide's sphere reaches an edge
     }
     FloorRiding::land(players, 0, from, collision);
     CHECK(actor.position() == from);
@@ -172,7 +172,7 @@ TEST_CASE("a travelling lift keeps riders aboard without freezing movement on it
     CHECK_FALSE(collision.floorExitBlocked(7));
 }
 
-TEST_CASE("a travelling lift retains footprint support above lower ground",
+TEST_CASE("the face under the centre decides who rides, and a holding lift keeps its rider",
           "[game][screens][floor-riding][lift-support]") {
     WorldCollision collision;
     auto triangles = square({-5, -5}, {0, 5}, 2, 7, FloorRiding::kMoving | kFloorQuery);
@@ -184,12 +184,20 @@ TEST_CASE("a travelling lift retains footprint support above lower ground",
     collision.setFloorExitBlocked(7, true);
     std::array<PlayerRuntime, 1> players;
     auto& actor = players[0].actor;
+    // FloorCollide takes the face under the point: centred past the deck's edge, a body
+    // stands over the ground two below and sinks to it at the native pace.
     actor.spawn(0, {}, nullptr, {0.1f, 2, 0}, 0);
     FloorRiding::land(players, 0, actor.position(), collision);
-    REQUIRE(players[0].floor.object == 7);
+    CHECK(players[0].floor.object == 8);
+    CHECK(actor.fall(1.0f / 30.0f, collision));
+    CHECK(actor.position().y == Approx(2 - PlayerActor::kFallSpeed / 30));
 
-    // The lift moved down, while the feet still straddle its edge. Lower
-    // ground under the centre is not a reason to sink through that support.
+    // Centred on the deck it rides. The lift's hold refuses the step off it
+    // (PlayerCollideFloor refuses every other floor while the flags hold) and keeps it at
+    // the deck's height, until the lift is gone.
+    actor.spawn(0, {}, nullptr, {-0.1f, 2, 0}, 0);
+    FloorRiding::land(players, 0, actor.position(), collision);
+    REQUIRE(players[0].floor.object == 7);
     collision.setObjectTransform(7, glm::translate(Mat4{1}, Vec3{0, -0.1f, 0}));
     FloorRiding::carry(players[0], collision);
     const Vec3 carried = actor.position();
@@ -205,7 +213,7 @@ TEST_CASE("a travelling lift retains footprint support above lower ground",
     CHECK(actor.position().y < 1.9f);
 }
 
-TEST_CASE("an unlocked lift keeps ownership of feet supported across its edge",
+TEST_CASE("an unlocked lift owns the body centred on it and no other",
           "[game][screens][floor-riding][lift-support-owner]") {
     bool onDeck = true;
     f32 deckHeight = 0.8f;
@@ -227,7 +235,9 @@ TEST_CASE("an unlocked lift keeps ownership of feet supported across its edge",
     collision.setObjectTransform(7, Mat4{1});
     std::array<PlayerRuntime, 1> players;
     auto& actor = players[0].actor;
-    actor.spawn(0, {}, nullptr, {0.1f, onDeck ? deckHeight : 0, 0}, 0);
+    // The face under the centre owns the body: on the deck when centred over it, on the
+    // ground beside it otherwise, whatever the feet overlap.
+    actor.spawn(0, {}, nullptr, {onDeck ? -0.1f : 0.1f, onDeck ? deckHeight : 0, 0}, 0);
     FloorRiding::land(players, 0, actor.position(), collision);
     CHECK(players[0].floor.object == (onDeck ? 7 : 8));
     CHECK(players[0].floor.placement.has_value() == onDeck);

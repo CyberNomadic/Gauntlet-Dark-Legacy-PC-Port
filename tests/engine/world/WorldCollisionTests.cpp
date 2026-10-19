@@ -845,4 +845,66 @@ TEST_CASE("the native tower has floors under its start points", "[world][collisi
     REQUIRE(found >= 10);
 }
 
+TEST_CASE("a swept sphere meets a wall's front and never its back, first contact first",
+          "[world][collision][sphere-sweep]") {
+    // PlayerWallCollide's sphere, as BTriLineCol tests it: a face the centre starts behind
+    // never counts, a face it parts from never counts, and of two ahead the nearer stops it.
+    WorldCollision collision;
+    collision.build({
+        triangle({5, 0, -10}, {5, 8, -10}, {5, 8, 10}, {-1, 0, 0}),
+        triangle({5, 0, -10}, {5, 8, 10}, {5, 0, 10}, {-1, 0, 0}),
+        triangle({8, 0, -10}, {8, 8, -10}, {8, 8, 10}, {-1, 0, 0}),
+        triangle({8, 0, -10}, {8, 8, 10}, {8, 0, 10}, {-1, 0, 0}),
+    });
+    const auto hit = collision.sweepSphere({0, 3.5f, 0}, {6, 3.5f, 0}, 1.5f);
+    REQUIRE(hit.has_value());
+    CHECK(hit->normal == Vec3{-1, 0, 0});
+    CHECK(hit->time == Approx(3.5f / 6.0f)); // the centre a width and a half from x = 5
+    CHECK(hit->point.x == Approx(5.0f));
+    CHECK(hit->point.y == Approx(3.5f));
+    // Already within its width of the wall, it is met at once; parting from it, never.
+    const auto touching = collision.sweepSphere({4, 3.5f, 0}, {4, 3.5f, 1}, 1.5f);
+    REQUIRE(touching.has_value());
+    CHECK(touching->time == 0.0f);
+    CHECK_FALSE(collision.sweepSphere({4, 3.5f, 0}, {3, 3.5f, 0}, 1.5f).has_value());
+    // Behind the face, moving at it: nothing holds the body inside a wall.
+    CHECK_FALSE(collision.sweepSphere({6, 3.5f, 0}, {4, 3.5f, 0}, 1.5f).has_value());
+    // Over the wall's top, out of reach.
+    CHECK_FALSE(collision.sweepSphere({0, 10, 0}, {6, 10, 0}, 1.5f).has_value());
+    // A wall's end is met by the sphere's side, before its face is under the centre.
+    const auto corner = collision.sweepSphere({4, 3.5f, -11.5f}, {4, 3.5f, -9.5f}, 1.5f);
+    REQUIRE(corner.has_value());
+    CHECK(corner->point.x == Approx(5.0f));
+    CHECK(corner->point.z == Approx(-10.0f));
+    CHECK(corner->time == Approx((1.5f - std::sqrt(1.25f)) / 2.0f).margin(0.001f));
+}
+
+TEST_CASE("the floor under a point outranks a nearer edge, and an edge within the width "
+          "serves when there is no face",
+          "[world][collision][floor-under]") {
+    // FloorCollide: CTriListCollide ranks a face crossing far ahead of an edge contact, so
+    // a lower floor under the point is the floor, whatever ledge stands beside it.
+    WorldCollision collision;
+    collision.build({
+        triangle({-10, 0, -4}, {0, 0, -4}, {0, 0, 4}, {0, 1, 0}),
+        triangle({-10, 0, -4}, {0, 0, 4}, {-10, 0, 4}, {0, 1, 0}),
+        triangle({0, -2, -4}, {10, -2, -4}, {10, -2, 4}, {0, 1, 0}),
+        triangle({0, -2, -4}, {10, -2, 4}, {0, -2, 4}, {0, 1, 0}),
+    });
+    const auto lower = collision.floorUnder({0.2f, 2.5f, 0}, 5.5f, 1.5f);
+    REQUIRE(lower.has_value());
+    CHECK(lower->y == Approx(-2.0f));
+    CHECK(lower->point.x == Approx(0.2f));
+    // Past both faces, the nearest edge within the width is the contact.
+    const auto edge = collision.floorUnder({-10.5f, 2.5f, 0}, 5.5f, 1.5f);
+    REQUIRE(edge.has_value());
+    CHECK(edge->y == 0.0f);
+    CHECK(edge->point.x == Approx(-10.0f));
+    CHECK_FALSE(collision.floorUnder({-12, 2.5f, 0}, 5.5f, 1.5f).has_value());
+    // A floor above the origin is behind the sweep; one below its reach is out of it.
+    CHECK_FALSE(collision.floorUnder({-5, -1, 0}, 5.5f, 1.5f).has_value());
+    CHECK_FALSE(collision.floorUnder({-5, 20, 0}, 5.5f, 1.5f).has_value());
+    CHECK(collision.floorUnder({-5, 7, 0}, 5.5f, 1.5f).has_value()); // the sphere's reach
+}
+
 } // namespace
