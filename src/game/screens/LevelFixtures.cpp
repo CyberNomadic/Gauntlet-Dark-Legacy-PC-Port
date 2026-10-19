@@ -1132,14 +1132,17 @@ bool LevelFixtures::releaseBarrelContents(const BreakableStrike& struck, s32 byP
     if (!m_resources || !struck.broken || struck.contents < 0) {
         return true;
     }
-    // What it held comes out: Death himself, or a pickup (fn_8005E90C).
+    // What it held comes out: Death himself, or a pickup (fn_8005E90C, the same routine as a
+    // chest's, so keys numbering more than one come out as the key ring).
+    const s32 contents = Chests::contentsRecord(m_resources->world.layout().itemInfos(),
+                                                struck.contents, struck.count);
     bool released =
-        events.releaseEnemy && events.releaseEnemy(struck.contents, struck.position, struck.count);
+        events.releaseEnemy && events.releaseEnemy(contents, struck.position, struck.count);
     if (!released) {
         const auto placed =
-            pickup ? pickup(struck.contents, struck.position, struck.count)
+            pickup ? pickup(contents, struck.position, struck.count)
                    : std::optional{m_resources->world.placeItemRecord(
-                         m_resources->device, struck.contents, struck.position, struck.count)};
+                         m_resources->device, contents, struck.position, struck.count)};
         if (!placed) {
             return false;
         }

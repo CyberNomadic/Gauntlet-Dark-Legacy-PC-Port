@@ -1923,7 +1923,8 @@ TEST_CASE("in the fields harm is the level's own: help is given, barrels break, 
     REQUIRE(scene.help().lines().size() == 2);
     REQUIRE(scene.actor(0)->save().helpSeen == std::vector<s32>{HelpMessages::kChestNeedsKey});
 
-    // A blast breaks the barrels about it; the one by the first field gives up its key.
+    // A blast breaks the barrels about it; the one by the first field gives up its keys,
+    // three of them as one ring (the original's container opening finds the KEYRING row).
     usize holder = scene.barrels().size();
     for (usize i = 0; i < scene.barrels().size(); ++i) {
         const Breakables::Barrel& barrel = scene.barrels().barrel(i);
@@ -1938,7 +1939,7 @@ TEST_CASE("in the fields harm is the level's own: help is given, barrels break, 
     scene.blast(at, 3.0f, 30.0f);
     REQUIRE_FALSE(scene.barrels().standing(holder));
     REQUIRE(world.placedItems().size() == lying + 1);
-    REQUIRE(world.placedItems().item(lying).name == "KEY");
+    REQUIRE(world.placedItems().item(lying).name == "KEYRING");
     REQUIRE(scene.actor(0)->save().health() == 300); // far from it
 
     // Hurt, the character loses health; with none left it falls, and its box says where it

@@ -891,6 +891,39 @@ TEST_CASE("a barrel holding Death lets him out when it breaks, instead of a pick
     f.fixtures.clear();
 }
 
+TEST_CASE("a barrel of more than one key lets out the key ring, as a chest does",
+          "[game][screens][level-fixtures][key-ring][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    Fixture f;
+    f.fixtures.clear();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    REQUIRE(f.world.load(f.device, root, *catalog.byName("G1")));
+    f.fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio, 1});
+    f.fixtures.setPlayerCount(1);
+    const auto& infos = f.world.layout().itemInfos();
+    std::optional<usize> keys;
+    for (usize i = 0; i < f.fixtures.barrels().size() && !keys; ++i) {
+        const auto& barrel = f.fixtures.barrels().barrel(i);
+        if (f.fixtures.barrels().standing(i) && barrel.kind == BreakableStrike::Kind::Holding &&
+            barrel.contents >= 0 && static_cast<usize>(barrel.contents) < infos.size() &&
+            infos[static_cast<usize>(barrel.contents)].name == "KEY" && barrel.count > 1) {
+            keys = i;
+        }
+    }
+    REQUIRE(keys.has_value()); // the Town's first level keeps three keys in one barrel
+    f.events.help = [](s32, usize) { return true; };
+    f.events.releaseEnemy = [](s32, const Vec3&, s32) { return false; };
+    const usize items = f.world.placedItems().size();
+    // fn_8005E90C opens barrels as it opens chests: keys numbering more than one are the
+    // KEYRING record.
+    f.fixtures.strikeBarrel(*keys, 10000, -1, {}, f.events);
+    REQUIRE(f.world.placedItems().size() == items + 1);
+    CHECK(f.world.placedItems().item(items).name == "KEYRING");
+    f.fixtures.clear();
+}
+
 TEST_CASE("the swarm's missiles are stopped by rocks, bottles and the triggers that are shot",
           "[game][screens][level-fixtures][enemy-missile-items][assets]") {
     const auto root =
