@@ -77,7 +77,7 @@ bool FallingScenery::appendLocalDigest(NativeStateDigest& digest, const LocalSna
 void FallingScenery::saveLocal(LocalSnapshot& saved) const {
     saved.m_pieces.resize(m_pieces.size());
     for (usize index = 0; index < m_pieces.size(); ++index) {
-        saved.m_pieces[index] = m_pieces[index];
+        saved.m_pieces[index] = static_cast<const PieceState&>(m_pieces[index]);
     }
     saved.m_clock = m_clock;
     saved.m_binding = m_checkpointBinding;

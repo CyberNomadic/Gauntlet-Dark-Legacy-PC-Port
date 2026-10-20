@@ -84,7 +84,7 @@ bool WorldAnimator::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
 void WorldAnimator::saveLocal(LocalSnapshot& saved) const {
     saved.m_cursors.resize(m_tracks.size());
     for (usize i = 0; i < m_tracks.size(); ++i) {
-        saved.m_cursors[i] = m_tracks[i];
+        saved.m_cursors[i] = static_cast<const Cursor&>(m_tracks[i]);
     }
     saved.m_cycles = m_cycleEvents;
     saved.m_owner = this;

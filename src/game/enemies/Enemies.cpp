@@ -526,7 +526,7 @@ std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
     for (usize index = 0; index < m_simulation.enemies.size(); ++index) {
         const auto& enemy = m_simulation.enemies[index];
         auto& body = state.enemies[index];
-        static_cast<BodyState&>(body) = enemy;
+        static_cast<BodyState&>(body) = static_cast<const BodyState&>(enemy);
         body.animator = enemy.animator.checkpoint();
         if (enemy.animator.bound() && !body.animator) {
             return std::nullopt;
@@ -613,7 +613,7 @@ std::optional<Enemies::Prepared> Enemies::prepareRestore(const Checkpoint& state
     for (usize index = 0; index < state.enemies.size(); ++index) {
         const auto& body = state.enemies[index];
         auto& enemy = enemies[index];
-        static_cast<BodyState&>(enemy) = body;
+        static_cast<BodyState&>(enemy) = static_cast<const BodyState&>(body);
         if (body.floor &&
             (m_collision == nullptr || !m_collision->objectTransform(body.floor->object))) {
             return std::nullopt;

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <format>
@@ -128,15 +129,12 @@ bool PlayScene::nativePresentationReady() const {
         (m_world->isTower() && !m_sumnerVisit.nativeReady(m_messages.text()))) {
         return false;
     }
-    for (const auto& player : m_players) {
-        // Offline loading permits missing art, but a native peer must have the
-        // action clock which drives releases, reactions and death transitions.
-        // Pojo and other intentional forms still retain this base animator.
-        if (!player.departed && (player.figure == nullptr || !player.figure->animator().bound())) {
-            return false;
-        }
-    }
-    return true;
+    // Offline loading permits missing art, but a native peer must have the
+    // action clock which drives releases, reactions and death transitions.
+    // Pojo and other intentional forms still retain this base animator.
+    return std::ranges::all_of(m_players, [](const auto& player) {
+        return player.departed || (player.figure != nullptr && player.figure->animator().bound());
+    });
 }
 
 bool PlayScene::registerNativeDigestResources() {

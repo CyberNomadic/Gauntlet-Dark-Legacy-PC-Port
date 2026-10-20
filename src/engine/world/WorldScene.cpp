@@ -437,13 +437,14 @@ bool WorldScene::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsho
 void WorldScene::saveLocal(LocalSnapshot& saved) const {
     saved.m_placements.resize(m_movingPlacements.size());
     for (usize i = 0; i < m_movingPlacements.size(); ++i) {
-        saved.m_placements[i] = m_placements[m_movingPlacements[i]];
+        saved.m_placements[i] =
+            static_cast<const PlacementState&>(m_placements[m_movingPlacements[i]]);
     }
     saved.m_staticPlacements = m_staticPlacements;
     saved.m_staticPreviousPending = m_staticPreviousPending;
     saved.m_units.resize(m_units.size());
     for (usize i = 0; i < m_units.size(); ++i) {
-        saved.m_units[i] = m_units[i];
+        saved.m_units[i] = static_cast<const UnitState&>(m_units[i]);
     }
     saved.m_slots.resize(m_slots.size());
     usize i = 0;

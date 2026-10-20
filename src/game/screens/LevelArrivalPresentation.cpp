@@ -66,7 +66,7 @@ void LevelArrivalPresentation::saveLocal(LocalSnapshot& saved) const {
     saved.m_textures = m_textures.clock();
     saved.m_spawns.resize(m_spawns.size());
     for (usize i = 0; i < m_spawns.size(); ++i) {
-        saved.m_spawns[i] = m_spawns[i];
+        saved.m_spawns[i] = static_cast<const SpawnState&>(m_spawns[i]);
     }
 }
 

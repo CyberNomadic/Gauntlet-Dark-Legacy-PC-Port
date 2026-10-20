@@ -101,7 +101,7 @@ void ExitPortals::saveLocal(LocalSnapshot& saved) const {
     saved.m_waiting = m_wait;
     saved.m_portals.resize(m_portals.size());
     for (usize i = 0; i < m_portals.size(); ++i) {
-        saved.m_portals[i] = m_portals[i];
+        saved.m_portals[i] = static_cast<const PortalState&>(m_portals[i]);
     }
 }
 

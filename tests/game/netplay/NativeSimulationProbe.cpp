@@ -634,6 +634,7 @@ void run(const Options& options) {
 }
 } // namespace
 
+// NOLINTNEXTLINE(bugprone-exception-escape): the handler only reports
 int main(int argc, char** argv) {
     try {
         std::string numericError;

@@ -80,7 +80,7 @@ void LevelTransporters::saveLocal(LocalSnapshot& saved) const {
     saved.m_presentationAdvanced = m_presentationAdvanced;
     saved.m_pads.resize(m_pads.size());
     for (usize i = 0; i < m_pads.size(); ++i) {
-        saved.m_pads[i] = m_pads[i];
+        saved.m_pads[i] = static_cast<const PadState&>(m_pads[i]);
     }
 }
 

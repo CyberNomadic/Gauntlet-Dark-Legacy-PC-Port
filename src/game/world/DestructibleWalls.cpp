@@ -62,7 +62,7 @@ bool DestructibleWalls::appendLocalDigest(NativeStateDigest& digest, const Local
 void DestructibleWalls::saveLocal(LocalSnapshot& saved) const {
     saved.m_walls.resize(m_walls.size());
     for (usize index = 0; index < m_walls.size(); ++index) {
-        saved.m_walls[index] = m_walls[index];
+        saved.m_walls[index] = static_cast<const WallState&>(m_walls[index]);
     }
     saved.m_binding = m_checkpointBinding;
     saved.m_owner = this;
