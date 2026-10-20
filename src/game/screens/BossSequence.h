@@ -64,6 +64,15 @@ public:
     const SpeechTiming& speechTiming() const { return m_sim.speech; }
     void capturePresentation() { m_victory.capturePresentation(); }
     BossCameraSubject victorySubject() const;
+    /** Whether the boss has fallen this level, the wizard's visit begun or done. The boss
+     * camera stays with the arena from the fall to the level's end, as BossCameraUpdate's
+     * does (its active flag clears only with the next level's camera). */
+    bool fallen() const { return m_victory.state().running() || m_victory.state().finished(); }
+    /** Where the boss's key lies. */
+    const Vec3& shardPosition() const { return m_sim.shardPosition; }
+    /** The camera's subject once the wizard has gone: BossCameraUpdate looks at the
+     * fallen boss's base, with the key's radius, and keeps the party in view. */
+    BossCameraSubject restSubject() const;
     const Texture* frozenTexture() const {
         return m_legend != nullptr ? m_legend->frozenTexture() : nullptr;
     }
@@ -78,6 +87,8 @@ private:
         SpeechTiming speech;
         SoundCueToken speechCue;
         Vec3 shardPosition{0};
+        Vec3 fallenSpot{0};      ///< where the boss fell
+        f32 fallenFacing = 0.0f; ///< and the way it faced
     };
 
 public:

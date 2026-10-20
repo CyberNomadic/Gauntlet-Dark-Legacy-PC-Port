@@ -1562,11 +1562,25 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     if (relicCeremonyOn()) {
         m_towerRelics.drawWizard(device, clip, m_world->lighting(), camera, effectBlend);
     }
-    m_bossSequence.victory().drawWizard(device, clip, m_world->lighting(), &effectCamera,
-                                        effectBlend);
+    // Neither the wizard nor the boss's key effect writes depth; the original sorts both by
+    // distance, so whichever stands nearer the camera is drawn over the other.
+    const auto drawVictoryWizard = [&] {
+        m_bossSequence.victory().drawWizard(device, clip, m_world->lighting(), &effectCamera,
+                                            effectBlend);
+    };
+    const bool wizardNearer =
+        m_bossSequence.victory().state().wizardShown() &&
+        glm::distance(camera.position, m_bossSequence.victorySubject().position) <
+            glm::distance(camera.position, m_bossSequence.shardPosition());
+    if (!wizardNearer) {
+        drawVictoryWizard();
+    }
     m_opponents.missiles().draw(device, clip, m_world->lighting(), &effectCamera);
     m_arsenal.missiles().draw(device, clip, m_world->lighting(), &effectCamera, projectileBlend);
     m_effects.draw(device, clip, m_world->fullLighting(), &effectCamera, effectBlend);
+    if (wizardNearer) {
+        drawVictoryWizard();
+    }
     m_arrival.drawEffects(device, clip, m_world->lighting(), effectBlend);
     if (config.display.bloom) {
         device.applyBloom();

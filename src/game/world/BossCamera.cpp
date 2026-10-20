@@ -339,7 +339,10 @@ void BossCamera::update(const BossCameraSubject& boss, std::span<const CameraSub
                                    kStopScale, m_yawVelocity, true, seconds));
     // The distance goes out or comes in by how everyone fits, under its speeds.
     const f32 nearest = boss.awake ? record.minDistance : record.minPlayerDistance;
-    const f32 farthest = boss.awake ? record.maxDistance : record.maxPlayerDistance;
+    // BossCameraUpdate doubles the greatest distance while the good wizard stands, so the
+    // party may spread about the arena for the coins without going out of view.
+    const f32 farthest = (boss.awake ? record.maxDistance : record.maxPlayerDistance) *
+                         (boss.focus == BossCameraSubject::Focus::Wizard ? kWizardReach : 1.0f);
     m_margin = viewMargin(boss, party, view);
     const f32 wanted = wantedDistance(nearest, farthest);
     const f32 settled = m_distance;

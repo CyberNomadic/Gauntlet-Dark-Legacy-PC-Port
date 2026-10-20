@@ -123,6 +123,31 @@ TEST_CASE("Skorne records victory without an ordinary boss key effect", "[skorne
     }
 }
 
+TEST_CASE("the boss's fall keeps the arena's camera subject to the level's end",
+          "[game][screens][boss-sequence][boss-camera]") {
+    // BossCameraUpdate's active flag clears only with the next level: after the wizard
+    // has gone it looks at the fallen boss's base with the key's radius.
+    Fixture f;
+    f.loadLevel();
+    REQUIRE_FALSE(f.sequence.fallen());
+    f.sequence.fallen({2, 3, 4}, f.bosses, f.players);
+    REQUIRE(f.sequence.fallen());
+    CHECK(f.sequence.shardPosition() == Vec3{2, 3, 4} + f.bosses.rewardOffset());
+    for (s32 tick = 0; tick < 2000 && !f.sequence.victory().state().finished(); ++tick) {
+        f.sequence.advanceVictory(2, 1.0f / 30.0f, f.players, f.strings);
+    }
+    REQUIRE(f.sequence.victory().state().finished());
+    REQUIRE(f.sequence.fallen());
+    const BossCameraSubject rest = f.sequence.restSubject();
+    CHECK(rest.position == Vec3{2, 3, 4});
+    CHECK(rest.baseAttention == std::optional{Vec3{2, 3, 4}});
+    CHECK(rest.focus == BossCameraSubject::Focus::Combat);
+    CHECK(rest.awake);
+    CHECK(rest.radius == 5.0f);
+    f.bind();
+    CHECK_FALSE(f.sequence.fallen());
+}
+
 TEST_CASE("boss victory rewards survivors once and counts the fallen party's runes",
           "[game][screens][boss-sequence]") {
     Fixture f;

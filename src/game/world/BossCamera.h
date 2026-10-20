@@ -59,6 +59,7 @@ public:
     static constexpr f32 kWantedMargin = 2.5f;     ///< the slack it settles at
     static constexpr f32 kLooseMargin = 4.0f;      ///< past this it comes in
     static constexpr f32 kFarthest = 2.0f;         ///< of the record's greatest distance
+    static constexpr f32 kWizardReach = 2.0f;      ///< the greatest distance, while the wizard stands
     static constexpr f32 kYawSpeed = std::numbers::pi_v<f32> / 2.0f; ///< radians a second
     static constexpr f32 kYawAcceleration = std::numbers::pi_v<f32> / 6.0f;
     static constexpr f32 kOutSpeed = 200.0f; ///< units a second it may back off

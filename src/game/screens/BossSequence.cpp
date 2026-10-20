@@ -14,7 +14,7 @@
 namespace gdl::game {
 bool BossSequence::appendNativeDigest(NativeStateDigest& digest) const {
     digest.string("BossSequence.native.1");
-    digest.fields<4>(m_sim);
+    digest.fields<6>(m_sim);
     if (!m_victory.appendNativeDigest(digest)) {
         return false;
     }
@@ -29,7 +29,7 @@ bool BossSequence::appendLocalDigest(NativeStateDigest& digest, const LocalSnaps
     }
     const auto& [state, victory, legend, owner, binding] = saved;
     digest.string("BossSequence.native.1");
-    digest.fields<4>(state);
+    digest.fields<6>(state);
     if (!m_victory.appendLocalDigest(digest, victory)) {
         return false;
     }
@@ -137,6 +137,8 @@ void BossSequence::clear() {
     m_legend.reset(); // stops its loop while audio and effects remain available
     m_victory.clear();
     m_sim.shardPosition = Vec3{0};
+    m_sim.fallenSpot = Vec3{0};
+    m_sim.fallenFacing = 0.0f;
     m_resources.reset();
 }
 
@@ -269,6 +271,8 @@ void BossSequence::fallen(const Vec3& where, const Bosses& bosses,
     const char letter = r.world.ref().name.empty() ? 'G' : r.world.ref().name.front();
     m_victory.begin(level->bossType, letter, inRealm, found, false);
     m_sim.shardPosition = where + bosses.rewardOffset();
+    m_sim.fallenSpot = where;
+    m_sim.fallenFacing = bosses.facing();
     if (r.world.items().loaded()) {
         if (level->bossType < 42) {
             EffectTrees::Setting setting;
@@ -322,6 +326,19 @@ bool BossSequence::advanceVictory(s32 ticks, f32 seconds, std::span<const Player
         }
     }
     return m_victory.state().finished();
+}
+
+/** BossCameraUpdate's radius for the key and the fallen boss's spot. */
+constexpr f32 kFallenRadius = 5.0f;
+
+BossCameraSubject BossSequence::restSubject() const {
+    BossCameraSubject subject;
+    subject.position = m_sim.fallenSpot;
+    subject.baseAttention = m_sim.fallenSpot;
+    subject.facing = m_sim.fallenFacing;
+    subject.radius = kFallenRadius;
+    subject.awake = true;
+    return subject;
 }
 
 BossCameraSubject BossSequence::victorySubject() const {

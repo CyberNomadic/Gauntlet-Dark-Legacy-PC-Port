@@ -46,7 +46,7 @@ WorldCamera PlayScene::viewCamera() const {
 bool PlayScene::bossCameraOn() const {
     const LevelInfo* level = m_world != nullptr ? m_world->level() : nullptr;
     return level != nullptr && level->bossCamera.has_value() &&
-           (m_opponents.bosses().present() || m_bossSequence.victory().state().running());
+           (m_opponents.bosses().present() || m_bossSequence.fallen());
 }
 
 /** The boss as the camera sees it; once it has fallen, the wizard in its place. */
@@ -54,6 +54,9 @@ BossCameraSubject PlayScene::bossSubject() const {
     BossCameraSubject subject;
     if (m_bossSequence.victory().state().running()) {
         return m_bossSequence.victorySubject();
+    }
+    if (!m_opponents.bosses().present() && m_bossSequence.fallen()) {
+        return m_bossSequence.restSubject();
     }
     if (const Vec3* at = m_opponents.bosses().position(); at != nullptr) {
         subject.position = *at;
