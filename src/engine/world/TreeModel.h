@@ -101,7 +101,17 @@ public:
     void setPresentationFrame(u32 sequence, f32 frame);
     /** Selects one node's object run without disturbing independently posed siblings. */
     void setMeshPresentationFrame(usize index, u32 sequence, f32 frame);
+    /** Whether a frame's mesh may be blended towards the next's at all: as many parts, lit
+     * alike. Vertices, texture coordinates, colours and textures may all differ; morphMap
+     * decides whether the vertices can be matched. */
     static bool compatibleMorph(const Mesh& from, const Mesh& to);
+    /**
+     * The vertex of `to` each vertex of `from` blends towards, for frames exported with
+     * their vertices in another order: the nearest with the same texture coordinate and
+     * colour. Empty when the orders agree; none when some vertex has no such partner or
+     * the nearest stands too far off to be the same one.
+     */
+    static std::optional<std::vector<u32>> morphMap(const Mesh& from, const Mesh& to);
     /** Overrides object-animation frames for just one independently animated branch. */
     void setSubtreeFrame(usize root, u32 sequence, s32 frame);
 
@@ -132,6 +142,9 @@ private:
         s32 reverseLength = 0; ///< sequence extent when object frames play backward
         std::vector<Shape> shapes;
         std::vector<bool> morphs; ///< compatible geometry/materials between adjacent frames
+        /** Per adjacent pair, the vertex map ahead and back (empty: the same order). */
+        std::vector<std::vector<u32>> forward;
+        std::vector<std::vector<u32>> backward;
     };
     struct TextureFrame {
         u32 slot = 0;
@@ -142,6 +155,7 @@ private:
     struct Node {
         Shape shape; ///< what the node draws now; without a mesh, nothing
         const Mesh* nextMesh = nullptr;
+        const std::vector<u32>* nextMap = nullptr; ///< into nextMesh, when its order differs
         f32 meshBlend = 0.0f;
         usize index = 0; ///< the tree node this mesh hangs from
         Vec3 offset{0.0f, 0.0f, 0.0f};

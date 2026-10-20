@@ -142,37 +142,68 @@ TEST_CASE("world occlusion is a per-draw policy and preserves authored halo blen
     }
 }
 
-TEST_CASE("object mesh morphing requires matching topology UVs and materials",
+TEST_CASE("object mesh morphing matches a frame's vertices to the next's by order, else by "
+          "texture coordinate and place",
           "[world][model][presentation]") {
+    // Flip-book frames were exported with their vertices in another order, split or joined
+    // (the grunts' archer, the demons, the knights), with their own textures (the vermin)
+    // or texture coordinates (the plants). Each vertex keeps its texture coordinate and
+    // colour and moves a little from frame to frame, so its nearest such vertex is it.
     Mesh from;
     from.vertices.resize(3);
+    from.vertices[0].uv = {0, 0};
+    from.vertices[1].uv = {1, 0};
+    from.vertices[1].position = {4, 0, 0};
+    from.vertices[2].uv = {0, 1};
+    from.vertices[2].position = {0, 4, 0};
     from.parts.push_back(MeshPart{0, 0, {0, 1, 2}});
     Mesh to = from;
-    to.vertices[1].position.x = 2;
-    to.vertices[1].normal = Vec3{1, 0, 0};
+    to.vertices[1].position.x = 4.5f;
     REQUIRE(TreeModel::compatibleMorph(from, to));
-    SECTION("vertex count") {
-        to.vertices.emplace_back();
-    }
-    SECTION("index topology") {
-        to.parts[0].indices = {0, 2, 1};
-    }
-    SECTION("part texture") {
+    SECTION("the same order maps as itself, whatever the coordinates, colours or textures") {
+        to.vertices[1].uv.x = 0.9f;
+        to.vertices[2].color.r = 0;
         to.parts[0].texture = 1;
+        const auto map = TreeModel::morphMap(from, to);
+        REQUIRE(map.has_value());
+        CHECK(map->empty());
     }
-    SECTION("part lightmap") {
-        to.parts[0].lightmap = 1;
+    SECTION("another order is matched vertex by vertex") {
+        std::swap(to.vertices[0], to.vertices[2]);
+        to.parts[0].indices = {2, 1, 0};
+        const auto map = TreeModel::morphMap(from, to);
+        REQUIRE(map.has_value());
+        CHECK(*map == std::vector<u32>{2, 1, 0});
     }
-    SECTION("UV correspondence") {
-        to.vertices[1].uv.x = 1;
+    SECTION("a frame with a vertex more or fewer shares what matches") {
+        to.vertices.push_back(to.vertices[1]);
+        to.parts[0].indices = {0, 1, 2, 0, 3, 2};
+        const auto ahead = TreeModel::morphMap(from, to);
+        REQUIRE(ahead.has_value());
+        CHECK(*ahead == std::vector<u32>{0, 1, 2});
+        const auto back = TreeModel::morphMap(to, from);
+        REQUIRE(back.has_value());
+        CHECK(*back == std::vector<u32>{0, 1, 2, 1});
     }
-    SECTION("lightmap correspondence") {
-        to.vertices[1].lightmapUv.x = 1;
+    SECTION("a vertex with no partner of its coordinates leaves the pair to cut") {
+        std::swap(to.vertices[0], to.vertices[2]);
+        to.parts[0].indices = {2, 1, 0};
+        to.vertices[1].uv = {0.5f, 0.5f};
+        CHECK_FALSE(TreeModel::morphMap(from, to).has_value());
     }
-    SECTION("vertex color") {
-        to.vertices[1].color.r = 0;
+    SECTION("a partner further off than half the body is another vertex") {
+        std::swap(to.vertices[0], to.vertices[2]);
+        to.parts[0].indices = {2, 1, 0};
+        to.vertices[1].position.x = 9;
+        CHECK_FALSE(TreeModel::morphMap(from, to).has_value());
     }
-    CHECK_FALSE(TreeModel::compatibleMorph(from, to));
+    SECTION("parts and lighting must agree") {
+        to.parts.push_back(MeshPart{1, 0, {0, 1, 2}});
+        CHECK_FALSE(TreeModel::compatibleMorph(from, to));
+        to.parts.pop_back();
+        to.prelit = true;
+        CHECK_FALSE(TreeModel::compatibleMorph(from, to));
+    }
 }
 
 TEST_CASE("prelit tree meshes retain vertex colour while ordinary meshes use scene lighting",

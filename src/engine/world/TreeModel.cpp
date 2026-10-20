@@ -1,6 +1,8 @@
 #include "engine/world/TreeModel.h"
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 #include <array>
 #include <cmath>
 #include <exception>
@@ -23,25 +25,55 @@ constexpr std::array<std::string_view, 2> kMarkerNodes{"DUMMY", "NULL1"};
 } // namespace
 
 bool TreeModel::compatibleMorph(const Mesh& from, const Mesh& to) {
-    if (from.vertices.size() != to.vertices.size() || from.parts.size() != to.parts.size() ||
-        from.prelit != to.prelit) {
-        return false;
+    return from.parts.size() == to.parts.size() && from.prelit == to.prelit;
+}
+
+std::optional<std::vector<u32>> TreeModel::morphMap(const Mesh& from, const Mesh& to) {
+    if (!compatibleMorph(from, to)) {
+        return std::nullopt;
     }
-    for (usize p = 0; p < from.parts.size(); ++p) {
-        if (from.parts[p].indices != to.parts[p].indices ||
-            from.parts[p].texture != to.parts[p].texture ||
-            from.parts[p].lightmap != to.parts[p].lightmap) {
-            return false;
+    bool sameOrder = from.vertices.size() == to.vertices.size();
+    for (usize p = 0; p < from.parts.size() && sameOrder; ++p) {
+        sameOrder = from.parts[p].indices == to.parts[p].indices;
+    }
+    if (sameOrder) {
+        return std::vector<u32>{};
+    }
+    // The frames were written with their vertices in another order, or with some split
+    // or joined (the grunts' archer, the demons and the knights, among others). A vertex
+    // keeps its texture coordinate and colour from frame to frame and moves a little: its
+    // nearest such vertex in the next frame is it, shared when the next frame has fewer.
+    // One with no such partner, or whose nearest stands further off than half the body,
+    // is not the same vertex, and the pair is left to cut as the original does.
+    Vec3 low{std::numeric_limits<f32>::max()};
+    Vec3 high{std::numeric_limits<f32>::lowest()};
+    for (const MeshVertex& v : from.vertices) {
+        low = glm::min(low, v.position);
+        high = glm::max(high, v.position);
+    }
+    const f32 farthest = 0.5f * glm::distance(low, high);
+    std::vector<u32> map(from.vertices.size(), 0);
+    for (usize i = 0; i < from.vertices.size(); ++i) {
+        const MeshVertex& v = from.vertices[i];
+        f32 best = std::numeric_limits<f32>::max();
+        bool found = false;
+        for (usize j = 0; j < to.vertices.size(); ++j) {
+            const MeshVertex& w = to.vertices[j];
+            if (w.uv != v.uv || w.color != v.color) {
+                continue;
+            }
+            const f32 distance = glm::distance(v.position, w.position);
+            if (distance < best) {
+                best = distance;
+                map[i] = static_cast<u32>(j);
+                found = true;
+            }
+        }
+        if (!found || best > farthest) {
+            return std::nullopt;
         }
     }
-    for (usize v = 0; v < from.vertices.size(); ++v) {
-        if (from.vertices[v].uv != to.vertices[v].uv ||
-            from.vertices[v].lightmapUv != to.vertices[v].lightmapUv ||
-            from.vertices[v].color != to.vertices[v].color) {
-            return false;
-        }
-    }
-    return true;
+    return map;
 }
 
 TreeModel::Shape TreeModel::makeShape(const Mesh& mesh, TextureSet& textures, RenderDevice& device,
@@ -139,9 +171,17 @@ bool TreeModel::bind(const TreeInfo& tree, ModelSet& models, TextureSet& texture
                     for (usize f = 1; f < frames.shapes.size(); ++f) {
                         const auto& from = frames.shapes[f - 1];
                         const auto& to = frames.shapes[f];
-                        frames.morphs.push_back(
-                            from.textures == to.textures && from.translucent == to.translucent &&
-                            from.slots == to.slots && compatibleMorph(*from.mesh, *to.mesh));
+                        std::optional<std::vector<u32>> ahead;
+                        std::optional<std::vector<u32>> back;
+                        // A frame's own textures stay on it while its vertices move on (the
+                        // vermin change texture with the frame); only translucency must agree.
+                        if (from.translucent == to.translucent) {
+                            ahead = morphMap(*from.mesh, *to.mesh);
+                            back = ahead ? morphMap(*to.mesh, *from.mesh) : std::nullopt;
+                        }
+                        frames.morphs.push_back(ahead.has_value() && back.has_value());
+                        frames.forward.push_back(ahead.value_or(std::vector<u32>{}));
+                        frames.backward.push_back(back.value_or(std::vector<u32>{}));
                     }
                 }
                 node.runs.push_back(std::move(frames));
@@ -155,6 +195,21 @@ bool TreeModel::bind(const TreeInfo& tree, ModelSet& models, TextureSet& texture
     }
     return !m_nodes.empty();
 }
+
+namespace {
+
+/** The colour between two, by `blend` of the way from the first. */
+Color mixColor(const Color& from, const Color& to, f32 blend) {
+    const auto channel = [blend](u8 a, u8 b) {
+        return static_cast<u8>(std::clamp(
+            std::lround(static_cast<f32>(a) + (static_cast<f32>(b) - static_cast<f32>(a)) * blend),
+            0L, 255L));
+    };
+    return Color{channel(from.r, to.r), channel(from.g, to.g), channel(from.b, to.b),
+                 channel(from.a, to.a)};
+}
+
+} // namespace
 
 void TreeModel::setFrame(u32 sequence, s32 frame) {
     for (Node& node : m_nodes) {
@@ -198,11 +253,15 @@ void TreeModel::selectPresentationFrame(Node& node, u32 sequence, f32 frame) {
         return;
     }
     node.nextMesh = run.shapes[static_cast<usize>(next)].mesh;
+    const auto pair = static_cast<usize>(std::min(at, next));
+    const std::vector<u32>& map = next > at ? run.forward[pair] : run.backward[pair];
+    node.nextMap = map.empty() ? nullptr : &map;
     node.meshBlend = fraction;
 }
 
 void TreeModel::selectFrame(Node& node, u32 sequence, s32 frame) {
     node.nextMesh = nullptr;
+    node.nextMap = nullptr;
     node.meshBlend = 0.0f;
     if (node.runs.empty()) {
         return;
@@ -288,22 +347,29 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                 const MeshVertex& v = shape.mesh->vertices[index];
                 Vec3 position = v.position;
                 Vec3 vertexNormal = v.normal;
+                Vec2 meshUv = v.uv;
+                Color baked = v.color;
                 if (node.nextMesh != nullptr) {
-                    const MeshVertex& next = node.nextMesh->vertices[index];
+                    const MeshVertex& next =
+                        node.nextMesh->vertices[node.nextMap != nullptr ? (*node.nextMap)[index]
+                                                                        : index];
                     position = glm::mix(position, next.position, node.meshBlend);
                     const Vec3 blendedNormal = glm::mix(vertexNormal, next.normal, node.meshBlend);
                     if (glm::dot(blendedNormal, blendedNormal) > 0.000001f) {
                         vertexNormal = blendedNormal;
                     }
+                    meshUv = glm::mix(meshUv, next.uv, node.meshBlend);
+                    baked = mixColor(baked, next.color, node.meshBlend);
                 }
                 const Vec3 normal = glm::normalize(normalMatrix * vertexNormal);
-                const Vec2 uv =
-                    node.chrome ? Vec2{0.5f * (1.0f - normal.x), 0.5f * (1.0f - normal.y)} : v.uv;
+                const Vec2 uv = node.chrome
+                                    ? Vec2{0.5f * (1.0f - normal.x), 0.5f * (1.0f - normal.y)}
+                                    : meshUv;
                 const Vec4 placed = placement * Vec4{position, 1.0f};
                 // Glows add their whole texture; the original never lights them.
                 // Baked RGB belongs to the geometry stream, including level meshes
                 // rendered as destructible items rather than by WorldScene.
-                Color color = shape.mesh->prelit ? v.color : lighting.shade(Vec3{placed}, normal);
+                Color color = shape.mesh->prelit ? baked : lighting.shade(Vec3{placed}, normal);
                 if (additive || m_unlit || nodeFlash) {
                     color = Color::white();
                 }
