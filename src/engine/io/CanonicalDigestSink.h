@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <span>
 
 #include "engine/io/Sha256.h"
@@ -46,7 +47,8 @@ public:
         m_size += bytes.size();
         if (m_used != 0) {
             const usize count = std::min(bytes.size(), m_buffer.size() - m_used);
-            std::copy_n(bytes.begin(), count, m_buffer.begin() + m_used);
+            std::copy_n(bytes.begin(), count,
+                        m_buffer.begin() + static_cast<std::ptrdiff_t>(m_used));
             m_used += count;
             bytes = bytes.subspan(count);
             if (m_used != m_buffer.size()) {
