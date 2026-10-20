@@ -210,14 +210,19 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         const bool additive = material.additive;
         const bool prelit = object.prelit() && mesh->prelit;
         const bool depthWrite = material.depthWrite;
-        const bool depthTest = material.depthTest;
         const u32 facing = material.facing;
+        // The original skips the compare for the no-depth-test word. The camera-facing glows
+        // flagged so keep it; a flat overlay lying on geometry (A3XOEXTRACTED_P, the Armory
+        // rack's picture) would be painted through the walls in front of it, so it is tested
+        // and lifted toward the eye instead.
+        const bool lifted = !material.depthTest && facing == 0;
+        const bool depthTest = material.depthTest || lifted;
         const bool background = std::ranges::find(backgroundObjects, i) != backgroundObjects.end();
         const bool thermal = std::ranges::any_of(mesh->parts, [&](const MeshPart& part) {
             return slotFor(part.texture, textures, device, lenders).thermal;
         });
         const bool unit = thermal || background || m_placements[i].moving || material.sorted ||
-                          facing != 0 ||
+                          facing != 0 || lifted ||
                           std::ranges::find(controlledObjects, i) != controlledObjects.end();
         Unit placedUnit;
         placedUnit.object = i;
@@ -229,6 +234,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         placedUnit.background = background;
         placedUnit.depthWrite = depthWrite;
         placedUnit.depthTest = depthTest;
+        placedUnit.lifted = lifted;
         placedUnit.facing = facing;
         placedUnit.prelit = prelit;
         placedUnit.sortBias = material.sortBias;
@@ -363,7 +369,7 @@ const CanonicalDigestSink::Digest& WorldScene::rosterDigest() const {
     for (const auto& unit : m_units) {
         digest.values(unit.object, unit.sortBias, unit.facing, unit.prelit, unit.chrome,
                       unit.sorted, unit.deferAlways, unit.meshAlpha, unit.background,
-                      unit.depthWrite, unit.depthTest);
+                      unit.depthWrite, unit.depthTest, unit.lifted);
     }
     m_rosterDigest = digest.finish();
     return *m_rosterDigest;
@@ -869,7 +875,14 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
             const Vec3 normal = normalLength > 0 && std::isfinite(normalLength)
                                     ? transformedNormal / normalLength
                                     : Vec3{0};
-            const Vec4 placed = world * Vec4{v.position, 1.0f};
+            Vec4 placed = world * Vec4{v.position, 1.0f};
+            if (unit.lifted) {
+                const Vec3 toEye = camera.position - Vec3{placed};
+                const f32 reach = glm::length(toEye);
+                if (reach > kOverlayLift) {
+                    placed += Vec4{toEye * (kOverlayLift / reach), 0.0f};
+                }
+            }
             Color color = shadeAt(part.additive, unit.prelit, v, Vec3{placed}, normal, m_lighting);
             if (unit.alpha < 1.0f) {
                 color.a = static_cast<u8>(static_cast<f32>(color.a) * unit.alpha);

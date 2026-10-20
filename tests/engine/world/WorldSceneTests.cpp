@@ -206,7 +206,7 @@ TEST_CASE("placed flame surfaces produce separate depth-tested heat sources",
     // Authored depthless scenery and explicitly selected backdrops must not
     // generate a foreground shimmer, nor may an unresolved white placeholder.
     writeTextFile(f.directory / "world.json", R"({"objects":[
-      {"name":"FLAME","position":[-4,0,0],"next":1,"child":-1,"objectFlags":64},
+      {"name":"FLAME","position":[-4,0,0],"next":1,"child":-1,"objectFlags":16777280},
       {"name":"FLAME","position":[4,0,0],"next":-1,"child":-1}]})");
     REQUIRE(f.layout.load(f.directory));
     const std::array<usize, 1> background{1};
@@ -299,6 +299,32 @@ TEST_CASE("controlled static geometry hides only its own mesh without moving or 
     REQUIRE(f.scene.setObjectVisible(0, false));
     REQUIRE(f.build(controlled));
     REQUIRE(f.scene.objectVisible(0)); // a new scene restores the object
+}
+
+TEST_CASE("an overlay authored without a depth compare is tested and lifted toward the eye",
+          "[world][scene][overlay]") {
+    // A3XOEXTRACTED_P lies on the Armory rack's face with the no-compare, no-write, sorted
+    // and alpha-last words; the original paints it through the parapet in front of it.
+    Fixture f("world-scene-overlay");
+    writeTextFile(f.directory / "world.json", R"({"objects":[
+      {"name":"WALL","position":[0,0,0],"next":1,"child":-1},
+      {"name":"PANE","position":[0,0,5],"next":-1,"child":-1,"objectFlags":526528}]})");
+    REQUIRE(f.layout.load(f.directory));
+    REQUIRE(f.build());
+    REQUIRE(f.scene.unitCount() == 1);
+    f.scene.draw(f.device, Mat4{1}, CameraFrame::at(Vec3{0, 0, -10}));
+    REQUIRE(f.device.draws.size() == 2);
+    const auto& wall = f.device.draws[0];
+    CHECK(wall.vertices[0].position == Vec3{0, 0, 0});
+    CHECK(wall.state.depthTest);
+    const auto& overlay = f.device.draws[1];
+    CHECK(overlay.state.depthTest);
+    CHECK_FALSE(overlay.state.depthWrite);
+    // Lifted a tenth toward the eye at (0, 0, -10): straight back along z.
+    CHECK(overlay.vertices[0].position.x == Approx(0));
+    CHECK(overlay.vertices[0].position.y == Approx(0));
+    CHECK(overlay.vertices[0].position.z == Approx(5 - WorldScene::kOverlayLift));
+    CHECK(overlay.vertices[1].position.z < 5);
 }
 
 TEST_CASE("a world scene places every object that has a mesh and draws it in passes",
@@ -580,26 +606,31 @@ TEST_CASE("S8 wheat cutouts reject clear texels in both batched and independent 
 
 TEST_CASE("world depth comparison flags survive batching and independent unit draws",
           "[world][scene][vfx-depth]") {
+    // A camera-facing glow keeps its authored no-compare word (the facing mode is the top
+    // nibble); a wall that only leaves depth unwritten stays batched.
     Fixture f("world-scene-depth-compare");
     writeTextFile(f.directory / "world.json", R"({"objects":[
       {"name":"WALL","position":[0,0,0],"next":1,"objectFlags":0},
-      {"name":"WALL","position":[10,0,0],"next":2,"objectFlags":64},
-      {"name":"WALL","position":[20,0,0],"next":3,"objectFlags":192},
+      {"name":"WALL","position":[10,0,0],"next":2,"objectFlags":16777280},
+      {"name":"WALL","position":[20,0,0],"next":3,"objectFlags":128},
       {"name":"PANE","position":[30,0,0],"next":4,"objectFlags":2048},
-      {"name":"PANE","position":[40,0,0],"next":5,"objectFlags":2112},
-      {"name":"PANE","position":[50,0,0],"next":-1,"objectFlags":2240}]})");
+      {"name":"PANE","position":[40,0,0],"next":5,"objectFlags":16779328},
+      {"name":"PANE","position":[50,0,0],"next":-1,"objectFlags":16779456}]})");
     REQUIRE(f.layout.load(f.directory));
     REQUIRE(f.build());
-    REQUIRE(f.scene.batchCount() == 3);
-    REQUIRE(f.scene.unitCount() == 3);
+    REQUIRE(f.scene.batchCount() == 2);
+    REQUIRE(f.scene.unitCount() == 4);
     f.scene.draw(f.device, Mat4{1}, CameraFrame{});
     REQUIRE(f.device.draws.size() == 6);
     for (const auto& draw : f.device.draws) {
-        const auto placement = static_cast<s32>(draw.vertices.front().position.x / 10);
+        const auto placement =
+            static_cast<s32>(std::round(draw.vertices.front().position.x / 10));
         INFO(placement);
-        CHECK(draw.state.depthTest == (placement % 3 == 0));
-        CHECK(draw.state.depthWrite == (placement % 3 != 2));
-        CHECK(draw.state.usesAlphaToCoverage(4) == (placement % 3 == 0));
+        const bool tested = placement == 0 || placement == 2 || placement == 3;
+        const bool written = placement != 2 && placement != 5;
+        CHECK(draw.state.depthTest == tested);
+        CHECK(draw.state.depthWrite == written);
+        CHECK(draw.state.usesAlphaToCoverage(4) == (tested && written));
     }
 }
 

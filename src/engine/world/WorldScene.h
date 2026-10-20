@@ -29,6 +29,10 @@ class NativeStateDigest;
  * object is deferred, farthest first, once it is faded, a glow, flagged behind or wears an
  * alpha-textured mesh; everything else, alpha texture or not, is a solid drawn with the
  * cutout test. Textures a texture animation cycles or slides are swapped per slot.
+ * One authored word is not followed to the letter: a flat object flagged to skip the depth
+ * compare (the Armory's weapon-rack overlay) is tested after all, lifted a little toward
+ * the eye so it still lies over the face it was cut from, because the original paints it
+ * through the walls in front of it; the camera-facing glows flagged so keep their word.
  */
 class WorldScene {
 public:
@@ -46,6 +50,8 @@ public:
     /** Negative depth biases defer flagged overlays until after ordinary sorted objects. */
     static constexpr f32 kSortBackBias = -10000.0f;
     static constexpr f32 kSortBehindBias = -20000.0f;
+    /** How far an overlay authored without a depth compare is drawn toward the eye. */
+    static constexpr f32 kOverlayLift = 0.1f;
 
     /** Gathers every placed object that has a mesh; false when nothing could be placed.
      * Textures the level's set marks external are looked up by name in `lenders`.
@@ -203,6 +209,7 @@ private:
         bool background = false;  ///< depthless, far-layer scenery (e.g. A5 lightning sheets)
         bool depthWrite = true;
         bool depthTest = true;
+        bool lifted = false; ///< authored without a depth compare: tested, moved toward the eye
 
         /** Drawn after the solids, farthest first, as the original's MBSetupObject decides. */
         bool deferred() const { return sorted && (alpha < 1.0f || deferAlways || meshAlpha); }
