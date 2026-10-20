@@ -180,6 +180,7 @@ add_executable(tests
     game/netplay/MeasuredPacketTransportTests.cpp
     game/netplay/SessionInputsTests.cpp
     game/app/BuildLabelTests.cpp
+    game/app/LevelDebugOverlayTests.cpp
     game/app/GameCursorTests.cpp
     game/screens/PlaySceneRumbleTests.cpp
     game/world/StaticSceneryTests.cpp

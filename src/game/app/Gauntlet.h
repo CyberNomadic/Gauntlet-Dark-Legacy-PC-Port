@@ -21,6 +21,7 @@
 #include "game/app/BuildLabel.h"
 #include "game/app/CommandLine.h"
 #include "game/app/LevelCompletion.h"
+#include "game/app/LevelDebugOverlay.h"
 #include "game/app/MusicDuck.h"
 #include "game/app/OnlineRun.h"
 #include "game/config/GameConfig.h"
@@ -70,6 +71,8 @@ private:
     void leaveNetplay();
     void updateTower(f64 deltaSeconds);
     PlayScene::Inputs readPlayInputs(f64 deltaSeconds);
+    /** The level debug overlay's lines for the level in play. */
+    std::vector<std::string> levelDebugLines() const;
     void resetPlayInput();
     void updatePause(f64 deltaSeconds);
     bool saveSettings(const GameConfig& config);
@@ -97,6 +100,7 @@ private:
     GameOptions m_options;
     GameConfig m_config;
     BuildLabel m_buildLabel;
+    LevelDebugOverlay m_levelDebug;
     std::string m_version;
     std::unique_ptr<OnlineRun> m_online;
     struct NetplayNavigation {

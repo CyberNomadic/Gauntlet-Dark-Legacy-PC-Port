@@ -108,6 +108,7 @@ constexpr auto kKeyMap = std::to_array<KeyMapping>({
     {GLFW_KEY_F10, Key::F10},
     {GLFW_KEY_F11, Key::F11},
     {GLFW_KEY_F12, Key::F12},
+    {GLFW_KEY_GRAVE_ACCENT, Key::Grave},
 });
 
 } // namespace

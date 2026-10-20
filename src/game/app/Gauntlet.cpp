@@ -20,6 +20,7 @@
 #include "game/app/GameCursor.h"
 #include "game/app/Scenario.h"
 #include "game/config/ControlProfiles.h"
+#include "game/enemies/Enemies.h"
 #include "game/menu/MenuInput.h"
 #include "game/players/AutoSave.h"
 #include "game/players/PlayerControls.h"
@@ -559,6 +560,15 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     if (anyJoining && joinTower(joining)) {
         return;
     }
+    if (std::ranges::any_of(m_config.menu.debug,
+                            [this](Key key) { return input().wasKeyPressed(key); })) {
+        m_levelDebug.toggle();
+        if (m_levelDebug.visible()) {
+            for (const std::string& line : levelDebugLines()) {
+                log::info("Level debug: {}", line);
+            }
+        }
+    }
     for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
         if (!m_play->scene.canPause(player)) {
             continue;
@@ -942,7 +952,20 @@ void Gauntlet::onRender(RenderDevice& device) {
     renderScene(device);
     // One final pass covers movies, loading, menus, play, pause and the idle screen.
     m_buildLabel.render(device, device.framebufferExtent());
+    if (m_levelDebug.visible() && m_play->scene.isOpen()) {
+        m_levelDebug.render(device, device.framebufferExtent(), levelDebugLines());
+    }
     m_autoSaveIcon.render(device, device.framebufferExtent());
+}
+
+std::vector<std::string> Gauntlet::levelDebugLines() const {
+    s32 enemiesAlive = 0;
+    const Enemies& enemies = m_play->scene.opponents().enemies();
+    for (s32 id = 0; id < Enemies::kMost; ++id) {
+        enemiesAlive += enemies.alive(id) ? 1 : 0;
+    }
+    return LevelDebugOverlay::describe(m_play->world, m_play->scene.participants(),
+                                       m_play->scene.camera().localState(), enemiesAlive);
 }
 
 PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
@@ -1097,6 +1120,7 @@ void Gauntlet::onShutdown() {
     window().stopRumble();
     m_online.reset();
     m_buildLabel.release();
+    m_levelDebug.release();
     m_autoSaveIcon.release();
     m_idleScreen.close();
     m_demo.close();

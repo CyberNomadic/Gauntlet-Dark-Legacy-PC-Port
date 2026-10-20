@@ -79,6 +79,7 @@ add_library(game STATIC
     app/GauntletNetplay.cpp
     app/GameCursor.cpp
     app/BuildLabel.cpp
+    app/LevelDebugOverlay.cpp
     app/LevelCompletion.h
     app/MusicDuck.h
     app/MusicDuck.cpp
