@@ -773,7 +773,9 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         return;
     }
     if (outcome == PauseOutcome::ReturnTower) {
-        // Quitting a level gives up what it gave, as dying in it does.
+        // Quitting a level gives up what it gave, as dying in it does: the original kills
+        // the whole party (opt_restart_request), and init_shop with nobody standing skips
+        // the tally and the shop for the tower, so neither is shown here.
         party = m_play->scene.abandonedParty(party);
         Journey journey;
         journey.destination = LevelRef::tower();
@@ -781,15 +783,7 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         journey.options.welcome = false;
         journey.options.arriving = true;
         journey.options.arrivalWorld = static_cast<u32>(std::max(m_play->world.ref().realmId, 0));
-        const auto* level = m_play->world.level();
-        const auto maxima =
-            level != nullptr ? level->shopMaxima : std::array<s32, 3>{1000, 100, 1000};
-        // The rolled-back saves own no rewards from the aborted level. Empty
-        // results prevent its old deltas from fabricating a level-up in the tally.
-        if (!m_afterLevel.open(renderDevice(), context(), party, {}, maxima,
-                               m_play->world.ref().name)) {
-            log::warn("Abort-level tally unavailable; returning to the tower.");
-        }
+        autoSave(party);
         m_play->scene.close();
         m_loadingPicture.load(renderDevice(), m_options.unpackedDirectory);
         m_loadingPicture.cover();
