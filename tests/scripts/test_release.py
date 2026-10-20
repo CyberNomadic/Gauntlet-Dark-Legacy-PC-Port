@@ -13,7 +13,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from installer.install import retry_locked
-from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_new_version, validated_assets
+from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_green_ci, require_new_version, validated_assets
 from release import build_release, check_frozen_installer, dependency_notices, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files
 from installer.releases import runtime_name
 
@@ -273,15 +273,18 @@ class ReleaseTests(unittest.TestCase):
                 publish.assert_not_called()
 
     def test_preflight_is_read_only_and_publication_creates_but_never_updates(self):
+        def answer(command, **_):
+            return "completed\tsuccess\n" if "workflows/ci.yml" in command[2] else ""
         with mock.patch.dict(os.environ, {
                 "GITHUB_EVENT_NAME": "push", "GITHUB_REF": f"refs/tags/{self.tag}",
-                "RELEASE_TAG": self.tag}), mock.patch(
+                "RELEASE_TAG": self.tag, "GITHUB_SHA": "abc123"}), mock.patch(
                 "publish_release.validate_tag", return_value=self.tag), mock.patch(
-                "publish_release.subprocess.check_output", return_value="") as query, mock.patch(
+                "publish_release.subprocess.check_output", side_effect=answer) as query, mock.patch(
                 "publish_release.subprocess.run") as publish, mock.patch(
                 "publish_release.ROOT", self.root):
             self.assertEqual(check_publication(), self.tag)
-            self.assertIn("--paginate", query.call_args.args[0])
+            self.assertIn("--paginate", query.call_args_list[0].args[0])
+            self.assertIn("head_sha=abc123", query.call_args.args[0][2])
             publish_main(["--check"])
             publish.assert_not_called()
             with mock.patch("publish_release.validated_assets", return_value=[self.root / "setup.exe"]):
@@ -297,6 +300,40 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(command[:4], ["gh", "release", "create", self.tag])
             self.assertIn("--verify-tag", command)
             self.assertNotIn("--clobber", command)
+
+    def test_release_waits_for_green_ci_on_the_tagged_commit(self):
+        # A run still going is polled; success releases, anything else refuses.
+        naps = []
+        with mock.patch("publish_release.subprocess.check_output",
+                        side_effect=["in_progress\t\n", "completed\tsuccess\n"]):
+            require_green_ci("abc", wait_minutes=5, poll_seconds=7, sleep=naps.append)
+        self.assertEqual(naps, [7])
+        for rows, message in (("completed\tfailure\n", "concluded 'failure'"),
+                              ("completed\tcancelled\n", "concluded 'cancelled'"),
+                              ("", "No CI run")):
+            with self.subTest(rows=rows), mock.patch(
+                    "publish_release.subprocess.check_output", return_value=rows):
+                with self.assertRaisesRegex(ValueError, message):
+                    require_green_ci("abc", sleep=naps.append)
+        with mock.patch("publish_release.subprocess.check_output", return_value="queued\t\n"), \
+                mock.patch("publish_release.time.monotonic", side_effect=[0, 0, 10000]):
+            with self.assertRaisesRegex(ValueError, "still 'queued'"):
+                require_green_ci("abc", wait_minutes=1, sleep=naps.append)
+        with mock.patch("publish_release.subprocess.check_output", return_value="completed\tsuccess\n"):
+            require_green_ci("abc", sleep=naps.append)
+
+    def test_red_ci_blocks_the_release_before_any_build(self):
+        def answer(command, **_):
+            return "completed\tfailure\n" if "workflows/ci.yml" in command[2] else ""
+        with mock.patch.dict(os.environ, {
+                "GITHUB_EVENT_NAME": "push", "GITHUB_REF": f"refs/tags/{self.tag}",
+                "RELEASE_TAG": self.tag, "GITHUB_SHA": "abc123"}), mock.patch(
+                "publish_release.validate_tag", return_value=self.tag), mock.patch(
+                "publish_release.subprocess.check_output", side_effect=answer), mock.patch(
+                "publish_release.subprocess.run") as publish:
+            with self.assertRaisesRegex(ValueError, "green run"):
+                publish_main(["--check"])
+            publish.assert_not_called()
 
     def test_publication_classifies_stable_and_prerelease_from_semver(self):
         for tag, prerelease in (("v1.0.0-alpha.1", True), ("v1.0.0-beta.1", True),

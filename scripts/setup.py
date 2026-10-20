@@ -7,6 +7,7 @@
     python scripts/setup.py --test      # ... and run the unit tests afterwards
     python scripts/setup.py --tooling   # also want the LLVM tooling (clangd, clang-tidy, clang-format)
     python scripts/setup.py --no-build  # stop once the tools are in place
+    python scripts/setup.py --hooks     # only install the git hooks (pre-push lint)
 
 Windows: Visual Studio 2022 Build Tools with the C++ workload (which brings CMake and Ninja)
 through winget, vcpkg into C:\\vcpkg. Linux: the distribution's packages through apt, dnf or
@@ -403,6 +404,30 @@ def build(test: bool) -> None:
         devenv.run(["ctest", "--preset", preset, "-LE", "gpu"])
 
 
+def install_hooks(root: pathlib.Path = ROOT, out=print) -> bool:
+    """Copies scripts/hooks into .git/hooks where no hook of that name exists. A hook that
+    is already there is left alone and told how to chain to ours; false then."""
+    hooks = root / ".git" / "hooks"
+    if not hooks.is_dir():
+        return True
+    complete = True
+    for source in sorted((root / "scripts" / "hooks").iterdir()):
+        if source.name.endswith(".py") or source.name.startswith("."):
+            continue
+        target = hooks / source.name
+        if target.exists():
+            if (target.read_bytes() != source.read_bytes() and
+                    source.name not in target.read_text(encoding="utf-8", errors="replace")):
+                out(f"Existing {target} kept; have it run `python scripts/hooks/{source.name}` "
+                    "with the same stdin so pushes are linted.")
+                complete = False
+            continue
+        shutil.copyfile(source, target)
+        target.chmod(target.stat().st_mode | 0o755)
+        out(f"Installed git hook {target}")
+    return complete
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true", help="report only; install nothing")
@@ -410,7 +435,10 @@ def main() -> int:
     parser.add_argument("--tooling", action="store_true", help="also want the LLVM editor tooling")
     parser.add_argument("--no-build", action="store_true", help="stop once the tools are in place")
     parser.add_argument("--test", action="store_true", help="run the unit tests after building")
+    parser.add_argument("--hooks", action="store_true", help="only install the git hooks")
     args = parser.parse_args()
+    if args.hooks:
+        return 0 if install_hooks() else 1
 
     report = gather(args.tooling)
     print(f"Tools for building under {ROOT} ({'Windows' if WINDOWS else 'Linux'}):")
@@ -423,6 +451,7 @@ def main() -> int:
         if not install_missing(report, args.yes):
             print("\nSomething is still missing; see the advice above, then run this again.")
             return 1
+    install_hooks()
     if args.no_build:
         return 0
     print("\nConfiguring and building:")

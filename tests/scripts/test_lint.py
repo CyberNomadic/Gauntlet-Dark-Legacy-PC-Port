@@ -175,5 +175,80 @@ class DriverTests(unittest.TestCase):
         cache.remember.assert_not_called()
 
 
+class ChangedTests(unittest.TestCase):
+    """--changed lints the changed units and every unit reached through a changed header."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = pathlib.Path(directory.name).resolve()
+        self.files = {
+            "src/engine/core/Types.h": "",
+            "src/engine/world/Scene.h": '#include "engine/core/Types.h"\n',
+            "src/game/world/Level.h": '#include "engine/world/Scene.h"\n',
+            "src/engine/world/Scene.cpp": '#include "engine/world/Scene.h"\n',
+            "src/game/world/Level.cpp": '#include "game/world/Level.h"\n',
+            "src/game/app/App.cpp": '#include "engine/core/Log.h"\n',
+            "tests/game/world/LevelTests.cpp": '#include "game/world/Level.h"\n',
+        }
+        for name, text in self.files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        self.roster = sorted(self.root / name for name in self.files if name.endswith(".cpp"))
+        patcher = mock.patch.object(lint, "ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def affected(self, *changed):
+        return [unit.relative_to(self.root).as_posix() for unit in
+                lint.affected_units(self.roster, [self.root / c for c in changed], lint.header_roster())]
+
+    def test_changed_sources_and_includers_of_changed_headers_are_linted(self):
+        self.assertEqual(self.affected("src/game/app/App.cpp"), ["src/game/app/App.cpp"])
+        self.assertEqual(self.affected("src/game/world/Level.h"),
+                         ["src/game/world/Level.cpp", "tests/game/world/LevelTests.cpp"])
+        # A header reached through two other headers still counts.
+        self.assertEqual(self.affected("src/engine/core/Types.h"),
+                         ["src/engine/world/Scene.cpp", "src/game/world/Level.cpp",
+                          "tests/game/world/LevelTests.cpp"])
+        self.assertEqual(self.affected("docs/notes.md"), [])
+
+    def test_include_names_drop_the_source_roots(self):
+        self.assertEqual(lint.include_name(self.root / "src/engine/core/Types.h"), "engine/core/Types.h")
+        self.assertEqual(lint.include_name(self.root / "tests/Fake.h"), "Fake.h")
+
+    def test_changed_files_come_from_git_and_keep_only_sources(self):
+        completed = subprocess.CompletedProcess([], 0, "src/a.cpp\nREADME.md\nsrc/b.h\n", "")
+        with mock.patch.object(lint.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(lint.changed_files("origin/main"),
+                             [self.root / "src/a.cpp", self.root / "src/b.h"])
+        self.assertIn("origin/main", run.call_args.args[0])
+        failed = subprocess.CompletedProcess([], 128, "", "bad revision")
+        with mock.patch.object(lint.subprocess, "run", return_value=failed), \
+             self.assertRaises(SystemExit):
+            lint.changed_files("nope")
+
+    def test_nothing_affected_passes_without_running_clang_tidy(self):
+        with mock.patch.object(lint, "find_clang_tidy", return_value="clang-tidy"), \
+             mock.patch.object(lint, "translation_units", return_value=self.roster), \
+             mock.patch.object(lint, "changed_files", return_value=[self.root / "README.md"]), \
+             mock.patch.object(lint, "run_one") as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lint.main(["--changed", "origin/main"]), 0)
+        run.assert_not_called()
+
+    def test_changed_mode_lints_only_the_affected_units(self):
+        with mock.patch.object(lint, "find_clang_tidy", return_value="clang-tidy"), \
+             mock.patch.object(lint, "translation_units", return_value=self.roster), \
+             mock.patch.object(lint, "changed_files", return_value=[self.root / "src/game/world/Level.h"]), \
+             mock.patch.object(lint, "run_one", return_value=["Level.h:1:1: warning: x [c]"]) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lint.main(["--changed", "a..b"]), 1)
+        self.assertCountEqual([call.args[1] for call in run.call_args_list],
+                              [self.root / "src/game/world/Level.cpp",
+                               self.root / "tests/game/world/LevelTests.cpp"])
+
+
 if __name__ == "__main__":
     unittest.main()

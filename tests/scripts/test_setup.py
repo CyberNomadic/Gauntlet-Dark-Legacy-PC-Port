@@ -58,5 +58,29 @@ class LinuxSetupTests(unittest.TestCase):
         fix.assert_called_once()
 
 
+class HookTests(unittest.TestCase):
+    def test_hooks_are_installed_once_and_existing_hooks_are_left_alone(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "scripts" / "hooks").mkdir(parents=True)
+            (root / "scripts" / "hooks" / "pre-push").write_text("#!/usr/bin/env python\n")
+            # No repository: nothing to do, nothing wrong.
+            self.assertTrue(setup.install_hooks(root, out=lambda *_: None))
+            (root / ".git" / "hooks").mkdir(parents=True)
+            messages = []
+            self.assertTrue(setup.install_hooks(root, out=messages.append))
+            installed = root / ".git" / "hooks" / "pre-push"
+            self.assertEqual(installed.read_text(), "#!/usr/bin/env python\n")
+            self.assertEqual(len(messages), 1)
+            # A second run keeps the installed copy quietly; a foreign hook is reported.
+            self.assertTrue(setup.install_hooks(root, out=messages.append))
+            installed.write_text("#!/bin/sh\nexit 0\n")
+            self.assertFalse(setup.install_hooks(root, out=messages.append))
+            self.assertIn("scripts/hooks/pre-push", messages[-1])
+            installed.write_text("#!/bin/sh\npython scripts/hooks/pre-push\n")
+            self.assertTrue(setup.install_hooks(root, out=messages.append))
+
+
 if __name__ == "__main__":
     unittest.main()

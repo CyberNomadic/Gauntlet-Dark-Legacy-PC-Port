@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 from release import ROOT, digest, validate_tag
 from installer.install import payload_inventory
@@ -55,6 +56,27 @@ def changelog(tag):
     return notes
 
 
+def require_green_ci(sha, wait_minutes=90, poll_seconds=60, sleep=time.sleep):
+    """The CI workflow must have passed on the exact commit being released. A run still
+    going is waited for; none at all, or anything but success, refuses the release."""
+    deadline = time.monotonic() + wait_minutes * 60
+    while True:
+        rows = subprocess.check_output(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=20",
+             "--jq", ".workflow_runs[] | [.status, (.conclusion // \"\")] | @tsv"],
+            cwd=ROOT, text=True).splitlines()
+        if not rows:
+            raise ValueError(f"No CI run exists for {sha}; push the commit to main and let CI pass first")
+        status, conclusion = rows[0].split("\t")
+        if status == "completed":
+            if conclusion == "success":
+                return
+            raise ValueError(f"CI concluded '{conclusion}' for {sha}; a release needs a green run")
+        if time.monotonic() >= deadline:
+            raise ValueError(f"CI is still '{status}' for {sha} after {wait_minutes} minutes")
+        sleep(poll_seconds)
+
+
 def check_publication():
     """Fail closed before building and again before publishing, without mutating GitHub."""
     if os.environ.get("GITHUB_EVENT_NAME") != "push":
@@ -70,6 +92,7 @@ def check_publication():
         ["gh", "api", "--paginate", "repos/{owner}/{repo}/releases", "--jq", ".[].tag_name"],
         cwd=ROOT, text=True).splitlines()
     require_new_version(tag, existing)
+    require_green_ci(os.environ["GITHUB_SHA"])
     return tag
 
 

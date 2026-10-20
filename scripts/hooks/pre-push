@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+"""Lint what is about to be pushed, so clang-tidy debt never reaches main unnoticed.
+
+Installed by `python scripts/setup.py` (copied to .git/hooks/pre-push when none exists;
+an existing hook can call this file instead). For every updated ref it lints the
+translation units that the pushed commits touch, against the remote's old tip, through
+`scripts/lint.py --changed`. Set GDL_SKIP_LINT=1 to push regardless, for example to
+publish a fix for the lint itself.
+"""
+
+import os
+import pathlib
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+LINT = ROOT / "scripts" / "lint.py"
+
+
+def pushed_ranges(lines):
+    """(base, head) pairs for the refs being created or updated; deletions are skipped."""
+    ranges = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        _local_ref, local_oid, _remote_ref, remote_oid = parts
+        if set(local_oid) == {"0"}:
+            continue
+        ranges.append((None if set(remote_oid) == {"0"} else remote_oid, local_oid))
+    return ranges
+
+
+def base_for(base, head, git="git"):
+    """The remote's old tip when it exists locally; otherwise where head left origin/main."""
+    if base is not None:
+        if subprocess.run([git, "cat-file", "-e", f"{base}^{{commit}}"], cwd=ROOT,
+                          capture_output=True, check=False).returncode == 0:
+            return base
+    merge_base = subprocess.run([git, "merge-base", "origin/main", head], cwd=ROOT,
+                                capture_output=True, text=True, check=False)
+    if merge_base.returncode == 0 and merge_base.stdout.strip():
+        return merge_base.stdout.strip()
+    return None
+
+
+def main():
+    if os.environ.get("GDL_SKIP_LINT") == "1":
+        print("pre-push: lint skipped by GDL_SKIP_LINT=1", file=sys.stderr)
+        return 0
+    for base, head in pushed_ranges(sys.stdin):
+        start = base_for(base, head)
+        if start is None:
+            print("pre-push: no base to compare against; linting is skipped for this ref",
+                  file=sys.stderr)
+            continue
+        print(f"pre-push: clang-tidy over the translation units changed in {start[:9]}..{head[:9]}",
+              file=sys.stderr)
+        result = subprocess.run([sys.executable, str(LINT), "--changed", f"{start}..{head}"],
+                                cwd=ROOT, check=False)
+        if result.returncode != 0:
+            print("pre-push: refused, fix the findings above (or push with GDL_SKIP_LINT=1).",
+                  file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

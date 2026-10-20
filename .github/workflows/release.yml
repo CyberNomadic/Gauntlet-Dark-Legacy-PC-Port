@@ -26,7 +26,8 @@ jobs:
   preflight:
     name: Check release eligibility
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # Waits for the CI workflow on the tagged commit: no installer is built from a red main.
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

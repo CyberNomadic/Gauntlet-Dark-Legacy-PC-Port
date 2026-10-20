@@ -9,6 +9,12 @@ and build only compile_commands, avoiding build-only module mapper files.
     python scripts/lint.py             # everything
     python scripts/lint.py src/game    # a subtree or single file
     python scripts/lint.py --shard-index 0 --shard-count 4  # first CI shard
+    python scripts/lint.py --changed origin/main   # only what a change touches
+
+--changed lints the translation units affected by the files that differ from a git
+revision (or a range such as a..b): the changed sources themselves and every unit
+that includes a changed header, directly or through other headers. The pre-push hook
+under scripts/hooks runs it over what is being pushed; nothing affected passes.
 """
 
 import argparse
@@ -58,6 +64,61 @@ def translation_units(filters: list[str]) -> list[pathlib.Path]:
     return sorted(set(units))
 
 
+INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
+SOURCE_SUFFIXES = (".cpp", ".cc", ".cxx", ".h", ".hpp", ".inl")
+
+
+def changed_files(revision: str, git: str = "git") -> list[pathlib.Path]:
+    """Sources that differ from `revision` (a commit, or a range such as a..b), including
+    the working tree when a single revision is given."""
+    completed = subprocess.run([git, "diff", "--name-only", "--diff-filter=ACMR", revision],
+                               cwd=ROOT, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        sys.exit(f"git diff {revision} failed: {completed.stderr.strip()}")
+    return [(ROOT / line.strip()).resolve() for line in completed.stdout.splitlines()
+            if line.strip().endswith(SOURCE_SUFFIXES)]
+
+
+def include_name(path: pathlib.Path) -> str:
+    """How a header is written in an #include: its path under src or tests."""
+    relative = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else path.as_posix()
+    for prefix in ("src/", "tests/"):
+        if relative.startswith(prefix):
+            return relative[len(prefix):]
+    return relative
+
+
+def affected_units(roster: list[pathlib.Path], changed: list[pathlib.Path],
+                   headers: list[pathlib.Path]) -> list[pathlib.Path]:
+    """The roster units to lint for `changed`: changed units themselves, plus every unit
+    that includes a changed header, following headers that include headers."""
+    includes_of = {}
+    for path in [*headers, *roster]:
+        try:
+            includes_of[path] = set(INCLUDE.findall(path.read_text(encoding="utf-8",
+                                                                   errors="replace")))
+        except OSError:
+            includes_of[path] = set()
+    header_set = set(headers)
+    affected_names = {include_name(path) for path in changed if path in header_set}
+    grown = True
+    while grown:
+        grown = False
+        for header in headers:
+            name = include_name(header)
+            if name not in affected_names and includes_of[header] & affected_names:
+                affected_names.add(name)
+                grown = True
+    changed_set = set(changed)
+    return sorted(unit for unit in roster
+                  if unit in changed_set or includes_of[unit] & affected_names)
+
+
+def header_roster() -> list[pathlib.Path]:
+    return sorted(path.resolve() for folder in ("src", "tests")
+                  for path in (ROOT / folder).rglob("*") if path.suffix in (".h", ".hpp", ".inl"))
+
+
 def select_shard(units: list[pathlib.Path], index: int, count: int) -> list[pathlib.Path]:
     """Partition the complete sorted roster, without depending on machine paths or hashes."""
     if count < 1 or not 0 <= index < count:
@@ -98,6 +159,8 @@ def main(argv=None) -> int:
                         help="maximum concurrent clang-tidy processes")
     parser.add_argument("--cache-dir", type=pathlib.Path,
                         help="reuse clean results after hashing clang dependencies (GCC-style commands)")
+    parser.add_argument("--changed", metavar="REVISION",
+                        help="lint only the units affected by the sources that differ from REVISION")
     args = parser.parse_args(argv)
     if args.jobs < 1:
         parser.error("--jobs must be positive")
@@ -109,6 +172,11 @@ def main(argv=None) -> int:
     roster = translation_units(args.paths)
     if not roster:
         parser.error("no translation units found; check the paths and compilation database")
+    if args.changed:
+        roster = affected_units(roster, changed_files(args.changed), header_roster())
+        if not roster:
+            print(f"No translation units are affected by the changes since {args.changed}.")
+            return 0
     units = select_shard(roster, args.shard_index, args.shard_count)
     started = time.monotonic()
     cache = None
