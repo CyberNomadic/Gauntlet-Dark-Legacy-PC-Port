@@ -110,22 +110,22 @@ void ChallengeHud::draw(Canvas& canvas, const Look& look) const {
 }
 
 void ChallengeHud::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.falling = m_falling.clock();
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_falling = m_falling.clock();
 }
 
 bool ChallengeHud::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding;
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding;
 }
 
 bool ChallengeHud::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_falling.restoreClock(saved.falling);
+    m_sim = saved.m_state;
+    m_falling.restoreClock(saved.m_falling);
     return true;
 }
 
@@ -134,8 +134,8 @@ bool ChallengeHud::appendDigest(NativeStateDigest& digest, const LocalSnapshot* 
     digest.resource(m_frame);
     digest.resource(m_sand);
     m_falling.appendBindingDigest(digest);
-    digest.fields<1>(saved ? saved->state : m_sim);
-    digest.fields<3>(saved ? saved->falling : m_falling.clock());
+    digest.fields<1>(saved ? saved->m_state : m_sim);
+    digest.fields<3>(saved ? saved->m_falling : m_falling.clock());
     return digest.good();
 }
 

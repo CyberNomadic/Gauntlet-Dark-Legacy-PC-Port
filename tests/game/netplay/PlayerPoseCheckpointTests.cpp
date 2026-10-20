@@ -182,7 +182,7 @@ TEST_CASE("transition pose wire rejects truncation forged counts flags and nonfi
     REQUIRE(state);
     const auto encoded = PlayerPoseCheckpoint::encode(*state);
     REQUIRE(encoded);
-    const auto bytes = *encoded;
+    const auto& bytes = *encoded;
     CHECK(bytes.size() == PlayerPoseCheckpoint::kHeaderBytes + state->current.tree.size() +
                               tree.nodes.size() * (PlayerPoseCheckpoint::kNodeBytes + 5));
     for (usize size = 0; size < bytes.size(); ++size) {
@@ -330,7 +330,7 @@ TEST_CASE("native class and Sumner costume poses survive wire correction and rep
             glm::translate(glm::rotate(Mat4{1}, 0.43f, Vec3{0, 1, 0}), Vec3{2.1f, 1.7f, -4.2f});
         CHECK(figure->rootAttachment(placement, replay.pose()) ==
               figure->rootAttachment(placement));
-        for (const auto suffix : {"HEAD", "L_HAND", "R_HAND"}) {
+        for (const auto* const suffix : {"HEAD", "L_HAND", "R_HAND"}) {
             CHECK(figure->attachment(placement, suffix, replay.pose()) ==
                   figure->attachment(placement, suffix));
         }

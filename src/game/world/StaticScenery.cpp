@@ -25,7 +25,7 @@ bool StaticScenery::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 bool StaticScenery::registerNativeResources(NativeStateResources& resources) const {
@@ -38,25 +38,25 @@ bool StaticScenery::registerNativeResources(NativeStateResources& resources) con
 }
 
 void StaticScenery::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool StaticScenery::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool StaticScenery::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool StaticScenery::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -140,7 +140,7 @@ void StaticScenery::update(f32 seconds) {
 
 std::vector<Obstacle> StaticScenery::obstacles() const {
     std::vector<Obstacle> result;
-    for (auto& prop : m_sim.props) {
+    for (const auto& prop : m_sim.props) {
         if (prop.shown && prop.box.solid) {
             result.push_back(prop.box);
         }
@@ -151,7 +151,7 @@ std::vector<Obstacle> StaticScenery::obstacles() const {
 void StaticScenery::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                          const CameraFrame* camera, TreeModel::Pass pass,
                          f32 presentationAlpha) const {
-    for (auto& prop : m_sim.props) {
+    for (const auto& prop : m_sim.props) {
         if (prop.shown) {
             prop.figure.draw(device, clip, lighting, 1, 1, camera, pass, presentationAlpha);
         }

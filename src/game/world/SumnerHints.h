@@ -71,9 +71,9 @@ class SumnerHints {
 public:
     class LocalSnapshot {
         friend class SumnerHints;
-        Simulation state;
-        const SumnerHints* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        const SumnerHints* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

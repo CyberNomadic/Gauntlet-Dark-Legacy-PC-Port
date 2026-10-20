@@ -171,6 +171,7 @@ public:
     PlayerMissiles& operator=(const PlayerMissiles&) = delete;
     PlayerMissiles(PlayerMissiles&&) = delete;
     PlayerMissiles& operator=(PlayerMissiles&&) = delete;
+    ~PlayerMissiles() = default;
     static constexpr u32 kPlainModifiers =
         powerup::kRapidFire | powerup::kThreeWayShot | powerup::kFiveWayShot;
     static constexpr u32 kReplayModifiers = kPlainModifiers | 0xFU;
@@ -486,11 +487,11 @@ public:
     class LocalSnapshot {
     private:
         friend class PlayerMissiles;
-        Simulation state;
-        EffectTrees::LocalSnapshot visuals;
-        RenderDevice* device = nullptr;
-        std::weak_ptr<const u8> owner;
-        u64 epoch = 0;
+        Simulation m_state;
+        EffectTrees::LocalSnapshot m_visuals;
+        RenderDevice* m_device = nullptr;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
     };
     /** Native value history. Borrowed specs, archives and attack tables must
      * remain alive for this stage epoch. */

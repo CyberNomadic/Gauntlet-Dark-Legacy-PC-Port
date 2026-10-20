@@ -61,6 +61,7 @@ public:
     Chests& operator=(const Chests&) = delete;
     Chests(Chests&&) noexcept = default;
     Chests& operator=(Chests&&) noexcept = default;
+    ~Chests() = default;
     static constexpr s32 kBarrel = 43; ///< container subtypes
     static constexpr s32 kTrappedChest = 44;
     static constexpr s32 kChest = 46;
@@ -175,9 +176,9 @@ private:
 public:
     class LocalSnapshot {
         friend class Chests;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const Chests* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const Chests* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

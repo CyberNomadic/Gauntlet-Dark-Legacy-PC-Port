@@ -122,8 +122,8 @@ bool FallingSceneryCheckpoint::canCommit(const Prepared& prepared) const {
     for (usize index = 0; index < data.state.pieces.size(); ++index) {
         const auto& saved = data.state.pieces[index];
         const auto& live = m_owner.m_pieces[index];
-        if (!data.layout || !saved.source.matches(*data.layout) ||
-            saved.source.index != live.motion.instance || !data.models ||
+        if ((data.layout == nullptr) || !saved.source.matches(*data.layout) ||
+            saved.source.index != live.motion.instance || (data.models == nullptr) ||
             !data.models->find(saved.source.instance.name) || !live.model.bound() ||
             saved.subtype != live.subtype || saved.gravityStep != live.profile.gravityStep ||
             saved.spin != live.profile.spin || saved.radius != live.radius ||

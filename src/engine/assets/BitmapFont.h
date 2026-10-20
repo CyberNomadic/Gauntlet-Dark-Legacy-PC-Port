@@ -37,7 +37,7 @@ public:
     const BitmapGlyph* glyph(u8 code) const;
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const BitmapFont&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const BitmapFont& /*font*/);
     void index();
 
     s32 m_height = 0;
@@ -47,6 +47,6 @@ private:
     mutable std::optional<CanonicalDigestSink::Digest> m_nativeContent;
 };
 
-void visitNativeState(NativeStateDigest&, const BitmapFont&);
+void visitNativeState(NativeStateDigest& /*digest*/, const BitmapFont& /*font*/);
 
 } // namespace gdl

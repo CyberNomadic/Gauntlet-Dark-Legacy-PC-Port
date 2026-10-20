@@ -305,38 +305,39 @@ std::optional<Vec3> PartyHud::helpAnchor(std::span<const PlayerRuntime> players)
     return m_sim.helpPosition;
 }
 void PartyHud::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    m_hourglass.saveLocal(saved.hourglass);
-    saved.sharedTotal = m_sharedStopTimeTotal;
-    saved.total = stopTimeTotal();
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    m_hourglass.saveLocal(saved.m_hourglass);
+    saved.m_sharedTotal = m_sharedStopTimeTotal;
+    saved.m_total = stopTimeTotal();
 }
 
 bool PartyHud::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding &&
-           saved.sharedTotal == m_sharedStopTimeTotal && m_hourglass.canRestoreLocal(saved.hourglass);
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding &&
+           saved.m_sharedTotal == m_sharedStopTimeTotal &&
+           m_hourglass.canRestoreLocal(saved.m_hourglass);
 }
 
 bool PartyHud::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_hourglass.restoreLocal(saved.hourglass);
-    stopTimeTotal() = saved.total;
+    m_sim = saved.m_state;
+    m_hourglass.restoreLocal(saved.m_hourglass);
+    stopTimeTotal() = saved.m_total;
     return true;
 }
 
 bool PartyHud::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
     digest.string("party-hud-native-v1");
-    digest.fields<6>(saved ? saved->state : m_sim);
+    digest.fields<6>(saved ? saved->m_state : m_sim);
     digest.flag(m_sharedStopTimeTotal != nullptr);
-    digest.real(saved ? saved->total : stopTimeTotal());
+    digest.real(saved ? saved->m_total : stopTimeTotal());
     // Status-box art, local control labels and font GPU caches only draw. Help's
     // actual borrowed text content is visited with its admission state below.
     if (saved) {
-        m_hourglass.appendLocalDigest(digest, saved->hourglass);
+        m_hourglass.appendLocalDigest(digest, saved->m_hourglass);
     } else {
         m_hourglass.appendNativeDigest(digest);
     }

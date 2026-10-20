@@ -26,14 +26,14 @@ using namespace gdl::game;
 constexpr f64 kStep = 1.0 / 60.0;
 
 PlayScene::Inputs journal(u32 tick, bool wrong = false) {
-    constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+    constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
     PlayScene::Inputs inputs;
     for (u8 seat = 0; seat < PlayScene::kPlayerCount; ++seat) {
         PlayInput input;
         if (tick > 360) {
             const u32 elapsed = tick - 361;
             const u32 phase = (elapsed + seat * 30) % 240;
-            const Vec2 direction = directions[(elapsed / 120 + seat + (wrong ? 2 : 0)) % 4];
+            const Vec2 direction = kDirections[(elapsed / 120 + seat + (wrong ? 2 : 0)) % 4];
             input.move = {direction, 1};
             input.aimDirection = Vec3{direction.x, 0, -direction.y};
             input.attack = wrong ? phase >= 90 : phase < 90;
@@ -134,11 +134,11 @@ struct Observation {
     std::optional<SimulationObservation::Digest> native;
     std::vector<PlayerView> players;
     WorldCamera camera;
-    bool spawning;
-    bool leaving;
-    bool secret;
-    TransitionScreen::Phase transition;
-    f32 stopTimeTotal;
+    bool spawning{};
+    bool leaving{};
+    bool secret{};
+    TransitionScreen::Phase transition{};
+    f32 stopTimeTotal{};
     std::vector<PlayerSimulation> nativePlayers;
     const LevelOpponents* opponents = nullptr;
     LevelOpponents::LocalSnapshot nativeOpponents;
@@ -369,7 +369,7 @@ TEST_CASE("native scene history crosses speculative defeat but rejects foreign a
     fixture->open();
     CHECK_FALSE(fixture->scene.canRestoreLocal(saved));
     CHECK_FALSE(fixture->scene.restoreLocal(saved));
-    PlayScene closed;
+    const PlayScene closed;
     CHECK_FALSE(closed.saveLocal(empty));
 }
 
@@ -392,7 +392,10 @@ TEST_CASE("native scenes measure a warmed sixteen slot ring with two and four pa
     // These measurements are not assertions against shared-machine timing and
     // do not imply a shipping rollback budget on every player's hardware.
     constexpr usize kSamples = 128;
-    std::array<f64, kSamples> saves{}, restores{}, updates{}, replay8{};
+    std::array<f64, kSamples> saves{};
+    std::array<f64, kSamples> restores{};
+    std::array<f64, kSamples> updates{};
+    std::array<f64, kSamples> replay8{};
     using Clock = std::chrono::steady_clock;
     const auto micros = [](Clock::time_point from, Clock::time_point to) {
         return std::chrono::duration<f64, std::micro>(to - from).count();
@@ -481,11 +484,11 @@ TEST_CASE("native snapshot profiling separates warmed owners in active Ghost Tow
         std::array<EffectTrees::LocalSnapshot, kSlots> effects;
     };
     auto history = std::make_unique<History>();
-    constexpr std::array<std::string_view, 11> names{
+    constexpr std::array<std::string_view, 11> kNames{
         "whole-scene",     "world",        "world-particles", "world-geometry",
         "world-collision", "placed-items", "opponents",       "chests",
         "barrels",         "traps",        "effects"};
-    std::array<std::array<f64, kSamples>, names.size()> timings{};
+    std::array<std::array<f64, kSamples>, kNames.size()> timings{};
     using Clock = std::chrono::steady_clock;
     usize maxParticles = 0;
     for (usize sample = 0; sample < kSlots + kSamples; ++sample) {
@@ -510,8 +513,8 @@ TEST_CASE("native snapshot profiling separates warmed owners in active Ghost Tow
         // Rotate the first owner rather than always giving the whole scene cold
         // caches and its children already-warm caches. Nested owner timings
         // overlap: they locate copy cost, and must not be summed as a tick cost.
-        for (usize offset = 0; offset < names.size(); ++offset) {
-            const usize component = (sample + offset) % names.size();
+        for (usize offset = 0; offset < kNames.size(); ++offset) {
+            const usize component = (sample + offset) % kNames.size();
             const auto start = Clock::now();
             const bool captured = capture(component);
             const auto end = Clock::now();
@@ -529,10 +532,10 @@ TEST_CASE("native snapshot profiling separates warmed owners in active Ghost Tow
     std::cout << "native snapshot owners level=G2 seats=4 samples=" << kSamples
               << " emitters=" << fixture->world.particles().size()
               << " max-particles=" << maxParticles << " nested-timings=overlap\n";
-    for (usize component = 0; component < names.size(); ++component) {
+    for (usize component = 0; component < kNames.size(); ++component) {
         auto& times = timings[component];
         std::ranges::sort(times);
-        std::cout << names[component] << " copy-us p50=" << times[kSamples / 2]
+        std::cout << kNames[component] << " copy-us p50=" << times[kSamples / 2]
                   << " p95=" << times[kSamples * 95 / 100] << " max=" << times.back() << '\n';
     }
 }

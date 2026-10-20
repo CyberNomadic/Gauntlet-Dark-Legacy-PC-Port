@@ -25,7 +25,7 @@ namespace gdl::game {
  * walls by the level's collision.
  */
 class PlayerActor {
-    friend void visitNativeState(NativeStateDigest&, const PlayerActor&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const PlayerActor& /*value*/);
 
 public:
     bool operator==(const PlayerActor&) const = default;

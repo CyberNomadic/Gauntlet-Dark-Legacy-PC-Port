@@ -50,7 +50,8 @@ bool ExitPortalsCheckpoint::State::valid() const {
     if (!std::ranges::all_of(waiting, [](s32 party) { return party >= 0 && party < 4; })) {
         return false;
     }
-    usize triangles = 0, particles = 0;
+    usize triangles = 0;
+    usize particles = 0;
     std::optional<usize> previous;
     for (const auto& portal : portals) {
         const auto& source = portal.source;

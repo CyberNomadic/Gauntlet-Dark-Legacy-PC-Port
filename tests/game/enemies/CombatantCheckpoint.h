@@ -56,7 +56,7 @@ public:
         std::vector<CombatBlow> blows;
         std::vector<CombatLoss> losses;
         bool valid() const;
-        bool operator==(const Events&) const;
+        bool operator==(const Events& /*other*/) const;
     };
     struct PlayerDamage {
         f32 dealt = 0, received = 0, dealtTime = 0, receivedTime = 0;
@@ -157,7 +157,7 @@ public:
         std::vector<Attachment> attachments;
         std::array<Vec2, 2> gaze{};
         bool valid() const;
-        bool operator==(const Actor&) const;
+        bool operator==(const Actor& /*other*/) const;
     };
     struct Part {
         Actor actor;
@@ -172,7 +172,7 @@ public:
         u32 arenaRandom = 1;
         Events events;
         bool valid() const;
-        bool operator==(const Part&) const;
+        bool operator==(const Part& /*other*/) const;
     };
     struct State {
         // Root first; native child actors are direct children, in authored order.
@@ -207,28 +207,29 @@ public:
      * without dereferencing potentially expired frame-local storage. They are not
      * retained continuation data and must be rebound by the next native update. */
     std::optional<State> checkpoint() const;
-    std::optional<Prepared> prepareRestore(const State&) const;
-    bool canCommit(const Prepared&) const;
+    std::optional<Prepared> prepareRestore(const State& /*state*/) const;
+    bool canCommit(const Prepared& /*value*/) const;
     /** Allocation/callback-free. Native updates may occur between preparation and
      * rewind; clear/rebind or any successful restore invalidates sibling tokens. */
-    bool commitRestore(Prepared&&);
-    bool restore(const State&);
-    std::optional<Events> captureEvents(std::span<const CombatCue>, std::span<const CombatGrab>,
-                                        std::span<const CombatSpew>, std::span<const CombatShot>,
-                                        std::span<const CombatArenaActivation>,
-                                        std::span<const CombatTrample>,
-                                        std::span<const CombatantRam>, std::span<const CombatPush>,
-                                        std::span<const CombatBlow>,
-                                        std::span<const CombatLoss>) const;
-    std::optional<std::vector<CombatShot>> restoreShots(std::span<const Shot>) const;
+    bool commitRestore(Prepared&& /*value*/);
+    bool restore(const State& /*state*/);
+    std::optional<Events>
+        captureEvents(std::span<const CombatCue> /*cues*/, std::span<const CombatGrab> /*grabs*/,
+                      std::span<const CombatSpew> /*spews*/, std::span<const CombatShot> /*shots*/,
+                      std::span<const CombatArenaActivation> /*arena*/,
+                      std::span<const CombatTrample> /*tramples*/,
+                      std::span<const CombatantRam> /*rams*/,
+                      std::span<const CombatPush> /*pushes*/, std::span<const CombatBlow> /*blows*/,
+                      std::span<const CombatLoss> /*losses*/) const;
+    std::optional<std::vector<CombatShot>> restoreShots(std::span<const Shot> /*shots*/) const;
 
 private:
     bool bound() const;
     const Resource* resource(u32 id) const;
-    std::optional<Definition> definition(const CritterData*) const;
-    const CritterData* definition(Definition) const;
-    std::optional<Part> capturePart(const Combatant&, s32 parent) const;
-    bool preparePart(Combatant& staged, const Part&, Combatant* parent) const;
+    std::optional<Definition> definition(const CritterData* /*data*/) const;
+    const CritterData* definition(Definition /*value*/) const;
+    std::optional<Part> capturePart(const Combatant& /*owner*/, s32 parent) const;
+    bool preparePart(Combatant& staged, const Part& /*part*/, Combatant* parent) const;
     static void install(Combatant& destination, Combatant& staged);
     Combatant& m_owner;
     std::vector<Resource> m_resources;

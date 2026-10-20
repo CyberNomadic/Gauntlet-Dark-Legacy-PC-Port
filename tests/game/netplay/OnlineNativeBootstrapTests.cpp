@@ -22,7 +22,8 @@ using Delivery = PacketTransport::Delivery;
 using SendResult = PacketTransport::SendResult;
 
 std::string peerId(u8 peer) {
-    return std::string(32, static_cast<char>('a' + peer - 1));
+    std::string name(32, static_cast<char>('a' + peer - 1));
+    return name;
 }
 OnlineSession::NativeIdentity identity() {
     return {"same-executable-sha256", "windows-x64-msvc-14.44-fp-precise-v1", std::string(64, 'a'),
@@ -81,7 +82,7 @@ struct Network {
         bool configurePeer(std::string peer, bool host) override {
             return peer == peerId(id) && host == (id == 1);
         }
-        bool authorizePeers(std::span<const std::string>) override { return true; }
+        bool authorizePeers(std::span<const std::string> /*peers*/) override { return true; }
         std::optional<Connection> connectPeer(const std::string& peer) override;
         std::optional<std::string> peer(Connection connection) const override {
             const auto found = peers.find(connection);
@@ -90,8 +91,10 @@ struct Network {
         SendResult send(Connection connection, std::span<const u8> bytes,
                         Delivery delivery) override;
         std::vector<Event> poll() override { return std::exchange(incoming, {}); }
-        std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-        void close(Connection) override {}
+        std::optional<Statistics> statistics(Connection /*connection*/) const override {
+            return std::nullopt;
+        }
+        void close(Connection /*connection*/) override {}
     };
     struct Client {
         Service service;
@@ -108,7 +111,8 @@ struct Network {
     explicit Network(std::vector<u8> counts = {1, 1}) {
         room = {"ABCDEFGH", peerId(1), 1, false, {}, {4, 2, 2}};
         u8 seat = 0;
-        for (u8 peer = 1; peer <= counts.size(); ++peer) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 peer = 1; peer <= static_cast<u8>(counts.size()); ++peer) {
             RoomMember member{peerId(peer), {}, false};
             for (u8 local = 0; local < counts[peer - 1]; ++local) {
                 member.seats.push_back(seat++);
@@ -125,6 +129,8 @@ struct Network {
         }
         pump();
     }
+    Network(const Network&) = delete;
+    Network& operator=(const Network&) = delete;
     ~Network() {
         for (auto& client : clients) {
             if (client) {
@@ -142,7 +148,8 @@ struct Network {
         }
     }
     void configure(OnlineSession::NativeRules rules = {}) {
-        for (u8 peer = 1; peer <= room.members.size(); ++peer) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 peer = 1; peer <= static_cast<u8>(room.members.size()); ++peer) {
             REQUIRE(clients[peer]->session.configureNative(
                 identity(), peer == 1 ? std::optional{rules} : std::nullopt));
         }
@@ -157,14 +164,14 @@ struct Network {
         REQUIRE(clients[1]->session.start());
         pump();
     }
-    std::unique_ptr<NativePlaySetup> setup(u8 peer, PlayOptions options = {}) {
+    std::unique_ptr<NativePlaySetup> setup(u8 peer, const PlayOptions& options = {}) {
         auto& session = clients[peer]->session;
         const auto* contract = session.nativeContract();
         REQUIRE(contract);
         REQUIRE(session.party());
         GameConfig local;
         local.text.language = contract->identity.language;
-        local.camera.horizontalFovDegrees = 45.0f + 10.0f * peer;
+        local.camera.horizontalFovDegrees = 45.0f + 10.0f * static_cast<f32>(peer);
         local.timing.gameplayFrameRate = 30U * peer;
         local.combat.autoMelee = !contract->rules.autoMelee;
         local.combat.autoActivateItems = !contract->rules.autoActivateItems;
@@ -187,7 +194,8 @@ struct Network {
     }
     void complete() {
         for (u32 round = 0; round < 12; ++round) {
-            for (u8 peer = 1; peer <= room.members.size(); ++peer) {
+            // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+            for (u8 peer = 1; peer <= static_cast<u8>(room.members.size()); ++peer) {
                 if (clients[peer]->session.nativeSetupPending()) {
                     confirm(peer);
                 }
@@ -269,7 +277,8 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
     }
     network->complete();
     const auto expected = network->setups[1]->digest();
-    for (u8 peer = 1; peer <= counts.size(); ++peer) {
+    // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+    for (u8 peer = 1; peer <= static_cast<u8>(counts.size()); ++peer) {
         CHECK(network->setups[peer]->digest() == expected);
         CHECK(network->setups[peer]->config().camera.horizontalFovDegrees == 45.0f + 10.0f * peer);
         CHECK(network->setups[peer]->config().combat.autoMelee);

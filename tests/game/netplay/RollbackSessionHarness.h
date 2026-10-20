@@ -75,7 +75,9 @@ public:
             return std::nullopt;
         }
         const auto frame = m_inputs.advance();
-        if (frame) m_lastFrame = frame;
+        if (frame) {
+            m_lastFrame = frame;
+        }
         return frame;
     }
     bool complete() {
@@ -88,10 +90,14 @@ public:
      * Tests explicitly submit every peer and pump agreement before marking a
      * boundary. Native gameplay tests use the driver's complete-state digest. */
     bool submitBoundaryDigest(game::MatchSession::Time now = game::MatchSession::Clock::now()) {
-        if (!complete()) return false;
+        if (!complete()) {
+            return false;
+        }
         game::NativeAgreement::Digest digest{};
         const u64 tick = m_inputs.tick() - 1;
-        for (u32 byte = 0; byte < 8; ++byte) digest[byte] = static_cast<u8>(tick >> (byte * 8));
+        for (u32 byte = 0; byte < 8; ++byte) {
+            digest[byte] = static_cast<u8>(tick >> (byte * 8));
+        }
         return m_session->observeNativeTerminal(m_epoch, tick, digest, now);
     }
     bool sampleReady() const { return running() && m_inputs.sampleReady(); }
@@ -103,7 +109,7 @@ public:
 
 private:
     bool running() const {
-        return m_session && m_session->context().epoch == m_epoch &&
+        return (m_session != nullptr) && m_session->context().epoch == m_epoch &&
                m_session->phase() == game::MatchSession::Phase::Running;
     }
     game::MatchSession* m_session = nullptr;

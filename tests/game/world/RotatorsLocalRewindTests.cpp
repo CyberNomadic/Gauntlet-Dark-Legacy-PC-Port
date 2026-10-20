@@ -161,12 +161,14 @@ TEST_CASE("native invisible turntable rewind preserves contact and delayed corre
     ItemArchive items;
     REQUIRE(layout.load(root / (std::string{"LEVELS/LEVEL"} + name)));
     REQUIRE(items.load(root / (std::string{"ITEMS/LEVEL"} + name[0])));
-    Rotators reference, predicted;
+    Rotators reference;
+    Rotators predicted;
     reference.bind(layout);
     predicted.bind(layout);
     reference.bindFigures(device, layout, AssetScope(items));
     predicted.bindFigures(device, layout, AssetScope(items));
-    WorldScene referenceScene, predictedScene;
+    WorldScene referenceScene;
+    WorldScene predictedScene;
     const auto uploads = device.texturesCreated;
     std::vector<TriggerVisitor> pads;
     for (usize index = 0; index < reference.size(); ++index) {
@@ -186,7 +188,8 @@ TEST_CASE("native invisible turntable rewind preserves contact and delayed corre
         }
         return owner.update(1.0f / 60, visitors, scene);
     };
-    Rotators::LocalSnapshot saved, observed;
+    Rotators::LocalSnapshot saved;
+    Rotators::LocalSnapshot observed;
     std::array<Rotators::LocalSnapshot, 8> expected;
     s32 tick = 0;
     for (s32 window = 0; window < 136; ++window) {
@@ -230,7 +233,9 @@ TEST_CASE("native invisible turntable rewind preserves contact and delayed corre
 TEST_CASE("native rotator equality retains pad activation before its first angular step",
           "[rotators-local-rewind]") {
     Fixture fixture("rotators-local-hidden-values");
-    Rotators::LocalSnapshot before, after, restored;
+    Rotators::LocalSnapshot before;
+    Rotators::LocalSnapshot after;
+    Rotators::LocalSnapshot restored;
     fixture.rotators.saveLocal(before);
     const auto angle = fixture.rotators.rotator(1).turned;
     const auto position = fixture.rotators.rotator(1).spot;
@@ -255,7 +260,8 @@ TEST_CASE("native rotator histories are scoped to their owner and bound stage",
     CHECK_FALSE(first.rotators.equalLocal(saved, saved));
     first.rotators.saveLocal(saved);
     CHECK(first.rotators.equalLocal(saved, saved));
-    Rotators::LocalSnapshot otherBefore, otherAfter;
+    Rotators::LocalSnapshot otherBefore;
+    Rotators::LocalSnapshot otherAfter;
     other.rotators.saveLocal(otherBefore);
     CHECK_FALSE(other.rotators.restoreLocal(saved));
     CHECK_FALSE(other.rotators.equalLocal(saved, saved));

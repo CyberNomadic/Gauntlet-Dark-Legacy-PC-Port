@@ -340,7 +340,7 @@ bool PlacedItemsCheckpoint::bindResources(RenderDevice& device) {
         identity.placements = m_owner.m_layout->itemInstances();
     }
     for (auto* archive : m_owner.m_archives) {
-        identity.archives.push_back(archive && archive->loaded());
+        identity.archives.push_back((archive != nullptr) && archive->loaded());
     }
     for (const auto& motion : m_owner.m_motions) {
         identity.textures.push_back(motion.animator.checkpoint());
@@ -397,6 +397,7 @@ bool PlacedItemsCheckpoint::bindResources(RenderDevice& device) {
             auto* archive = catalog->archives[archiveIndex];
             const auto tree =
                 archive && archive->loaded() ? archive->trees.find(resourceName) : std::nullopt;
+            // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
             if (tree && &archive->trees.tree(*tree) == effect.figure) {
                 break;
             }
@@ -450,12 +451,11 @@ bool PlacedItemsCheckpoint::ready() const {
     }
     for (usize i = 0; i < m_catalog->archives.size(); ++i) {
         const auto* archive = m_catalog->archives[i];
-        if ((archive && archive->loaded()) != m_catalog->identity.archives[i]) {
+        if (((archive != nullptr) && archive->loaded()) != m_catalog->identity.archives[i]) {
             return false;
         }
     }
-    for (usize i = 0; i < m_catalog->figures.size(); ++i) {
-        const auto& item = m_catalog->figures[i];
+    for (const auto& item : m_catalog->figures) {
         const auto found = item.archive->trees.find(item.name);
         if (!found || &item.archive->trees.tree(*found) != item.figure) {
             return false;
@@ -477,7 +477,7 @@ bool PlacedItemsCheckpoint::placementValid(const PlacedItems::Item& item) const 
         !scalar(item.strength) || !scalar(item.noGrabSeconds) || item.noGrabSeconds < 0) {
         return false;
     }
-    return !item.floor || (m_owner.m_collision && item.floor->object >= 0 &&
+    return !item.floor || ((m_owner.m_collision != nullptr) && item.floor->object >= 0 &&
                            item.floor->object <= 65535 && matrix(item.floor->local) &&
                            m_owner.m_collision->objectTransform(item.floor->object).has_value());
 }
@@ -778,7 +778,7 @@ PlacedItemsCheckpoint::prepareRestore(const State& state) const {
             return std::nullopt;
         }
         if (saved.floor) {
-            if (!m_owner.m_collision ||
+            if ((m_owner.m_collision == nullptr) ||
                 !m_owner.m_collision->objectTransform(saved.floor->object)) {
                 return std::nullopt;
             }
@@ -889,13 +889,11 @@ bool PlacedItemsCheckpoint::canCommit(const Prepared& prepared) const {
         data.generation == std::numeric_limits<u64>::max()) {
         return false;
     }
-    for (const auto& item : data.state.items) {
-        if (item.floor &&
-            (!m_owner.m_collision || !m_owner.m_collision->objectTransform(item.floor->object))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(data.state.items, [&](const auto& item) {
+        return !item.floor.has_value() ||
+               ((m_owner.m_collision != nullptr) &&
+                m_owner.m_collision->objectTransform(item.floor->object).has_value());
+    });
 }
 bool PlacedItemsCheckpoint::commitRestore(Prepared&& prepared) {
     if (!canCommit(prepared)) {

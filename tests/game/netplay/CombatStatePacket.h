@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
@@ -32,14 +33,14 @@ public:
 
     static constexpr u32 kVersion = 7;
     static constexpr usize kHeaderBytes = 16;
-    static constexpr usize kMaxBytes = 512 * 1024;
+    static constexpr usize kMaxBytes = static_cast<const usize>(512 * 1024);
     /** Shared budgets for these explicit fields. Complete participant leaves
      * retain their own bounded codec and also count toward kMaxBytes. */
     static constexpr usize kMaxRecords = 8192;
     static constexpr usize kMaxEffects = 512;
     static constexpr usize kMaxBanks = 256;
     static constexpr usize kMaxString = 4096;
-    static constexpr usize kMaxStringBytes = 32 * 1024;
+    static constexpr usize kMaxStringBytes = static_cast<const usize>(32 * 1024);
 
     /** All fields are encoded, or the whole supplement is refused. These bounds
      * are transport limits, not changes to native pool capacities. */

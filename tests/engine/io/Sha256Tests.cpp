@@ -79,7 +79,8 @@ TEST_CASE("SHA256 automatic and portable backends agree for fragmented blocks", 
         byte = static_cast<u8>(random >> 24);
     }
     for (const usize size : {usize{0}, usize{31}, usize{257}, usize{4093}, bytes.size()}) {
-        Sha256 automatic, portable(Sha256::Backend::Portable);
+        Sha256 automatic;
+        Sha256 portable(Sha256::Backend::Portable);
         portable.update(std::span<const u8>{bytes}.first(size));
         for (usize offset = 0; offset < size;) {
             const usize length = std::min(size - offset, usize{1} + bytes[offset]);

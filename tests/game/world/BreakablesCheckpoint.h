@@ -36,7 +36,7 @@ public:
         ItemFigureCheckpoint::State figure;
         Obstacle box;
         Support support;
-        bool operator==(const Barrel&) const;
+        bool operator==(const Barrel& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxBarrels = 4096;
@@ -50,7 +50,7 @@ public:
         bool collision = false;
         bool layout = false;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
     };
     class Prepared {
     public:

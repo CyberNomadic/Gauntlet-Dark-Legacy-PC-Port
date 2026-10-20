@@ -56,7 +56,7 @@ TEST_CASE("full effect pool restores native identities tails shared clocks and d
     REQUIRE(saved->effects.size() == 2);
     REQUIRE(saved->effects[0].state.retiring);
     REQUIRE(saved->effects[0].state.particles.field.entries.size() == 1);
-    REQUIRE(saved->effects[0].state.particles.field.entries[0].emitter.particles.size() > 0);
+    REQUIRE(!saved->effects[0].state.particles.field.entries[0].emitter.particles.empty());
     const auto uploads = fixture.device.texturesCreated;
     auto prepared = replay.prepareRestorePool(*saved, fixture.resources);
     REQUIRE(prepared);
@@ -68,7 +68,7 @@ TEST_CASE("full effect pool restores native identities tails shared clocks and d
         CAPTURE(tick, seconds);
         native.capturePresentation();
         replay.capturePresentation();
-        const auto position = Vec3{0.1f * tick, 2, 3};
+        const auto position = Vec3{0.1f * static_cast<f32>(tick), 2, 3};
         native.moveTo(second, position);
         replay.moveTo(second, position);
         native.update(seconds);
@@ -119,6 +119,8 @@ TEST_CASE("effect pool preparation rejects malformed state and has exact single 
         case 8: bad.banks[0].clock.remainder = 1; break;
         case 9: bad.nextId = bad.effects[0].id; break;
         case 10: bad.effects[0].provenance = EffectTrees::Provenance{4, 1, 0, 0}; break;
+        default:
+            break;
         }
         CHECK_FALSE(pool.prepareRestorePool(bad, fixture.resources));
         CHECK(pool.checkpointPool(fixture.resources) == saved);
@@ -150,7 +152,8 @@ TEST_CASE("direct pool capture preserves ordered sparse identities and complete 
           "[effect-pool-checkpoint][checkpoint-capture-validation]") {
     const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
     test::ProjectileCheckpointFixture fixture;
-    EffectTrees native, replay;
+    EffectTrees native;
+    EffectTrees replay;
     std::array<u32, 48> ids{};
     for (usize index = 0; index < ids.size(); ++index) {
         EffectTrees::Setting setting;
@@ -218,6 +221,7 @@ TEST_CASE("direct effect capture still rejects malformed live state and mismatch
     const auto before = pool.checkpointPool(fixture.resources);
     REQUIRE(before);
     REQUIRE(before->valid());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& live = const_cast<EffectTrees::Effect&>(pool.effect(0));
     const auto lived = std::exchange(live.lived, std::numeric_limits<f32>::quiet_NaN());
     const auto individual = pool.checkpoint(id);
@@ -361,8 +365,10 @@ TEST_CASE("effect pool chains restore native morph timing particle birth and pre
     const f32 seconds = GENERATE(1.0f / 30, 1.0f / 60);
     const bool timedMorph = GENERATE(false, true);
     CAPTURE(seconds, timedMorph);
-    MorphFixture host, guest;
-    EffectTrees native, replay;
+    MorphFixture host;
+    MorphFixture guest;
+    EffectTrees native;
+    EffectTrees replay;
     EffectTrees::Setting setting;
     setting.seconds = 3;
     setting.then = "LOOP";
@@ -393,7 +399,8 @@ TEST_CASE("effect pool chains restore native morph timing particle birth and pre
     REQUIRE(replay.effect(0).morphPrototype != nullptr);
     CHECK(replay.checkpointPool(guest.resources) == baseline);
     compareMorphDraws(native, replay, guest.device);
-    bool crossedMorph = false, emittedAfterMorph = false;
+    bool crossedMorph = false;
+    bool emittedAfterMorph = false;
     for (s32 tick = 0; tick < 35; ++tick) {
         CAPTURE(tick);
         native.capturePresentation();
@@ -445,8 +452,10 @@ TEST_CASE("effect pool chains restore native morph timing particle birth and pre
 TEST_CASE("effect pool morph catalogs reject missing future resources and forged previous trees "
           "atomically",
           "[effect-pool-checkpoint][effect-pool-morph]") {
-    MorphFixture fixture, other;
-    EffectTrees native, replay;
+    MorphFixture fixture;
+    MorphFixture other;
+    EffectTrees native;
+    EffectTrees replay;
     EffectTrees::Setting setting;
     setting.persistent = true;
     setting.then = "LOOP";
@@ -478,6 +487,8 @@ TEST_CASE("effect pool morph catalogs reject missing future resources and forged
             resources[1].lenders = future.lenders;
             break;
         case 4: future.particles.step(1.0f / 30, Mat4{1}, future.pose.matrices()); break;
+        default:
+            break;
         }
         resources[1].prototype = &future;
         CHECK_FALSE(replay.prepareRestorePool(invalid, resources));
@@ -512,6 +523,8 @@ TEST_CASE("effect pool morph catalogs reject missing future resources and forged
         case 5:
             previous.lenders.push_back(&other.archive.textures);
             resources[0].lenders = previous.lenders;
+            break;
+        default:
             break;
         }
         resources[0].prototype = &previous;

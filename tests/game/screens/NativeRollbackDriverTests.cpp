@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <iostream>
 #include <memory>
 
@@ -99,7 +100,8 @@ struct Fixture {
     std::vector<InputCommand> commands(u8 peer, u64 tick,
                                        const SessionInputs::Frame& frame = {}) const {
         std::vector<InputCommand> result;
-        for (u8 seat = 0; seat < match.owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(match.owners.size()); ++seat) {
             if (match.owners[seat] == peer) {
                 result.push_back(
                     SessionInputs::command(frame[seat], kEpoch, tick, match.grants[seat], seat));
@@ -159,13 +161,17 @@ TEST_CASE("rollback hashes the corrected saved frame only after every seat confi
     PlayScene::LocalSnapshot predictedThirty;
     std::optional<SimulationObservation::Digest> predictedHash;
     SessionInputs::Frame thirtieth;
-    if (mismatched) thirtieth[3].move = {{1, 0}, 1};
+    if (mismatched) {
+        thirtieth[3].move = {{1, 0}, 1};
+    }
     for (u64 tick = 1; tick <= 37; ++tick) {
         const auto remote = tick == 30 ? thirtieth : SessionInputs::Frame{};
         for (auto* fixture : {reference.get(), delayed.get()}) {
             fixture->remote(2, tick);
             fixture->remote(3, tick);
-            if (fixture == reference.get() || tick != 30) fixture->remote(4, tick, remote);
+            if (fixture == reference.get() || tick != 30) {
+                fixture->remote(4, tick, remote);
+            }
             fixture->progress(tick);
             REQUIRE(fixture->driver.sample({}));
             const auto result = fixture->driver.advance();
@@ -254,6 +260,7 @@ TEST_CASE("native rollback binds a frozen loaded scene and refuses stale resourc
     wrong.grants[2] = 0;
     CHECK_FALSE(driver.bind(fixture->scene, wrong, 1));
     CHECK_FALSE(driver.bind(fixture->scene, fixture->match, 3));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& profile = const_cast<PlayerActor*>(fixture->scene.actor(0))->save();
     profile.name = "TOO-LONG";
     CHECK_FALSE(driver.bind(fixture->scene, fixture->match, 1));
@@ -362,7 +369,7 @@ TEST_CASE("shipping-order sampling admits the captured tick immediately after co
     REQUIRE(driver.bind(fixture->scene, fixture->match, 1,
                         NativeRollbackDriver::AudioMode::Required));
     usize physicalAudio = 0;
-    SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
+    const SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     fixture->predict(4);
 
     SessionInputs::Frame remote;
@@ -436,7 +443,7 @@ TEST_CASE("local pause clears only its seat's unsampled controls without rewriti
     CHECK(driver.clearPendingInput(0)); // A pause need not have a queued press.
     CHECK(driver.clearPendingInput(2));
     usize physicalAudio = 0;
-    SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
+    const SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     fixture->predict(RollbackInputs::kPredictionTicks);
     fixture->progress(9);
     SessionInputs::Frame admitted;
@@ -463,7 +470,9 @@ TEST_CASE("local pause clears only its seat's unsampled controls without rewriti
     CHECK(InputPacket::encode(driver.redundantInputs()) == before);
     CHECK(driver.sampleTick() == 10);
 
-    for (u64 tick = 1; tick <= 11; ++tick) fixture->remote(2, tick);
+    for (u64 tick = 1; tick <= 11; ++tick) {
+        fixture->remote(2, tick);
+    }
     REQUIRE(driver.advance(false).status == Status::Held);
     CHECK(driver.sampleTick() == 10); // Confirmation alone does not admit captures.
     const auto ninth = driver.advance();
@@ -513,8 +522,9 @@ TEST_CASE("native rollback replaces an earlier terminal without fabricating post
     auto& scene = fixture->scene;
     auto& driver = fixture->driver;
     usize physicalAudio = 0;
-    SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
+    const SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     if (audio) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& owner = const_cast<PlayerRuntime&>(scene.participants()[0]);
         owner.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kStopTime, 0,
                                                            20);
@@ -522,13 +532,17 @@ TEST_CASE("native rollback replaces an earlier terminal without fabricating post
     }
     // Isolate the real answerTowerPrompts boundary. Only its real input handler
     // mutates departed; other players remain standing so Wait can remove a Quit.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& dead = const_cast<PlayerRuntime&>(scene.participants()[1]);
     dead.life = PlayerLife::InTower;
     dead.towerPrompt = true;
     dead.actor.save().progress().health = 1;
-    PlayScene::LocalSnapshot initial, expectedQuit, expectedWait;
+    PlayScene::LocalSnapshot initial;
+    PlayScene::LocalSnapshot expectedQuit;
+    PlayScene::LocalSnapshot expectedWait;
     REQUIRE(scene.saveLocal(initial));
-    SessionInputs::Frame quit, wait;
+    SessionInputs::Frame quit;
+    SessionInputs::Frame wait;
     quit[1].menu.back = true;
     wait[1].menu.select = true;
     for (u64 tick = 1; tick <= 3; ++tick) {
@@ -683,6 +697,7 @@ TEST_CASE("terminal agreement hashes the exact confirmed final frame on and off 
     auto fixture = std::make_unique<Fixture>(MatchOwners{1, 2, 3, 4});
     auto& scene = fixture->scene;
     auto& driver = fixture->driver;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& dead = const_cast<PlayerRuntime&>(scene.participants()[1]);
     dead.life = PlayerLife::InTower;
     dead.towerPrompt = true;
@@ -693,7 +708,9 @@ TEST_CASE("terminal agreement hashes the exact confirmed final frame on and off 
         remote[1].menu.back = tick == terminalTick;
         fixture->remote(2, tick, remote);
         fixture->remote(3, tick);
-        if (tick != terminalTick) fixture->remote(4, tick);
+        if (tick != terminalTick) {
+            fixture->remote(4, tick);
+        }
         fixture->progress(tick);
         REQUIRE(driver.sample({}));
         const auto result = driver.advance();
@@ -750,7 +767,7 @@ TEST_CASE("native rollback requires a matching audio boundary and fails closed i
     CHECK_FALSE(driver.bind(scene, wrong, 1, Mode::Required));
     REQUIRE(driver.bind(scene, fixture->match, 1, Mode::Required));
     usize physicalAudio = 0;
-    SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
+    const SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     REQUIRE(driver.sample({}));
     const auto first = driver.advance();
     REQUIRE(first.status == Status::Advanced);
@@ -821,7 +838,9 @@ TEST_CASE("native rollback restores accumulated all-seat arrival skip votes with
     REQUIRE(driver.advance().status == Status::Advanced);
     CHECK(driver.arrivalVotes() == std::array<bool, 4>{true, false, false, false});
     CHECK(scene.startCamera().phase() == StartCamera::Phase::Hold);
-    SessionInputs::Frame second, third, fourth;
+    SessionInputs::Frame second;
+    SessionInputs::Frame third;
+    SessionInputs::Frame fourth;
     second[1].menu.select = third[2].menu.select = fourth[3].menu.select = true;
     fixture->remote(2, 1, second);
     fixture->remote(3, 2, third);
@@ -858,15 +877,15 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
 
     const auto inputAt = [&](u64 tick) {
         SessionInputs::Frame inputs;
-        constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+        constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
         for (u8 seat = 0; seat < seats; ++seat) {
             if (tick <= 360) {
                 continue;
             }
             auto& input = inputs[seat];
             const u64 elapsed = tick - 361;
-            const u64 phase = (elapsed + seat * 30) % 240;
-            const auto direction = directions[(elapsed / 120 + seat) % 4];
+            const u64 phase = (elapsed + static_cast<u64>(seat * 30)) % 240;
+            const auto direction = kDirections[(elapsed / 120 + seat) % 4];
             input.move = {direction, 1};
             input.aimDirection = Vec3{direction.x, 0, -direction.y};
             input.attack = phase < 90;
@@ -886,7 +905,7 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
         return inputs;
     };
     usize physicalAudio = 0;
-    SoundPlayer::Capture capture(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
+    const SoundPlayer::Capture capture(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     const auto publish = [&](const NativeRollbackDriver::Result& result, usize elapsedTicks) {
         REQUIRE(result.status != Status::Failed);
         REQUIRE(result.audio);
@@ -894,7 +913,7 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
             REQUIRE(scene.dispatchOutput(action));
         }
         scene.dispatchRecordedAudio(*result.audio);
-        scene.serviceRecordedAudio(static_cast<f32>(elapsedTicks * kStep));
+        scene.serviceRecordedAudio(static_cast<f32>(static_cast<f64>(elapsedTicks) * kStep));
         // Consume the mix without opening a physical audio device. Presentation
         // service and mixing are outside the measured replay call.
         std::array<f32, 1600> samples{};
@@ -938,7 +957,8 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
     usize finiteCues = 0;
     for (usize sample = 0; sample < kSamples; ++sample) {
         const u64 first = driver.nextTick();
-        PlayScene::LocalSnapshot base, expectedControl;
+        PlayScene::LocalSnapshot base;
+        PlayScene::LocalSnapshot expectedControl;
         REQUIRE(scene.saveLocal(base));
         std::array<PlayScene::RecordedStep, 8> expected;
         const auto physicalBefore = physicalAudio;
@@ -956,11 +976,14 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
         for (const auto& player : scene.participants()) {
             players.push_back(player.simulation());
         }
-        LevelOpponents::LocalSnapshot expectedOpponents, actualOpponents;
+        LevelOpponents::LocalSnapshot expectedOpponents;
+        LevelOpponents::LocalSnapshot actualOpponents;
         REQUIRE(scene.opponents().saveLocal(expectedOpponents));
-        LevelFixtures::LocalSnapshot expectedFixtures, actualFixtures;
+        LevelFixtures::LocalSnapshot expectedFixtures;
+        LevelFixtures::LocalSnapshot actualFixtures;
         scene.fixtures().saveLocal(expectedFixtures);
-        LevelWorld::LocalSnapshot expectedWorld, actualWorld;
+        LevelWorld::LocalSnapshot expectedWorld;
+        LevelWorld::LocalSnapshot actualWorld;
         REQUIRE(scene.world() != nullptr);
         scene.world()->saveLocal(expectedWorld);
         REQUIRE(scene.restoreLocal(base));

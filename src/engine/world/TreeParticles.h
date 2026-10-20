@@ -49,7 +49,7 @@ public:
     const ParticleField& field() const { return m_field; }
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const TreeParticles&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const TreeParticles& /*state*/);
     ParticleField m_field;
     std::vector<Binding> m_nodes; ///< emitter index -> posed tree node and texture slot
 };

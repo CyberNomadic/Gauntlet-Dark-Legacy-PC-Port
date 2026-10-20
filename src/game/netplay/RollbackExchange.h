@@ -92,7 +92,7 @@ private:
     };
     bool occupied(u8 peer) const;
     Admission validate(const Message& message, History& incoming) const;
-    void commit(const Message& message, History incoming, std::optional<Progress> progress);
+    void commit(const Message& message, const History& incoming, std::optional<Progress> progress);
     std::optional<u64> now();
     void trim();
     bool fail(Failure reason);

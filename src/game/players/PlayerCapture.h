@@ -14,7 +14,7 @@ namespace gdl::game {
 /** External-node parenting and the following throw. Neither accepts walking input.
  * The held matrix is owned here, never a pointer into the captor's animation tree. */
 class PlayerCapture {
-    friend void visitNativeState(NativeStateDigest&, const PlayerCapture&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const PlayerCapture& /*value*/);
 
 public:
     bool operator==(const PlayerCapture&) const = default;

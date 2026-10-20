@@ -49,6 +49,7 @@ std::string StringTable::digest() const {
     };
     const auto text = [&](std::string_view value) {
         word(value.size());
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         hash.update({reinterpret_cast<const u8*>(value.data()), value.size()});
     };
     text("gdl-effective-string-table-v1");

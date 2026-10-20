@@ -31,7 +31,7 @@ struct Fixture {
     PlayScene scene;
 
     explicit Fixture(std::string_view name = "G1", s32 players = 1,
-                     std::optional<CharacterSave> initial = std::nullopt) {
+                     const std::optional<CharacterSave>& initial = std::nullopt) {
         REQUIRE(catalog.load(root));
         const auto level = catalog.byName(name);
         REQUIRE(level);
@@ -46,6 +46,7 @@ struct Fixture {
         save.progress().health = 2000;
         REQUIRE(CharacterProfile::capture(save));
         std::vector<PartyMember> party;
+        party.reserve(static_cast<usize>(players));
         for (s32 player = 0; player < players; ++player) {
             party.push_back({player, save});
         }
@@ -97,6 +98,7 @@ TEST_CASE("native watchdog observes boss generators without a restore-domain cer
 TEST_CASE("native watchdog covers stored player cooldowns and inactive saved classes",
           "[native-agreement-scene][native-state-digest][assets]") {
     auto fixture = std::make_unique<Fixture>();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& player = const_cast<PlayerRuntime&>(fixture->scene.participants().front());
     const PlayerSimulation saved = player.simulation();
     const auto before = fixture->digest();
@@ -113,8 +115,9 @@ TEST_CASE("native watchdog covers stored player cooldowns and inactive saved cla
 TEST_CASE("native watchdog rejects unknown missile resources instead of omitting them",
           "[native-agreement-scene][assets]") {
     auto fixture = std::make_unique<Fixture>();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
-    TreeModel firstArt;
+    const TreeModel firstArt;
     const auto before = fixture->digest();
     missiles.launch(EnemyMissileKind::arrow(), {0, 10, 0}, {0, 10, 30}, 1, &firstArt, 0);
     REQUIRE(missiles.count() == 1);
@@ -122,6 +125,7 @@ TEST_CASE("native watchdog rejects unknown missile resources instead of omitting
     CHECK_FALSE(fixture->scene.nativeAgreementDigest());
     // A legitimate art-free native flight is still hashable. Unregistered
     // non-null resources cannot be silently collapsed into that state.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<EnemyMissile&>(missiles.missile(0)).model = nullptr;
     const auto launched = fixture->digest();
     CHECK(launched != before);
@@ -138,6 +142,7 @@ TEST_CASE("native watchdog rejects unknown missile resources instead of omitting
 TEST_CASE("native watchdog compares full blast parameters with unchanged flight and burst counts",
           "[native-agreement-scene][native-state-digest][assets]") {
     auto fixture = std::make_unique<Fixture>();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
     EnemyMissiles::LocalSnapshot empty;
     missiles.saveLocal(empty);
@@ -156,6 +161,7 @@ TEST_CASE("native watchdog includes trigger inputs waiting for their next native
     const auto before = fixture->digest();
     REQUIRE(fixture->world.triggers().size() > 0);
     // Change only the queued contact bit, not any public geometry/camera result.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& trigger = const_cast<LevelTrigger&>(fixture->world.triggers().trigger(0));
     trigger.shot = !trigger.shot;
     CHECK(fixture->digest() != before);
@@ -164,6 +170,7 @@ TEST_CASE("native watchdog includes trigger inputs waiting for their next native
 TEST_CASE("native coordinator digest matches its saved values and rewinds pending rewards",
           "[native-agreement-scene][native-state-digest][local-rewind][assets]") {
     auto fixture = std::make_unique<Fixture>();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& opponents = const_cast<LevelOpponents&>(fixture->scene.opponents());
     LevelOpponents::LocalSnapshot saved;
     REQUIRE(opponents.saveLocal(saved));
@@ -190,6 +197,7 @@ TEST_CASE("native coordinator digest matches its saved values and rewinds pendin
 TEST_CASE("native watchdog walks the entire pending placement roster beyond wire limits",
           "[native-agreement-scene][assets]") {
     auto fixture = std::make_unique<Fixture>();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& placements = const_cast<PlacedEnemies&>(fixture->scene.placedEnemies());
     PlacedEnemies::Placement placement;
     placement.kind = kGruntKind;
@@ -245,6 +253,7 @@ TEST_CASE("first native watchdog after promotion registers the original retained
 
     // Keep a genuine class effect alive across the native costume replacement.
     // The first figure is retained by ownership, but has no promotion-cache entry.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& effects = const_cast<EffectTrees&>(scene.effects());
     EffectTrees::Setting setting;
     setting.persistent = true;
@@ -319,9 +328,9 @@ TEST_CASE("native watchdog measures warm registry and actual state hashing in a 
     std::vector<double> samples;
     std::map<std::string_view, std::vector<double>> owners;
     PlayScene::NativeDigestProfile profile;
-    constexpr usize count = 128;
-    samples.reserve(count);
-    for (usize index = 0; index < count; ++index) {
+    constexpr usize kCount = 128;
+    samples.reserve(kCount);
+    for (usize index = 0; index < kCount; ++index) {
         fixture->scene.update(1.0 / 60.0, {});
         const auto began = std::chrono::steady_clock::now();
         const auto result = fixture->scene.nativeAgreementDigest();
@@ -335,13 +344,13 @@ TEST_CASE("native watchdog measures warm registry and actual state hashing in a 
     }
     std::ranges::sort(samples);
     log::info("native-watchdog-us level=G2 players=4 enemies={} generators={} samples={} "
-              "p50={} p95={} max={}", fixture->scene.enemies().targets().size(),
-              fixture->scene.generators().count(), count, samples[count / 2],
-              samples[count * 95 / 100], samples.back());
+              "p50={} p95={} max={}",
+              fixture->scene.enemies().targets().size(), fixture->scene.generators().count(),
+              kCount, samples[kCount / 2], samples[kCount * 95 / 100], samples.back());
     for (auto& [name, timings] : owners) {
-        REQUIRE(timings.size() == count);
+        REQUIRE(timings.size() == kCount);
         std::ranges::sort(timings);
-        log::info("native-watchdog-owner-us owner={} samples={} p50={} p95={} max={}",
-                  name, count, timings[count / 2], timings[count * 95 / 100], timings.back());
+        log::info("native-watchdog-owner-us owner={} samples={} p50={} p95={} max={}", name, kCount,
+                  timings[kCount / 2], timings[kCount * 95 / 100], timings.back());
     }
 }

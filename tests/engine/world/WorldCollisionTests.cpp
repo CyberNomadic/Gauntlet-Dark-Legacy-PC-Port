@@ -49,7 +49,8 @@ TEST_CASE("native collision geometry fingerprints refresh on every geometry bind
         REQUIRE(digest.checkedFinish());
         return *digest.checkedFinish();
     };
-    WorldCollision first, independent;
+    WorldCollision first;
+    WorldCollision independent;
     first.build(room());
     independent.build(room());
     const auto original = hash(first);
@@ -60,10 +61,18 @@ TEST_CASE("native collision geometry fingerprints refresh on every geometry bind
     for (u32 changed = 0; changed < 4; ++changed) {
         CAPTURE(changed);
         auto triangles = room();
-        if (changed == 0) triangles.back().normal.z = 0.125f;
-        if (changed == 1) triangles.back().vertices.back().y += 0.125f;
-        if (changed == 2) ++triangles.back().object;
-        if (changed == 3) triangles.back().objectFlags ^= 4;
+        if (changed == 0) {
+            triangles.back().normal.z = 0.125f;
+        }
+        if (changed == 1) {
+            triangles.back().vertices.back().y += 0.125f;
+        }
+        if (changed == 2) {
+            ++triangles.back().object;
+        }
+        if (changed == 3) {
+            triangles.back().objectFlags ^= 4;
+        }
         first.build(triangles);
         independent.build(triangles);
         CHECK(hash(first) != original);
@@ -136,7 +145,7 @@ TEST_CASE("repeated moving collision placement preserves first identity and corr
     WorldCollision::LocalSnapshot start;
     collision.saveLocal(start);
     std::array<WorldCollision::LocalSnapshot, 8> reference;
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     for (usize tick = 0; tick < reference.size(); ++tick) {
         place(static_cast<u32>(tick + 1));
         collision.saveLocal(reference[tick]);
@@ -145,7 +154,9 @@ TEST_CASE("repeated moving collision placement preserves first identity and corr
     for (usize distance = 1; distance <= reference.size(); ++distance) {
         CAPTURE(distance);
         REQUIRE(collision.restoreLocal(start));
-        for (usize tick = 0; tick < distance; ++tick) place(static_cast<u32>(100 + tick));
+        for (usize tick = 0; tick < distance; ++tick) {
+            place(static_cast<u32>(100 + tick));
+        }
         REQUIRE(collision.restoreLocal(start));
         place(0);
         contacts(0);
@@ -193,7 +204,8 @@ TEST_CASE("collision placement reuse does not discard signed zero transform chan
     WorldCollision collision;
     collision.build(room());
     collision.setMovingObjects(std::array<s32, 1>{0});
-    WorldCollision::LocalSnapshot positive, negative;
+    WorldCollision::LocalSnapshot positive;
+    WorldCollision::LocalSnapshot negative;
     collision.saveLocal(positive);
     NativeStateDigest before;
     REQUIRE(collision.appendNativeDigest(before));

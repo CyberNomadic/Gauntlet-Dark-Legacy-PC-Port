@@ -77,21 +77,25 @@ bool PlacedItems::appendDigest(NativeStateDigest& digest, const LocalSnapshot* s
     digest.resource(m_layout);
     digest.resource(m_collision);
     digest.wide(m_infos.size());
-    for (const auto& info : m_infos) digest.fields<19>(info);
+    for (const auto& info : m_infos) {
+        digest.fields<19>(info);
+    }
     digest.wide(m_archives.size());
     for (const auto* archive : m_archives) {
         digest.flag(archive != nullptr);
         const bool loaded = archive != nullptr && archive->loaded();
         digest.flag(loaded);
-        if (loaded) digest.resource(archive);
+        if (loaded) {
+            digest.resource(archive);
+        }
     }
-    digest.value(saved ? saved->state : m_sim);
+    digest.value(saved ? saved->m_state : m_sim);
     digest.wide(m_motions.size());
     for (usize i = 0; i < m_motions.size(); ++i) {
         const auto& [archive, animator] = m_motions[i];
         digest.resource(archive);
         animator.appendBindingDigest(digest);
-        digest.fields<3>(saved ? saved->clocks[i] : animator.clock());
+        digest.fields<3>(saved ? saved->m_clocks[i] : animator.clock());
     }
     // m_figures is only a retained immutable binding cache. Its insertion order
     // may differ after abandoned predictions; active resource identities above
@@ -112,52 +116,62 @@ bool PlacedItems::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsh
 
 bool PlacedItems::registerNativeResources(NativeStateResources& resources) const {
     for (const auto* archive : m_archives) {
-        if (archive && archive->loaded() && !resources.refreshArchive(*archive)) return false;
+        if (archive && archive->loaded() && !resources.refreshArchive(*archive)) {
+            return false;
+        }
     }
     for (const auto& binding : m_figures) {
-        if (!binding.archive || !binding.tree || !binding.model) return false;
+        if (!binding.archive || !binding.tree || !binding.model) {
+            return false;
+        }
         bool found = false;
         for (u32 i = 0; i < binding.archive->trees.size(); ++i) {
-            if (&binding.archive->trees.tree(i) != binding.tree) continue;
+            if (&binding.archive->trees.tree(i) != binding.tree) {
+                continue;
+            }
             const std::string key = "placed-item/tree/" + std::to_string(i);
-            if (!resources.registerModel(*binding.model, *binding.archive, key)) return false;
+            if (!resources.registerModel(*binding.model, *binding.archive, key)) {
+                return false;
+            }
             found = true;
             break;
         }
-        if (!found) return false;
+        if (!found) {
+            return false;
+        }
     }
     return resources.good();
 }
 
 void PlacedItems::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.collision = m_collision;
-    saved.binding = m_checkpointBinding;
-    saved.state = m_sim;
-    saved.clocks.resize(m_motions.size());
+    saved.m_owner = this;
+    saved.m_collision = m_collision;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_state = m_sim;
+    saved.m_clocks.resize(m_motions.size());
     for (usize i = 0; i < m_motions.size(); ++i) {
-        saved.clocks[i] = m_motions[i].animator.clock();
+        saved.m_clocks[i] = m_motions[i].animator.clock();
     }
 }
 
 bool PlacedItems::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_checkpointBinding &&
-           saved.collision == m_collision && saved.clocks.size() == m_motions.size();
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+           saved.m_collision == m_collision && saved.m_clocks.size() == m_motions.size();
 }
 
 bool PlacedItems::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
-           left.clocks == right.clocks;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state &&
+           left.m_clocks == right.m_clocks;
 }
 
 bool PlacedItems::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     for (usize i = 0; i < m_motions.size(); ++i) {
-        m_motions[i].animator.restoreClock(saved.clocks[i]);
+        m_motions[i].animator.restoreClock(saved.m_clocks[i]);
     }
     // Geometry bindings are retained by the stage. Frame/texture selection is
     // derived again for each item when drawing; no resource bind occurs here.

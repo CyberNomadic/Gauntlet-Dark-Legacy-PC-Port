@@ -843,7 +843,7 @@ void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRunti
  * than fifty away (fn_80060114); seen, it is gone from the waiting list whether or not the
  * swarm had room for it. With no view, all stand. */
 void LevelOpponents::standPlacements(std::optional<ViewVolume> view, const Vec3& attention) {
-    m_placements.observe(std::move(view), attention);
+    m_placements.observe(view, attention);
     m_placements.activate([this](const Placement& placement) { stand(placement); });
 }
 

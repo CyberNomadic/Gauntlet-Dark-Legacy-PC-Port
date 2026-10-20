@@ -58,7 +58,8 @@ bool LockstepInputs::open(u8 localPeer, u64 epoch, const Owners& owners, const G
     // does not authorize concealment after these explicitly agreed startup ticks.
     for (u64 tick = 1; tick <= delay; ++tick) {
         auto& pending = m_pending[tick];
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
             if (owners[seat] != 0) {
                 InputCommand command;
                 command.epoch = epoch;
@@ -169,6 +170,7 @@ LockstepInputs::Admission LockstepInputs::receive(PacketTransport::Connection co
     if (!m_open || m_failed || connection == 0) {
         return Admission::WrongPeer;
     }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto source = std::ranges::find(m_links, connection);
     if (source == m_links.end()) {
         return Admission::WrongPeer;

@@ -34,7 +34,7 @@ public:
         ItemFigureCheckpoint::State figure;
         Obstacle box;
         Support support;
-        bool operator==(const Trap&) const;
+        bool operator==(const Trap& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxTraps = 4096;

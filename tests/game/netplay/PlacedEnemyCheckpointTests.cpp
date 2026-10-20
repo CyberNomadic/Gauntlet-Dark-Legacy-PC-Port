@@ -104,8 +104,8 @@ TEST_CASE("placed enemy wire refuses malformed fields counts and noncanonical op
     auto encoded = PlacedEnemyCheckpoint::encode(state);
     REQUIRE(encoded);
     auto& bytes = *encoded;
-    constexpr usize row = PlacedEnemyCheckpoint::kHeaderBytes;
-    constexpr usize pending = row + 3 * PlacedEnemyCheckpoint::kPlacementBytes;
+    constexpr usize kRow = PlacedEnemyCheckpoint::kHeaderBytes;
+    constexpr usize kPending = kRow + 3 * PlacedEnemyCheckpoint::kPlacementBytes;
     SECTION("magic") {
         word(bytes, 0, 0);
     }
@@ -125,32 +125,32 @@ TEST_CASE("placed enemy wire refuses malformed fields counts and noncanonical op
         word(bytes, 20, std::bit_cast<u32>(std::numeric_limits<f32>::quiet_NaN()));
     }
     SECTION("unknown spawn flag") {
-        word(bytes, row + 48, 32);
+        word(bytes, kRow + 48, 32);
     }
     SECTION("absent carried value") {
-        word(bytes, row + 80, 1);
+        word(bytes, kRow + 80, 1);
     }
     SECTION("invalid priority") {
-        word(bytes, row + 56, 2);
+        word(bytes, kRow + 56, 2);
     }
     SECTION("invalid algorithm") {
-        word(bytes, row + 12, 32768);
+        word(bytes, kRow + 12, 32768);
     }
     SECTION("negative timer") {
-        word(bytes, row + 52, std::bit_cast<u32>(-1.0f));
+        word(bytes, kRow + 52, std::bit_cast<u32>(-1.0f));
     }
     SECTION("invalid family") {
-        word(bytes, row + 64, kEnemyKindCount);
+        word(bytes, kRow + 64, kEnemyKindCount);
     }
     SECTION("out-of-roster pending index") {
-        word(bytes, pending, 3);
+        word(bytes, kPending, 3);
     }
     SECTION("duplicate pending index") {
-        word(bytes, pending + 4, 0);
+        word(bytes, kPending + 4, 0);
     }
     SECTION("reordered pending indices") {
-        word(bytes, pending, 2);
-        word(bytes, pending + 4, 0);
+        word(bytes, kPending, 2);
+        word(bytes, kPending + 4, 0);
     }
     SECTION("trailing byte") {
         bytes.push_back(0);

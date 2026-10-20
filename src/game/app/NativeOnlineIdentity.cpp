@@ -49,6 +49,7 @@ public:
     }
     void text(std::string_view value) {
         word(value.size());
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         m_hash.update({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     std::string finish() const { return m_hash.hex(); }
@@ -123,7 +124,7 @@ void platform(Digest& digest) {
 std::array<u32, 4> cpu(u32 leaf, u32 subleaf = 0) {
     std::array<u32, 4> result{};
 #if defined(__linux__) && defined(__x86_64__)
-    if (__get_cpuid_count(leaf, subleaf, &result[0], &result[1], &result[2], &result[3]) == 0) {
+    if (__get_cpuid_count(leaf, subleaf, result.data(), &result[1], &result[2], &result[3]) == 0) {
         throw std::runtime_error("native online CPU feature identity is unavailable");
     }
 #else
@@ -200,15 +201,15 @@ void result(Digest& digest, f64 value) {
 }
 
 void corpus(Digest& digest) {
-    PreserveArithmeticStatus restore;
+    const PreserveArithmeticStatus restore;
     digest.text("gdl-native-operation-corpus-v1");
     // Player headings/movement, tree rotations, damping and collision algebra.
     // Include angle boundaries, adjacent unit values and gradual underflow.
-    constexpr u32 singles[] = {0x00000000U, 0x80000000U, 0x00000001U, 0x00800000U, 0x3eaaaaabU,
-                               0xbeaaaaabU, 0x3f7fffffU, 0x3f800000U, 0x3f800001U, 0xbf800001U,
-                               0x3fc90fdaU, 0x3fc90fdbU, 0x3fc90fdcU, 0x40490fdaU, 0x40490fdbU,
-                               0xc0490fdbU, 0x40c90fdbU, 0x447a0001U, 0xc47a0001U};
-    for (const auto bits : singles) {
+    constexpr u32 kSingles[] = {0x00000000U, 0x80000000U, 0x00000001U, 0x00800000U, 0x3eaaaaabU,
+                                0xbeaaaaabU, 0x3f7fffffU, 0x3f800000U, 0x3f800001U, 0xbf800001U,
+                                0x3fc90fdaU, 0x3fc90fdbU, 0x3fc90fdcU, 0x40490fdaU, 0x40490fdbU,
+                                0xc0490fdbU, 0x40c90fdbU, 0x447a0001U, 0xc47a0001U};
+    for (const auto bits : kSingles) {
         const f32 value = operand(bits);
         const f32 positive = std::abs(value) + operand(u32{0x3e000000});
         result(digest, std::sin(value));
@@ -227,12 +228,12 @@ void corpus(Digest& digest) {
         result(digest, value / operand(u32{0x40400000}));
         result(digest, (value + positive) - positive);
     }
-    constexpr u64 doubles[] = {
+    constexpr u64 kDoubles[] = {
         0x0000000000000000ULL, 0x8000000000000000ULL, 0x0000000000000001ULL, 0x0010000000000000ULL,
         0x3fd5555555555555ULL, 0xbfd5555555555555ULL, 0x3fefffffffffffffULL, 0x3ff0000000000000ULL,
         0x3ff0000000000001ULL, 0xbff0000000000001ULL, 0x3ff921fb54442d17ULL, 0x3ff921fb54442d18ULL,
         0x3ff921fb54442d19ULL, 0x400921fb54442d18ULL, 0xc00921fb54442d18ULL, 0x408f400000000001ULL};
-    for (const auto bits : doubles) {
+    for (const auto bits : kDoubles) {
         const f64 value = operand(bits);
         const f64 positive = std::abs(value) + operand(u64{0x3fc0000000000000ULL});
         result(digest, std::sin(value));
@@ -357,6 +358,7 @@ std::string fileDigest(const std::filesystem::path& path) {
     std::array<u8, 65536> bytes{};
     u64 total = 0;
     while (file) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         file.read(reinterpret_cast<char*>(bytes.data()),
                   static_cast<std::streamsize>(bytes.size()));
         const auto count = file.gcount();
@@ -519,13 +521,13 @@ void runtimeFiles(Digest& digest) {
     digest.text("executable");
     // The proc link still identifies the running inode after a file replacement.
     digest.text(fileDigest("/proc/self/exe"));
-    constexpr std::string_view symbols[] = {
+    constexpr auto kSymbols = std::to_array<std::string_view>({
         "sinf", "cosf", "tanf",   "asinf",  "acosf",  "atan2f", "sqrtf",       "powf", "expf",
         "logf", "sin",  "cos",    "tan",    "asin",   "acos",   "atan2",       "sqrt", "pow",
         "exp",  "log",  "strtof", "strtod", "malloc", "memcpy", "__cxa_throw",
-    };
+    });
     std::map<std::filesystem::path, std::string> hashes;
-    for (const auto symbol : symbols) {
+    for (const auto symbol : kSymbols) {
         void* address = dlsym(RTLD_DEFAULT, symbol.data());
         Dl_info information{};
         if (address == nullptr || dladdr(address, &information) == 0 ||

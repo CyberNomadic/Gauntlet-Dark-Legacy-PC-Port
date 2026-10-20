@@ -18,7 +18,7 @@ public:
         Vec3 origin{0}, spot{0};
         f32 radius = 0, height = 0;
         std::optional<ItemFigureCheckpoint::State> pad;
-        bool operator==(const Rotator&) const;
+        bool operator==(const Rotator& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxRotators = Rotators::kMaxCursors;
@@ -47,14 +47,15 @@ public:
     RotatorsCheckpoint& operator=(const RotatorsCheckpoint&) = delete;
     RotatorsCheckpoint(RotatorsCheckpoint&&) = delete;
     RotatorsCheckpoint& operator=(RotatorsCheckpoint&&) = delete;
+    ~RotatorsCheckpoint() = default;
 
     std::optional<State> checkpoint() const;
-    std::optional<Prepared> prepareRestore(const State&) const;
-    bool canCommit(const Prepared&) const;
+    std::optional<Prepared> prepareRestore(const State& /*state*/) const;
+    bool canCommit(const Prepared& /*prepared*/) const;
     /** No allocation, resource binding, geometry changes or cue dispatch. Plans
      * survive native updates, but not a rebind or another successful restore. */
-    bool commitRestore(Prepared&&);
-    bool restore(const State&);
+    bool commitRestore(Prepared&& /*prepared*/);
+    bool restore(const State& /*state*/);
 
 private:
     Rotators& m_owner;

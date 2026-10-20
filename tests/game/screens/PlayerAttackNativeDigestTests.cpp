@@ -29,7 +29,8 @@ template <class T> auto savedHash(const T& owner, const typename T::LocalSnapsho
 
 TEST_CASE("native move strike digest preserves hidden launch delay and next identity",
           "[native-digest][player-attack-native-digest]") {
-    MoveStrikes a, b;
+    MoveStrikes a;
+    MoveStrikes b;
     CHECK(nativeHash(a) == nativeHash(b));
     MoveStrike row;
     row.type = 2;
@@ -43,13 +44,14 @@ TEST_CASE("native move strike digest preserves hidden launch delay and next iden
     MoveStrikes::LocalSnapshot base;
     a.saveLocal(base);
     const auto original = nativeHash(a);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<MoveStrikes::Strike&>(a.strike(0)).launchIn = 0.125f;
     CHECK(nativeHash(a) != original);
     CHECK(savedHash(a, base) == original);
     REQUIRE(a.restoreLocal(base));
     CHECK(nativeHash(a) == original);
     a.stop(id);
-    MoveStrikes empty;
+    const MoveStrikes empty;
     REQUIRE(a.count() == empty.count());
     CHECK(nativeHash(a) != nativeHash(empty)); // next identity still affects future births
     NativeStateDigest foreign;
@@ -62,8 +64,9 @@ TEST_CASE("native move strike digest preserves hidden launch delay and next iden
 
 TEST_CASE("native player projectile hashes include contact history pending impacts and specs",
           "[native-digest][player-attack-native-digest]") {
-    PlayerMissiles missiles, other;
-    MissileSpec spec{"TEST", "0", 1, 0, 1, false, "SPARKS"};
+    PlayerMissiles missiles;
+    PlayerMissiles other;
+    const MissileSpec spec{"TEST", "0", 1, 0, 1, false, "SPARKS"};
     MissileSpec copy = spec;
     MissileLaunch launch;
     launch.position = {0, 20, 0};
@@ -73,6 +76,7 @@ TEST_CASE("native player projectile hashes include contact history pending impac
     REQUIRE(other.launch(launch));
     const auto initial = nativeHash(missiles);
     CHECK(nativeHash(other) == initial); // specification addresses are not state
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& shot = const_cast<PlayerMissiles::Missile&>(missiles.missile(0));
     const auto original = shot;
     const auto changes = [&](auto change) {
@@ -88,7 +92,7 @@ TEST_CASE("native player projectile hashes include contact history pending impac
     changes([](auto& value) { value.breaksPotions = false; });
     changes([](auto& value) { value.playerHitGap += 0.001f; });
     shot = original;
-    TreeModel unknown;
+    const TreeModel unknown;
     shot.model = &unknown;
     NativeStateDigest unresolved;
     CHECK_FALSE(missiles.appendNativeDigest(unresolved));
@@ -112,7 +116,8 @@ TEST_CASE("native player projectile hashes include contact history pending impac
 
 TEST_CASE("native player projectile values replay all eight correction distances",
           "[native-digest][player-attack-native-digest][local-rewind]") {
-    PlayerMissiles reference, corrected;
+    PlayerMissiles reference;
+    PlayerMissiles corrected;
     MissileLaunch launch;
     launch.spec = &MissileSpec::of(0);
     launch.position = {0, 12, 0};
@@ -122,7 +127,7 @@ TEST_CASE("native player projectile values replay all eight correction distances
     PlayerMissiles::LocalSnapshot base;
     corrected.saveLocal(base);
     const auto initial = nativeHash(corrected);
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     for (auto& frame : expected) {
         reference.update(1.0f / 60, nullptr);
         frame = nativeHash(reference);

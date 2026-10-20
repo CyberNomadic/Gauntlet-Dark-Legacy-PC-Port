@@ -454,13 +454,14 @@ TEST_CASE("texture rewind preserves signed and out of range native start counter
                     auto info = cycle("STONE", 0, source, source >= 0 ? 2 : 4, start, rate);
                     info.flag = keyed ? 0 : TextureAnimationInfo::kFreeRunning;
                     const std::array animations{info};
-                    TextureAnimator reference, replay;
+                    TextureAnimator reference;
+                    TextureAnimator replay;
                     reference.bind(animations, f.textures, f.device);
                     replay.bind(animations, f.textures, f.device);
                     REQUIRE(reference.size() == 1);
                     REQUIRE(replay.size() == 1);
-                    std::array<s32, 48> counters;
-                    std::array<Vec2, 48> offsets;
+                    std::array<s32, 48> counters{};
+                    std::array<Vec2, 48> offsets{};
                     std::array<TextureAnimator::Clock, 48> clocks;
                     for (usize frame = 0; frame < counters.size(); ++frame) {
                         counters[frame] = reference.counter(0);
@@ -508,7 +509,8 @@ TEST_CASE("texture binding fingerprints retain authored values and resolve curre
           "[world][animation][native-immutable-digest][texture-binding-digest]") {
     Fixture first("texture-binding-digest-first");
     Fixture second("texture-binding-digest-second");
-    DigestTextures firstTextures(first), secondTextures(second);
+    DigestTextures firstTextures(first);
+    DigestTextures secondTextures(second);
     std::vector<TextureAnimationInfo> definitions{
         cycle("STONE", 0, 1, 2, 0, 2),
         cycle("TORCHB", 3, TextureAnimationInfo::kByName, 2, 1, 2, "TORCH00"),
@@ -572,7 +574,7 @@ TEST_CASE("texture binding fingerprints retain authored values and resolve curre
     CHECK(bindingDigest(first.animator, firstTextures.resources()) != initial);
 
     first.animator.clear();
-    TextureAnimator empty;
+    const TextureAnimator empty;
     REQUIRE(bindingDigest(first.animator));
     CHECK(bindingDigest(first.animator) == bindingDigest(empty));
     CHECK(bindingDigest(first.animator) != initial);
@@ -595,13 +597,13 @@ TEST_CASE("texture binding cache never substitutes for mutable clocks or counter
     const auto saved = fixture.animator.clock();
     const auto captured = bindingDigest(fixture.animator, textures.resources(), saved);
     REQUIRE(captured);
-    std::array<NativeStateDigest::Digest, 8> expected;
-    for (usize tick = 0; tick < expected.size(); ++tick) {
+    std::array<NativeStateDigest::Digest, 8> expected{};
+    for (auto& tick : expected) {
         fixture.animator.advance(1.0f / 60);
         const auto next =
             bindingDigest(fixture.animator, textures.resources(), fixture.animator.clock());
         REQUIRE(next);
-        expected[tick] = *next;
+        tick = *next;
         CHECK(bindingDigest(fixture.animator, textures.resources()) == immutable);
         CHECK(bindingDigest(fixture.animator, textures.resources(), saved) == captured);
     }

@@ -8,6 +8,7 @@ namespace gdl {
  * This is visitation only: no byte copying, reflection of padding, or restore.
  * Private records use a friend visitor that binds their members in their owner. */
 template <std::size_t Count, class T, class Visitor>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): the visitor is invoked here, not passed on
 void visitNativeFields(const T& state, Visitor&& visitor) {
     static_assert(Count >= 1 && Count <= 64, "Add an explicit decomposition for this record");
     if constexpr (Count == 1) {

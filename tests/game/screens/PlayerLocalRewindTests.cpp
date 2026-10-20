@@ -27,7 +27,7 @@ constexpr f32 kStep = 1.0f / 60.0f;
 constexpr usize kSeats = 4;
 
 struct CompanionObservation {
-    PowerupCompanion::Kind kind;
+    PowerupCompanion::Kind kind{};
     AnimationPlayer::Checkpoint animation;
     TextureAnimator::Clock textures;
     std::optional<TreePose::Checkpoint> pose;
@@ -86,7 +86,7 @@ TEST_CASE("local companion rewind crosses every native kind without replacing it
             return true;
         }));
         const auto before = observeCompanion(companion);
-        const usize distance = static_cast<usize>(tick % 8 + 1);
+        const auto distance = static_cast<usize>(tick % 8 + 1);
         std::array<CompanionObservation, 8> expected;
         for (usize frame = 0; frame < distance; ++frame) {
             step(tick + frame, false);
@@ -134,7 +134,7 @@ TEST_CASE("local companion history restores an unbound state and rejects foreign
     CHECK(device.texturesCreated == uploads);
     PowerupCompanion::LocalSnapshot destroyed;
     {
-        PowerupCompanion temporary;
+        const PowerupCompanion temporary;
         temporary.saveLocal(destroyed);
     }
     CHECK_FALSE(original.restoreLocal(destroyed));
@@ -167,7 +167,7 @@ static_assert(!std::is_copy_constructible_v<PlayerRuntime>);
 PlayerRuntimeCheckpoint::State observeValues(const PlayerRuntime& player) {
     PlayerRuntime probe;
     probe.simulation() = player.simulation();
-    PlayerRuntimeCheckpoint diagnostic{probe, nullptr};
+    const PlayerRuntimeCheckpoint diagnostic{probe, nullptr};
     const auto state = diagnostic.checkpoint();
     REQUIRE(state);
     return *state;
@@ -536,10 +536,10 @@ TEST_CASE("native figure rewind restores Pojo attachments and both companion rel
         for (usize seat = 0; seat < kSeats; ++seat) {
             auto& inventory = party.players[seat].actor.save().progress().inventory;
             // Switch a form every three frames, including a return to the bare costume.
-            constexpr std::array forms{0U, powerup::kPojo, powerup::kPhoenix,
-                                        powerup::kFireBreath, powerup::kLevitation};
-            const auto form = forms[(static_cast<usize>(tick / 3) + seat + (corrected ? 1 : 0)) %
-                                    forms.size()];
+            constexpr std::array kForms{0U, powerup::kPojo, powerup::kPhoenix, powerup::kFireBreath,
+                                        powerup::kLevitation};
+            const auto form =
+                kForms[(static_cast<usize>(tick / 3) + seat + (corrected ? 1 : 0)) % kForms.size()];
             inventory.powerups = {};
             if (form != 0) {
                 inventory.addPowerup(powerup::kSpecial, form, 0, 0.6f);
@@ -709,7 +709,7 @@ TEST_CASE("local action snapshots are reusable but cannot borrow another figure'
     PartyRewind party{true};
     auto& first = *party.players[0].figure;
     auto& other = *party.players[1].figure;
-    PlayerFigure::LocalSnapshot empty;
+    const PlayerFigure::LocalSnapshot empty;
     const auto original = observeAction(first);
     CHECK_FALSE(first.restoreLocal(empty));
     CHECK(observeAction(first) == original);
@@ -724,20 +724,23 @@ TEST_CASE("local action snapshots are reusable but cannot borrow another figure'
         CHECK(observeAction(first) == original);
     }
     auto moved = std::move(saved);
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.restoreLocal(saved));
     REQUIRE(first.restoreLocal(moved));
 }
 
 TEST_CASE("local action state cannot outlive its figure even when its address is reused",
           "[local-rewind][player-local-rewind]") {
-    alignas(PlayerFigure) std::array<std::byte, sizeof(PlayerFigure)> storage;
+    alignas(PlayerFigure) std::array<std::byte, sizeof(PlayerFigure)> storage{};
     const auto destroy = [](PlayerFigure* figure) { std::destroy_at(figure); };
     using Owner = std::unique_ptr<PlayerFigure, decltype(destroy)>;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     Owner figure{std::construct_at(reinterpret_cast<PlayerFigure*>(storage.data())), destroy};
     PlayerFigure::LocalSnapshot saved;
     figure->saveLocal(saved);
     REQUIRE(figure->restoreLocal(saved));
     figure.reset();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     figure.reset(std::construct_at(reinterpret_cast<PlayerFigure*>(storage.data())));
     CHECK_FALSE(figure->restoreLocal(saved));
     PlayerFigure::LocalSnapshot replacement;
@@ -753,12 +756,12 @@ TEST_CASE("measure native four-player value and action copy before scene integra
     ItemArchive weapons;
     REQUIRE(powerups.load(root / "POWERUPS"));
     REQUIRE(weapons.load(root / "WEAPONS"));
-    constexpr std::array forms{powerup::kPojo, powerup::kPhoenix, powerup::kLevitation,
+    constexpr std::array kForms{powerup::kPojo, powerup::kPhoenix, powerup::kLevitation,
                                 powerup::kFireBreath};
     for (usize seat = 0; seat < kSeats; ++seat) {
         auto& player = party.players[seat];
         auto& inventory = player.actor.save().progress().inventory;
-        inventory.addPowerup(powerup::kSpecial, forms[seat], 0, 60);
+        inventory.addPowerup(powerup::kSpecial, kForms[seat], 0, 60);
         player.figure->setCompanionPowerups(party.device, powerups, inventory, &weapons);
         REQUIRE(player.figure->companion().shown());
         REQUIRE(player.figure->familiarTier() > 0);

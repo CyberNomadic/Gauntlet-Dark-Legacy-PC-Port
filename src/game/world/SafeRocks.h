@@ -46,10 +46,10 @@ public:
     /** Native values in the current bound arena; model and texture resources stay put. */
     class LocalSnapshot {
         friend class SafeRocks;
-        std::vector<RockState> rocks;
-        TextureAnimator::Clock textures;
-        std::weak_ptr<const u8> binding;
-        const SafeRocks* owner = nullptr;
+        std::vector<RockState> m_rocks;
+        TextureAnimator::Clock m_textures;
+        std::weak_ptr<const u8> m_binding;
+        const SafeRocks* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

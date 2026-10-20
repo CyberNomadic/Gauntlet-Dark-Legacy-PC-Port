@@ -243,16 +243,13 @@ bool OpponentCombatCheckpoint::supported() const {
         return false;
     }
     const auto& swarm = owner.m_enemies;
-    if (!swarm.m_simulation.deathEvents.empty() || !swarm.m_simulation.deathShots.empty() ||
-        !swarm.m_simulation.tagged.empty() ||
-        std::ranges::any_of(swarm.m_simulation.enemies, [](const auto& enemy) {
-            return enemy.state != Enemies::State::Inactive && !ordinary(enemy.kind);
-        })) {
-        return false;
-    }
     // Pending definitions and statues are value-owned separately. Merely
     // retaining a special placement is not an active special combatant.
-    return true;
+    return swarm.m_simulation.deathEvents.empty() && swarm.m_simulation.deathShots.empty() &&
+           swarm.m_simulation.tagged.empty() &&
+           std::ranges::none_of(swarm.m_simulation.enemies, [](const auto& enemy) {
+               return enemy.state != Enemies::State::Inactive && !ordinary(enemy.kind);
+           });
 }
 
 struct OpponentCombatCheckpoint::Prepared::Data {
@@ -470,10 +467,10 @@ OpponentCombatCheckpoint::prepareRestore(const State& state,
 }
 
 bool OpponentCombatCheckpoint::canCommit(const Prepared& prepared) const {
-    if (!(prepared.m_data && prepared.m_data->owner == this &&
-          prepared.m_data->lifetime == m_lifetime && prepared.m_data->generation == m_generation &&
-          m_generation != std::numeric_limits<u64>::max() &&
-          prepared.m_data->binding == m_owner.m_bindingGeneration && supported())) {
+    if (!prepared.m_data || prepared.m_data->owner != this ||
+        prepared.m_data->lifetime != m_lifetime || prepared.m_data->generation != m_generation ||
+        m_generation == std::numeric_limits<u64>::max() ||
+        prepared.m_data->binding != m_owner.m_bindingGeneration || !supported()) {
         return false;
     }
     const auto& data = *prepared.m_data;

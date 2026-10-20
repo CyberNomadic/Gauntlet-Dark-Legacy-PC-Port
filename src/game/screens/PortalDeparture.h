@@ -25,9 +25,9 @@ class PortalDeparture {
 public:
     class LocalSnapshot {
         friend class PortalDeparture;
-        Simulation state;
-        const PortalDeparture* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        const PortalDeparture* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

@@ -103,6 +103,8 @@ TEST_CASE("particle checkpoint validation rejects corruption atomically", "[part
         case 7: bad.descriptor.rate[0] = std::numeric_limits<f32>::infinity(); break;
         case 8: bad.particles.resize(4097); break;
         case 9: bad.age = std::numeric_limits<u32>::max(); break;
+        default:
+            break;
         }
         CHECK_FALSE(bad.valid());
         CHECK_FALSE(emitter.restore(bad));

@@ -232,7 +232,8 @@ TEST_CASE("native boss meter rewind restores independent easing after wrong heal
         r.definition = lichMeter();
         r.health = r.maxHealth = 1200;
     }
-    BossMeters reference, predicted;
+    BossMeters reference;
+    BossMeters predicted;
     reference.bind(readings, nullptr);
     predicted.bind(readings, nullptr);
     BossMeters::LocalSnapshot saved;
@@ -279,7 +280,8 @@ TEST_CASE("native boss meter rewind restores independent easing after wrong heal
 
 TEST_CASE("native boss meter histories reject foreign layouts and preserve first-health state",
           "[boss-meters-local-rewind][native-equality]") {
-    BossMeter meter, foreign;
+    BossMeter meter;
+    BossMeter foreign;
     REQUIRE(meter.bind(lichMeter(), nullptr));
     REQUIRE(foreign.bind(lichMeter(), nullptr));
     BossMeter::LocalSnapshot saved;
@@ -297,7 +299,8 @@ TEST_CASE("native boss meter histories reject foreign layouts and preserve first
     REQUIRE(meter.bind(lichMeter(), nullptr));
     CHECK_FALSE(meter.equalLocal(saved, saved));
     CHECK_FALSE(meter.restoreLocal(saved));
-    BossMeters many, other;
+    BossMeters many;
+    BossMeters other;
     BossMeters::LocalSnapshot group;
     many.saveLocal(group);
     CHECK(many.equalLocal(group, group));
@@ -313,7 +316,8 @@ TEST_CASE("native boss meter equality detects hidden first-update state and maxi
           "[boss-meters-local-rewind][native-equality]") {
     BossMeter meter;
     REQUIRE(meter.bind(lichMeter(), nullptr));
-    BossMeter::LocalSnapshot before, after;
+    BossMeter::LocalSnapshot before;
+    BossMeter::LocalSnapshot after;
     meter.saveLocal(before);
     const auto look = meter.look();
     meter.update(0, 0, 1, true, false);

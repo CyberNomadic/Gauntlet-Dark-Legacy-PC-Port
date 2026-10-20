@@ -561,7 +561,7 @@ public:
         f32 pendingSeconds = 0;
         f32 shrink = 1;
         bool valid() const;
-        bool operator==(const Checkpoint&) const;
+        bool operator==(const Checkpoint& /*other*/) const;
     };
     std::optional<Checkpoint> checkpoint() const;
     /** Prepared against this owner's loaded resources. No live state is changed
@@ -571,6 +571,8 @@ public:
         Prepared(Prepared&&) noexcept;
         Prepared& operator=(Prepared&&) noexcept;
         ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
 
     private:
         friend class Enemies;
@@ -734,7 +736,7 @@ public:
     /** Complete captured native pool values, not its public presentation. Immutable
      * art is resolved through stage resource identities; draw caches are excluded. */
     bool appendNativeDigest(NativeStateDigest& digest) const;
-    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& source) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     /** Restores values in place, retaining archives and GPU resources. May reuse this
      * snapshot repeatedly; collision/hazard state is owned by the enclosing scene. */
     bool restoreLocal(const LocalSnapshot& source);

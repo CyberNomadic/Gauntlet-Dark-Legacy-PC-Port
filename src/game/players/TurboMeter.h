@@ -26,7 +26,7 @@ struct TurboMeterLook {
  * spend it; it starts each level, and ends each life, empty.
  */
 class TurboMeter {
-    friend void visitNativeState(NativeStateDigest&, const TurboMeter&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const TurboMeter& /*value*/);
 
 public:
     bool operator==(const TurboMeter&) const = default;

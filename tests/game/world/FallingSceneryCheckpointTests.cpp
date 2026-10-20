@@ -129,6 +129,8 @@ TEST_CASE("falling checkpoint rejects malformed motion and stale resource plans"
     case 3: invalid.remainder = FallingPiece::kStep; break;
     case 4: invalid.breakSound = "FOREIGN"; break;
     case 5: invalid.bottom += 1; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.owner.restore(invalid));
     CHECK(fixture.state() == before);
@@ -248,7 +250,9 @@ TEST_CASE("native falling scenery rewinds start cues half-frame motion and retir
 TEST_CASE("native falling equality retains subframe time without a changed piece position",
           "[local-rewind][falling-local-rewind]") {
     Fixture fixture("falling-native-hidden-clock");
-    FallingScenery::LocalSnapshot before, after, restored;
+    FallingScenery::LocalSnapshot before;
+    FallingScenery::LocalSnapshot after;
+    FallingScenery::LocalSnapshot restored;
     fixture.scenery.saveLocal(before);
     const auto position = fixture.scenery.piece(0).motion.position;
     fixture.scenery.update(1.0f / 240);

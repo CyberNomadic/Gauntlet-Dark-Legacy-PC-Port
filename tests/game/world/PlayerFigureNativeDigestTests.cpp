@@ -65,9 +65,9 @@ struct Figure {
         refresh();
     }
 
-    void companion(u32 kind, f32 strength = 60) {
+    void companion(u32 flags, f32 strength = 60) {
         Inventory inventory;
-        inventory.addPowerup(powerup::kSpecial, kind, 0, strength);
+        inventory.addPowerup(powerup::kSpecial, flags, 0, strength);
         inventory.powerups[0].on = true;
         figure->setCompanionPowerups(device, powerups, inventory, &weapons);
     }
@@ -91,7 +91,7 @@ struct Figure {
 
 TEST_CASE("player native digest includes latent animator and glow controls",
           "[native-state-digest][player-figure-native-digest]") {
-    NativeStateResources resources;
+    const NativeStateResources resources;
     PlayerAnimator animator;
     const auto initial = animator;
     const auto baseline = nativeValue(animator, resources);
@@ -149,7 +149,7 @@ TEST_CASE("independent player figures hash native values not render cadence or a
     const auto baseline = first.digest();
     CHECK(first.digest(saved) == baseline);
 
-    NativeStateResources missing;
+    const NativeStateResources missing;
     NativeStateDigest unknown(missing.resources());
     CHECK_FALSE(first.figure->appendNativeDigest(unknown));
     CHECK_FALSE(unknown.checkedFinish());
@@ -264,7 +264,7 @@ TEST_CASE("companion native history retains dormant pose and rejects expired bin
     const auto baseline = nativeValue(companion, resources);
     companion.clear();
     REQUIRE_FALSE(companion.shown());
-    PowerupCompanion neverBound;
+    const PowerupCompanion neverBound;
     CHECK(nativeValue(companion, resources) != nativeValue(neverBound, resources));
     CHECK(savedValue(companion, saved, resources) == baseline);
     REQUIRE(companion.restoreLocal(saved));

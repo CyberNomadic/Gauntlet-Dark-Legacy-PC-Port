@@ -176,7 +176,8 @@ TEST_CASE("root control equality includes fractional clocks priorities and voice
     SECTION("runestone cue latches differ even when the displayed fill matches") {
         std::array<PartyMember, 1> party;
         party[0].save.progress().relics.addShard(9);
-        RuneMeter first, second;
+        RuneMeter first;
+        RuneMeter second;
         first.begin(0, Vec3{0}, Vec3{100, 0, 0}, 7, party);
         second = first;
         REQUIRE(first.update(Vec3{0}, true) == RuneMeter::Cue::Closer);
@@ -186,7 +187,8 @@ TEST_CASE("root control equality includes fractional clocks priorities and voice
         CHECK(nativeHash(first) != nativeHash(second));
     }
     SECTION("level notices retain the player associated with each mark") {
-        LevelWatch first, second;
+        LevelWatch first;
+        LevelWatch second;
         first.observe(0, 10);
         second.observe(1, 10);
         CHECK(nativeHash(first) != nativeHash(second));
@@ -195,9 +197,9 @@ TEST_CASE("root control equality includes fractional clocks priorities and voice
     }
     SECTION("unopened tower gates still retain partial crystal progress") {
         std::array<CharacterSave, 1> party;
-        TowerAccess first{std::span<const CharacterSave>{party}};
+        const TowerAccess first{std::span<const CharacterSave>{party}};
         party[0].progress().crystals[0] = 1;
-        TowerAccess second{std::span<const CharacterSave>{party}};
+        const TowerAccess second{std::span<const CharacterSave>{party}};
         CHECK(nativeHash(first) != nativeHash(second));
     }
 }

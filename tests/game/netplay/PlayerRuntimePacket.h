@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
@@ -15,7 +16,7 @@ class PlayerRuntimePacket {
 public:
     static constexpr u32 kVersion = 2;
     static constexpr usize kHeaderBytes = 16;
-    static constexpr usize kMaxBytes = 512 * 1024;
+    static constexpr usize kMaxBytes = static_cast<const usize>(512 * 1024);
     static constexpr usize kMaxRecords = 4096;
     static constexpr usize kMaxMovies = 256;
     static constexpr usize kMaxString = 4096;

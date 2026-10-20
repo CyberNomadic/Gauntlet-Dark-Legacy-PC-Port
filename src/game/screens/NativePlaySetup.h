@@ -50,6 +50,7 @@ public:
     NativePlaySetup& operator=(const NativePlaySetup&) = delete;
     NativePlaySetup(NativePlaySetup&&) = delete;
     NativePlaySetup& operator=(NativePlaySetup&&) = delete;
+    ~NativePlaySetup() = default;
 
     const GameConfig& config() const { return m_config; }
     const PlayOptions& options() const { return m_options; }

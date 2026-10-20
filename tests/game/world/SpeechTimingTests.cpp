@@ -22,8 +22,8 @@ using Catch::Approx;
 
 TEST_CASE("speech timing uses decoded frames and simulation time, including authored loops",
           "[game][speech-timing][determinism]") {
-    SoundClip first{24000, 2, std::vector<f32>(12000, 0.1f)};
-    SoundClip second{48000, 1, std::vector<f32>(36000, 0.1f)};
+    const SoundClip first{24000, 2, std::vector<f32>(12000, 0.1f)};
+    const SoundClip second{48000, 1, std::vector<f32>(36000, 0.1f)};
     SoundSequence sequence;
     sequence.steps = {{&first, false, false}, {&second, false, false}};
     auto timing = SpeechTiming::of(sequence);
@@ -49,12 +49,14 @@ TEST_CASE("speech timing uses decoded frames and simulation time, including auth
 
 TEST_CASE("voice admission and backlog ignore device progress, absence and external stop",
           "[game][speech-timing][voice-queue][determinism]") {
-    AudioMixer fastMixer(48000), stalledMixer(48000);
-    SoundPlayer fast(fastMixer), stalled(stalledMixer);
+    AudioMixer fastMixer(48000);
+    AudioMixer stalledMixer(48000);
+    SoundPlayer fast(fastMixer);
+    SoundPlayer stalled(stalledMixer);
     std::array<VoiceQueue, 3> queues;
     queues[0].bind(&fast);
     queues[1].bind(&stalled);
-    SoundClip clip{48000, 1, std::vector<f32>(12000, 0.2f)};
+    const SoundClip clip{48000, 1, std::vector<f32>(12000, 0.2f)};
     SoundSequence sequence;
     sequence.steps.push_back({&clip, false, false});
     for (auto& queue : queues) {
@@ -110,7 +112,8 @@ TEST_CASE("timed ceremony bank precedence and chained duration are independent o
                                samples);
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
-    LevelSoundscape audible, silent;
+    LevelSoundscape audible;
+    LevelSoundscape silent;
     audible.open(root, &output, nullptr);
     silent.open(root, nullptr, nullptr);
     SoundSet character;

@@ -64,6 +64,8 @@ TEST_CASE("native camera digest includes every stored camera and smoothing field
     case 11: changed.ringPositions[5].y = 7; break;
     case 12: changed.ringDistances[4] = 7; break;
     case 13: changed.ringIndex = 1; break;
+    default:
+        break;
     }
     CHECK_FALSE(TowerCamera::equalLocal(initial, changed));
     CHECK(savedHash(camera, initial) != savedHash(camera, changed));
@@ -72,7 +74,7 @@ TEST_CASE("native camera digest includes every stored camera and smoothing field
     camera.restoreLocal(initial);
     CHECK(liveHash(camera) == savedHash(camera, initial));
     // Diagnostic owner/generation metadata is not a native camera value.
-    TowerCamera copied = camera;
+    const TowerCamera copied = camera;
     CHECK(liveHash(copied) == liveHash(camera));
 }
 
@@ -92,7 +94,8 @@ TEST_CASE("native camera digest survives corrected turns and independent present
         player.feet = {0, 0, 0};
         player.follow = {0, 3, 0};
     }
-    TowerCamera reference, predicted;
+    TowerCamera reference;
+    TowerCamera predicted;
     reference.reset(party, markers, range, view);
     predicted.reset(party, markers, range, view);
     const auto step = [&](TowerCamera& camera, s32 tick, bool wrong) {
@@ -140,7 +143,8 @@ TEST_CASE("native camera digest survives corrected turns and independent present
 
 TEST_CASE("native meter digest includes hidden fresh state and immutable layout",
           "[native-state-digest][camera-meter-native-digest]") {
-    BossMeter first, second;
+    BossMeter first;
+    BossMeter second;
     REQUIRE(first.bind(meterDefinition(), nullptr));
     REQUIRE(second.bind(meterDefinition(), nullptr));
     CHECK(liveHash(first) == liveHash(second));
@@ -164,6 +168,8 @@ TEST_CASE("native meter digest includes hidden fresh state and immutable layout"
     case 3: definition.leftInset = 45; break;
     case 4: definition.rightInset = 54; break;
     case 5: definition.backed = false; break;
+    default:
+        break;
     }
     REQUIRE(second.bind(definition, nullptr, left));
     CHECK(first.shown() == second.shown());
@@ -185,7 +191,8 @@ TEST_CASE("native multipart meter digest restores every layer after one to eight
         readings[i].definition.backed = i == 0;
         readings[i].health = readings[i].maxHealth = 1200 + static_cast<f32>(i) * 300;
     }
-    BossMeters reference, predicted;
+    BossMeters reference;
+    BossMeters predicted;
     reference.bind(readings, nullptr);
     predicted.bind(readings, nullptr);
     const auto step = [&](BossMeters& meters, s32 tick, bool wrong) {
@@ -227,10 +234,12 @@ TEST_CASE("native multipart meter digest restores every layer after one to eight
 TEST_CASE("native meter texture-bank identities agree across loads without render side effects",
           "[native-state-digest][camera-meter-native-digest][assets]") {
     const auto path = test::assetOrSkip("MONSTERS/LICH/textures.ngc").parent_path();
-    ItemArchive firstArchive, secondArchive;
+    ItemArchive firstArchive;
+    ItemArchive secondArchive;
     REQUIRE(firstArchive.load(path));
     REQUIRE(secondArchive.load(path));
-    BossMeter first, second;
+    BossMeter first;
+    BossMeter second;
     REQUIRE(first.bind(meterDefinition(), &firstArchive.textures));
     REQUIRE(second.bind(meterDefinition(), &secondArchive.textures));
     first.update(0, 3000, 3000, true, false);
@@ -238,7 +247,8 @@ TEST_CASE("native meter texture-bank identities agree across loads without rende
     NativeStateDigest missing;
     CHECK_FALSE(first.appendNativeDigest(missing));
     CHECK_FALSE(missing.checkedFinish());
-    NativeStateResources a, b;
+    NativeStateResources a;
+    NativeStateResources b;
     REQUIRE(a.registerArchive(firstArchive, "boss/LICH"));
     REQUIRE(b.registerArchive(secondArchive, "boss/LICH"));
     REQUIRE(liveHash(first, a.resources()) == liveHash(second, b.resources()));

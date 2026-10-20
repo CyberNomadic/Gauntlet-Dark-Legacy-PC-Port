@@ -36,9 +36,9 @@ class SumnerFigure {
 public:
     class LocalSnapshot {
         friend class SumnerFigure;
-        Simulation state;
-        const SumnerFigure* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        const SumnerFigure* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

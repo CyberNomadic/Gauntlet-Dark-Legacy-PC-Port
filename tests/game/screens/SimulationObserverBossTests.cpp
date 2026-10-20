@@ -19,14 +19,14 @@ using namespace gdl;
 using namespace gdl::game;
 
 PlayScene::Inputs combatJournal(u32 tick) {
-    constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+    constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
     PlayScene::Inputs inputs;
     for (u32 seat = 0; seat < 4; ++seat) {
         auto& input = inputs[seat];
         if (tick > 360) {
             const u32 elapsed = tick - 361;
             const u32 phase = (elapsed + seat * 30) % 240;
-            const Vec2 direction = directions[(elapsed / 120 + seat) % directions.size()];
+            const Vec2 direction = kDirections[(elapsed / 120 + seat) % kDirections.size()];
             input.move = {direction, 1};
             input.aimDirection = Vec3{direction.x, 0, -direction.y};
             input.attack = phase < 90;
@@ -97,10 +97,10 @@ TEST_CASE("native boss combat keeps the represented diagnostic observations avai
         std::string_view name;
         u32 tick;
     };
-    constexpr std::array boundaries{Boundary{"A5", 738}, Boundary{"B6", 604}, Boundary{"F2", 376},
-                                    Boundary{"G5", 627}, Boundary{"H4", 354}, Boundary{"J5", 609},
-                                    Boundary{"K5", 439}};
-    const u32 boundary = std::ranges::find(boundaries, name, &Boundary::name)->tick;
+    constexpr std::array kBoundaries{Boundary{"A5", 738}, Boundary{"B6", 604}, Boundary{"F2", 376},
+                                     Boundary{"G5", 627}, Boundary{"H4", 354}, Boundary{"J5", 609},
+                                     Boundary{"K5", 439}};
+    const u32 boundary = std::ranges::find(kBoundaries, name, &Boundary::name)->tick;
     auto fixture = std::make_unique<Fixture>(name);
     PlayScene::LocalSnapshot before;
     std::vector<SimulationObservation> uninterrupted;

@@ -80,7 +80,7 @@ TEST_CASE("weapon preparation samples live inventory without launches or resourc
 TEST_CASE("complete weapon preparation is resource-free and keeps single-volley sound flags",
           "[game][world][player-arsenal][weapon-prepare]") {
     Fixture fixture;
-    PlayerFigure figure;
+    const PlayerFigure figure;
     const u32 flags = GENERATE(0U, powerup::kRapidFire | powerup::kFiveWayShot | 4U,
                                powerup::kThreeWayShot | powerup::kSuperShot);
     const bool spreads = GENERATE(false, true);

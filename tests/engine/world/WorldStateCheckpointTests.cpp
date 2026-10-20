@@ -210,7 +210,8 @@ TEST_CASE("native world history restores collision animation masks and rendered 
             CHECK(replay.animator.equalLocal(observed.animator, expected[i].animator));
             CHECK(replay.state() == reference.state());
             sameDraw(reference, replay, 0.37f);
-            const Vec3 from{10, 4, 45}, to{10, 4, 55};
+            const Vec3 from{10, 4, 45};
+            const Vec3 to{10, 4, 55};
             CHECK(replay.collision.sweepWalls(from, to, 1, 3, 9) ==
                   reference.collision.sweepWalls(from, to, 1, 3, 9));
         }
@@ -221,7 +222,8 @@ TEST_CASE("native world history restores collision animation masks and rendered 
 
 TEST_CASE("native world history rejects foreign owners and changed geometry bindings",
           "[local-rewind][world-local-rewind]") {
-    Fixture a("world-local-owner"), b("world-local-other");
+    Fixture a("world-local-owner");
+    Fixture b("world-local-other");
     WorldScene::LocalSnapshot scene;
     WorldCollision::LocalSnapshot collision;
     WorldAnimator::LocalSnapshot animator;
@@ -258,7 +260,8 @@ TEST_CASE("native world history rejects foreign owners and changed geometry bind
 
 TEST_CASE("native world history shares static placements without losing diagnostic edits",
           "[local-rewind][world-local-rewind]") {
-    Fixture reference("world-local-static-reference"), replay("world-local-static-replay");
+    Fixture reference("world-local-static-reference");
+    Fixture replay("world-local-static-replay");
     const auto initial = replay.state();
     WorldScene::LocalSnapshot beforeDiagnostic;
     replay.scene.saveLocal(beforeDiagnostic);
@@ -285,11 +288,11 @@ TEST_CASE("native world history shares static placements without losing diagnost
         scene.capturePresentation();
         scene.setObjectTransform(8,
                                  glm::translate(Mat4{1}, Vec3{0, tick, 50}) *
-                                     glm::rotate(Mat4{1}, tick * 0.1f, Vec3{0, 1, 0}),
+                                     glm::rotate(Mat4{1}, static_cast<f32>(tick) * 0.1f, Vec3{0, 1, 0}),
                                  tick % 5 == 0);
         scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
         REQUIRE(scene.setObjectVisible(11, tick % 3 != 0));
-        scene.setTextureOffset(0, {tick * 0.007f, 0});
+        scene.setTextureOffset(0, {static_cast<f32>(tick) * 0.007f, 0});
     };
     step(reference.scene, 1);
     step(replay.scene, 1);
@@ -333,9 +336,15 @@ TEST_CASE("native world history shares static placements without losing diagnost
 TEST_CASE("native world equality sees latent texture phases query masks and held animation",
           "[local-rewind][world-local-rewind]") {
     Fixture fixture("world-local-hidden-values");
-    WorldScene::LocalSnapshot sceneBefore, sceneAfter, sceneRestored;
-    WorldCollision::LocalSnapshot collisionBefore, collisionAfter, collisionRestored;
-    WorldAnimator::LocalSnapshot animatorBefore, animatorAfter, animatorRestored;
+    WorldScene::LocalSnapshot sceneBefore;
+    WorldScene::LocalSnapshot sceneAfter;
+    WorldScene::LocalSnapshot sceneRestored;
+    WorldCollision::LocalSnapshot collisionBefore;
+    WorldCollision::LocalSnapshot collisionAfter;
+    WorldCollision::LocalSnapshot collisionRestored;
+    WorldAnimator::LocalSnapshot animatorBefore;
+    WorldAnimator::LocalSnapshot animatorAfter;
+    WorldAnimator::LocalSnapshot animatorRestored;
     fixture.scene.saveLocal(sceneBefore);
     fixture.collision.saveLocal(collisionBefore);
     fixture.animator.saveLocal(animatorBefore);
@@ -434,7 +443,7 @@ TEST_CASE("Ghost Town world chrome draws contain finite texture coordinates",
 
 TEST_CASE("native level geometry reports reusable local history costs",
           "[.][assets][local-rewind-timing][world-local-rewind-timing]") {
-    const auto level = GENERATE("G2", "G4", "L1");
+    const auto* const level = GENERATE("G2", "G4", "L1");
     const auto directory =
         test::assetOrSkip(std::string{"LEVELS/LEVEL"} + level + "/WORLDS.PS2").parent_path();
     test::FakeRenderDevice device;
@@ -488,7 +497,9 @@ TEST_CASE("native level geometry reports reusable local history costs",
     const auto elapsed = [](auto start) {
         return std::chrono::duration<f64, std::milli>(Clock::now() - start).count();
     };
-    std::array<f64, 256> saves{}, restores{}, replays{};
+    std::array<f64, 256> saves{};
+    std::array<f64, 256> restores{};
+    std::array<f64, 256> replays{};
     for (usize i = 0; i < saves.size(); ++i) {
         auto& frame = history[i % history.size()];
         auto start = Clock::now();
@@ -631,6 +642,8 @@ TEST_CASE("world core rejects malformed state before changing any participating 
     case 11: invalid.hidden = {1000, 1000}; break;
     case 12: invalid.units.front().alpha = 2; break;
     case 13: invalid.light.points.front().radius = -1; break;
+    default:
+        break;
     }
     CAPTURE(mutation);
     CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
@@ -673,7 +686,7 @@ TEST_CASE("compact world catalogs reject equal-count but different authored reso
           "[world][world-state-checkpoint]") {
     const s32 variant = GENERATE(1, 2, 3, 4, 5, 6, 7, 8);
     CAPTURE(variant);
-    Fixture source("world-core-catalog-source");
+    const Fixture source("world-core-catalog-source");
     Fixture other("world-core-catalog-other", variant);
     const auto sourceState = source.state();
     const auto before = other.state();
@@ -738,7 +751,7 @@ TEST_CASE("world texture lookup preserves first authored occurrence and repeated
     // Aliases retain the first id even when their references repeat or reorder.
     std::vector<const Texture*> resources;
     const auto add = [&](const Texture* texture) {
-        if (texture && std::ranges::find(resources, texture) == resources.end()) {
+        if ((texture != nullptr) && std::ranges::find(resources, texture) == resources.end()) {
             resources.push_back(texture);
         }
     };

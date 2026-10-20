@@ -47,6 +47,8 @@ struct AdapterFixture {
         REQUIRE(opponents.generators().bind(device, layout, opponents.enemies(), nullptr, {}, 1));
         REQUIRE(opponents.generators().count() == 1);
     }
+    AdapterFixture(const AdapterFixture&) = delete;
+    AdapterFixture& operator=(const AdapterFixture&) = delete;
     ~AdapterFixture() { opponents.close(); }
     EffectTrees::PoolCheckpoint visual() const {
         const auto result = effects.checkpointPool();
@@ -104,6 +106,8 @@ TEST_CASE("ordinary opponent adapter preparation is owner bound and atomically v
     case 6: invalid.shrink = 0; break;
     case 7: invalid.cueEffects = {1, 1}; break;
     case 8: invalid.lessons.resize(OpponentCombatCheckpoint::State::kMaxRecords + 1); break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.adapter.prepareRestore(invalid, fixture.visual()));
     CHECK_FALSE(fixture.adapter.restore(invalid, fixture.visual()));
@@ -169,9 +173,9 @@ TEST_CASE("adapter cached capture matches fresh owners across clocks catalogs an
         const auto captured = fixture->adapter.checkpoint(effects);
         REQUIRE(captured);
         REQUIRE(captured->valid());
-        OpponentCombatCheckpoint fresh{fixture->opponents};
+        const OpponentCombatCheckpoint fresh{fixture->opponents};
         CHECK(fresh.checkpoint(effects) == captured);
-        CrittersCheckpoint independent{critters};
+        const CrittersCheckpoint independent{critters};
         CHECK(independent.checkpoint() == captured->critters);
         CHECK(fixture->opponents.statues().checkpoint() == captured->statues);
         CHECK(fixture->device.texturesCreated == uploads);
@@ -226,6 +230,8 @@ TEST_CASE("adapter local capture keeps public child and supplied effect validati
         case 1: invalid.critters.actors.back().parts.front().arenaRandom = 0; break;
         case 2: invalid.projectiles.ricochetIn = std::numeric_limits<f32>::quiet_NaN(); break;
         case 3: invalid.shrink = std::numeric_limits<f32>::quiet_NaN(); break;
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture->adapter.prepareRestore(invalid, effects));
@@ -376,6 +382,8 @@ TEST_CASE("critter bank identities and counts are strictly bounded",
     case 3: std::swap(state.critters.banks[0], state.critters.banks[1]); break;
     case 4: state.critters.banks[1] = state.critters.banks[0]; break;
     case 5: state.critters.banks.resize(CrittersCheckpoint::kMaxStocks + 1); break;
+    default:
+        break;
     }
     CHECK_FALSE(state.valid());
 }
@@ -402,6 +410,8 @@ TEST_CASE("complete critter state does not authorize dormant-only simulation",
     case 13: state.critterEffects.emplace_back(); break;
     case 14: state.moveEffects.emplace_back(); break;
     case 15: state.barrelRams.emplace_back(); break;
+    default:
+        break;
     }
     CHECK_FALSE(state.dormant());
     state = {};
@@ -497,6 +507,8 @@ TEST_CASE("dormant statue admission uses the native grid wake and body predicate
         visitor.position.z = 90;
         statues.setContactGridBounds({-100, 0, -100}, {100, 0, 100});
         break;
+    default:
+        break;
     }
     REQUIRE(statues.add(device, *archive, placement, nullptr));
     const auto before = statues.checkpoint();
@@ -526,6 +538,8 @@ TEST_CASE("ordinary adapter refuses queued special-owner outcomes even with no v
     case 0: swarm->deathEvents.push_back({DeathEvent::Kind::Killed, 0, 2}); break;
     case 1: swarm->deathShots.push_back({0}); break;
     case 2: swarm->tagged.push_back(2); break;
+    default:
+        break;
     }
     REQUIRE(swarm->valid());
     REQUIRE(fixture.opponents.enemies().restore(*swarm));
@@ -729,7 +743,8 @@ TEST_CASE("native opponent equality includes undispatched coordinator rewards",
     REQUIRE(fixture->opponents.saveLocal(*before));
     auto enemiesBefore = std::make_unique<Enemies::LocalSnapshot>();
     auto enemiesAfter = std::make_unique<Enemies::LocalSnapshot>();
-    Generators::LocalSnapshot generatorsBefore, generatorsAfter;
+    Generators::LocalSnapshot generatorsBefore;
+    Generators::LocalSnapshot generatorsAfter;
     REQUIRE(fixture->opponents.enemies().saveLocal(*enemiesBefore));
     fixture->opponents.generators().saveLocal(generatorsBefore);
     usize awards = 0;

@@ -89,7 +89,7 @@ private:
         Time started;
     };
     struct Delivery {
-        std::array<u8, kPacketBytes> bytes;
+        std::array<u8, kPacketBytes> bytes{};
         Time started;
     };
     bool occupied(u8 peer) const;
@@ -108,7 +108,7 @@ private:
     u64 m_agreed = 0;
     Failure m_failure = Failure::None;
     u64 m_failureTick = 0;
-    Time m_now{};
+    Time m_now;
     Owners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};
     std::array<std::deque<Delivery>, 5> m_outgoing;

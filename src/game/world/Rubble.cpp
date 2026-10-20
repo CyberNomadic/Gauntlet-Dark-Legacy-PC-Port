@@ -33,14 +33,14 @@ bool Rubble::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& s
         digest.invalidate();
         return false;
     }
-    return appendPiecesDigest(digest, saved.pieces);
+    return appendPiecesDigest(digest, saved.m_pieces);
 }
 
 bool Rubble::registerNativeResources(NativeStateResources& resources) const {
     for (const auto& binding : m_models) {
         const auto& [device, archive, object, model] = binding;
         static_cast<void>(device); // Backend allocation identity never selects gameplay.
-        if (!archive || !model || !resources.refreshArchive(*archive) ||
+        if ((archive == nullptr) || !model || !resources.refreshArchive(*archive) ||
             !resources.registerModel(*model, *archive, "rubble/" + object)) {
             return false;
         }
@@ -49,25 +49,25 @@ bool Rubble::registerNativeResources(NativeStateResources& resources) const {
 }
 
 void Rubble::saveLocal(LocalSnapshot& saved) const {
-    saved.pieces = m_pieces;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_pieces = m_pieces;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool Rubble::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool Rubble::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.pieces == right.pieces;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_pieces == right.m_pieces;
 }
 
 bool Rubble::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_pieces = saved.pieces;
+    m_pieces = saved.m_pieces;
     ++m_checkpointGeneration;
     return true;
 }

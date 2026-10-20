@@ -16,6 +16,6 @@ struct EnemyMissileEmission {
     std::string_view sound;
     f32 level = 0; ///< native 0..255 volume before nearest-player attenuation
 
-    static EnemyMissileEmission resolve(const EnemyMissileHit&, ItemArchive& weapons);
+    static EnemyMissileEmission resolve(const EnemyMissileHit& /*hit*/, ItemArchive& weapons);
 };
 } // namespace gdl::game

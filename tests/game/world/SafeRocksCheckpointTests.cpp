@@ -153,6 +153,8 @@ TEST_CASE("safe rock checkpoint restores are atomic and fenced by bindings and s
     case 7: invalid.rocks[0].models[3] = true; break;
     case 8: invalid.rocks[0].obstacle.height += 1; break;
     case 9: invalid.rocks[0].position.z += 1; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.owner.restore(invalid));
     CHECK(captured(fixture.owner) == before);
@@ -202,7 +204,7 @@ TEST_CASE("empty safe rock rosters retain their native animation binding",
     CHECK_FALSE(guest.bind(guestDevice, guestLayout, guestItems));
     REQUIRE(host.size() == 0);
     REQUIRE(guest.size() == 0);
-    SafeRocksCheckpoint hostOwner(host);
+    const SafeRocksCheckpoint hostOwner(host);
     SafeRocksCheckpoint guestOwner(guest);
     const auto unbound = captured(guestOwner);
     CHECK_FALSE(unbound.animationItems);
@@ -229,7 +231,7 @@ TEST_CASE("empty safe rock rosters retain their native animation binding",
 
 TEST_CASE("native arena cover checkpoints retain all authored tiers and stable resource addresses",
           "[safe-rocks-checkpoint][assets]") {
-    const auto name = GENERATE("B6", "A5", "I5");
+    const auto* const name = GENERATE("B6", "A5", "I5");
     CAPTURE(name);
     const std::string relative = std::string{"LEVELS/LEVEL"} + name + "/WORLDS.PS2";
     const std::string itemRelative = std::string{"ITEMS/LEVEL"} + name + "/objects.ngc";
@@ -474,7 +476,10 @@ TEST_CASE("native cover equality distinguishes dormant activation and subframe t
           "[local-rewind][safe-rocks-local-rewind][native-equality]") {
     Fixture fixture("safe-rock-local-equality");
     fixture.rocks.hideForEruptions();
-    SafeRocks::LocalSnapshot initial, scheduled, advanced, restored;
+    SafeRocks::LocalSnapshot initial;
+    SafeRocks::LocalSnapshot scheduled;
+    SafeRocks::LocalSnapshot advanced;
+    SafeRocks::LocalSnapshot restored;
     fixture.rocks.saveLocal(initial);
     const auto obstacle = fixture.rocks.rock(0).obstacle;
     const auto placement = fixture.rocks.rock(0).placement;

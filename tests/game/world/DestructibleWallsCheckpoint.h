@@ -38,7 +38,7 @@ public:
         f32 blinkTicks = 0;
         bool white = false;
         bool model = false;
-        bool operator==(const Wall&) const;
+        bool operator==(const Wall& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxWalls = 4096;
@@ -66,6 +66,7 @@ public:
     explicit DestructibleWallsCheckpoint(DestructibleWalls& owner) : m_owner(owner) {}
     DestructibleWallsCheckpoint(const DestructibleWallsCheckpoint&) = delete;
     DestructibleWallsCheckpoint& operator=(const DestructibleWallsCheckpoint&) = delete;
+    ~DestructibleWallsCheckpoint() = default;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

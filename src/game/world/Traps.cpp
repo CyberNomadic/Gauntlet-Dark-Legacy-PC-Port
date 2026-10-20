@@ -35,7 +35,7 @@ bool Traps::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& sa
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 bool Traps::registerNativeResources(NativeStateResources& resources) const {
@@ -48,25 +48,25 @@ bool Traps::registerNativeResources(NativeStateResources& resources) const {
 }
 
 void Traps::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool Traps::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool Traps::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool Traps::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -297,7 +297,7 @@ void Traps::capturePresentation() {
 
 void Traps::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                  const CameraFrame* camera, TreeModel::Pass pass, f32 presentationAlpha) const {
-    for (auto& trap : m_sim.traps) {
+    for (const auto& trap : m_sim.traps) {
         if (trap.shown) {
             trap.figure.draw(device, clip, lighting, 1, 1, camera, pass, presentationAlpha);
         }

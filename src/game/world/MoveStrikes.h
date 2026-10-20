@@ -44,6 +44,7 @@ public:
     MoveStrikes& operator=(const MoveStrikes&) = delete;
     MoveStrikes(MoveStrikes&&) = delete;
     MoveStrikes& operator=(MoveStrikes&&) = delete;
+    ~MoveStrikes() = default;
     /** One strike under way. */
     struct Strike {
         u32 id = 0;
@@ -79,10 +80,10 @@ private:
 public:
     class LocalSnapshot {
         friend class MoveStrikes;
-        Simulation state;
-        const MoveStrikes* owner = nullptr;
-        std::weak_ptr<const u8> lifetime;
-        u64 epoch = 0;
+        Simulation m_state;
+        const MoveStrikes* m_owner = nullptr;
+        std::weak_ptr<const u8> m_lifetime;
+        u64 m_epoch = 0;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;
@@ -103,14 +104,15 @@ public:
         Prepared& operator=(Prepared&&) noexcept = default;
         Prepared(const Prepared&) = delete;
         Prepared& operator=(const Prepared&) = delete;
+        ~Prepared() = default;
 
     private:
         friend class MoveStrikes;
         Prepared() = default;
-        const MoveStrikes* owner = nullptr;
-        std::weak_ptr<const u8> lifetime;
-        u64 generation = 0;
-        Checkpoint state;
+        const MoveStrikes* m_owner = nullptr;
+        std::weak_ptr<const u8> m_lifetime;
+        u64 m_generation = 0;
+        Checkpoint m_state;
     };
     std::optional<Checkpoint> checkpoint() const;
     std::optional<Prepared> prepareRestore(const Checkpoint& state) const;

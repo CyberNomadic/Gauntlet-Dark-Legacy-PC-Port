@@ -62,6 +62,8 @@ struct GeneratorSounds {
         events.open(kEpoch, nullptr);
         audio.recordTo(&events);
     }
+    GeneratorSounds(const GeneratorSounds&) = delete;
+    GeneratorSounds& operator=(const GeneratorSounds&) = delete;
     ~GeneratorSounds() {
         opponents.close();
         audio.close();

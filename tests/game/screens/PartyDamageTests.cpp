@@ -71,6 +71,8 @@ struct Fixture {
             owners[i] = std::make_unique<PlayerRuntimeCheckpoint>(player, stats);
         }
     }
+    Fixture(const Fixture&) = delete;
+    Fixture& operator=(const Fixture&) = delete;
     ~Fixture() {
         attacks.clear();
         arsenal.clear();

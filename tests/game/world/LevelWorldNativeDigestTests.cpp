@@ -88,7 +88,9 @@ struct Fixture {
         REQUIRE(resources.registerCollision(world.collision(), "TEST"));
         REQUIRE(resources.registerTextures(world.textures(), "TEST/textures"));
         REQUIRE(resources.registerArchive(world.items(), "TEST/items"));
-        if (world.powerups().loaded()) REQUIRE(resources.registerArchive(world.powerups(), "POWERUPS"));
+        if (world.powerups().loaded()) {
+            REQUIRE(resources.registerArchive(world.powerups(), "POWERUPS"));
+        }
         REQUIRE(world.registerNativeResources(resources));
     }
 
@@ -121,12 +123,16 @@ struct Fixture {
             REQUIRE(world.throwItem(device, "COIN", {8, 5, 0}, {2, 3, 0}, 0.5f));
             world.bossArenaCue({0, 0, 0});
         }
-        if (tick == 3) REQUIRE(world.strikeWall(0, 10));
+        if (tick == 3) {
+            REQUIRE(world.strikeWall(0, 10));
+        }
         if (tick == 5) {
             REQUIRE(world.collect(device, std::array{Collector{{80, 0, 0}, 1, 2}}).size() == 1);
             world.bossArenaCue({0, 0, 0});
         }
-        if (tick == 7) world.bossArenaCue({1, 0, 2});
+        if (tick == 7) {
+            world.bossArenaCue({1, 0, 2});
+        }
         world.update(kStep, tick >= 9 && tick <= 11);
         const std::array visitors{TriggerVisitor{.position = Vec3{0, 0, 0}, .floorObject = 0},
                                  TriggerVisitor{.position = Vec3{20, 0, 0}}};
@@ -159,7 +165,9 @@ TEST_CASE("native world digest agrees across independent bindings and render cad
             left.draw(alpha);
             CHECK(left.hash() == before);
         }
-        if (tick % 3 == 0) right.draw(0.8f);
+        if (tick % 3 == 0) {
+            right.draw(0.8f);
+        }
         CHECK(right.hash() == before);
         LevelWorld::LocalSnapshot saved;
         left.world.saveLocal(saved);
@@ -191,12 +199,16 @@ TEST_CASE("native world saved hash survives wrong branches and one to eight tick
         replay.world.bossArenaCue({23, 0, -18});
         replay.world.discardItem(0);
         replay.world.revealWall(0);
-        for (s32 tick = 0; tick < distance; ++tick) replay.world.update(kStep);
+        for (s32 tick = 0; tick < distance; ++tick) {
+            replay.world.update(kStep);
+        }
         CHECK(replay.hash(anchor) == anchorHash);
         CHECK(replay.hash() != anchorHash);
         REQUIRE(replay.world.restoreLocal(anchor));
         CHECK(replay.hash() == anchorHash);
-        for (s32 tick = 3; tick < 3 + distance; ++tick) replay.step(tick);
+        for (s32 tick = 3; tick < 3 + distance; ++tick) {
+            replay.step(tick);
+        }
         CHECK(replay.hash() == expected[static_cast<usize>(distance - 1)]);
     }
 }
@@ -228,6 +240,7 @@ TEST_CASE("native world hash retains pickup hidden continuation fields",
     for (usize i = 0; i < changes.size(); ++i) {
         CAPTURE(i);
         REQUIRE(fixture.world.restoreLocal(saved));
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         changes[i](const_cast<Item&>(fixture.world.placedItems().item(0)));
         CHECK(fixture.hash() != original);
         CHECK(fixture.hash(saved) == original);
@@ -237,7 +250,7 @@ TEST_CASE("native world hash retains pickup hidden continuation fields",
 TEST_CASE("native world resource and history failures cannot certify a partial digest",
           "[native-digest][level-world-native-digest]") {
     Fixture fixture("native-world-reject");
-    Fixture foreign("native-world-foreign");
+    const Fixture foreign("native-world-foreign");
     LevelWorld::LocalSnapshot saved;
     fixture.world.saveLocal(saved);
     NativeStateDigest unbound;
@@ -288,10 +301,18 @@ TEST_CASE("native collision digest covers all masks and captured moving transfor
     for (s32 change = 0; change < 4; ++change) {
         CAPTURE(change);
         REQUIRE(collision.restoreLocal(saved));
-        if (change == 0) collision.setSolid(0, false);
-        if (change == 1) collision.setContactOnly(0, true);
-        if (change == 2) collision.setFloorExitBlocked(0, true);
-        if (change == 3) collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{0, 2, 0}));
+        if (change == 0) {
+            collision.setSolid(0, false);
+        }
+        if (change == 1) {
+            collision.setContactOnly(0, true);
+        }
+        if (change == 2) {
+            collision.setFloorExitBlocked(0, true);
+        }
+        if (change == 3) {
+            collision.setObjectTransform(0, glm::translate(Mat4{1}, Vec3{0, 2, 0}));
+        }
         CHECK(hash() != original);
         NativeStateDigest past;
         REQUIRE(collision.appendLocalDigest(past, saved));

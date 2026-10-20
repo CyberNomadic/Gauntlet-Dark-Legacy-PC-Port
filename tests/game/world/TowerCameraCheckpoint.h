@@ -38,7 +38,7 @@ public:
         std::array<f32, TowerCamera::kRing> ringDistances{};
         s32 ringIndex = 0;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
     };
     class Prepared {
     public:

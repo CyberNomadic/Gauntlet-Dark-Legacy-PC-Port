@@ -46,8 +46,8 @@ TEST_CASE("turbo effect clocks distinguish absent banks from existing frame zero
 
 TEST_CASE("turbo effect bank packets reject invalid clocks damage and flag combinations",
           "[turbo-effect-checkpoint]") {
-    TurboEffectState state{12.5f, TextureAnimator::Checkpoint{57, 0.003f, 0.5f},
-                           TextureAnimator::Checkpoint{31, 0.01f, 0}};
+    const TurboEffectState state{12.5f, TextureAnimator::Checkpoint{57, 0.003f, 0.5f},
+                                 TextureAnimator::Checkpoint{31, 0.01f, 0}};
     const auto bytes = TurboEffectCheckpoint::encode(state);
     REQUIRE(bytes);
     REQUIRE(bytes->size() == TurboEffectCheckpoint::kMaxBytes);

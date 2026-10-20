@@ -16,7 +16,7 @@ namespace gdl::game {
  * as it appears, and forgotten only once neither is worn.
  */
 class HeadGem {
-    friend void visitNativeState(NativeStateDigest&, const HeadGem&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const HeadGem& /*value*/);
 
 public:
     bool operator==(const HeadGem&) const = default;

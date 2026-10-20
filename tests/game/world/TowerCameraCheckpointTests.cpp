@@ -46,7 +46,7 @@ struct CameraFixture {
         nativeOwner = std::make_unique<TowerCameraCheckpoint>(native, world);
         replayOwner = std::make_unique<TowerCameraCheckpoint>(replay, world);
     }
-    TowerCameraCheckpoint::State capture(const TowerCameraCheckpoint& owner) const {
+    static TowerCameraCheckpoint::State capture(const TowerCameraCheckpoint& owner) {
         auto state = owner.checkpoint();
         REQUIRE(state);
         return std::move(*state);
@@ -71,12 +71,12 @@ TEST_CASE("camera checkpoint resumes every native smoothing and turn field at th
     const f32 seconds = 1.0f / static_cast<f32>(rate);
     CameraFixture fixture;
     fixture.beginTurn(seconds);
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     REQUIRE(baseline.turnStep > 0);
     REQUIRE(baseline.turnStep < TowerCamera::kTurnSteps);
     REQUIRE(baseline.markers.size() == 2); // never imports the trigger-cut marker
     REQUIRE(fixture.replayOwner->restore(baseline));
-    REQUIRE(fixture.capture(*fixture.replayOwner) == baseline);
+    REQUIRE(CameraFixture::capture(*fixture.replayOwner) == baseline);
     const auto textures = fixture.device.texturesCreated;
     bool finishedTurn = false;
     bool wrappedRing = false;
@@ -87,8 +87,8 @@ TEST_CASE("camera checkpoint resumes every native smoothing and turn field at th
                          standing({94 - step, 0, 4 + step * 2})};
         fixture.update(fixture.native, seconds);
         fixture.update(fixture.replay, seconds);
-        const auto expected = fixture.capture(*fixture.nativeOwner);
-        CHECK(fixture.capture(*fixture.replayOwner) == expected);
+        const auto expected = CameraFixture::capture(*fixture.nativeOwner);
+        CHECK(CameraFixture::capture(*fixture.replayOwner) == expected);
         wrappedRing = wrappedRing || expected.ringIndex < baseline.ringIndex;
         finishedTurn = finishedTurn || !fixture.native.turning();
     }
@@ -103,7 +103,7 @@ TEST_CASE("camera rewind preserves subsequent native leash and camera relative d
     const f32 seconds = 1.0f / static_cast<f32>(rate);
     CameraFixture fixture;
     fixture.beginTurn(seconds);
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     auto undo = fixture.nativeOwner->prepareRestore(baseline);
     REQUIRE(undo);
     for (s32 tick = 0; tick < rate; ++tick) {
@@ -113,7 +113,7 @@ TEST_CASE("camera rewind preserves subsequent native leash and camera relative d
     REQUIRE(fixture.nativeOwner->canCommit(*undo)); // native updates are rewindable
     REQUIRE(fixture.nativeOwner->commitRestore(std::move(*undo)));
     REQUIRE(fixture.replayOwner->restore(baseline));
-    CHECK(fixture.capture(*fixture.nativeOwner) == baseline);
+    CHECK(CameraFixture::capture(*fixture.nativeOwner) == baseline);
     bool limited = false;
     for (s32 tick = 0; tick < 120; ++tick) {
         CAPTURE(rate, tick);
@@ -133,7 +133,7 @@ TEST_CASE("camera rewind preserves subsequent native leash and camera relative d
                          standing(fixture.native.attention() + Vec3{-20, 0, 0})};
         fixture.update(fixture.native, seconds);
         fixture.update(fixture.replay, seconds);
-        CHECK(fixture.capture(*fixture.replayOwner) == fixture.capture(*fixture.nativeOwner));
+        CHECK(CameraFixture::capture(*fixture.replayOwner) == CameraFixture::capture(*fixture.nativeOwner));
     }
     CHECK(limited);
 }
@@ -142,26 +142,26 @@ TEST_CASE("camera checkpoint handles trigger attention snap without discarding n
           "[game][camera-checkpoint]") {
     CameraFixture fixture;
     fixture.beginTurn(1.0f / 60);
-    const auto before = fixture.capture(*fixture.nativeOwner);
+    const auto before = CameraFixture::capture(*fixture.nativeOwner);
     REQUIRE(fixture.replayOwner->restore(before));
     fixture.party = {standing({-30, 3, 4}), standing({20, 0, -3})};
     fixture.native.snapAttention(fixture.party, fixture.world.cameraRange());
     fixture.replay.snapAttention(fixture.party, fixture.world.cameraRange());
-    const auto snapped = fixture.capture(*fixture.nativeOwner);
+    const auto snapped = CameraFixture::capture(*fixture.nativeOwner);
     CHECK(snapped.ringDistances == before.ringDistances);
     CHECK(snapped.yawRate == before.yawRate);
     CHECK(snapped.turnStep == before.turnStep);
-    CHECK(fixture.capture(*fixture.replayOwner) == snapped);
+    CHECK(CameraFixture::capture(*fixture.replayOwner) == snapped);
     fixture.update(fixture.native, 1.0f / 60);
     fixture.update(fixture.replay, 1.0f / 60);
-    CHECK(fixture.capture(*fixture.replayOwner) == fixture.capture(*fixture.nativeOwner));
+    CHECK(CameraFixture::capture(*fixture.replayOwner) == CameraFixture::capture(*fixture.nativeOwner));
 }
 
 TEST_CASE("camera checkpoint rejects malformed and foreign authored bindings without mutation",
           "[game][camera-checkpoint]") {
     CameraFixture fixture;
     fixture.beginTurn(1.0f / 60);
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     using State = TowerCameraCheckpoint::State;
     const f32 nan = std::numeric_limits<f32>::quiet_NaN();
     const std::array<std::function<void(State&)>, 20> damage{
@@ -191,17 +191,17 @@ TEST_CASE("camera checkpoint rejects malformed and foreign authored bindings wit
         damage[index](corrupt);
         CHECK_FALSE(fixture.nativeOwner->prepareRestore(corrupt));
         CHECK_FALSE(fixture.nativeOwner->restore(corrupt));
-        CHECK(fixture.capture(*fixture.nativeOwner) == baseline);
+        CHECK(CameraFixture::capture(*fixture.nativeOwner) == baseline);
     }
 }
 
 TEST_CASE("camera prepared restoration is owner bound single use and invalidates sibling plans",
           "[game][camera-checkpoint]") {
     CameraFixture fixture;
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     auto first = fixture.nativeOwner->prepareRestore(baseline);
     auto sibling = fixture.nativeOwner->prepareRestore(baseline);
-    TowerCameraCheckpoint secondWrapper{fixture.native, fixture.world};
+    const TowerCameraCheckpoint secondWrapper{fixture.native, fixture.world};
     auto otherWrapper = secondWrapper.prepareRestore(baseline);
     REQUIRE(first);
     REQUIRE(sibling);
@@ -214,18 +214,18 @@ TEST_CASE("camera prepared restoration is owner bound single use and invalidates
     CHECK_FALSE(fixture.nativeOwner->commitRestore(std::move(*first)));
     CHECK_FALSE(fixture.nativeOwner->canCommit(*sibling));
     CHECK_FALSE(secondWrapper.canCommit(*otherWrapper));
-    CHECK(fixture.capture(*fixture.nativeOwner) == baseline);
+    CHECK(CameraFixture::capture(*fixture.nativeOwner) == baseline);
 }
 
 TEST_CASE("camera reset and value assignment cannot revive old prepared owner identities",
           "[game][camera-checkpoint]") {
     CameraFixture fixture;
     fixture.beginTurn(1.0f / 60);
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     auto beforeReset = fixture.nativeOwner->prepareRestore(baseline);
     REQUIRE(beforeReset);
     TowerCamera copied{fixture.native};
-    TowerCameraCheckpoint copyOwner{copied, fixture.world};
+    const TowerCameraCheckpoint copyOwner{copied, fixture.world};
     REQUIRE(copyOwner.checkpoint() == std::optional{baseline});
     fixture.native.reset(fixture.party, fixture.world.cameraMarkers(), fixture.world.cameraRange(),
                          fixture.projection);
@@ -233,20 +233,20 @@ TEST_CASE("camera reset and value assignment cannot revive old prepared owner id
     auto beforeAssignment = fixture.nativeOwner->prepareRestore(baseline);
     REQUIRE(beforeAssignment);
     fixture.native = copied;
-    CHECK(fixture.capture(*fixture.nativeOwner) == baseline);
+    CHECK(CameraFixture::capture(*fixture.nativeOwner) == baseline);
     CHECK_FALSE(fixture.nativeOwner->canCommit(*beforeReset));
     CHECK_FALSE(fixture.nativeOwner->canCommit(*beforeAssignment));
     auto beforeMove = fixture.nativeOwner->prepareRestore(baseline);
     REQUIRE(beforeMove);
     fixture.native = std::move(copied);
-    CHECK(fixture.capture(*fixture.nativeOwner) == baseline);
+    CHECK(CameraFixture::capture(*fixture.nativeOwner) == baseline);
     CHECK_FALSE(fixture.nativeOwner->canCommit(*beforeMove));
 }
 
 TEST_CASE("camera restore refuses stale world and wrapper lifetimes even after equal reload",
           "[game][camera-checkpoint]") {
     CameraFixture fixture;
-    const auto baseline = fixture.capture(*fixture.nativeOwner);
+    const auto baseline = CameraFixture::capture(*fixture.nativeOwner);
     auto stale = fixture.nativeOwner->prepareRestore(baseline);
     REQUIRE(stale);
     fixture.nativeOwner.reset();

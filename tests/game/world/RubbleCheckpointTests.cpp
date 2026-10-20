@@ -41,7 +41,8 @@ struct Fixture {
 TEST_CASE(
     "debris checkpoints restore dynamic births across independently bound owners without uploads",
     "[rollback][rubble-checkpoint]") {
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     const auto empty = first.owner.checkpoint();
     REQUIRE(empty);
     REQUIRE(empty->resources.size() == 2);
@@ -84,6 +85,8 @@ TEST_CASE(
         case 2: invalid.pieces[0].resource = 50; break;
         case 3: invalid.pieces[0].transform[3].x = std::numeric_limits<f32>::quiet_NaN(); break;
         case 4: invalid.resources.push_back(invalid.resources[0]); break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner.restore(invalid));
         CHECK(fixture.owner.checkpoint() == state);
@@ -105,7 +108,7 @@ TEST_CASE(
     CHECK_FALSE(fixture.owner.checkpoint());
     REQUIRE(fixture.owner.bindResources(fixture.device));
     REQUIRE(fixture.owner.restore(*state));
-    Fixture other;
+    const Fixture other;
     auto foreign = other.owner.prepareRestore(*state);
     REQUIRE(foreign);
     CHECK_FALSE(fixture.owner.commitRestore(std::move(*foreign)));
@@ -129,7 +132,8 @@ TEST_CASE("debris never drops uncatalogued live meshes from a full checkpoint",
 
 TEST_CASE("native debris history removes predicted births and reuses bound models during replay",
           "[local-rewind][rubble-local-rewind]") {
-    Fixture reference, corrected;
+    Fixture reference;
+    Fixture corrected;
     LocalStateHistory<Rubble::LocalSnapshot> history;
     std::array<Rubble::LocalSnapshot, 8> expectedLocal;
     Rubble::LocalSnapshot observed;
@@ -201,7 +205,8 @@ TEST_CASE("native debris history removes predicted births and reuses bound model
 
 TEST_CASE("native debris snapshots retain uncatalogued values but reject replaced owners",
           "[local-rewind][rubble-local-rewind]") {
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     Rubble::LocalSnapshot saved;
     CHECK_FALSE(first.rubble.restoreLocal(saved));
     CHECK_FALSE(first.rubble.equalLocal(saved, saved));
@@ -225,7 +230,11 @@ TEST_CASE("native debris snapshots retain uncatalogued values but reject replace
 TEST_CASE("native debris equality distinguishes same-count mesh identities and placement",
           "[local-rewind][rubble-local-rewind][native-equality]") {
     Fixture fixture;
-    Rubble::LocalSnapshot empty, barrel, gas, moved, replay;
+    Rubble::LocalSnapshot empty;
+    Rubble::LocalSnapshot barrel;
+    Rubble::LocalSnapshot gas;
+    Rubble::LocalSnapshot moved;
+    Rubble::LocalSnapshot replay;
     fixture.rubble.saveLocal(empty);
     REQUIRE(fixture.rubble.leave(fixture.device, fixture.archives, Rubble::kBlownBarrel, Mat4{1}));
     fixture.rubble.saveLocal(barrel);

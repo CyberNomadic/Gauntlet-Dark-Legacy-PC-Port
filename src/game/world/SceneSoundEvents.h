@@ -67,7 +67,7 @@ public:
     };
     class Unsupported final : public std::logic_error {
     public:
-        explicit Unsupported(std::string reason) : std::logic_error(std::move(reason)) {}
+        explicit Unsupported(const std::string& reason) : std::logic_error(reason) {}
     };
 
     class Scope {
@@ -90,6 +90,7 @@ public:
     SceneSoundEvents() = default;
     SceneSoundEvents(const SceneSoundEvents&) = delete;
     SceneSoundEvents& operator=(const SceneSoundEvents&) = delete;
+    ~SceneSoundEvents() = default;
     void open(u64 epoch, SoundPlayer* output, u64 firstTick = 1);
     void close();
     void beginTick(u64 tick);
@@ -102,7 +103,7 @@ public:
     void abortTick() noexcept;
     bool recording() const { return m_recording; }
     u64 epoch() const { return m_epoch; }
-    Scope scoped(FrameEventEmitter emitter, u32 cue) { return Scope(*this, emitter, cue); }
+    Scope scoped(FrameEventEmitter emitter, u32 cue) { return {*this, emitter, cue}; }
     SoundCueToken emit(const SoundSequence& sequence, f32 volume = 1, f32 pan = 0,
                        SoundCueToken after = {});
     /** Native start of a cancellable finite cue. No sound is emitted until its

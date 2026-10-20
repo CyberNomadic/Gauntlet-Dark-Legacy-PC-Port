@@ -57,7 +57,7 @@ struct NativePair {
     u32 hostAwards = 0, guestAwards = 0;
     u16 hostUnlocks = 0, guestUnlocks = 0;
 
-    explicit NativePair(PlayOptions options = {}, std::string_view beatenLevel = {},
+    explicit NativePair(const PlayOptions& options = {}, std::string_view beatenLevel = {},
                         std::optional<bool> autoSave = {}, std::string_view initialLevel = "L1",
                         bool withAudio = false, u8 inputDelay = 1, bool secondHostPlayer = false)
         : hostSession(hostService, hostWire, true, static_cast<u8>(secondHostPlayer ? 2 : 1)) {
@@ -129,7 +129,7 @@ struct NativePair {
             result.save.color = character;
             result.save.classUnlock = beatenLevel.empty() ? 0xFFFF : 0;
             result.save.moviesSeen = {"LOCAL"};
-            result.save.classes[static_cast<usize>(character + 2)].experience = 123456;
+            result.save.classes[static_cast<usize>(character) + 2].experience = 123456;
             // Selected class is genuinely fresh: zero persisted health denotes
             // its default spawn health, not a fallen campaign continuation.
             REQUIRE(result.save.progress().health == 0);
@@ -215,7 +215,7 @@ struct NativePair {
         REQUIRE(agreed);
         REQUIRE(session.party());
         REQUIRE(session.room());
-        NativePlaySetup::Contract contract{
+        const NativePlaySetup::Contract contract{
             agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
             agreed->rules.expandedShop, agreed->identity.build,  agreed->identity.content,
             agreed->identity.data};
@@ -230,7 +230,7 @@ struct NativePair {
         REQUIRE(hostSession.phase() != OnlineSession::Phase::Failed);
         REQUIRE(guestSession.phase() != OnlineSession::Phase::Failed);
     }
-    void draw(NativeOnlinePlay& play, test::FakeRenderDevice& device, f32 blend = 1) {
+    static void draw(NativeOnlinePlay& play, test::FakeRenderDevice& device, f32 blend = 1) {
         play.render(device, Mat4{1}, 1280, 720, 1.0 / 60, blend);
         REQUIRE(play.phase() != NativeOnlinePlay::Phase::Failed);
     }
@@ -271,7 +271,8 @@ struct NativePair {
                 controlsReady(*host.scene()) && controlsReady(*guest.scene())) {
                 return;
             }
-            SessionInputs::Frame first, second;
+            SessionInputs::Frame first;
+            SessionInputs::Frame second;
             first[kHostDevice].menu.select = true;
             second[kGuestDevice].menu.select = true;
             step(first, second);
@@ -294,8 +295,8 @@ struct NativePair {
         }
         REQUIRE(host.simulatedTick() == guest.simulatedTick());
     }
-    void placeOnPortal(NativeOnlinePlay& play, const std::string& destination = {},
-                       bool secret = false) {
+    static void placeOnPortal(NativeOnlinePlay& play, const std::string& destination = {},
+                              bool secret = false) {
         REQUIRE(play.scene());
         const auto& exits = play.scene()->portals();
         usize found = 0;
@@ -312,6 +313,7 @@ struct NativePair {
             REQUIRE(play.scene()->actor(seat));
             // Identical native contact fixture on each independent scene. No
             // transition/private flag is manufactured or network input changed.
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
             auto& actor = *const_cast<PlayerActor*>(play.scene()->actor(seat));
             actor.place(position);
         }
@@ -380,12 +382,16 @@ TEST_CASE("native online bootstrap opens canonical sparse fresh parties on both 
     CHECK(pair->hostParty.localMembers()[0].save.classUnlock == 0xFFFF);
     CHECK(pair->guestParty.localMembers()[0].save.classUnlock == 0xFFFF);
 
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* host = const_cast<PlayScene*>(pair->host.scene());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* guest = const_cast<PlayScene*>(pair->guest.scene());
-    SimulationObserver hostObserver{*host}, guestObserver{*guest};
+    SimulationObserver hostObserver{*host};
+    SimulationObserver guestObserver{*guest};
     REQUIRE(hostObserver.bind());
     REQUIRE(guestObserver.bind());
-    std::map<u64, SimulationObservation> first, second;
+    std::map<u64, SimulationObservation> first;
+    std::map<u64, SimulationObservation> second;
     u32 compared = 0;
     const auto observe = [&](NativeOnlinePlay& play, SimulationObserver& observer,
                              std::map<u64, SimulationObservation>& samples) {
@@ -428,7 +434,8 @@ TEST_CASE("native online local pause fences only the owned device while agreed t
     const auto before = pair->host.simulatedTick();
     u32 checked = 0;
     for (u32 frame = 0; frame < 50; ++frame) {
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         first[kHostDevice].move = {{1, 0}, 1};
         first[kHostDevice].attack = true;
         second[kGuestDevice].move = {{-1, 0}, 0.5f};
@@ -470,8 +477,8 @@ TEST_CASE("shipping native online predicts local movement before delayed peer in
     pair->hostWire.latency = pair->guestWire.latency = 4;
     usize hostAudio = 0;
     usize guestAudio = 0;
-    SoundPlayer::Capture captureHost(&pair->hostSounds, [&](const auto&) { ++hostAudio; });
-    SoundPlayer::Capture captureGuest(&pair->guestSounds, [&](const auto&) { ++guestAudio; });
+    const SoundPlayer::Capture captureHost(&pair->hostSounds, [&](const auto&) { ++hostAudio; });
+    const SoundPlayer::Capture captureGuest(&pair->guestSounds, [&](const auto&) { ++guestAudio; });
     std::optional<u32> locallyMoving;
     std::optional<u32> remotelyMoving;
     u64 largestSpeculation = 0;
@@ -549,7 +556,8 @@ TEST_CASE("shipping correction admits current local input without an extra appli
     pair->hostWire.latency = pair->guestWire.latency = 3;
     u32 checkedCorrections = 0;
     for (u32 frame = 0; frame < 72; ++frame) {
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         first[kHostDevice].move = {{frame % 4 < 2 ? 1.0f : -1.0f, 0}, 0.5f};
         second[kGuestDevice].move = {{frame % 2 == 0 ? -1.0f : 1.0f, 0}, 0.5f};
         const auto latest = published.latest(kSeats[1]);
@@ -850,6 +858,7 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
     // PartyRecords resets turbo at a level boundary; retain that rule too.
     for (const auto* play : {&pair->host, &pair->guest}) {
         for (const auto& member : play->scene()->participants()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
             auto& runtime = const_cast<PlayerRuntime&>(member);
             runtime.actor.save().gold = 10000 + runtime.actor.player();
             runtime.turbo.add(37.0f);
@@ -924,7 +933,8 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
     };
     REQUIRE(localLane(pair->host, kSeats[0]).phase == ShopPhase::Tally);
     for (u32 frame = 0; frame < 90; ++frame) {
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         first[kHostDevice].menu.select = second[kGuestDevice].menu.select = frame % 10 == 0;
         pair->step(first, second);
     }
@@ -933,7 +943,8 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
     CHECK(localLane(pair->host, kSeats[1]).phase != ShopPhase::Tally);
     REQUIRE(pair->host.resume(kHostDevice));
     for (u32 frame = 0; frame < 3600; ++frame) {
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         if (frame % 60 == 0) {
             first[kHostDevice].menu.start = second[kGuestDevice].menu.start = true;
         } else if (frame % 60 == 30) {
@@ -961,6 +972,7 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
     const auto canonical = pair->host.scene()->party();
     const auto agreed = *pair->hostSession.match().travelParty();
     const auto completedGold = pair->hostParty.localMembers()[0].save.gold;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<PlayerActor*>(pair->host.scene()->actor(kSeats[0]))->save().gold =
         completedGold + 777;
     REQUIRE(pair->host.saveCompletedProgress());
@@ -974,6 +986,7 @@ TEST_CASE("native online travel drains the terminal tick and retains the native 
         }
     }
     // Restore the test's deliberate live-only mutation before more shared ticks.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<PlayerActor*>(pair->host.scene()->actor(kSeats[0]))->save().gold =
         canonical[0].save.gold;
     pair->manualSaveSucceeds = false;
@@ -1022,13 +1035,16 @@ TEST_CASE("native secret travel resumes each retained parent and commits only lo
     REQUIRE(pair->guest.scene()->world()->ref().name == "B2");
     pair->settle();
     pair->synchronize();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* hostParent = const_cast<PlayScene*>(pair->host.scene());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* guestParent = const_cast<PlayScene*>(pair->guest.scene());
     const auto* hostWorld = hostParent->world();
     const auto* guestWorld = guestParent->world();
     const auto parentEpoch = pair->hostSession.match().context().epoch;
     for (auto* scene : {hostParent, guestParent}) {
         for (const auto seat : kSeats) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
             const_cast<PlayerActor*>(scene->actor(seat))->save().gold += 250 + seat;
             scene->awardExperience(seat, 100, true);
         }
@@ -1067,12 +1083,15 @@ TEST_CASE("native secret travel resumes each retained parent and commits only lo
     CHECK(pair->guest.scene() != guestParent);
     pair->settle();
     pair->synchronize();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* hostChallenge = const_cast<PlayScene*>(pair->host.scene());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* guestChallenge = const_cast<PlayScene*>(pair->guest.scene());
     REQUIRE(hostChallenge->challenge().totalCoins() > 0);
     REQUIRE(hostChallenge->challenge().totalCoins() == guestChallenge->challenge().totalCoins());
     for (auto* scene : {hostChallenge, guestChallenge}) {
         for (const auto seat : kSeats) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
             const_cast<PlayerActor*>(scene->actor(seat))->save().gold += 125;
             scene->awardExperience(seat, 80, true);
         }
@@ -1088,6 +1107,7 @@ TEST_CASE("native secret travel resumes each retained parent and commits only lo
         CHECK(coin.position == guestChallenge->world()->placedItems().item(index).position);
         for (auto* scene : {hostChallenge, guestChallenge}) {
             for (const auto seat : kSeats) {
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
                 const_cast<PlayerActor*>(scene->actor(seat))->place(coin.position);
             }
         }
@@ -1113,7 +1133,8 @@ TEST_CASE("native secret travel resumes each retained parent and commits only lo
          ++frame) {
         // ALLCOINS is an actual native scroll: it holds the one-second won
         // countdown until both owned inputs accept and burn the message.
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         first[kHostDevice].menu.select = second[kGuestDevice].menu.select = frame % 30 == 0;
         pair->step(first, second);
     }
@@ -1194,6 +1215,7 @@ TEST_CASE("native completion checkpoints save only local progress and honor Auto
         // Prepare the same native wizard timeline immediately before its final
         // departure. The actual scene update must produce the ending boundary;
         // no Shop/ending packet or completion state is fabricated.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& victory = const_cast<BossVictory&>(play->scene()->victory());
         victory.begin(44, 'H', 0, 0, false);
         for (u32 step = 0; step < 20 && victory.stage() != BossVictory::Stage::Gone; ++step) {
@@ -1217,7 +1239,8 @@ TEST_CASE("native completion checkpoints save only local progress and honor Auto
     for (u32 frame = 0; frame < 3600 && (pair->host.phase() != NativeOnlinePlay::Phase::Playing ||
                                          pair->guest.phase() != NativeOnlinePlay::Phase::Playing);
          ++frame) {
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         first[kHostDevice].menu.select = second[kGuestDevice].menu.select = frame % 30 == 0;
         pair->step(first, second);
     }
@@ -1243,7 +1266,9 @@ TEST_CASE("native GameOver finishes locally while terminal input relay remains l
     auto pair = std::make_unique<NativePair>(immediateTower());
     pair->settle();
     pair->synchronize();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<PlayScene*>(pair->host.scene())->startGameOver();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<PlayScene*>(pair->guest.scene())->startGameOver();
     for (u32 frame = 0; frame < static_cast<u32>(GameOver::kDurationTicks) + 30 &&
                         (pair->host.phase() != NativeOnlinePlay::Phase::Finished ||
@@ -1283,8 +1308,10 @@ TEST_CASE("native terminal departure waits for exact off-cadence state agreement
     const auto* hostScene = pair->host.scene();
     const auto* guestScene = pair->guest.scene();
     for (const auto* play : {&pair->host, &pair->guest}) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& scene = *const_cast<PlayScene*>(play->scene());
         scene.startGameOver();
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         const_cast<GameOver&>(scene.gameOver()).step(GameOver::kDurationTicks - 2);
     }
     usize blockedReports = 0;

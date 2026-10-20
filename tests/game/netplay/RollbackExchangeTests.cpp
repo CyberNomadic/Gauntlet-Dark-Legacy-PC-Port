@@ -40,8 +40,10 @@ struct Wire final : PacketTransport {
         return result;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-    void close(Connection) override {}
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
+        return std::nullopt;
+    }
+    void close(Connection /*connection*/) override {}
 };
 
 std::vector<u8> encode(const Exchange::Message& message) {
@@ -63,15 +65,16 @@ struct Room {
     std::function<bool(u8, u8, const Exchange::Message&)> drop;
     explicit Room(Exchange::Owners roster = {1, 2, 3, 4}, u8 delay = 0) : owners(roster) {
         for (usize seat = 0; seat < owners.size(); ++seat) {
-            grants[seat] = owners[seat] ? static_cast<u32>(20 + seat) : 0;
+            grants[seat] = (owners[seat] != 0u) ? static_cast<u32>(20 + seat) : 0;
         }
         std::vector<Exchange::Link> guests;
         for (u8 peer = 2; peer <= 4; ++peer) {
             if (present(peer)) {
                 guests.push_back({peer, static_cast<PacketTransport::Connection>(100 + peer)});
                 const std::array host{Exchange::Link{1, kHost}};
-                REQUIRE(peers[peer].open(peer, kEpoch, owners, grants, delay, host,
-                                         [this, peer] { return nowUs + 100'000'000 * peer; }));
+                REQUIRE(peers[peer].open(peer, kEpoch, owners, grants, delay, host, [this, peer] {
+                    return nowUs + static_cast<u64>(100'000'000) * peer;
+                }));
             }
         }
         REQUIRE(peers[1].open(1, kEpoch, owners, grants, delay, guests,
@@ -80,7 +83,8 @@ struct Room {
     bool present(u8 peer) const { return std::ranges::find(owners, peer) != owners.end(); }
     std::vector<InputCommand> frame(u8 peer, u64 tick) const {
         std::vector<InputCommand> result;
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
             if (owners[seat] == peer) {
                 InputCommand command;
                 command.epoch = kEpoch;
@@ -144,7 +148,7 @@ struct Room {
 
 TEST_CASE("rollback datagrams bound and authenticate their envelope before parsing input",
           "[rollback-exchange]") {
-    Room room;
+    const Room room;
     Exchange::Message message{kEpoch, 2, 3, {}, room.frame(2, 3)};
     const auto bytes = encode(message);
     CHECK(bytes.size() ==
@@ -357,6 +361,7 @@ TEST_CASE("a one datagram budget cannot starve later routed origins", "[rollback
     for (u8 receiver = 1; receiver <= 4; ++receiver) {
         for (u8 origin = 1; origin <= 4; ++origin) {
             CHECK(room.peers[receiver].receivedThrough(origin) == 1);
+            // NOLINTNEXTLINE(readability-suspicious-call-argument): what the origin acknowledged of this peer
             CHECK(room.peers[receiver].acknowledgedThrough(origin, receiver) == 1);
         }
     }
@@ -488,7 +493,7 @@ TEST_CASE("progress ages saturate and unknown RTT remains a bounded pacing estim
           "[rollback-exchange][rollback-pacing]") {
     const s32 ping = GENERATE(s32{-1}, std::numeric_limits<s32>::max());
     Room room({1, 2, 0, 0});
-    Exchange::Message message{kEpoch, 2, 1, {}, {}, 1, 0};
+    const Exchange::Message message{kEpoch, 2, 1, {}, {}, 1, 0};
     REQUIRE(room.peers[1].receive(102, encode(message), ping,
                                   [](const auto&, std::optional<u8> age) {
                                       REQUIRE(age == RollbackInputs::kPredictionTicks);
@@ -515,7 +520,7 @@ TEST_CASE("asymmetric star progress paces an actually faster peer without slowin
     std::array<usize, 5> idles{};
     // Guest A is 80 ms from the host, B 10 ms, C 30 ms. The receiver only
     // supplies its direct link RTT; no test code adds an upstream hop.
-    constexpr std::array<u64, 5> hopUs{0, 0, 80'000, 10'000, 30'000};
+    constexpr std::array<u64, 5> kHopUs{0, 0, 80'000, 10'000, 30'000};
     struct Pending {
         u8 sender, receiver;
         u64 arrives;
@@ -534,7 +539,7 @@ TEST_CASE("asymmetric star progress paces an actually faster peer without slowin
             const u8 guest = packet.sender == 1 ? packet.receiver : packet.sender;
             const auto connection = packet.sender == 1 ? kHost : 100 + packet.sender;
             REQUIRE(room.peers[packet.receiver].receive(
-                        connection, packet.bytes, static_cast<s32>(hopUs[guest] / 500),
+                        connection, packet.bytes, static_cast<s32>(kHopUs[guest] / 500),
                         [&](const Exchange::Message& message, std::optional<u8> age) {
                             if (!message.commands.empty()) {
                                 const auto admitted = inputs[packet.receiver].submit(
@@ -588,7 +593,8 @@ TEST_CASE("asymmetric star progress paces an actually faster peer without slowin
             for (auto& packet : room.wires[peer].packets) {
                 const u8 receiver = peer == 1 ? static_cast<u8>(packet.connection - 100) : 1;
                 const u8 guest = peer == 1 ? receiver : peer;
-                pending.push_back({peer, receiver, room.nowUs + hopUs[guest], std::move(packet.bytes)});
+                pending.push_back(
+                    {peer, receiver, room.nowUs + kHopUs[guest], std::move(packet.bytes)});
             }
             room.wires[peer].packets.clear();
         }

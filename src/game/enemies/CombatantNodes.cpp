@@ -31,7 +31,7 @@ bool Combatant::replaceNodeModel(RenderDevice& device, std::string_view node,
     }
     std::erase_if(actor.modelReplacements,
                   [&](const auto& previous) { return previous.node == *index; });
-    actor.modelReplacements.push_back(std::move(replacement));
+    actor.modelReplacements.push_back(replacement);
     return true;
 }
 

@@ -13,7 +13,8 @@ static_assert(!std::is_copy_assignable_v<MoveStrikes>);
 
 TEST_CASE("native strike values rewind births delayed launches reflections and retirement",
           "[rollback][local-rewind][move-strikes-local-rewind]") {
-    MoveStrikes uninterrupted, replay;
+    MoveStrikes uninterrupted;
+    MoveStrikes replay;
     MoveStrikes::LocalSnapshot history;
     MoveStrike burst;
     burst.type = MoveStrike::kBursts;
@@ -28,7 +29,7 @@ TEST_CASE("native strike values rewind births delayed launches reflections and r
     flight.speed = 20;
     flight.maxTime = 0.75f;
     flight.amount = 70;
-    constexpr f32 seconds = 1.0f / 30;
+    constexpr f32 kSeconds = 1.0f / 30;
     const auto step = [&](MoveStrikes& owner, s32 tick) {
         if (tick % 23 == 0) {
             owner.start(burst, 0, {2, 3, 4}, {0, 0, 1}, 10, 0.75f);
@@ -40,7 +41,7 @@ TEST_CASE("native strike values rewind births delayed launches reflections and r
             owner.hitPlayer(owner.strike(owner.count() - 1).id, true, {1, 2, 3});
             owner.placeArea(owner.strike(0).id, glm::translate(Mat4{1}, Vec3{7, 8, 9}));
         }
-        return owner.update(seconds, nullptr);
+        return owner.update(kSeconds, nullptr);
     };
     s32 frame = 0;
     usize contacts = 0;
@@ -54,7 +55,7 @@ TEST_CASE("native strike values rewind births delayed launches reflections and r
         for (s32 i = 0; i < length; ++i) {
             expected.push_back(step(uninterrupted, frame + i));
             replay.start(flight, 1, {100, 50, 10}, {1, 0, 0}, 500, 3);
-            replay.update(seconds * 3, nullptr);
+            replay.update(kSeconds * 3, nullptr);
             if (replay.count() > 0) {
                 replay.stop(replay.strike(0).id);
             }
@@ -157,6 +158,8 @@ TEST_CASE("strike restoration validates before mutation and consumes only its ow
         case 5: bad.next = bad.strikes[0].id; break;
         case 6: bad.strikes[0].expanding = true; break;
         case 7: bad.strikes.resize(MoveStrikes::Checkpoint::kMaxStrikes + 1); break;
+        default:
+            break;
         }
         CHECK_FALSE(native.restore(bad));
         CHECK(native.checkpoint() == saved);

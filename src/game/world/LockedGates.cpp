@@ -30,7 +30,7 @@ bool LockedGates::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsh
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 bool LockedGates::registerNativeResources(NativeStateResources& resources) const {
@@ -43,25 +43,25 @@ bool LockedGates::registerNativeResources(NativeStateResources& resources) const
 }
 
 void LockedGates::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool LockedGates::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool LockedGates::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool LockedGates::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -211,7 +211,7 @@ std::vector<GateEvent> LockedGates::update(s32 ticks, f32 seconds,
 
 std::vector<Obstacle> LockedGates::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (auto& gate : m_sim.gates) {
+    for (const auto& gate : m_sim.gates) {
         if (gate.shown && gate.box.solid) {
             boxes.push_back(gate.box);
         }
@@ -222,7 +222,7 @@ std::vector<Obstacle> LockedGates::obstacles() const {
 std::vector<Obstacle> LockedGates::shotStops() const {
     // fn_8005F0F4 keeps a door in a shot's way until it has swung open.
     std::vector<Obstacle> boxes;
-    for (auto& gate : m_sim.gates) {
+    for (const auto& gate : m_sim.gates) {
         if (gate.shown && gate.blocksPassage && gate.state != kOpen) {
             Obstacle box = gate.box;
             box.solid = true;
@@ -240,7 +240,7 @@ void LockedGates::capturePresentation() {
 
 void LockedGates::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                        f32 presentationAlpha) const {
-    for (auto& gate : m_sim.gates) {
+    for (const auto& gate : m_sim.gates) {
         if (gate.shown) {
             gate.figure.draw(device, clip, lighting, 1, 1, nullptr, TreeModel::Pass::All,
                              presentationAlpha);

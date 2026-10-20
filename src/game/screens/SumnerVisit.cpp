@@ -209,25 +209,25 @@ void SumnerVisit::answer(s32 topic, const TextPainter& text, const StringTable* 
 }
 
 void SumnerVisit::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    m_menu.saveLocal(saved.menu);
-    m_hints.saveLocal(saved.hints);
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    m_menu.saveLocal(saved.m_menu);
+    m_hints.saveLocal(saved.m_hints);
 }
 
 bool SumnerVisit::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding &&
-           m_menu.canRestoreLocal(saved.menu) && m_hints.canRestoreLocal(saved.hints);
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding &&
+           m_menu.canRestoreLocal(saved.m_menu) && m_hints.canRestoreLocal(saved.m_hints);
 }
 
 bool SumnerVisit::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_menu.restoreLocal(saved.menu);
-    m_hints.restoreLocal(saved.hints);
+    m_sim = saved.m_state;
+    m_menu.restoreLocal(saved.m_menu);
+    m_hints.restoreLocal(saved.m_hints);
     return true;
 }
 

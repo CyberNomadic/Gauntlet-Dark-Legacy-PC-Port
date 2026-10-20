@@ -22,44 +22,47 @@ class ParticleTextureOrderDevice final : public RenderDevice {
 public:
     explicit ParticleTextureOrderDevice(bool reverse) {
         for (s32 i = 0; i < 2; ++i) {
-            textures.push_back(std::make_unique<test::FakeTexture>(2, 2));
+            m_textures.push_back(std::make_unique<test::FakeTexture>(2, 2));
         }
-        std::ranges::sort(textures, [](const auto& a, const auto& b) {
+        std::ranges::sort(m_textures, [](const auto& a, const auto& b) {
             return std::less<const Texture*>{}(a.get(), b.get());
         });
         if (reverse) {
-            std::ranges::reverse(textures);
+            std::ranges::reverse(m_textures);
         }
     }
     bool beginFrame() override { return true; }
     void endFrame() override {}
-    void setClearColor(const Vec4&) override {}
+    void setClearColor(const Vec4& /*rgba*/) override {}
     Extent2D framebufferExtent() const override { return {640, 448}; }
-    void setPresentation(bool, u32) override {}
+    void setPresentation(bool /*vsync*/, u32 /*sampleCount*/) override {}
     u32 presentationSampleCount() const override { return 1; }
-    void setTextureFiltering(u32) override {}
-    void setSmoothSprites(bool) override {}
+    void setTextureFiltering(u32 /*filtering*/) override {}
+    void setSmoothSprites(bool /*enabled*/) override {}
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> pixels) override {
         REQUIRE(desc.width == 2);
         REQUIRE(desc.height == 2);
-        REQUIRE(next < textures.size());
-        textures[next]->pixels.assign(pixels.begin(), pixels.end());
-        return std::move(textures[next++]);
+        REQUIRE(m_next < m_textures.size());
+        m_textures[m_next]->pixels.assign(pixels.begin(), pixels.end());
+        return std::move(m_textures[m_next++]);
     }
-    void updateTexture(Texture&, std::span<const u8>) override { FAIL("unexpected upload"); }
-    const Texture& whiteTexture() const override { return white; }
-    void draw(const ImmediateBatch&, const Texture&, const Mat4&, const DrawState&) override {}
+    void updateTexture(Texture& /*texture*/, std::span<const u8> /*rgba8Pixels*/) override {
+        FAIL("unexpected upload");
+    }
+    const Texture& whiteTexture() const override { return m_white; }
+    void draw(const ImmediateBatch& /*batch*/, const Texture& /*texture*/,
+              const Mat4& /*transform*/, const DrawState& /*state*/) override {}
     void waitIdle() override {}
-    bool applyDepthOfField(const DepthOfField&) override { return false; }
+    bool applyDepthOfField(const DepthOfField& /*settings*/) override { return false; }
     bool applyBloom() override { return false; }
-    void addHeatSource(const HeatSource&) override {}
-    bool applyAmbientOcclusion(const AmbientOcclusion&) override { return false; }
+    void addHeatSource(const HeatSource& /*source*/) override {}
+    bool applyAmbientOcclusion(const AmbientOcclusion& /*settings*/) override { return false; }
 
 private:
-    test::FakeTexture white{1, 1};
-    std::vector<std::unique_ptr<test::FakeTexture>> textures;
-    usize next = 0;
+    test::FakeTexture m_white{1, 1};
+    std::vector<std::unique_ptr<test::FakeTexture>> m_textures;
+    usize m_next = 0;
 };
 
 struct ParticleTextureBindings {
@@ -101,11 +104,14 @@ TEST_CASE("native particle digest canonicalizes only authored texture-batched ma
          "direction":[0,1,0],"speed":15,"texture":"GLASS"}]})");
     WorldLayout layout;
     REQUIRE(layout.load(directory));
-    ParticleTextureOrderDevice ascending(false), descending(true);
-    TextureSet firstTextures, secondTextures;
+    ParticleTextureOrderDevice ascending(false);
+    ParticleTextureOrderDevice descending(true);
+    TextureSet firstTextures;
+    TextureSet secondTextures;
     REQUIRE(firstTextures.load(directory));
     REQUIRE(secondTextures.load(directory));
-    ParticleField first, second;
+    ParticleField first;
+    ParticleField second;
     first.bind(layout, firstTextures, ascending, {}, 871);
     second.bind(layout, secondTextures, descending, {}, 871);
     REQUIRE(first.size() == 2);
@@ -137,7 +143,7 @@ TEST_CASE("native particle digest canonicalizes only authored texture-batched ma
     const auto add = [&](ParticleField& field, const Texture& texture, bool reverse) {
         for (s32 i = 0; i < 2; ++i) {
             const s32 index = reverse ? 1 - i : i;
-            field.start(descriptor, glm::translate(Mat4{1}, Vec3{10.0f + index, 2, 3}),
+            field.start(descriptor, glm::translate(Mat4{1}, Vec3{10.0f + static_cast<f32>(index), 2, 3}),
                          &texture, static_cast<u32>(index + 23));
         }
     };
@@ -236,7 +242,8 @@ TEST_CASE("native particle value copies restore topology RNG and fractional cloc
 TEST_CASE("stepped particle draw samples preserve native bindings and do not blend cutouts",
           "[native-digest][particle-native-digest][particle-local-rewind][presentation]") {
     test::FakeRenderDevice device;
-    test::FakeTexture shown{2, 2}, next{2, 2};
+    test::FakeTexture shown{2, 2};
+    test::FakeTexture next{2, 2};
     ParticleDescriptor descriptor;
     descriptor.oneShot = true;
     descriptor.maxParticles = 1;

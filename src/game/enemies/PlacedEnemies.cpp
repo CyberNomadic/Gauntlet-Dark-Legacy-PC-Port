@@ -104,7 +104,7 @@ void PlacedEnemies::clear() {
 }
 
 void PlacedEnemies::observe(std::optional<ViewVolume> view, const Vec3& attention) {
-    m_sim.view = std::move(view);
+    m_sim.view = view;
     m_sim.attention = attention;
 }
 
@@ -121,7 +121,7 @@ std::vector<PlacedEnemies::Placement> PlacedEnemies::activations() const {
     std::vector<Placement> result;
     for (const usize index : m_sim.pending) {
         if (auto standing = activation(index)) {
-            result.push_back(std::move(*standing));
+            result.push_back(*standing);
         }
     }
     return result;

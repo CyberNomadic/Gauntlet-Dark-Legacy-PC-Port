@@ -17,7 +17,7 @@ namespace gdl::game {
  * `S_BRAVERY`, and the count starts over.
  */
 class MeleeStreak {
-    friend void visitNativeState(NativeStateDigest&, const MeleeStreak&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const MeleeStreak& /*value*/);
 
 public:
     bool operator==(const MeleeStreak&) const = default;

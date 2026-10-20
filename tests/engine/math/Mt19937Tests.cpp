@@ -16,7 +16,7 @@ namespace {
 using namespace gdl;
 
 template <u32 Minimum, u32 Maximum, class Word = u32> struct ScriptedRandom {
-    using result_type = Word;
+    using result_type = Word; // NOLINT(readability-identifier-naming): std::mt19937's name
     std::span<const u32> words;
     usize draws = 0;
 

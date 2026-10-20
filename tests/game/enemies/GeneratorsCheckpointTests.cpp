@@ -281,7 +281,8 @@ TEST_CASE(
 TEST_CASE("native generator history cannot outlive its level or owner",
           "[local-rewind][generator-local-rewind][native-equality]") {
     Generators::LocalSnapshot saved;
-    Generators a, b;
+    Generators a;
+    Generators b;
     CHECK_FALSE(a.restoreLocal(saved));
     CHECK_FALSE(a.equalLocal(saved, saved));
     a.saveLocal(saved);
@@ -293,7 +294,7 @@ TEST_CASE("native generator history cannot outlive its level or owner",
     CHECK_FALSE(a.restoreLocal(saved));
     CHECK_FALSE(a.equalLocal(saved, saved));
     {
-        Generators temporary;
+        const Generators temporary;
         temporary.saveLocal(saved);
     }
     CHECK_FALSE(a.restoreLocal(saved));

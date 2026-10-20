@@ -59,6 +59,7 @@ struct CameraFixture {
     Mat4 render(f32 blend = 1) {
         const auto width = static_cast<f32>(config.display.frameWidth);
         const auto height = static_cast<f32>(config.display.frameHeight);
+        // NOLINTNEXTLINE(readability-suspicious-call-argument): the screen's y axis points down
         const auto projection = glm::ortho(0.0f, width, height, 0.0f, -1.0f, 1.0f);
         REQUIRE(device.beginFrame());
         scene.render(device, projection, width, height, false, blend);

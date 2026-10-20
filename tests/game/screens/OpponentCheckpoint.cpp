@@ -62,6 +62,7 @@ bool OpponentCheckpoint::canCommit(const Prepared& prepared) const {
            m_missiles.canCommit(prepared.m_data->missiles) &&
            (prepared.m_data->placements.has_value() == (m_placements != nullptr)) &&
            (!prepared.m_data->placements ||
+            // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker): paired with the owner above
             PlacedEnemiesCheckpoint::canCommit(*m_placements, *prepared.m_data->placements));
 }
 

@@ -476,14 +476,12 @@ bool PlayerFigure::registerNativeResources(NativeStateResources& resources) cons
     // The animator's resolved bank is immutable; its changing clock is native
     // state. Equipment models are mutable draw caches and are not registered.
     return resources.registerTextureAnimator(m_costumeTextures, m_costumeArchive, "costume") &&
-           (!m_missile.bound() ||
-            (m_missileArchive &&
-             resources.registerModel(m_missile, *m_missileArchive,
-                                     "player/missile/" + m_missileName))) &&
+           (!m_missile.bound() || ((m_missileArchive != nullptr) &&
+                                   resources.registerModel(m_missile, *m_missileArchive,
+                                                           "player/missile/" + m_missileName))) &&
            (!m_familiarMissile.bound() ||
             resources.registerModel(m_familiarMissile, m_effects, "player/familiar-missile")) &&
-           m_companion.registerNativeResources(resources) &&
-           resources.good();
+           m_companion.registerNativeResources(resources) && resources.good();
 }
 
 std::optional<Vec3> PlayerFigure::handPosition(const Mat4& body) const {
@@ -1075,9 +1073,9 @@ bool PlayerFigure::gameplayBindingMatches(const GameplayCheckpoint& state) const
         }
         return true;
     };
-    return m_actionTree && m_costume && m_action.animator.bound() &&
-           state.actions == m_actionTree->name &&
-           state.costume == m_costume->name && objects(*m_costume, state.costumeObjects) &&
+    return (m_actionTree != nullptr) && (m_costume != nullptr) && m_action.animator.bound() &&
+           state.actions == m_actionTree->name && state.costume == m_costume->name &&
+           objects(*m_costume, state.costumeObjects) &&
            objects(m_handItemTree, state.handObjects) && objects(m_armTree, state.armObjects) &&
            state.familiarTier == m_familiar.tier() && state.companion == m_companion.kind() &&
            !pojoActive() && state.handHeld == m_handItemHeld && state.armHeld == m_armHeld &&
@@ -1141,6 +1139,7 @@ bool PlayerFigure::canCommitGameplay(const PreparedGameplay& prepared) const {
            prepared.m_data->companionBinding == m_companion.bindingRevision() &&
            gameplayBindingMatches(prepared.m_data->state);
 }
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts are taken in place
 bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
     if (!canCommitGameplay(prepared)) {
         return false;

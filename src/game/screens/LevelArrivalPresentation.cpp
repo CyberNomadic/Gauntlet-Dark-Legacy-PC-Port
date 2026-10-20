@@ -60,30 +60,30 @@ bool LevelArrivalPresentation::appendLocalDigest(NativeStateDigest& digest,
 }
 
 void LevelArrivalPresentation::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.state = m_sim;
-    saved.textures = m_textures.clock();
-    saved.spawns.resize(m_spawns.size());
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_state = m_sim;
+    saved.m_textures = m_textures.clock();
+    saved.m_spawns.resize(m_spawns.size());
     for (usize i = 0; i < m_spawns.size(); ++i) {
-        saved.spawns[i] = m_spawns[i];
+        saved.m_spawns[i] = m_spawns[i];
     }
 }
 
 bool LevelArrivalPresentation::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_localBinding &&
-           saved.spawns.size() == m_spawns.size();
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_localBinding &&
+           saved.m_spawns.size() == m_spawns.size();
 }
 
 bool LevelArrivalPresentation::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_textures.restoreClock(saved.textures);
+    m_sim = saved.m_state;
+    m_textures.restoreClock(saved.m_textures);
     for (usize i = 0; i < m_spawns.size(); ++i) {
-        static_cast<SpawnState&>(m_spawns[i]) = saved.spawns[i];
+        static_cast<SpawnState&>(m_spawns[i]) = saved.m_spawns[i];
     }
     return true;
 }

@@ -81,10 +81,10 @@ private:
 public:
     class LocalSnapshot {
         friend class TowerPromotion;
-        Simulation state;
-        TextureAnimator::Clock textureClock;
-        const TowerPromotion* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        TextureAnimator::Clock m_textureClock;
+        const TowerPromotion* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

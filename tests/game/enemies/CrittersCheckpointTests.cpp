@@ -91,7 +91,7 @@ TEST_CASE("critter capture retains exact actor links and validates incoming bank
     for (s32 tick = 0; tick < 12; ++tick) {
         fixture->critters.update(1, 1.0f / 60, players);
         const auto captured = capture(*fixture->checkpoint);
-        CrittersCheckpoint independent{fixture->critters};
+        const CrittersCheckpoint independent{fixture->critters};
         REQUIRE(captured.valid());
         CHECK(capture(independent) == captured);
     }
@@ -109,6 +109,8 @@ TEST_CASE("critter capture retains exact actor links and validates incoming bank
             invalid.events.blows.push_back({0, 0, std::numeric_limits<f32>::quiet_NaN()});
             break;
         case 4: invalid.actors.front().lookouts.reset(); break;
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture->checkpoint->prepareRestore(invalid));

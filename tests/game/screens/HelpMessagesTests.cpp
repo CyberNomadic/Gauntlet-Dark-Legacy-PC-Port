@@ -88,9 +88,9 @@ TEST_CASE("read only help admission shares every native repeat policy", "[help][
     loadStrings("help-repeat-admission", strings);
     std::array<std::vector<s32>, 2> seen;
     std::array<std::vector<s32>, 2> heard;
-    const std::array readers{HelpReader{3, &seen[0], &heard[0]},
+    const std::array readers{HelpReader{3, seen.data(), heard.data()},
                              HelpReader{1, &seen[1], &heard[1]}};
-    const std::array histories{HelpHistory{3, &seen[0], &heard[0]},
+    const std::array histories{HelpHistory{3, seen.data(), heard.data()},
                                HelpHistory{1, &seen[1], &heard[1]}};
     const auto compare = [&](s32 id, s32 player, bool expected) {
         CAPTURE(id, player, expected);

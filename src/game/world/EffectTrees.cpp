@@ -25,6 +25,7 @@ void appendLenders(NativeStateDigest& digest, std::span<TextureSet* const> lende
     }
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 void appendEffect(NativeStateDigest& digest, const EffectTrees::EffectState& effect,
                   std::vector<const EffectTrees::EffectState*>& ancestors) {
     if (std::ranges::find(ancestors, &effect) != ancestors.end()) {
@@ -520,48 +521,48 @@ EffectTrees::Motion& EffectTrees::nativeBank(RenderDevice& device, ItemArchive& 
 }
 
 void EffectTrees::saveLocal(LocalSnapshot& state) const {
-    state.owner.reset();
-    state.effects.resize(m_effects.size());
+    state.m_owner.reset();
+    state.m_effects.resize(m_effects.size());
     for (usize i = 0; i < m_effects.size(); ++i) {
-        state.effects[i] = *m_effects[i];
+        state.m_effects[i] = static_cast<const EffectState&>(*m_effects[i]);
     }
-    state.motions = m_motions;
-    state.clocks.resize(m_motions.size());
+    state.m_motions = m_motions;
+    state.m_clocks.resize(m_motions.size());
     for (usize i = 0; i < m_motions.size(); ++i) {
-        state.clocks[i] = m_motions[i]->animator.clock();
+        state.m_clocks[i] = m_motions[i]->animator.clock();
     }
-    state.lenders = m_lenders;
-    state.presentationAdvanced = m_presentationAdvanced;
-    state.nextId = m_nextId;
-    state.nextInstance = m_nextInstance;
-    state.epoch = m_localEpoch;
-    state.owner = m_restoreOwner;
+    state.m_lenders = m_lenders;
+    state.m_presentationAdvanced = m_presentationAdvanced;
+    state.m_nextId = m_nextId;
+    state.m_nextInstance = m_nextInstance;
+    state.m_epoch = m_localEpoch;
+    state.m_owner = m_restoreOwner;
 }
 
 bool EffectTrees::canRestoreLocal(const LocalSnapshot& state) const {
-    return !state.owner.expired() && state.owner.lock() == m_restoreOwner &&
-           state.epoch == m_localEpoch;
+    return !state.m_owner.expired() && state.m_owner.lock() == m_restoreOwner &&
+           state.m_epoch == m_localEpoch;
 }
 
 bool EffectTrees::restoreLocal(const LocalSnapshot& state) {
     if (!canRestoreLocal(state)) {
         return false;
     }
-    m_effects.resize(state.effects.size());
-    for (usize i = 0; i < state.effects.size(); ++i) {
+    m_effects.resize(state.m_effects.size());
+    for (usize i = 0; i < state.m_effects.size(); ++i) {
         if (!m_effects[i]) {
             m_effects[i] = std::make_unique<Effect>();
         }
-        static_cast<EffectState&>(*m_effects[i]) = state.effects[i];
+        static_cast<EffectState&>(*m_effects[i]) = state.m_effects[i];
     }
-    m_motions = state.motions;
+    m_motions = state.m_motions;
     for (usize i = 0; i < m_motions.size(); ++i) {
-        m_motions[i]->animator.restoreClock(state.clocks[i]);
+        m_motions[i]->animator.restoreClock(state.m_clocks[i]);
     }
-    m_lenders = state.lenders;
-    m_presentationAdvanced = state.presentationAdvanced;
-    m_nextId = state.nextId;
-    m_nextInstance = state.nextInstance;
+    m_lenders = state.m_lenders;
+    m_presentationAdvanced = state.m_presentationAdvanced;
+    m_nextId = state.m_nextId;
+    m_nextInstance = state.m_nextInstance;
     ++m_restoreGeneration;
     return true;
 }
@@ -610,7 +611,7 @@ bool EffectTrees::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool EffectTrees::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const {
-    if (!canRestoreLocal(state) || state.motions.size() != state.clocks.size()) {
+    if (!canRestoreLocal(state) || state.m_motions.size() != state.m_clocks.size()) {
         digest.invalidate();
         return false;
     }
@@ -641,7 +642,7 @@ bool EffectTrees::registerNativeResources(NativeStateResources& registry) const 
     std::vector<const ItemArchive*> archives;
     std::vector<const TextureSet*> banks;
     const auto refreshArchive = [&](const ItemArchive* archive) {
-        if (!archive || std::ranges::find(archives, archive) != archives.end()) {
+        if ((archive == nullptr) || std::ranges::find(archives, archive) != archives.end()) {
             return true;
         }
         archives.push_back(archive);
@@ -649,7 +650,7 @@ bool EffectTrees::registerNativeResources(NativeStateResources& registry) const 
     };
     const auto refreshLenders = [&](std::span<TextureSet* const> lenders) {
         for (const auto* lender : lenders) {
-            if (lender && std::ranges::find(banks, lender) == banks.end()) {
+            if ((lender != nullptr) && std::ranges::find(banks, lender) == banks.end()) {
                 banks.push_back(lender);
                 if (!registry.refreshTextures(*lender)) {
                     return false;
@@ -672,6 +673,7 @@ bool EffectTrees::registerNativeResources(NativeStateResources& registry) const 
         }
     }
     std::vector<const EffectState*> ancestors;
+    // NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
     const auto refreshEffect = [&](const auto& self, const EffectState& effect) -> bool {
         if (std::ranges::find(ancestors, &effect) != ancestors.end() ||
             !refreshArchive(effect.archive) || !refreshLenders(effect.lenders)) {

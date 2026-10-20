@@ -46,37 +46,39 @@ bool Rotators::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot&
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
     [[maybe_unused]] const auto& [state, binding, owner, epoch] = saved;
     if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
-    return appendDigest(digest, saved.state);
+    return appendDigest(digest, saved.m_state);
 }
 
 bool Rotators::registerNativeResources(NativeStateResources& resources) const {
     for (const auto& rotator : m_sim.rotators) {
-        if (rotator.pad && !rotator.pad->registerNativeResources(resources)) return false;
+        if (rotator.pad && !rotator.pad->registerNativeResources(resources)) {
+            return false;
+        }
     }
     return resources.good();
 }
 
 void Rotators::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
-    saved.epoch = m_localEpoch;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
+    saved.m_epoch = m_localEpoch;
 }
 
 bool Rotators::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding && saved.epoch == m_localEpoch;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding && saved.m_epoch == m_localEpoch;
 }
 
 bool Rotators::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool Rotators::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }

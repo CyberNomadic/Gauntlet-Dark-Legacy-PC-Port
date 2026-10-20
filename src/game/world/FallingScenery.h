@@ -65,10 +65,10 @@ public:
     };
     class LocalSnapshot {
         friend class FallingScenery;
-        std::vector<PieceState> pieces;
-        Clock clock;
-        std::weak_ptr<const u8> binding;
-        const FallingScenery* owner = nullptr;
+        std::vector<PieceState> m_pieces;
+        Clock m_clock;
+        std::weak_ptr<const u8> m_binding;
+        const FallingScenery* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

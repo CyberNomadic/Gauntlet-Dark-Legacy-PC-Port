@@ -122,8 +122,8 @@ TEST_CASE("effect checkpoints replay native poses particles and detached flight 
         native.capturePresentation();
         replay.capturePresentation();
         if (attached) {
-            const Mat4 at = glm::translate(glm::rotate(Mat4{1}, 0.13f * step, Vec3{0, 1, 0}),
-                                           Vec3{0.01f * step, 2, 3});
+            const Mat4 at = glm::translate(glm::rotate(Mat4{1}, 0.13f * static_cast<f32>(step), Vec3{0, 1, 0}),
+                                           Vec3{0.01f * static_cast<f32>(step), 2, 3});
             native.placeAt(source, at, Vec3{1, 2, 3});
             replay.placeAt(destination, at, Vec3{1, 2, 3});
         }
@@ -170,6 +170,8 @@ TEST_CASE("effect checkpoint failures are atomic and reject resource topology ch
         case 7: bad.particles.field.entries[0].emitter.descriptor.speed += 0.5f; break;
         case 8: bad.setting.playbackRate = std::numeric_limits<f32>::infinity(); break;
         case 9: bad.setting.emitParticles = false; break;
+        default:
+            break;
         }
         CHECK_FALSE(effects.restore(id, bad));
         CHECK(effects.checkpoint(id) == state);

@@ -12,8 +12,10 @@ struct CritterCueEmission {
     Vec3 position{0};
     EffectTrees::Setting setting;
 
-    static CritterCueEmission resolve(const CombatCue&, ItemArchive*, ItemArchive& weapons);
-    std::optional<EffectTrees::Prepared> prepare(std::span<const EffectTrees::PoolResource>,
-                                                 std::span<TextureSet* const>) const;
+    static CritterCueEmission resolve(const CombatCue& /*cue*/, ItemArchive* /*archive*/,
+                                      ItemArchive& weapons);
+    std::optional<EffectTrees::Prepared>
+        prepare(std::span<const EffectTrees::PoolResource> /*resources*/,
+                std::span<TextureSet* const> /*lenders*/) const;
 };
 } // namespace gdl::game

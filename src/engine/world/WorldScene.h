@@ -154,7 +154,9 @@ private:
                          scrollVelocity] = value;
             digest.resource(frame);
             digest.wide(cycle.size());
-            for (const auto* texture : cycle) digest.resource(texture);
+            for (const auto* texture : cycle) {
+                digest.resource(texture);
+            }
             digest.values(cyclePosition, cycleSpeed, offset, scrollPhase, scrollVelocity);
         }
     };
@@ -234,7 +236,7 @@ private:
     struct StaticPlacements {
         explicit StaticPlacements(std::vector<PlacementState> states = {});
         std::vector<PlacementState> values;
-        CanonicalDigestSink::Digest fingerprint;
+        CanonicalDigestSink::Digest fingerprint{};
     };
 
     /** Static placement values are shared by native history until a diagnostic
@@ -257,16 +259,16 @@ private:
 public:
     class LocalSnapshot {
         friend class WorldScene;
-        std::vector<PlacementState> placements;
-        std::shared_ptr<const StaticPlacements> staticPlacements;
-        bool staticPreviousPending = false;
-        std::vector<UnitState> units;
-        std::vector<std::pair<u32, SlotMotion>> slots;
-        WorldLighting lighting;
-        f32 darken = 0;
-        u32 textureFrame = 0;
-        const WorldScene* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        std::vector<PlacementState> m_placements;
+        std::shared_ptr<const StaticPlacements> m_staticPlacements;
+        bool m_staticPreviousPending = false;
+        std::vector<UnitState> m_units;
+        std::vector<std::pair<u32, SlotMotion>> m_slots;
+        WorldLighting m_lighting;
+        f32 m_darken = 0;
+        u32 m_textureFrame = 0;
+        const WorldScene* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     /** Native values only: geometry buffers, mesh bindings, and draw scratch
      * stay with the live scene. No resource lookup or GPU work during restore. */

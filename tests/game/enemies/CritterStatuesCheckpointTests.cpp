@@ -316,7 +316,8 @@ TEST_CASE("native statue rewind restores wrong wake branches across compaction a
             statues.takeRisen();
         }
     };
-    bool sawRisen = false, sawCompaction = false;
+    bool sawRisen = false;
+    bool sawCompaction = false;
     s32 tick = 0;
     for (s32 window = 0; window < 24; ++window) {
         CAPTURE(window, tick);
@@ -389,7 +390,8 @@ TEST_CASE("native statue history refuses different pools loads and diagnostic re
 TEST_CASE("native statue equality sees contact-grid policy before any actor moves",
           "[critter-statues-local-rewind][native-equality]") {
     StatueFixture fixture;
-    CritterStatues::LocalSnapshot before, after;
+    CritterStatues::LocalSnapshot before;
+    CritterStatues::LocalSnapshot after;
     fixture.native.saveLocal(before);
     fixture.native.setContactGridBounds({-500, 0, -500}, {700, 0, 700});
     fixture.native.saveLocal(after);

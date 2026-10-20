@@ -84,7 +84,8 @@ struct PortalFixture {
 TEST_CASE("native portal history rewinds contacts waiting events secret icons and departure",
           "[local-rewind][exit-portals-local-rewind]") {
     const bool artwork = GENERATE(false, true);
-    PortalFixture native("portal-local-native", artwork), replay("portal-local-replay", artwork);
+    PortalFixture native("portal-local-native", artwork);
+    PortalFixture replay("portal-local-replay", artwork);
     std::array<ExitPortals::LocalSnapshot, 16> history;
     WorldCollision::LocalSnapshot floor;
     const auto* model = &replay.portals.portal(0).model;
@@ -159,8 +160,8 @@ TEST_CASE("portal checkpoint resumes native phases floor carry texture clocks an
     const s32 rate = GENERATE(30, 60);
     const bool artwork = GENERATE(false, true);
     CAPTURE(rate, artwork);
-    PortalFixture host("portal-checkpoint-host", artwork),
-        guest("portal-checkpoint-guest", artwork);
+    PortalFixture host("portal-checkpoint-host", artwork);
+    PortalFixture guest("portal-checkpoint-guest", artwork);
     const s32 ticks = 60 / rate;
     const f32 seconds = 1.0f / static_cast<f32>(rate);
     std::array party{PortalVisitor{{0, 0, 0}, 0.75f, 3, true},
@@ -208,7 +209,8 @@ TEST_CASE("portal checkpoint resumes native phases floor carry texture clocks an
 
 TEST_CASE("portal restore preflights malformed state and fences stale binding and sibling plans",
           "[rollback][exit-portals-checkpoint]") {
-    PortalFixture fixture("portal-checkpoint-atomic"), other("portal-checkpoint-other");
+    PortalFixture fixture("portal-checkpoint-atomic");
+    PortalFixture other("portal-checkpoint-other");
     const auto original = fixture.state();
     for (s32 mutation = 0; mutation < 8; ++mutation) {
         CAPTURE(mutation);
@@ -222,6 +224,8 @@ TEST_CASE("portal restore preflights malformed state and fences stale binding an
         case 5: invalid.portals[0].source.instance.position.x += 1; break;
         case 6: invalid.portals[1].icon.state.textures.remainder = 1; break;
         case 7: invalid.portals[0].supportLocal[3].x += 1; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
         CHECK(fixture.state() == original);
@@ -248,7 +252,8 @@ TEST_CASE("portal restore preflights malformed state and fences stale binding an
 
 TEST_CASE("secret portal checkpoint keeps the actual toucher and consumed icon without travel",
           "[rollback][exit-portals-checkpoint]") {
-    PortalFixture fixture("portal-checkpoint-secret"), other("portal-checkpoint-secret-other");
+    PortalFixture fixture("portal-checkpoint-secret");
+    PortalFixture other("portal-checkpoint-secret-other");
     const std::array touching{PortalVisitor{{20.5f, 0, 0}, 0.75f, 2, true}};
     REQUIRE(fixture.portals.update(1, 1.0f / 60, touching) == 1);
     fixture.portals.consume(1);
@@ -270,7 +275,8 @@ TEST_CASE("native tower portal restore retains open and EXIT_OFF resources indep
     test::FakeRenderDevice device;
     WorldLayout layout;
     LevelCatalog catalog;
-    ItemArchive hostItems, guestItems;
+    ItemArchive hostItems;
+    ItemArchive guestItems;
     REQUIRE(layout.load(root / "LEVELS/LEVELL1"));
     REQUIRE(catalog.load(root));
     REQUIRE(hostItems.load(root / "ITEMS/LEVELL"));
@@ -278,13 +284,16 @@ TEST_CASE("native tower portal restore retains open and EXIT_OFF resources indep
     std::vector<ClassProgress> progress(1);
     progress[0].levels.recordBeaten(7, 0);
     const TowerAccess access{progress};
-    ExitPortals host, guest;
+    ExitPortals host;
+    ExitPortals guest;
     REQUIRE(host.bind(device, layout, AssetScope(hostItems), catalog, nullptr, &access));
     REQUIRE(guest.bind(device, layout, AssetScope(guestItems), catalog, nullptr, &access));
-    ExitPortalsCheckpoint hostState{host, layout, hostItems}, guestState{guest, layout, guestItems};
+    ExitPortalsCheckpoint hostState{host, layout, hostItems};
+    ExitPortalsCheckpoint guestState{guest, layout, guestItems};
     REQUIRE(hostState.bindResources());
     REQUIRE(guestState.bindResources());
-    std::optional<usize> open, closed;
+    std::optional<usize> open;
+    std::optional<usize> closed;
     for (usize index = 0; index < host.size(); ++index) {
         const auto& portal = host.portal(index);
         if (portal.model.bound() && !portal.secret) {

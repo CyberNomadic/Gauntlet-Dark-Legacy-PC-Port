@@ -19,10 +19,10 @@ class ChallengeHud {
 public:
     class LocalSnapshot {
         friend class ChallengeHud;
-        Simulation state;
-        const ChallengeHud* owner = nullptr;
-        std::weak_ptr<const u8> binding;
-        TextureAnimator::Clock falling;
+        Simulation m_state;
+        const ChallengeHud* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+        TextureAnimator::Clock m_falling;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

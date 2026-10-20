@@ -61,7 +61,7 @@ void TriggerCues::handleRotators(LevelWorld& world, LevelSoundscape& audio, Soun
     }
 }
 
-void TriggerCues::gatherAudio(const LevelWorld& world, LevelSoundscape& audio) const {
+void TriggerCues::gatherAudio(const LevelWorld& world, LevelSoundscape& audio) {
     if (!audio.recording()) {
         return;
     }

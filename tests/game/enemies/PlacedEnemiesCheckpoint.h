@@ -19,7 +19,7 @@ public:
         std::optional<ViewVolume> view;
         Vec3 attention{0};
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
         std::optional<std::vector<PlacedEnemies::Placement>> activations() const;
         std::optional<std::vector<PlacedEnemies::Placement>>
         activations(std::optional<ViewVolume> nextView, const Vec3& nextAttention) const;

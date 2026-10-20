@@ -73,7 +73,7 @@ BossCameraSubject PlayScene::bossSubject() const {
 /** Canonical gameplay projection for camera fitting, visibility, party limits and
  * transporter selection. Local FOV/aspect belong only to render() and its
  * presented cursor projection; they must not change the next native update. */
-CameraView PlayScene::cameraView() const {
+CameraView PlayScene::cameraView() {
     return {};
 }
 

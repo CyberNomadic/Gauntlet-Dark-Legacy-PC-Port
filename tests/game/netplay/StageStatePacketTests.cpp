@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cstddef>
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -60,6 +61,7 @@ std::vector<u8> pack(const std::vector<u8>& bytes, bool planar = false) {
     // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
     const s32 written =
         LZ4_compress_default(reinterpret_cast<const char*>(payload.data()),
+                             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a contiguous buffer
                              reinterpret_cast<char*>(result.data() + Packet::kHeaderBytes), size,
                              static_cast<s32>(result.size() - Packet::kHeaderBytes));
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -150,12 +152,12 @@ Packet::State populatedState() {
     world.destruction.objects[0].name = "MOVED";
     world.destruction.destroyed = {true, false};
     world.destruction.controlled = {0};
-    world.destruction.explosions.push_back({1, 2, 3});
+    world.destruction.explosions.emplace_back(1, 2, 3);
     world.triggers.parents = {-1, -1};
     world.triggers.frameRemainder = 0.5f;
     world.triggers.emptyToggleDelay = 0.125f;
     world.triggers.cameraHeld = true;
-    world.triggers.wakes.push_back({3, 4, 5});
+    world.triggers.wakes.emplace_back(3, 4, 5);
     world.textures = {4, 0.5f, 0.5f};
     world.frameRemainder = 0.5f;
     world.textureAdvance = 0.5f;
@@ -248,7 +250,7 @@ TEST_CASE("stage packet preserves complete clocks contacts masks particles and p
     REQUIRE(decoded);
     CHECK(*decoded == state);
     CHECK(Packet::encode(*decoded, *catalog) == bytes);
-    const auto before = *bytes;
+    const auto& before = *bytes;
     CHECK_FALSE(Packet::decode(*bytes, {}));
     CHECK_FALSE(Packet::encode(state, {}));
     CHECK_FALSE(Packet::encodedSize(state, {}));
@@ -287,8 +289,8 @@ TEST_CASE("stage geometry is catalog backed and same count foreign surfaces are 
     const auto found =
         std::search(invalidReference.begin(), invalidReference.end(), marker.begin(), marker.end());
     REQUIRE(found != invalidReference.end());
-    const auto reference =
-        static_cast<usize>(found - invalidReference.begin()) + marker.size() + 12 + 12 + 12 * 4;
+    const auto reference = static_cast<usize>(found - invalidReference.begin()) + marker.size() +
+                           12 + 12 + static_cast<std::size_t>(12 * 4);
     word(invalidReference, reference, 0xffffffffU);
     CHECK_FALSE(Packet::decode(invalidReference, *catalog));
     foreign = original;
@@ -380,7 +382,8 @@ TEST_CASE("stage decoder refuses truncated malformed headers counts booleans and
     invalid = *encoded;
     // Eight empty LevelRef fields, u64 layout, 32 scalar catalog bytes,
     // resource count, then the first dynamic record count.
-    constexpr usize kPlacementsCount = Packet::kHeaderBytes + 32 + 8 + 32 * 4 + 4;
+    constexpr usize kPlacementsCount =
+        Packet::kHeaderBytes + 32 + 8 + static_cast<usize>(32 * 4) + 4;
     word(invalid, kPlacementsCount, 0xffffffffU);
     CHECK_FALSE(Packet::decode(invalid, *catalog));
     invalid = *encoded;
@@ -569,7 +572,8 @@ TEST_CASE("stage packet preserves complete transporter clocks and authenticates 
         CHECK_FALSE(Packet::decode(*encoded, *foreignCatalog));
     }
 
-    const usize padCount = presence + 4 + 32 * 4 + 4 + state.transporters->tree.size() + 8;
+    const usize padCount =
+        presence + 4 + static_cast<usize>(32 * 4) + 4 + state.transporters->tree.size() + 8;
     REQUIRE(word(*encoded, padCount) == 2);
     for (const auto [offset, value] :
          {std::pair{presence, u32{2}}, std::pair{presence + 4, u32{256}},
@@ -584,8 +588,8 @@ TEST_CASE("stage packet preserves complete transporter clocks and authenticates 
     const std::string marker = "PAD_WIRE_A";
     const auto found = std::search(encoded->begin(), encoded->end(), marker.begin(), marker.end());
     REQUIRE(found != encoded->end());
-    const usize destination =
-        static_cast<usize>(found - encoded->begin()) + marker.size() + 12 + 12 + 12 * 4 + 4 + 4 + 4;
+    const usize destination = static_cast<usize>(found - encoded->begin()) + marker.size() + 12 +
+                              12 + static_cast<std::size_t>(12 * 4) + 4 + 4 + 4;
     REQUIRE(word(*encoded, destination) == 1); // Optional native usize presence.
     REQUIRE(word(*encoded, destination + 4) == 1);
     REQUIRE(word(*encoded, destination + 8) == 0); // Explicit 64-bit index high word.
@@ -685,8 +689,8 @@ TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing c
         REQUIRE(Packet::envelopeValid(invalid));
         CHECK_FALSE(Packet::decode(invalid, *catalog));
     }
-    for (const auto suffix : {std::vector<u8>{0}, std::vector<u8>{0, 0},
-                              std::vector<u8>{0xff, 0xff, 0xff, 0xff}, std::vector<u8>{0x10, 0}}) {
+    for (const auto& suffix : {std::vector<u8>{0}, std::vector<u8>{0, 0},
+                               std::vector<u8>{0xff, 0xff, 0xff, 0xff}, std::vector<u8>{0x10, 0}}) {
         auto invalid = *encoded;
         invalid.insert(invalid.end(), suffix.begin(), suffix.end());
         word(invalid, 8, static_cast<u32>(invalid.size()));
@@ -724,7 +728,8 @@ TEST_CASE("stage compression rejects bombs invalid codecs lengths and trailing c
     const auto emptyBytes = raw(empty, *emptyCatalog);
     REQUIRE(emptyBytes);
     hostile = *emptyBytes;
-    constexpr usize kPlacementsCount = Packet::kHeaderBytes + 32 + 8 + 32 * 4 + 4;
+    constexpr usize kPlacementsCount =
+        Packet::kHeaderBytes + 32 + 8 + static_cast<usize>(32 * 4) + 4;
     word(hostile, kPlacementsCount, static_cast<u32>(Packet::kMaxRecords + 1));
     CHECK_FALSE(Packet::decode(pack(hostile, planar), *emptyCatalog));
     CHECK_FALSE(Packet::encode(state, *catalog, static_cast<Packet::Encoding>(255)));
@@ -882,7 +887,8 @@ TEST_CASE("sparse stage matrices are lossless canonical and independent of catal
     REQUIRE(catalog);
     const auto identity = raw(state, *catalog);
     REQUIRE(identity);
-    constexpr usize kFirstMatrix = Packet::kHeaderBytes + 32 + 8 + 32 * 4 + 4 + 4;
+    constexpr usize kFirstMatrix =
+        Packet::kHeaderBytes + 32 + 8 + static_cast<usize>(32 * 4) + 4 + 4;
     REQUIRE(kFirstMatrix + 12 <= identity->size());
     CHECK((*identity)[kFirstMatrix] == 0);
     CHECK((*identity)[kFirstMatrix + 4] == 0); // Previous identity mask, not 16 floats.
@@ -1055,7 +1061,8 @@ TEST_CASE("stage packet restores independently bound native motion and particle 
     const auto rate = GENERATE(30, 60);
     const auto root = test::sampleLevel("stage-packet-native-continuation");
     const LevelRef level{"TEST", 0, "TEST", "", "", "", "", 0};
-    NativeStage first(root, level, false), second(root, level, false);
+    NativeStage first(root, level, false);
+    NativeStage second(root, level, false);
     const auto catalog = Packet::Catalog::build(first.state());
     const auto otherCatalog = Packet::Catalog::build(second.state());
     REQUIRE(catalog);
@@ -1157,7 +1164,8 @@ TEST_CASE("stage wire resumes native carried transporter loops from independent 
     writeTextFile(root / "collision.json", R"({"objects":[{"object":0,"normals":[0,1,0],
       "vertices":[-4,0,-4,0,0,4,4,0,-4]}]})");
     const LevelRef level{"TEST", 0, "TEST", "", "", "", "", 0};
-    NativeStage native(root, level, false), replay(root, level, false);
+    NativeStage native(root, level, false);
+    NativeStage replay(root, level, false);
     REQUIRE(native.transporters.size() == 2);
     const auto initial = native.state();
     REQUIRE(initial.transporters);

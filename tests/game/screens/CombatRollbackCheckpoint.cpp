@@ -86,12 +86,9 @@ bool CombatRollbackCheckpoint::State::validAggregate() const {
             return false;
         }
     }
-    for (const auto& potion : attacks.potions) {
-        if (potion.impact.player >= 0 && !present(potion.impact.player)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(attacks.potions, [&](const auto& potion) {
+        return potion.impact.player < 0 || present(potion.impact.player);
+    });
 }
 
 struct CombatRollbackCheckpoint::Prepared::Data {

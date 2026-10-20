@@ -3795,7 +3795,7 @@ TEST_CASE("recorded anti-Death audio follows corrected native holds without mixe
     audio.open(71, output ? &sounds : nullptr);
     f.audio.recordTo(&audio);
     usize commands = 0;
-    SoundPlayer::Capture capture(&sounds, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture capture(&sounds, [&](const auto&) { ++commands; });
     const auto step = [&](u64 tick, bool held) {
         audio.beginTick(tick);
         CHECK(f.attacks.grabDeath(0, 1, held, f.players, f.targets).has_value() == held);
@@ -3909,7 +3909,7 @@ TEST_CASE("native opponent sound lifetimes survive pause and corrected cancellat
     audio.open(81, &sounds);
     f.audio.recordTo(&audio);
     usize commands = 0;
-    SoundPlayer::Capture capture(&sounds, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture capture(&sounds, [&](const auto&) { ++commands; });
     LevelOpponents::Events events;
     events.settleBlasts = [] {};
     events.advanceLegend = [](f32) {};

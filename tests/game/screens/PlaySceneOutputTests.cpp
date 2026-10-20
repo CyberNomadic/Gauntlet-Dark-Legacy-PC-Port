@@ -116,7 +116,7 @@ TEST_CASE("native scene audio capture and correction never mutate playback insid
     CHECK_FALSE(f->scene.beginRecordedAudio(kEpoch));
     REQUIRE_THROWS_AS(f->scene.update(kStep, {}), std::logic_error);
     usize physicalCalls = 0;
-    SoundPlayer::Capture watch(&f->sounds, [&](const auto&) { ++physicalCalls; });
+    const SoundPlayer::Capture watch(&f->sounds, [&](const auto&) { ++physicalCalls; });
     usize finiteCues = 0;
     usize loopRequests = 0;
     const auto input = [](u64 tick) {
@@ -224,7 +224,7 @@ TEST_CASE("confirmed challenge suspension ends audio history before external tra
     REQUIRE(f->scene.secretTravel());
     CHECK(f->scene.destination().name == "S4");
     usize travelPlays = 0;
-    SoundPlayer::Capture listen(&f->sounds, [&](const auto& event) {
+    const SoundPlayer::Capture listen(&f->sounds, [&](const auto& event) {
         travelPlays += event.kind == SoundPlayer::Event::Kind::Play ? 1 : 0;
     });
     REQUIRE_NOTHROW(f->scene.suspendForChallenge());

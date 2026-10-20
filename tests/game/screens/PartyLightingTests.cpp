@@ -27,7 +27,8 @@ TEST_CASE("party lighting rebuild preserves native effect order truncation and m
     auto& native = *fixture;
     LevelInfo level;
     level.flags = DynamicLights::kDarkLevel;
-    std::vector<PointLight> actual, expected;
+    std::vector<PointLight> actual;
+    std::vector<PointLight> expected;
     const auto nativeGather = [&] {
         expected.clear();
         native.effects.lights(expected);

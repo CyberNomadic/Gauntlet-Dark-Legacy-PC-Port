@@ -30,7 +30,7 @@ void PlayerArsenal::appendBindingDigest(NativeStateDigest& digest) const {
         if (resources.weapons.loaded()) {
             digest.resource(&resources.weapons);
         }
-        digest.flag(resources.powerups && resources.powerups->loaded());
+        digest.flag((resources.powerups != nullptr) && resources.powerups->loaded());
         if (resources.powerups && resources.powerups->loaded()) {
             digest.resource(resources.powerups);
         }
@@ -56,8 +56,8 @@ bool PlayerArsenal::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
     }
     digest.string("PlayerArsenal.native.1");
     appendBindingDigest(digest);
-    digest.value(saved.state);
-    return m_missiles.appendLocalDigest(digest, saved.missiles) && digest.good();
+    digest.value(saved.m_state);
+    return m_missiles.appendLocalDigest(digest, saved.m_missiles) && digest.good();
 }
 
 bool PlayerArsenal::registerNativeResources(NativeStateResources& resources) const {
@@ -98,22 +98,22 @@ PlayerArsenal::SoundCapture::~SoundCapture() {
     }
 }
 void PlayerArsenal::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.state = m_sim;
-    m_missiles.saveLocal(saved.missiles);
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_state = m_sim;
+    m_missiles.saveLocal(saved.m_missiles);
 }
 bool PlayerArsenal::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_localBinding &&
-           m_missiles.canRestoreLocal(saved.missiles);
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_localBinding &&
+           m_missiles.canRestoreLocal(saved.m_missiles);
 }
 bool PlayerArsenal::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_missiles.restoreLocal(saved.missiles);
+    m_sim = saved.m_state;
+    m_missiles.restoreLocal(saved.m_missiles);
     ++m_restoreGeneration;
     return true;
 }
@@ -308,6 +308,7 @@ std::optional<PlayerArsenal::WeaponRider> PlayerArsenal::weaponRider(const Playe
     }
     WeaponRider rider;
     rider.archive = archive;
+    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
     rider.tree = &archive->trees.tree(*tree);
     rider.lenders.push_back(&m_resources->weapons.textures);
     rider.textureFrame = m_missiles.visuals().textureFrame(*archive, rider.lenders);

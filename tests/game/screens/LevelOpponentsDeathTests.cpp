@@ -65,6 +65,8 @@ struct DeathSoundFixture {
         sounds.open(113, &output);
         audio.recordTo(&sounds);
     }
+    DeathSoundFixture(const DeathSoundFixture&) = delete;
+    DeathSoundFixture& operator=(const DeathSoundFixture&) = delete;
     ~DeathSoundFixture() {
         opponents.close();
         audio.close();
@@ -96,7 +98,7 @@ TEST_CASE("correcting an earlier Death cue never renumbers a different Death's a
     auto saved = std::make_unique<Enemies::LocalSnapshot>();
     REQUIRE(enemies.saveLocal(*saved));
     usize commands = 0;
-    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
     enemies.hurt(0, {.damage = 1, .player = 0});
     enemies.hurt(1, {.damage = 1, .player = 0});
     const auto wrong = fixture.consume(1);
@@ -150,7 +152,7 @@ TEST_CASE("Death audio retains its retired birth and refuses legacy events in re
     REQUIRE(legacy->valid());
     REQUIRE(enemies.restore(*legacy));
     usize commands = 0;
-    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(fixture.consume(3), SceneSoundEvents::Unsupported);
     CHECK_FALSE(fixture.sounds.recording());
     CHECK(commands == 0);
@@ -199,7 +201,7 @@ TEST_CASE("native swarm impact and bomber audio use source lifetimes rather than
     callbacks.award = [](s32, s32, bool) {};
     callbacks.levels = [] {};
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     const auto impact = [&](bool firstAlso) {
         sounds.beginTick(1);
         if (firstAlso) {
@@ -248,6 +250,7 @@ TEST_CASE("corrected native missile impacts cannot steal another flight's record
     DeathSoundFixture fixture(1);
     fixture.players[0].actor.spawn(0, {}, nullptr, {10, 0, 10}, 0);
     // Seed native flights in the mutable owner, without a test-only gameplay API.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& pool = const_cast<EnemyMissiles&>(fixture.opponents.missiles());
     auto kind = EnemyMissileKind::bolt(20, 25, 0.3f, 0, 0);
     kind.burstRadius = 2;
@@ -265,7 +268,7 @@ TEST_CASE("corrected native missile impacts cannot steal another flight's record
         return fixture.consume(tick);
     };
     usize commands = 0;
-    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
     const auto wrong = step(1, true);
     REQUIRE(wrong.finite.events.size() == 2);
     CHECK(wrong.finite.events[0].id.emitter == FrameEventEmitter{22, 0, first, 0});
@@ -305,6 +308,7 @@ TEST_CASE("retired missile audio rejects missing births instead of binding a rec
           "[native-combat-audio][scene-sound-events]") {
     DeathSoundFixture fixture(1);
     fixture.players[0].actor.spawn(0, {}, nullptr, {10, 0, 10}, 0);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& pool = const_cast<EnemyMissiles&>(fixture.opponents.missiles());
     auto kind = EnemyMissileKind::bolt(20, 25, 0.3f, 0, 0);
     kind.burstRadius = 2;
@@ -325,7 +329,7 @@ TEST_CASE("retired missile audio rejects missing births instead of binding a rec
     legacy.hits[0].instance = 0;
     REQUIRE(pool.restore(legacy));
     usize commands = 0;
-    SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&fixture.output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(fixture.consume(2), SceneSoundEvents::Unsupported);
     CHECK_FALSE(fixture.sounds.recording());
     CHECK(fixture.sounds.lastUnsupported() == "enemy missile hit without its source lifetime");

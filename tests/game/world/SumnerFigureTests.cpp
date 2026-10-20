@@ -54,7 +54,8 @@ TEST_CASE("native Sumner history restores pending gestures idle cycles and fract
     test::FakeRenderDevice device;
     REQUIRE(layout.load(dir));
     REQUIRE(items.load(dir));
-    SumnerFigure native, replay;
+    SumnerFigure native;
+    SumnerFigure replay;
     REQUIRE(native.load(device, items, layout));
     REQUIRE(replay.load(device, items, layout));
     std::array<SumnerFigure::LocalSnapshot, 16> history;
@@ -63,7 +64,7 @@ TEST_CASE("native Sumner history restores pending gestures idle cycles and fract
         CHECK(replay.index() == native.index());
         CHECK(replay.animation().checkpoint() == native.animation().checkpoint());
         CHECK(replay.gesturing() == native.gesturing());
-        for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+        for (f32 const alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
             device.draws.clear();
             native.draw(device, Mat4{1}, {}, alpha);
             const auto expected = device.draws;

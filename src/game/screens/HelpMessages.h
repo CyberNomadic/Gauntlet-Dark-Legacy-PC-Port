@@ -181,7 +181,7 @@ public:
     Rect areaFor(const TextPainter& text, const Vec2& head) const;
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const HelpMessages&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const HelpMessages& /*value*/);
     static Rect areaForLines(const TextPainter& text, const Vec2& head,
                              std::span<const std::string> lines);
     /** The line naming `player`: their colour and class, or Pojo when carried (message.c

@@ -28,7 +28,8 @@ struct Fixture {
 
     std::vector<InputCommand> frame(u8 peer, u64 tick, bool actions = false) const {
         std::vector<InputCommand> result;
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
             if (owners[seat] != peer) {
                 continue;
             }

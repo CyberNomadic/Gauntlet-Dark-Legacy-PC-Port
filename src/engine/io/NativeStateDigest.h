@@ -50,6 +50,7 @@ public:
     void matrix(const Mat4& v) { value(v); }
     void string(std::string_view v) {
         wide(v.size());
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         m_sink.append({reinterpret_cast<const u8*>(v.data()), v.size()});
     }
     void bytes(std::span<const u8> v) {
@@ -138,6 +139,7 @@ public:
         std::apply([this](const auto&... field) { values(field...); }, v);
     }
     template <class T, usize N> void value(const std::array<T, N>& v) { sequence(v); }
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays): takes the caller's array as is
     template <class T, usize N> void value(const T (&v)[N]) { sequence(v); }
     template <class T, usize N> void value(std::span<T, N> v) { sequence(v); }
     template <class T, class A> void value(const std::vector<T, A>& v) { sequence(v); }

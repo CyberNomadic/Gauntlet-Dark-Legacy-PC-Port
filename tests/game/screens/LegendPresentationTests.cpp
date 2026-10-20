@@ -744,7 +744,8 @@ TEST_CASE("every costume uses its authored relic charge once at brandishing",
 TEST_CASE("native legend rewind restores carries throws impacts and attached effects without audio",
           "[local-rewind][legend-local-rewind]") {
     const s32 kind = GENERATE(34, 35, 36, 37, 38, 39, 40, 41, 42);
-    LegendFixture actual, expected;
+    LegendFixture actual;
+    LegendFixture expected;
     actual.load("legend-local-actual");
     expected.load("legend-local-expected");
     REQUIRE(actual.weapons.load(legendArchive("legend-local-actual-weapons")));

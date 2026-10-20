@@ -66,7 +66,9 @@ struct DigestTextures {
     NativeStateDigest::Resources resources() {
         return {this, [](NativeStateDigest& digest, std::type_index type, const void* pointer,
                          void* context) {
-                    if (type != typeid(Texture)) return false;
+                    if (type != typeid(Texture)) {
+                        return false;
+                    }
                     const auto& bindings = *static_cast<DigestTextures*>(context);
                     for (const auto& [texture, identity] : bindings.slots) {
                         if (texture == pointer) {
@@ -83,8 +85,11 @@ std::optional<NativeStateDigest::Digest>
 sceneDigest(const WorldScene& scene, NativeStateDigest::Resources resources = {},
             const WorldScene::LocalSnapshot* saved = nullptr) {
     NativeStateDigest digest(resources);
-    if (saved) scene.appendLocalDigest(digest, *saved);
-    else scene.appendNativeDigest(digest);
+    if (saved) {
+        scene.appendLocalDigest(digest, *saved);
+    } else {
+        scene.appendNativeDigest(digest);
+    }
     return digest.checkedFinish();
 }
 
@@ -918,10 +923,12 @@ TEST_CASE("a layout whose objects have no meshes builds nothing", "[world][scene
 
 TEST_CASE("world immutable digest caches retain native resources and rebuild configuration",
           "[world][scene][native-immutable-digest][world-scene-digest]") {
-    Fixture first("world-digest-first"), second("world-digest-second");
+    Fixture first("world-digest-first");
+    Fixture second("world-digest-second");
     REQUIRE(first.build());
     REQUIRE(second.build());
-    DigestTextures firstTextures(first), secondTextures(second);
+    DigestTextures firstTextures(first);
+    DigestTextures secondTextures(second);
     const auto initial = sceneDigest(first.scene, firstTextures.resources());
     REQUIRE(initial);
     REQUIRE(first.scene.textureOf(0) != second.scene.textureOf(0));
@@ -970,7 +977,7 @@ TEST_CASE("world immutable digest caches retain native resources and rebuild con
     CHECK(sceneDigest(first.scene, firstTextures.resources()) == initial);
 
     first.scene.clear();
-    WorldScene empty;
+    const WorldScene empty;
     REQUIRE(sceneDigest(first.scene));
     CHECK(sceneDigest(first.scene) == sceneDigest(empty));
     CHECK(sceneDigest(first.scene) != initial);
@@ -1053,7 +1060,7 @@ TEST_CASE("world static digest versions follow native history across corrections
     WorldCollision collision;
     WorldAnimator animator;
     animator.bind(fixture.layout);
-    TextureAnimator textureClock;
+    const TextureAnimator textureClock;
     const std::shared_ptr<const u8> binding = std::make_shared<const u8>(0);
     WorldStateCheckpoint construction(fixture.scene, collision, animator, binding);
     REQUIRE(construction.bind(textureClock, fixture.layout));
@@ -1090,9 +1097,15 @@ TEST_CASE("world static digest versions follow native history across corrections
     for (u32 field = 0; field < 3; ++field) {
         CAPTURE(field);
         auto changed = alternate;
-        if (field == 0) changed.placements[0].local[3].z += 1;
-        if (field == 1) changed.placements[0].previous[3].z += 1;
-        if (field == 2) ++changed.placements[0].continuity;
+        if (field == 0) {
+            changed.placements[0].local[3].z += 1;
+        }
+        if (field == 1) {
+            changed.placements[0].previous[3].z += 1;
+        }
+        if (field == 2) {
+            ++changed.placements[0].continuity;
+        }
         REQUIRE(construction.restore(changed));
         CHECK(sceneDigest(fixture.scene, textures.resources()) != shifted);
         CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
@@ -1111,11 +1124,12 @@ TEST_CASE("world static digest versions follow native history across corrections
         fixture.scene.setObjectTransform(8, glm::translate(Mat4{1}, Vec3{0, tick, 50}), tick % 5 == 0);
         fixture.scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
         REQUIRE(fixture.scene.setObjectVisible(11, tick % 3 != 0));
-        fixture.scene.setTextureScroll(0, {tick * 0.007f, 0}, {0, tick * 0.01f}, {0.01f, 0});
+        const auto scroll = static_cast<f32>(tick);
+        fixture.scene.setTextureScroll(0, {scroll * 0.007f, 0}, {0, scroll * 0.01f}, {0.01f, 0});
         fixture.scene.setTextureTime(tick);
     };
     std::array<WorldScene::LocalSnapshot, 8> reference;
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     for (usize tick = 0; tick < reference.size(); ++tick) {
         step(static_cast<u32>(tick + 1));
         fixture.scene.saveLocal(reference[tick]);
@@ -1128,7 +1142,9 @@ TEST_CASE("world static digest versions follow native history across corrections
     for (usize distance = 1; distance <= reference.size(); ++distance) {
         CAPTURE(distance);
         REQUIRE(fixture.scene.restoreLocal(settledState));
-        for (usize tick = 0; tick < distance; ++tick) step(static_cast<u32>(100 + tick));
+        for (usize tick = 0; tick < distance; ++tick) {
+            step(static_cast<u32>(100 + tick));
+        }
         REQUIRE(fixture.scene.restoreLocal(alternateState));
         CHECK(sceneDigest(fixture.scene, textures.resources()) == shifted);
         REQUIRE(fixture.scene.restoreLocal(initialState));
@@ -1136,7 +1152,9 @@ TEST_CASE("world static digest versions follow native history across corrections
         CHECK(sceneDigest(fixture.scene, textures.resources(), &alternateState) == shifted);
         REQUIRE(fixture.scene.restoreLocal(settledState));
         CHECK(sceneDigest(fixture.scene, textures.resources()) == settled);
-        for (usize tick = 0; tick < distance; ++tick) step(static_cast<u32>(tick + 1));
+        for (usize tick = 0; tick < distance; ++tick) {
+            step(static_cast<u32>(tick + 1));
+        }
         WorldScene::LocalSnapshot corrected;
         fixture.scene.saveLocal(corrected);
         CHECK(fixture.scene.equalLocal(corrected, reference[distance - 1]));

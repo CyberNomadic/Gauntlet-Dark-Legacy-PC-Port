@@ -208,6 +208,7 @@ LevelWorldCheckpoint::checkpoint(CaptureTimings* timings) const {
     return capture(nullptr, timings);
 }
 std::optional<LevelWorldCheckpoint::State>
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the state's storage is reused in place
 LevelWorldCheckpoint::checkpoint(State&& reusable, CaptureTimings* timings) const {
     return capture(&reusable, timings);
 }
@@ -274,9 +275,12 @@ LevelWorldCheckpoint::capture(State* reusable, CaptureTimings* timings, bool obs
     state.textures = m_owner.m_textureAnimator.checkpoint();
     state.particles = m_owner.m_sim.particles.checkpoint();
     auto nativeEntries = std::move(state.particles.entries);
+    decltype(nativeEntries) orderedEntries;
+    orderedEntries.reserve(nativeEntries.size());
     for (const auto index : m_resources->particleOrder) {
-        state.particles.entries.push_back(std::move(nativeEntries[index]));
+        orderedEntries.push_back(std::move(nativeEntries[index]));
     }
+    state.particles.entries = std::move(orderedEntries);
     state.particleSources = m_resources->particleSources;
     state.lighting = WorldStateCheckpoint::Light::capture(m_owner.m_sim.lighting);
     state.litNow = WorldStateCheckpoint::Light::capture(m_owner.m_sim.litNow);

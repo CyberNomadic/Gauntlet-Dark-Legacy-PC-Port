@@ -32,10 +32,10 @@ private:
 public:
     class LocalSnapshot {
         friend class SkorneArena;
-        Simulation state;
-        std::vector<FallingPiece> motions;
-        std::weak_ptr<const u8> binding;
-        const SkorneArena* owner = nullptr;
+        Simulation m_state;
+        std::vector<FallingPiece> m_motions;
+        std::weak_ptr<const u8> m_binding;
+        const SkorneArena* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

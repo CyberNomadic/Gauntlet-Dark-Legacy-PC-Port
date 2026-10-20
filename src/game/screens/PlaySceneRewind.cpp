@@ -110,14 +110,20 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
                                  weaponGlow, deathHeldEffect] = data->players[i];
                     digest.values(simulation, previous);
                     digest.flag(figure != nullptr);
-                    if (figure && !figure->appendLocalDigest(digest, figureState)) return false;
+                    if (figure && !figure->appendLocalDigest(digest, figureState)) {
+                        return false;
+                    }
                     digest.values(mikey, glow, weaponGlow, deathHeldEffect);
                 } else {
                     digest.values(live.simulation(), live.previous);
                     digest.flag(live.figure != nullptr);
-                    if (live.figure && !live.figure->appendNativeDigest(digest)) return false;
+                    if (live.figure && !live.figure->appendNativeDigest(digest)) {
+                        return false;
+                    }
                     digest.flag(live.mikeyFigure != nullptr);
-                    if (live.mikeyFigure) digest.value(*live.mikeyFigure);
+                    if (live.mikeyFigure) {
+                        digest.value(*live.mikeyFigure);
+                    }
                     digest.values(live.glow, live.weaponGlow, live.deathHeldEffect);
                 }
             }
@@ -130,7 +136,9 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
             return data ? owner.appendLocalDigest(digest, data->*member)
                         : owner.appendNativeDigest(digest);
         });
-        if (!valid) digest.invalidate();
+        if (!valid) {
+            digest.invalidate();
+        }
     };
     using Data = LocalSnapshot::Data;
     child("world", *m_world, &Data::world);

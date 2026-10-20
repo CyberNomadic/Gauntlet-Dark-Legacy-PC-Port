@@ -182,12 +182,12 @@ public:
 
     class LocalSnapshot {
         friend class WorldCollision;
-        std::vector<Mat4> transforms;
-        std::vector<s32> hidden;
-        std::vector<s32> contactOnly;
-        std::vector<s32> blockedFloorExits;
-        const WorldCollision* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        std::vector<Mat4> m_transforms;
+        std::vector<s32> m_hidden;
+        std::vector<s32> m_contactOnly;
+        std::vector<s32> m_blockedFloorExits;
+        const WorldCollision* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     /** Copies only live transforms and query masks, never the static triangles
      * or grid. Restore rebuilds changed moving-triangle caches in place. */

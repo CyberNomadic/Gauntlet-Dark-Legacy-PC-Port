@@ -46,7 +46,7 @@ public:
         bool reflected = false;
         u64 instance = 0;
         bool valid() const;
-        bool operator==(const Flight&) const;
+        bool operator==(const Flight& /*b*/) const;
     };
     struct State {
         std::vector<Catalog> catalog;
@@ -62,7 +62,7 @@ public:
         f32 ricochetIn = 0;
         u64 nextInstance = 1;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*b*/) const;
     };
     class Prepared {
     public:
@@ -75,12 +75,13 @@ public:
     private:
         friend class CombatantProjectilesCheckpoint;
         struct Data;
-        explicit Prepared(std::unique_ptr<Data>);
+        explicit Prepared(std::unique_ptr<Data> /*data*/);
         std::unique_ptr<Data> m_data;
     };
 
-    CombatantProjectilesCheckpoint(CombatantProjectiles&, EffectTrees&, std::span<const Resource>,
-                                   std::span<const EffectTrees::PoolResource>);
+    CombatantProjectilesCheckpoint(CombatantProjectiles& /*owner*/, EffectTrees& /*effects*/,
+                                   std::span<const Resource> /*resources*/,
+                                   std::span<const EffectTrees::PoolResource> /*effectResources*/);
     ~CombatantProjectilesCheckpoint();
     CombatantProjectilesCheckpoint(const CombatantProjectilesCheckpoint&) = delete;
     CombatantProjectilesCheckpoint& operator=(const CombatantProjectilesCheckpoint&) = delete;
@@ -96,19 +97,20 @@ public:
     /** The enclosing transaction must prepare/install this exact shared effect
      * checkpoint once. This leaf validates its topology and handle references but
      * deliberately does not restore, stop or otherwise mutate that shared pool. */
-    std::optional<Prepared> prepareRestore(const State&, const EffectTrees::PoolCheckpoint&) const;
-    bool canCommit(const Prepared&) const;
-    bool commitRestore(Prepared&&);
+    std::optional<Prepared> prepareRestore(const State& /*state*/,
+                                           const EffectTrees::PoolCheckpoint& /*effects*/) const;
+    bool canCommit(const Prepared& /*prepared*/) const;
+    bool commitRestore(Prepared&& /*prepared*/);
     /** Leaf-only convenience: the caller still installs the supplied shared
      * effect state exactly once as part of the same preflighted transaction. */
-    bool restore(const State&, const EffectTrees::PoolCheckpoint&);
+    bool restore(const State& /*state*/, const EffectTrees::PoolCheckpoint& /*effects*/);
 
 private:
     bool bound() const;
-    const Resource* resource(u32) const;
-    std::optional<Definition> definition(const CritterData*) const;
-    const CritterData* definition(Definition) const;
-    bool references(const State&, const EffectTrees::PoolCheckpoint&) const;
+    const Resource* resource(u32 /*id*/) const;
+    std::optional<Definition> definition(const CritterData* /*value*/) const;
+    const CritterData* definition(Definition /*value*/) const;
+    bool references(const State& /*state*/, const EffectTrees::PoolCheckpoint& /*effects*/) const;
     CombatantProjectiles& m_owner;
     EffectTrees& m_effects;
     std::vector<Resource> m_resources;

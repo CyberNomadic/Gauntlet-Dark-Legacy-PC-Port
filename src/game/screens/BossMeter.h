@@ -31,6 +31,7 @@ public:
     BossMeter& operator=(const BossMeter&) = delete;
     BossMeter(BossMeter&&) = delete;
     BossMeter& operator=(BossMeter&&) = delete;
+    ~BossMeter() = default;
     struct Look {
         bool visible = false;
         bool frozen = false;
@@ -112,6 +113,7 @@ public:
     BossMeters& operator=(const BossMeters&) = delete;
     BossMeters(BossMeters&&) = delete;
     BossMeters& operator=(BossMeters&&) = delete;
+    ~BossMeters() = default;
     static constexpr usize kCapacity = 3;
     class LocalSnapshot {
         friend class BossMeters;

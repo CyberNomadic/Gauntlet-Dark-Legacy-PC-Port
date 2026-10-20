@@ -167,6 +167,8 @@ TEST_CASE("turbo resource admission withholds complete unsupported or incomplete
         f.stats.moveEffects[2].next = 99;
         expected = TurboEffectResources::Status::InvalidChain;
         break;
+    default:
+        break;
     }
     REQUIRE(f.bind());
     CHECK(f.resources.status(0) == expected);

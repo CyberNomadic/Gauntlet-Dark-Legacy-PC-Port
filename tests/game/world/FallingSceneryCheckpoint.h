@@ -50,6 +50,7 @@ public:
     explicit FallingSceneryCheckpoint(FallingScenery& owner) : m_owner(owner) {}
     FallingSceneryCheckpoint(const FallingSceneryCheckpoint&) = delete;
     FallingSceneryCheckpoint& operator=(const FallingSceneryCheckpoint&) = delete;
+    ~FallingSceneryCheckpoint() = default;
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;
     bool canCommit(const Prepared& prepared) const;

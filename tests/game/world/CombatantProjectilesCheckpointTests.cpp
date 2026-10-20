@@ -124,9 +124,11 @@ struct Fixture {
 
 TEST_CASE("combatant projectile checkpoint validates complete values without native resources",
           "[combatant-projectiles-checkpoint]") {
-    CombatantProjectiles pool, other;
+    CombatantProjectiles pool;
+    CombatantProjectiles other;
     EffectTrees effects;
-    Checkpoint owner(pool, effects, {}, {}), foreign(other, effects, {}, {});
+    Checkpoint owner(pool, effects, {}, {});
+    Checkpoint foreign(other, effects, {}, {});
     const auto baseline = owner.checkpoint();
     REQUIRE(baseline);
     const auto shared = effects.checkpointPool();
@@ -232,7 +234,8 @@ TEST_CASE("native combatant projectile history restores RNG contact phases and e
 
 TEST_CASE("native combatant projectile rewind rejects foreign owners and stale prepared restores",
           "[local-rewind][combatant-missile-local-rewind][native-equality]") {
-    CombatantProjectiles a, b;
+    CombatantProjectiles a;
+    CombatantProjectiles b;
     EffectTrees effects;
     CombatantProjectiles::LocalSnapshot saved;
     CHECK_FALSE(a.equalLocal(saved, saved));
@@ -241,7 +244,7 @@ TEST_CASE("native combatant projectile rewind rejects foreign owners and stale p
     CHECK(a.equalLocal(saved, saved));
     CHECK_FALSE(b.equalLocal(saved, saved));
     CHECK_FALSE(b.restoreLocal(saved));
-    Checkpoint observer(a, effects, {}, {});
+    const Checkpoint observer(a, effects, {}, {});
     const auto state = observer.checkpoint();
     const auto visual = effects.checkpointPool();
     REQUIRE(state);
@@ -254,7 +257,7 @@ TEST_CASE("native combatant projectile rewind rejects foreign owners and stale p
     CHECK_FALSE(a.equalLocal(saved, saved));
     CHECK_FALSE(a.restoreLocal(saved));
     {
-        CombatantProjectiles temporary;
+        const CombatantProjectiles temporary;
         temporary.saveLocal(saved);
     }
     CHECK_FALSE(a.equalLocal(saved, saved));
@@ -267,7 +270,8 @@ TEST_CASE("native combatant projectile equality retains undelivered hit queues",
     fixture.launch();
     const std::array players{EnemyView{0, {0, 0, 3}, 1, 6}};
     fixture.step(0.3f, players);
-    CombatantProjectiles::LocalSnapshot before, after;
+    CombatantProjectiles::LocalSnapshot before;
+    CombatantProjectiles::LocalSnapshot after;
     fixture.native.saveLocal(before);
     const auto hits = fixture.native.takeHits();
     REQUIRE_FALSE(hits.empty());
@@ -293,17 +297,17 @@ TEST_CASE("combatant launch uses portable native float mapping and exact random 
         const bool spinning = (cue->flags & 8U) != 0;
         const f32 spread = expected.unitFloat24() * 2.0f - 1.0f;
         Vec3 spin{0};
-        constexpr f32 rate = std::numbers::pi_v<f32> / 2.0f;
+        constexpr f32 kRate = std::numbers::pi_v<f32> / 2.0f;
         if (spinning) {
-            spin = {expected.unitFloat24() * rate, 0, expected.unitFloat24() * rate};
+            spin = {expected.unitFloat24() * kRate, 0, expected.unitFloat24() * kRate};
         }
 #if defined(_MSC_VER)
         // This is the pre-migration native implementation on the reference
         // compiler. Other standard libraries intentionally use the explicit mapping.
         CHECK(spread == std::uniform_real_distribution<f32>{-1, 1}(standard));
         if (spinning) {
-            CHECK(spin.x == std::uniform_real_distribution<f32>{0, rate}(standard));
-            CHECK(spin.z == std::uniform_real_distribution<f32>{0, rate}(standard));
+            CHECK(spin.x == std::uniform_real_distribution<f32>{0, kRate}(standard));
+            CHECK(spin.z == std::uniform_real_distribution<f32>{0, kRate}(standard));
         }
 #else
         standard.discard(spinning ? 3 : 1);
@@ -344,7 +348,7 @@ TEST_CASE("combatant sound phases and linked SFXX rows retain their own identiti
     REQUIRE(data.load(root / "critter.json"));
     auto shot = fixture.shot();
     shot.data = &data;
-    SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
+    const SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
     const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "TEST", 1};
     SceneSoundEvents sounds;
     sounds.open(1, nullptr);
@@ -397,14 +401,14 @@ TEST_CASE("corrected combatant impacts do not steal another flight's already pre
     EffectTrees::LocalSnapshot savedEffects;
     fixture.native.saveLocal(saved);
     fixture.effects.saveLocal(savedEffects);
-    SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
+    const SoundClip clip{24000, 1, std::vector<f32>(24000, 0.125f)};
     const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "TEST", 1};
     AudioMixer mixer(24000);
     SoundPlayer player(mixer);
     SceneSoundEvents sounds;
     sounds.open(7, &player);
     usize commands = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
     const auto step = [&](u64 tick, bool both) {
         std::array views{EnemyView{0, {0, 0, 0.5f}, 1, 6}, EnemyView{1, {20, 0, 0.5f}, 1, 6}};
         views[0].hidden = !both;
@@ -473,7 +477,8 @@ TEST_CASE("combatant hit queues retain retired births when compacted slots are r
     REQUIRE(replacement->hits.size() == 1);
     CHECK(replacement->hits[0].instance == retired);
     CHECK(replacement->flying[0].instance != retired);
-    CombatantProjectiles::LocalSnapshot saved, drained;
+    CombatantProjectiles::LocalSnapshot saved;
+    CombatantProjectiles::LocalSnapshot drained;
     fixture.native.saveLocal(saved);
     const auto queued = fixture.native.takeHits();
     fixture.native.saveLocal(drained);
@@ -633,14 +638,18 @@ TEST_CASE("combatant projectile checkpoints retain rock world generator and summ
     const auto shared = f.effects.checkpointPool(f.resources);
     REQUIRE(saved);
     REQUIRE(shared);
-    if (event == 0)
+    if (event == 0) {
         REQUIRE_FALSE(saved->rockHits.empty());
-    if (event == 1)
+    }
+    if (event == 1) {
         REQUIRE_FALSE(saved->worldHits.empty());
-    if (event == 2)
+    }
+    if (event == 2) {
         REQUIRE_FALSE(saved->generators.empty());
-    if (event == 3)
+    }
+    if (event == 3) {
         REQUIRE_FALSE(saved->summons.empty());
+    }
     f.restorePair(*saved, *shared);
     f.equal();
     CHECK(f.native.takeRockHits() == f.replay.takeRockHits());
@@ -679,6 +688,8 @@ TEST_CASE("late malformed flight resource and shared effect topology refuse atom
             bad.flying[0].stuck = true;
             break;
         case 13: bad.flying[0].morphed = true; break;
+        default:
+            break;
         }
         CHECK_FALSE(f.owner->prepareRestore(bad, badFx));
         CHECK(f.owner->checkpoint() == saved);
@@ -741,8 +752,12 @@ TEST_CASE("native gargoyle birth and linked topology restore independently of a 
     shot.critter = 9;
     shot.origin = {0, 12, 0};
     shot.target = Vec3{5, 6, 30};
-    EffectTrees prototype, effects, restoredEffects;
-    CombatantProjectiles warmup, pool, restoredPool;
+    EffectTrees prototype;
+    EffectTrees effects;
+    EffectTrees restoredEffects;
+    CombatantProjectiles warmup;
+    CombatantProjectiles pool;
+    CombatantProjectiles restoredPool;
     // Preload the exact native birth topology, including any authored SFXX
     // trails, before measuring restoration. This is not runtime speculative
     // emission or an assertion that the Stage catalog already supports it.
@@ -754,7 +769,7 @@ TEST_CASE("native gargoyle birth and linked topology restore independently of a 
     const std::array resources{
         EffectTrees::PoolResource{51, &stock.archive, {}, &textures, &prototype.effect(0)}};
     const std::array stocks{Checkpoint::Resource{73, &stock}};
-    Checkpoint native(pool, effects, stocks, resources);
+    const Checkpoint native(pool, effects, stocks, resources);
     Checkpoint replay(restoredPool, restoredEffects, stocks, resources);
     pool.launch(shot, stock.archive, device, effects, {});
     REQUIRE(pool.count() == 1);

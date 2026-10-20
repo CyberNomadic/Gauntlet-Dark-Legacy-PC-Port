@@ -27,7 +27,7 @@ constexpr u32 kMagic = fourcc("CBST");
  * scalars and booleans occupy one word; native indices occupy eight bytes. */
 class Writer {
 public:
-    static constexpr bool reading = false;
+    static constexpr bool reading = false; // NOLINT(readability-identifier-naming): archive trait
     std::vector<u8> bytes;
     CanonicalDigestSink* digest = nullptr;
     bool agreement = false;
@@ -57,6 +57,7 @@ public:
         if (value.size() > remaining()) {
             throw FormatError("combat checkpoint byte limit");
         }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     template <class T> void number(T value) {
@@ -76,7 +77,7 @@ public:
             number(std::bit_cast<u64>(value));
         } else if constexpr (sizeof(T) == 8) {
             static_assert(std::is_integral_v<T>);
-            const auto bits = static_cast<u64>(value);
+            auto bits = static_cast<u64>(value); // NOLINT(misc-const-correctness): the archive reads it back
             word(static_cast<u32>(bits));
             word(static_cast<u32>(bits >> 32));
         } else if constexpr (std::is_signed_v<T>) {
@@ -92,7 +93,7 @@ public:
 
 class Reader {
 public:
-    static constexpr bool reading = true;
+    static constexpr bool reading = true; // NOLINT(readability-identifier-naming): archive trait
     usize records = 0;
     usize strings = 0;
 
@@ -104,7 +105,7 @@ public:
             number(decoded);
             value = static_cast<T>(decoded);
         } else if constexpr (std::is_same_v<T, bool>) {
-            const auto bits = m_reader.readU32();
+            auto bits = m_reader.readU32(); // NOLINT(misc-const-correctness): the archive reads it back
             if (bits > 1) {
                 throw FormatError("noncanonical combat checkpoint boolean");
             }
@@ -174,7 +175,7 @@ template <class A, class... T> void fields(A& archive, T&... value) {
     (field(archive, value), ...);
 }
 template <class A, class T> void index(A& archive, T& value) {
-    u64 bits = value;
+    u64 bits = value; // NOLINT(misc-const-correctness): the archive reads it back
     archive.number(bits);
     if constexpr (A::reading) {
         if (bits > std::numeric_limits<usize>::max()) {
@@ -184,7 +185,7 @@ template <class A, class T> void index(A& archive, T& value) {
     }
 }
 template <class A, class T> void optionalIndex(A& archive, T& value) {
-    bool present = value.has_value();
+    bool present = value.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
     archive.number(present);
     if constexpr (A::reading) {
         if (present) {
@@ -354,7 +355,7 @@ template <class A, class T> void field(A& a, T& v) {
             field(a, entry);
         }
     } else if constexpr (IsOptional<V>::value) {
-        bool present = v.has_value();
+        bool present = v.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
         a.number(present);
         if constexpr (A::reading) {
             if (present) {
@@ -382,7 +383,7 @@ template <class A, class T> void field(A& a, T& v) {
         leaf<RandomCheckpoint>(a, v, RandomCheckpoint::kBytes);
     } else if constexpr (std::is_same_v<V, CombatStatePacket::State>) {
         fields(a, v.combat, v.adapter);
-        bool present = v.stage.has_value();
+        bool present = v.stage.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
         a.number(present);
         if (present) {
             u32 length = 0;
@@ -430,6 +431,7 @@ template <class A, class T> void field(A& a, T& v) {
                v.pitchYaw, v.playerAttachment);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::MoveEffect>) {
         fields(a, v.effect, v.critter, v.ofBoss);
+    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per state type
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::Ram>) {
         fields(a, v.id, v.damage);
     } else if constexpr (std::is_same_v<V, OpponentCombatCheckpoint::State::Bag>) {
@@ -765,7 +767,10 @@ std::optional<CombatStatePacket::State> CombatStatePacket::decode(std::span<cons
     }
     try {
         Reader reader(bytes);
-        u32 magic = 0, version = 0, length = 0, reserved = 0;
+        u32 magic = 0;
+        u32 version = 0;
+        u32 length = 0;
+        u32 reserved = 0;
         fields(reader, magic, version, length, reserved);
         if (magic != kMagic || version != kVersion || length != bytes.size() || reserved != 0) {
             return std::nullopt;

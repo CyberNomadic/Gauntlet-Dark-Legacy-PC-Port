@@ -112,7 +112,7 @@ bool ItemFigure::equalLocal(const ItemFigure& other) const {
 bool ItemFigure::registerNativeResources(NativeStateResources& registry) const {
     std::vector<const ItemArchive*> refreshed;
     const auto refresh = [&](const ItemArchive* archive) {
-        if (!archive || std::ranges::find(refreshed, archive) != refreshed.end()) {
+        if ((archive == nullptr) || std::ranges::find(refreshed, archive) != refreshed.end()) {
             return true;
         }
         if (!registry.refreshArchive(*archive)) {

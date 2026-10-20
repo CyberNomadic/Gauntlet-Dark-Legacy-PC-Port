@@ -213,23 +213,23 @@ void ScrollBox::drawPage(Canvas& canvas, const PageLayout& page, f32 scale, std:
 }
 
 void ScrollBox::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    m_fire.saveLocal(saved.fire);
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    m_fire.saveLocal(saved.m_fire);
 }
 
 bool ScrollBox::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding &&
-           m_fire.canRestoreLocal(saved.fire);
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding &&
+           m_fire.canRestoreLocal(saved.m_fire);
 }
 
 bool ScrollBox::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_fire.restoreLocal(saved.fire);
+    m_sim = saved.m_state;
+    m_fire.restoreLocal(saved.m_fire);
     return true;
 }
 
@@ -253,13 +253,13 @@ bool ScrollBox::appendDigest(NativeStateDigest& digest, const LocalSnapshot* sav
         digest.value(*m_text);
     }
     const auto& [device, pages, layout, prompt, scale, page, hold, time, active] =
-        saved ? saved->state : m_sim;
+        saved ? saved->m_state : m_sim;
     // Device presence selects the burn fallback. Its allocation identity and
     // the preloaded/uploaded frames do not affect the simulation.
     digest.flag(device != nullptr);
     digest.values(pages, layout, prompt, scale, page, hold, time, active);
     if (saved) {
-        m_fire.appendLocalDigest(digest, saved->fire);
+        m_fire.appendLocalDigest(digest, saved->m_fire);
     } else {
         m_fire.appendNativeDigest(digest);
     }

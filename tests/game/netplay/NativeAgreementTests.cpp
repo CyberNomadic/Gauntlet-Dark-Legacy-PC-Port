@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <limits>
 #include <vector>
 
@@ -63,15 +64,17 @@ struct Wire final : PacketTransport {
         return SendResult::Sent;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-    void close(Connection) override {}
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
+        return std::nullopt;
+    }
+    void close(Connection /*connection*/) override {}
 };
 
 struct Room {
     NativeAgreement::Owners owners;
     std::array<NativeAgreement, 5> streams;
     std::array<Wire, 5> wires;
-    Time now{};
+    Time now;
     u32 period;
     explicit Room(NativeAgreement::Owners roster = {1, 2, 0, 0}, u32 cadence = kPeriod)
         : owners(roster), period(cadence) {
@@ -150,6 +153,8 @@ TEST_CASE("native agreement validates the exact authenticated frozen star",
         local = 2;
         links = {{1, kHost}, {3, 103}};
         owners[2] = 3;
+        break;
+    default:
         break;
     }
     CHECK_FALSE(stream.open(local, epoch, owners, links, period, Time{}));
@@ -259,7 +264,7 @@ TEST_CASE("native agreement retains exact duplicates and rejects conflicting dup
 TEST_CASE("native agreement handles reordered reports and verdicts without skipping intervals",
           "[netplay][native-agreement]") {
     Room room;
-    for (u64 tick : {u64{kPeriod}, u64{2 * kPeriod}}) {
+    for (u64 const tick : {u64{kPeriod}, static_cast<u64>(2 * kPeriod)}) {
         room.submitAll(tick, digest(tick));
     }
     REQUIRE(room.streams[2].flush(room.wires[2], room.now));
@@ -269,7 +274,7 @@ TEST_CASE("native agreement handles reordered reports and verdicts without skipp
     CHECK(room.streams[1].receive(102, reports[1].bytes, room.now) == Admission::Accepted);
     CHECK(room.streams[1].agreedTick() == 0);
     CHECK(room.streams[1].receive(102, reports[0].bytes, room.now) == Admission::Accepted);
-    CHECK(room.streams[1].agreedTick() == 2 * kPeriod);
+    CHECK(room.streams[1].agreedTick() == static_cast<u64>(2) * kPeriod);
     REQUIRE(room.streams[1].flush(room.wires[1], room.now));
     REQUIRE(room.wires[1].sent.size() == 2);
     const auto verdicts = room.wires[1].sent;
@@ -277,7 +282,7 @@ TEST_CASE("native agreement handles reordered reports and verdicts without skipp
     CHECK(room.streams[2].agreedTick() == 0);
     CHECK(room.streams[2].receive(kHost, verdicts[1].bytes, room.now) == Admission::Duplicate);
     CHECK(room.streams[2].receive(kHost, verdicts[0].bytes, room.now) == Admission::Accepted);
-    CHECK(room.streams[2].agreedTick() == 2 * kPeriod);
+    CHECK(room.streams[2].agreedTick() == static_cast<u64>(2) * kPeriod);
     CHECK(room.streams[2].receive(kHost, verdicts[0].bytes, room.now) == Admission::Duplicate);
 }
 
@@ -312,7 +317,9 @@ TEST_CASE("terminal agreement has one exact u64 tick and a separate periodic wir
           "[netplay][native-agreement][native-terminal-agreement]") {
     const u64 tick = GENERATE(u64{31}, u64{60}, u64{3601}, u64{1} << 40);
     const bool mismatch = GENERATE(false, true);
-    NativeAgreement host, guest, periodic;
+    NativeAgreement host;
+    NativeAgreement guest;
+    NativeAgreement periodic;
     const NativeAgreement::Owners owners{1, 2, 0, 0};
     const std::array hostLinks{NativeAgreement::Link{2, 102}};
     const std::array guestLinks{NativeAgreement::Link{1, kHost}};
@@ -324,7 +331,9 @@ TEST_CASE("terminal agreement has one exact u64 tick and a separate periodic wir
     REQUIRE(host.submit(tick, digest(tick), Time{}) == Admission::Accepted);
     CHECK_FALSE(host.canSubmit());
     auto remote = digest(tick);
-    if (mismatch) remote.back() ^= 1;
+    if (mismatch) {
+        remote.back() ^= 1;
+    }
     REQUIRE(guest.submit(tick, remote, Time{}) == Admission::Accepted);
     Wire report;
     REQUIRE(guest.flush(report, Time{}));
@@ -395,6 +404,8 @@ TEST_CASE("native agreement refuses malformed flags and noncanonical terminal me
     case 9: bytes = packet(3, kEpoch, kPeriod, {}, Failure::None); break;
     case 10: bytes = packet(3, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
     case 11: bytes = packet(1, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
+    default:
+        break;
     }
     CHECK(room.streams[1].receive(102, bytes, room.now) == Admission::Invalid);
     CHECK(room.streams[1].failure() == Failure::Protocol);
@@ -408,7 +419,7 @@ TEST_CASE("native agreement submission cannot omit ticks or claim an unsubmitted
     Room room;
     CHECK(room.streams[2].submit(0, {}, room.now) == Admission::Invalid);
     CHECK(room.streams[2].submit(kPeriod + 1, {}, room.now) == Admission::Invalid);
-    CHECK(room.streams[2].submit(2 * kPeriod, {}, room.now) == Admission::Invalid);
+    CHECK(room.streams[2].submit(static_cast<u64>(2) * kPeriod, {}, room.now) == Admission::Invalid);
     CHECK(room.streams[2].submitTick() == kPeriod);
     CHECK(room.streams[2].queuedPackets() == 0);
     CHECK(room.streams[2].receive(kHost, packet(2, kEpoch, kPeriod, {}), room.now) ==

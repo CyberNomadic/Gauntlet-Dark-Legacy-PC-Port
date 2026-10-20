@@ -33,26 +33,26 @@ bool TowerRelics::registerNativeResources(NativeStateResources& resources) const
 }
 
 void TowerRelics::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.state = m_sim;
-    m_figures.saveLocal(saved.figures);
-    m_wizard.saveLocal(saved.wizard);
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_state = m_sim;
+    m_figures.saveLocal(saved.m_figures);
+    m_wizard.saveLocal(saved.m_wizard);
 }
 
 bool TowerRelics::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_localBinding &&
-           m_figures.canRestoreLocal(saved.figures) && m_wizard.canRestoreLocal(saved.wizard);
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_localBinding &&
+           m_figures.canRestoreLocal(saved.m_figures) && m_wizard.canRestoreLocal(saved.m_wizard);
 }
 
 bool TowerRelics::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_figures.restoreLocal(saved.figures);
-    m_wizard.restoreLocal(saved.wizard);
-    m_sim = saved.state;
+    m_figures.restoreLocal(saved.m_figures);
+    m_wizard.restoreLocal(saved.m_wizard);
+    m_sim = saved.m_state;
     return true;
 }
 

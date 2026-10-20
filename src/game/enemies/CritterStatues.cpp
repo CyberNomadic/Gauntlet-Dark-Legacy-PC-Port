@@ -342,7 +342,7 @@ CritterStatues::prepareRestore(const Checkpoint& state) const {
         if (!figure) {
             return std::nullopt;
         }
-        auto statue = std::optional<Statue>{std::in_place};
+        auto statue = std::optional<Statue>{Statue{}};
         statue->instance = body.instance;
         statue->archive = found->archive;
         statue->placement = found->definition.placement;
@@ -429,7 +429,7 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
     if (tree.empty() || m_sim.nextInstance == std::numeric_limits<u64>::max()) {
         return false;
     }
-    auto statue = std::optional<Statue>{std::in_place};
+    auto statue = std::optional<Statue>{Statue{}};
     statue->placement = placement;
     if (!statue->figure.place(device, archive, tree, placement.instance,
                               placement.onFloor ? collision : nullptr)) {

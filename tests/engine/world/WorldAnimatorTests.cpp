@@ -66,7 +66,8 @@ TEST_CASE("native world animation fingerprints retain keys and refresh after reb
           "[world][animation][native-immutable-digest]") {
     auto layout = layoutWithFlags("native-animation-immutable", 0);
     auto independentLayout = layoutWithFlags("native-animation-independent", 0);
-    WorldAnimator first, independent;
+    WorldAnimator first;
+    WorldAnimator independent;
     first.bind(layout);
     independent.bind(independentLayout);
     const auto hash = [](const WorldAnimator& animator) {
@@ -88,15 +89,24 @@ TEST_CASE("native world animation fingerprints retain keys and refresh after reb
     CHECK(saved.finish() == initial);
     REQUIRE(first.restoreLocal(old));
     CHECK(hash(first) == initial);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& animation = const_cast<WorldAnimation&>(layout.animations().front());
     const auto authored = animation.track;
     for (u32 changed = 0; changed < 4; ++changed) {
         CAPTURE(changed);
         animation.track = authored;
-        if (changed == 0) ++animation.track.node;
-        if (changed == 1) animation.track.flags ^= TrackInfo::kPitchYawRoll;
-        if (changed == 2) --animation.track.frames.back();
-        if (changed == 3) animation.track.values.back() += 0.125f;
+        if (changed == 0) {
+            ++animation.track.node;
+        }
+        if (changed == 1) {
+            animation.track.flags ^= TrackInfo::kPitchYawRoll;
+        }
+        if (changed == 2) {
+            --animation.track.frames.back();
+        }
+        if (changed == 3) {
+            animation.track.values.back() += 0.125f;
+        }
         first.bind(layout);
         CHECK(hash(first) != initial);
         CHECK(first.frame(0) == 0); // Changed only authored data, not the cursor.
@@ -106,6 +116,7 @@ TEST_CASE("native world animation fingerprints retain keys and refresh after reb
     animation.track = authored;
     first.bind(layout);
     CHECK(hash(first) == initial);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<WorldObject&>(layout.objects().front()).position.x = 0.25f;
     first.bind(layout);
     CHECK(hash(first) != initial);

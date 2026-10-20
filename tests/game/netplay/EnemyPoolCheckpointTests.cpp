@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -238,7 +239,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     constexpr usize kLookouts = kStocks + 4;
     constexpr usize kCombatants = kLookouts + 4;
     constexpr usize kBlows = kCombatants + 4;
-    constexpr usize kBody = kBlows + 10 * 4;
+    constexpr usize kBody = kBlows + static_cast<usize>(10 * 4);
     const auto reject = [&](usize offset, u32 value) {
         auto bytes = *plain;
         word(bytes, offset, value);
@@ -257,7 +258,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     reject(kLookouts, LookoutRoute::kMost + 1);
     reject(kCombatants, EnemyPoolCheckpoint::kMaxCombatants + 1);
     reject(kBlows, EnemyPoolCheckpoint::kMaxEvents + 1);
-    reject(kBlows + 3 * 4, EnemyPoolCheckpoint::kMaxEvents + 1);
+    reject(kBlows + static_cast<usize>(3 * 4), EnemyPoolCheckpoint::kMaxEvents + 1);
     reject(kBody + 8, 4);           // state past Dying
     reject(kBody + 8, 256);         // do not narrow an invalid u32 into enum zero
     reject(kBody + 32, 2);          // bred boolean
@@ -265,7 +266,8 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     reject(kBody + 40, 0x7F800000); // infinite health
     reject(kBody + 108, 2);         // floor presence
     auto zeroRandom = *plain;
-    std::fill(zeroRandom.begin() + 8, zeroRandom.begin() + 8 + 624 * 4, u8{0});
+    std::fill(zeroRandom.begin() + 8,
+              zeroRandom.begin() + 8 + static_cast<std::ptrdiff_t>(624 * 4), u8{0});
     CHECK_FALSE(EnemyPoolCheckpoint::decode(zeroRandom));
 
     const auto rich = EnemyPoolCheckpoint::encode(varied());
@@ -302,7 +304,8 @@ TEST_CASE("enemy birth wire validates every row and preserves the exhausted orde
     const auto bytes = EnemyPoolCheckpoint::encode(state);
     REQUIRE(bytes);
     CHECK(EnemyPoolCheckpoint::decode(*bytes) == state);
-    constexpr usize kBirths = 8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 + 3 * 4;
+    constexpr usize kBirths =
+        8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 + static_cast<usize>(3 * 4);
     for (const auto [offset, value] : std::array{
              std::pair{kBirths, u32{EnemyPoolCheckpoint::kMaxEvents + 1}},
              std::pair{kBirths + 4, u32{0x7FC00000}}, std::pair{kBirths + 16, u32{kEnemyKindCount}},
@@ -433,7 +436,7 @@ TEST_CASE(
     constexpr usize kQueues = 8 + RandomCheckpoint::kBytes + 84 + 4 + 4 + 4 + 4 +
                               EnemyPoolCheckpoint::kMaxCombatants * 24;
     constexpr usize kTagged =
-        kQueues + 8 * 4 + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 56 + 40);
+        kQueues + static_cast<usize>(8 * 4) + EnemyPoolCheckpoint::kMaxEvents * (40 + 36 + 56 + 40);
     word(tooManyEvents, kTagged, 1);
     tooManyEvents.insert(tooManyEvents.begin() + static_cast<s64>(kTagged + 4), 4, u8{0});
     CHECK_FALSE(EnemyPoolCheckpoint::decode(tooManyEvents));
@@ -497,6 +500,7 @@ struct NativePool {
             spawn.generator = index % 5;
             spawn.algorithm = index % 2 == 0 ? kWanderWay : kChaseWay;
             spawn.position = {static_cast<f32>(index % 5 - 2) * 9, 0,
+                              // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
                               static_cast<f32>(index / 5 - 2) * 9};
             REQUIRE(enemies.spawn(spawn, {}) == index);
         }
@@ -562,6 +566,7 @@ TEST_CASE("transported full native enemy pools restore and continue without load
 
     // Names are value syntax, never permission to bind an untrusted skeleton.
     auto tampered = *decoded;
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto animated = std::ranges::find_if(
         tampered.enemies, [](const auto& enemy) { return enemy.animator && enemy.animator->pose; });
     REQUIRE(animated != tampered.enemies.end());

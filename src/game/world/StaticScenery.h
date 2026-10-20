@@ -18,6 +18,7 @@ public:
     StaticScenery& operator=(const StaticScenery&) = delete;
     StaticScenery(StaticScenery&&) noexcept = default;
     StaticScenery& operator=(StaticScenery&&) noexcept = default;
+    ~StaticScenery() = default;
     struct Prop {
         s32 instance = -1;
         s32 minPlayers = 1;
@@ -54,9 +55,9 @@ public:
     /** In-memory history for this owner and its current bound stage. */
     class LocalSnapshot {
         friend class StaticScenery;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const StaticScenery* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const StaticScenery* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

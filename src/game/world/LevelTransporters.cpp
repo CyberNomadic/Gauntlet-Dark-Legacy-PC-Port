@@ -74,20 +74,20 @@ bool LevelTransporters::appendLocalDigest(NativeStateDigest& digest,
 }
 
 void LevelTransporters::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_checkpointBinding;
-    saved.textures = m_textures.clock();
-    saved.presentationAdvanced = m_presentationAdvanced;
-    saved.pads.resize(m_pads.size());
+    saved.m_owner = this;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_textures = m_textures.clock();
+    saved.m_presentationAdvanced = m_presentationAdvanced;
+    saved.m_pads.resize(m_pads.size());
     for (usize i = 0; i < m_pads.size(); ++i) {
-        saved.pads[i] = m_pads[i];
+        saved.m_pads[i] = m_pads[i];
     }
 }
 
 bool LevelTransporters::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_checkpointBinding &&
-           saved.pads.size() == m_pads.size();
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+           saved.m_pads.size() == m_pads.size();
 }
 
 bool LevelTransporters::restoreLocal(const LocalSnapshot& saved) {
@@ -95,10 +95,10 @@ bool LevelTransporters::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize i = 0; i < m_pads.size(); ++i) {
-        static_cast<PadState&>(m_pads[i]) = saved.pads[i];
+        static_cast<PadState&>(m_pads[i]) = saved.m_pads[i];
     }
-    m_textures.restoreClock(saved.textures);
-    m_presentationAdvanced = saved.presentationAdvanced;
+    m_textures.restoreClock(saved.m_textures);
+    m_presentationAdvanced = saved.m_presentationAdvanced;
     // Geometry and texture selections are derived again at each draw; floor contacts
     // retain their saved native phase until the next ordinary syncFloors call.
     ++m_checkpointGeneration;
@@ -168,13 +168,15 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
     const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
         m_archive = art;
+        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
         m_tree = &art->trees.tree(*tree);
         m_textures.bind(art->trees.textureAnimations(), art->textures, device);
     }
     for (const auto& contact : contacts(layout, players, collision)) {
         Pad pad;
         static_cast<Contact&>(pad) = contact;
-        if (m_tree != nullptr && pad.model.bind(*m_tree, art->models, art->textures, device)) {
+        if (m_tree != nullptr && art != nullptr &&
+            pad.model.bind(*m_tree, art->models, art->textures, device)) {
             pad.pose.rest(*m_tree);
             if (const auto sequence = m_tree->findSequence("ACTIVE")) {
                 pad.animation.start(m_tree->sequences[*sequence], *sequence);

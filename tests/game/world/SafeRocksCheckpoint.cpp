@@ -284,7 +284,7 @@ SafeRocksCheckpoint::prepareRestore(const State& state) const {
     for (usize index = 0; index < state.rocks.size(); ++index) {
         const auto& saved = state.rocks[index];
         const auto& source = m_owner.m_rocks[index];
-        if (!source || !m_owner.m_layout || !roster(*m_owner.m_layout, saved) ||
+        if (!source || (m_owner.m_layout == nullptr) || !roster(*m_owner.m_layout, saved) ||
             source->instance != saved.instance || source->baseHealth != saved.baseHealth ||
             source->armor != saved.armor || source->minPlayers != saved.minPlayers ||
             source->position != saved.position || source->placement != saved.placement ||
@@ -324,7 +324,7 @@ bool SafeRocksCheckpoint::canCommit(const Prepared& prepared) const {
         return false;
     }
     for (usize index = 0; index < data.roster.size(); ++index) {
-        if (data.roster[index] != m_owner.m_rocks[index].get() || !data.layout ||
+        if (data.roster[index] != m_owner.m_rocks[index].get() || (data.layout == nullptr) ||
             !roster(*data.layout, data.state.rocks[index]) ||
             modelsOf(*m_owner.m_rocks[index]) != data.state.rocks[index].models) {
             return false;

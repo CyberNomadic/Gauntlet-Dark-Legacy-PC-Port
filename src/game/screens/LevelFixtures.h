@@ -194,13 +194,13 @@ private:
      * actual appended item index, or refuses the enclosing transaction. The
      * ordinary native path retains placeItemRecord's missing-art no-op. Key
      * consumption, enemy-before-pickup ordering and contents links are shared. */
-    bool dispatchChestEvent(const ChestEvent&, std::span<PlayerRuntime>, const Events&,
-                            const ChestPickupPublisher& pickup = {},
+    bool dispatchChestEvent(const ChestEvent& /*event*/, std::span<PlayerRuntime> /*players*/,
+                            const Events& /*events*/, const ChestPickupPublisher& pickup = {},
                             const NamedPublisher& sound = {});
     /** Shared native post-selection dispatch. The publisher replaces only audio;
      * selected key consumption and help ordering remain the native operations. */
-    void dispatchGateEvent(const GateEvent&, std::span<PlayerRuntime>, const Events&,
-                           const NamedPublisher& publish = {});
+    void dispatchGateEvent(const GateEvent& /*event*/, std::span<PlayerRuntime> /*players*/,
+                           const Events& /*events*/, const NamedPublisher& publish = {});
     static Vec3 observePlayer(PlayerRuntime& player, const Vec3& position);
     static void advanceHitSounds(std::span<PlayerRuntime> players, s32 ticks);
     static void advanceCloudGaps(std::span<PlayerRuntime> players, f32 seconds);
@@ -278,16 +278,16 @@ private:
 public:
     class LocalSnapshot {
         friend class LevelFixtures;
-        Simulation state;
-        Chests::LocalSnapshot chests;
-        LockedGates::LocalSnapshot gates;
-        Traps::LocalSnapshot traps;
-        Breakables::LocalSnapshot barrels;
-        SafeRocks::LocalSnapshot safeRocks;
-        StaticScenery::LocalSnapshot scenery;
-        Rubble::LocalSnapshot rubble;
-        const LevelFixtures* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        Chests::LocalSnapshot m_chests;
+        LockedGates::LocalSnapshot m_gates;
+        Traps::LocalSnapshot m_traps;
+        Breakables::LocalSnapshot m_barrels;
+        SafeRocks::LocalSnapshot m_safeRocks;
+        StaticScenery::LocalSnapshot m_scenery;
+        Rubble::LocalSnapshot m_rubble;
+        const LevelFixtures* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

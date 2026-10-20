@@ -26,10 +26,10 @@ class LevelMessages {
 public:
     class LocalSnapshot {
         friend class LevelMessages;
-        Simulation state;
-        const LevelMessages* owner = nullptr;
-        std::weak_ptr<const u8> binding;
-        ScrollBox::LocalSnapshot scroll;
+        Simulation m_state;
+        const LevelMessages* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+        ScrollBox::LocalSnapshot m_scroll;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

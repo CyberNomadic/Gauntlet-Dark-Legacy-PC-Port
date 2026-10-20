@@ -13,7 +13,7 @@ namespace gdl::game {
 
 /** One player's in-level transporter fade. It cannot restart until they leave the pad. */
 class PlayerTransport {
-    friend void visitNativeState(NativeStateDigest&, const PlayerTransport&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const PlayerTransport& /*value*/);
 
 public:
     bool operator==(const PlayerTransport&) const = default;

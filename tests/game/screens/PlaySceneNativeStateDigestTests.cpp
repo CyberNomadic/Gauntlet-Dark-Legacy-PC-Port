@@ -24,14 +24,14 @@ constexpr f64 kStep = 1.0 / 60.0;
 // The same input-only warmup used by the native rewind fixture. These are real
 // scene ticks, not a public-observation or checkpoint-codec approximation.
 PlayScene::Inputs inputsAt(u32 tick, bool wrong = false) {
-    constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+    constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
     PlayScene::Inputs inputs{};
     for (u8 seat = 0; seat < PlayScene::kPlayerCount; ++seat) {
         PlayInput input;
         if (tick > 360) {
             const u32 elapsed = tick - 361;
             const u32 phase = (elapsed + seat * 30) % 240;
-            const auto direction = directions[(elapsed / 120 + seat + (wrong ? 2 : 0)) % 4];
+            const auto direction = kDirections[(elapsed / 120 + seat + (wrong ? 2 : 0)) % 4];
             input.move = {direction, 1};
             input.aimDirection = {direction.x, 0, -direction.y};
             input.attack = wrong ? phase >= 90 : phase < 90;
@@ -85,7 +85,9 @@ struct Fixture {
             party.push_back({seat, save, static_cast<usize>(seat), false, 100});
         }
         options.welcome = false;
-        if (stage == "L1") options.arrivalWorld = 10;
+        if (stage == "L1") {
+            options.arrivalWorld = 10;
+        }
         reopen();
     }
 
@@ -131,9 +133,13 @@ struct Fixture {
     }
 
     bool entering() const {
-        if (scene.spawning()) return true;
+        if (scene.spawning()) {
+            return true;
+        }
         for (s32 seat = 0; seat < PlayScene::kPlayerCount; ++seat) {
-            if (scene.animator(seat) && scene.animator(seat)->entering()) return true;
+            if (scene.animator(seat) && scene.animator(seat)->entering()) {
+                return true;
+            }
         }
         return false;
     }
@@ -145,7 +151,7 @@ void checkSuffixes(Fixture& fixture, bool still = false) {
     REQUIRE(fixture.scene.saveLocal(saved));
     const auto before = fixture.digest();
     CHECK(fixture.digest(&saved) == before);
-    std::array<Digest, 8> reference;
+    std::array<Digest, 8> reference{};
     for (u32 offset = 1; offset <= 8; ++offset) {
         const auto input = still ? PlayScene::Inputs{} : inputsAt(anchor + offset);
         REQUIRE(fixture.scene.update(kStep, input) == PlayOutcome::Running);
@@ -162,7 +168,7 @@ void checkSuffixes(Fixture& fixture, bool still = false) {
             REQUIRE(fixture.scene.update(kStep, inputsAt(anchor + offset, true)) == PlayOutcome::Running);
         }
         const auto speculative = fixture.digest();
-        fixture.render(distance % 2 ? -1.0f : 0.37f);
+        fixture.render(((distance % 2) != 0u) ? -1.0f : 0.37f);
         CHECK(fixture.digest() == speculative);
         CHECK(fixture.digest(&saved) == before);
         fixture.restore(saved);
@@ -191,8 +197,10 @@ TEST_CASE("native scene hashes agree across independent loads and different draw
         REQUIRE(first->scene.saveLocal(saved));
         const auto before = first->digest(&saved);
         for (u32 offset = 0; offset < 8; ++offset) {
-            first->render(offset % 2 ? -1.0f : 0.0f);
-            if (offset % 3 == 0) second->render(1.0f);
+            first->render(((offset % 2) != 0u) ? -1.0f : 0.0f);
+            if (offset % 3 == 0) {
+                second->render(1.0f);
+            }
             CHECK(first->digest() == second->digest());
             CHECK(first->digest(&saved) == before);
             first->advanceTo(first->tick + 1);
@@ -220,7 +228,9 @@ TEST_CASE("native scene saved hashes retain tower ceremony and costume replaceme
     save.progress().experience = levelExperience(30);
     save.progress().promotedLevel = promotion ? 29 : 30;
     save.progress().crystals[8] = LevelTriggers::crystalsNeeded(8);
-    if (!promotion) save.progress().relics.addShard(8);
+    if (!promotion) {
+        save.progress().relics.addShard(8);
+    }
     auto fixture = std::make_unique<Fixture>("L1", 2, save);
     REQUIRE(fixture->scene.promotion().active() == promotion);
     REQUIRE(fixture->scene.towerRelics().active() == !promotion);
@@ -262,6 +272,7 @@ TEST_CASE("native scene hash detects hidden player projectile world and fixture 
         fixture->restore(saved);
         CHECK(fixture->digest() == before);
     };
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& player = const_cast<PlayerRuntime&>(fixture->scene.participants().front());
     player.surfaceGap += 0.25f;
     changed();
@@ -269,17 +280,21 @@ TEST_CASE("native scene hash detects hidden player projectile world and fixture 
     changed();
     player.shockGaps.push_back({31, 0.125f});
     changed();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
     missiles.burst({0, 0, 0}, 5, 10, 0, 1, -1);
     changed();
     REQUIRE(fixture->world.triggers().size() > 0);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& trigger = const_cast<LevelTrigger&>(fixture->world.triggers().trigger(0));
     trigger.shot = !trigger.shot;
     changed();
     fixture->world.setAmbientOffset(-0.125f);
     changed();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& chests = const_cast<LevelFixtures&>(fixture->scene.fixtures()).chests();
     REQUIRE(chests.size() > 0);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<Chests::Chest&>(chests.chest(0)).refusalLeft += 0.375f;
     changed();
 }
@@ -288,7 +303,7 @@ TEST_CASE("native scene saved hashes reject empty foreign stale and unknown reso
           "[play-scene-native-digest][native-state-digest][local-rewind][assets]") {
     auto fixture = std::make_unique<Fixture>("G2");
     auto foreign = std::make_unique<Fixture>("G2");
-    PlayScene::LocalSnapshot empty;
+    const PlayScene::LocalSnapshot empty;
     CHECK_FALSE(fixture->scene.nativeLocalDigest(empty));
     PlayScene::LocalSnapshot saved;
     REQUIRE(fixture->scene.saveLocal(saved));
@@ -297,7 +312,8 @@ TEST_CASE("native scene saved hashes reject empty foreign stale and unknown reso
 
     // The snapshot itself does not load or bind resources. An unsupported
     // borrower must refuse a digest, not silently hash a partial scene.
-    TreeModel unknown;
+    const TreeModel unknown;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& missiles = const_cast<EnemyMissiles&>(fixture->scene.enemyMissiles());
     missiles.launch(EnemyMissileKind::arrow(), {0, 10, 0}, {0, 10, 30}, 1, &unknown, 0);
     PlayScene::LocalSnapshot unregistered;

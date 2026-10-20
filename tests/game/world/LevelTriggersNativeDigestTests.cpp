@@ -253,7 +253,8 @@ TEST_CASE("native trigger records hash every native contact and target value",
 
 TEST_CASE("native trigger snapshot digest rejects foreign expired and rebound owners atomically",
           "[native-state-digest][triggers-native-digest]") {
-    LevelTriggers a, b;
+    LevelTriggers a;
+    const LevelTriggers b{};
     LevelTriggers::LocalSnapshot saved;
     NativeStateDigest digest;
     digest.string("prefix");
@@ -268,7 +269,7 @@ TEST_CASE("native trigger snapshot digest rejects foreign expired and rebound ow
     CHECK_FALSE(a.appendLocalDigest(digest, saved));
     CHECK(digest.finish() == after);
     {
-        LevelTriggers temporary;
+        const LevelTriggers temporary;
         temporary.saveLocal(saved);
     }
     CHECK_FALSE(a.appendLocalDigest(digest, saved));

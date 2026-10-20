@@ -50,7 +50,7 @@ public:
         std::vector<Point> points;
         bool valid() const;
         bool operator==(const Light&) const = default;
-        static Light capture(const WorldLighting& lighting);
+        static Light capture(const WorldLighting& source);
         WorldLighting lighting() const;
     };
     struct Moving {

@@ -76,7 +76,7 @@ public:
     /** Complete captured figure values under this immutable costume binding.
      * Render-only equipment caches and disposable weapon ghosts are excluded. */
     bool appendNativeDigest(NativeStateDigest& digest) const;
-    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     /** Observe already-loaded immutable artwork and cached lender textures only.
      * Register every retained promotion figure as well as the currently worn one;
      * effects and local history may still borrow an earlier figure's archives. */

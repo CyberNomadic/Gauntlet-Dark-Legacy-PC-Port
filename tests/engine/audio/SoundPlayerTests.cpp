@@ -164,9 +164,9 @@ TEST_CASE("a held category keeps its voices where they are, silent, and a chaine
     a.steps.push_back(SoundSequenceStep{&first, false, false});
     SoundSequence b;
     b.steps.push_back(SoundSequenceStep{&second, false, false});
-    const SoundClip long_ = tone(48000, 1000, 0.5f);
+    const SoundClip longTone = tone(48000, 1000, 0.5f);
     SoundSequence music;
-    music.steps.push_back(SoundSequenceStep{&long_, false, false});
+    music.steps.push_back(SoundSequenceStep{&longTone, false, false});
     const SoundHandle line = player.play(a);
     const SoundHandle next = player.playAfter(line, b);
     const SoundHandle song = player.play(music, 1.0f, SoundCategory::Music);

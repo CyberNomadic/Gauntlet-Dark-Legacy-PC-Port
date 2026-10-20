@@ -142,6 +142,7 @@ public:
     LevelTriggers& operator=(const LevelTriggers&) = delete;
     LevelTriggers(LevelTriggers&&) noexcept = default;
     LevelTriggers& operator=(LevelTriggers&&) noexcept = default;
+    ~LevelTriggers() = default;
 
     struct Target {
         s32 subtype = 0;
@@ -360,10 +361,10 @@ public:
      * belong to their own snapshots; restoring triggers never fires their commands. */
     class LocalSnapshot {
         friend class LevelTriggers;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const LevelTriggers* owner = nullptr;
-        u64 epoch = 0;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const LevelTriggers* m_owner = nullptr;
+        u64 m_epoch = 0;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

@@ -20,28 +20,28 @@ bool MoveStrikes::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsh
         return false;
     }
     digest.string("MoveStrikes.native.1");
-    digest.value(saved.state);
+    digest.value(saved.m_state);
     return digest.good();
 }
 
 void MoveStrikes::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.lifetime = m_restoreOwner;
-    saved.epoch = m_localEpoch;
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_lifetime = m_restoreOwner;
+    saved.m_epoch = m_localEpoch;
 }
 
 bool MoveStrikes::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto lifetime = saved.lifetime.lock();
-    return saved.owner == this && lifetime && lifetime == m_restoreOwner &&
-           saved.epoch == m_localEpoch;
+    const auto lifetime = saved.m_lifetime.lock();
+    return saved.m_owner == this && lifetime && lifetime == m_restoreOwner &&
+           saved.m_epoch == m_localEpoch;
 }
 
 bool MoveStrikes::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_restoreGeneration;
     return true;
 }
@@ -81,24 +81,25 @@ std::optional<MoveStrikes::Prepared> MoveStrikes::prepareRestore(const Checkpoin
         return std::nullopt;
     }
     Prepared result;
-    result.owner = this;
-    result.lifetime = m_restoreOwner;
-    result.generation = m_restoreGeneration;
-    result.state = state;
+    result.m_owner = this;
+    result.m_lifetime = m_restoreOwner;
+    result.m_generation = m_restoreGeneration;
+    result.m_state = state;
     return result;
 }
 bool MoveStrikes::canCommit(const Prepared& state) const noexcept {
-    return state.owner == this && !state.lifetime.expired() &&
-           state.lifetime.lock() == m_restoreOwner && m_restoreGeneration != 0 &&
-           state.generation == m_restoreGeneration;
+    return state.m_owner == this && !state.m_lifetime.expired() &&
+           state.m_lifetime.lock() == m_restoreOwner && m_restoreGeneration != 0 &&
+           state.m_generation == m_restoreGeneration;
 }
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts are taken in place
 bool MoveStrikes::commitRestore(Prepared&& state) noexcept {
     if (!canCommit(state)) {
         return false;
     }
-    m_sim.strikes.swap(state.state.strikes);
-    m_sim.next = state.state.next;
-    state.owner = nullptr;
+    m_sim.strikes.swap(state.m_state.strikes);
+    m_sim.next = state.m_state.next;
+    state.m_owner = nullptr;
     ++m_restoreGeneration;
     return true;
 }

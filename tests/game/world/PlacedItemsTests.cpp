@@ -70,6 +70,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
                     TreeModel::Pass::Blended);
     std::vector<const Texture*> blendedTextures;
+    blendedTextures.reserve(device.draws.size());
     for (const auto& draw : device.draws) {
         blendedTextures.push_back(draw.texture);
     }

@@ -70,9 +70,9 @@ struct Settings {
 InputCommand actual(const Settings& settings, u8 seat, u64 tick) {
     PlayInput input;
     if (!settings.secret && tick > settings.delay) {
-        constexpr std::array<Vec2, 4> directions{Vec2{1, 0}, Vec2{0, 1}, Vec2{-1, 0}, Vec2{0, -1}};
+        constexpr std::array<Vec2, 4> kDirections{Vec2{1, 0}, Vec2{0, 1}, Vec2{-1, 0}, Vec2{0, -1}};
         if ((tick >= 5 && tick < 80) || (tick >= 130 && tick < 190)) {
-            input.move = {directions[((tick - 1) / 40) % directions.size()], 0.5f};
+            input.move = {kDirections[((tick - 1) / 40) % kDirections.size()], 0.5f};
         }
         input.aimDirection = Vec3{1, 0, 0};
         input.attack = (tick >= 20 && tick < 75) || (tick >= 145 && tick < 210);
@@ -212,8 +212,8 @@ struct Observation {
     std::vector<PlayerObservation> players;
     std::vector<PlayerSimulation> playerValues;
     WorldCamera camera;
-    SecretChallenge::State challenge;
-    TransitionScreen::Phase transition;
+    SecretChallenge::State challenge{};
+    TransitionScreen::Phase transition{};
 };
 Observation observe(NativeScene& source) {
     Observation result{source.observer.observe(),
@@ -398,10 +398,10 @@ struct Wire final : PacketTransport {
         return SendResult::Sent;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override {
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
         return Statistics{pingMs};
     }
-    void close(Connection) override {}
+    void close(Connection /*connection*/) override {}
 };
 
 void run(const Settings& settings) {
@@ -464,8 +464,14 @@ void run(const Settings& settings) {
     std::array<std::array<u64, 4>, 4> lastSequence{};
     std::vector<Packet> pending;
     std::array<Wire, 4> wires;
-    u64 sent = 0, dropped = 0, reordered = 0, recoveryPackets = 0, redundantPackets = 0;
-    u64 outageDrops = 0, heartbeats = 0, wallNow = 0;
+    u64 sent = 0;
+    u64 dropped = 0;
+    u64 reordered = 0;
+    u64 recoveryPackets = 0;
+    u64 redundantPackets = 0;
+    u64 outageDrops = 0;
+    u64 heartbeats = 0;
+    u64 wallNow = 0;
     const u64 hop = settings.peers == 2 ? 120'000 : 60'000;
     const s64 jitterUnit = settings.peers == 2 ? 20'000 : 10'000;
     const u64 oldestInput = settings.delay + 1;
@@ -525,7 +531,8 @@ void run(const Settings& settings) {
     }
 
     bool finished = false;
-    bool outageStalled = false, oldestLeftRedundancy = false;
+    bool outageStalled = false;
+    bool oldestLeftRedundancy = false;
     for (u64 wall = 0; wall < settings.ticks + 2000 && !finished; ++wall) {
         wallNow = wall;
         std::ranges::sort(pending, [](const Packet& a, const Packet& b) {
@@ -619,7 +626,8 @@ void run(const Settings& settings) {
         CHECK(peer.digests == expectedDigests);
         const auto& stats = peer.driver.statistics();
         REQUIRE(peer.journals.size() == expectedJournals.size());
-        std::map<FrameEventIdentity, PlayScene::OutputPayload> wantedRumbles, wantedCommits;
+        std::map<FrameEventIdentity, PlayScene::OutputPayload> wantedRumbles;
+        std::map<FrameEventIdentity, PlayScene::OutputPayload> wantedCommits;
         std::map<FrameEventIdentity, SceneSoundPayload> wantedAudio;
         for (usize tick = 1; tick < expectedJournals.size(); ++tick) {
             CAPTURE(tick);

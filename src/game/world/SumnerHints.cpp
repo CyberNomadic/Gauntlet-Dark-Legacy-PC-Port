@@ -264,20 +264,20 @@ HintPage SumnerHints::next(HintTopic topic, const HintKnowledge& knowledge,
 }
 
 void SumnerHints::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
 }
 
 bool SumnerHints::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding;
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding;
 }
 
 bool SumnerHints::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     return true;
 }
 

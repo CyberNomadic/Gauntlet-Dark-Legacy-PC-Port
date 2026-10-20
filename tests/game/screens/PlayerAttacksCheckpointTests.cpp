@@ -51,9 +51,10 @@ struct NativeAttackHistory {
 TEST_CASE("native attack values rewind paid potions shields breath and speculative effect births",
           "[rollback][local-rewind][player-attacks-local-rewind]") {
     const s32 kind = GENERATE(0, 1, 2, 3);
-    test::AttackCheckpointFixture uninterrupted, replay;
+    test::AttackCheckpointFixture uninterrupted;
+    test::AttackCheckpointFixture replay;
     NativeAttackHistory history;
-    constexpr f32 seconds = 1.0f / 30;
+    constexpr f32 kSeconds = 1.0f / 30;
     for (auto* fixture : {&uninterrupted, &replay}) {
         fixture->players[0].actor.save().progress().inventory.addPowerup(
             powerup::kSpecial, powerup::kFireBreath, 100, 30, true);
@@ -62,7 +63,7 @@ TEST_CASE("native attack values rewind paid potions shields breath and speculati
         auto& player = fixture.players[0];
         player.actor.place({static_cast<f32>(tick % 80) * 0.01f, 0, 0});
         player.figure->animate(
-            0, 1, seconds, kind == 2 && tick % 90 == 0 ? PlayerDeed::Breathe : PlayerDeed::None);
+            0, 1, kSeconds, kind == 2 && tick % 90 == 0 ? PlayerDeed::Breathe : PlayerDeed::None);
         fixture.effects.capturePresentation();
         if (tick % 90 == 0) {
             // Unknown-color potions advance the arsenal's own selection cycle.
@@ -78,12 +79,13 @@ TEST_CASE("native attack values rewind paid potions shields breath and speculati
         if (kind == 2) {
             fixture.attacks.useItemAttack(0, fixture.players);
         }
-        fixture.attacks.updateStrikes(seconds, fixture.players, fixture.targets);
-        fixture.attacks.updateProjectiles(seconds, fixture.players, fixture.targets);
-        fixture.attacks.updateShields(seconds, fixture.players, fixture.targets);
-        fixture.effects.update(seconds);
+        fixture.attacks.updateStrikes(kSeconds, fixture.players, fixture.targets);
+        fixture.attacks.updateProjectiles(kSeconds, fixture.players, fixture.targets);
+        fixture.attacks.updateShields(kSeconds, fixture.players, fixture.targets);
+        fixture.effects.update(kSeconds);
     };
-    usize births = 0, retirements = 0;
+    usize births = 0;
+    usize retirements = 0;
     s32 frame = 0;
     for (s32 window = 0; window < 96; ++window) {
         const s32 length = 1 + window % 8;
@@ -103,7 +105,8 @@ TEST_CASE("native attack values rewind paid potions shields breath and speculati
         }
         REQUIRE(replay.state() != saved);
         const auto rejected = replay.helps;
-        const auto uploads = replay.device.texturesCreated, updates = replay.device.textureUpdates;
+        const auto uploads = replay.device.texturesCreated;
+        const auto updates = replay.device.textureUpdates;
         history.restore(replay);
         CHECK(replay.helps == rejected);
         CHECK(replay.state() == saved);
@@ -222,7 +225,8 @@ TEST_CASE(
 TEST_CASE("native attack rewind preserves turbo contact ledgers and enemy harm after wrong futures",
           "[rollback][local-rewind][player-attacks-local-rewind]") {
     const bool flying = GENERATE(false, true);
-    test::AttackCheckpointFixture uninterrupted, replay;
+    test::AttackCheckpointFixture uninterrupted;
+    test::AttackCheckpointFixture replay;
     for (auto* fixture : {&uninterrupted, &replay}) {
         fixture->opponents.open({fixture->device, fixture->world, fixture->weapons,
                                  fixture->effects, fixture->audio, fixture->root, 1},
@@ -237,20 +241,21 @@ TEST_CASE("native attack rewind preserves turbo contact ledgers and enemy harm a
     }
     NativeAttackHistory history;
     Enemies::LocalSnapshot enemies;
-    constexpr f32 seconds = 1.0f / 60;
+    constexpr f32 kSeconds = 1.0f / 60;
     const auto step = [&](test::AttackCheckpointFixture& fixture, s32 tick) {
         auto& player = fixture.players[0];
-        player.figure->animate(0, 1, seconds,
+        player.figure->animate(0, 1, kSeconds,
                                tick == 0
                                    ? (flying ? PlayerDeed::TurboFull : PlayerDeed::TurboStrong)
                                    : PlayerDeed::None);
         fixture.effects.capturePresentation();
-        fixture.attacks.updateTurbo(0, 1, seconds, fixture.players, [](s32, usize) {});
-        fixture.attacks.updateStrikes(seconds, fixture.players, fixture.targets);
-        fixture.effects.update(seconds);
+        fixture.attacks.updateTurbo(0, 1, kSeconds, fixture.players, [](s32, usize) {});
+        fixture.attacks.updateStrikes(kSeconds, fixture.players, fixture.targets);
+        fixture.effects.update(kSeconds);
     };
     const f32 full = uninterrupted.opponents.enemies().healthOf(0);
-    bool sawContact = false, sawStrike = false;
+    bool sawContact = false;
+    bool sawStrike = false;
     s32 frame = 0;
     for (s32 window = 0; window < 64; ++window) {
         const s32 length = 1 + window % 8;
@@ -263,7 +268,7 @@ TEST_CASE("native attack rewind preserves turbo contact ledgers and enemy harm a
             step(uninterrupted, frame + i);
             replay.players[0].actor.place({100, 0, 100});
             replay.attacks.shatterPotion(0, {0, 0, 5});
-            replay.attacks.updateProjectiles(seconds * 2, replay.players, replay.targets);
+            replay.attacks.updateProjectiles(kSeconds * 2, replay.players, replay.targets);
             step(replay, frame + i);
         }
         const auto uploads = replay.device.texturesCreated;
@@ -311,16 +316,16 @@ TEST_CASE("attack restoration preserves native turbo repeated-contact cooldowns 
     auto& player = fixture.players[0];
     player.turbo.add(100);
     const f32 full = enemies.healthOf(*enemy);
-    constexpr f32 seconds = 1.0f / 60;
+    constexpr f32 kSeconds = 1.0f / 60;
     bool hit = false;
     for (s32 tick = 0; tick < 60 && !hit; ++tick) {
-        player.figure->animate(0, 1, seconds,
+        player.figure->animate(0, 1, kSeconds,
                                tick == 0
                                    ? (flying ? PlayerDeed::TurboFull : PlayerDeed::TurboStrong)
                                    : PlayerDeed::None);
-        fixture.attacks.updateTurbo(0, 1, seconds, fixture.players, [](s32, usize) {});
-        fixture.attacks.updateStrikes(seconds, fixture.players, fixture.targets);
-        fixture.effects.update(seconds);
+        fixture.attacks.updateTurbo(0, 1, kSeconds, fixture.players, [](s32, usize) {});
+        fixture.attacks.updateStrikes(kSeconds, fixture.players, fixture.targets);
+        fixture.effects.update(kSeconds);
         const auto state = fixture.state();
         hit = !state.strikeSources.empty() && !state.strikeSources[0].contacts.empty();
     }
@@ -340,8 +345,8 @@ TEST_CASE("attack restoration preserves native turbo repeated-contact cooldowns 
     std::vector<f32> health;
     std::vector<Boundary::State> expected;
     for (s32 tick = 0; tick < 240; ++tick) {
-        fixture.attacks.updateStrikes(seconds, fixture.players, fixture.targets);
-        fixture.effects.update(seconds);
+        fixture.attacks.updateStrikes(kSeconds, fixture.players, fixture.targets);
+        fixture.effects.update(kSeconds);
         health.push_back(enemies.healthOf(*enemy));
         expected.push_back(fixture.state());
         if (tick < 10) {
@@ -353,8 +358,8 @@ TEST_CASE("attack restoration preserves native turbo repeated-contact cooldowns 
     REQUIRE(enemies.restore(*victims));
     for (s32 tick = 0; tick < 240; ++tick) {
         CAPTURE(tick, flying);
-        fixture.attacks.updateStrikes(seconds, fixture.players, fixture.targets);
-        fixture.effects.update(seconds);
+        fixture.attacks.updateStrikes(kSeconds, fixture.players, fixture.targets);
+        fixture.effects.update(kSeconds);
         CHECK(enemies.healthOf(*enemy) == health[static_cast<usize>(tick)]);
         CHECK(fixture.state() == expected[static_cast<usize>(tick)]);
     }
@@ -478,6 +483,8 @@ TEST_CASE("attack preparation rejects malformed references and actor rebinding a
         case 19: bad.shields[0].marks.push_back(bad.shields[0].marks[0]); break;
         case 20: bad.shields[0].marks.resize(Boundary::State::kMaxContacts + 1); break;
         case 21: bad.shields[0].marks[0].wait = std::numeric_limits<f32>::infinity(); break;
+        default:
+            break;
         }
         CHECK_FALSE(Boundary::prepare(fixture.attacks, bad, fixture.actors, visual,
                                       fixture.missileResources));

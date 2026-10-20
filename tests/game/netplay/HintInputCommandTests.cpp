@@ -24,7 +24,7 @@ InputCommand topicCommand(u8 topic, u8 revision) {
 TEST_CASE("Sumner commands use bounded explicit wire bytes and preserve revision zero",
           "[netplay][protocol][hint-input]") {
     for (u8 topic = 0; topic <= 4; ++topic) {
-        for (u8 revision : {u8{0}, u8{1}, u8{255}}) {
+        for (u8 const revision : {u8{0}, u8{1}, u8{255}}) {
             CAPTURE(topic, revision);
             const auto command = topicCommand(topic, revision);
             const auto bytes = InputPacket::encode(std::array{command});

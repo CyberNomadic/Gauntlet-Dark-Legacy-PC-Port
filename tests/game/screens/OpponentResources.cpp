@@ -1,5 +1,6 @@
 #include "game/screens/OpponentResources.h"
 
+#include <cstddef>
 #include <utility>
 
 namespace gdl::game {
@@ -12,9 +13,10 @@ u32 OpponentResources::missileId(s32 kind, s32 slot) {
 }
 
 std::vector<EnemyMissiles::Resource> OpponentResources::missiles(const Enemies& enemies) {
-    static_assert(kEnemyKindCount * kMissileSlots <= EnemyMissiles::Checkpoint::kMaxResources);
+    static_assert(static_cast<usize>(kEnemyKindCount) * static_cast<usize>(kMissileSlots) <=
+                  EnemyMissiles::Checkpoint::kMaxResources);
     std::vector<EnemyMissiles::Resource> result;
-    result.reserve(static_cast<usize>(kEnemyKindCount * kMissileSlots));
+    result.reserve(static_cast<usize>(kEnemyKindCount) * static_cast<usize>(kMissileSlots));
     for (s32 kind = 0; kind < kEnemyKindCount; ++kind) {
         for (s32 slot = 0; slot < kMissileSlots; ++slot) {
             if (const auto* model = enemies.projectileModel(kind, slot)) {

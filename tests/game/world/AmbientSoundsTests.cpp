@@ -100,7 +100,8 @@ TEST_CASE("ambient desired requests are pure and independent of physical playbac
     AmbientSounds sounds;
     const std::array banks{&bank};
     REQUIRE(sounds.bind(layout, banks));
-    const std::array near{Vec3{0}}, far{Vec3{8, 0, 0}};
+    const std::array near{Vec3{0}};
+    const std::array far{Vec3{8, 0, 0}};
     const auto initial = sounds.emitter(0);
     const auto wanted = sounds.requests(near, 0.5f);
     REQUIRE(wanted.size() == 1);

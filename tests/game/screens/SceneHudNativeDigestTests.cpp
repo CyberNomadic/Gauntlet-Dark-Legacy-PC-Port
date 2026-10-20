@@ -174,7 +174,7 @@ TEST_CASE("native HUD values include help lifetime and nonvisible acquisition hi
     second.help().setTexts(&secondText);
     REQUIRE(first.help().post(HelpMessages::kLevelUp, 0, {}, 2));
     REQUIRE(second.help().post(HelpMessages::kLevelUp, 0, {}, 2));
-    NativeStateResources resources;
+    const NativeStateResources resources;
     CHECK(liveDigest(first, resources) == liveDigest(second, resources));
     PartyHud::LocalSnapshot saved;
     second.saveLocal(saved);
@@ -277,15 +277,16 @@ std::filesystem::path messageRoot() {
     std::filesystem::create_directories(root / "fonts");
     std::filesystem::create_directories(root / "text");
     writeFile(root / "STATIC/tile.png", test::kTinyPng);
-    constexpr std::array names{"FONT32", "SCROLL_A", "FONT32_GLOW", "GREENCIRCTRANS",
-                               "GREENCIRCTRANS+1", "GREENCIRCTRANSM", "GREENCIRCTRANSM+1"};
+    constexpr std::array kNames{"FONT32",           "SCROLL_A",         "FONT32_GLOW",
+                                "GREENCIRCTRANS",   "GREENCIRCTRANS+1", "GREENCIRCTRANSM",
+                                "GREENCIRCTRANSM+1"};
     std::string manifest = R"({"bitmaps":[)";
-    for (usize i = 0; i < names.size(); ++i) {
+    for (usize i = 0; i < kNames.size(); ++i) {
         if (i != 0) {
             manifest += ',';
         }
-        manifest += std::format(R"({{"index":{},"name":"{}","file":"tile.png","width":2,"height":2}})",
-                                i, names[i]);
+        manifest += std::format(
+            R"({{"index":{},"name":"{}","file":"tile.png","width":2,"height":2}})", i, kNames[i]);
     }
     writeTextFile(root / "STATIC/textures.json", manifest + "]}");
     writeTextFile(root / "fonts/font32.json", R"({"height":10,"glyphs":[

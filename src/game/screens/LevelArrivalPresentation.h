@@ -91,11 +91,11 @@ private:
 public:
     class LocalSnapshot {
         friend class LevelArrivalPresentation;
-        Simulation state;
-        std::vector<SpawnState> spawns;
-        TextureAnimator::Clock textures;
-        const LevelArrivalPresentation* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        std::vector<SpawnState> m_spawns;
+        TextureAnimator::Clock m_textures;
+        const LevelArrivalPresentation* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

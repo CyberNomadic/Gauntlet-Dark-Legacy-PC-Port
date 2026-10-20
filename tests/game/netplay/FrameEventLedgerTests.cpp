@@ -36,6 +36,7 @@ Ledger::Result replace(Ledger& ledger, u64 tick, std::vector<Ledger::Event> even
 void kinds(const Ledger::Result& result, std::vector<Kind> expected) {
     REQUIRE(result);
     std::vector<Kind> actual;
+    actual.reserve(result.actions.size());
     for (const auto& action : result.actions) {
         actual.push_back(action.kind);
     }
@@ -481,15 +482,15 @@ TEST_CASE("epoch reset cancels old loops and discards only explicitly abandoned 
 TEST_CASE("frame ranges preserve high tick identity without arithmetic wraparound",
           "[netplay][frame-event-ledger]") {
     Ledger ledger;
-    constexpr u64 last = std::numeric_limits<u64>::max();
-    REQUIRE(ledger.reset(1, last - 1));
-    kinds(replace(ledger, last - 1, {event(last - 1)}), {Kind::Present});
+    constexpr u64 kLast = std::numeric_limits<u64>::max();
+    REQUIRE(ledger.reset(1, kLast - 1));
+    kinds(replace(ledger, kLast - 1, {event(kLast - 1)}), {Kind::Present});
     const std::array<Ledger::Journal, 2> overflow{};
-    CHECK(ledger.replace(1, last, overflow).error == Error::InvalidRange);
-    CHECK(ledger.head() == last - 1);
-    kinds(replace(ledger, last, {event(last)}), {Kind::Present});
-    kinds(ledger.confirm(1, last), {});
-    kinds(replace(ledger, last, {event(last)}), {});
+    CHECK(ledger.replace(1, kLast, overflow).error == Error::InvalidRange);
+    CHECK(ledger.head() == kLast - 1);
+    kinds(replace(ledger, kLast, {event(kLast)}), {Kind::Present});
+    kinds(ledger.confirm(1, kLast), {});
+    kinds(replace(ledger, kLast, {event(kLast)}), {});
     CHECK(replace(ledger, 0, {}).error == Error::TooOld);
 }
 } // namespace

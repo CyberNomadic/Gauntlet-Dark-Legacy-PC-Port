@@ -64,17 +64,17 @@ public:
     /** Canonical load-bound stock IDs shared with launched attacks; no actor
      * slot, live incarnation, or allocation order participates in this roster. */
     std::span<const CombatantCheckpoint::Resource> resources() const { return m_resources; }
-    std::optional<Prepared> prepareRestore(const State&) const;
-    bool canCommit(const Prepared&) const;
+    std::optional<Prepared> prepareRestore(const State& /*state*/) const;
+    bool canCommit(const Prepared& /*value*/) const;
     /** Jointly preflights every actor and bank before any mutation; no allocation,
      * resource binding or callback occurs during the synchronous commit. */
-    bool commitRestore(Prepared&&);
-    bool restore(const State&);
+    bool commitRestore(Prepared&& /*value*/);
+    bool restore(const State& /*state*/);
 
 private:
     friend class OpponentCombatCheckpoint;
     bool bound() const;
-    bool matches(const State&) const;
+    bool matches(const State& /*state*/) const;
     Critters& m_owner;
     std::shared_ptr<const u8> m_binding;
     std::shared_ptr<const u8> m_lifetime = std::make_shared<const u8>(0);

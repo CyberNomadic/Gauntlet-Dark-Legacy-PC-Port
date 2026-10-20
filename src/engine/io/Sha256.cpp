@@ -18,16 +18,22 @@
 namespace gdl {
 namespace {
 #if GDL_SHA256_X64
+// NOLINTBEGIN(portability-simd-intrinsics): the SHA-NI path is x86-only by design
 bool hasSha256Instructions() {
 #if defined(_MSC_VER)
     int features[4]{};
     __cpuid(features, 0);
-    if (features[0] < 7) return false;
+    if (features[0] < 7) {
+        return false;
+    }
     __cpuidex(features, 7, 0);
     return (static_cast<u32>(features[1]) & (1U << 29)) != 0;
 #else
-    unsigned int a = 0, b = 0, c = 0, d = 0;
-    return __get_cpuid_max(0, nullptr) >= 7 && __get_cpuid_count(7, 0, &a, &b, &c, &d) &&
+    unsigned int a = 0;
+    unsigned int b = 0;
+    unsigned int c = 0;
+    unsigned int d = 0;
+    return __get_cpuid_max(0, nullptr) >= 7 && __get_cpuid_count(7, 0, &a, &b, &c, &d) != 0 &&
            (b & (1U << 29)) != 0;
 #endif
 }
@@ -51,13 +57,18 @@ void compressAccelerated(std::array<u32, 8>& state, const std::array<u32, 64>& w
     // Instruction semantics: Intel SHA Extensions, SHA256RNDS2 input/output table.
     for (usize i = 0; i < words.size(); i += 4) {
         const auto message = _mm_add_epi32(
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
             _mm_loadu_si128(reinterpret_cast<const __m128i*>(words.data() + i)),
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
             _mm_loadu_si128(reinterpret_cast<const __m128i*>(constants.data() + i)));
         cdgh = _mm_sha256rnds2_epu32(cdgh, abef, message);
         abef = _mm_sha256rnds2_epu32(abef, cdgh, _mm_shuffle_epi32(message, 0x0E));
     }
-    std::array<u32, 4> first{}, second{};
+    std::array<u32, 4> first{};
+    std::array<u32, 4> second{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     _mm_storeu_si128(reinterpret_cast<__m128i*>(first.data()), abef);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     _mm_storeu_si128(reinterpret_cast<__m128i*>(second.data()), cdgh);
     state[0] += first[3];
     state[1] += first[2];
@@ -68,13 +79,14 @@ void compressAccelerated(std::array<u32, 8>& state, const std::array<u32, 64>& w
     state[6] += second[1];
     state[7] += second[0];
 }
+// NOLINTEND(portability-simd-intrinsics)
 #endif
 } // namespace
 
 bool Sha256::hardwareAccelerationAvailable() {
 #if GDL_SHA256_X64
-    static const bool available = hasSha256Instructions();
-    return available;
+    static const bool kAvailable = hasSha256Instructions();
+    return kAvailable;
 #else
     return false;
 #endif

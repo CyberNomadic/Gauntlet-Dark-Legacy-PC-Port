@@ -243,6 +243,7 @@ public:
     EnemyMissiles& operator=(const EnemyMissiles&) = delete;
     EnemyMissiles(EnemyMissiles&&) = delete;
     EnemyMissiles& operator=(EnemyMissiles&&) = delete;
+    ~EnemyMissiles() = default;
 
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): what is thrown
      * meanwhile is that size and does half (EnemyStartMissile). */

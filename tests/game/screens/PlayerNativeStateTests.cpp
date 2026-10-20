@@ -91,7 +91,7 @@ TEST_CASE("native player digest includes latent decisions and contact cooldowns"
 
     change("cursor aiming", [](auto& p) { p.cursorAiming = true; });
     change("melee direction presence", [](auto& p) { p.meleeFacing = Vec3{0}; });
-    change("attack contact presence", [](auto& p) { p.attackStep.emplace(); });
+    change("attack contact presence", [](auto& p) { p.attackStep = PlayerSimulation::AttackStep{}; });
     change("linked level baseline", [](auto& p) { p.resultsCheckpoint.emplace(); });
     change("level kills", [](auto& p) { ++p.levelKills; });
     change("life", [](auto& p) { p.life = PlayerLife::Dying; });
@@ -127,7 +127,7 @@ TEST_CASE("native player digest includes latent decisions and contact cooldowns"
 
     auto contacts = base;
     contacts.meleeFacing = Vec3{0};
-    contacts.attackStep.emplace();
+    contacts.attackStep = PlayerSimulation::AttackStep{};
     contacts.resultsCheckpoint.emplace();
     contacts.fixtureSpot = Vec3{0};
     contacts.floor.placement = Mat4{1};
@@ -376,7 +376,7 @@ TEST_CASE("native player digest includes private body and action state without p
 
 TEST_CASE("native player digest follows one through eight corrected ticks and direct rewinds",
           "[native-state-digest][player-native-state][local-rewind]") {
-    constexpr f32 dt = 1.0f / 60.0f;
+    constexpr f32 kDt = 1.0f / 60.0f;
     const auto stats = turboStats();
     PlayerSimulation player;
     player.actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -402,8 +402,8 @@ TEST_CASE("native player digest follows one through eight corrected ticks and di
         if (result.transported) {
             player.actor.place(*result.transported);
         }
-        player.actor.update({Vec2{wrong ? -1.0f : 1.0f, 0}, 1}, 0, dt, nullptr);
-        player.mikey.update(dt, player.actor.save().progress().inventory, player.actor.position());
+        player.actor.update({Vec2{wrong ? -1.0f : 1.0f, 0}, 1}, 0, kDt, nullptr);
+        player.mikey.update(kDt, player.actor.save().progress().inventory, player.actor.position());
         player.turbo.step(1);
         player.move.advance(
             PlayerAnimator::Action::TurboStrong, static_cast<f32>(tick) * 0.5f, *player.meleeFacing,
@@ -415,15 +415,15 @@ TEST_CASE("native player digest follows one through eight corrected ticks and di
         player.surfaceGap = wrong ? 0.75f : 0.25f;
         player.shockGaps.push_back({tick, wrong ? 0.75f : 0.25f});
         player.streak.record(wrong);
-        player.streak.step(dt);
+        player.streak.step(kDt);
         player.exitWait.step(true, 1);
-        player.actor.save().classes.back().lifetime.playSeconds += dt;
+        player.actor.save().classes.back().lifetime.playSeconds += kDt;
         player.entrySave.classes.back().lifetime.goldFound += wrong ? 2 : 1;
         player.resultsCheckpoint->kills += wrong ? 2 : 1;
         return result;
     };
     std::array<PlayerSimulation, 8> expected;
-    std::array<NativeStateDigest::Digest, 8> expectedDigests;
+    std::array<NativeStateDigest::Digest, 8> expectedDigests{};
     std::array<Output, 8> outputs;
     for (s32 tick = 0; tick < 8; ++tick) {
         outputs[tick] = step(tick, false);

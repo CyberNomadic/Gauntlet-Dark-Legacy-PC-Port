@@ -199,7 +199,9 @@ bool PlayScene::registerNativeDigestResources() {
 
 std::optional<SimulationObservation::Digest>
 PlayScene::nativeAgreementDigest(NativeDigestProfile* profile) {
-    if (profile) profile->samples.clear();
+    if (profile) {
+        profile->samples.clear();
+    }
     if (!m_open || m_world == nullptr) {
         return std::nullopt;
     }
@@ -212,7 +214,9 @@ PlayScene::nativeAgreementDigest(NativeDigestProfile* profile) {
     } else {
         registered = registerNativeDigestResources();
     }
-    if (!registered) return std::nullopt;
+    if (!registered) {
+        return std::nullopt;
+    }
     NativeStateDigest digest{m_nativeDigestResources.resources()};
     if (!appendSceneDigest(digest, nullptr, profile)) {
         return std::nullopt;

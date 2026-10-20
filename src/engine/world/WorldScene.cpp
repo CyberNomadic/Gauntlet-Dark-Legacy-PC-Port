@@ -357,7 +357,9 @@ void WorldScene::captureStaticPlacements() {
 }
 
 const CanonicalDigestSink::Digest& WorldScene::rosterDigest() const {
-    if (m_rosterDigest) return *m_rosterDigest;
+    if (m_rosterDigest) {
+        return *m_rosterDigest;
+    }
     NativeStateDigest digest;
     digest.string("WorldScene.roster/1");
     digest.values(m_layoutSignature, m_movingPlacements);
@@ -380,25 +382,30 @@ bool WorldScene::appendDigest(NativeStateDigest& digest, const LocalSnapshot* sa
     // Build fixes the roster. Static poses are immutable versions, not a cache
     // of whichever version happens to be live when historical state is hashed.
     digest.bytes(rosterDigest());
-    digest.bytes((saved ? saved->staticPlacements : m_staticPlacements)->fingerprint);
+    digest.bytes((saved ? saved->m_staticPlacements : m_staticPlacements)->fingerprint);
     digest.wide(m_movingPlacements.size());
     for (usize i = 0; i < m_movingPlacements.size(); ++i) {
-        digest.value(saved ? saved->placements[i]
-                           : static_cast<const PlacementState&>(m_placements[m_movingPlacements[i]]));
+        digest.value(saved
+                         ? saved->m_placements[i]
+                         : static_cast<const PlacementState&>(m_placements[m_movingPlacements[i]]));
     }
-    digest.flag(saved ? saved->staticPreviousPending : m_staticPreviousPending);
+    digest.flag(saved ? saved->m_staticPreviousPending : m_staticPreviousPending);
     digest.wide(m_units.size());
     for (usize i = 0; i < m_units.size(); ++i) {
-        digest.value(saved ? saved->units[i] : static_cast<const UnitState&>(m_units[i]));
+        digest.value(saved ? saved->m_units[i] : static_cast<const UnitState&>(m_units[i]));
     }
     // Slot iteration must not inherit unordered-map insertion/bucket order. Saved
     // motion is read directly, never selected from the live animation clock.
     std::vector<std::pair<u32, const SlotMotion*>> slots;
     slots.reserve(m_slots.size());
     if (saved) {
-        for (const auto& [key, motion] : saved->slots) slots.emplace_back(key, &motion);
+        for (const auto& [key, motion] : saved->m_slots) {
+            slots.emplace_back(key, &motion);
+        }
     } else {
-        for (const auto& [key, motion] : m_slots) slots.emplace_back(key, &motion);
+        for (const auto& [key, motion] : m_slots) {
+            slots.emplace_back(key, &motion);
+        }
     }
     std::ranges::sort(slots, {}, &std::pair<u32, const SlotMotion*>::first);
     digest.wide(slots.size());
@@ -409,9 +416,8 @@ bool WorldScene::appendDigest(NativeStateDigest& digest, const LocalSnapshot* sa
         digest.resource(found->second.texture);
         digest.values(found->second.usable, found->second.thermal, *motion);
     }
-    digest.values(saved ? saved->lighting : m_lighting,
-                  saved ? saved->darken : m_darken,
-                  saved ? saved->textureFrame : m_textureFrame);
+    digest.values(saved ? saved->m_lighting : m_lighting, saved ? saved->m_darken : m_darken,
+                  saved ? saved->m_textureFrame : m_textureFrame);
     // Bound mesh/batch geometry is immutable art authenticated at stage load.
     // Composed matrices, sorting, uploaded/lit vertices are derived draw scratch.
     return digest.good();
@@ -429,45 +435,48 @@ bool WorldScene::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsho
 }
 
 void WorldScene::saveLocal(LocalSnapshot& saved) const {
-    saved.placements.resize(m_movingPlacements.size());
+    saved.m_placements.resize(m_movingPlacements.size());
     for (usize i = 0; i < m_movingPlacements.size(); ++i) {
-        saved.placements[i] = m_placements[m_movingPlacements[i]];
+        saved.m_placements[i] = m_placements[m_movingPlacements[i]];
     }
-    saved.staticPlacements = m_staticPlacements;
-    saved.staticPreviousPending = m_staticPreviousPending;
-    saved.units.resize(m_units.size());
+    saved.m_staticPlacements = m_staticPlacements;
+    saved.m_staticPreviousPending = m_staticPreviousPending;
+    saved.m_units.resize(m_units.size());
     for (usize i = 0; i < m_units.size(); ++i) {
-        saved.units[i] = m_units[i];
+        saved.m_units[i] = m_units[i];
     }
-    saved.slots.resize(m_slots.size());
+    saved.m_slots.resize(m_slots.size());
     usize i = 0;
     for (const auto& [key, slot] : m_slots) {
         // Copy into the retained cycle buffer. Assigning a temporary pair
         // allocates a fresh cycle vector and throws away the ring slot's capacity.
-        auto& destination = saved.slots[i++];
+        auto& destination = saved.m_slots[i++];
         destination.first = key;
         destination.second = slot;
     }
-    saved.lighting = m_lighting;
-    saved.darken = m_darken;
-    saved.textureFrame = m_textureFrame;
-    saved.owner = this;
-    saved.binding = m_localBinding;
+    saved.m_lighting = m_lighting;
+    saved.m_darken = m_darken;
+    saved.m_textureFrame = m_textureFrame;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
 }
 
 bool WorldScene::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
-           saved.placements.size() == m_movingPlacements.size() && saved.staticPlacements &&
-           saved.staticPlacements->values.size() == m_placements.size() - m_movingPlacements.size() &&
-           saved.units.size() == m_units.size() && saved.slots.size() == m_slots.size();
+    return saved.m_owner == this && m_localBinding && saved.m_binding.lock() == m_localBinding &&
+           saved.m_placements.size() == m_movingPlacements.size() && saved.m_staticPlacements &&
+           saved.m_staticPlacements->values.size() ==
+               m_placements.size() - m_movingPlacements.size() &&
+           saved.m_units.size() == m_units.size() && saved.m_slots.size() == m_slots.size();
 }
 
 bool WorldScene::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.placements == right.placements &&
-           left.staticPlacements->values == right.staticPlacements->values &&
-           left.staticPreviousPending == right.staticPreviousPending && left.units == right.units &&
-           left.slots == right.slots && left.lighting == right.lighting &&
-           left.darken == right.darken && left.textureFrame == right.textureFrame;
+    return canRestoreLocal(left) && canRestoreLocal(right) &&
+           left.m_placements == right.m_placements &&
+           left.m_staticPlacements->values == right.m_staticPlacements->values &&
+           left.m_staticPreviousPending == right.m_staticPreviousPending &&
+           left.m_units == right.m_units && left.m_slots == right.m_slots &&
+           left.m_lighting == right.m_lighting && left.m_darken == right.m_darken &&
+           left.m_textureFrame == right.m_textureFrame;
 }
 
 bool WorldScene::restoreLocal(const LocalSnapshot& saved) {
@@ -475,27 +484,27 @@ bool WorldScene::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize i = 0; i < m_movingPlacements.size(); ++i) {
-        static_cast<PlacementState&>(m_placements[m_movingPlacements[i]]) = saved.placements[i];
+        static_cast<PlacementState&>(m_placements[m_movingPlacements[i]]) = saved.m_placements[i];
     }
-    if (m_staticPlacements != saved.staticPlacements) {
+    if (m_staticPlacements != saved.m_staticPlacements) {
         usize i = 0;
         for (auto& placement : m_placements) {
             if (!placement.moving) {
-                static_cast<PlacementState&>(placement) = saved.staticPlacements->values[i++];
+                static_cast<PlacementState&>(placement) = saved.m_staticPlacements->values[i++];
             }
         }
-        m_staticPlacements = saved.staticPlacements;
+        m_staticPlacements = saved.m_staticPlacements;
     }
-    m_staticPreviousPending = saved.staticPreviousPending;
+    m_staticPreviousPending = saved.m_staticPreviousPending;
     for (usize i = 0; i < m_units.size(); ++i) {
-        static_cast<UnitState&>(m_units[i]) = saved.units[i];
+        static_cast<UnitState&>(m_units[i]) = saved.m_units[i];
     }
-    for (const auto& [key, motion] : saved.slots) {
+    for (const auto& [key, motion] : saved.m_slots) {
         static_cast<SlotMotion&>(m_slots.at(key)) = motion;
     }
-    m_lighting = saved.lighting;
-    m_darken = saved.darken;
-    m_textureFrame = saved.textureFrame;
+    m_lighting = saved.m_lighting;
+    m_darken = saved.m_darken;
+    m_textureFrame = saved.m_textureFrame;
     std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
     std::fill(m_presentedValid.begin(), m_presentedValid.end(), u8{0});
     return true;

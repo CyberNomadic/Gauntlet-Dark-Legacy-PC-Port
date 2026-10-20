@@ -58,7 +58,7 @@ struct Fixture {
 TEST_CASE("rotator checkpoint refuses malformed rosters and stale preparations atomically",
           "[rotators-checkpoint]") {
     Fixture f("rotators-checkpoint-rejections");
-    Fixture other("rotators-checkpoint-other");
+    const Fixture other("rotators-checkpoint-other");
     const auto baseline = f.state();
     auto bad = baseline;
     bad.rotators[0].cursor.turned = std::numeric_limits<f32>::quiet_NaN();
@@ -109,7 +109,7 @@ TEST_CASE("rotator checkpoint refuses malformed rosters and stale preparations a
 
 TEST_CASE("archived sequence-free pad figures restore rest poses and reject nonzero cursors",
           "[rotators-checkpoint][item-figure-checkpoint]") {
-    Fixture fixture("rotators-checkpoint-static-tree");
+    const Fixture fixture("rotators-checkpoint-static-tree");
     auto figure = *fixture.rotators.rotator(1).pad;
     REQUIRE(figure.presentation().tree);
     REQUIRE(figure.presentation().tree->sequences.empty());
@@ -137,6 +137,8 @@ TEST_CASE("archived sequence-free pad figures restore rest poses and reject nonz
         case 4: invalid.state.poseFrame = 1; break;
         case 5: invalid.state.textureSequence = 1; break;
         case 6: invalid.state.textureFrame = 1; break;
+        default:
+            break;
         }
         REQUIRE(invalid.valid());
         CHECK_FALSE(ItemFigureCheckpoint::prepare(figure, invalid));

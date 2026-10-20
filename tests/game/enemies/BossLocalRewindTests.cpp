@@ -65,7 +65,8 @@ struct NativeBoss {
             resources.push_back({static_cast<u32>(resources.size() + 1), resource});
         }
         // The adapter only reads. Native local save/restore is the sole rewind path.
-        CombatantCheckpoint observer{const_cast<Combatant&>(boss.fighter()), resources, {}};
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        const CombatantCheckpoint observer{const_cast<Combatant&>(boss.fighter()), resources, {}};
         const auto state = observer.checkpoint();
         REQUIRE(state);
         return *state;
@@ -73,10 +74,10 @@ struct NativeBoss {
     void equal(NativeBoss& expected) {
         const auto actual = boss.view();
         const auto reference = expected.boss.view();
-        CHECK(std::tie(actual.kind, actual.name, actual.health, actual.maxHealth, actual.awake,
+        CHECK((std::tie(actual.kind, actual.name, actual.health, actual.maxHealth, actual.awake,
                        actual.alive) == std::tie(reference.kind, reference.name, reference.health,
                                                  reference.maxHealth, reference.awake,
-                                                 reference.alive));
+                                                 reference.alive)));
         CHECK(boss.present() == expected.boss.present());
         CHECK(boss.cameraBase() == expected.boss.cameraBase());
         CHECK(boss.rewardOffset() == expected.boss.rewardOffset());
@@ -84,7 +85,7 @@ struct NativeBoss {
             return std::tuple{rite.stage(),     rite.player(), rite.running(),   rite.holdsBoss(),
                               rite.wantsRoar(), rite.thrown(), rite.weakening(), rite.darkens()};
         };
-        CHECK(legendValues(boss.legend()) == legendValues(expected.boss.legend()));
+        CHECK((legendValues(boss.legend()) == legendValues(expected.boss.legend())));
         CHECK(observeActor() == expected.observeActor());
         const auto resources = boss.resources();
         const auto referenceResources = expected.boss.resources();
@@ -146,7 +147,8 @@ TEST_CASE("native boss encounter rewind covers waking legend impact death and re
 TEST_CASE("boss local history retains loaded artwork and rejects stage teardown",
           "[local-rewind][boss-local-rewind][native-equality][assets]") {
     auto encounter = std::make_unique<NativeBoss>(35);
-    Bosses::LocalSnapshot cold, active;
+    Bosses::LocalSnapshot cold;
+    Bosses::LocalSnapshot active;
     REQUIRE(encounter->boss.saveLocal(cold));
     REQUIRE(encounter->boss.spawn(35, {}, 0, 30));
     REQUIRE(encounter->boss.saveLocal(active));
@@ -173,8 +175,10 @@ TEST_CASE("boss local history retains loaded artwork and rejects stage teardown"
 
 TEST_CASE("native boss equality observes waiting clocks before any fighter is visible",
           "[local-rewind][boss-local-rewind][native-equality]") {
-    Bosses boss, foreign;
-    Bosses::LocalSnapshot initial, after;
+    Bosses boss;
+    const Bosses foreign{};
+    Bosses::LocalSnapshot initial;
+    Bosses::LocalSnapshot after;
     CHECK_FALSE(boss.equalLocal(initial, initial));
     REQUIRE(boss.saveLocal(initial));
     CHECK_FALSE(foreign.equalLocal(initial, initial));

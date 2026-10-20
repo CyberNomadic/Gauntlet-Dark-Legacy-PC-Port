@@ -156,6 +156,7 @@ TEST_CASE("arsenal capture refuses malformed live missile state and an unresolve
                                   resources));
     // Keep the native identity/resource tuple intact while corrupting one
     // scalar, so the child value validator (not missing artwork) rejects it.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& live = const_cast<PlayerMissiles::Missile&>(shot);
     const auto savedDamage = live.damage;
     live.damage = std::numeric_limits<f32>::quiet_NaN();
@@ -187,6 +188,8 @@ TEST_CASE("arsenal preparation validates identities and state before atomic sing
         case 5: bad.casts.resize(Boundary::State::kMaxCasts + 1); break;
         case 6: bad.bound = false; break;
         case 7: bad.missiles.ricochetIn = std::numeric_limits<f32>::quiet_NaN(); break;
+        default:
+            break;
         }
         CHECK_FALSE(Boundary::prepare(fixture.arsenal, bad, fixture.slots, visual));
         CHECK(Boundary::capture(fixture.arsenal) == saved);

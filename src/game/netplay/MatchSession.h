@@ -95,7 +95,7 @@ public:
     bool movieSkipReady() const;
     u8 movieSkipVotes() const { return m_movieSkipVotes; }
     /** Global pause has no shared tick boundary and is deliberately unsupported. */
-    bool requestPause() { return false; }
+    static bool requestPause() { return false; }
     void leave();
     void disconnected(PacketTransport::Connection connection);
     /** seconds is lifecycle elapsed time; now is independent monotonic watchdog time. */

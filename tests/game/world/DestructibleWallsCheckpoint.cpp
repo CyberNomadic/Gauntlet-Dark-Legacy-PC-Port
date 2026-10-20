@@ -196,7 +196,7 @@ bool DestructibleWallsCheckpoint::canCommit(const Prepared& prepared) const {
         }
         const auto& object = saved.source.instance.name.empty() ? saved.source.info.name
                                                                 : saved.source.instance.name;
-        if (saved.model && (!data.models || !data.models->find(object))) {
+        if (saved.model && ((data.models == nullptr) || !data.models->find(object))) {
             return false;
         }
     }

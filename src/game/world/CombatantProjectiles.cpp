@@ -757,27 +757,27 @@ std::vector<CombatantProjectileHit> CombatantProjectiles::takeHits() {
 }
 
 void CombatantProjectiles::saveLocal(LocalSnapshot& state) const {
-    state.owner.reset();
-    state.state = m_sim;
-    state.epoch = m_localEpoch;
-    state.owner = m_localOwner;
+    state.m_owner.reset();
+    state.m_state = m_sim;
+    state.m_epoch = m_localEpoch;
+    state.m_owner = m_localOwner;
 }
 
 bool CombatantProjectiles::canRestoreLocal(const LocalSnapshot& state) const {
-    return !state.owner.expired() && state.owner.lock() == m_localOwner &&
-           state.epoch == m_localEpoch;
+    return !state.m_owner.expired() && state.m_owner.lock() == m_localOwner &&
+           state.m_epoch == m_localEpoch;
 }
 
 bool CombatantProjectiles::restoreLocal(const LocalSnapshot& state) {
     if (!canRestoreLocal(state)) {
         return false;
     }
-    m_sim = state.state;
+    m_sim = state.m_state;
     ++m_checkpointRevision;
     return true;
 }
 bool CombatantProjectiles::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) const {
-    return canRestoreLocal(a) && canRestoreLocal(b) && a.state == b.state;
+    return canRestoreLocal(a) && canRestoreLocal(b) && a.m_state == b.m_state;
 }
 bool CombatantProjectiles::appendNativeDigest(NativeStateDigest& digest) const {
     digest.string("CombatantProjectiles.native.1");
@@ -790,7 +790,7 @@ bool CombatantProjectiles::appendLocalDigest(NativeStateDigest& digest,
         return false;
     }
     digest.string("CombatantProjectiles.native.1");
-    digest.value(state.state);
+    digest.value(state.m_state);
     return digest.good();
 }
 } // namespace gdl::game

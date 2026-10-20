@@ -58,7 +58,7 @@ void compare(const ItemFigure& actual, const ItemFigure& expected, test::FakeRen
     CameraFrame camera;
     camera.right = {1, 0, 0};
     camera.up = {0, 1, 0};
-    for (f32 blend : {-1.0f, 0.0f, 0.37f, 1.0f}) {
+    for (f32 const blend : {-1.0f, 0.0f, 0.37f, 1.0f}) {
         device.draws.clear();
         expected.draw(device, Mat4{1}, {}, 0.75f, 1.0f, &camera, TreeModel::Pass::All, blend);
         const auto draws = device.draws;
@@ -168,7 +168,8 @@ TEST_CASE("native fixture values rewind animation attachments particles and chan
     ItemArchive archive;
     REQUIRE(archive.load(figureArchive()));
     test::FakeRenderDevice device;
-    ItemFigure native, replay;
+    ItemFigure native;
+    ItemFigure replay;
     std::array<ItemFigure, 16> history;
     const auto tick = [&](ItemFigure& figure, u32 frame, bool wrong) {
         figure.capturePresentation();
@@ -251,7 +252,8 @@ TEST_CASE("fixture equality rejects lookalike but independently owned artwork",
     ItemArchive archive;
     REQUIRE(archive.load(figureArchive()));
     test::FakeRenderDevice device;
-    ItemFigure original, independent;
+    ItemFigure original;
+    ItemFigure independent;
     REQUIRE(original.place(device, archive, "CHEST", {}, nullptr));
     REQUIRE(independent.place(device, archive, "CHEST", {}, nullptr));
     CHECK_FALSE(original.equalLocal(independent));
@@ -270,13 +272,16 @@ TEST_CASE("fixture equality rejects lookalike but independently owned artwork",
 TEST_CASE("native figure digest uses semantic bindings across independent archives and devices",
           "[native-state-digest][item-figure-native-digest]") {
     const auto path = figureArchive();
-    test::FakeRenderDevice firstDevice, secondDevice;
-    ItemArchive firstArchive, secondArchive;
+    test::FakeRenderDevice firstDevice;
+    test::FakeRenderDevice secondDevice;
+    ItemArchive firstArchive;
+    ItemArchive secondArchive;
     REQUIRE(firstArchive.load(path));
     REQUIRE(secondArchive.load(path));
     FigureResourceNames firstNames(firstArchive, firstDevice, "figure-fixture");
     FigureResourceNames secondNames(secondArchive, secondDevice, "figure-fixture");
-    ItemFigure first, second;
+    ItemFigure first;
+    ItemFigure second;
     REQUIRE(first.place(firstDevice, firstArchive, "CHEST", {}, nullptr));
     REQUIRE(second.place(secondDevice, secondArchive, "CHEST", {}, nullptr));
     first.play(1, false);
@@ -311,7 +316,7 @@ TEST_CASE("native figure digest uses semantic bindings across independent archiv
         }
         figure.update(1.0f / 60);
     };
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     CameraFrame camera;
     camera.right = {1, 0, 0};
     camera.up = {0, 1, 0};
@@ -432,7 +437,7 @@ TEST_CASE("native figure digest detects live clocks poses particles and emitter 
     particles = nativeParticles;
     CHECK(figureDigest(particles, names) == figureDigest(nativeParticles, names));
 
-    const auto field = nativeParticles.field();
+    const auto& field = nativeParticles.field();
     auto changedField = field;
     changedField.setNode(0, glm::translate(Mat4{1}, Vec3{1, 2, 3}));
     CHECK(figureDigest(changedField, names) != figureDigest(field, names));
@@ -449,7 +454,8 @@ TEST_CASE("native figure digest detects live clocks poses particles and emitter 
     CHECK(figureDigest(changedField, names) == figureDigest(field, names));
 
     const auto descriptor = field.emitter(0).descriptor();
-    ParticleEmitter firstSeed, secondSeed;
+    ParticleEmitter firstSeed;
+    ParticleEmitter secondSeed;
     firstSeed.start(descriptor, Mat4{1}, 1);
     secondSeed.start(descriptor, Mat4{1}, 2);
     REQUIRE(firstSeed.particles().empty());
@@ -485,7 +491,7 @@ TEST_CASE("sequence-less item draws cannot change native particle texture bindin
     CameraFrame camera;
     camera.right = {1, 0, 0};
     camera.up = {0, 1, 0};
-    for (const auto name : {"CUTOUT", "SOFT"}) {
+    for (const auto* const name : {"CUTOUT", "SOFT"}) {
         CAPTURE(name);
         ItemFigure figure;
         REQUIRE(figure.place(device, archive, name, {}, nullptr));

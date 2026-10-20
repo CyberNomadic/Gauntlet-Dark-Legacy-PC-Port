@@ -151,7 +151,7 @@ public:
               f32 frameOffset = 0.0f) const;
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const ParticleEmitter&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const ParticleEmitter& /*state*/);
     bool operator==(const ParticleEmitter&) const = default;
     void stepFrame();
     f32 rateNow();

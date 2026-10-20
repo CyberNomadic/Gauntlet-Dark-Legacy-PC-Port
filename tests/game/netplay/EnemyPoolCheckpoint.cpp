@@ -1,5 +1,6 @@
 #include "game/netplay/EnemyPoolCheckpoint.h"
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 #include <string>
@@ -65,9 +66,10 @@ struct Writer {
             !word(static_cast<u32>(value.size()))) {
             return false;
         }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         return raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
-    bool count(usize& value, usize maximum, usize, usize* budget = nullptr) {
+    bool count(usize& value, usize maximum, usize /*unused*/, usize* budget = nullptr) {
         if (value > maximum || (budget && value > *budget)) {
             return false;
         }
@@ -180,7 +182,7 @@ struct Reader {
 };
 
 template <class IO, class T, class Fn> bool optional(IO& io, T& value, Fn visit) {
-    bool present = value.has_value();
+    bool present = value.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
     if (!io(present)) {
         return false;
     }
@@ -204,12 +206,7 @@ bool vector(IO& io, T& values, usize maximum, usize minimumBytes, Fn visit,
     if constexpr (IO::kReading) {
         values.resize(count);
     }
-    for (auto& value : values) {
-        if (!visit(value)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(values, [&](auto& value) { return visit(value); });
 }
 
 template <class Codec, class IO, class T> bool block(IO& io, T& value) {
@@ -241,7 +238,7 @@ template <class IO, class T> bool animator(IO& io, T& value, usize& nodesLeft) {
         !io(value.frameBefore, value.generationBefore)) {
         return false;
     }
-    bool hasPose = value.pose.has_value();
+    bool hasPose = value.pose.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
     if (!io(hasPose)) {
         return false;
     }
@@ -348,8 +345,8 @@ template <class IO, class T> bool event(IO& io, T& value) {
 }
 
 template <class IO, class T> bool pool(IO& io, T& state) {
-    u32 version = EnemyPoolCheckpoint::kVersion;
-    u32 slots = Enemies::kMost;
+    u32 version = EnemyPoolCheckpoint::kVersion; // NOLINT(misc-const-correctness): the archive reads it back
+    u32 slots = Enemies::kMost; // NOLINT(misc-const-correctness): the archive reads it back
     if (!io(version, slots) || version != EnemyPoolCheckpoint::kVersion ||
         slots != Enemies::kMost || !block<RandomCheckpoint>(io, state.random) ||
         !io(state.nextInstance, state.most, state.scales.health, state.scales.speed,

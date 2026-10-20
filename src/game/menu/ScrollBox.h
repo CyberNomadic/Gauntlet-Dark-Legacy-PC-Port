@@ -79,10 +79,10 @@ private:
 public:
     class LocalSnapshot {
         friend class ScrollBox;
-        Simulation state;
-        const ScrollBox* owner = nullptr;
-        std::weak_ptr<const u8> binding;
-        BurnDialogueScroll::LocalSnapshot fire;
+        Simulation m_state;
+        const ScrollBox* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+        BurnDialogueScroll::LocalSnapshot m_fire;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

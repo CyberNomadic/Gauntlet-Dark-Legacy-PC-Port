@@ -59,7 +59,7 @@ bool LevelTriggers::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
     }
     digest.string("LevelTriggers");
     digest.value(m_parents);
-    appendSimulationDigest(digest, saved.state);
+    appendSimulationDigest(digest, saved.m_state);
     return digest.good();
 }
 
@@ -313,7 +313,7 @@ LevelTriggers::prepareRestore(const Checkpoint& state) const {
             return std::nullopt;
         }
         if (!source) {
-            data->figures.push_back(std::nullopt);
+            data->figures.emplace_back(std::nullopt);
             data->resources.push_back({});
             continue;
         }
@@ -395,26 +395,26 @@ bool LevelTriggers::restore(const Checkpoint& state) {
 }
 
 void LevelTriggers::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
-    saved.epoch = m_localEpoch;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
+    saved.m_epoch = m_localEpoch;
 }
 
 bool LevelTriggers::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding && saved.epoch == m_localEpoch;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding && saved.m_epoch == m_localEpoch;
 }
 
 bool LevelTriggers::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool LevelTriggers::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -662,7 +662,7 @@ void LevelTriggers::bindFigures(RenderDevice& device, const WorldLayout& layout,
         const auto& info = layout.itemInfos()[static_cast<usize>(instance.info)];
         constexpr u32 kNoGeometry = 2;
         if ((instance.flags & kNoGeometry) != 0) {
-            m_sim.figures.push_back(std::nullopt);
+            m_sim.figures.emplace_back(std::nullopt);
             continue;
         }
         std::optional<ItemFigure> figure{std::in_place};

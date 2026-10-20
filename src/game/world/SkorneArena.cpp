@@ -19,10 +19,10 @@ constexpr FallingProfile kProfile{}; ///< the masonry falls as most loose pieces
 bool SkorneArena::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
     digest.string("SkorneArena/1");
     digest.value(m_bottom);
-    digest.value(saved ? saved->state : m_sim);
+    digest.value(saved ? saved->m_state : m_sim);
     digest.wide(m_rocks.size());
     for (usize i = 0; i < m_rocks.size(); ++i) {
-        digest.value(saved ? saved->motions[i] : m_rocks[i].motion);
+        digest.value(saved ? saved->m_motions[i] : m_rocks[i].motion);
     }
     // Rock models are immutable bound-stage draw resources, not mutable simulation.
     return digest.good();
@@ -43,32 +43,32 @@ bool SkorneArena::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsh
 }
 
 void SkorneArena::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.motions.resize(m_rocks.size());
+    saved.m_state = m_sim;
+    saved.m_motions.resize(m_rocks.size());
     for (usize index = 0; index < m_rocks.size(); ++index) {
-        saved.motions[index] = m_rocks[index].motion;
+        saved.m_motions[index] = m_rocks[index].motion;
     }
-    saved.binding = m_localBinding;
-    saved.owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_owner = this;
 }
 
 bool SkorneArena::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
-           saved.motions.size() == m_rocks.size();
+    return saved.m_owner == this && m_localBinding && saved.m_binding.lock() == m_localBinding &&
+           saved.m_motions.size() == m_rocks.size();
 }
 
 bool SkorneArena::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
-           left.motions == right.motions;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state &&
+           left.m_motions == right.m_motions;
 }
 
 bool SkorneArena::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     for (usize index = 0; index < m_rocks.size(); ++index) {
-        m_rocks[index].motion = saved.motions[index];
+        m_rocks[index].motion = saved.m_motions[index];
     }
     return true;
 }

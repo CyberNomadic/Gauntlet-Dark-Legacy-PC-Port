@@ -24,7 +24,8 @@ TEST_CASE("native challenge digest canonicalizes unordered coin identities, not 
           "[native-state-digest][secret-native-digest]") {
     std::vector<usize> coins(257);
     std::iota(coins.begin(), coins.end(), 0);
-    SecretChallenge a, b;
+    SecretChallenge a;
+    SecretChallenge b;
     REQUIRE(a.begin(3, 45, coins));
     std::ranges::reverse(coins);
     REQUIRE(b.begin(3, 45, coins));
@@ -41,7 +42,8 @@ TEST_CASE("native challenge digest canonicalizes unordered coin identities, not 
 
 TEST_CASE("native challenge digest includes reward total duration and subsecond clock",
           "[native-state-digest][secret-native-digest]") {
-    SecretChallenge base, changed;
+    SecretChallenge base;
+    SecretChallenge changed;
     REQUIRE(base.begin(0, 30, std::array<usize, 1>{3}));
     const auto expected = digestOf(base);
     changed = base;
@@ -74,14 +76,15 @@ TEST_CASE("native challenge value restore reproduces corrected one through eight
           "[native-state-digest][secret-native-digest][local-rewind]") {
     for (s32 distance = 1; distance <= 8; ++distance) {
         CAPTURE(distance);
-        SecretChallenge reference, predicted;
+        SecretChallenge reference;
+        SecretChallenge predicted;
         const std::array<usize, 4> coins{5, 10, 15, 20};
         REQUIRE(reference.begin(0, 10, coins));
         REQUIRE(predicted.begin(0, 10, coins));
         const auto before = predicted;
         const auto advance = [](SecretChallenge& challenge, s32 tick) {
             if (tick < 4) {
-                challenge.collect(static_cast<usize>((tick + 1) * 5));
+                challenge.collect((static_cast<usize>(tick) + 1) * 5);
             }
             return challenge.step(0.3f, tick == 4);
         };

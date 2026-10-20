@@ -152,6 +152,8 @@ TEST_CASE("scenery snapshot plans refuse malformed foreign or rebound owners ato
     case 4: invalid.props[0].figure.state.pose.tree = "FOREIGN"; break;
     case 5: invalid.props[2].figure.bound = true; break;
     case 6: invalid.props[1].instance = invalid.props[0].instance; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.owner.restore(invalid));
     CHECK(fixture.state() == before);
@@ -276,7 +278,9 @@ TEST_CASE("scenery local values rewind supported figures hidden clocks and disab
 TEST_CASE("native scenery equality includes detached support with unchanged figure and obstacle",
           "[local-rewind][scenery-local-rewind][native-equality]") {
     Fixture fixture("scenery-local-equality");
-    StaticScenery::LocalSnapshot attached, detached, restored;
+    StaticScenery::LocalSnapshot attached;
+    StaticScenery::LocalSnapshot detached;
+    StaticScenery::LocalSnapshot restored;
     CHECK_FALSE(fixture.scenery.equalLocal(attached, attached));
     fixture.scenery.saveLocal(attached);
     const auto figure = fixture.scenery.prop(0).figure;

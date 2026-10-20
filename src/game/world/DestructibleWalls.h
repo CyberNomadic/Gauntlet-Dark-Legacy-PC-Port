@@ -42,9 +42,9 @@ public:
     /** Collision is restored independently; this holds only the walls' native values. */
     class LocalSnapshot {
         friend class DestructibleWalls;
-        std::vector<WallState> walls;
-        std::weak_ptr<const u8> binding;
-        const DestructibleWalls* owner = nullptr;
+        std::vector<WallState> m_walls;
+        std::weak_ptr<const u8> m_binding;
+        const DestructibleWalls* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

@@ -322,6 +322,8 @@ struct NativeFixture {
         REQUIRE(player.figure->effects());
         player.turbo.add(100);
     }
+    NativeFixture(const NativeFixture&) = delete;
+    NativeFixture& operator=(const NativeFixture&) = delete;
     ~NativeFixture() {
         attacks.clear();
         arsenal.clear();
@@ -335,17 +337,15 @@ struct NativeFixture {
         return weapons.trees.find(tree) ? &weapons : nullptr;
     }
     bool particleAvailable(std::string_view name) {
-        for (auto* candidate : {players[0].figure->effects(), &weapons}) {
+        const auto pictured = [&](const auto* candidate) {
             if (candidate == nullptr) {
-                continue;
+                return false;
             }
             const auto slot = candidate->textures.find(name);
-            if (slot && !candidate->textures.entry(*slot).external() &&
-                !candidate->textures.entry(*slot).noPicture) {
-                return true;
-            }
-        }
-        return false;
+            return slot.has_value() && !candidate->textures.entry(*slot).external() &&
+                   !candidate->textures.entry(*slot).noPicture;
+        };
+        return pictured(players[0].figure->effects()) || pictured(&weapons);
     }
 };
 

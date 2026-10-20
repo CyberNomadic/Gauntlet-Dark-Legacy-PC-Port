@@ -50,10 +50,10 @@ bool FallingScenery::appendDigest(NativeStateDigest& digest, const LocalSnapshot
     digest.resource(m_layout);
     digest.resource(m_textures);
     digest.values(m_breakSound, m_leafSound, m_bottom);
-    digest.value(saved ? saved->clock : m_clock);
+    digest.value(saved ? saved->m_clock : m_clock);
     digest.wide(m_pieces.size());
     for (usize i = 0; i < m_pieces.size(); ++i) {
-        digest.value(saved ? saved->pieces[i] : static_cast<const PieceState&>(m_pieces[i]));
+        digest.value(saved ? saved->m_pieces[i] : static_cast<const PieceState&>(m_pieces[i]));
     }
     // Meshes/models are fixed stage art; the complete per-piece profile and motion
     // are values above, including the retained previous pose.
@@ -75,23 +75,24 @@ bool FallingScenery::appendLocalDigest(NativeStateDigest& digest, const LocalSna
 }
 
 void FallingScenery::saveLocal(LocalSnapshot& saved) const {
-    saved.pieces.resize(m_pieces.size());
+    saved.m_pieces.resize(m_pieces.size());
     for (usize index = 0; index < m_pieces.size(); ++index) {
-        saved.pieces[index] = m_pieces[index];
+        saved.m_pieces[index] = m_pieces[index];
     }
-    saved.clock = m_clock;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_clock = m_clock;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool FallingScenery::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding && saved.pieces.size() == m_pieces.size();
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding &&
+           saved.m_pieces.size() == m_pieces.size();
 }
 
 bool FallingScenery::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.pieces == right.pieces &&
-           left.clock == right.clock;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_pieces == right.m_pieces &&
+           left.m_clock == right.m_clock;
 }
 
 bool FallingScenery::restoreLocal(const LocalSnapshot& saved) {
@@ -99,9 +100,9 @@ bool FallingScenery::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize index = 0; index < m_pieces.size(); ++index) {
-        static_cast<PieceState&>(m_pieces[index]) = saved.pieces[index];
+        static_cast<PieceState&>(m_pieces[index]) = saved.m_pieces[index];
     }
-    m_clock = saved.clock;
+    m_clock = saved.m_clock;
     ++m_checkpointGeneration;
     return true;
 }

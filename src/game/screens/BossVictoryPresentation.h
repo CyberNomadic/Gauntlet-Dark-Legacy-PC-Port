@@ -72,10 +72,10 @@ private:
 public:
     class LocalSnapshot {
         friend class BossVictoryPresentation;
-        Simulation state;
-        TextureAnimator::Clock textureClock;
-        const BossVictoryPresentation* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        TextureAnimator::Clock m_textureClock;
+        const BossVictoryPresentation* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

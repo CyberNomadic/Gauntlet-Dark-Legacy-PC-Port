@@ -55,9 +55,11 @@ TEST_CASE("native arrival history restores effects intro cameras and queued titl
     REQUIRE(archive.load(spawnFixture("arrival-local", true, true)));
     test::FakeRenderDevice device;
     const std::array party{Vec3{-2, 0, 10}, Vec3{2, 0, 10}};
-    const Vec3 follow{0, 10, -10}, attention{0, 0, 10};
+    const Vec3 follow{0, 10, -10};
+    const Vec3 attention{0, 0, 10};
     for (const auto mode : {StartCamera::Mode::Standard, StartCamera::Mode::Legacy}) {
-        LevelArrivalPresentation native, replay;
+        LevelArrivalPresentation native;
+        LevelArrivalPresentation replay;
         native.begin(device, archive, party, WorldCamera{}, mode);
         replay.begin(device, archive, party, WorldCamera{}, mode);
         std::array<LevelArrivalPresentation::LocalSnapshot, 16> history;
@@ -73,7 +75,7 @@ TEST_CASE("native arrival history restores effects intro cameras and queued titl
             CHECK(replay.camera().camera().yaw == native.camera().camera().yaw);
             CHECK(replay.camera().camera().pitch == native.camera().camera().pitch);
             CHECK(replay.camera().camera().roll == native.camera().camera().roll);
-            for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+            for (f32 const alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
                 device.draws.clear();
                 native.drawEffects(device, Mat4{1}, {}, alpha);
                 const auto expected = device.draws;

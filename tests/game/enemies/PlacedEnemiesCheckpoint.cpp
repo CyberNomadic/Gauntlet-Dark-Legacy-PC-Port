@@ -89,7 +89,7 @@ PlacedEnemiesCheckpoint::State::activations(std::optional<ViewVolume> nextView,
     std::vector<PlacedEnemies::Placement> result;
     for (const usize index : pending) {
         if (auto standing = activationOf(roster[index], nextView, nextAttention)) {
-            result.push_back(std::move(*standing));
+            result.push_back(*standing);
         }
     }
     return result;

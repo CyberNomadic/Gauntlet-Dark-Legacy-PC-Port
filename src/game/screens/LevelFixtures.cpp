@@ -173,14 +173,14 @@ bool LevelFixtures::appendLocalDigest(NativeStateDigest& digest,
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state) &&
-           m_chests.appendLocalDigest(digest, saved.chests) &&
-           m_gates.appendLocalDigest(digest, saved.gates) &&
-           m_traps.appendLocalDigest(digest, saved.traps) &&
-           m_barrels.appendLocalDigest(digest, saved.barrels) &&
-           m_safeRocks.appendLocalDigest(digest, saved.safeRocks) &&
-           m_scenery.appendLocalDigest(digest, saved.scenery) &&
-           m_rubble.appendLocalDigest(digest, saved.rubble);
+    return appendSimulationDigest(digest, saved.m_state) &&
+           m_chests.appendLocalDigest(digest, saved.m_chests) &&
+           m_gates.appendLocalDigest(digest, saved.m_gates) &&
+           m_traps.appendLocalDigest(digest, saved.m_traps) &&
+           m_barrels.appendLocalDigest(digest, saved.m_barrels) &&
+           m_safeRocks.appendLocalDigest(digest, saved.m_safeRocks) &&
+           m_scenery.appendLocalDigest(digest, saved.m_scenery) &&
+           m_rubble.appendLocalDigest(digest, saved.m_rubble);
 }
 
 bool LevelFixtures::registerNativeResources(NativeStateResources& resources) const {
@@ -193,50 +193,50 @@ bool LevelFixtures::registerNativeResources(NativeStateResources& resources) con
 }
 
 void LevelFixtures::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_checkpointBinding;
-    saved.state = m_sim;
-    m_chests.saveLocal(saved.chests);
-    m_gates.saveLocal(saved.gates);
-    m_traps.saveLocal(saved.traps);
-    m_barrels.saveLocal(saved.barrels);
-    m_safeRocks.saveLocal(saved.safeRocks);
-    m_scenery.saveLocal(saved.scenery);
-    m_rubble.saveLocal(saved.rubble);
+    saved.m_owner = this;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_state = m_sim;
+    m_chests.saveLocal(saved.m_chests);
+    m_gates.saveLocal(saved.m_gates);
+    m_traps.saveLocal(saved.m_traps);
+    m_barrels.saveLocal(saved.m_barrels);
+    m_safeRocks.saveLocal(saved.m_safeRocks);
+    m_scenery.saveLocal(saved.m_scenery);
+    m_rubble.saveLocal(saved.m_rubble);
 }
 
 bool LevelFixtures::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_checkpointBinding &&
-           m_chests.canRestoreLocal(saved.chests) && m_gates.canRestoreLocal(saved.gates) &&
-           m_traps.canRestoreLocal(saved.traps) && m_barrels.canRestoreLocal(saved.barrels) &&
-           m_safeRocks.canRestoreLocal(saved.safeRocks) &&
-           m_scenery.canRestoreLocal(saved.scenery) && m_rubble.canRestoreLocal(saved.rubble);
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+           m_chests.canRestoreLocal(saved.m_chests) && m_gates.canRestoreLocal(saved.m_gates) &&
+           m_traps.canRestoreLocal(saved.m_traps) && m_barrels.canRestoreLocal(saved.m_barrels) &&
+           m_safeRocks.canRestoreLocal(saved.m_safeRocks) &&
+           m_scenery.canRestoreLocal(saved.m_scenery) && m_rubble.canRestoreLocal(saved.m_rubble);
 }
 
 bool LevelFixtures::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
-           m_chests.equalLocal(left.chests, right.chests) &&
-           m_gates.equalLocal(left.gates, right.gates) &&
-           m_traps.equalLocal(left.traps, right.traps) &&
-           m_barrels.equalLocal(left.barrels, right.barrels) &&
-           m_safeRocks.equalLocal(left.safeRocks, right.safeRocks) &&
-           m_scenery.equalLocal(left.scenery, right.scenery) &&
-           m_rubble.equalLocal(left.rubble, right.rubble);
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state &&
+           m_chests.equalLocal(left.m_chests, right.m_chests) &&
+           m_gates.equalLocal(left.m_gates, right.m_gates) &&
+           m_traps.equalLocal(left.m_traps, right.m_traps) &&
+           m_barrels.equalLocal(left.m_barrels, right.m_barrels) &&
+           m_safeRocks.equalLocal(left.m_safeRocks, right.m_safeRocks) &&
+           m_scenery.equalLocal(left.m_scenery, right.m_scenery) &&
+           m_rubble.equalLocal(left.m_rubble, right.m_rubble);
 }
 
 bool LevelFixtures::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_chests.restoreLocal(saved.chests);
-    m_gates.restoreLocal(saved.gates);
-    m_traps.restoreLocal(saved.traps);
-    m_barrels.restoreLocal(saved.barrels);
-    m_safeRocks.restoreLocal(saved.safeRocks);
-    m_scenery.restoreLocal(saved.scenery);
-    m_rubble.restoreLocal(saved.rubble);
+    m_sim = saved.m_state;
+    m_chests.restoreLocal(saved.m_chests);
+    m_gates.restoreLocal(saved.m_gates);
+    m_traps.restoreLocal(saved.m_traps);
+    m_barrels.restoreLocal(saved.m_barrels);
+    m_safeRocks.restoreLocal(saved.m_safeRocks);
+    m_scenery.restoreLocal(saved.m_scenery);
+    m_rubble.restoreLocal(saved.m_rubble);
     // The enclosing scene also rewinds the world, players and effect pool.
     // Never cancel/restart gas effects or dispatch contact callbacks here.
     ++m_checkpointGeneration;

@@ -45,6 +45,7 @@ public:
     Breakables& operator=(const Breakables&) = delete;
     Breakables(Breakables&&) noexcept = default;
     Breakables& operator=(Breakables&&) noexcept = default;
+    ~Breakables() = default;
     static constexpr s32 kBreakable = 10; ///< the item type of barrels and breakable walls
     static constexpr s32 kBarrel = 43;    ///< of either type
     static constexpr s32 kExploding = 44;
@@ -134,9 +135,9 @@ public:
     /** In-memory history for this owner and its current bound stage. */
     class LocalSnapshot {
         friend class Breakables;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const Breakables* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const Breakables* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

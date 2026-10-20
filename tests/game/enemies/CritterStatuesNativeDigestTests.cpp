@@ -127,7 +127,8 @@ NativeStateDigest::Digest placementHash(const CritterStatues::Placement& placeme
 TEST_CASE("statue native digests resolve independent art and remain independent of drawing",
           "[native-state-digest][critter-statues-native-digest]") {
     const auto path = statueDigestFixture();
-    Pool first(path), second(path);
+    Pool first(path);
+    Pool second(path);
     REQUIRE(first.statues.figure(0).presentation().tree !=
             second.statues.figure(0).presentation().tree);
     REQUIRE(&first.statues.archive(0) != &second.statues.archive(0));
@@ -167,7 +168,8 @@ TEST_CASE("statue native digests resolve independent art and remain independent 
 TEST_CASE("statue native hashes include hidden placements grid wake clocks and pending births",
           "[native-state-digest][critter-statues-native-digest]") {
     const auto path = statueDigestFixture();
-    Pool first(path, 1), otherDuration(path, 1, 4);
+    Pool first(path, 1);
+    const Pool otherDuration(path, 1, 4);
     CHECK(first.statues.positionOf(0) == otherDuration.statues.positionOf(0));
     CHECK(first.statues.figure(0).sequence() == otherDuration.statues.figure(0).sequence());
     CHECK(first.digest() != otherDuration.digest());
@@ -216,7 +218,8 @@ TEST_CASE("statue native hashes include hidden placements grid wake clocks and p
 TEST_CASE("statue native one through eight tick corrections retain compaction particles and outputs",
           "[native-state-digest][critter-statues-native-digest][local-rewind]") {
     const auto path = statueDigestFixture();
-    Pool reference(path), corrected(path);
+    Pool reference(path);
+    Pool corrected(path);
     for (s32 tick = 0; tick < 3; ++tick) {
         reference.step(tick);
         corrected.step(tick);
@@ -224,7 +227,7 @@ TEST_CASE("statue native one through eight tick corrections retain compaction pa
     CritterStatues::LocalSnapshot initial;
     corrected.statues.saveLocal(initial);
     const auto initialHash = corrected.digest();
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     std::array<CritterStatues::LocalSnapshot, 8> exact;
     for (s32 tick = 0; tick < 8; ++tick) {
         reference.step(3 + tick);
@@ -279,8 +282,10 @@ TEST_CASE("statue placement hashing includes native spawn payload and authored c
 TEST_CASE("statue native digests reject missing stale foreign and unloaded bindings",
           "[native-state-digest][critter-statues-native-digest]") {
     const auto path = statueDigestFixture();
-    Pool first(path), second(path);
-    CritterStatues::LocalSnapshot saved, unset;
+    Pool first(path);
+    Pool second(path);
+    CritterStatues::LocalSnapshot saved;
+    const CritterStatues::LocalSnapshot unset{};
     first.statues.saveLocal(saved);
     NativeStateDigest unknown;
     CHECK_FALSE(first.statues.appendNativeDigest(unknown));

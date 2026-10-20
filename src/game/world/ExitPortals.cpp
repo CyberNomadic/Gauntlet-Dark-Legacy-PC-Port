@@ -96,29 +96,29 @@ bool ExitPortals::registerNativeResources(NativeStateResources& resources) const
 }
 
 void ExitPortals::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_checkpointBinding;
-    saved.waiting = m_wait;
-    saved.portals.resize(m_portals.size());
+    saved.m_owner = this;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_waiting = m_wait;
+    saved.m_portals.resize(m_portals.size());
     for (usize i = 0; i < m_portals.size(); ++i) {
-        saved.portals[i] = m_portals[i];
+        saved.m_portals[i] = m_portals[i];
     }
 }
 
 bool ExitPortals::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_checkpointBinding &&
-           saved.portals.size() == m_portals.size();
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+           saved.m_portals.size() == m_portals.size();
 }
 
 bool ExitPortals::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_wait = saved.waiting;
+    m_wait = saved.m_waiting;
     for (usize i = 0; i < m_portals.size(); ++i) {
         auto& portal = m_portals[i];
-        static_cast<PortalState&>(portal) = saved.portals[i];
+        static_cast<PortalState&>(portal) = saved.m_portals[i];
         if (!portal.secret && !portal.shut && portal.player.playing()) {
             portal.model.setFrame(portal.player.sequence(),
                                   static_cast<s32>(portal.player.frame()));
@@ -216,6 +216,7 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, const As
     ItemArchive* art = scope.archiveForTree(kFigure);
     const auto tree = art != nullptr ? art->trees.find(kFigure) : std::nullopt;
     if (tree.has_value()) {
+        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
         m_tree = &art->trees.tree(*tree);
         for (usize i = 0; i < kSequences.size(); ++i) {
             const auto sequence = m_tree->findSequence(kSequences[i]);
@@ -235,7 +236,7 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, const As
         } else if (access != nullptr && portal.destination.has_value() &&
                    !access->portalOpen(portal.destination->realmId, gateOf(portal.tag))) {
             shut(device, portal, scope);
-        } else if (m_tree != nullptr &&
+        } else if (m_tree != nullptr && art != nullptr &&
                    portal.model.bind(*m_tree, art->models, art->textures, device)) {
             portal.archive = art;
             portal.pose.rest(*m_tree);

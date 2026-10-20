@@ -50,9 +50,9 @@ TEST_CASE("private potion flight restores the native ballistic continuation and 
     launch.potionRelease = MissilePotionRelease{37};
     PlayerMissiles native;
     REQUIRE(native.launch(launch));
-    constexpr f32 step = 1.0f / 60;
+    constexpr f32 kStep = 1.0f / 60;
     for (s32 tick = 0; tick < 6; ++tick) {
-        native.update(step, nullptr);
+        native.update(kStep, nullptr);
     }
     REQUIRE(native.count() == 1);
     const auto saved = PlayerMissiles::flightCheckpoint(native.missile(0));
@@ -65,8 +65,8 @@ TEST_CASE("private potion flight restores the native ballistic continuation and 
     CHECK(replay.missile(0).potionRelease == launch.potionRelease);
     for (s32 tick = 6; tick < 190; ++tick) {
         CAPTURE(kind, charge, tick);
-        native.update(step, nullptr);
-        replay.update(step, nullptr);
+        native.update(kStep, nullptr);
+        replay.update(kStep, nullptr);
         REQUIRE(replay.count() == native.count());
         REQUIRE(replay.visualHistory().size() == native.visualHistory().size());
         REQUIRE(replay.visualHistory().size() == 1);

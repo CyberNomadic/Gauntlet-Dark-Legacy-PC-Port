@@ -29,8 +29,8 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
     REQUIRE(powerups.load(root / "POWERUPS"));
     REQUIRE(weapons.load(root / "WEAPONS"));
     const auto camera = CameraFrame::at({10, 20, 30});
-    constexpr std::array<f32, 3> blends{0, 0.5f, 1};
-    constexpr f32 seconds = 1.0f / 60;
+    constexpr std::array<f32, 3> kBlends{0, 0.5f, 1};
+    constexpr f32 kSeconds = 1.0f / 60;
     struct Observation {
         PowerupCompanion::Checkpoint state;
         std::array<std::vector<test::RecordedDraw>, 3> draws;
@@ -43,7 +43,7 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
         REQUIRE(companion.shown());
         for (s32 tick = 0; tick < 24; ++tick) {
             companion.capturePresentation();
-            companion.update(seconds, Action::Run1, false, false);
+            companion.update(kSeconds, Action::Run1, false, false);
         }
         PowerupCompanion::LocalSnapshot initial;
         companion.saveLocal(initial);
@@ -52,9 +52,9 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
             const auto state = companion.checkpoint();
             REQUIRE(state);
             result.state = *state;
-            for (usize blend = 0; blend < blends.size(); ++blend) {
+            for (usize blend = 0; blend < kBlends.size(); ++blend) {
                 device.draws.clear();
-                companion.draw(device, Mat4{1}, Mat4{1}, {}, 0.8f, &camera, blends[blend]);
+                companion.draw(device, Mat4{1}, Mat4{1}, {}, 0.8f, &camera, kBlends[blend]);
                 REQUIRE_FALSE(device.draws.empty());
                 result.draws[blend] = device.draws;
             }
@@ -64,8 +64,8 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
         const auto check = [&](const Observation& expected) {
             const auto actual = observe();
             CHECK(actual.state == expected.state);
-            for (usize blend = 0; blend < blends.size(); ++blend) {
-                CAPTURE(blends[blend]);
+            for (usize blend = 0; blend < kBlends.size(); ++blend) {
+                CAPTURE(kBlends[blend]);
                 REQUIRE(actual.draws[blend].size() == expected.draws[blend].size());
                 for (usize draw = 0; draw < actual.draws[blend].size(); ++draw) {
                     CAPTURE(draw);
@@ -76,7 +76,7 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
         const auto step = [&](s32 tick) {
             companion.capturePresentation();
             if (tick % 3 != 1) {
-                companion.update(seconds, tick % 4 == 0 ? Action::Run1 : Action::Ready,
+                companion.update(kSeconds, tick % 4 == 0 ? Action::Run1 : Action::Ready,
                                  tick % 4 == 2, tick % 4 == 2);
             }
         };
@@ -101,7 +101,7 @@ TEST_CASE("native companion rewind retains interpolation and held frame boundari
                 REQUIRE(companion.restoreLocal(before));
                 for (s32 tick = 0; tick < length; ++tick) {
                     companion.capturePresentation();
-                    companion.update(seconds, Action::Death, true, true);
+                    companion.update(kSeconds, Action::Death, true, true);
                 }
                 device.draws.clear();
                 const auto uploads = device.texturesCreated;
@@ -129,7 +129,7 @@ TEST_CASE("native companion snapshots reject missing foreign and expired owners"
           "[game][world][companion][powerup-companion-local-rewind][native-local-rewind]") {
     PowerupCompanion owner;
     PowerupCompanion foreign;
-    PowerupCompanion::LocalSnapshot missing;
+    const PowerupCompanion::LocalSnapshot missing;
     PowerupCompanion::LocalSnapshot saved;
     owner.saveLocal(saved);
     CHECK_FALSE(owner.canRestoreLocal(missing));
@@ -139,7 +139,7 @@ TEST_CASE("native companion snapshots reject missing foreign and expired owners"
     CHECK(owner.canRestoreLocal(saved));
     CHECK(owner.restoreLocal(saved));
     {
-        PowerupCompanion temporary;
+        const PowerupCompanion temporary;
         temporary.saveLocal(saved);
         REQUIRE(temporary.canRestoreLocal(saved));
     }

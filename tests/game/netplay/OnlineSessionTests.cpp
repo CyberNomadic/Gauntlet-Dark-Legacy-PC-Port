@@ -393,8 +393,9 @@ TEST_CASE("native guest flush preserves sampled edges and redundant inputs throu
     REQUIRE(pair.guestSession.flush());
     REQUIRE(pair.guestSession.flush());
     REQUIRE(attempts.size() == 2);
-    for (const auto& attempt : attempts)
+    for (const auto& attempt : attempts) {
         CHECK(InputPacket::encode(attempt.commands) == InputPacket::encode(sampled));
+    }
     CHECK(pair.guestWire.polls == polls);
     CHECK(pair.guestInputs.sampleTick() == firstTick + 1);
     CHECK_FALSE(pair.guestInputs.sample(inputs(pair.guest, pair.guestInputs, true)));
@@ -414,8 +415,9 @@ TEST_CASE("native guest flush preserves sampled edges and redundant inputs throu
         CHECK(InputPacket::encode(host->commands) == InputPacket::encode(guest->commands));
         CHECK(host->predictedSeats == 0);
         CHECK(guest->predictedSeats == 0);
-        for (usize seat = 0; seat < presses.size(); ++seat)
+        for (usize seat = 0; seat < presses.size(); ++seat) {
             presses[seat] += host->commands[seat].pressed(CommandPress::UsePotion) ? 1U : 0U;
+        }
         REQUIRE(pair.hostInputs.complete());
         REQUIRE(pair.guestInputs.complete());
     }
@@ -509,10 +511,14 @@ TEST_CASE("online sessions handle split local seats, sparse rosters and unordere
     REQUIRE(guest.session.match().loaded());
     guest.session.update(0);
     host.wire.sent.clear();
-    for (const auto& packet : guest.wire.sent) host.wire.message(1, packet.bytes);
+    for (const auto& packet : guest.wire.sent) {
+        host.wire.message(1, packet.bytes);
+    }
     guest.wire.sent.clear();
     host.session.update(0);
-    for (const auto& packet : host.wire.sent) guest.wire.message(99, packet.bytes);
+    for (const auto& packet : host.wire.sent) {
+        guest.wire.message(99, packet.bytes);
+    }
     host.wire.sent.clear();
     guest.session.update(0);
     CHECK(host.session.match().phase() == MatchSession::Phase::Running);
@@ -813,7 +819,7 @@ TEST_CASE("online failure preserves terminal agreement diagnostics through teard
     REQUIRE(pair.hostInputs.complete());
     const auto epoch = pair.host.context().epoch;
     const auto now = MatchSession::Clock::now();
-    NativeAgreement::Digest first{};
+    const NativeAgreement::Digest first{};
     REQUIRE(pair.host.observeNativeTerminal(epoch, 1, first, now));
     CHECK_FALSE(pair.host.completeNativeBoundary(epoch, 1));
     std::string expected;

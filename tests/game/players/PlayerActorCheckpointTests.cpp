@@ -130,10 +130,10 @@ TEST_CASE("actor checkpoint validation is bounded and failure cannot partially r
         CHECK(actor.player() == 3);
         CHECK(actor.save().toJson() == identity);
     };
-    constexpr std::array scalars{
+    constexpr std::array kScalars{
         &State::yaw,    &State::speed,        &State::paceBonus,      &State::radius,
         &State::height, &State::followHeight, &State::attentionHeight};
-    for (const auto scalar : scalars) {
+    for (const auto scalar : kScalars) {
         for (const f32 value :
              {std::numeric_limits<f32>::quiet_NaN(), std::numeric_limits<f32>::infinity(),
               -std::numeric_limits<f32>::infinity()}) {

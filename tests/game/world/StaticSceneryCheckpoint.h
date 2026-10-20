@@ -26,7 +26,7 @@ public:
         ItemFigureCheckpoint::State figure;
         Support support;
         Obstacle box;
-        bool operator==(const Prop&) const;
+        bool operator==(const Prop& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxProps = 4096;

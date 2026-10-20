@@ -171,7 +171,8 @@ TEST_CASE("native missile history rewinds complete flight contacts effects and u
 
 TEST_CASE("native missile history rejects other pools resource teardown and stale diagnostic restores",
           "[local-rewind][missile-local-rewind]") {
-    PlayerMissiles a, b;
+    PlayerMissiles a;
+    PlayerMissiles b;
     PlayerMissiles::LocalSnapshot state;
     CHECK_FALSE(a.restoreLocal(state));
     a.saveLocal(state);
@@ -189,7 +190,7 @@ TEST_CASE("native missile history rejects other pools resource teardown and stal
     a.bindVisuals(device);
     CHECK_FALSE(a.restoreLocal(state));
     {
-        PlayerMissiles temporary;
+        const PlayerMissiles temporary;
         temporary.saveLocal(state);
     }
     CHECK_FALSE(a.restoreLocal(state));
@@ -326,6 +327,8 @@ TEST_CASE("player missile checkpoint preparation is bounded atomic and resource 
         case 10: bad.missiles.resize(PlayerMissiles::Checkpoint::kMaxMissiles + 1); break;
         case 11: bad.visualsBound = true; break;
         case 12: bad.ricochetIn = -1; break;
+        default:
+            break;
         }
         CHECK_FALSE(pool.prepareRestore(bad, resources));
         CHECK(pool.checkpoint(resources) == saved);

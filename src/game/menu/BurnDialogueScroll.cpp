@@ -35,7 +35,7 @@ bool BurnDialogueScroll::ready(const Image* scroll, std::span<const Image* const
            });
 }
 
-bool BurnDialogueScroll::start(RenderDevice&, const Rect& area, const Image& scroll,
+bool BurnDialogueScroll::start(RenderDevice& /*unused*/, const Rect& area, const Image& scroll,
                                std::vector<const Image*> masks, std::vector<const Texture*> ring) {
     reset();
     if (scroll.pixels.empty() || masks.empty() || ring.empty() || masks.front() == nullptr) {
@@ -168,20 +168,20 @@ void BurnDialogueScroll::draw(Canvas& canvas) const {
 }
 
 void BurnDialogueScroll::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
 }
 
 bool BurnDialogueScroll::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding;
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding;
 }
 
 bool BurnDialogueScroll::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     return true;
 }
 
@@ -218,7 +218,7 @@ bool BurnDialogueScroll::appendLocalDigest(NativeStateDigest& digest,
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 } // namespace gdl::game

@@ -36,8 +36,8 @@ struct Pair {
     HostedRoom hostRoom, guestRoom;
     OnlineSession host, guest;
     test::RollbackSessionHarness hostInputs, guestInputs;
-    Pair(u8 hostPlayers = 1, u8 guestPlayers = 1, std::string version = "test",
-         std::string content = std::string(64, 'a'))
+    Pair(u8 hostPlayers = 1, u8 guestPlayers = 1, const std::string& version = "test",
+         const std::string& content = std::string(64, 'a'))
         : hostRoom(a, true, hostPlayers, "test", std::string(64, 'a')),
           guestRoom(b, false, guestPlayers, version, content),
           host(hostRoom, hostRoom.transport(), true, hostPlayers),
@@ -136,7 +136,7 @@ TEST_CASE("hosted exact-input packets fit a single provider fragment", "[netplay
         inputs[index].tick = index + 1;
         inputs[index].grant = 1;
     }
-    RollbackExchange::Message message{1, 1, 1, {}, inputs, 1};
+    const RollbackExchange::Message message{1, 1, 1, {}, inputs, 1};
     const auto packet = RollbackExchange::encode(message);
     REQUIRE(packet);
     REQUIRE(pair.hostRoom.transport().send(7, *packet, PacketTransport::Delivery::Unreliable) ==

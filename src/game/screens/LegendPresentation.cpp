@@ -41,21 +41,21 @@ bool LegendPresentation::appendLocalDigest(NativeStateDigest& digest,
 }
 
 void LegendPresentation::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_state = m_sim;
 }
 
 bool LegendPresentation::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_localBinding;
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_localBinding;
 }
 
 bool LegendPresentation::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     return true;
 }
 

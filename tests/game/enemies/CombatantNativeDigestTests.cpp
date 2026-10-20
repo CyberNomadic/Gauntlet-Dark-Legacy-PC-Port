@@ -126,7 +126,7 @@ TEST_CASE("combatant native digest observes inactive retained state without reso
 
 TEST_CASE("combatant native hashes agree across independent art loads and corrected histories",
           "[native-state-digest][combatant-native-digest][assets]") {
-    const auto family = GENERATE("GENERAL", "GOLEM", "CHIMERA", "LICH");
+    const auto* const family = GENERATE("GENERAL", "GOLEM", "CHIMERA", "LICH");
     CAPTURE(family);
     auto reference = std::make_unique<Encounter>(family);
     auto predicted = std::make_unique<Encounter>(family);
@@ -176,6 +176,8 @@ TEST_CASE("combatant native hashes distinguish hidden timer and move admission s
         case 2: actor.curb(second ? 0.9f : 0.8f); break;
         case 3: actor.hold(second); break;
         case 4: actor.damagedPlayer(1, second ? 2.0f : 1.0f); break;
+        default:
+            break;
         }
     };
     mutate(false);
@@ -237,7 +239,7 @@ TEST_CASE("combatant native patrol bindings use owner identity without reading l
     auto first = std::make_unique<Encounter>("GENERAL");
     auto second = std::make_unique<Encounter>("GENERAL");
     LookoutRoute firstRoute{{Vec3{2, 0, 0}, Vec3{8, 0, 0}}, {1, 0}};
-    LookoutRoute secondRoute = firstRoute;
+    const LookoutRoute secondRoute = firstRoute;
     REQUIRE(first->resources.registerLookouts(firstRoute, "stage/critters/lookouts"));
     REQUIRE(second->resources.registerLookouts(secondRoute, "stage/critters/lookouts"));
     first->actor.startPatrol(&firstRoute, 10);
@@ -287,7 +289,8 @@ TEST_CASE("combatant native replacement models resolve retained semantic binding
 TEST_CASE("combatant native digest refuses missing bindings foreign owners and stale assets",
           "[native-state-digest][combatant-native-digest][assets]") {
     auto encounter = std::make_unique<Encounter>("GOLEM");
-    Combatant::LocalSnapshot saved, empty;
+    Combatant::LocalSnapshot saved;
+    const Combatant::LocalSnapshot empty{};
     REQUIRE(encounter->actor.saveLocal(saved));
     NativeStateDigest missing;
     CHECK_FALSE(encounter->actor.appendNativeDigest(missing));
@@ -295,7 +298,7 @@ TEST_CASE("combatant native digest refuses missing bindings foreign owners and s
     NativeStateDigest unset(encounter->resources.resources());
     CHECK_FALSE(encounter->actor.appendLocalDigest(unset, empty));
     CHECK_FALSE(unset.checkedFinish());
-    Combatant foreign;
+    const Combatant foreign;
     NativeStateDigest other(encounter->resources.resources());
     CHECK_FALSE(foreign.appendLocalDigest(other, saved));
     CHECK_FALSE(other.checkedFinish());
@@ -317,11 +320,13 @@ TEST_CASE("combatant native digest refuses missing bindings foreign owners and s
 
 TEST_CASE("combatant native saved digest rejects a destroyed owner at the same address",
           "[native-state-digest][combatant-native-digest]") {
-    alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage;
+    alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     auto* actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     Combatant::LocalSnapshot saved;
     REQUIRE(actor->saveLocal(saved));
     std::destroy_at(actor);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     NativeStateDigest stale;
     CHECK_FALSE(actor->appendLocalDigest(stale, saved));

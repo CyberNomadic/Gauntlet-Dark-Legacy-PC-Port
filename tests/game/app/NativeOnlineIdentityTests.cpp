@@ -32,7 +32,7 @@ StringTable strings(std::string_view value = "first") {
     INFO(numericError);
     REQUIRE(prepared);
     const auto directory = test::scratchDirectory("native-online-identity");
-    writeTextFile(directory / "en.json", "{\"cue\":\"" + std::string(value) + "\"}");
+    writeTextFile(directory / "en.json", R"({"cue":")" + std::string(value) + "\"}");
     StringTable result;
     REQUIRE(result.load(directory, "en"));
     return result;
@@ -42,10 +42,15 @@ struct FloatingEnvironment {
     std::fenv_t value{};
     FloatingEnvironment() { REQUIRE(std::fegetenv(&value) == 0); }
     ~FloatingEnvironment() { std::fesetenv(&value); }
+    FloatingEnvironment(const FloatingEnvironment&) = delete;
+    FloatingEnvironment& operator=(const FloatingEnvironment&) = delete;
 };
 
 struct ErrorNumber {
     int value = errno;
+    ErrorNumber() = default;
+    ErrorNumber(const ErrorNumber&) = delete;
+    ErrorNumber& operator=(const ErrorNumber&) = delete;
     ~ErrorNumber() { errno = value; }
 };
 
@@ -90,6 +95,7 @@ TEST_CASE("native online identity requires effective data and complete owned inp
         } else {
             bad.language.clear();
         }
+        // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move): a fresh copy each pass
         CHECK_FALSE(NativeOnlineIdentity::capture(std::move(bad), &error));
         CHECK_FALSE(error.empty());
     }
@@ -136,12 +142,12 @@ TEST_CASE("native runtime identity hashes the running image independently from t
 
 TEST_CASE("numeric identity detects rounding changes but ignores sticky exceptions",
           "[native-online-identity][determinism]") {
-    FloatingEnvironment restore;
+    const FloatingEnvironment restore;
     REQUIRE(std::fesetround(FE_TONEAREST) == 0);
     const auto source = strings();
     const auto nearest = NativeOnlineIdentity::snapshot(source);
     REQUIRE(nearest);
-    ErrorNumber restoreErrno;
+    const ErrorNumber restoreErrno;
     errno = EDOM;
     REQUIRE(std::feraiseexcept(FE_INEXACT) == 0);
     const int exceptions = std::fetestexcept(FE_ALL_EXCEPT);
@@ -176,7 +182,7 @@ TEST_CASE("prepared numeric identity agrees on a new thread without sharing live
     const auto source = strings();
     const auto input = NativeOnlineIdentity::snapshot(source);
     REQUIRE(input);
-    const auto copy = *input;
+    const auto& copy = *input;
     auto worker = std::async(std::launch::async,
                              [copy] { return NativeOnlineIdentity::numericMatches(copy); });
     CHECK(worker.get());
@@ -228,7 +234,9 @@ TEST_CASE("static runtime identity ignores an actual incidental system UCRT",
         struct Module {
             HMODULE handle;
             ~Module() {
-                if (handle != nullptr) FreeLibrary(handle);
+                if (handle != nullptr) {
+                    FreeLibrary(handle);
+                }
             }
         } incidental{LoadLibraryExW(L"ucrtbase.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)};
         REQUIRE(incidental.handle != nullptr);

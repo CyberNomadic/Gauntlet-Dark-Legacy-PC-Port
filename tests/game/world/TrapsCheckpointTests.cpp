@@ -87,7 +87,8 @@ TEST_CASE("trap rewind preserves native randomized cycles victim gaps wakes and 
     const auto rate = GENERATE(30, 60);
     const f32 seconds = 1.0f / static_cast<f32>(rate);
     const s32 ticks = 60 / rate;
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     const std::array<TrapVictim, 2> victims{{{{0, 1, 0}, 0.75f, 1.5f}, {{20, 1, 0}, 0.75f, 1.5f}}};
     for (s32 tick = 0; tick < 17; ++tick) {
         first.traps.update(ticks, seconds, victims);
@@ -96,8 +97,10 @@ TEST_CASE("trap rewind preserves native randomized cycles victim gaps wakes and 
     REQUIRE(state);
     REQUIRE(second.owner.restore(*state));
     CHECK(second.owner.checkpoint() == state);
-    const auto textures = second.device.texturesCreated, uploads = second.device.textureUpdates;
-    usize hits = 0, wakes = 0;
+    const auto textures = second.device.texturesCreated;
+    const auto uploads = second.device.textureUpdates;
+    usize hits = 0;
+    usize wakes = 0;
     for (s32 tick = 0; tick < 400; ++tick) {
         first.traps.capturePresentation();
         second.traps.capturePresentation();
@@ -119,7 +122,8 @@ TEST_CASE("trap rewind preserves native randomized cycles victim gaps wakes and 
 }
 TEST_CASE("trap checkpoints switch between original disarmed and vanished figures without uploads",
           "[rollback][traps-checkpoint]") {
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     const auto initial = first.owner.checkpoint();
     REQUIRE(initial);
     for (usize i = 0; i < first.traps.size(); ++i) {
@@ -132,7 +136,8 @@ TEST_CASE("trap checkpoints switch between original disarmed and vanished figure
     CHECK_FALSE(first.traps.trap(1).shown);
     const auto state = first.owner.checkpoint();
     REQUIRE(state);
-    const auto textures = second.device.texturesCreated, uploads = second.device.textureUpdates;
+    const auto textures = second.device.texturesCreated;
+    const auto uploads = second.device.textureUpdates;
     const auto* address = &second.traps.trap(0);
     REQUIRE(second.owner.restore(*state));
     CHECK(second.owner.checkpoint() == state);
@@ -161,6 +166,8 @@ TEST_CASE("trap plans reject malformed state wrong authored rows and changed bin
         case 6: invalid.timeScale += 1; break;
         case 7: invalid.traps[0].ticksLeft = std::numeric_limits<s32>::min(); break;
         case 8: invalid.traps[0].action = 100; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner.restore(invalid));
         CHECK(fixture.owner.checkpoint() == state);
@@ -187,7 +194,8 @@ TEST_CASE("trap plans reject malformed state wrong authored rows and changed bin
 }
 TEST_CASE("disarming a striking trap without alternate art retains its frozen native pose",
           "[rollback][traps-checkpoint]") {
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     for (s32 tick = 0; tick < 1000 && first.traps.trap(1).action != 2; ++tick) {
         first.traps.update(1, 1.0f / 60, {});
     }
@@ -225,7 +233,7 @@ TEST_CASE(
     "native trap rosters restore every authored and disarmed figure on independent stage loads",
     "[rollback][traps-checkpoint][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
-    const auto stage = GENERATE("F1", "J4", "G2");
+    const auto* const stage = GENERATE("F1", "J4", "G2");
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
     const auto level = catalog.byName(stage);
@@ -233,10 +241,12 @@ TEST_CASE(
     test::FakeRenderDevice device;
     LevelWorld world;
     REQUIRE(world.load(device, root, *level));
-    Traps a, b;
+    Traps a;
+    Traps b;
     a.bind(device, world.layout(), world.itemScope(), &world.collision(), 42, 1, 1);
     b.bind(device, world.layout(), world.itemScope(), &world.collision(), 42, 1, 1);
-    TrapsCheckpoint first{a}, second{b};
+    TrapsCheckpoint first{a};
+    TrapsCheckpoint second{b};
     REQUIRE(first.bindResources(device));
     REQUIRE(second.bindResources(device));
     const auto state = first.checkpoint();
@@ -260,7 +270,8 @@ TEST_CASE(
 TEST_CASE("trap floor attachments rewind with native nonblocking moving support",
           "[rollback][traps-checkpoint]") {
     const auto rate = GENERATE(30, 60);
-    Fixture first(true), second(true);
+    Fixture first(true);
+    Fixture second(true);
     REQUIRE(first.traps.trap(0).support.object() == 0);
     REQUIRE_FALSE(first.traps.trap(0).box.solid);
     const auto initial = first.owner.checkpoint();
@@ -307,7 +318,8 @@ TEST_CASE("trap floor attachments rewind with native nonblocking moving support"
 }
 TEST_CASE("trap native values undo random cycles contact gaps disarming and first effect births",
           "[local-rewind][fixture-local-rewind][traps-local-rewind]") {
-    Fixture native(true), replay(true);
+    Fixture native(true);
+    Fixture replay(true);
     std::array<Traps::LocalSnapshot, 16> history;
     WorldCollision::LocalSnapshot floor;
     const auto uploads = replay.device.texturesCreated;
@@ -334,7 +346,8 @@ TEST_CASE("trap native values undo random cycles contact gaps disarming and firs
         return fixture.traps.update(wrong ? 11 : 1, wrong ? 0.2f : 1.0f / 60, victims,
                                     !wrong && tick >= 70 && tick < 80);
     };
-    usize hits = 0, wakes = 0;
+    usize hits = 0;
+    usize wakes = 0;
     bool particles = false;
     s32 tick = 0;
     for (usize window = 0; window < 96; ++window) {
@@ -396,7 +409,11 @@ TEST_CASE("trap native values undo random cycles contact gaps disarming and firs
 TEST_CASE("native trap equality detects victim cooldowns with identical trap figures",
           "[local-rewind][fixture-local-rewind][traps-local-rewind]") {
     Fixture fixture;
-    Traps::LocalSnapshot initial, untouched, hit, actual, empty;
+    Traps::LocalSnapshot initial;
+    Traps::LocalSnapshot untouched;
+    Traps::LocalSnapshot hit;
+    Traps::LocalSnapshot actual;
+    const Traps::LocalSnapshot empty{};
     for (s32 tick = 0; tick < 100 && fixture.traps.trap(0).action != 2; ++tick) {
         fixture.traps.update(1, 1.0f / 60, {});
     }

@@ -143,9 +143,9 @@ struct CampaignPeer {
         REQUIRE(agreed);
         REQUIRE(session.room());
         REQUIRE(session.party());
-        NativePlaySetup::Contract contract{
-            agreed->rules.scene, agreed->rules.autoMelee, agreed->rules.autoActivateItems,
-            agreed->rules.expandedShop, agreed->identity.build, agreed->identity.content,
+        const NativePlaySetup::Contract contract{
+            agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
+            agreed->rules.expandedShop, agreed->identity.build,  agreed->identity.content,
             agreed->identity.data};
         setup = NativePlaySetup::create(config, session.room()->settings, *session.party(),
                                         options, contract);
@@ -163,7 +163,7 @@ struct CampaignPeer {
     void step(MenuInput menu = {}) {
         SessionInputs::Frame devices;
         auto& input = devices[static_cast<usize>(localDevice)];
-        input.menu = menu;
+        input.menu = std::move(menu);
         input.movieSkipPressed = play.entryPhase() == OnlineLevelEntry::Phase::Movie;
         play.update(devices);
         checkHealthy();
@@ -238,15 +238,18 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
             peer->checkHealthy();
         }
     };
-    until("room admission", [&] {
-        return host->session.connected() && guest->session.connected() &&
-               host->session.room() && host->session.room()->members.size() == 2;
-    }, lobbyStep);
+    until(
+        "room admission",
+        [&] {
+            return host->session.connected() && guest->session.connected() &&
+                   (host->session.room() != nullptr) && host->session.room()->members.size() == 2;
+        },
+        lobbyStep);
     REQUIRE(host->session.ready());
     REQUIRE(guest->session.ready());
     until("all room members ready", [&] {
         const auto* room = host->session.room();
-        return room && std::ranges::all_of(room->members, &RoomMember::ready);
+        return (room != nullptr) && std::ranges::all_of(room->members, &RoomMember::ready);
     }, lobbyStep);
     REQUIRE(host->session.start());
     until("native setup agreement", [&] {
@@ -306,7 +309,8 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
     }
 
     u32 menuFrames = 0;
-    std::array<bool, 2> sawShopping{}, sawInventory{};
+    std::array<bool, 2> sawShopping{};
+    std::array<bool, 2> sawInventory{};
     until("normal shop commands and tower return", [&] {
         return std::ranges::all_of(peers, [](const auto* peer) {
             return peer->play.phase() == NativeOnlinePlay::Phase::Playing && peer->play.scene() &&

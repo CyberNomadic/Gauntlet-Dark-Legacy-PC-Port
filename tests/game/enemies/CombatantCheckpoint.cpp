@@ -184,12 +184,12 @@ bool restorePlayer(AnimationPlayer& output, const AnimationPlayer::Checkpoint& s
     if (!state.playing) {
         return output.restore(state, nullptr);
     }
-    return tree && state.sequence < tree->sequences.size() &&
+    return (tree != nullptr) && state.sequence < tree->sequences.size() &&
            output.restore(state, &tree->sequences[state.sequence]);
 }
 bool restorePose(TreePose& output, const std::optional<TreePose::Checkpoint>& state,
                  const TreeInfo* tree) {
-    return !state || (tree && output.restore(*tree, *state));
+    return !state || ((tree != nullptr) && output.restore(*tree, *state));
 }
 std::optional<u32> randomWord(const std::minstd_rand& random) {
     // linear_congruential_engine's textual representation is exactly its one
@@ -199,7 +199,9 @@ std::optional<u32> randomWord(const std::minstd_rand& random) {
     stream << random;
     const auto text = stream.str();
     u32 value = 0;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a contiguous buffer
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a contiguous buffer
     return result.ec == std::errc{} && result.ptr == text.data() + text.size() && value > 0 &&
                    value < 2147483647U
                ? std::optional{value}
@@ -605,7 +607,8 @@ std::optional<CombatantCheckpoint::Part> CombatantCheckpoint::capturePart(const 
     return out.valid() ? std::optional{std::move(out)} : std::nullopt;
 }
 std::optional<CombatantCheckpoint::State> CombatantCheckpoint::checkpoint() const {
-    if (!bound() || m_owner.children().size() >= kMaxParts || m_owner.m_sim.actor.parent) {
+    if (!bound() || m_owner.children().size() >= kMaxParts ||
+        (m_owner.m_sim.actor.parent != nullptr)) {
         return std::nullopt;
     }
     State state;
@@ -650,7 +653,8 @@ bool CombatantCheckpoint::preparePart(Combatant& staged, const Part& part,
             return false;
         }
     } else {
-        if (!stock || !tree || !data || a.moveTimes.size() != data->moves().size() ||
+        if ((stock == nullptr) || (tree == nullptr) || (data == nullptr) ||
+            a.moveTimes.size() != data->moves().size() ||
             a.patternTimes.size() != data->patterns().size() ||
             a.hitNodes.size() != data->parts().size() ||
             a.attachments.size() != (a.definition.index == 0 ? stock->attachments.size() : 0) ||
@@ -816,7 +820,7 @@ CombatantCheckpoint::prepareRestore(const State& state) const {
     for (usize i = 1; i < state.parts.size(); ++i) {
         const auto& part = state.parts[i];
         const auto& a = part.actor;
-        if (!stock || a.definition.resource != root.definition.resource ||
+        if ((stock == nullptr) || a.definition.resource != root.definition.resource ||
             a.definition.index != i || part.id != state.parts.front().id + static_cast<s32>(i) ||
             part.collision ||
             a.branch != stock->stock->tree->findNode(stock->stock->children[i - 1].rootNode(),

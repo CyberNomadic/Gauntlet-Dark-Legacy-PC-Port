@@ -73,6 +73,7 @@ TEST_CASE("native opponent resource IDs cover every kind and slot without instan
 TEST_CASE("native opponent resource manifests restore independent owners in reverse load order",
           "[rollback][opponent-resources][assets]") {
     std::vector<s32> kinds;
+    kinds.reserve(static_cast<usize>(kSwarmKindCount));
     for (s32 kind = 0; kind < kSwarmKindCount; ++kind) {
         kinds.push_back(kind);
     }

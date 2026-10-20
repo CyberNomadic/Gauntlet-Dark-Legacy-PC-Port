@@ -60,6 +60,7 @@ public:
     CombatantProjectiles& operator=(const CombatantProjectiles&) = delete;
     CombatantProjectiles(CombatantProjectiles&&) = delete;
     CombatantProjectiles& operator=(CombatantProjectiles&&) = delete;
+    ~CombatantProjectiles() = default;
     enum class SoundPhase : u32 { Launch = 1, Morph, Impact, End, Splash, Ricochet };
     struct SoundCue {
         u64 instance = 0;
@@ -160,9 +161,9 @@ public:
     class LocalSnapshot {
     private:
         friend class CombatantProjectiles;
-        Simulation state;
-        std::weak_ptr<const u8> owner;
-        u64 epoch = 0;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
     };
     /** Native value history. Borrowed specs, archives and attack tables must
      * remain alive for this stage epoch.

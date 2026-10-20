@@ -264,7 +264,7 @@ TEST_CASE("prepared carried pickup releases retain native no-op visibility and r
 TEST_CASE("prepared pickup births and release failures leave the complete native owner intact",
           "[prepared-pickup-birth]") {
     Fixture fixture("prepared-birth-atomic", 2);
-    Fixture foreign("prepared-birth-foreign", 2);
+    const Fixture foreign("prepared-birth-foreign", 2);
     fixture.step(1.0f / 30);
     const auto before = fixture.state();
     auto undo = fixture.owner.prepareRestore(before);

@@ -197,7 +197,10 @@ TEST_CASE("native altar rewind retains random lifts cues fractional clocks and f
 TEST_CASE("native altar equality retains lift randomness and subframe clocks before movement",
           "[local-rewind][skorne-arena-local-rewind]") {
     RewindFixture fixture("skorne-native-hidden-values");
-    SkorneArena::LocalSnapshot before, lifted, fractional, restored;
+    SkorneArena::LocalSnapshot before;
+    SkorneArena::LocalSnapshot lifted;
+    SkorneArena::LocalSnapshot fractional;
+    SkorneArena::LocalSnapshot restored;
     fixture.arena.saveLocal(before);
     const auto position = fixture.arena.position(0);
     fixture.arena.cue({0, 0, 0});

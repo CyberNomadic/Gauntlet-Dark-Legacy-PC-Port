@@ -42,10 +42,13 @@ template <class Owner> struct NativeOwner {
 
 TEST_CASE("native boss digest observes hidden waking and legend clocks",
           "[native-digest][opponent-owners-native-digest]") {
-    Bosses boss, foreign;
+    Bosses boss;
+    const Bosses foreign{};
     Bosses::LocalSnapshot saved;
     REQUIRE(boss.saveLocal(saved));
-    NativeStateDigest initial, historical, changed;
+    NativeStateDigest initial;
+    NativeStateDigest historical;
+    NativeStateDigest changed;
     REQUIRE(boss.appendNativeDigest(initial));
     boss.arm(1.0f / 60);
     REQUIRE_FALSE(boss.present());
@@ -67,7 +70,8 @@ TEST_CASE("native boss digest observes hidden waking and legend clocks",
     const auto phase = rite.stage();
     REQUIRE(rite.update(1, true, false).empty());
     REQUIRE(rite.stage() == phase);
-    NativeStateDigest beforeHash, afterHash;
+    NativeStateDigest beforeHash;
+    NativeStateDigest afterHash;
     beforeHash.value(before);
     afterHash.value(rite);
     CHECK(beforeHash.checkedFinish() != afterHash.checkedFinish());
@@ -93,7 +97,9 @@ TEST_CASE("native critter owner includes discarded species histories and native 
           "[native-digest][opponent-owners-native-digest][assets]") {
     auto first = std::make_unique<NativeOwner<Critters>>();
     auto second = std::make_unique<NativeOwner<Critters>>();
-    Critters::LocalSnapshot cold, general, speculative;
+    Critters::LocalSnapshot cold;
+    Critters::LocalSnapshot general;
+    Critters::LocalSnapshot speculative;
     REQUIRE(first->owner.saveLocal(cold));
     const auto empty = first->digest();
     REQUIRE(first->owner.spawnGeneral({}, 0, 15));
@@ -133,7 +139,8 @@ TEST_CASE("native boss owner hashes all families and recursive children across i
     CAPTURE(kind);
     auto first = std::make_unique<NativeOwner<Bosses>>();
     auto second = std::make_unique<NativeOwner<Bosses>>();
-    Bosses::LocalSnapshot cold, saved;
+    Bosses::LocalSnapshot cold;
+    Bosses::LocalSnapshot saved;
     REQUIRE(first->owner.saveLocal(cold));
     const auto empty = first->digest();
     REQUIRE(first->owner.spawn(kind, {}, 0, 30));
@@ -181,8 +188,8 @@ TEST_CASE("empty native opponent owners include configuration for their next bir
     Bosses boss;
     Critters critters;
     NativeStateResources resources;
-    WorldCollision collision;
-    HazardSurfaces hazards;
+    const WorldCollision collision;
+    const HazardSurfaces hazards;
     REQUIRE(resources.registerCollision(collision, "stage/test"));
     REQUIRE(resources.registerHazards(hazards, "stage/test"));
     const auto bossHash = [&] {

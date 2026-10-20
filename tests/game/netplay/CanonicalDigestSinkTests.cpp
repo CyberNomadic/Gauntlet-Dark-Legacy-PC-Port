@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <algorithm>
 #include <array>
 #include <string>
@@ -22,11 +23,11 @@ std::vector<u8> digestBytes(usize count) {
 }
 
 std::string hexDigest(const std::array<u8, 32>& digest) {
-    constexpr std::string_view digits = "0123456789abcdef";
+    constexpr std::string_view kDigits = "0123456789abcdef";
     std::string result;
     for (const auto byte : digest) {
-        result.push_back(digits[byte >> 4]);
-        result.push_back(digits[byte & 15]);
+        result.push_back(kDigits[byte >> 4]);
+        result.push_back(kDigits[byte & 15]);
     }
     return result;
 }
@@ -58,7 +59,8 @@ TEST_CASE("canonical digest byte and bulk paths preserve independent boundary ve
     for (const auto& expected : kVectors) {
         CAPTURE(expected.bytes);
         const auto bytes = digestBytes(expected.bytes);
-        CanonicalDigestSink individual, bulk;
+        CanonicalDigestSink individual;
+        CanonicalDigestSink bulk;
         individual.reserve(bytes.size());
         CHECK(individual.size() == 0);
         for (const auto byte : bytes) {
@@ -86,7 +88,7 @@ TEST_CASE("canonical digest mixed append and unaligned SHA blocks preserve all b
                                  usize{4096}, usize{4097}, usize{8193});
     const auto input = digestBytes(16421);
     std::vector<u8> storage(input.size() + offset + 11, 0xcc);
-    std::copy(input.begin(), input.end(), storage.begin() + offset);
+    std::copy(input.begin(), input.end(), storage.begin() + static_cast<std::ptrdiff_t>(offset));
     const auto bytes = std::span<const u8>{storage}.subspan(offset, input.size());
     CanonicalDigestSink sink;
     Sha256 hash;
@@ -160,12 +162,13 @@ TEST_CASE("canonical digest copies and finishing retain independent continuation
 TEST_CASE("canonical scalar writes retain the bytewise stream across partial buffer boundaries",
           "[netplay][canonical-digest][sha256]") {
     const auto prefix = digestBytes(4097);
-    for (usize count : {usize{0}, usize{1}, usize{3}, usize{55}, usize{56}, usize{63},
-                        usize{64}, usize{4087}, usize{4088}, usize{4089}, usize{4090},
-                        usize{4091}, usize{4092}, usize{4093}, usize{4094}, usize{4095},
-                        usize{4096}, usize{4097}}) {
+    for (usize const count :
+         {usize{0}, usize{1}, usize{3}, usize{55}, usize{56}, usize{63}, usize{64}, usize{4087},
+          usize{4088}, usize{4089}, usize{4090}, usize{4091}, usize{4092}, usize{4093}, usize{4094},
+          usize{4095}, usize{4096}, usize{4097}}) {
         CAPTURE(count);
-        CanonicalDigestSink fast, bytewise;
+        CanonicalDigestSink fast;
+        CanonicalDigestSink bytewise;
         fast.append(std::span<const u8>{prefix}.first(count));
         bytewise.append(std::span<const u8>{prefix}.first(count));
         const auto oldWord = [&](u32 value) {
@@ -173,7 +176,7 @@ TEST_CASE("canonical scalar writes retain the bytewise stream across partial buf
                 bytewise.push_back(static_cast<u8>(value >> shift));
             }
         };
-        for (u32 value : {0U, 0x12345678U, 0x80000000U, 0xffffffffU}) {
+        for (u32 const value : {0U, 0x12345678U, 0x80000000U, 0xffffffffU}) {
             fast.word(value);
             oldWord(value);
             fast.push_back(0x91);

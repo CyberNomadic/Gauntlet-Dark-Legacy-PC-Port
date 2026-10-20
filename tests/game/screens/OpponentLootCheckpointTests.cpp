@@ -112,6 +112,8 @@ struct Fixture {
             return true;
         };
     }
+    Fixture(const Fixture&) = delete;
+    Fixture& operator=(const Fixture&) = delete;
     ~Fixture() {
         adapter.reset();
         worldOwner.reset();
@@ -326,6 +328,8 @@ TEST_CASE("loot checkpoint rejects malformed references before any native owner 
         case 7: bag.velocity = std::numeric_limits<f32>::infinity(); break;
         case 8: bag.spin = -1; break;
         case 9: invalid.carried.back() = Adapter::State::kMaxRecords + 1; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture->adapter->prepareRestore(invalid, baseline->effects));
         fixture->check(*baseline);
@@ -343,7 +347,7 @@ TEST_CASE("loot checkpoint rejects malformed references before any native owner 
     auto sibling = fixture->adapter->prepareRestore(baseline->adapter, baseline->effects);
     REQUIRE(first);
     REQUIRE(sibling);
-    Adapter foreign{fixture->opponents, fixture->effectResources()};
+    const Adapter foreign{fixture->opponents, fixture->effectResources()};
     CHECK_FALSE(foreign.canCommit(*first));
     REQUIRE(fixture->adapter->commitRestore(std::move(*first)));
     CHECK_FALSE(fixture->adapter->canCommit(*sibling));

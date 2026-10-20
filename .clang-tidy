@@ -17,11 +17,16 @@
 #   readability-uppercase-literal-suffix                 1.0f is the convention, not 1.0F
 #   misc-misplaced-const                                 Vulkan handles are opaque pointer typedefs; `const VkDevice` means an immutable handle
 #   cppcoreguidelines-pro-type-union-access              glm vector components are union members
+#   bugprone-unchecked-optional-access                   cannot see the invariants that guard the accesses
+#   performance-enum-size                                enum widths are digested and sent as their underlying type
+#   readability-avoid-nested-conditional-operator        chained conditionals laid out as lookup tables are the house style
+#   misc-no-recursion                                    nested actors and effect trees are walked recursively on purpose
 ---
 Checks: >
   -*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
+  -bugprone-unchecked-optional-access,
   clang-analyzer-*,
   -clang-analyzer-optin.core.EnumCastOutOfRange,
   cppcoreguidelines-*,
@@ -37,13 +42,16 @@ Checks: >
   -misc-include-cleaner,
   -misc-misplaced-const,
   -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
   modernize-*,
   -modernize-use-nodiscard,
   -modernize-use-trailing-return-type,
   performance-*,
+  -performance-enum-size,
   portability-*,
   readability-*,
   -readability-uppercase-literal-suffix,
+  -readability-avoid-nested-conditional-operator,
   -readability-function-cognitive-complexity,
   -readability-identifier-length,
   -readability-magic-numbers,
@@ -88,6 +96,8 @@ CheckOptions:
   cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor: true
   cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
   misc-const-correctness.WarnPointersAsValues: false
+  # A prepared restore hands over its parts, not the wrapper that carried them.
+  cppcoreguidelines-rvalue-reference-param-not-moved.AllowPartialMove: true
   # C stdio handles are wrapped in unique_ptr; the gsl::owner convention is not used here.
   cppcoreguidelines-owning-memory.LegacyResourceProducers: ''
   cppcoreguidelines-owning-memory.LegacyResourceConsumers: ''

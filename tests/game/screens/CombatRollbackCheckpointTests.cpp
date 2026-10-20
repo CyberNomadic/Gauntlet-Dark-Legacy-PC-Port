@@ -32,16 +32,16 @@ struct SmallFixture {
     std::unique_ptr<Boundary> owner;
 
     SmallFixture() {
-        constexpr std::array<s32, 2> slots{3, 1};
+        constexpr std::array<s32, 2> kSlots{3, 1};
         for (usize index = 0; index < players.size(); ++index) {
             CharacterSave save;
             save.name = "TEST";
             save.progress().health = 1000;
-            players[index].actor.spawn(slots[index], save, &stats, Vec3{0}, 0);
+            players[index].actor.spawn(kSlots[index], save, &stats, Vec3{0}, 0);
             players[index].entrySave = save;
             runtimes[index] = std::make_unique<PlayerRuntimeCheckpoint>(players[index], &stats);
             ordered[index] = runtimes[index].get();
-            levels.observe(slots[index], 1);
+            levels.observe(kSlots[index], 1);
         }
         owner = std::make_unique<Boundary>(ordered, health, levels, attacks, arsenal, effects,
                                            Boundary::Resources{});
@@ -208,6 +208,8 @@ TEST_CASE("combat transaction keeps native party order and validates complete ow
         case 4: target.players[1] = target.players[0]; break;
         case 5: target.health.words.fill(0); break;
         case 6: target.players.resize(5); break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner->prepareRestore(target));
         CHECK(fixture.state() == baseline);
@@ -219,8 +221,8 @@ TEST_CASE("combat transaction keeps native party order and validates complete ow
     CHECK(fixture.state() == target);
     const std::array<PlayerRuntimeCheckpoint*, 2> duplicates{fixture.ordered[0],
                                                              fixture.ordered[0]};
-    Boundary wrong(duplicates, fixture.health, fixture.levels, fixture.attacks, fixture.arsenal,
-                   fixture.effects, {});
+    const Boundary wrong(duplicates, fixture.health, fixture.levels, fixture.attacks,
+                         fixture.arsenal, fixture.effects, {});
     CHECK_FALSE(wrong.checkpoint());
     CHECK_FALSE(wrong.prepareRestore(target));
 }
@@ -240,6 +242,8 @@ TEST_CASE("combat captures retain child validation and native participant links"
         case 3: invalid.effects.banks.push_back({1, {0, nan}}); break;
         case 4: invalid.levels.marks.front().player = 0; break;
         case 5: invalid.attacks.actors.front().player = 0; break;
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture.owner->prepareRestore(invalid));
@@ -276,6 +280,8 @@ TEST_CASE("combat prepared restoration refuses stale participants before changin
         fixture.levels.forget(3);
         fixture.levels.observe(3, 1); // Same marks, different native order.
         break;
+    default:
+        break;
     }
     const auto before = fixture.state();
     REQUIRE_FALSE(fixture.owner->canCommit(*prepared));
@@ -287,7 +293,7 @@ TEST_CASE("combat prepared restoration refuses stale participants before changin
 TEST_CASE("combat prepared values are single use owner bound and invalidate sibling transactions",
           "[rollback][combat-rollback-checkpoint]") {
     SmallFixture fixture;
-    SmallFixture other;
+    const SmallFixture other;
     const auto baseline = fixture.state();
     auto target = baseline;
     target.players[0].save.gold = 777;
@@ -305,13 +311,15 @@ TEST_CASE("combat prepared values are single use owner bound and invalidate sibl
     CHECK_FALSE(fixture.owner->commitRestore(std::move(*sibling)));
     CHECK(fixture.state() == target);
 
-    alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage;
+    alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage{};
     auto* temporary = std::construct_at(
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         reinterpret_cast<Boundary*>(storage.data()), fixture.ordered, fixture.health,
         fixture.levels, fixture.attacks, fixture.arsenal, fixture.effects, Boundary::Resources{});
     auto old = temporary->prepareRestore(baseline);
     REQUIRE(old);
     std::destroy_at(temporary);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     temporary = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                                   fixture.health, fixture.levels, fixture.attacks, fixture.arsenal,
                                   fixture.effects, Boundary::Resources{});
@@ -326,9 +334,9 @@ TEST_CASE("combat bundle rejects mismatched shared effect and arsenal bindings",
     NativeFixture fixture;
     const auto baseline = fixture.state();
     EffectTrees unrelatedEffects;
-    Boundary wrongEffects(fixture.ordered, fixture.health, fixture.levels, fixture.native.attacks,
-                          fixture.native.arsenal, unrelatedEffects,
-                          {fixture.missiles, {}, fixture.native.resources});
+    const Boundary wrongEffects(fixture.ordered, fixture.health, fixture.levels,
+                                fixture.native.attacks, fixture.native.arsenal, unrelatedEffects,
+                                {fixture.missiles, {}, fixture.native.resources});
     CHECK_FALSE(wrongEffects.checkpoint());
     CHECK_FALSE(wrongEffects.prepareRestore(baseline));
     PlayerArsenal unrelatedArsenal;
@@ -340,9 +348,9 @@ TEST_CASE("combat bundle rejects mismatched shared effect and arsenal bindings",
                            fixture.native.audio,
                            nullptr,
                            {}});
-    Boundary wrongArsenal(fixture.ordered, fixture.health, fixture.levels, fixture.native.attacks,
-                          unrelatedArsenal, fixture.native.effects,
-                          {fixture.missiles, {}, fixture.native.resources});
+    const Boundary wrongArsenal(fixture.ordered, fixture.health, fixture.levels,
+                                fixture.native.attacks, unrelatedArsenal, fixture.native.effects,
+                                {fixture.missiles, {}, fixture.native.resources});
     CHECK_FALSE(wrongArsenal.checkpoint());
     CHECK_FALSE(wrongArsenal.prepareRestore(baseline));
     CHECK(fixture.state() == baseline);
@@ -408,7 +416,7 @@ TEST_CASE("combat rewind retains owner resource and sibling invalidation checks"
           "[rollback][combat-rollback-checkpoint][combat-rewind]") {
     const s32 mutation = GENERATE(0, 1, 2, 3, 4);
     SmallFixture fixture;
-    SmallFixture other;
+    const SmallFixture other;
     const auto baseline = fixture.state();
     auto rewind = fixture.owner->prepareRewind();
     REQUIRE(rewind);
@@ -421,19 +429,23 @@ TEST_CASE("combat rewind retains owner resource and sibling invalidation checks"
     case 2: fixture.attacks.clear(); break;
     case 3: REQUIRE(fixture.runtimes[1]->restore(baseline.players[1])); break;
     case 4: REQUIRE(fixture.owner->restore(baseline)); break;
+    default:
+        break;
     }
     const auto current = fixture.state();
     CHECK_FALSE(fixture.owner->canRewind(*rewind));
     CHECK_FALSE(fixture.owner->rewind(std::move(*rewind)));
     CHECK(fixture.state() == current);
 
-    alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage;
+    alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     auto* owner = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                                     fixture.health, fixture.levels, fixture.attacks,
                                     fixture.arsenal, fixture.effects, Boundary::Resources{});
     auto stale = owner->prepareRewind();
     REQUIRE(stale);
     std::destroy_at(owner);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     owner = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                               fixture.health, fixture.levels, fixture.attacks, fixture.arsenal,
                               fixture.effects, Boundary::Resources{});

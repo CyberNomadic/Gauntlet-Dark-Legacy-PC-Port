@@ -22,7 +22,7 @@ constexpr u32 kMagic = fourcc("PRTS");
  * object representation, padding, platform-sized indices or pointers is copied. */
 class Writer {
 public:
-    static constexpr bool reading = false;
+    static constexpr bool reading = false; // NOLINT(readability-identifier-naming): archive trait
     std::vector<u8> bytes;
 
     void raw(std::span<const u8> source) {
@@ -63,7 +63,7 @@ public:
 
 class Reader {
 public:
-    static constexpr bool reading = true;
+    static constexpr bool reading = true; // NOLINT(readability-identifier-naming): archive trait
     explicit Reader(std::span<const u8> bytes) : m_reader(bytes) {}
     std::span<const u8> raw(usize count) { return m_reader.readBytes(count); }
     template <class T> void number(T& value) {
@@ -118,7 +118,7 @@ template <class A, class T> void matrix(A& archive, T& value) {
     }
 }
 template <class A, class T, class F> void optional(A& archive, T& value, const F& field) {
-    bool present = value.has_value();
+    bool present = value.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
     archive.number(present);
     if constexpr (A::reading) {
         if (present) {
@@ -133,7 +133,7 @@ template <class A, class T, class F> void optional(A& archive, T& value, const F
 }
 template <class A, class T, class F>
 void sequence(A& archive, T& values, usize limit, usize minimumBytes, const F& field) {
-    usize count = values.size();
+    usize count = values.size(); // NOLINT(misc-const-correctness): the archive reads it back
     archive.index(count);
     if (count > limit || count > archive.remaining() / minimumBytes) {
         throw FormatError("participant checkpoint sequence exceeds its bounds");
@@ -146,15 +146,17 @@ void sequence(A& archive, T& values, usize limit, usize minimumBytes, const F& f
     }
 }
 template <class A, class T> void text(A& archive, T& value, usize limit) {
-    usize count = value.size();
+    usize count = value.size(); // NOLINT(misc-const-correctness): the archive reads it back
     archive.index(count);
     if (count > limit || count > archive.remaining()) {
         throw FormatError("participant checkpoint string exceeds its bounds");
     }
     if constexpr (A::reading) {
         const auto bytes = archive.raw(count);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         value.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     } else {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         archive.raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
 }

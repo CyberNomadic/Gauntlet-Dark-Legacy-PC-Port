@@ -54,6 +54,7 @@ bool near(const Vec3& a, const Vec3& b) {
 TEST_CASE("native pose equality checks transforms and their loaded hierarchy",
           "[pose][local-rewind]") {
     const auto tree = sampleTree();
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare unequal
     const auto otherTree = tree;
     TreePose pose;
     pose.evaluate(tree, 0, 2);

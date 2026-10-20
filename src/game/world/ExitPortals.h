@@ -148,10 +148,10 @@ private:
 public:
     class LocalSnapshot {
         friend class ExitPortals;
-        std::vector<PortalState> portals;
-        Waiting waiting;
-        const ExitPortals* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        std::vector<PortalState> m_portals;
+        Waiting m_waiting;
+        const ExitPortals* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

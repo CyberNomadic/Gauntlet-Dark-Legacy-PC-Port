@@ -192,23 +192,23 @@ void HintMenu::draw(Canvas& canvas, const TextPainter& painter) const {
 }
 
 void HintMenu::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    m_fire.saveLocal(saved.fire);
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    m_fire.saveLocal(saved.m_fire);
 }
 
 bool HintMenu::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding &&
-           m_fire.canRestoreLocal(saved.fire);
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding &&
+           m_fire.canRestoreLocal(saved.m_fire);
 }
 
 bool HintMenu::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_fire.restoreLocal(saved.fire);
+    m_sim = saved.m_state;
+    m_fire.restoreLocal(saved.m_fire);
     return true;
 }
 

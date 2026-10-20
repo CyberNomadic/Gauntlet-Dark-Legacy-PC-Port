@@ -108,7 +108,7 @@ TEST_CASE("native projectile particle history preserves birth and the exact stop
 
 TEST_CASE("particle flight history rejects unsafe clocks and private corrections preserve birth",
           "[game][missiles][particle-flight][elemental-prediction]") {
-    PlayerMissiles::ParticleFlight state;
+    const PlayerMissiles::ParticleFlight state;
     REQUIRE(state.valid());
     auto invalid = state;
     invalid.stepSeconds = std::numeric_limits<f32>::quiet_NaN();

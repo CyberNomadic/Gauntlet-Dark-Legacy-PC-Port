@@ -36,7 +36,8 @@ NativeStateDigest::Digest digestOf(const PlacedEnemies& owner,
 
 TEST_CASE("native placement digest covers all roster fields after activation",
           "[placed-enemies-native-digest]") {
-    PlacedEnemies a, b;
+    PlacedEnemies a;
+    PlacedEnemies b;
     const auto base = record();
     a.bind({base, base});
     a.activate([](const auto&) {});
@@ -65,6 +66,8 @@ TEST_CASE("native placement digest covers all roster fields after activation",
     case 18: changed.sight += 1; break;
     case 19: changed.carried = 0; break;
     case 20: changed.carried = 65536; break;
+    default:
+        break;
     }
     b.bind({base, changed});
     b.activate([](const auto&) {});
@@ -75,7 +78,8 @@ TEST_CASE("native placement digest covers all roster fields after activation",
 
 TEST_CASE("native placement digest retains hidden watch axes angles and attention",
           "[placed-enemies-native-digest]") {
-    PlacedEnemies a, b;
+    PlacedEnemies a;
+    PlacedEnemies b;
     a.bind({record()});
     b.bind({record()});
     ViewVolume view;
@@ -118,7 +122,8 @@ TEST_CASE("native placement digest retains hidden watch axes angles and attentio
 
 TEST_CASE("native placement digest uses the same saved and live visitor through replay",
           "[placed-enemies-native-digest]") {
-    PlacedEnemies a, b;
+    PlacedEnemies a;
+    PlacedEnemies b;
     std::vector<PlacedEnemies::Placement> roster;
     for (s32 index = 0; index < 10; ++index) {
         auto p = record();
@@ -183,7 +188,8 @@ TEST_CASE("native placement digest rejects foreign stale and destroyed snapshots
 
 TEST_CASE("native placement digest distinguishes empty bound state and roster order",
           "[placed-enemies-native-digest]") {
-    PlacedEnemies a, b;
+    PlacedEnemies a;
+    PlacedEnemies b;
     b.bind({});
     CHECK(digestOf(a) != digestOf(b));
     auto second = record();

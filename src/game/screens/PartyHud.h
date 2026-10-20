@@ -38,12 +38,12 @@ private:
 public:
     class LocalSnapshot {
         friend class PartyHud;
-        Simulation state;
-        const PartyHud* owner = nullptr;
-        std::weak_ptr<const u8> binding;
-        ChallengeHud::LocalSnapshot hourglass;
-        f32* sharedTotal = nullptr;
-        f32 total = 0;
+        Simulation m_state;
+        const PartyHud* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+        ChallengeHud::LocalSnapshot m_hourglass;
+        f32* m_sharedTotal = nullptr;
+        f32 m_total = 0;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

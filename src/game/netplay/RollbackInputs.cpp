@@ -62,7 +62,8 @@ bool RollbackInputs::open(u8 localPeer, u64 epoch, const Owners& owners, const G
     // peers. This is not permission to fill a later missing frame with authority.
     for (u64 tick = 1; tick <= delay; ++tick) {
         auto& frame = m_actual[tick];
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
             if (owners[seat] != 0) {
                 InputCommand command;
                 command.epoch = epoch;
@@ -271,7 +272,8 @@ std::optional<RollbackInputs::Frame> RollbackInputs::advance() {
     }
     Frame frame;
     const auto actual = m_actual.find(m_next);
-    for (u8 seat = 0; seat < m_owners.size(); ++seat) {
+    // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+    for (u8 seat = 0; seat < static_cast<u8>(m_owners.size()); ++seat) {
         if (m_owners[seat] == 0) {
             continue;
         }

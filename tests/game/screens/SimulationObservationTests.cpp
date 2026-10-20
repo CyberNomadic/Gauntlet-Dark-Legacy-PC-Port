@@ -132,6 +132,7 @@ TEST_CASE("native agreement observes live party and opponents without replica bi
     REQUIRE(before);
     CHECK(fixture->scene.nativeAgreementDigest() == before);
     CHECK(fixture->device.draws.empty());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& actor = const_cast<PlayerActor&>(*fixture->scene.actor(0));
     const auto position = actor.position();
     actor.place(position + Vec3{0.125f, 0, 0});
@@ -233,7 +234,7 @@ TEST_CASE("Ghost Town native gas transitions remain observable without replay ad
     // Native probe journal v1, including the untouched startup and input-packet
     // quantization. This reached the first former adapter refusal at tick 650;
     // no enemy, action, placement or cloud state is injected into the scene.
-    constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+    constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
     bool gasSeen = false;
     bool secondStageSeen = false;
     for (u32 tick = 1; tick <= 900; ++tick) {
@@ -243,7 +244,7 @@ TEST_CASE("Ghost Town native gas transitions remain observable without replay ad
             if (tick > 360) {
                 const u32 elapsed = tick - 361;
                 const u32 phase = (elapsed + seat * 30) % 240;
-                const Vec2 direction = directions[(elapsed / 120 + seat) % directions.size()];
+                const Vec2 direction = kDirections[(elapsed / 120 + seat) % kDirections.size()];
                 input.move = {direction, 1};
                 input.aimDirection = Vec3{direction.x, 0, -direction.y};
                 input.attack = phase < 90;
@@ -297,6 +298,7 @@ TEST_CASE("native observation includes silent logical narration and hold timing"
     auto fixture = std::make_unique<Fixture>("G1");
     fixture->bind();
     // The fixture owns this soundscape; the public scene view is read-only.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& audio = const_cast<LevelSoundscape&>(fixture->scene.soundscape());
     const auto before = fixture->observer.observe();
     REQUIRE(audio.narrationTiming().empty());

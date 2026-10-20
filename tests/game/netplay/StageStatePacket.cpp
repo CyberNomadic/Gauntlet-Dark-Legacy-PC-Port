@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <map>
 #include <string>
@@ -21,7 +22,7 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("STST");
-constexpr usize kCatalogWalkBytes = 16 * 1024 * 1024;
+constexpr usize kCatalogWalkBytes = static_cast<const usize>(16 * 1024 * 1024);
 constexpr u32 kRaw = 0, kLz4 = 1, kLz4BytePlanes = 2;
 constexpr usize kCompressionMinimum = 1024;
 static_assert(StageStatePacket::kMaxDecodedBytes <
@@ -53,7 +54,7 @@ struct GeometryCatalog {
 
 class Writer {
 public:
-    static constexpr bool reading = false;
+    static constexpr bool reading = false; // NOLINT(readability-identifier-naming): archive trait
     explicit Writer(const GeometryCatalog* geometry = nullptr,
                     GeometryCatalog* collecting = nullptr)
         : catalog(geometry), collect(collecting) {}
@@ -84,6 +85,7 @@ public:
         raw(data);
     }
     void text(const std::string& value) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     template <class T> void number(T value) {
@@ -101,7 +103,7 @@ public:
                 number(std::bit_cast<u64>(value));
             }
         } else if constexpr (sizeof(T) == 8) {
-            const auto bits = static_cast<u64>(value);
+            auto bits = static_cast<u64>(value); // NOLINT(misc-const-correctness): the archive reads it back
             word(static_cast<u32>(bits));
             word(static_cast<u32>(bits >> 32));
         } else if constexpr (std::is_signed_v<T>) {
@@ -114,7 +116,7 @@ public:
 };
 class Reader {
 public:
-    static constexpr bool reading = true;
+    static constexpr bool reading = true; // NOLINT(readability-identifier-naming): archive trait
     Reader(std::span<const u8> bytes, const GeometryCatalog* geometry = nullptr)
         : catalog(geometry), m_reader(bytes) {}
     usize records = 0, strings = 0, triangles = 0;
@@ -126,7 +128,7 @@ public:
             number(decoded);
             value = static_cast<T>(decoded);
         } else if constexpr (std::is_same_v<T, bool>) {
-            const u32 bits = m_reader.readU32();
+            u32 bits = m_reader.readU32(); // NOLINT(misc-const-correctness): the archive reads it back
             if (bits > 1) {
                 throw FormatError("noncanonical stage boolean");
             }
@@ -143,7 +145,8 @@ public:
                 throw FormatError("nonfinite stage scalar");
             }
         } else if constexpr (sizeof(T) == 8) {
-            const u64 low = m_reader.readU32(), high = m_reader.readU32();
+            const u64 low = m_reader.readU32();
+            const u64 high = m_reader.readU32();
             value = std::bit_cast<T>(low | (high << 32));
         } else if constexpr (std::is_signed_v<T>) {
             const s32 decoded = std::bit_cast<s32>(m_reader.readU32());
@@ -173,7 +176,7 @@ template <class T> struct IsArray : std::false_type {};
 template <class T, usize N> struct IsArray<std::array<T, N>> : std::true_type {};
 template <class T> struct IsPair : std::false_type {};
 template <class T, class U> struct IsPair<std::pair<T, U>> : std::true_type {};
-template <class A, class T> void field(A&, T&);
+template <class A, class T> void field(A& /*a*/, T& /*v*/);
 /** These optional poses are overwritten by draw before use. The agreement
  * visitor alone elides them; wire and native restore retain and validate them. */
 template <class A, class T> void drawCache(A& a, T& value) {
@@ -191,7 +194,7 @@ template <class A, class... T> void fields(A& a, T&... v) {
     (field(a, v), ...);
 }
 template <class A, class T> void index(A& a, T& value) {
-    u64 bits = value;
+    u64 bits = value; // NOLINT(misc-const-correctness): the archive reads it back
     a.number(bits);
     if constexpr (A::reading) {
         if (bits > std::numeric_limits<usize>::max()) {
@@ -224,7 +227,7 @@ template <class A, class T> void indices(A& a, T& value) {
     sequence(a, value, [](auto& archive, auto& item) { index(archive, item); });
 }
 template <class A, class T> void optionalIndex(A& a, T& value) {
-    bool present = value.has_value();
+    bool present = value.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
     a.number(present);
     if constexpr (A::reading) {
         if (present) {
@@ -344,6 +347,7 @@ template <class T> constexpr usize recordLimit() {
 template <class T> constexpr usize minimumBytes() {
     if constexpr (std::is_same_v<T, TowerCameraCheckpoint::Marker>) {
         return 32;
+    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per state type
     } else if constexpr (std::is_same_v<T, WorldStateCheckpoint::Placement>) {
         return 12;
     } else if constexpr (std::is_same_v<T, WorldStateCheckpoint::Moving> ||
@@ -462,7 +466,7 @@ template <class A, class T> void field(A& a, T& v) {
         }
         if constexpr (std::is_same_v<V, std::vector<bool>>) {
             for (usize index = 0; index < v.size(); ++index) {
-                bool bit = v[index];
+                bool bit = v[index]; // NOLINT(misc-const-correctness): the archive reads it back
                 a.number(bit);
                 if constexpr (A::reading) {
                     v[index] = bit;
@@ -474,7 +478,7 @@ template <class A, class T> void field(A& a, T& v) {
             }
         }
     } else if constexpr (IsOptional<V>::value) {
-        bool present = v.has_value();
+        bool present = v.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
         a.number(present);
         if constexpr (A::reading) {
             if (present) {
@@ -822,14 +826,15 @@ void hashRows(Sha256& hash, const auto& rows) {
     hash.update(count.bytes);
     for (const auto& row : rows) {
         const auto key = geometryKey(row);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         hash.update({reinterpret_cast<const u8*>(key.data()), key.size()});
     }
 }
 } // namespace
 struct StageStatePacket::Catalog::Data : GeometryCatalog {};
 const std::array<u8, 32>& StageStatePacket::Catalog::fingerprint() const {
-    static constexpr std::array<u8, 32> empty{};
-    return m_data ? m_data->fingerprint : empty;
+    static constexpr std::array<u8, 32> kEmpty{};
+    return m_data ? m_data->fingerprint : kEmpty;
 }
 bool StageStatePacket::Catalog::valid() const {
     return m_data != nullptr;
@@ -877,7 +882,12 @@ bool StageStatePacket::envelopeValid(std::span<const u8> bytes) {
     }
     try {
         Reader reader(bytes);
-        u32 magic = 0, version = 0, length = 0, codec = 0, decoded = 0, reserved = 0;
+        u32 magic = 0;
+        u32 version = 0;
+        u32 length = 0;
+        u32 codec = 0;
+        u32 decoded = 0;
+        u32 reserved = 0;
         fields(reader, magic, version, length, codec, decoded, reserved);
         const usize payload = bytes.size() - kHeaderBytes;
         return magic == kMagic && version == kVersion && length == bytes.size() && reserved == 0 &&

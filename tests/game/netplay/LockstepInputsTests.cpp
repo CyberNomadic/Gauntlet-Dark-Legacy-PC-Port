@@ -39,8 +39,10 @@ struct Wire final : PacketTransport {
         return SendResult::Sent;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-    void close(Connection) override {}
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
+        return std::nullopt;
+    }
+    void close(Connection /*connection*/) override {}
 };
 
 std::vector<u8> packet(std::span<const InputCommand> commands) {
@@ -79,7 +81,8 @@ struct Room {
 
     std::vector<InputCommand> commands(u8 peer, u64 tick, bool actions = false) const {
         std::vector<InputCommand> result;
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
             if (owners[seat] != peer) {
                 continue;
             }
@@ -181,6 +184,8 @@ TEST_CASE("lockstep requires an exact frozen authenticated star roster", "[locks
         owners[2] = 3;
         grants[2] = 12;
         links.push_back({3, 102});
+        break;
+    default:
         break;
     }
     CHECK_FALSE(inputs.open(local, epoch, owners, grants, delay, links));
@@ -451,11 +456,11 @@ TEST_CASE("lockstep full relay queues refuse atomically and accept the exact ret
     for (u64 tick = 1; tick <= LockstepInputs::kWindow; ++tick) {
         REQUIRE(host.receive(102, packet(room.commands(2, tick))) == Admission::Accepted);
     }
-    constexpr u64 remaining = LockstepInputs::kQueuedPackets - LockstepInputs::kWindow - 1;
-    for (u64 tick = 1; tick <= remaining; ++tick) {
+    constexpr u64 kRemaining = LockstepInputs::kQueuedPackets - LockstepInputs::kWindow - 1;
+    for (u64 tick = 1; tick <= kRemaining; ++tick) {
         REQUIRE(host.receive(103, packet(room.commands(3, tick))) == Admission::Accepted);
     }
-    const auto pending = packet(room.commands(3, remaining + 1, true));
+    const auto pending = packet(room.commands(3, kRemaining + 1, true));
     const auto queued = host.queuedPackets();
     CHECK(queued <= 3 * LockstepInputs::kQueuedPackets);
     CHECK(host.receive(103, pending) == Admission::Full);

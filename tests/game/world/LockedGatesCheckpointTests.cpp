@@ -169,6 +169,8 @@ TEST_CASE("gate snapshot plans refuse malformed or foreign rosters and stale sib
     case 5: invalid.gates[2].blocksPassage = true; break;
     case 6: invalid.gates[0].refusalLeft = -1; break;
     case 7: invalid.gates[0].box.height = -1; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.owner.restore(invalid));
     CHECK(fixture.state() == before);
@@ -196,7 +198,7 @@ TEST_CASE("native campaign gates retain the complete trusted geometry and figure
         test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
-    const auto name = GENERATE("G1", "G3", "E1");
+    const auto* const name = GENERATE("G1", "G3", "E1");
     CAPTURE(name);
     test::FakeRenderDevice device;
     LevelWorld world;
@@ -240,7 +242,8 @@ TEST_CASE("gate local values undo speculative unlocking and moving support witho
                                ChestVisitor{Vec3{20, 0, 0}, 1, !wrong && tick >= 12 ? 1 : 0}};
         return fixture.gates.update(wrong ? 3 : 1, wrong ? 0.05f : 1.0f / 60, party);
     };
-    bool refused = false, unlocked = false;
+    bool refused = false;
+    bool unlocked = false;
     s32 tick = 0;
     for (usize window = 0; window < 96; ++window) {
         const auto distance = static_cast<s32>(window % 8 + 1);
@@ -297,7 +300,9 @@ TEST_CASE("gate local values undo speculative unlocking and moving support witho
 TEST_CASE("native gate equality includes refusal clocks without a visible geometry change",
           "[local-rewind][gates-local-rewind][native-equality]") {
     Fixture fixture("gate-local-equality");
-    LockedGates::LocalSnapshot initial, refused, restored;
+    LockedGates::LocalSnapshot initial;
+    LockedGates::LocalSnapshot refused;
+    LockedGates::LocalSnapshot restored;
     CHECK_FALSE(fixture.gates.equalLocal(initial, initial));
     fixture.gates.saveLocal(initial);
     const auto figure = fixture.gates.gate(0).figure;

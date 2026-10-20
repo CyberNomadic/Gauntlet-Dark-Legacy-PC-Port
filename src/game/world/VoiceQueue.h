@@ -27,6 +27,7 @@ public:
     VoiceQueue& operator=(const VoiceQueue&) = delete;
     VoiceQueue(VoiceQueue&&) = delete;
     VoiceQueue& operator=(VoiceQueue&&) = delete;
+    ~VoiceQueue() = default;
     static constexpr usize kMost = 16;
     static constexpr f32 kAlwaysRoom = -1.0f; ///< a wait that is never refused
 

@@ -35,10 +35,12 @@ TEST_CASE("native voice hashes include silent admission holds and logical predec
     SoundSequence sequence;
     sequence.bank = "TEST";
     sequence.steps.push_back({&clip, false, false});
-    VoiceQueue audible, silent;
+    VoiceQueue audible;
+    VoiceQueue silent;
     audible.bind(&output);
     silent.bind(nullptr);
-    SceneSoundEvents left, right;
+    SceneSoundEvents left;
+    SceneSoundEvents right;
     left.open(42, &output);
     right.open(42, nullptr);
     audible.recordTo(&left);
@@ -71,7 +73,9 @@ TEST_CASE("native voice hashes include silent admission holds and logical predec
     for (usize distance = 1; distance <= 8; ++distance) {
         CAPTURE(distance);
         REQUIRE(silent.restoreLocal(saved));
-        for (usize i = 0; i < distance; ++i) silent.update(1.0f / 60);
+        for (usize i = 0; i < distance; ++i) {
+            silent.update(1.0f / 60);
+        }
         CHECK(nativeHash(silent) != initial);
         CHECK(savedHash(silent, saved) == initial);
     }
@@ -89,7 +93,8 @@ TEST_CASE("native soundscape hashes requests and hidden duck state but not mixer
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
     const LevelAudioInfo info{.bank = {}, .stream = {}, .areas = 3};
-    LevelSoundscape audible, silent;
+    LevelSoundscape audible;
+    LevelSoundscape silent;
     audible.open(root, &output, &info);
     silent.open(root, nullptr, &info);
     CHECK(nativeHash(audible) == nativeHash(silent));

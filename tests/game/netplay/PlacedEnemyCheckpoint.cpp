@@ -189,7 +189,7 @@ std::optional<PlacedEnemiesCheckpoint::State> PlacedEnemyCheckpoint::decode(std:
         if (!value) {
             return std::nullopt;
         }
-        state.roster.push_back(std::move(*value));
+        state.roster.push_back(*value);
     }
     state.pending.reserve(pending);
     for (usize index = 0; index < pending; ++index) {

@@ -112,30 +112,30 @@ bool PlayerAttacks::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
     }
     digest.string("PlayerAttacks.native.1");
     appendBindingDigest(digest);
-    digest.value(saved.state);
-    return m_strikes.appendLocalDigest(digest, saved.strikes) && digest.good();
+    digest.value(saved.m_state);
+    return m_strikes.appendLocalDigest(digest, saved.m_strikes) && digest.good();
 }
 
 void PlayerAttacks::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    m_strikes.saveLocal(saved.strikes);
-    saved.owner = this;
-    saved.lifetime = m_restoreOwner;
-    saved.epoch = m_localEpoch;
+    saved.m_state = m_sim;
+    m_strikes.saveLocal(saved.m_strikes);
+    saved.m_owner = this;
+    saved.m_lifetime = m_restoreOwner;
+    saved.m_epoch = m_localEpoch;
 }
 
 bool PlayerAttacks::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto lifetime = saved.lifetime.lock();
-    return saved.owner == this && lifetime && lifetime == m_restoreOwner &&
-           saved.epoch == m_localEpoch && m_strikes.canRestoreLocal(saved.strikes);
+    const auto lifetime = saved.m_lifetime.lock();
+    return saved.m_owner == this && lifetime && lifetime == m_restoreOwner &&
+           saved.m_epoch == m_localEpoch && m_strikes.canRestoreLocal(saved.m_strikes);
 }
 
 bool PlayerAttacks::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_strikes.restoreLocal(saved.strikes);
+    m_sim = saved.m_state;
+    m_strikes.restoreLocal(saved.m_strikes);
     ++m_restoreGeneration;
     return true;
 }

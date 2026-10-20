@@ -38,37 +38,37 @@ bool BossSequence::appendLocalDigest(NativeStateDigest& digest, const LocalSnaps
 }
 
 void BossSequence::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    saved.state = m_sim;
-    m_victory.saveLocal(saved.victory);
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_state = m_sim;
+    m_victory.saveLocal(saved.m_victory);
     if (m_legend != nullptr) {
-        if (!saved.legend) {
-            saved.legend.emplace();
+        if (!saved.m_legend) {
+            saved.m_legend.emplace();
         }
-        m_legend->saveLocal(*saved.legend);
+        m_legend->saveLocal(*saved.m_legend);
     } else {
-        saved.legend.reset();
+        saved.m_legend.reset();
     }
 }
 
 bool BossSequence::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_localBinding &&
-           m_victory.canRestoreLocal(saved.victory) &&
-           saved.legend.has_value() == (m_legend != nullptr) &&
-           (!m_legend || m_legend->canRestoreLocal(*saved.legend));
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_localBinding &&
+           m_victory.canRestoreLocal(saved.m_victory) &&
+           saved.m_legend.has_value() == (m_legend != nullptr) &&
+           (!m_legend || m_legend->canRestoreLocal(*saved.m_legend));
 }
 
 bool BossSequence::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_victory.restoreLocal(saved.victory);
+    m_victory.restoreLocal(saved.m_victory);
     if (m_legend) {
-        m_legend->restoreLocal(*saved.legend);
+        m_legend->restoreLocal(*saved.m_legend);
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     return true;
 }
 

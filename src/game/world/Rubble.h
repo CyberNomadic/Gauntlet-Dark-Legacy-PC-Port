@@ -42,6 +42,7 @@ public:
     Rubble& operator=(const Rubble&) = delete;
     Rubble(Rubble&&) noexcept = default;
     Rubble& operator=(Rubble&&) noexcept = default;
+    ~Rubble() = default;
 
     static constexpr std::string_view kItem = "ITEMEXP0";    ///< a destroyed pickup's
     static constexpr std::string_view kChest = "CHESTGEXP0"; ///< a chest's
@@ -52,9 +53,9 @@ public:
     /** In-process debris values; the bound archives and device must outlive this history. */
     class LocalSnapshot {
         friend class Rubble;
-        std::vector<Piece> pieces;
-        std::weak_ptr<const u8> binding;
-        const Rubble* owner = nullptr;
+        std::vector<Piece> m_pieces;
+        std::weak_ptr<const u8> m_binding;
+        const Rubble* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

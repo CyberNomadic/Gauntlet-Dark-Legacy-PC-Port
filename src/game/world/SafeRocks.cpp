@@ -79,8 +79,8 @@ bool SafeRocks::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot
     if (!appendBindingDigest(digest)) {
         return false;
     }
-    digest.fields<3>(saved.textures);
-    digest.value(saved.rocks);
+    digest.fields<3>(saved.m_textures);
+    digest.value(saved.m_rocks);
     return digest.good();
 }
 
@@ -100,28 +100,29 @@ bool SafeRocks::registerNativeResources(NativeStateResources& resources) const {
             }
         }
     }
-    return (!m_animationItems || !m_animationItems->loaded() ||
-            resources.refreshArchive(*m_animationItems)) && resources.good();
+    return ((m_animationItems == nullptr) || !m_animationItems->loaded() ||
+            resources.refreshArchive(*m_animationItems)) &&
+           resources.good();
 }
 
 void SafeRocks::saveLocal(LocalSnapshot& saved) const {
-    saved.rocks.resize(m_rocks.size());
+    saved.m_rocks.resize(m_rocks.size());
     for (usize index = 0; index < m_rocks.size(); ++index) {
-        saved.rocks[index] = *m_rocks[index];
+        saved.m_rocks[index] = static_cast<const RockState&>(*m_rocks[index]);
     }
-    saved.textures = m_textures.clock();
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_textures = m_textures.clock();
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool SafeRocks::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding && saved.rocks.size() == m_rocks.size();
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding && saved.m_rocks.size() == m_rocks.size();
 }
 
 bool SafeRocks::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.rocks == right.rocks &&
-           left.textures == right.textures;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_rocks == right.m_rocks &&
+           left.m_textures == right.m_textures;
 }
 
 bool SafeRocks::restoreLocal(const LocalSnapshot& saved) {
@@ -129,9 +130,9 @@ bool SafeRocks::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize index = 0; index < m_rocks.size(); ++index) {
-        static_cast<RockState&>(*m_rocks[index]) = saved.rocks[index];
+        static_cast<RockState&>(*m_rocks[index]) = saved.m_rocks[index];
     }
-    m_textures.restoreClock(saved.textures);
+    m_textures.restoreClock(saved.m_textures);
     ++m_checkpointGeneration;
     return true;
 }

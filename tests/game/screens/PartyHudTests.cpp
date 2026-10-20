@@ -455,7 +455,7 @@ TEST_CASE("party HUD rewind restores notices selectors shared sand and external 
         }
     }
     const auto tick = [](State& f, s32 t) {
-        const usize index = static_cast<usize>((t / 9) % 2);
+        const auto index = static_cast<usize>((t / 9) % 2);
         auto& actor = f.players[index].actor;
         if (t % 29 == 0) {
             f.hud.pickups().addCard(actor.player(), "CRYSTAL");

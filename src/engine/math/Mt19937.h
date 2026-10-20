@@ -12,9 +12,11 @@ class Mt19937 {
 public:
     bool operator==(const Mt19937&) const = default;
 
+    // NOLINTBEGIN(readability-identifier-naming): the names std::mt19937 exposes
     using result_type = u32;
     static constexpr usize state_size = 624;
     static constexpr u32 default_seed = 5489U;
+    // NOLINTEND(readability-identifier-naming)
 
     struct Checkpoint {
         std::array<u32, state_size> words{};

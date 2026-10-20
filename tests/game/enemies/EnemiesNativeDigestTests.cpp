@@ -137,7 +137,8 @@ NativeStateDigest::Digest valueHash(const T& value,
 TEST_CASE("enemy native digests identify independently loaded artwork and ignore drawing cadence",
           "[native-state-digest][enemies-native-digest]") {
     const auto root = enemyDigestFixture();
-    Pool first(root), second(root);
+    Pool first(root);
+    Pool second(root);
     REQUIRE(first.enemies.archiveOf(kGruntKind) != second.enemies.archiveOf(kGruntKind));
     REQUIRE(first.enemies.treeOf(kGruntKind, 1) != second.enemies.treeOf(kGruntKind, 1));
     REQUIRE(first.enemies.treeOf(kItKind, 1) != second.enemies.treeOf(kItKind, 1));
@@ -168,8 +169,9 @@ TEST_CASE("enemy native digests identify independently loaded artwork and ignore
 TEST_CASE("enemy native digests cover hidden queues grid routes RNG and saved texture clocks",
           "[native-state-digest][enemies-native-digest]") {
     const auto root = enemyDigestFixture();
-    Pool pool(root), otherSeed(root, 753);
-    CHECK(pool.visible() == otherSeed.visible());
+    Pool pool(root);
+    const Pool otherSeed(root, 753);
+    CHECK((pool.visible() == otherSeed.visible()));
     CHECK(pool.digest() != otherSeed.digest());
     Enemies::LocalSnapshot original;
     REQUIRE(pool.enemies.saveLocal(original));
@@ -178,7 +180,7 @@ TEST_CASE("enemy native digests cover hidden queues grid routes RNG and saved te
     const auto change = [&](auto&& action) {
         REQUIRE(pool.enemies.restoreLocal(original));
         action();
-        CHECK(pool.visible() == visible);
+        CHECK((pool.visible() == visible));
         CHECK(pool.digest() != baseline);
         CHECK(pool.digest(original) == baseline);
     };
@@ -207,7 +209,8 @@ TEST_CASE("enemy native digests cover hidden queues grid routes RNG and saved te
 TEST_CASE("enemy native digests match corrected one through eight tick branches",
           "[native-state-digest][enemies-native-digest][local-rewind]") {
     const auto root = enemyDigestFixture();
-    Pool reference(root), corrected(root);
+    Pool reference(root);
+    Pool corrected(root);
     for (s32 tick = 0; tick < 12; ++tick) {
         reference.step(tick);
         corrected.step(tick);
@@ -215,7 +218,7 @@ TEST_CASE("enemy native digests match corrected one through eight tick branches"
     Enemies::LocalSnapshot base;
     REQUIRE(corrected.enemies.saveLocal(base));
     const auto baseDigest = corrected.digest();
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     std::array<Enemies::LocalSnapshot, 8> exact;
     for (s32 tick = 0; tick < 8; ++tick) {
         reference.step(12 + tick);
@@ -246,7 +249,8 @@ TEST_CASE("enemy native digests match corrected one through eight tick branches"
 TEST_CASE("enemy native digest refuses unknown resources foreign histories and closed bindings",
           "[native-state-digest][enemies-native-digest]") {
     const auto root = enemyDigestFixture();
-    Pool first(root), second(root);
+    Pool first(root);
+    const Pool second(root);
     NativeStateDigest unknown;
     CHECK_FALSE(first.enemies.appendNativeDigest(unknown));
     CHECK_FALSE(unknown.checkedFinish());
@@ -286,8 +290,10 @@ TEST_CASE("native inactive body values and enemy animation requests are not pres
     changed([](auto& slot) { slot.deathSkin = "DEATHALT"; });
 
     const auto root = enemyDigestFixture();
-    Pool first(root), second(root);
-    EnemyAnimator animator, independent;
+    const Pool first(root);
+    const Pool second(root);
+    EnemyAnimator animator;
+    EnemyAnimator independent;
     REQUIRE(animator.bind(*first.enemies.treeOf(kGruntKind, 1)));
     REQUIRE(independent.bind(*second.enemies.treeOf(kGruntKind, 1)));
     const EnemyAnimator saved = animator;

@@ -828,15 +828,17 @@ PlayScene::RecordedStep PlayScene::recordStep(u64 epoch, u64 tick, f64 deltaSeco
     }
     RecordedStep result;
     OutputFrame frame{epoch, tick, &result.journal};
+    // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
     struct ResetCollector {
         OutputFrame*& collector;
         ~ResetCollector() { collector = nullptr; }
-    } reset{m_outputFrame};
+    } const reset{m_outputFrame};
     m_outputFrame = &frame;
+    // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
     struct AbortSoundCapture {
         SceneSoundEvents& events;
         ~AbortSoundCapture() { events.abortTick(); }
-    } abortSounds{m_recordedAudio};
+    } const abortSounds{m_recordedAudio};
     if (m_audio.recordingSounds()) {
         m_recordedAudio.beginTick(tick);
         const auto camera = CameraFrame::of(viewCamera());
@@ -917,8 +919,8 @@ void PlayScene::gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome) {
         const auto player = static_cast<usize>(actor.player());
         visitors.push_back({actor.position(), actor.radius(), static_cast<s32>(index),
                             player >= inputs.size() || !inputs[player].move.any()});
-        if (!hourglass &&
-            (PowerupEffects::of(actor.save().progress().inventory).special & powerup::kStopTime)) {
+        if (!hourglass && ((PowerupEffects::of(actor.save().progress().inventory).special &
+                            powerup::kStopTime) != 0u)) {
             hourglass = actor.position();
         }
     }
@@ -929,7 +931,7 @@ void PlayScene::gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome) {
         m_sim.switchCutscene.active() || m_promotion.active() || relicCeremonyOn(),
         &m_world->scene(), m_sim.leaving ? std::nullopt : m_portals.flamePosition(visitors),
         hourglass);
-    m_triggerCues.gatherAudio(*m_world, m_audio);
+    TriggerCues::gatherAudio(*m_world, m_audio);
     m_bossSequence.gatherAudio();
     m_attacks.gatherLoops();
     m_opponents.gatherLoops();
@@ -950,7 +952,7 @@ void PlayScene::emitOutput(OutputPayload payload) {
         }
         return;
     }
-    OutputLedger::Event event{{}, OutputLedger::Policy::OneShot, std::move(payload), {}};
+    OutputLedger::Event event{{}, OutputLedger::Policy::OneShot, payload, {}};
     event.id.epoch = m_outputFrame->epoch;
     event.id.tick = m_outputFrame->tick;
     // The supplied epoch identifies this loaded, frozen party. These emitters
@@ -972,7 +974,7 @@ void PlayScene::emitOutput(OutputPayload payload) {
             ++event.id.occurrence;
         }
     }
-    m_outputFrame->journal->events.push_back(std::move(event));
+    m_outputFrame->journal->events.push_back(event);
 }
 
 bool PlayScene::dispatchOutput(const OutputLedger::Action& action) const {

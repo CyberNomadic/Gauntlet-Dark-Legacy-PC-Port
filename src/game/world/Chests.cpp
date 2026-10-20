@@ -46,7 +46,7 @@ bool Chests::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& s
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 bool Chests::registerNativeResources(NativeStateResources& resources) const {
@@ -60,25 +60,25 @@ bool Chests::registerNativeResources(NativeStateResources& resources) const {
 }
 
 void Chests::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool Chests::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool Chests::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool Chests::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -455,7 +455,7 @@ void Chests::remove(usize chest) {
 
 std::vector<Obstacle> Chests::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (auto& chest : m_sim.chests) {
+    for (const auto& chest : m_sim.chests) {
         // ItemTouch (8005D730) leaves an open pickup chest passable even when a
         // full-health player cannot take its food. Open gold chests likewise stay
         // reachable without trapping someone whose wallet cannot take their gold.
@@ -477,7 +477,7 @@ void Chests::capturePresentation() {
 
 void Chests::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                   const CameraFrame* camera, f32 presentationAlpha) const {
-    for (auto& chest : m_sim.chests) {
+    for (const auto& chest : m_sim.chests) {
         if (chest.shown && !chest.gone) {
             if (chest.revealed) {
                 // Retail MBTreeSetAlpha(0xC0) is transparency, not opacity.

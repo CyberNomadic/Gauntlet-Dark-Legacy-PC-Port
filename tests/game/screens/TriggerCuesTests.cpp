@@ -106,13 +106,13 @@ TEST_CASE("recorded turntables derive one desired voice and retract corrected ac
     TriggerCues cues;
     SwitchCutscene cutscene;
     usize physical = 0;
-    SoundPlayer::Capture watch(&sounds, [&](const auto&) { ++physical; });
+    const SoundPlayer::Capture watch(&sounds, [&](const auto&) { ++physical; });
     const std::array visitors{TriggerVisitor{.position = world.rotators().rotator(pad).spot}};
     const auto capture = [&](u64 tick, std::span<const TriggerVisitor> standing) {
         events.beginTick(tick);
         world.updateTriggers(1.0f / 60, standing);
         cues.handle(world, audio, &sounds, cutscene, {});
-        cues.gatherAudio(world, audio);
+        TriggerCues::gatherAudio(world, audio);
         return events.endFrame();
     };
     const std::array original{capture(1, visitors), capture(2, {})};

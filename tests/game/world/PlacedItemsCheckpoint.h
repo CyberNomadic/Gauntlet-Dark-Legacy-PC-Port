@@ -83,7 +83,7 @@ public:
         bool revealing = false, capturePending = false, burstsAdvanced = false;
         bool layout = false, collision = false;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
 
     private:
         friend class PlacedItemsCheckpoint;

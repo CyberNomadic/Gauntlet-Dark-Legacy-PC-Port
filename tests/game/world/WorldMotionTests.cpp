@@ -285,7 +285,7 @@ TEST_CASE("passive motion does not activate unobserved pads or emit native trigg
 
 TEST_CASE("world motion rejects over-budget rosters before touching the bound scene",
           "[world-motion][rollback]") {
-    Fixture host;
+    const Fixture host;
     const auto good = host.state();
     WorldMotion replay;
     replay.bind(host.layout);

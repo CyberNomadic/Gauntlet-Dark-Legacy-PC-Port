@@ -117,7 +117,7 @@ struct Encounter {
 
 TEST_CASE("native combatant families replay corrected one to eight tick histories",
           "[local-rewind][combatant-local-rewind][native-equality][assets]") {
-    const auto name =
+    const auto* const name =
         GENERATE("GENERAL", "GOLEM", "GARG", "CHIMERA", "LICH", "GARM", "YETI", "DRAGON", "DJINN",
                  "DRIDER", "PBOSS", "WRAITH", "SKORNE1", "SKORNE2");
     CAPTURE(name);
@@ -166,7 +166,7 @@ TEST_CASE("local combatant rewind retains boss child addresses across clear and 
     auto encounter = std::make_unique<Encounter>("CHIMERA");
     auto& actor = encounter->predicted;
     REQUIRE(actor.childCount() == 3);
-    std::array<const Combatant*, 3> children;
+    std::array<const Combatant*, 3> children{};
     for (s32 i = 0; i < 3; ++i) {
         children[static_cast<usize>(i)] = actor.child(41 + i);
     }
@@ -199,7 +199,8 @@ TEST_CASE("local combatant snapshots fence owners assets and borrowed per-tick c
           "[local-rewind][combatant-local-rewind][native-equality][assets]") {
     auto encounter = std::make_unique<Encounter>("GOLEM");
     auto& actor = encounter->predicted;
-    Combatant::LocalSnapshot saved, empty;
+    Combatant::LocalSnapshot saved;
+    Combatant::LocalSnapshot empty;
     REQUIRE(actor.saveLocal(saved));
     CHECK(actor.equalLocal(saved, saved));
     CHECK_FALSE(actor.restoreLocal(empty));
@@ -293,11 +294,13 @@ TEST_CASE("local combatant rewind has no portable-packet scalar admission limits
 
 TEST_CASE("destroyed combatant owners cannot restore into reused addresses",
           "[local-rewind][combatant-local-rewind][native-equality]") {
-    alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage;
+    alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     auto* actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     Combatant::LocalSnapshot saved;
     REQUIRE(actor->saveLocal(saved));
     std::destroy_at(actor);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     CHECK_FALSE(actor->restoreLocal(saved));
     CHECK_FALSE(actor->equalLocal(saved, saved));
@@ -335,7 +338,8 @@ TEST_CASE("native combatant equality retains a cleared slot's next incarnation",
     auto encounter = std::make_unique<Encounter>("GENERAL");
     auto& actor = encounter->predicted;
     actor.clear();
-    Combatant::LocalSnapshot before, after;
+    Combatant::LocalSnapshot before;
+    Combatant::LocalSnapshot after;
     REQUIRE(actor.saveLocal(before));
     const auto incarnation = actor.incarnation();
     REQUIRE(actor.spawn(encounter->stock, 40, {}, 0, nullptr, {}, 'G'));
@@ -357,11 +361,14 @@ TEST_CASE("measure native multi-part combatant copy and eight tick replay",
         encounter->step(encounter->predicted, i);
     }
     const auto capture = [&](auto& value) { return encounter->predicted.saveLocal(value); };
-    for (u64 i = 0; i < history.kCapacity; ++i) {
+    for (u64 i = 0;
+         i < gdl::game::LocalStateHistory<gdl::game::Combatant::LocalSnapshot>::kCapacity; ++i) {
         REQUIRE(history.capture(i, capture));
     }
     using Clock = std::chrono::steady_clock;
-    std::vector<f64> saves, restores, replays;
+    std::vector<f64> saves;
+    std::vector<f64> restores;
+    std::vector<f64> replays;
     for (u64 sample = 16; sample < 272; ++sample) {
         const auto begin = Clock::now();
         const bool captured = history.capture(sample, capture);

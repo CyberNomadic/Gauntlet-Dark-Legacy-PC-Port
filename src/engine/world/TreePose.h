@@ -104,7 +104,7 @@ public:
     static Vec3 readAngles(const Mat4& rotation);
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const TreePose&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const TreePose& /*state*/);
     void compose();
 
     const TreeInfo* m_tree = nullptr;

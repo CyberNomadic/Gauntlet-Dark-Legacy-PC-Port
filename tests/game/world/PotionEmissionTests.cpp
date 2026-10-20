@@ -163,7 +163,7 @@ TEST_CASE(
     Fixture fixture;
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
     REQUIRE(fixture.classes.load(root / "pdata"));
-    constexpr std::array<s32, 4> elements{3, 2, 1, 4};
+    constexpr std::array<s32, 4> kElements{3, 2, 1, 4};
     s32 cycle = 1;
     const auto resolve = [&](s32 stored) {
         if (stored != 0) {
@@ -190,7 +190,7 @@ TEST_CASE(
                 fixture.actor.save().color = colour;
                 for (s32 stored = 0; stored <= 4; ++stored) {
                     CAPTURE(character, level, colour, stored);
-                    const f32 bonus = stored == elements[static_cast<usize>(colour)] ? 1.1f : 1;
+                    const f32 bonus = stored == kElements[static_cast<usize>(colour)] ? 1.1f : 1;
                     const f32 power = magic * bonus;
                     const u32 flags = level >= 25 ? damage::kHeal : 0;
                     progress.inventory.potions = {2, stored};

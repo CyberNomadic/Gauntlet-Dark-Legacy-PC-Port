@@ -22,7 +22,7 @@ struct NativePopulation {
         critters.setLookouts({{{-20, 0, 0}, {-20, 0, 20}}, {1, 65535}});
     }
     CrittersCheckpoint::State observe() {
-        CrittersCheckpoint observation{critters};
+        const CrittersCheckpoint observation{critters};
         auto value = observation.checkpoint();
         REQUIRE(value);
         return std::move(*value);
@@ -116,7 +116,8 @@ TEST_CASE("native population retains speculative artwork without retaining its a
           "[local-rewind][critters-local-rewind][native-equality][assets]") {
     auto population = std::make_unique<NativePopulation>();
     auto& critters = population->critters;
-    Critters::LocalSnapshot cold, general;
+    Critters::LocalSnapshot cold;
+    Critters::LocalSnapshot general;
     REQUIRE(critters.saveLocal(cold));
     const auto empty = population->observe();
     REQUIRE(critters.spawnGeneral({}, 0, 15) == 0);

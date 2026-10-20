@@ -84,7 +84,9 @@ struct Peer {
         REQUIRE(scene.open(device, context, world, party, options));
         // The same actual native starting placement on both peers: guest seat3
         // is the visitor, and host seat1 is away from Sumner's authored trigger.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         const_cast<PlayerActor*>(scene.actor(1))->place(Vec3{0, 2.1f, 0});
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         const_cast<PlayerActor*>(scene.actor(3))->place(*options.position);
         match.epoch = 1;
         match.scene = 1;
@@ -94,6 +96,8 @@ struct Peer {
         REQUIRE(scene.beginRecordedAudio(1));
         REQUIRE(driver.bind(scene, match, id, NativeRollbackDriver::AudioMode::Required));
     }
+    Peer(const Peer&) = delete;
+    Peer& operator=(const Peer&) = delete;
     ~Peer() { driver.clear(); scene.endRecordedAudio(); }
     NativeRollbackDriver::Status advance(bool forward = true) {
         last = driver.advance(forward);
@@ -266,7 +270,7 @@ TEST_CASE("Sumner checks the semantic sender against the live menu owner",
     const auto root =
         test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
     REQUIRE(visit.loadTexts(root / "text/hints_e.json"));
-    GameConfig config;
+    const GameConfig config;
     StringTable strings;
     REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
     REQUIRE(visit.visit(0, 3, true, f.text, &config, &strings));

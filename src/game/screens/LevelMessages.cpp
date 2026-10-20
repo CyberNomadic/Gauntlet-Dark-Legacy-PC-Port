@@ -138,32 +138,32 @@ LevelMessages::Cues LevelMessages::step(s32 ticks, u32 accepted) {
 }
 
 void LevelMessages::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.owner = this;
-    saved.binding = m_localBinding;
-    m_scroll.saveLocal(saved.scroll);
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    m_scroll.saveLocal(saved.m_scroll);
 }
 
 bool LevelMessages::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && saved.binding.lock() == m_localBinding &&
-           m_scroll.canRestoreLocal(saved.scroll);
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding &&
+           m_scroll.canRestoreLocal(saved.m_scroll);
 }
 
 bool LevelMessages::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
-    m_scroll.restoreLocal(saved.scroll);
+    m_sim = saved.m_state;
+    m_scroll.restoreLocal(saved.m_scroll);
     return true;
 }
 
 bool LevelMessages::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
     digest.string("level-messages-native-v1");
     digest.values(m_font32, m_text, m_scrollText);
-    digest.fields<2>(saved ? saved->state : m_sim);
+    digest.fields<2>(saved ? saved->m_state : m_sim);
     if (saved) {
-        m_scroll.appendLocalDigest(digest, saved->scroll);
+        m_scroll.appendLocalDigest(digest, saved->m_scroll);
     } else {
         m_scroll.appendNativeDigest(digest);
     }

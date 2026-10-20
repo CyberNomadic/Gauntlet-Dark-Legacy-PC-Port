@@ -1,6 +1,7 @@
 #include "game/enemies/Enemies.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -151,14 +152,12 @@ bool checkpointMind(const MindMemory& mind) {
         !checkpointCounter(mind.turns, 0) || (mind.effectiveWay == kFleeWay && mind.counter < 0)) {
         return false;
     }
-    for (const s32 value : {mind.route, mind.collided, mind.stuck, mind.deadEnd, mind.counter,
-                            mind.mode, mind.fuse, mind.lookout, mind.zigZag.count, mind.zigZag.side,
-                            mind.zigZag.spread, mind.zigZag.hold, mind.zigZag.swings}) {
-        if (!checkpointCounter(value)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(
+        std::initializer_list<s32>{mind.route, mind.collided, mind.stuck, mind.deadEnd,
+                                   mind.counter, mind.mode, mind.fuse, mind.lookout,
+                                   mind.zigZag.count, mind.zigZag.side, mind.zigZag.spread,
+                                   mind.zigZag.hold, mind.zigZag.swings},
+        [](s32 value) { return checkpointCounter(value); });
 }
 
 auto checkpointView(const ViewVolume& view) {
@@ -409,13 +408,10 @@ bool Enemies::BodyState::valid() const {
             return false;
         }
     }
-    for (const s32 value : {pushes, attackCount, stunTicks, drainTicks, endurance, otherSide,
-                            hitCount, veilClock, deathSkinFrames}) {
-        if (!checkpointCounter(value)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(
+        std::initializer_list<s32>{pushes, attackCount, stunTicks, drainTicks, endurance,
+                                   otherSide, hitCount, veilClock, deathSkinFrames},
+        [](s32 value) { return checkpointCounter(value); });
 }
 
 bool Enemies::Checkpoint::valid() const {
@@ -504,12 +500,8 @@ bool Enemies::Checkpoint::valid() const {
             return false;
         }
     }
-    for (const auto& event : bursts) {
-        if (!sourceValid(event, event.kind)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(
+        bursts, [&](const auto& event) { return sourceValid(event, event.kind); });
 }
 
 bool Enemies::Checkpoint::operator==(const Checkpoint& other) const {
@@ -3147,6 +3139,7 @@ std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
     } else if (enemy.killed && enemy.kind == kDeathKind) {
         result.alpha *= std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds);
     }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto skin = std::ranges::find(kDeathSkins, enemy.deathSkin);
     const auto frame = static_cast<u32>(enemy.deathSeconds * kDeathSkinRate);
     if (enemy.killed && skin != kDeathSkins.end() &&

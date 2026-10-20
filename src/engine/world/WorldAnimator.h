@@ -81,10 +81,10 @@ public:
     std::span<const CycleEvent> cycleEvents() const { return m_cycleEvents; }
     class LocalSnapshot {
         friend class WorldAnimator;
-        std::vector<Cursor> cursors;
-        std::vector<CycleEvent> cycles;
-        const WorldAnimator* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        std::vector<Cursor> m_cursors;
+        std::vector<CycleEvent> m_cycles;
+        const WorldAnimator* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

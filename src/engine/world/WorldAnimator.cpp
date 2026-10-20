@@ -61,9 +61,9 @@ bool WorldAnimator::appendDigest(NativeStateDigest& digest, const LocalSnapshot*
     digest.wide(m_tracks.size());
     for (usize i = 0; i < m_tracks.size(); ++i) {
         const auto& track = m_tracks[i];
-        digest.value(saved ? saved->cursors[i] : static_cast<const Cursor&>(track));
+        digest.value(saved ? saved->m_cursors[i] : static_cast<const Cursor&>(track));
     }
-    digest.value(saved ? saved->cycles : m_cycleEvents);
+    digest.value(saved ? saved->m_cycles : m_cycleEvents);
     return digest.good();
 }
 
@@ -82,23 +82,23 @@ bool WorldAnimator::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
 }
 
 void WorldAnimator::saveLocal(LocalSnapshot& saved) const {
-    saved.cursors.resize(m_tracks.size());
+    saved.m_cursors.resize(m_tracks.size());
     for (usize i = 0; i < m_tracks.size(); ++i) {
-        saved.cursors[i] = m_tracks[i];
+        saved.m_cursors[i] = m_tracks[i];
     }
-    saved.cycles = m_cycleEvents;
-    saved.owner = this;
-    saved.binding = m_localBinding;
+    saved.m_cycles = m_cycleEvents;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
 }
 
 bool WorldAnimator::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
-           saved.cursors.size() == m_tracks.size();
+    return saved.m_owner == this && m_localBinding && saved.m_binding.lock() == m_localBinding &&
+           saved.m_cursors.size() == m_tracks.size();
 }
 
 bool WorldAnimator::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.cursors == right.cursors &&
-           left.cycles == right.cycles;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_cursors == right.m_cursors &&
+           left.m_cycles == right.m_cycles;
 }
 
 bool WorldAnimator::restoreLocal(const LocalSnapshot& saved) {
@@ -106,9 +106,9 @@ bool WorldAnimator::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize i = 0; i < m_tracks.size(); ++i) {
-        static_cast<Cursor&>(m_tracks[i]) = saved.cursors[i];
+        static_cast<Cursor&>(m_tracks[i]) = saved.m_cursors[i];
     }
-    m_cycleEvents = saved.cycles;
+    m_cycleEvents = saved.m_cycles;
     return true;
 }
 

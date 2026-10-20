@@ -28,11 +28,11 @@ class SumnerVisit {
 public:
     class LocalSnapshot {
         friend class SumnerVisit;
-        Simulation state;
-        const SumnerVisit* owner = nullptr;
-        std::weak_ptr<const u8> binding;
-        HintMenu::LocalSnapshot menu;
-        SumnerHints::LocalSnapshot hints;
+        Simulation m_state;
+        const SumnerVisit* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+        HintMenu::LocalSnapshot m_menu;
+        SumnerHints::LocalSnapshot m_hints;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

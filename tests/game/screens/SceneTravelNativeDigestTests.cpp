@@ -180,7 +180,8 @@ struct Travel {
 
 TEST_CASE("travel native hashes survive independent bindings and one to eight tick corrections",
           "[native-state-digest][scene-travel-native-digest][local-rewind]") {
-    Travel correct("travel-digest-correct"), reference("travel-digest-reference");
+    Travel correct("travel-digest-correct");
+    Travel reference("travel-digest-reference");
     REQUIRE(correct.arrival.effectPresentation(0)->tree != reference.arrival.effectPresentation(0)->tree);
     REQUIRE(correct.digest() == reference.digest());
     s32 tick = 0;
@@ -226,7 +227,7 @@ TEST_CASE("travel native hashes survive independent bindings and one to eight ti
     NativeStateDigest stale(correct.resources.resources());
     CHECK_FALSE(correct.exits.appendLocalDigest(stale, saved.exits));
     CHECK_FALSE(stale.checkedFinish());
-    NativeStateResources empty;
+    const NativeStateResources empty;
     NativeStateDigest unknown(empty.resources());
     CHECK_FALSE(reference.arrival.appendNativeDigest(unknown));
     CHECK_FALSE(unknown.checkedFinish());
@@ -234,7 +235,7 @@ TEST_CASE("travel native hashes survive independent bindings and one to eight ti
 
 TEST_CASE("inactive entry camera and queued promotion clocks remain in the native digest",
           "[native-state-digest][scene-travel-native-digest]") {
-    NativeStateResources resources;
+    const NativeStateResources resources;
     StartCamera camera;
     camera.start(WorldCamera{Vec3{0, 20, -30}}, Vec3{0});
     const auto savedCamera = camera;
@@ -244,7 +245,7 @@ TEST_CASE("inactive entry camera and queued promotion clocks remain in the nativ
     camera = savedCamera;
     CHECK(native(camera, resources) == initialCamera);
     camera.stop();
-    StartCamera neverStarted;
+    const StartCamera neverStarted;
     REQUIRE_FALSE(camera.active());
     REQUIRE_FALSE(neverStarted.active());
     CHECK(native(camera, resources) != native(neverStarted, resources));
@@ -254,7 +255,7 @@ TEST_CASE("inactive entry camera and queued promotion clocks remain in the nativ
     save.progress().experience = levelExperience(30);
     save.progress().promotedLevel = 29;
     party[0].actor.spawn(0, save, nullptr, Vec3{0}, 0);
-    MessageTable strings;
+    const MessageTable strings;
     TowerPromotion promotion;
     promotion.begin(party, strings);
     REQUIRE(promotion.active());
@@ -290,7 +291,7 @@ TEST_CASE("speculative first victory artwork cannot contaminate an earlier nativ
     CHECK(native(victory, fixture.resources) == empty);
     victory.begin(41, 'G', 1, 0, false);
     victory.bindWizard(fixture.device, fixture.items, Vec3{0}, std::array{Vec3{2, 0, 2}});
-    MessageTable strings;
+    const MessageTable strings;
     victory.update(1, kStep, false, strings);
     const auto stable = native(victory, fixture.resources);
     for (const f32 alpha : {-1.0f, 0.0f, 0.37f, 1.0f}) {
@@ -308,9 +309,9 @@ TEST_CASE("speculative first victory artwork cannot contaminate an earlier nativ
 
 TEST_CASE("empty scene phase owners still hash latent native clocks and reject foreign history",
           "[native-state-digest][scene-travel-native-digest]") {
-    NativeStateResources resources;
+    const NativeStateResources resources;
     BossSequence boss;
-    BossSequence other;
+    const BossSequence other;
     BossSequence::LocalSnapshot saved;
     boss.saveLocal(saved);
     const auto initial = native(boss, resources);
@@ -323,11 +324,11 @@ TEST_CASE("empty scene phase owners still hash latent native clocks and reject f
     CHECK_FALSE(boss.appendLocalDigest(stale, saved));
     CHECK_FALSE(stale.checkedFinish());
 
-    TowerRelics relics;
+    const TowerRelics relics;
     TowerRelics::LocalSnapshot relicHistory;
     relics.saveLocal(relicHistory);
     CHECK(native(relics, resources) == captured(relics, relicHistory, resources));
-    SumnerFigure wizard;
+    const SumnerFigure wizard;
     SumnerFigure::LocalSnapshot wizardHistory;
     wizard.saveLocal(wizardHistory);
     CHECK(native(wizard, resources) == captured(wizard, wizardHistory, resources));
@@ -345,7 +346,7 @@ TEST_CASE("empty scene phase owners still hash latent native clocks and reject f
 
 TEST_CASE("hint menu and cursor digests retain hidden progression and typed native layout",
           "[native-state-digest][scene-travel-native-digest][local-rewind]") {
-    NativeStateResources resources;
+    const NativeStateResources resources;
     SumnerHints hints;
     const auto hintFile = test::scratchDirectory("native-hint-cursor") / "hints.json";
     writeTextFile(hintFile,
@@ -375,11 +376,14 @@ TEST_CASE("hint menu and cursor digests retain hidden progression and typed nati
     };
     auto firstFont = makeFont();
     auto secondFont = makeFont();
-    test::FakeTexture firstSheet{64, 64}, secondSheet{64, 64};
-    TextPainter firstPainter, secondPainter;
+    test::FakeTexture firstSheet{64, 64};
+    test::FakeTexture secondSheet{64, 64};
+    TextPainter firstPainter;
+    TextPainter secondPainter;
     firstPainter.setFont(&firstFont, &firstSheet);
     secondPainter.setFont(&secondFont, &secondSheet);
-    HintMenu first, second;
+    HintMenu first;
+    HintMenu second;
     const HintMenuLabels labels{"HELP", {{"GENERAL", 39}, {"GUARDIANS", 40}},
                                 "BACK", "SELECT", "PLAYER"};
     REQUIRE(first.open(firstPainter, {}, labels));
@@ -406,7 +410,7 @@ TEST_CASE("hint menu and cursor digests retain hidden progression and typed nati
     CHECK_FALSE(second.appendLocalDigest(foreign, saved));
     CHECK_FALSE(foreign.checkedFinish());
 
-    SumnerVisit visit;
+    const SumnerVisit visit;
     SumnerVisit::LocalSnapshot visitHistory;
     visit.saveLocal(visitHistory);
     CHECK(native(visit, resources) == captured(visit, visitHistory, resources));

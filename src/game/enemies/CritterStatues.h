@@ -34,6 +34,7 @@ public:
     CritterStatues& operator=(const CritterStatues&) = delete;
     CritterStatues(CritterStatues&&) = delete;
     CritterStatues& operator=(CritterStatues&&) = delete;
+    ~CritterStatues() = default;
     /** A placement standing as a statue, and what it becomes. */
     struct Placement {
         CombatantKind kind = CombatantKind::Unknown;
@@ -49,7 +50,7 @@ public:
         f32 sight = 0.0f;      ///< approach wake radius; negative disables proximity waking
         s32 activeOn = 0; ///< the record's, in half ticks; nought for the sequence's own length
         std::optional<usize> carried; ///< the pickup the great one holds
-        bool operator==(const Placement&) const;
+        bool operator==(const Placement& /*other*/) const;
         friend void visitNativeState(NativeStateDigest& digest, const Placement& value);
     };
     /** Whether a sphere of a radius about a point is in view. */
@@ -139,6 +140,8 @@ public:
         Prepared(Prepared&&) noexcept;
         Prepared& operator=(Prepared&&) noexcept;
         ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
 
     private:
         friend class CritterStatues;

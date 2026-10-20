@@ -375,7 +375,7 @@ void decorate(Packet::State& state) {
 
 TEST_CASE("combat packet round trips complete nonempty native owners and adapter values",
           "[netplay][combat-state-packet]") {
-    NativeFixture fixture;
+    const NativeFixture fixture;
     auto state = fixture.state();
     decorate(state);
     const auto encoded = Packet::encode(state);
@@ -531,13 +531,13 @@ TEST_CASE("combat packet bounds allocations before reading nested records",
     const auto encoded = Packet::encode(emptyState());
     REQUIRE(encoded);
     // No player leaves the fixed RNG immediately after the first vector count.
-    constexpr usize levels = Packet::kHeaderBytes + 4 + PlayerHealthCheckpoint::kBytes;
-    const usize offset = GENERATE_COPY(Packet::kHeaderBytes, levels, levels + 8, levels + 12);
+    constexpr usize kLevels = Packet::kHeaderBytes + 4 + PlayerHealthCheckpoint::kBytes;
+    const usize offset = GENERATE_COPY(Packet::kHeaderBytes, kLevels, kLevels + 8, kLevels + 12);
     auto bytes = *encoded;
     word(bytes, offset, 0xFFFFFFFF);
     CHECK_FALSE(Packet::decode(bytes));
     bytes = *encoded;
-    word(bytes, levels + 4, 2); // Canonical attack-owner boolean, not a bitmask.
+    word(bytes, kLevels + 4, 2); // Canonical attack-owner boolean, not a bitmask.
     CHECK_FALSE(Packet::decode(bytes));
     bytes = *encoded;
     word(bytes, Packet::kHeaderBytes, 5); // Smaller than global cap, still too many players.
@@ -546,7 +546,7 @@ TEST_CASE("combat packet bounds allocations before reading nested records",
 
 TEST_CASE("combat packet rejects malformed or cross-party state without omission",
           "[netplay][combat-state-packet]") {
-    NativeFixture fixture;
+    const NativeFixture fixture;
     auto baseline = fixture.state();
     decorate(baseline);
     auto bad = baseline;
@@ -594,6 +594,8 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
     case 21: bad.adapter.bags[1].name.clear(); break;
     case 22: bad.adapter.bags[0].age = 3; break;
     case 23: bad.adapter.bags[1].pitch = std::numeric_limits<f32>::infinity(); break;
+    default:
+        break;
     }
     CHECK_FALSE(Packet::encode(bad));
     CHECK(Packet::encode(baseline));
@@ -601,7 +603,7 @@ TEST_CASE("combat packet rejects malformed or cross-party state without omission
 
 TEST_CASE("combat packet rejects forged nested fields and opaque leaf lengths",
           "[netplay][combat-state-packet]") {
-    NativeFixture fixture;
+    const NativeFixture fixture;
     auto state = fixture.state();
     decorate(state);
     state.combat.arsenal.missiles.missiles[0].damage = 731.125f;

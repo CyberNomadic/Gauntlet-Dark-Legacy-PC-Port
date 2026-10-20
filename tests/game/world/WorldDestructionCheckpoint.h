@@ -52,6 +52,7 @@ public:
     explicit WorldDestructionCheckpoint(WorldDestruction& owner) : m_owner(owner) {}
     WorldDestructionCheckpoint(const WorldDestructionCheckpoint&) = delete;
     WorldDestructionCheckpoint& operator=(const WorldDestructionCheckpoint&) = delete;
+    ~WorldDestructionCheckpoint() = default;
 
     std::optional<State> checkpoint() const;
     std::optional<Prepared> prepareRestore(const State& state) const;

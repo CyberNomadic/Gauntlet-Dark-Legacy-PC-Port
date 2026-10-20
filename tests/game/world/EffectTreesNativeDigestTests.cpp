@@ -74,7 +74,7 @@ struct Fixture {
         return id;
     }
 
-    ParticleDescriptor trail() const {
+    static ParticleDescriptor trail() {
         ParticleDescriptor descriptor;
         descriptor.emitFrames = 6;
         descriptor.fadeFrames = 4;
@@ -108,12 +108,12 @@ struct Fixture {
             REQUIRE(effects.startParticles(device, archive, trail(), 0,
                                            glm::translate(Mat4{1}, Vec3{6, 5, 4})) != 0);
         }
-        if (effects.count() && tick % 5 == 0) {
+        if ((effects.count() != 0u) && tick % 5 == 0) {
             effects.placeAt(effects.effect(0).id,
                             glm::translate(Mat4{1}, wrong ? Vec3{-8} : Vec3{1, 2, 3}),
                             Vec3{1, 0, 2});
         }
-        if (effects.count() && tick % 7 == 0) {
+        if ((effects.count() != 0u) && tick % 7 == 0) {
             effects.finish(effects.effect(0).id);
         }
         effects.update(1.0f / 60);
@@ -122,13 +122,14 @@ struct Fixture {
 
 TEST_CASE("effect native hashes agree across independent resources and draw cadences",
           "[native-digest][effect-native-digest]") {
-    Fixture a("effect-digest-owner-a"), b("effect-digest-owner-b");
+    Fixture a("effect-digest-owner-a");
+    Fixture b("effect-digest-owner-b");
     a.start(true);
     b.start(true);
     REQUIRE(a.effects.effect(0).tree != b.effects.effect(0).tree);
     REQUIRE(a.effects.effect(0).model != b.effects.effect(0).model);
     CHECK(a.hash() == b.hash());
-    CameraFrame camera;
+    const CameraFrame camera;
     for (u32 tick = 1; tick <= 24; ++tick) {
         CAPTURE(tick);
         a.step(tick);
@@ -155,7 +156,7 @@ TEST_CASE("effect native digest covers each retained value family and recursive 
     Fixture f("effect-digest-hidden-values");
     const auto id = f.start(true);
     REQUIRE(f.effects.tag(id, {1, 20, 2, 3}));
-    f.effects.attachTrail(id, f.trail(), f.archive.textures.texture(f.device, 0));
+    f.effects.attachTrail(id, Fixture::trail(), f.archive.textures.texture(f.device, 0));
     f.effects.capturePresentation();
     f.effects.update(1.0f / 30);
     EffectTrees::LocalSnapshot saved;
@@ -215,11 +216,13 @@ TEST_CASE("effect native digest covers each retained value family and recursive 
         REQUIRE(f.effects.restoreLocal(saved));
         // The accessor is read-only gameplay API; this test owns the non-const
         // pool and alters its actual retained record, not a parallel test DTO.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         changes[index](const_cast<EffectTrees::Effect&>(f.effects.effect(0)));
         CHECK(f.hash() != baseline);
         CHECK(f.savedHash(saved) == baseline);
     }
     REQUIRE(f.effects.restoreLocal(saved));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& current = const_cast<EffectTrees::Effect&>(f.effects.effect(0));
     auto prototype = std::make_shared<EffectTrees::Effect>(current);
     current.morphPrototype = prototype;
@@ -246,7 +249,7 @@ TEST_CASE("effect native snapshots hash captured clocks through one to eight tic
     for (u32 ticks = 1; ticks <= 8; ++ticks) {
         CAPTURE(ticks);
         REQUIRE(f.effects.restoreLocal(saved));
-        std::array<Digest, 8> expected;
+        std::array<Digest, 8> expected{};
         for (u32 tick = 0; tick < ticks; ++tick) {
             f.step(tick);
             expected[tick] = f.hash();
@@ -295,21 +298,22 @@ TEST_CASE("effect native digest rejects unknown resources and foreign stale hist
           "[native-digest][effect-native-digest]") {
     Fixture f("effect-digest-guards");
     f.start();
-    EffectTrees::LocalSnapshot saved, empty;
+    EffectTrees::LocalSnapshot saved;
+    const EffectTrees::LocalSnapshot empty{};
     f.effects.saveLocal(saved);
     const auto baseline = f.hash();
     NativeStateDigest unresolved;
     CHECK_FALSE(f.effects.appendNativeDigest(unresolved));
     CHECK_FALSE(unresolved.checkedFinish());
-    EffectTrees other;
+    const EffectTrees other;
     NativeStateDigest foreign(f.resources.resources());
     CHECK_FALSE(other.appendLocalDigest(foreign, saved));
     CHECK_FALSE(foreign.checkedFinish());
     NativeStateDigest missing(f.resources.resources());
     CHECK_FALSE(f.effects.appendLocalDigest(missing, empty));
     CHECK_FALSE(missing.checkedFinish());
-    test::FakeTexture unregistered(2, 2);
-    f.effects.attachTrail(f.effects.effect(0).id, f.trail(), unregistered);
+    const test::FakeTexture unregistered(2, 2);
+    f.effects.attachTrail(f.effects.effect(0).id, Fixture::trail(), unregistered);
     NativeStateDigest unknown(f.resources.resources());
     CHECK_FALSE(f.effects.appendNativeDigest(unknown));
     CHECK_FALSE(unknown.checkedFinish());
@@ -323,8 +327,10 @@ TEST_CASE("effect native digest rejects unknown resources and foreign stale hist
 
 TEST_CASE("effect texture bindings hash authored and resolved values separately from clocks",
           "[native-digest][effect-native-digest][texture-binding-digest]") {
-    Fixture a("effect-bank-digest-a"), b("effect-bank-digest-b");
-    TextureAnimator left, right;
+    Fixture a("effect-bank-digest-a");
+    Fixture b("effect-bank-digest-b");
+    TextureAnimator left;
+    TextureAnimator right;
     auto infos = a.archive.trees.textureAnimations();
     left.bind(infos, a.archive.textures, a.device);
     right.bind(infos, b.archive.textures, b.device);
@@ -353,6 +359,8 @@ TEST_CASE("effect texture bindings hash authored and resolved values separately 
         case 6: ++changed[0].rate; break;
         case 7: ++changed[0].offset; break;
         case 8: changed[0].flag = 0; break;
+        default:
+            break;
         }
         right.bind(changed, b.archive.textures, b.device);
         REQUIRE(b.resources.refreshArchive(b.archive));

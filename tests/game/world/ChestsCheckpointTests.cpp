@@ -152,7 +152,10 @@ TEST_CASE("native chest history cancels opening rewards transmutation and first 
 TEST_CASE("native chest equality detects hidden pickup ownership and refusal clocks",
           "[local-rewind][chest-local-rewind]") {
     Fixture fixture("chest-local-hidden-equality");
-    Chests::LocalSnapshot initial, changed, actual, empty;
+    Chests::LocalSnapshot initial;
+    Chests::LocalSnapshot changed;
+    Chests::LocalSnapshot actual;
+    const Chests::LocalSnapshot empty{};
     fixture.chests.saveLocal(initial);
     REQUIRE(fixture.chests.equalLocal(initial, initial));
     CHECK_FALSE(fixture.chests.equalLocal(initial, empty));
@@ -392,6 +395,8 @@ TEST_CASE("container malformed state is rejected atomically without binding new 
     case 9: invalid.chests[0].collectedSeconds = -1.0f; break;
     case 10: invalid.infos.resize(ChestsCheckpoint::State::kMaxInfos + 1); break;
     case 11: invalid.placements[0].position.x += 1; break;
+    default:
+        break;
     }
     const auto uploads = fixture.device.texturesCreated;
     CHECK_FALSE(fixture.owner.prepareRestore(invalid));
@@ -406,7 +411,7 @@ TEST_CASE("native campaign containers retain full authored roster and preloaded 
         test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
-    const auto name = GENERATE("G1", "G3", "G4");
+    const auto* const name = GENERATE("G1", "G3", "G4");
     CAPTURE(name);
     test::FakeRenderDevice device;
     LevelWorld world;

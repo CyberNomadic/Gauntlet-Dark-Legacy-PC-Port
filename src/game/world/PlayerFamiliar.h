@@ -43,7 +43,7 @@ public:
     bool restoreLocal(const LocalSnapshot& state);
     /** Actual captured values and immutable binding, never a draw-sampled clock. */
     bool appendNativeDigest(NativeStateDigest& digest) const;
-    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     struct Checkpoint {
         s32 tier = 0;
         std::string tree;

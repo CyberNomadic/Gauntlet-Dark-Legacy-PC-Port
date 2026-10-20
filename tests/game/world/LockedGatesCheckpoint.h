@@ -30,7 +30,7 @@ public:
         ItemFigureCheckpoint::State figure;
         Obstacle box;
         Support support;
-        bool operator==(const Gate&) const;
+        bool operator==(const Gate& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxGates = 4096;

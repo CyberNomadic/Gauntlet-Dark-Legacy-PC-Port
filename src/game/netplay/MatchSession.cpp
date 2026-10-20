@@ -269,9 +269,13 @@ bool MatchSession::ensureTerminalAgreement(u64 tick, Time now) {
     auto agreement = std::make_unique<NativeAgreement>();
     std::vector<NativeAgreement::Link> links;
     for (u8 peer = 1; peer <= 4; ++peer) {
-        if (m_links[peer] != 0) links.push_back({peer, m_links[peer]});
+        if (m_links[peer] != 0) {
+            links.push_back({peer, m_links[peer]});
+        }
     }
-    if (!agreement->openTerminal(m_local, m_context.epoch, m_owners, links, tick, now)) return false;
+    if (!agreement->openTerminal(m_local, m_context.epoch, m_owners, links, tick, now)) {
+        return false;
+    }
     m_terminalAgreement = std::move(agreement);
     return true;
 }
@@ -285,7 +289,9 @@ void MatchSession::failNativeAgreement(NativeAgreement::Failure fallback, u64 ti
     }
     if (m_phase != Phase::Stopped && m_phase != Phase::Offline) {
         m_failureDetail = "Simulation agreement failed: " + std::string(agreementReason(reason));
-        if (tick != 0) m_failureDetail += " at tick " + std::to_string(tick);
+        if (tick != 0) {
+            m_failureDetail += " at tick " + std::to_string(tick);
+        }
         m_failureDetail += ". Online play stopped to protect progress.";
     }
     log::error("Native observation agreement failed: {} (epoch {}, tick {}, peer {})",
@@ -498,7 +504,9 @@ void MatchSession::tryCommit() {
         return; // Final source hashes must finish before retiring their agreement stream.
     }
     if (m_drainingTerminal && (m_drainingTerminal->agreedTick() != m_context.sourceTick ||
-                              m_drainingTerminal->queuedPackets() != 0)) return;
+                               m_drainingTerminal->queuedPackets() != 0)) {
+        return;
+    }
     if (!broadcast(MatchControlKind::Commit)) {
         stop(MatchStop::TransportFailure, true);
         return;
@@ -598,8 +606,12 @@ void MatchSession::disconnected(PacketTransport::Connection connection) {
     if (m_drainingAgreement) {
         m_drainingAgreement->disconnected(connection);
     }
-    if (m_terminalAgreement) m_terminalAgreement->disconnected(connection);
-    if (m_drainingTerminal) m_drainingTerminal->disconnected(connection);
+    if (m_terminalAgreement) {
+        m_terminalAgreement->disconnected(connection);
+    }
+    if (m_drainingTerminal) {
+        m_drainingTerminal->disconnected(connection);
+    }
     if (m_exchange) {
         m_exchange->disconnected(connection);
     }
@@ -791,7 +803,9 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         NativeAgreement* agreement = nullptr;
         if (m_drainingContext && epoch == m_drainingContext->epoch) {
             agreement = m_drainingTerminal.get();
-            if (!agreement) return Admission::Stale;
+            if (!agreement) {
+                return Admission::Stale;
+            }
         } else if (epoch == m_context.epoch && m_phase == Phase::Running &&
                    m_context.transition != MatchTransition::Shop) {
             // A validated epoch-wide failure has no scheduled tick. Route it
@@ -818,7 +832,9 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
             return result == NativeAgreement::Admission::Invalid ? Admission::Invalid
                                                                  : Admission::Accepted;
         }
-        if (result == NativeAgreement::Admission::WrongPeer) return Admission::WrongPeer;
+        if (result == NativeAgreement::Admission::WrongPeer) {
+            return Admission::WrongPeer;
+        }
         return result == NativeAgreement::Admission::Accepted ||
                        result == NativeAgreement::Admission::Duplicate
                    ? Admission::Accepted : Admission::Stale;
@@ -905,7 +921,7 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         } else if (message->epoch != m_context.epoch || !inputs || !m_nativeConsumer ||
                    m_context.transition == MatchTransition::Shop ||
                    (m_phase != Phase::Running &&
-                    !(m_phase == Phase::Loading && m_loaded[m_local]))) {
+                    (m_phase != Phase::Loading || !m_loaded[m_local]))) {
             return Admission::Stale;
         }
         // A redundant packet can contain the missing terminal frame and later
@@ -986,21 +1002,27 @@ bool MatchSession::completeNativeBoundary(u64 epoch, u64 tick) {
 }
 bool MatchSession::observeNativeTerminal(u64 epoch, u64 tick,
                                        const NativeAgreement::Digest& digest, Time now) {
-    if (m_phase != Phase::Running || epoch != m_context.epoch || !m_nativeConsumer ||
-        tick == 0 || tick != m_nativeCompleted || tick == std::numeric_limits<u64>::max() ||
-        tick + 1 != m_nativeNextTick) return false;
+    if (m_phase != Phase::Running || epoch != m_context.epoch || !m_nativeConsumer || tick == 0 ||
+        tick != m_nativeCompleted || tick == std::numeric_limits<u64>::max() ||
+        tick + 1 != m_nativeNextTick) {
+        return false;
+    }
     if (!ensureTerminalAgreement(tick, now)) {
         failNativeAgreement(NativeAgreement::Failure::Protocol, tick);
         return false;
     }
     const auto admitted = m_terminalAgreement->submit(tick, digest, now);
     if (admitted == NativeAgreement::Admission::Accepted ||
-        admitted == NativeAgreement::Admission::Duplicate) return true;
+        admitted == NativeAgreement::Admission::Duplicate) {
+        return true;
+    }
     failNativeAgreement(NativeAgreement::Failure::Protocol, tick, m_terminalAgreement.get());
     return false;
 }
 bool MatchSession::nativeTerminalAgreed(u64 epoch, u64 tick) const {
-    if (tick == 0) return false;
+    if (tick == 0) {
+        return false;
+    }
     if (epoch == m_context.epoch) {
         return m_terminalAgreement && !m_terminalAgreement->failed() &&
                m_terminalAgreement->agreedTick() == tick;
@@ -1039,7 +1061,9 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
             failNativeAgreement(NativeAgreement::Failure::Transport, 0, agreement);
             return;
         }
-        if (agreement && agreement->queuedPackets() != 0) return;
+        if (agreement && agreement->queuedPackets() != 0) {
+            return;
+        }
     }
     // These reliable reports precede Ready on the same connection. A peer may
     // already be loading the destination, but its last confirmed source hash
@@ -1092,7 +1116,7 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
         }
         return;
     }
-    if (m_phase != Phase::Running && !(m_phase == Phase::Loading && m_loaded[m_local])) {
+    if (m_phase != Phase::Running && (m_phase != Phase::Loading || !m_loaded[m_local])) {
         return;
     }
     // In particular, a congested Commit above must reach this destination
@@ -1105,6 +1129,5 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
     if (m_nativeAgreement && !m_nativeAgreement->flush(transport, now)) {
         failNativeAgreement(NativeAgreement::Failure::Transport);
     }
-    return;
 }
 } // namespace gdl::game

@@ -50,12 +50,14 @@ TEST_CASE("native digest follows actual fields not allocation or padding",
         f64 time;
     };
     static_assert(std::is_trivially_copyable_v<Padded>);
-    Padded a{}, b{};
+    Padded a{};
+    Padded b{};
     std::memset(&a, 0xAA, sizeof(a));
     std::memset(&b, 0x55, sizeof(b));
     a.code = b.code = 2;
     a.time = b.time = 0.25;
-    NativeStateDigest left, right;
+    NativeStateDigest left;
+    NativeStateDigest right;
     left.fields<2>(a);
     right.fields<2>(b);
     CHECK(left.finish() == right.finish());
@@ -63,7 +65,7 @@ TEST_CASE("native digest follows actual fields not allocation or padding",
 
 TEST_CASE("native digest canonicalizes unordered containers without losing contents",
           "[native-state-digest]") {
-    std::unordered_map<s32, std::vector<s32>> first{{2, {9, 8}}, {5, {1, 3}}};
+    std::unordered_map<s32, std::vector<s32>> const first{{2, {9, 8}}, {5, {1, 3}}};
     std::unordered_map<s32, std::vector<s32>> second;
     second.reserve(128);
     second.emplace(5, std::vector<s32>{1, 3});
@@ -97,7 +99,7 @@ TEST_CASE("native digest includes RNG state without advancing it", "[native-stat
     const auto savedStandard = standard;
     const auto beforeStandard = hash(standard);
     CHECK(standard == savedStandard);
-    for (u32 count : {1u, 623u, 624u, 625u}) {
+    for (u32 const count : {1u, 623u, 624u, 625u}) {
         standard = savedStandard;
         standard.discard(count);
         CHECK(hash(standard) != beforeStandard);
@@ -119,11 +121,12 @@ void visitNativeState(NativeStateDigest& digest, const Borrower& value) {
 
 TEST_CASE("native digest refuses unresolved resources including nested unordered values",
           "[native-state-digest]") {
-    const s32 first = 8, second = 8;
+    const s32 first = 8;
+    const s32 second = 8;
     NativeStateDigest missing;
     missing.resource(&first);
     CHECK_FALSE(missing.checkedFinish());
-    NativeStateDigest::Resources bindings{
+    const NativeStateDigest::Resources bindings{
         .append = [](NativeStateDigest& sink, std::type_index type, const void* pointer, void*) {
             if (type != typeid(s32)) {
                 return false;
@@ -132,7 +135,8 @@ TEST_CASE("native digest refuses unresolved resources including nested unordered
             sink.value(*static_cast<const s32*>(pointer));
             return true;
         }};
-    NativeStateDigest left{bindings}, right{bindings};
+    NativeStateDigest left{bindings};
+    NativeStateDigest right{bindings};
     left.resource(&first);
     right.resource(&second);
     REQUIRE(left.checkedFinish());
@@ -152,7 +156,9 @@ TEST_CASE("native digest scalar and string stream preserves its original canonic
     NativeStateDigest actual;
     std::vector<u8> bytes;
     const auto word = [&](u32 value) {
-        for (u32 shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<u8>(value >> shift));
+        for (u32 shift = 0; shift < 32; shift += 8) {
+            bytes.push_back(static_cast<u8>(value >> shift));
+        }
     };
     const auto wide = [&](u64 value) {
         word(static_cast<u32>(value));
@@ -168,10 +174,14 @@ TEST_CASE("native digest scalar and string stream preserves its original canonic
         // Include embedded zero/high bytes and lengths on both sides of the
         // sink boundary. Text is bytes, never locale conversion or C strings.
         std::string text(index % 71, '\0');
-        for (usize at = 0; at < text.size(); ++at) text[at] = static_cast<char>(at * 73 + index);
+        for (usize at = 0; at < text.size(); ++at) {
+            text[at] = static_cast<char>(at * 73 + index);
+        }
         actual.string(text);
         wide(text.size());
-        for (const char byte : text) bytes.push_back(static_cast<u8>(byte));
+        for (const char byte : text) {
+            bytes.push_back(static_cast<u8>(byte));
+        }
     }
     Sha256 original;
     original.update(bytes);
@@ -187,27 +197,34 @@ TEST_CASE("native digest unordered elements retain their original independently 
     }
     std::vector<CanonicalDigestSink::Digest> elements;
     const auto word = [](CanonicalDigestSink& sink, u32 value) {
-        for (u32 shift = 0; shift < 32; shift += 8) sink.push_back(static_cast<u8>(value >> shift));
+        for (u32 shift = 0; shift < 32; shift += 8) {
+            sink.push_back(static_cast<u8>(value >> shift));
+        }
     };
     for (const auto& [key, payload] : values) {
         CanonicalDigestSink element;
         word(element, static_cast<u32>(key));
         word(element, static_cast<u32>(payload.size()));
         word(element, 0);
-        for (const auto value : payload) word(element, static_cast<u32>(value));
+        for (const auto value : payload) {
+            word(element, static_cast<u32>(value));
+        }
         elements.push_back(element.finish());
     }
     std::ranges::sort(elements);
     CanonicalDigestSink original;
     word(original, static_cast<u32>(elements.size()));
     word(original, 0);
-    for (const auto& element : elements) original.append(element);
+    for (const auto& element : elements) {
+        original.append(element);
+    }
     CHECK(hash(values) == original.finish());
 }
 
 TEST_CASE("native scalar digest reports bytewise and fixed-width costs",
           "[.native-digest-benchmark][native-state-digest]") {
-    std::array<double, 16> bytewise{}, fixed{};
+    std::array<double, 16> bytewise{};
+    std::array<double, 16> fixed{};
     const auto run = [](bool bulk) {
         CanonicalDigestSink sink;
         for (u64 index = 0; index < 32768; ++index) {
@@ -217,8 +234,12 @@ TEST_CASE("native scalar digest reports bytewise and fixed-width costs",
                 sink.word(word);
                 sink.wide(wide);
             } else {
-                for (u32 shift = 0; shift < 32; shift += 8) sink.push_back(static_cast<u8>(word >> shift));
-                for (u32 shift = 0; shift < 64; shift += 8) sink.push_back(static_cast<u8>(wide >> shift));
+                for (u32 shift = 0; shift < 32; shift += 8) {
+                    sink.push_back(static_cast<u8>(word >> shift));
+                }
+                for (u32 shift = 0; shift < 64; shift += 8) {
+                    sink.push_back(static_cast<u8>(wide >> shift));
+                }
             }
         }
         return sink.finish();

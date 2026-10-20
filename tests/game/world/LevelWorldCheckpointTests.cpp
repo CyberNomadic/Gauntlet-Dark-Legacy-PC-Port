@@ -31,44 +31,47 @@ class TextureOrderDevice final : public RenderDevice {
 public:
     explicit TextureOrderDevice(bool reverse) {
         for (s32 i = 0; i < 2; ++i) {
-            textures.push_back(std::make_unique<test::FakeTexture>(2, 2));
+            m_textures.push_back(std::make_unique<test::FakeTexture>(2, 2));
         }
-        std::ranges::sort(textures, [](const auto& a, const auto& b) {
+        std::ranges::sort(m_textures, [](const auto& a, const auto& b) {
             return std::less<const Texture*>{}(a.get(), b.get());
         });
         if (reverse) {
-            std::ranges::reverse(textures);
+            std::ranges::reverse(m_textures);
         }
     }
     bool beginFrame() override { return true; }
     void endFrame() override {}
-    void setClearColor(const Vec4&) override {}
+    void setClearColor(const Vec4& /*rgba*/) override {}
     Extent2D framebufferExtent() const override { return {640, 448}; }
-    void setPresentation(bool, u32) override {}
+    void setPresentation(bool /*vsync*/, u32 /*sampleCount*/) override {}
     u32 presentationSampleCount() const override { return 1; }
-    void setTextureFiltering(u32) override {}
-    void setSmoothSprites(bool) override {}
+    void setTextureFiltering(u32 /*filtering*/) override {}
+    void setSmoothSprites(bool /*enabled*/) override {}
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> pixels) override {
         REQUIRE(desc.width == 2);
         REQUIRE(desc.height == 2);
-        REQUIRE(next < textures.size());
-        textures[next]->pixels.assign(pixels.begin(), pixels.end());
-        return std::move(textures[next++]);
+        REQUIRE(m_next < m_textures.size());
+        m_textures[m_next]->pixels.assign(pixels.begin(), pixels.end());
+        return std::move(m_textures[m_next++]);
     }
-    void updateTexture(Texture&, std::span<const u8>) override { FAIL("unexpected upload"); }
-    const Texture& whiteTexture() const override { return white; }
-    void draw(const ImmediateBatch&, const Texture&, const Mat4&, const DrawState&) override {}
+    void updateTexture(Texture& /*texture*/, std::span<const u8> /*rgba8Pixels*/) override {
+        FAIL("unexpected upload");
+    }
+    const Texture& whiteTexture() const override { return m_white; }
+    void draw(const ImmediateBatch& /*batch*/, const Texture& /*texture*/,
+              const Mat4& /*transform*/, const DrawState& /*state*/) override {}
     void waitIdle() override {}
-    bool applyDepthOfField(const DepthOfField&) override { return false; }
+    bool applyDepthOfField(const DepthOfField& /*settings*/) override { return false; }
     bool applyBloom() override { return false; }
-    void addHeatSource(const HeatSource&) override {}
-    bool applyAmbientOcclusion(const AmbientOcclusion&) override { return false; }
+    void addHeatSource(const HeatSource& /*source*/) override {}
+    bool applyAmbientOcclusion(const AmbientOcclusion& /*settings*/) override { return false; }
 
 private:
-    test::FakeTexture white{1, 1};
-    std::vector<std::unique_ptr<test::FakeTexture>> textures;
-    usize next = 0;
+    test::FakeTexture m_white{1, 1};
+    std::vector<std::unique_ptr<test::FakeTexture>> m_textures;
+    usize m_next = 0;
 };
 
 struct Fixture {
@@ -198,7 +201,8 @@ TEST_CASE("level support batches retain appended collision owners and reject sta
 
 TEST_CASE("native whole world history restores coupled platforms items destruction and triggers",
           "[local-rewind][level-world-local-rewind]") {
-    Fixture native("world-local-native"), replay("world-local-replay");
+    Fixture native("world-local-native");
+    Fixture replay("world-local-replay");
     std::array<LevelWorld::LocalSnapshot, 16> history;
     std::array<LevelWorld::LocalSnapshot, 8> expected;
     LevelWorld::LocalSnapshot observed;
@@ -246,7 +250,7 @@ TEST_CASE("native whole world history restores coupled platforms items destructi
                   native.world.collision().objectTransform(0));
             CHECK(replay.world.placedItems().item(0).position ==
                   native.world.placedItems().item(0).position);
-            for (f32 alpha : {-1.0f, 0.5f, 1.0f}) {
+            for (f32 const alpha : {-1.0f, 0.5f, 1.0f}) {
                 for (auto* fixture : {&native, &replay}) {
                     fixture->device.draws.clear();
                     fixture->world.drawOpaque(fixture->device, Mat4{1}, {}, alpha);
@@ -271,7 +275,9 @@ TEST_CASE("native whole world history restores coupled platforms items destructi
 TEST_CASE("native world equality includes pending child output and latent root controls",
           "[local-rewind][level-world-local-rewind]") {
     Fixture fixture("world-local-hidden-values");
-    LevelWorld::LocalSnapshot before, changed, restored;
+    LevelWorld::LocalSnapshot before;
+    LevelWorld::LocalSnapshot changed;
+    LevelWorld::LocalSnapshot restored;
     fixture.world.saveLocal(before);
     const auto position = fixture.world.placedItems().item(0).position;
     fixture.world.setItemOpener(0, 3);
@@ -298,7 +304,7 @@ TEST_CASE("native world equality includes pending child output and latent root c
 TEST_CASE(
     "loaded native worlds report complete owner history cost without diagnostic serialization",
     "[.][assets][level-world-local-timing]") {
-    const auto name = GENERATE("G2", "G4", "L1", "D2");
+    const auto* const name = GENERATE("G2", "G4", "L1", "D2");
     const auto root = test::assetOrSkip(std::string{"LEVELS/LEVEL"} + name + "/WORLDS.PS2")
                           .parent_path()
                           .parent_path()
@@ -340,7 +346,9 @@ TEST_CASE(
     const auto elapsed = [](auto start) {
         return std::chrono::duration<f64, std::milli>(Clock::now() - start).count();
     };
-    std::array<f64, 256> saves{}, restores{}, replays{};
+    std::array<f64, 256> saves{};
+    std::array<f64, 256> restores{};
+    std::array<f64, 256> replays{};
     for (usize i = 0; i < saves.size(); ++i) {
         auto& saved = history[i % history.size()];
         auto start = Clock::now();
@@ -379,7 +387,10 @@ TEST_CASE("complete level checkpoints rewind native motion destruction pickups a
     const auto uploads = replay.device.textureUpdates;
     const auto* wall = &host.world.walls().wall(0);
     const auto* rotator = &host.world.rotators().rotator(0);
-    bool particleBirth = false, burst = false, cartExplosion = false, wallBroken = false;
+    bool particleBirth = false;
+    bool burst = false;
+    bool cartExplosion = false;
+    bool wallBroken = false;
     bool carriedPickup = false;
     for (s32 tick = 0; tick < 50; ++tick) {
         CAPTURE(tick, seconds);
@@ -456,6 +467,8 @@ TEST_CASE("complete level preparation is atomic across malformed child owners",
     case 11: invalid.playerCount = 2; break;
     case 12: invalid.particleSources.clear(); break;
     case 13: invalid.particleSources.front() = 0; break;
+    default:
+        break;
     }
     CAPTURE(mutation);
     CHECK_FALSE(fixture.owner.prepareRestore(invalid));
@@ -534,20 +547,26 @@ TEST_CASE("world scratch recaptures live fields while rejecting catalog and nati
         case 6: scratch.pickups.placements[4].collision[0].normal.x = -0.0f; break;
         case 7: ++scratch.pickups.placements[4].params[0]; break;
         case 8: scratch.pickups.placements[4].collision[0].vertices[0].x = nan; break;
+        default:
+            break;
         }
+        // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
         CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
         CHECK(fixture.state() == baseline);
     }
 
     auto undo = fixture.owner.prepareRestore(baseline);
     REQUIRE(undo);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
     const auto flash = std::exchange(wall.flash, nan);
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
     wall.flash = flash;
     fixture.world.setAmbientOffset(1'000'001.0f);
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
     REQUIRE(fixture.owner.canCommit(*undo));
     REQUIRE(fixture.owner.commitRestore(std::move(*undo)));
@@ -557,7 +576,7 @@ TEST_CASE("world scratch recaptures live fields while rejecting catalog and nati
 TEST_CASE("world scratch reuse follows current binding and exact value catalog identity",
           "[rollback][level-world-checkpoint][world-capture-reuse]") {
     Fixture first("level-world-capture-reuse-bind-a");
-    Fixture second("level-world-capture-reuse-bind-b");
+    const Fixture second("level-world-capture-reuse-bind-b");
     const auto baseline = first.state();
     auto scratch = baseline;
     auto independent = second.owner.checkpoint(std::move(scratch));
@@ -565,12 +584,15 @@ TEST_CASE("world scratch reuse follows current binding and exact value catalog i
     CHECK(*independent == second.state());
     first.owner.clearResources();
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
     REQUIRE(first.owner.bindResources(first.device));
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{baseline});
     first.world.clear();
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
     CHECK(second.state() == baseline);
 }
@@ -619,6 +641,7 @@ TEST_CASE("world capture failure timings reset and retain only reached operation
 
     // All seven child captures run in native order before the existing joint
     // refusal. Ambient capture and aggregate validation must remain unreached.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
     const auto flash = std::exchange(wall.flash, std::numeric_limits<f32>::quiet_NaN());
     CHECK_FALSE(fixture.owner.checkpoint());
@@ -670,24 +693,30 @@ TEST_CASE("level particle checkpoints use authored markers across opposite textu
         {"id":"B","preset":2,"enables":16929,"texture":"GLASS",
          "particleLife":[0.3,0],"rate":[30,30,30,30]}]})");
     test::FakeRenderDevice loadDevice;
-    TextureOrderDevice ascending(false), descending(true);
-    TextureSet hostTextures, replayTextures;
+    TextureOrderDevice ascending(false);
+    TextureOrderDevice descending(true);
+    TextureSet hostTextures;
+    TextureSet replayTextures;
     REQUIRE(hostTextures.load(root));
     REQUIRE(replayTextures.load(root));
-    LevelWorld host, replay;
+    LevelWorld host;
+    LevelWorld replay;
     const LevelRef level{"TEST", 0, "TEST", "", "", "", "", 0};
     REQUIRE(host.load(loadDevice, root, level));
     REQUIRE(replay.load(loadDevice, root, level));
     // Rebind the native particle owners against independent, immutable catalogs.
     // These catalogs and their devices outlive both worlds and every preparation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<ParticleField&>(host.particles()).bind(host.layout(), hostTextures, ascending);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<ParticleField&>(replay.particles())
         .bind(replay.layout(), replayTextures, descending);
     REQUIRE(host.particles().size() == 2);
     REQUIRE(replay.particles().size() == 2);
     REQUIRE(host.particles().sourceObject(0) == 0);
     REQUIRE(replay.particles().sourceObject(0) == 1);
-    LevelWorldCheckpoint authority(host), replica(replay);
+    LevelWorldCheckpoint authority(host);
+    LevelWorldCheckpoint replica(replay);
     REQUIRE(authority.bindResources(loadDevice));
     REQUIRE(replica.bindResources(loadDevice));
     for (s32 tick = 0; tick < 11; ++tick) {
@@ -728,6 +757,8 @@ TEST_CASE("world capture validation remains complete for raw values and nested c
         case 8: invalid.particles.entries.front().emitter.saved = nan; break;
         case 9: invalid.ambientOffset = nan; break;
         case 10: invalid.playerCount = 2; break; // Individually valid children, invalid relation.
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture.owner.prepareRestore(invalid));
@@ -736,6 +767,7 @@ TEST_CASE("world capture validation remains complete for raw values and nested c
 
     // Fault injection into a live child must still fail its capture before the
     // parent's capture-only cross-link checks can accept anything.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& wall = const_cast<DestructibleWalls::Wall&>(fixture.world.walls().wall(0));
     const auto flash = std::exchange(wall.flash, nan);
     CHECK_FALSE(fixture.owner.checkpoint());
@@ -778,6 +810,7 @@ TEST_CASE("complete level plans refuse foreign owners sibling restores and child
     const auto floor = fixture.world.collision().objectTransform(0);
     // Deliberate ownership fault injection: one participating native owner is
     // cleared after preparation. No other participant may be partially restored.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<LevelTriggers&>(fixture.world.triggers()).clear();
     CHECK_FALSE(fixture.owner.canCommit(*staleChild));
     CHECK_FALSE(fixture.owner.commitRestore(std::move(*staleChild)));
@@ -815,12 +848,14 @@ TEST_CASE("native level checkpoint restores independently loaded world owners wi
     const auto level = catalog.byName(name);
     REQUIRE(level);
     test::FakeRenderDevice device;
-    LevelWorld host, restored;
+    LevelWorld host;
+    LevelWorld restored;
     REQUIRE(host.load(device, root, *level));
     REQUIRE(restored.load(device, root, *level));
     host.setPlayerCount(1);
     restored.setPlayerCount(1);
-    LevelWorldCheckpoint authority{host}, replay{restored};
+    LevelWorldCheckpoint authority{host};
+    LevelWorldCheckpoint replay{restored};
     REQUIRE(authority.bindResources(device));
     REQUIRE(replay.bindResources(device));
     const auto textures = device.texturesCreated;

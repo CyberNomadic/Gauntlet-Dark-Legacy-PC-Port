@@ -47,8 +47,9 @@ public:
      * never inherits another owner's prepared-restore identity. */
     TowerCamera(const TowerCamera& other);
     TowerCamera& operator=(const TowerCamera& other);
-    TowerCamera(TowerCamera&& other);
-    TowerCamera& operator=(TowerCamera&& other);
+    TowerCamera(TowerCamera&& other) noexcept;
+    TowerCamera& operator=(TowerCamera&& other) noexcept;
+    ~TowerCamera() = default;
 
     static constexpr s32 kRing = 9;         ///< frames the look-at point and distance average over
     static constexpr s32 kTurnSteps = 50;   ///< steps a turn to a new marker takes

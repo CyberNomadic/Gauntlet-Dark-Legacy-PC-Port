@@ -25,7 +25,7 @@ public:
         f32 viewRadius = 0;
         f32 sight = 0;
         std::optional<usize> carried;
-        bool operator==(const Placement&) const;
+        bool operator==(const Placement& /*other*/) const;
         friend void visitNativeState(NativeStateDigest& digest, const Placement& value) {
             digest.fields<6>(value);
         }
@@ -36,6 +36,7 @@ public:
     PlacedEnemies& operator=(const PlacedEnemies&) = delete;
     PlacedEnemies(PlacedEnemies&&) = delete;
     PlacedEnemies& operator=(PlacedEnemies&&) = delete;
+    ~PlacedEnemies() = default;
 
     /** Load-time records have already passed the level's native resource and
      * party filters. */

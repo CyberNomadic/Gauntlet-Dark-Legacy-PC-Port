@@ -209,6 +209,8 @@ TEST_CASE("barrel plans reject malformed rosters and fence foreign or stale reso
     case 8: invalid.barrels[0].box.cylinderRadius = -1; break;
     case 9: invalid.barrels[0].radius += 1; break;
     case 10: invalid.barrels[0].support.object = 1; break;
+    default:
+        break;
     }
     const auto uploads = fixture.device.texturesCreated;
     CHECK_FALSE(fixture.owner.restore(invalid));
@@ -238,7 +240,7 @@ TEST_CASE("native campaign barrel snapshots preserve their full original placeme
         test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
-    const auto name = GENERATE("G1", "G3");
+    const auto* const name = GENERATE("G1", "G3");
     CAPTURE(name);
     test::FakeRenderDevice device;
     LevelWorld world;
@@ -268,7 +270,8 @@ TEST_CASE("barrel local values replay destruction random contents and retirement
     std::array<Breakables::LocalSnapshot, 16> history;
     WorldCollision::LocalSnapshot floor;
     const auto uploads = replay.device.texturesCreated;
-    usize drops = 0, retired = 0;
+    usize drops = 0;
+    usize retired = 0;
     s32 tick = 0;
     for (usize window = 0; window < 96; ++window) {
         const auto distance = static_cast<s32>(window % 8 + 1);
@@ -343,7 +346,10 @@ TEST_CASE("barrel local values replay destruction random contents and retirement
 TEST_CASE("native barrel equality detects hidden loot and support binding changes",
           "[local-rewind][fixture-local-rewind][breakables-local-rewind]") {
     Fixture fixture("barrel-local-hidden-equality", true);
-    Breakables::LocalSnapshot initial, changed, actual, empty;
+    Breakables::LocalSnapshot initial;
+    Breakables::LocalSnapshot changed;
+    Breakables::LocalSnapshot actual;
+    const Breakables::LocalSnapshot empty{};
     fixture.barrels.saveLocal(initial);
     REQUIRE(fixture.barrels.equalLocal(initial, initial));
     CHECK_FALSE(fixture.barrels.equalLocal(initial, empty));

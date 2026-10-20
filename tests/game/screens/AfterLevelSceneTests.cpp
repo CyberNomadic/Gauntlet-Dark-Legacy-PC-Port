@@ -353,7 +353,7 @@ TEST_CASE("shop completion follows native phrase durations without a draining au
         return timing.remainingSeconds;
     };
     f64 phraseSeconds = duration(character, PickupVoices::nameOf(save.character, save.color));
-    for (const auto name : {"S_HAS", "S_GAINEDLEVEL"}) {
+    for (const auto* const name : {"S_HAS", "S_GAINEDLEVEL"}) {
         phraseSeconds += duration(secondNarrator.find(name) ? secondNarrator : narrator, name);
     }
     const f64 longestEffect = std::max(
@@ -366,7 +366,7 @@ TEST_CASE("shop completion follows native phrase durations without a draining au
     accept[0].select = true;
     std::vector<SoundHandle> attempted;
     {
-        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+        const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
             if (event.kind == SoundPlayer::Event::Kind::Play) {
                 attempted.push_back(event.handle);
                 if (throwOutput) {

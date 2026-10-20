@@ -118,40 +118,38 @@ bool deedValid(PlayerDeed value) {
 } // namespace
 
 bool PlayerRuntimeCheckpoint::State::valid() const {
-    if (player < 0 || player >= 4 || !saveValid(save) || !saveValid(entrySave) || !actor.valid() ||
-        (meleeFacing && !vector(*meleeFacing)) ||
-        (attackStep && (!vector(attackStep->from) || !vector(attackStep->to))) ||
-        !vector(previous.position) || !scalar(previous.yaw) || !capture.valid() ||
-        combo.role < ComboRole::None || combo.role > ComboRole::Thrown || combo.partner < -1 ||
-        combo.partner >= 4 || combo.grabberClass < -1 || combo.grabberClass >= kClassCount ||
-        !counter(combo.ticksLeft) || !counter(combo.turnTicks) || !scalar(combo.graceSeconds) ||
-        !vector(combo.saved) || !transport.valid() || !mikey.valid() ||
-        (figure && !figure->valid()) || (slot && *slot > 65535) ||
-        (resultsCheckpoint &&
-         (!counter(resultsCheckpoint->gold) || !counter(resultsCheckpoint->experience) ||
-          !counter(resultsCheckpoint->kills))) ||
-        !counter(levelKills) || life < PlayerLife::Standing || life > PlayerLife::InTower ||
-        !scalar(healthFraction) || std::abs(healthFraction) > 1 || !scalar(painOwed) ||
-        painOwed < 0 || !counter(hitSoundGap) || !counter(heartbeatTicks) ||
-        (fixtureSpot && !vector(*fixtureSpot)) || !scalar(surfaceGap) || !counter(hitFlashTicks) ||
-        !counter(itTicks) || !deedValid(gesture) || !scalar(gagSeconds) ||
-        shockGaps.size() > kMaxRecords ||
-        !std::ranges::all_of(shockGaps,
-                             [](const PlayerRuntime::ShockGap& gap) {
-                                 return identifier(gap.target) && scalar(gap.seconds);
-                             }) ||
-        !identifier(deathHeld) || !timer(deathDrainTicks) || !deedValid(reaction) ||
-        !Knockback::valid(knockback) || !TurboMeter::valid(turbo) ||
-        helpHeard.size() > kMaxRecords || !std::ranges::all_of(helpHeard, identifier) ||
-        !TurboMove::valid(move) || rammed.size() > kMaxRecords ||
-        !std::ranges::all_of(rammed, [](usize id) { return id <= 65535; }) || !scalar(blockLeft) ||
-        !scalar(cloudGap) || !scalar(breathGap) || !scalar(effectGap) ||
-        !identifier(floor.object) || (floor.placement && !matrix(*floor.placement)) ||
-        !gem.valid() || !scalar(glow) || !weaponGlow.valid() || weaponGlow.effect != 0 ||
-        !streak.valid() || !exitWait.valid() || !counter(nameTicks)) {
-        return false;
-    }
-    return true;
+    // NOLINTNEXTLINE(readability-simplify-boolean-expr): one negated list of every invalid case
+    return !(player < 0 || player >= 4 || !saveValid(save) || !saveValid(entrySave) ||
+             !actor.valid() || (meleeFacing && !vector(*meleeFacing)) ||
+             (attackStep && (!vector(attackStep->from) || !vector(attackStep->to))) ||
+             !vector(previous.position) || !scalar(previous.yaw) || !capture.valid() ||
+             combo.role < ComboRole::None || combo.role > ComboRole::Thrown || combo.partner < -1 ||
+             combo.partner >= 4 || combo.grabberClass < -1 || combo.grabberClass >= kClassCount ||
+             !counter(combo.ticksLeft) || !counter(combo.turnTicks) ||
+             !scalar(combo.graceSeconds) || !vector(combo.saved) || !transport.valid() ||
+             !mikey.valid() || (figure && !figure->valid()) || (slot && *slot > 65535) ||
+             (resultsCheckpoint &&
+              (!counter(resultsCheckpoint->gold) || !counter(resultsCheckpoint->experience) ||
+               !counter(resultsCheckpoint->kills))) ||
+             !counter(levelKills) || life < PlayerLife::Standing || life > PlayerLife::InTower ||
+             !scalar(healthFraction) || std::abs(healthFraction) > 1 || !scalar(painOwed) ||
+             painOwed < 0 || !counter(hitSoundGap) || !counter(heartbeatTicks) ||
+             (fixtureSpot && !vector(*fixtureSpot)) || !scalar(surfaceGap) ||
+             !counter(hitFlashTicks) || !counter(itTicks) || !deedValid(gesture) ||
+             !scalar(gagSeconds) || shockGaps.size() > kMaxRecords ||
+             !std::ranges::all_of(shockGaps,
+                                  [](const PlayerRuntime::ShockGap& gap) {
+                                      return identifier(gap.target) && scalar(gap.seconds);
+                                  }) ||
+             !identifier(deathHeld) || !timer(deathDrainTicks) || !deedValid(reaction) ||
+             !Knockback::valid(knockback) || !TurboMeter::valid(turbo) ||
+             helpHeard.size() > kMaxRecords || !std::ranges::all_of(helpHeard, identifier) ||
+             !TurboMove::valid(move) || rammed.size() > kMaxRecords ||
+             !std::ranges::all_of(rammed, [](usize id) { return id <= 65535; }) ||
+             !scalar(blockLeft) || !scalar(cloudGap) || !scalar(breathGap) || !scalar(effectGap) ||
+             !identifier(floor.object) || (floor.placement && !matrix(*floor.placement)) ||
+             !gem.valid() || !scalar(glow) || !weaponGlow.valid() || weaponGlow.effect != 0 ||
+             !streak.valid() || !exitWait.valid() || !counter(nameTicks));
 }
 
 bool PlayerRuntimeCheckpoint::State::operator==(const State& other) const {
@@ -365,6 +363,7 @@ bool PlayerRuntimeCheckpoint::canCommit(const Prepared& prepared) const {
            m_runtime.figure->canCommitGameplay(*prepared.m_data->figureState);
 }
 
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts are taken in place
 bool PlayerRuntimeCheckpoint::commitRestore(Prepared&& prepared) {
     if (!canCommit(prepared)) {
         return false;

@@ -89,11 +89,12 @@ struct Fixtures {
             {"info":5,"position":[100,0,0]},
             {"info":6,"position":[120,0,0],"params":[41,0,3,0,0,0,0,0,0,0,0,0]}]})");
         std::string trees;
-        for (const auto name : {"CHEST", "BARREL", "GATE", "TRAP", "TRAP_D", "PROP", "KEY"}) {
+        for (const auto* const name :
+             {"CHEST", "BARREL", "GATE", "TRAP", "TRAP_D", "PROP", "KEY"}) {
             if (!trees.empty()) {
                 trees += ',';
             }
-            trees += std::string{"{\"name\":\""} + name + R"(","nodes":[
+            trees += std::string{R"({"name":")"} + name + R"(","nodes":[
               {"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
               {"name":"NULL1","parent":0,"position":[0,1,0]}],
               "sequences":[{"name":"REST","frames":4,"frameRate":30},
@@ -180,7 +181,8 @@ struct Fixtures {
 
 TEST_CASE("fixture native digests agree across independently loaded resources and draw cadences",
           "[native-state-digest][fixtures-native-digest]") {
-    Fixtures first{"fixture-native-a"}, second{"fixture-native-b"};
+    Fixtures first{"fixture-native-a"};
+    Fixtures second{"fixture-native-b"};
     REQUIRE(&first.items != &second.items);
     CHECK(first.hash() == second.hash());
     for (u32 tick = 0; tick < 24; ++tick) {
@@ -188,7 +190,7 @@ TEST_CASE("fixture native digests agree across independently loaded resources an
         first.step(tick);
         second.step(tick);
         const auto before = second.hash();
-        for (f32 alpha : {-1.0f, 0.0f, 0.5f, 1.0f}) {
+        for (f32 const alpha : {-1.0f, 0.0f, 0.5f, 1.0f}) {
             second.draw(alpha);
             CHECK(second.hash() == before);
         }
@@ -217,27 +219,27 @@ TEST_CASE("fixture native saved values survive one to eight wrong-branch correct
         };
         (one(std::get<I>(owners), std::get<I>(saved), expected[I]), ...);
     };
-    constexpr auto indices = std::make_index_sequence<7>{};
-    save(indices);
+    constexpr auto kIndices = std::make_index_sequence<7>{};
+    save(kIndices);
     const auto initial = fixture.hash();
     for (u32 distance = 1; distance <= 8; ++distance) {
         CAPTURE(distance);
-        restore(indices);
-        std::array<std::array<Digest, 7>, 8> expected;
+        restore(kIndices);
+        std::array<std::array<Digest, 7>, 8> expected{};
         for (u32 tick = 0; tick < distance; ++tick) {
             fixture.step(tick);
             expected[tick] = fixture.hash();
         }
-        checkSaved(initial, indices);
-        restore(indices);
+        checkSaved(initial, kIndices);
+        restore(kIndices);
         for (u32 tick = 0; tick < distance; ++tick) {
             fixture.step(tick, true);
         }
         CHECK(fixture.hash() != expected[distance - 1]);
-        checkSaved(initial, indices);
+        checkSaved(initial, kIndices);
         const auto uploads = fixture.device.textureUpdates;
         const auto textures = fixture.device.texturesCreated;
-        restore(indices);
+        restore(kIndices);
         CHECK(fixture.hash() == initial);
         CHECK(fixture.device.textureUpdates == uploads);
         CHECK(fixture.device.texturesCreated == textures);
@@ -261,9 +263,12 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
         REQUIRE(owner.restoreLocal(saved));
         CHECK(liveHash(owner, f.resources) == before);
     };
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.chests, [&] { const_cast<Chests::Chest&>(f.chests.chest(0)).refusalLeft = 0.25f; });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.chests, [&] { const_cast<Chests::Chest&>(f.chests.chest(0)).held = 41; });
     changed(f.chests, [&] {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& chest = const_cast<Chests::Chest&>(f.chests.chest(0));
         REQUIRE(chest.floor);
         chest.floor->local[3].x += 0.25f;
@@ -274,15 +279,22 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
         REQUIRE_FALSE(f.chests.update(0, visitor).empty());
         // Restore the visible/native chest record only: the private choice RNG
         // must still differ, despite identical contents and artwork.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         const_cast<Chests::Chest&>(f.chests.chest(0)) = chest;
     });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.barrels, [&] { const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).breakingSeconds = 0.02f; });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.barrels, [&] { const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).collisionOffset.z = 0.5f; });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.gates, [&] { const_cast<LockedGates::Gate&>(f.gates.gate(0)).openingTicks = 1; });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.traps, [&] { const_cast<Traps::Trap&>(f.traps.trap(0)).ticksLeft += 1; });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.traps, [&] { const_cast<Traps::Trap&>(f.traps.trap(0)).rectangularContact = false; });
     changed(f.traps, [&] {
         const auto before = f.traps.trap(0);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& trap = const_cast<Traps::Trap&>(f.traps.trap(0));
         trap.action = 3;
         trap.ticksLeft = 0;
@@ -293,6 +305,7 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
     });
     changed(f.traps, [&] {
         const auto before = f.traps.trap(0);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& trap = const_cast<Traps::Trap&>(f.traps.trap(0));
         trap.ticksLeft = 0;
         f.traps.update(1, 0, {});
@@ -301,6 +314,7 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
     });
     changed(f.traps, [&] {
         const auto before = f.traps.trap(0);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& trap = const_cast<Traps::Trap&>(f.traps.trap(0));
         trap.action = 2;
         trap.ticksLeft = 10;
@@ -308,8 +322,10 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
         REQUIRE(f.traps.update(0, 0, victims).size() == 1);
         trap = before; // Respite remains even though the visible trap is identical.
     });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.scenery, [&] { const_cast<StaticScenery::Prop&>(f.scenery.prop(0)).shown = false; });
     changed(f.rocks, [&] { f.rocks.scheduleActivation(0, 0.25f); });
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.rocks, [&] { const_cast<SafeRocks::Rock&>(f.rocks.rock(0)).baseHealth += 1; });
 }
 
@@ -335,7 +351,7 @@ struct Coordinator {
         players[0].actor.spawn(3, {}, nullptr, {0, 0, 0}, 0);
         players[1].actor.spawn(1, {}, nullptr, {6, 0, 0}, 0);
     }
-    LevelFixtures::Events events(s32 identity) {
+    static LevelFixtures::Events events(s32 identity) {
         return {.opponents = [identity](const Vec3&, f32, f32, std::vector<s32>& reached, u32) {
             if (std::ranges::find(reached, identity) == reached.end()) {
                 reached.push_back(identity);
@@ -346,7 +362,7 @@ struct Coordinator {
 
 TEST_CASE("fixture coordinator hashes poison clouds and pending trapped chest destruction",
           "[native-state-digest][fixtures-native-digest]") {
-    Fixtures files{"fixture-native-coordinator"};
+    const Fixtures files{"fixture-native-coordinator"};
     Coordinator f{files.directory};
     REQUIRE(f.fixtures.barrels().size() == 2);
     REQUIRE(f.fixtures.chests().size() == 1);
@@ -359,6 +375,7 @@ TEST_CASE("fixture coordinator hashes poison clouds and pending trapped chest de
     REQUIRE_FALSE(f.fixtures.barrels().standing(1));
     // Isolate the cloud from its source barrel: otherwise a missing cloud visitor
     // could be hidden by the barrel's independently changed health/animation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     REQUIRE(const_cast<Breakables&>(f.fixtures.barrels()).restoreLocal(barrels));
     const auto cloud = liveHash(f.fixtures, f.resources);
     CHECK(cloud != before);
@@ -374,6 +391,7 @@ TEST_CASE("fixture coordinator hashes poison clouds and pending trapped chest de
     CHECK(liveHash(f.fixtures, f.resources) == advanced);
 
     REQUIRE(f.fixtures.restoreLocal(initial));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& chest = const_cast<Chests::Chest&>(f.fixtures.chests().chest(0));
     chest.subtype = Chests::kTrappedChest;
     const auto noPending = liveHash(f.fixtures, f.resources);
@@ -399,32 +417,32 @@ TEST_CASE("fixture coordinator hashes blast hit identities clocks and confirmed-
     LevelFixtures::LocalSnapshot initial;
     f.fixtures.saveLocal(initial);
     const auto before = liveHash(f.fixtures, f.resources);
-    f.fixtures.blast({0, 0, 0}, 12, 30, {}, f.events(17));
+    f.fixtures.blast({0, 0, 0}, 12, 30, {}, Coordinator::events(17));
     const auto first = liveHash(f.fixtures, f.resources);
     CHECK(first != before);
     CHECK(savedHash(f.fixtures, initial, f.resources) == before);
     REQUIRE(f.fixtures.restoreLocal(initial));
-    f.fixtures.blast({0, 0, 0}, 12, 30, {}, f.events(19));
+    f.fixtures.blast({0, 0, 0}, 12, 30, {}, Coordinator::events(19));
     CHECK(liveHash(f.fixtures, f.resources) != first);
     REQUIRE(f.fixtures.restoreLocal(initial));
-    f.fixtures.blast({0, 0, 0}, 12, 30, {}, f.events(17));
+    f.fixtures.blast({0, 0, 0}, 12, 30, {}, Coordinator::events(17));
     CHECK(liveHash(f.fixtures, f.resources) == first);
     for (u32 distance = 1; distance <= 8; ++distance) {
         CAPTURE(distance);
         LevelFixtures::LocalSnapshot saved;
         f.fixtures.saveLocal(saved);
-        std::array<Digest, 8> expected;
+        std::array<Digest, 8> expected{};
         for (u32 tick = 0; tick < distance; ++tick) {
-            f.fixtures.advanceBlasts(kStep, {}, f.events(17));
+            f.fixtures.advanceBlasts(kStep, {}, Coordinator::events(17));
             expected[tick] = liveHash(f.fixtures, f.resources);
         }
         REQUIRE(f.fixtures.restoreLocal(saved));
-        f.fixtures.blast({7, 0, 0}, 18, 40, {}, f.events(31));
-        f.fixtures.advanceBlasts(0.2f, {}, f.events(31));
+        f.fixtures.blast({7, 0, 0}, 18, 40, {}, Coordinator::events(31));
+        f.fixtures.advanceBlasts(0.2f, {}, Coordinator::events(31));
         CHECK(liveHash(f.fixtures, f.resources) != expected[distance - 1]);
         REQUIRE(f.fixtures.restoreLocal(saved));
         for (u32 tick = 0; tick < distance; ++tick) {
-            f.fixtures.advanceBlasts(kStep, {}, f.events(17));
+            f.fixtures.advanceBlasts(kStep, {}, Coordinator::events(17));
             CHECK(liveHash(f.fixtures, f.resources) == expected[tick]);
         }
     }
@@ -432,11 +450,13 @@ TEST_CASE("fixture coordinator hashes blast hit identities clocks and confirmed-
 
 TEST_CASE("fixture native digests refuse missing resources foreign saves and stale child bindings",
           "[native-state-digest][fixtures-native-digest]") {
-    Fixtures first{"fixture-native-guards"}, foreign{"fixture-native-foreign"};
+    Fixtures first{"fixture-native-guards"};
+    const Fixtures foreign{"fixture-native-foreign"};
     std::apply([&](auto&... owner) {
         const auto test = [&](auto& value) {
             using Owner = std::remove_cvref_t<decltype(value)>;
-            typename Owner::LocalSnapshot saved, empty;
+            typename Owner::LocalSnapshot saved;
+            const typename Owner::LocalSnapshot empty{};
             value.saveLocal(saved);
             NativeStateDigest absent;
             CHECK_FALSE(value.appendLocalDigest(absent, empty));

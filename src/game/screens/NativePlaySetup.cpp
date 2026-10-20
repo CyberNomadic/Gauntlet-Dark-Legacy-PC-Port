@@ -39,6 +39,7 @@ public:
     }
     void string(std::string_view value) {
         word(static_cast<u32>(value.size()));
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         m_hash.update({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     void bytes(std::span<const u8> value) { m_hash.update(value); }

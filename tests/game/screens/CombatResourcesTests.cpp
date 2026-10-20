@@ -210,6 +210,8 @@ TEST_CASE("combat resource construction rejects malformed declarations atomicall
     case 3: malformed[0].archive = nullptr; break;
     case 4: malformed[0].lenders.push_back(nullptr); break;
     case 5: missiles.push_back({1, nullptr}); break;
+    default:
+        break;
     }
     CHECK_FALSE(catalog.bind(source.device, malformed, missiles));
     CHECK(catalog.bankCount() == banks);
@@ -284,6 +286,8 @@ struct NativeBindings {
         REQUIRE(
             catalog.bindStage(device, world, weapons, classes, party, arsenal, opponents, effects));
     }
+    NativeBindings(const NativeBindings&) = delete;
+    NativeBindings& operator=(const NativeBindings&) = delete;
     ~NativeBindings() {
         arsenal.clear();
         effects.clear();

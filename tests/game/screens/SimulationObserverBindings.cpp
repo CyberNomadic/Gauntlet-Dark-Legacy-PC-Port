@@ -65,8 +65,8 @@ bool SimulationObserver::bind() {
         return false;
     }
     auto catalog = StageStatePacket::Catalog::buildObservation(
-        {std::move(*worldState), std::move(*fixtureState), std::move(*cameraState),
-         std::move(*portalState), std::move(*transporterState)});
+        {std::move(*worldState), std::move(*fixtureState), std::move(cameraState),
+         std::move(portalState), std::move(transporterState)});
     if (!checked(catalog.has_value(), "stage immutable catalog")) {
         return false;
     }

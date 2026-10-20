@@ -176,7 +176,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
     std::array<GameConfig, 3> configs;
     std::array<GameContext, 3> contexts;
-    std::array<u32, 3> autoSaves{}, manualSaves{}, unlocks{};
+    std::array<u32, 3> autoSaves{};
+    std::array<u32, 3> manualSaves{};
+    std::array<u32, 3> unlocks{};
     std::array<std::unique_ptr<test::FakeRenderDevice>, 3> devices;
     std::array<std::unique_ptr<OnlineRun>, 3> runs;
     for (usize peer = 0; peer < runs.size(); ++peer) {
@@ -204,7 +206,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     auto due = std::chrono::steady_clock::now();
     const auto step = [&] {
         for (usize peer = 0; peer < runs.size(); ++peer) {
-            if (!active[peer]) continue;
+            if (!active[peer]) {
+                continue;
+            }
             runs[peer]->update(input[peer], {});
             REQUIRE(devices[peer]->beginFrame());
             runs[peer]->render(*devices[peer], Mat4{1}, 640, 448, 1.0 / 60, 1);
@@ -220,7 +224,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
             step();
             if (expectHealthy) {
                 for (usize peer = 0; peer < runs.size(); ++peer) {
-                    if (!active[peer]) continue;
+                    if (!active[peer]) {
+                        continue;
+                    }
                     INFO("peer=" << peer + 1 << " status=" << runs[peer]->status());
                     REQUIRE(runs[peer]->lobby().page != NetplayMenu::Page::Finished);
                 }
@@ -259,7 +265,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     pump([&] {
         return std::ranges::all_of(runs, [&](const auto& run) { return run->lobby().settings == rules; });
     });
-    for (const auto& run : runs) REQUIRE(run->ready(true));
+    for (const auto& run : runs) {
+        REQUIRE(run->ready(true));
+    }
     pump([&] { return runs[0]->lobby().canStart; });
     REQUIRE(runs[0]->start());
     pump([&] {
@@ -277,10 +285,14 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     CHECK_FALSE(runs[1]->pause(0));
     REQUIRE(runs[0]->pause(0));
     std::array<u64, 3> confirmed{};
-    for (usize peer = 0; peer < runs.size(); ++peer) confirmed[peer] = runs[peer]->confirmedTick();
+    for (usize peer = 0; peer < runs.size(); ++peer) {
+        confirmed[peer] = runs[peer]->confirmedTick();
+    }
     pump([&] {
         for (usize peer = 0; peer < runs.size(); ++peer) {
-            if (runs[peer]->confirmedTick() < confirmed[peer] + 90) return false;
+            if (runs[peer]->confirmedTick() < confirmed[peer] + 90) {
+                return false;
+            }
         }
         return true;
     });
@@ -302,7 +314,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     const std::array detail{runs[0]->status(), runs[2]->status()};
     CHECK_FALSE(detail[0].empty());
     CHECK_FALSE(detail[1].empty());
-    for (u32 frame = 0; frame < 20; ++frame) step();
+    for (u32 frame = 0; frame < 20; ++frame) {
+        step();
+    }
     CHECK(runs[0]->simulatedTick() == stopped[0]);
     CHECK(runs[2]->simulatedTick() == stopped[1]);
     CHECK(runs[0]->status() == detail[0]);
@@ -323,7 +337,7 @@ TEST_CASE("development iroh launcher retains explicit native setup and automatic
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
     const auto directory = test::scratchDirectory("online-native-launch");
     const auto invitation = directory / "invitation.txt";
-    GameConfig config;
+    const GameConfig config;
     StringTable strings;
     LevelCatalog levels;
     REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
@@ -349,7 +363,8 @@ TEST_CASE("development iroh launcher retains explicit native setup and automatic
     auto hostDevice = std::make_unique<test::FakeRenderDevice>();
     auto guestDevice = std::make_unique<test::FakeRenderDevice>();
     hostDevice->recordDraws = guestDevice->recordDraws = false;
-    OnlineRun host, guest;
+    OnlineRun host;
+    OnlineRun guest;
     REQUIRE(host.open(*hostDevice, context, "local", {}, "test", std::string(64, 'a'),
                       std::array{first}, *initial, options, true, invitation));
     bool joined = false;

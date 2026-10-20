@@ -338,7 +338,7 @@ TEST_CASE("native swarm families resume all body state from delayed checkpoints"
         AnimationSet assets;
         REQUIRE(assets.load(monsters / std::string(info.name)));
         s32 found = 0;
-        for (const auto suffix : {"1", "2", "3", "A", "B", "S"}) {
+        for (const auto* const suffix : {"1", "2", "3", "A", "B", "S"}) {
             const auto treeIndex = assets.find(std::string(info.prefix) + suffix);
             if (!treeIndex) {
                 continue; // native families deliberately omit unsupported tiers/variants

@@ -280,14 +280,14 @@ TEST_CASE("action trace retention is bounded and ordinary movement cannot evict 
           "[netplay][input-timeline][input-admission-trace]") {
     InputTimeline timeline;
     REQUIRE(timeline.assign(0, 2));
-    constexpr u64 extra = 7;
-    for (u64 tick = 0; tick < InputTimeline::kCommandTraces + extra; ++tick) {
+    constexpr u64 kExtra = 7;
+    for (u64 tick = 0; tick < InputTimeline::kCommandTraces + kExtra; ++tick) {
         REQUIRE(timeline.submit(2, commandFor(timeline)) == Admission::Accepted);
         timeline.advance();
     }
     REQUIRE(timeline.commandTrace().size() == InputTimeline::kCommandTraces);
-    CHECK(timeline.commandTrace().front().command.tick == extra);
-    CHECK(timeline.droppedCommandTraces() == extra);
+    CHECK(timeline.commandTrace().front().command.tick == kExtra);
+    CHECK(timeline.droppedCommandTraces() == kExtra);
     for (const auto& trace : timeline.commandTrace()) {
         REQUIRE(trace.executedTick);
         CHECK(*trace.executedTick == trace.command.tick);
@@ -299,8 +299,8 @@ TEST_CASE("action trace retention is bounded and ordinary movement cannot evict 
         timeline.advance();
     }
     CHECK(timeline.commandTrace().size() == InputTimeline::kCommandTraces);
-    CHECK(timeline.commandTrace().front().command.tick == extra);
-    CHECK(timeline.droppedCommandTraces() == extra);
+    CHECK(timeline.commandTrace().front().command.tick == kExtra);
+    CHECK(timeline.droppedCommandTraces() == kExtra);
     timeline.beginEpoch();
     CHECK(timeline.commandTrace().empty());
     CHECK(timeline.droppedCommandTraces() == 0);

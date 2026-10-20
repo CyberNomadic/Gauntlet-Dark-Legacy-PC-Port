@@ -20,7 +20,9 @@ constexpr auto kTick = std::chrono::nanoseconds(16'666'667);
 // catalog has one already-loaded scene, not a path received from the network.
 constexpr u32 kScene = 1;
 double percentile(std::vector<double> values, usize percent) {
-    if (values.empty()) return 0.0;
+    if (values.empty()) {
+        return 0.0;
+    }
     std::ranges::sort(values);
     return values[(values.size() - 1) * percent / 100];
 }
@@ -53,7 +55,9 @@ public:
         }
         // Apply backpressure before drawing random decisions: retries are not
         // fresh impairment trials and cannot grow an unbounded delayed queue.
-        if (m_queue.size() >= kQueueLimit) return SendResult::Congested;
+        if (m_queue.size() >= kQueueLimit) {
+            return SendResult::Congested;
+        }
         const auto message = game::RollbackExchange::decode(bytes);
         require(message.has_value(), "Impairment received a malformed native input datagram");
         for (const auto& command : message->commands) {
@@ -79,7 +83,9 @@ public:
         const s64 jitter = static_cast<s64>(random() % (2 * m_config.jitterMs + 1)) -
                            static_cast<s64>(m_config.jitterMs);
         s64 delay = std::max<s64>(0, static_cast<s64>(m_config.latencyMs) + jitter);
-        if (random() % 1'000'000 < m_config.reorderPpm) delay += m_config.reorderMs;
+        if (random() % 1'000'000 < m_config.reorderPpm) {
+            delay += m_config.reorderMs;
+        }
         m_queue.emplace(now + std::chrono::milliseconds(delay),
                         Queued{connection, std::vector<u8>(bytes.begin(), bytes.end()), now,
                                ++m_serial});
@@ -111,14 +117,18 @@ public:
             const auto bytes = game::RollbackExchange::encode(*message);
             require(bytes.has_value(), "Queued native progress age overflowed");
             const auto sent = m_wire->send(queued.connection, *bytes, Delivery::Unreliable);
-            if (sent == SendResult::Congested) break;
+            if (sent == SendResult::Congested) {
+                break;
+            }
             if (sent == SendResult::Disconnected) {
                 abandon(queued.connection);
                 continue; // poll still delivers the real disconnect to the session barrier.
             }
             require(sent == SendResult::Sent, "Delayed native input datagram send failed");
             auto& last = m_lastSent[queued.connection];
-            if (queued.serial < last) ++m_metrics.reordered;
+            if (queued.serial < last) {
+                ++m_metrics.reordered;
+            }
             last = std::max(last, queued.serial);
             ++m_metrics.transmitted;
             if (m_metrics.outageFinished && queued.enqueued >= m_outageEnd && message->origin == m_peer &&
@@ -133,7 +143,9 @@ public:
         }
         auto events = m_wire->poll();
         for (const auto& event : events) {
-            if (event.type == EventType::Disconnected) abandon(event.connection);
+            if (event.type == EventType::Disconnected) {
+                abandon(event.connection);
+            }
         }
         return events;
     }
@@ -148,7 +160,9 @@ public:
         // Count only forward attempts wholly inside this sender's measured
         // application-input blackout. Lifetime counters cannot show whether a
         // wait happened during the injected outage or an unrelated earlier gap.
-        if (m_metrics.outageStartedTick == 0 || begin < m_outageStart || end > m_outageEnd) return;
+        if (m_metrics.outageStartedTick == 0 || begin < m_outageStart || end > m_outageEnd) {
+            return;
+        }
         auto& progress = m_metrics.outageProgress;
         if (progress.updates == 0) {
             progress.firstNextTick = next;
@@ -204,7 +218,7 @@ private:
     u8 m_peer;
     u64 m_random;
     u64 m_serial = 0;
-    Clock::time_point m_outageStart{}, m_outageEnd{};
+    Clock::time_point m_outageStart, m_outageEnd;
     std::multimap<Clock::time_point, Queued> m_queue;
     std::map<Connection, u64> m_lastSent;
     std::array<u64, 5> m_latestInput{};
@@ -254,7 +268,9 @@ NativeProbeLink::~NativeProbeLink() {
     const auto epoch = m_match->context().epoch;
     m_match->detachNativeInputs(epoch);
     m_driver.clear();
-    if (m_scene.recordedAudioEpoch() == epoch) m_scene.endRecordedAudio();
+    if (m_scene.recordedAudioEpoch() == epoch) {
+        m_scene.endRecordedAudio();
+    }
 }
 bool NativeProbeLink::every(bool Endpoint::*field) const {
     return m_endpoints.size() == (m_host ? static_cast<usize>(m_peers - 1) : usize{1}) &&
@@ -270,6 +286,7 @@ void NativeProbeLink::openMatch() {
         owners[seat] = static_cast<u8>(seat + 1);
     }
     std::vector<game::MatchLink> links;
+    links.reserve(m_endpoints.size());
     for (const auto& [connection, endpoint] : m_endpoints) {
         links.push_back({endpoint.peer, connection});
     }
@@ -311,8 +328,8 @@ void NativeProbeLink::pump(bool send) {
             const auto found = m_endpoints.find(event.connection);
             require(found != m_endpoints.end(), "Native test disconnect from unknown endpoint");
             auto& endpoint = found->second;
-            if (!(m_finishing && m_host && endpoint.doneSent && endpoint.done &&
-                  endpoint.completed == m_completed)) {
+            if (!m_finishing || !m_host || !endpoint.doneSent || !endpoint.done ||
+                endpoint.completed != m_completed) {
                 m_match->disconnected(event.connection);
                 throw std::runtime_error("Native test peer disconnected before completion");
             }
@@ -394,14 +411,18 @@ void NativeProbeLink::pump(bool send) {
                         using Admission = game::RollbackInputs::Admission;
                         if (!message.commands.empty()) {
                             const auto admitted = m_driver.submit(message.origin, message.commands);
-                            if (admitted != Admission::Accepted && admitted != Admission::Duplicate &&
-                                admitted != Admission::Stale) return false;
+                            if (admitted != Admission::Accepted &&
+                                admitted != Admission::Duplicate && admitted != Admission::Stale) {
+                                return false;
+                            }
                         }
                         if (transit) {
                             const auto progress = m_driver.observePeerTick(
                                 message.origin, message.epoch, message.nextTick, *transit);
-                            if (progress != Admission::Accepted && progress != Admission::Duplicate &&
-                                progress != Admission::Stale) return false;
+                            if (progress != Admission::Accepted &&
+                                progress != Admission::Duplicate && progress != Admission::Stale) {
+                                return false;
+                            }
                         }
                         return true;
                     }), "Native probe input consumer refused");
@@ -431,7 +452,7 @@ void NativeProbeLink::pump(bool send) {
         const auto* agreement = m_match->nativeAgreement();
         const bool agreed =
             m_completed < game::MatchSession::kNativeAgreementPeriod ||
-            (agreement &&
+            ((agreement != nullptr) &&
              agreement->agreedTick() ==
                  m_completed - m_completed % game::MatchSession::kNativeAgreementPeriod);
         if (m_finishing && agreed && (!m_host || every(&Endpoint::done))) {
@@ -456,7 +477,9 @@ void NativeProbeLink::execute(bool forward, Step& step) {
                 result.status == game::NativeRollbackDriver::Status::Advanced,
             "Native rollback failed or reached an unsupported campaign boundary");
     require(!m_driver.tentativeTerminal(), "Native probe reached a speculative campaign boundary");
-    if (forward) m_wire->observeNativeUpdate(start, ended, next, confirmed, before, m_driver);
+    if (forward) {
+        m_wire->observeNativeUpdate(start, ended, next, confirmed, before, m_driver);
+    }
     if (std::ranges::any_of(result.frames, &game::NativeRollbackDriver::ExecutedFrame::replay)) {
         m_correctionMilliseconds.push_back(
             std::chrono::duration<double, std::milli>(ended - start).count());
@@ -616,15 +639,20 @@ void NativeProbeLink::observePaths() {
     // Provider RTT is measured below the optional application-datagram delay.
     // Sample every native turn, including stalled turns, not only at shutdown.
     for (const auto& [connection, endpoint] : m_endpoints) {
-        if (endpoint.disconnected || !endpoint.ready) continue;
+        if (endpoint.disconnected || !endpoint.ready) {
+            continue;
+        }
         auto& path = m_paths[endpoint.peer];
         const auto stats = m_wire->statistics(connection);
         if (!stats || stats->pingMs < 0) {
             ++path.unavailable;
             continue;
         }
-        if (stats->relayed) ++path.relayed;
-        else ++path.direct;
+        if (stats->relayed) {
+            ++path.relayed;
+        } else {
+            ++path.direct;
+        }
         require(!m_relayOnly || stats->relayed,
                 "Relay-only diagnostic observed a direct transport path");
         path.rtt.push_back(stats->pingMs);

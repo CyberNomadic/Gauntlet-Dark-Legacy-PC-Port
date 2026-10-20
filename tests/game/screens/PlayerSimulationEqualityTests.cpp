@@ -78,7 +78,7 @@ TEST_CASE("native player equality includes every top-level decision timer and co
     };
     change("cursor aiming", [](auto& p) { p.cursorAiming = true; });
     change("melee facing presence", [](auto& p) { p.meleeFacing = Vec3{0}; });
-    change("attack step presence", [](auto& p) { p.attackStep.emplace(); });
+    change("attack step presence", [](auto& p) { p.attackStep = PlayerSimulation::AttackStep{}; });
     change("fixture contact presence", [](auto& p) { p.fixtureSpot = Vec3{0}; });
     change("level kills", [](auto& p) { ++p.levelKills; });
     change("life", [](auto& p) { p.life = PlayerLife::Dying; });
@@ -115,7 +115,7 @@ TEST_CASE("native player equality includes every top-level decision timer and co
 
     auto populated = base;
     populated.meleeFacing = Vec3{0};
-    populated.attackStep.emplace();
+    populated.attackStep = PlayerSimulation::AttackStep{};
     populated.fixtureSpot = Vec3{0};
     populated.floor.placement = Mat4{1};
     populated.shockGaps = {{4, 0.25f}, {6, 0.5f}};
@@ -386,7 +386,7 @@ TEST_CASE("native player equality detects actor envelope contacts and private ac
 
 TEST_CASE("native player value equality verifies one through eight corrected ticks directly",
           "[local-rewind][player-simulation-equality]") {
-    constexpr f32 dt = 1.0f / 60.0f;
+    constexpr f32 kDt = 1.0f / 60.0f;
     const auto collision = floorAndWall();
     const auto stats = turboStats();
     PlayerSimulation player;
@@ -402,7 +402,7 @@ TEST_CASE("native player value equality verifies one through eight corrected tic
     player.combo = {ComboRole::Thrown, 1, ComboMove::kWarrior, false, false, 120, 4, 0.5f, Vec3{0}};
     player.turbo.add(100);
     player.move.begin(PlayerAnimator::Action::TurboStrong, &stats, player.turbo);
-    player.knockback.shove({0.25f, 0, 0}, dt);
+    player.knockback.shove({0.25f, 0, 0}, kDt);
     player.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kMikey, 0, 60);
     player.actor.save().progress().inventory.powerups[0].on = true;
     const auto saved = player;
@@ -419,15 +419,15 @@ TEST_CASE("native player value equality verifies one through eight corrected tic
         player.cursorAiming = !wrong;
         player.meleeFacing = wrong ? Vec3{-1, 0, 0} : Vec3{1, 0, 0};
         const auto from = player.actor.position();
-        result.landingDamage = player.capture.update(dt, player.actor, collision);
+        result.landingDamage = player.capture.update(kDt, player.actor, collision);
         result.transported = player.transport.update(1);
         if (result.transported) {
             player.actor.place(*result.transported);
         }
-        player.actor.slide(player.knockback.step(dt, 1), &collision);
+        player.actor.slide(player.knockback.step(kDt, 1), &collision);
         player.attackStep = PlayerSimulation::AttackStep{from, player.actor.position()};
-        ComboMove::tick(player.combo, 1, dt);
-        player.mikey.update(dt, player.actor.save().progress().inventory, player.actor.position());
+        ComboMove::tick(player.combo, 1, kDt);
+        player.mikey.update(kDt, player.actor.save().progress().inventory, player.actor.position());
         player.turbo.step(1);
         player.move.advance(
             PlayerAnimator::Action::TurboStrong, static_cast<f32>(tick) * 0.5f, *player.meleeFacing,
@@ -437,9 +437,9 @@ TEST_CASE("native player value equality verifies one through eight corrected tic
              .identifiedStrike = [&](const auto& hit) { result.strikes.push_back(hit); }});
         player.shockGaps.push_back({tick, wrong ? 0.75f : 0.25f});
         player.streak.record(wrong);
-        player.streak.step(dt);
+        player.streak.step(kDt);
         player.exitWait.step(true, 1);
-        player.actor.save().classes.back().lifetime.playSeconds += dt;
+        player.actor.save().classes.back().lifetime.playSeconds += kDt;
         player.entrySave.classes.back().lifetime.goldFound += wrong ? 2 : 1;
         player.resultsCheckpoint->kills += wrong ? 2 : 1;
         return result;

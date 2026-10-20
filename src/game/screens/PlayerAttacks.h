@@ -277,7 +277,7 @@ private:
         std::function<void(usize, usize, std::string_view)> sound;
         std::function<void()> shake;
     };
-    std::optional<TurboEmission::Strike> prepareStrike(usize index, s32 row,
+    std::optional<TurboEmission::Strike> prepareStrike(usize index, s32 strikeIndex,
                                                        std::span<PlayerRuntime> players,
                                                        std::optional<Vec3> at = std::nullopt);
     bool applyStrike(usize index, const TurboEmission::Strike& prepared,
@@ -407,11 +407,11 @@ private:
 public:
     class LocalSnapshot {
         friend class PlayerAttacks;
-        Simulation state;
-        MoveStrikes::LocalSnapshot strikes;
-        const PlayerAttacks* owner = nullptr;
-        std::weak_ptr<const u8> lifetime;
-        u64 epoch = 0;
+        Simulation m_state;
+        MoveStrikes::LocalSnapshot m_strikes;
+        const PlayerAttacks* m_owner = nullptr;
+        std::weak_ptr<const u8> m_lifetime;
+        u64 m_epoch = 0;
     };
     /** Same bound owner only. Effects, projectiles, participants and hit targets
      * belong to the enclosing scene history and must rewind alongside this value. */

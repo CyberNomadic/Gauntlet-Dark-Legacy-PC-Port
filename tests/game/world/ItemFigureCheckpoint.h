@@ -19,6 +19,6 @@ public:
      * Never-bound or initially missing figures retain every scalar/clock. */
     static std::optional<State> capture(const ItemFigure& figure);
     /** Borrows only this already-bound prototype's live immutable archives. */
-    static std::unique_ptr<ItemFigure> prepare(const ItemFigure& figure, const State& state);
+    static std::unique_ptr<ItemFigure> prepare(const ItemFigure& figure, const State& saved);
 };
 } // namespace gdl::game

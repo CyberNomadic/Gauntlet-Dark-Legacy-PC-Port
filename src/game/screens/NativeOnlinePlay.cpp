@@ -87,6 +87,9 @@ struct NativeOnlinePlay::Data {
             driver.clear();
             scene.endRecordedAudio();
         }
+        Level() = default;
+        Level(const Level&) = delete;
+        Level& operator=(const Level&) = delete;
         ~Level() {
             unbind();
             scene.close();

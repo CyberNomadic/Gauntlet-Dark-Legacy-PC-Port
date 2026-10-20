@@ -41,6 +41,7 @@ public:
     LockedGates& operator=(const LockedGates&) = delete;
     LockedGates(LockedGates&&) noexcept = default;
     LockedGates& operator=(LockedGates&&) noexcept = default;
+    ~LockedGates() = default;
     static constexpr s32 kShut = 0; ///< the figure's sequences
     static constexpr s32 kOpening = 1;
     static constexpr s32 kOpen = 2;
@@ -95,9 +96,9 @@ public:
     /** In-memory history for this owner and its current bound stage. */
     class LocalSnapshot {
         friend class LockedGates;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const LockedGates* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const LockedGates* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

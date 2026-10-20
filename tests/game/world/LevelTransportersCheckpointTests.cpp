@@ -107,7 +107,8 @@ void sameDraws(test::FakeRenderDevice& host, test::FakeRenderDevice& guest,
 TEST_CASE("native transporter history rewinds floor contacts animation and held presentation",
           "[local-rewind][transporters-local-rewind]") {
     const bool artwork = GENERATE(false, true);
-    TransportFixture native("trans-local-native", artwork), replay("trans-local-replay", artwork);
+    TransportFixture native("trans-local-native", artwork);
+    TransportFixture replay("trans-local-replay", artwork);
     std::array<LevelTransporters::LocalSnapshot, 16> history;
     WorldCollision::LocalSnapshot floor;
     const auto* model = &replay.pads.pad(0).model;
@@ -115,7 +116,7 @@ TEST_CASE("native transporter history rewinds floor contacts animation and held 
     const auto step = [](TransportFixture& fixture, u32 tick, bool wrong) {
         fixture.pads.capturePresentation();
         fixture.collision.setObjectTransform(
-            0, glm::rotate(glm::translate(Mat4{1}, Vec3{1, wrong ? -8.0f : tick * 0.01f, 2}),
+            0, glm::rotate(glm::translate(Mat4{1}, Vec3{1, wrong ? -8.0f : static_cast<f32>(tick) * 0.01f, 2}),
                            static_cast<f32>(tick % 30) * 0.02f, Vec3{0, 1, 0}));
         fixture.collision.setSolid(0, tick % 3 != 0);
         fixture.pads.syncFloors(fixture.collision);
@@ -142,7 +143,7 @@ TEST_CASE("native transporter history rewinds floor contacts animation and held 
             step(replay, tick + i, false);
             CHECK(replay.state() == native.state());
             CHECK(replay.pads.contact(native.pads.pad(0).position, 0.5f, 2) == 0);
-            for (f32 alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
+            for (f32 const alpha : {-1.0f, 0.0f, 0.35f, 1.0f}) {
                 sameDraws(native.device, replay.device, native.pads, replay.pads, alpha);
             }
         }
@@ -164,8 +165,8 @@ TEST_CASE("transporter checkpoint resumes independent native floor clock and loo
     const s32 rate = GENERATE(30, 60);
     const bool artwork = GENERATE(false, true);
     CAPTURE(rate, artwork);
-    TransportFixture host("trans-checkpoint-host", artwork),
-        guest("trans-checkpoint-guest", artwork);
+    TransportFixture host("trans-checkpoint-host", artwork);
+    TransportFixture guest("trans-checkpoint-guest", artwork);
     const f32 seconds = 1.0f / static_cast<f32>(rate);
     REQUIRE(host.pads.pad(0).support == 0);
     for (s32 tick = 0; tick < 5; ++tick) {
@@ -225,7 +226,8 @@ TEST_CASE("transporter checkpoint resumes independent native floor clock and loo
 
 TEST_CASE("transporter restore preserves historical placement before its next native carry",
           "[rollback][transporter-checkpoint]") {
-    TransportFixture host("trans-checkpoint-lag-host"), guest("trans-checkpoint-lag-guest");
+    TransportFixture host("trans-checkpoint-lag-host");
+    TransportFixture guest("trans-checkpoint-lag-guest");
     const auto placement = glm::translate(Mat4{1}, Vec3{4, 2, 6});
     host.collision.setObjectTransform(0, placement);
     host.pads.syncFloors(host.collision);
@@ -248,7 +250,7 @@ TEST_CASE("transporter restore preserves historical placement before its next na
 
 TEST_CASE("transporter restore is atomic for malformed links poses clocks resources and limits",
           "[rollback][transporter-checkpoint]") {
-    TransportFixture fixture("trans-checkpoint-invalid");
+    const TransportFixture fixture("trans-checkpoint-invalid");
     const auto baseline = fixture.state();
     for (s32 mutation = 0; mutation < 16; ++mutation) {
         CAPTURE(mutation);
@@ -270,13 +272,16 @@ TEST_CASE("transporter restore is atomic for malformed links poses clocks resour
         case 13: invalid.pads.resize(LevelTransportersCheckpoint::State::kMaxPads + 1); break;
         case 14: invalid.pads[0].animation.frame = 100; break;
         case 15: invalid.pads[0].source.instance.params[4] = 30; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
         CHECK(fixture.state() == baseline);
     }
-    TransportFixture mesh("trans-checkpoint-wrong-mesh", true, 1),
-        track("trans-checkpoint-wrong-track", true, 2),
-        party("trans-checkpoint-wrong-party", true, 0, 2), absent("trans-checkpoint-no-art", false);
+    TransportFixture mesh("trans-checkpoint-wrong-mesh", true, 1);
+    TransportFixture track("trans-checkpoint-wrong-track", true, 2);
+    TransportFixture party("trans-checkpoint-wrong-party", true, 0, 2);
+    TransportFixture absent("trans-checkpoint-no-art", false);
     CHECK(mesh.state().catalog != baseline.catalog);
     CHECK(track.state().catalog != baseline.catalog);
     CHECK_FALSE(mesh.checkpoint.restore(baseline));
@@ -293,7 +298,8 @@ TEST_CASE("transporter restore is atomic for malformed links poses clocks resour
 
 TEST_CASE("transporter preparations own their state and fence owners rebinds and siblings",
           "[rollback][transporter-checkpoint]") {
-    TransportFixture fixture("trans-checkpoint-tokens"), other("trans-checkpoint-tokens-other");
+    TransportFixture fixture("trans-checkpoint-tokens");
+    TransportFixture other("trans-checkpoint-tokens-other");
     const auto original = fixture.state();
     auto saved = original;
     auto prepared = fixture.checkpoint.prepareRestore(saved);
@@ -333,7 +339,8 @@ TEST_CASE("native transporter catalogs restore all thirty six pads across seven 
         test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2").parent_path().parent_path().parent_path();
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
-    usize count = 0, levels = 0;
+    usize count = 0;
+    usize levels = 0;
     for (const auto& realm : catalog.realms()) {
         for (const auto& name : realm.levels) {
             const auto ref = catalog.byName(name);
@@ -349,14 +356,17 @@ TEST_CASE("native transporter catalogs restore all thirty six pads across seven 
             }
             CAPTURE(name, rate);
             test::FakeRenderDevice device;
-            LevelWorld hostWorld, guestWorld;
+            LevelWorld hostWorld;
+            LevelWorld guestWorld;
             REQUIRE(hostWorld.load(device, root, *ref));
             REQUIRE(guestWorld.load(device, root, *ref));
-            LevelTransporters host, guest;
+            LevelTransporters host;
+            LevelTransporters guest;
             host.bind(device, hostWorld.layout(), hostWorld.itemScope(), 1, &hostWorld.collision());
             guest.bind(device, guestWorld.layout(), guestWorld.itemScope(), 1,
                        &guestWorld.collision());
-            LevelTransportersCheckpoint hostState{host}, guestState{guest};
+            LevelTransportersCheckpoint hostState{host};
+            LevelTransportersCheckpoint guestState{guest};
             REQUIRE(hostState.bindResources());
             REQUIRE(guestState.bindResources());
             const f32 seconds = 1.0f / static_cast<f32>(rate);

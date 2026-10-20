@@ -56,11 +56,11 @@ struct Fixture {
     LevelInfo level;
 
     Fixture() {
-        constexpr std::array<std::string_view, 3> local{"BLOODFX1", "TREEHIT", "TREEDIE"};
-        constexpr std::array<std::string_view, 6> common{"BLOODFX1", "BLOODFX2", "HITCOL",
-                                                         "HITDIE",   "TREEHIT",  "TREEDIE"};
-        REQUIRE(enemy.load(archiveFixture("enemy-feedback-local", local)));
-        REQUIRE(weapons.load(archiveFixture("enemy-feedback-common", common)));
+        constexpr std::array<std::string_view, 3> kLocal{"BLOODFX1", "TREEHIT", "TREEDIE"};
+        constexpr std::array<std::string_view, 6> kCommon{"BLOODFX1", "BLOODFX2", "HITCOL",
+                                                          "HITDIE",   "TREEHIT",  "TREEDIE"};
+        REQUIRE(enemy.load(archiveFixture("enemy-feedback-local", kLocal)));
+        REQUIRE(weapons.load(archiveFixture("enemy-feedback-common", kCommon)));
         level.enemies = {LevelEnemy{13, 2, "EGRUNT"}, LevelEnemy{11, 1, "TRE"}};
         level.bossType = -1;
     }
@@ -261,11 +261,12 @@ TEST_CASE("prepared swarm feedback keeps native effect lifetime identities and s
 
 TEST_CASE("enemy birth artwork obeys the first provider kind prefix and native tier fallback",
           "[enemy-feedback-emission][enemy-birth-emission]") {
-    ItemArchive first, later;
-    constexpr std::array<std::string_view, 2> firstTrees{"GENFX1", "GENFX3"};
-    constexpr std::array<std::string_view, 3> laterTrees{"GENFX1", "GENFX2", "GENFX3"};
-    REQUIRE(first.load(archiveFixture("enemy-birth-first", firstTrees)));
-    REQUIRE(later.load(archiveFixture("enemy-birth-later", laterTrees)));
+    ItemArchive first;
+    ItemArchive later;
+    constexpr std::array<std::string_view, 2> kFirstTrees{"GENFX1", "GENFX3"};
+    constexpr std::array<std::string_view, 3> kLaterTrees{"GENFX1", "GENFX2", "GENFX3"};
+    REQUIRE(first.load(archiveFixture("enemy-birth-first", kFirstTrees)));
+    REQUIRE(later.load(archiveFixture("enemy-birth-later", kLaterTrees)));
     std::array<ItemArchive*, kSwarmKindCount> archives{};
     archives[kGruntKind] = &first;
     archives[7] = &later;
@@ -298,15 +299,16 @@ TEST_CASE("prepared birth effects match native lifetime clocks and require trust
     const s32 ticks = GENERATE(1, 2);
     test::FakeRenderDevice device;
     ItemArchive archive;
-    constexpr std::array<std::string_view, 2> trees{"GENFX1", "GENFX3"};
-    REQUIRE(archive.load(archiveFixture("enemy-birth-prepared", trees)));
+    constexpr std::array<std::string_view, 2> kTrees{"GENFX1", "GENFX3"};
+    REQUIRE(archive.load(archiveFixture("enemy-birth-prepared", kTrees)));
     CombatResources resources;
     const std::vector<TextureSet*> lenders{&archive.textures};
     const std::array banks{CombatResources::Bank{1, &archive, lenders}};
     REQUIRE(resources.bind(device, banks));
     std::array<ItemArchive*, kSwarmKindCount> archives{};
     archives[kGruntKind] = &archive;
-    EffectTrees native, replay;
+    EffectTrees native;
+    EffectTrees replay;
     native.setTextureLenders(lenders);
     replay.setTextureLenders(lenders);
     const auto bindings = resources.resources().sharedEffects;

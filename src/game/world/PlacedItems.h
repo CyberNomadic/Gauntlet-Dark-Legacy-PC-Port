@@ -190,17 +190,18 @@ private:
 public:
     class LocalSnapshot {
         friend class PlacedItems;
-        Simulation state;
-        std::vector<TextureAnimator::Clock> clocks;
-        const PlacedItems* owner = nullptr;
-        const WorldCollision* collision = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        std::vector<TextureAnimator::Clock> m_clocks;
+        const PlacedItems* m_owner = nullptr;
+        const WorldCollision* m_collision = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     PlacedItems() = default;
     PlacedItems(const PlacedItems&) = delete;
     PlacedItems& operator=(const PlacedItems&) = delete;
     PlacedItems(PlacedItems&&) = default;
     PlacedItems& operator=(PlacedItems&&) = default;
+    ~PlacedItems() = default;
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;
     bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;

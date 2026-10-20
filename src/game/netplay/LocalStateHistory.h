@@ -26,6 +26,7 @@ public:
     LocalStateHistory() : m_slots(std::make_unique<std::array<Slot, kCapacity>>()) {}
     LocalStateHistory(const LocalStateHistory&) = delete;
     LocalStateHistory& operator=(const LocalStateHistory&) = delete;
+    ~LocalStateHistory() = default;
 
     /** Capture returns true only after every component has been copied. A failed
      * or throwing copy cannot leave a partially overwritten state addressable. */

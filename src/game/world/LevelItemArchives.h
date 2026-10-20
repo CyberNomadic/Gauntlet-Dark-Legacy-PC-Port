@@ -19,6 +19,7 @@ public:
     const ItemArchive& primary() const { return m_primary; }
     ItemArchive& realm() { return m_realm; }
     /** The level's archive then the realm's, the order the original searches. */
+    // NOLINTNEXTLINE(modernize-return-braced-init-list): explicit constructor
     AssetScope scope() { return AssetScope(m_primary, m_realm.loaded() ? &m_realm : nullptr); }
     bool loaded() const { return m_primary.loaded(); }
     /** Borrowed for the lifetime of these archives; never a corpus-wide lookup. */

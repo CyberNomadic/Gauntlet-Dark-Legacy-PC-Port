@@ -65,8 +65,10 @@ NativeStateDigest::Digest figureHash(const NativeStateResources& registry,
 
 TEST_CASE("native builtin white textures identify particle fallbacks without renderer writes",
           "[native-digest][native-state-resources][native-builtin-texture]") {
-    test::FakeRenderDevice first, second;
-    NativeStateResources a, b;
+    const test::FakeRenderDevice first{};
+    const test::FakeRenderDevice second{};
+    NativeStateResources a;
+    NativeStateResources b;
     const Texture& whiteA = first.whiteTexture();
     const Texture& whiteB = second.whiteTexture();
     REQUIRE(&whiteA != &whiteB);
@@ -78,7 +80,8 @@ TEST_CASE("native builtin white textures identify particle fallbacks without ren
     descriptor.maxParticles = 2;
     descriptor.particleLife = 30;
     descriptor.width = {1, 1, 1, 1};
-    ParticleField left, right;
+    ParticleField left;
+    ParticleField right;
     left.start(descriptor, Mat4{1}, &whiteA, 17);
     right.start(descriptor, Mat4{1}, &whiteB, 17);
     const auto hash = [](const NativeStateResources& registry, const ParticleField& field) {
@@ -123,8 +126,10 @@ TEST_CASE("native builtin white textures identify particle fallbacks without ren
 
 TEST_CASE("native resource identities are independent of allocation and texture load order",
           "[native-digest][native-state-resources]") {
-    Fixture first("native-resources-first"), second("native-resources-second");
-    NativeStateResources a, b;
+    Fixture first("native-resources-first");
+    Fixture second("native-resources-second");
+    NativeStateResources a;
+    NativeStateResources b;
     REQUIRE(a.registerArchive(first.archive, "realm/G/items"));
     REQUIRE(b.registerArchive(second.archive, "realm/G/items"));
     CHECK(first.device.texturesCreated == 0);
@@ -148,7 +153,7 @@ TEST_CASE("native resource identities are independent of allocation and texture 
     }
     CHECK(resourceHash(a, &first.archive.trees.tree(0)) !=
           resourceHash(a, &first.archive.trees.tree(1)));
-    CHECK(resourceHash(a, &first.archive.trees.tree(0).sequences[0]) !=
+    CHECK(resourceHash(a, first.archive.trees.tree(0).sequences.data()) !=
           resourceHash(a, &first.archive.trees.tree(0).sequences[1]));
 
     const auto& left0 = first.archive.textures.texture(first.device, 0);
@@ -175,7 +180,8 @@ TEST_CASE("native resource identities are independent of allocation and texture 
     CHECK(second.device.textureUpdates == 0);
 
     // An external stage texture bank does not need a synthetic ItemArchive.
-    TextureSet worldA, worldB;
+    TextureSet worldA;
+    TextureSet worldB;
     REQUIRE(worldA.load(first.directory));
     REQUIRE(worldB.load(second.directory));
     const auto& world0 = worldA.texture(first.device, 0);
@@ -221,7 +227,7 @@ TEST_CASE("native resource lookup fails closed for unknown types and conflicting
     CHECK_FALSE(registry.registerTexture(texture, fixture.archive, 1));
     CHECK_FALSE(registry.good());
     registry.clear();
-    TreeModel model;
+    const TreeModel model;
     CHECK_FALSE(registry.registerModel(model, fixture.archive, "shot/0"));
     CHECK_FALSE(registry.good());
     registry.clear();
@@ -240,11 +246,17 @@ TEST_CASE("native resource lookup fails closed for unknown types and conflicting
 
 TEST_CASE("native resource roles distinguish model critter animation and collision bindings",
           "[native-digest][native-state-resources]") {
-    Fixture first("native-resource-roles-a"), second("native-resource-roles-b");
-    NativeStateResources a, b;
-    TreeModel modelA, modelB, anotherModel;
-    TextureAnimator animatorA, animatorB;
-    WorldCollision collisionA, collisionB;
+    Fixture first("native-resource-roles-a");
+    Fixture second("native-resource-roles-b");
+    NativeStateResources a;
+    NativeStateResources b;
+    TreeModel modelA;
+    TreeModel modelB;
+    const TreeModel anotherModel{};
+    TextureAnimator animatorA;
+    const TextureAnimator animatorB{};
+    const WorldCollision collisionA{};
+    const WorldCollision collisionB{};
     REQUIRE(modelA.bind(first.archive.trees.tree(0), first.archive.models,
                        first.archive.textures, first.device));
     REQUIRE(modelB.bind(second.archive.trees.tree(0), second.archive.models,
@@ -278,11 +290,14 @@ TEST_CASE("native resource roles distinguish model critter animation and collisi
 
 TEST_CASE("native standalone animation banks and empty lenders have stable typed identities",
           "[native-digest][native-state-resources]") {
-    Fixture first("native-actions-a"), second("native-actions-b");
-    AnimationSet left, right;
+    const Fixture first("native-actions-a");
+    const Fixture second("native-actions-b");
+    AnimationSet left;
+    AnimationSet right;
     REQUIRE(left.load(first.directory));
     REQUIRE(right.load(second.directory));
-    NativeStateResources a, b;
+    NativeStateResources a;
+    NativeStateResources b;
     REQUIRE(a.registerAnimations(left, "players/kni/anim"));
     REQUIRE(b.registerAnimations(right, "players/kni/anim"));
     REQUIRE(resourceHash(a, &left));
@@ -294,7 +309,8 @@ TEST_CASE("native standalone animation banks and empty lenders have stable typed
               resourceHash(b, &right.tree(i).sequences.front()));
     }
     REQUIRE(a.registerAnimations(left, "players/kni/anim"));
-    TextureSet emptyA, emptyB;
+    const TextureSet emptyA{};
+    const TextureSet emptyB{};
     REQUIRE(a.registerTextures(emptyA, "stage/G1/empty-realm"));
     REQUIRE(b.registerTextures(emptyB, "stage/G1/empty-realm"));
     REQUIRE(resourceHash(a, &emptyA));
@@ -328,7 +344,7 @@ TreeInfo generatedTree() {
 
 TEST_CASE("generated native tree identities include construction not just name or role",
           "[native-digest][native-state-resources]") {
-    Fixture fixture("native-resource-generated");
+    const Fixture fixture("native-resource-generated");
     NativeStateResources registry;
     REQUIRE(registry.registerArchive(fixture.archive, "realm/G/items"));
     const auto base = generatedTree();
@@ -337,8 +353,8 @@ TEST_CASE("generated native tree identities include construction not just name o
     REQUIRE(registry.registerGeneratedTree(duplicate, fixture.archive, "generator/1/state/0"));
     REQUIRE(resourceHash(registry, &base));
     CHECK(resourceHash(registry, &base) == resourceHash(registry, &duplicate));
-    CHECK(resourceHash(registry, &base.sequences[0]) ==
-          resourceHash(registry, &duplicate.sequences[0]));
+    CHECK(resourceHash(registry, base.sequences.data()) ==
+          resourceHash(registry, duplicate.sequences.data()));
     const std::array<std::function<void(TreeInfo&)>, 15> mutations{
         [](auto& t) { t.prefix = "DIFFERENT"; },
         [](auto& t) { t.nodes[0].object = "OTHER"; },
@@ -363,16 +379,19 @@ TEST_CASE("generated native tree identities include construction not just name o
         REQUIRE(alternative.registerArchive(fixture.archive, "realm/G/items"));
         REQUIRE(alternative.registerGeneratedTree(changed, fixture.archive, "generator/1/state/0"));
         CHECK(resourceHash(registry, &base) != resourceHash(alternative, &changed));
-        CHECK(resourceHash(registry, &base.sequences[0]) !=
-              resourceHash(alternative, &changed.sequences[0]));
+        CHECK(resourceHash(registry, base.sequences.data()) !=
+              resourceHash(alternative, changed.sequences.data()));
     }
 }
 
 TEST_CASE("static item figure resources retain discarded branches and resolve object suffixes",
           "[native-digest][native-state-resources][local-rewind]") {
-    Fixture first("native-resource-static-a"), second("native-resource-static-b");
-    NativeStateResources a, b;
-    ItemFigure figureA, figureB;
+    Fixture first("native-resource-static-a");
+    Fixture second("native-resource-static-b");
+    NativeStateResources a;
+    NativeStateResources b;
+    ItemFigure figureA;
+    ItemFigure figureB;
     ItemInstance instance;
     instance.position = {2, 4, 7};
     REQUIRE(figureA.placeStaticFallback(first.device, first.archive, "ROCK", instance, nullptr, 0));
@@ -412,8 +431,10 @@ TEST_CASE("static item figure resources retain discarded branches and resolve ob
 
 TEST_CASE("native image bindings observe cached pixels without decoding or uploading",
           "[native-digest][native-state-resources][native-image]") {
-    Fixture first("native-images-first"), second("native-images-second");
-    NativeStateResources a, b;
+    Fixture first("native-images-first");
+    Fixture second("native-images-second");
+    NativeStateResources a;
+    NativeStateResources b;
     REQUIRE(a.registerArchive(first.archive, "test/items"));
     REQUIRE(b.registerArchive(second.archive, "test/items"));
     CHECK(first.archive.textures.cachedImage(0) == nullptr);
@@ -429,10 +450,10 @@ TEST_CASE("native image bindings observe cached pixels without decoding or uploa
     CHECK(first.archive.textures.cachedImage(1) == nullptr);
     CHECK(first.archive.textures.cachedTexture(0) == nullptr);
 
-    Image unknown = left;
+    const Image unknown = left;
     CHECK_FALSE(resourceHash(a, &unknown));
     REQUIRE(a.registerImage(unknown, "test/scroll"));
-    Image equal = unknown;
+    const Image equal = unknown;
     REQUIRE(b.registerImage(equal, "test/scroll"));
     CHECK(resourceHash(a, &unknown) == resourceHash(b, &equal));
     Image different = unknown;

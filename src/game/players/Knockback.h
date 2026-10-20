@@ -25,7 +25,7 @@ namespace gdl::game {
  * character shows it is being pushed (hud_flags 4, then 8; do_players, player.c 2300).
  */
 class Knockback {
-    friend void visitNativeState(NativeStateDigest&, const Knockback&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const Knockback& /*value*/);
 
 public:
     bool operator==(const Knockback&) const = default;

@@ -14,7 +14,7 @@ class NativeStateDigest;
 namespace gdl::game {
 /** A selector-activated, stationary distraction for the swarm, independent of the player body. */
 class MikeyDecoy {
-    friend void visitNativeState(NativeStateDigest&, const MikeyDecoy&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const MikeyDecoy& /*value*/);
 
 public:
     bool operator==(const MikeyDecoy&) const = default;

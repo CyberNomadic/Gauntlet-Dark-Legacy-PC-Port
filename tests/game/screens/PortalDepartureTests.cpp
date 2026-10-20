@@ -18,7 +18,8 @@ TEST_CASE("native departure history can undo lazy start and replay its skin with
           "[local-rewind][portal-departure-local-rewind]") {
     test::FakeRenderDevice device;
     TextureSet textures;
-    PortalDeparture native, replay;
+    PortalDeparture native;
+    PortalDeparture replay;
     std::array<PortalDeparture::LocalSnapshot, 16> history;
     const Mat4 body = glm::translate(Mat4{1}, Vec3{3, 10, -2});
     const auto compare = [&] {

@@ -15,7 +15,7 @@ using namespace gdl;
 using namespace gdl::game;
 
 struct ModelBinding {
-    const TreeModel* model;
+    const TreeModel* model{};
     u32 slot = 2;
     static bool append(NativeStateDigest& digest, std::type_index type, const void* address,
                        void* context) {
@@ -47,9 +47,12 @@ template <class T> NativeStateDigest::Digest valueHash(const T& value) {
 
 TEST_CASE("enemy native digest binds model semantics instead of addresses",
           "[native-digest][enemy-missiles-native-digest]") {
-    TreeModel firstModel, secondModel;
-    ModelBinding first{&firstModel}, second{&secondModel};
-    EnemyMissiles a{71}, b{71};
+    const TreeModel firstModel{};
+    const TreeModel secondModel{};
+    ModelBinding first{&firstModel};
+    ModelBinding second{&secondModel};
+    EnemyMissiles a{71};
+    EnemyMissiles b{71};
     const auto kind = EnemyMissileKind::bolt(12, 25, 0.5f);
     a.launch(kind, {0, 3, 0}, {0, 3, 40}, 1, &firstModel, 4);
     b.launch(kind, {0, 3, 0}, {0, 3, 40}, 1, &secondModel, 4);
@@ -189,7 +192,7 @@ TEST_CASE("enemy native digest includes rejected launch RNG and retired birth co
     const auto untouched = stale.finish();
     CHECK_FALSE(pool.appendLocalDigest(stale, saved));
     CHECK(stale.finish() == untouched);
-    EnemyMissiles foreign;
+    const EnemyMissiles foreign;
     NativeStateDigest wrongOwner;
     CHECK_FALSE(foreign.appendLocalDigest(wrongOwner, saved));
     CHECK(wrongOwner.finish() == untouched);

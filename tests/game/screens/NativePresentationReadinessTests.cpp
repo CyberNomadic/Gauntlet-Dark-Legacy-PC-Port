@@ -54,7 +54,7 @@ std::filesystem::path sampleRoot(bool font, bool burn, bool hints) {
     writeFile(root / "STATIC/tile.png", test::kTinyPng);
     std::vector<std::string_view> names{"SCROLL_A", "FONT32_GLOW"};
     if (font) {
-        names.push_back("FONT32");
+        names.emplace_back("FONT32");
     }
     if (burn) {
         names.insert(names.end(), {"GREENCIRCTRANS", "GREENCIRCTRANS+1", "GREENCIRCTRANSM",
@@ -85,7 +85,7 @@ std::filesystem::path sampleRoot(bool font, bool burn, bool hints) {
 
 TEST_CASE("native burn readiness accepts short lists without allocating or changing hold timing",
           "[native-presentation-ready]") {
-    BurnArt art;
+    const BurnArt art;
     ScrollBox box;
     HintMenu hints;
     CHECK_FALSE(box.burnReady());
@@ -120,7 +120,7 @@ TEST_CASE("native burn readiness rejects missing malformed and inconsistent borr
     BurnArt art;
     auto scroll = art.scrollArt();
     auto hint = art.hintArt();
-    Image malformed = Image::filled(3, 2, Color::white());
+    const Image malformed = Image::filled(3, 2, Color::white());
     test::FakeTexture emptyTexture{0, 0};
     SECTION("missing scroll") {
         scroll.backdropImage = nullptr;
@@ -251,6 +251,7 @@ TEST_CASE("native scene readiness includes Sumner only for the tower and revokes
     CHECK(owners->device.draws.empty());
     // This fixture owns the menu; drop its borrowed art to model an optional
     // tower-load failure, without modifying message assets or gameplay state.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     const_cast<HintMenu&>(owners->scene.hints()).setArt({});
     CHECK(owners->scene.nativePresentationReady() == (name != "L1"));
     owners->scene.close();
@@ -284,6 +285,7 @@ TEST_CASE("native scene readiness rejects failed figure and action bindings for 
     options.welcome = false;
     REQUIRE(owners->scene.open(owners->device, context, owners->world, party, options));
     REQUIRE(owners->scene.nativePresentationReady());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto* player = const_cast<PlayerRuntime*>(owners->scene.runtime(3));
     REQUIRE(player != nullptr);
     REQUIRE(player->figure != nullptr);
@@ -300,6 +302,7 @@ TEST_CASE("native scene readiness rejects failed figure and action bindings for 
     }
     SECTION("action archive lacks the required READY sequence") {
         const TreeInfo missingReady;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         auto& animator = const_cast<PlayerAnimator&>(player->figure->animator());
         REQUIRE_FALSE(animator.bind(missingReady));
         REQUIRE_FALSE(animator.bound());

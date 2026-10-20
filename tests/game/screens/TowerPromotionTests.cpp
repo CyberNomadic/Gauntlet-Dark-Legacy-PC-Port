@@ -255,7 +255,9 @@ TEST_CASE("native tower promotion rewind preserves awards captions and wizard mo
     spawn(party[1], 1, 80, 79);
     MessageTable strings;
     texts(strings);
-    TowerPromotion actual, expected, foreign;
+    TowerPromotion actual;
+    TowerPromotion expected;
+    TowerPromotion foreign;
     for (auto* promotion : {&actual, &expected}) {
         promotion->begin(party, strings);
         promotion->bind(device, items, layout, party);

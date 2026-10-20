@@ -277,7 +277,7 @@ public:
      * absence changes simulation holds. Does not change offline optional art. */
     bool nativePresentationReady() const;
     const LevelWorld* world() const { return m_world; }
-    CameraView cameraView() const;
+    static CameraView cameraView();
     /** Hard-cut rule used by local render interpolation. */
     bool cameraContinuous() const;
     u32 simulationTickRate() const {

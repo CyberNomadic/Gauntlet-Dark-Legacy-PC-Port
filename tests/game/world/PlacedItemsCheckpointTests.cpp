@@ -109,7 +109,7 @@ TEST_CASE("native pickup history restores corrected births flight rewards and mo
     const auto step = [](Fixture& fixture, u32 tick, bool wrong) {
         fixture.items.capturePresentation();
         fixture.collision.setObjectTransform(
-            0, glm::translate(Mat4{1}, Vec3{0, wrong ? -20.0f : (tick % 20) * 0.2f, 0}));
+            0, glm::translate(Mat4{1}, Vec3{0, wrong ? -20.0f : static_cast<f32>(tick % 20) * 0.2f, 0}));
         fixture.items.setPlayerCount(wrong ? 1 : 2);
         if (tick % 17 == 0 || wrong) {
             REQUIRE(fixture.items.throwItem(fixture.device, "COIN", {5, 8, 0},
@@ -250,7 +250,9 @@ TEST_CASE("native pickup history refuses a changed collision owner before mutati
 TEST_CASE("native pickup equality distinguishes loot ownership without visible movement",
           "[local-rewind][placed-items-local-rewind]") {
     Fixture fixture("pickup-local-owner-values");
-    PlacedItems::LocalSnapshot before, after, restored;
+    PlacedItems::LocalSnapshot before;
+    PlacedItems::LocalSnapshot after;
+    PlacedItems::LocalSnapshot restored;
     fixture.items.saveLocal(before);
     const auto position = fixture.items.item(0).position;
     const auto value = fixture.items.item(0).value;
@@ -510,6 +512,8 @@ TEST_CASE("pickup capture retains full public identity and live mutable validati
         case 6: malformed.layout = false; break;
         case 7: malformed.figures.push_back(malformed.figures.front()); break;
         case 8: malformed.items[0].velocity.x = nan; break;
+        default:
+            break;
         }
         CHECK_FALSE(malformed.valid());
         CHECK_FALSE(fixture.owner.prepareRestore(malformed));
@@ -518,6 +522,7 @@ TEST_CASE("pickup capture retains full public identity and live mutable validati
     }
 
     // Capture may trust only its immutable catalog, never mutable native rows.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& item = const_cast<PlacedItems::Item&>(fixture.items.item(0));
     const auto velocity = std::exchange(item.velocity.x, nan);
     CHECK_FALSE(fixture.owner.checkpoint());
@@ -540,6 +545,7 @@ TEST_CASE("pickup presentation candidate filtering retains topology and composed
     REQUIRE(item.figure);
     REQUIRE(baseline.items[0].presentationPose);
     REQUIRE(fixture.items.presentationPoseOf(0));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& presentation = *const_cast<TreePose*>(fixture.items.presentationPoseOf(0));
     REQUIRE(presentation.size() == 2);
     auto changedTree = *item.figure;
@@ -567,6 +573,8 @@ TEST_CASE("pickup presentation candidate filtering retains topology and composed
         }
         CHECK(presentation.matrices()[1][0][0] > TreePose::Checkpoint::kMaxMagnitude);
         break;
+    default:
+        break;
     }
     CAPTURE(mutation);
     const auto captured = presentation.checkpoint();
@@ -576,6 +584,7 @@ TEST_CASE("pickup presentation candidate filtering retains topology and composed
     CHECK_FALSE(independent.restore(*item.figure, *captured));
     CHECK_FALSE(fixture.owner.checkpoint());
     auto scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
 
     auto malformed = baseline;
@@ -600,7 +609,8 @@ TEST_CASE("pickup capture consumes catalog storage while recapturing all native 
     const auto* bursts = scratch.bursts.data();
     const auto textures = fixture.device.texturesCreated;
     const auto uploads = fixture.device.textureUpdates;
-    bool activeBurst = false, retiredBurst = false;
+    bool activeBurst = false;
+    bool retiredBurst = false;
     for (s32 tick = 0; tick < 90; ++tick) {
         CAPTURE(tick, seconds);
         fixture.items.capturePresentation();
@@ -661,7 +671,10 @@ TEST_CASE("pickup scratch capture authenticates exact identity but never trusts 
         case 6: scratch.bursts.clear(); break;
         case 7: scratch.archives[0] = false; break;
         case 8: scratch.layout = false; break;
+        default:
+            break;
         }
+        // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
         CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
         CHECK(fixture.state() == baseline);
     }
@@ -689,9 +702,11 @@ TEST_CASE("pickup scratch capture authenticates exact identity but never trusts 
     // Invalid current state cannot be repaired by valid stale scratch.
     auto undo = fixture.owner.prepareRestore(baseline);
     REQUIRE(undo);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& item = const_cast<PlacedItems::Item&>(fixture.items.item(0));
     item.velocity.x = nan;
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(fixture.owner.checkpoint(std::move(scratch)));
     CHECK_FALSE(fixture.owner.checkpoint());
     REQUIRE(fixture.owner.canCommit(*undo));
@@ -702,7 +717,7 @@ TEST_CASE("pickup scratch capture authenticates exact identity but never trusts 
 TEST_CASE("pickup scratch requires current bindings and permits independently equal catalogs",
           "[placed-items-checkpoint][pickup-capture-reuse]") {
     Fixture first("pickup-capture-reuse-bind-a");
-    Fixture second("pickup-capture-reuse-bind-b");
+    const Fixture second("pickup-capture-reuse-bind-b");
     const auto baseline = first.state();
     auto scratch = baseline;
     auto independent = second.owner.checkpoint(std::move(scratch));
@@ -710,9 +725,11 @@ TEST_CASE("pickup scratch requires current bindings and permits independently eq
     CHECK(*independent == second.state());
     first.owner.clearResources();
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
     REQUIRE(first.owner.bindResources(first.device));
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{baseline});
 
     // A native rebind invalidates the old wrapper even when value rows agree.
@@ -720,12 +737,15 @@ TEST_CASE("pickup scratch requires current bindings and permits independently eq
         first.items.bind(first.device, first.layout, &first.collision, std::array{&first.archive}));
     first.items.setPlayerCount(2);
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
     REQUIRE(first.owner.bindResources(first.device));
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     REQUIRE(first.owner.checkpoint(std::move(scratch)));
 
     // Explicitly rebinding a changed authored catalog must not recycle old data.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     auto& infos = const_cast<std::vector<ItemInfo>&>(first.layout.itemInfos());
     ++infos[0].value;
     REQUIRE(
@@ -734,9 +754,11 @@ TEST_CASE("pickup scratch requires current bindings and permits independently eq
     REQUIRE(first.owner.bindResources(first.device));
     const auto changed = first.state();
     scratch = baseline;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(first.owner.checkpoint(std::move(scratch)));
     CHECK(first.state() == changed);
     scratch = changed;
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{changed});
 }
 

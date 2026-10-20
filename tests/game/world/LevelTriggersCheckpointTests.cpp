@@ -195,6 +195,8 @@ TEST_CASE("complete trigger state refuses malformed and foreign records atomical
     case 11: invalid.triggers[0].radius += 1; break;         // bounded but wrong native roster
     case 12: invalid.figures[2] = invalid.figures[0]; break; // marker cannot gain art
     case 13: invalid.targets[0].openHeight += 1; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.triggers.prepareRestore(invalid));
     CHECK_FALSE(fixture.triggers.restore(invalid));
@@ -208,7 +210,7 @@ TEST_CASE("native campaign trigger owners retain their complete loaded roster an
     test::FakeRenderDevice device;
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
-    const auto name = GENERATE("G1", "A1", "J4");
+    const auto* const name = GENERATE("G1", "A1", "J4");
     CAPTURE(name);
     const auto level = catalog.byName(name);
     REQUIRE(level);
@@ -278,7 +280,10 @@ TEST_CASE(
         }
     };
     s32 tick = 0;
-    bool sawRefusal = false, sawWake = false, sawLesson = false, sawSettled = false;
+    bool sawRefusal = false;
+    bool sawWake = false;
+    bool sawLesson = false;
+    bool sawSettled = false;
     for (s32 window = 0; window < 96; ++window) {
         CAPTURE(window, tick);
         const s32 distance = 1 + window % 8;
@@ -362,7 +367,11 @@ TEST_CASE(
 TEST_CASE("native trigger equality retains camera holds and undelivered refusals",
           "[triggers-local-rewind]") {
     Fixture fixture("triggers-local-hidden-values");
-    LevelTriggers::LocalSnapshot before, held, queued, drained, restored;
+    LevelTriggers::LocalSnapshot before;
+    LevelTriggers::LocalSnapshot held;
+    LevelTriggers::LocalSnapshot queued;
+    LevelTriggers::LocalSnapshot drained;
+    LevelTriggers::LocalSnapshot restored;
     fixture.triggers.saveLocal(before);
     const auto trigger = fixture.triggers.trigger(0);
     fixture.triggers.setCameraHeld(true);

@@ -466,7 +466,9 @@ TEST_CASE("native tower relic rewind crosses speech placement and wizard resets"
     party[0].addShard(1);
     MessageTable strings;
     messages(strings);
-    TowerRelics actual, expected, foreign;
+    TowerRelics actual;
+    TowerRelics expected;
+    TowerRelics foreign;
     for (auto* relics : {&actual, &expected}) {
         relics->begin(party, strings);
         relics->bind(device, world, {});

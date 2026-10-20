@@ -26,7 +26,7 @@ public:
         Obstacle obstacle;
         Mat4 placement{1};
         std::array<bool, 4> models{};
-        bool operator==(const Rock&) const;
+        bool operator==(const Rock& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxRocks = 4096;
@@ -43,7 +43,7 @@ public:
         bool items = false;
         bool animationItems = false;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
     };
     class Prepared {
     public:

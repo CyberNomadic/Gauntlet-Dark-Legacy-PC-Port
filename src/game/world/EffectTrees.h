@@ -35,6 +35,7 @@ public:
     EffectTrees& operator=(const EffectTrees&) = delete;
     EffectTrees(EffectTrees&& other) noexcept;
     EffectTrees& operator=(EffectTrees&& other) noexcept;
+    ~EffectTrees() = default;
     static constexpr f32 kStillSeconds = 1.0f; ///< how long a tree without a sequence shows
 
     /** A light an effect gives off while it plays (SfxSetLight). */
@@ -353,7 +354,7 @@ public:
 
 private:
     static Checkpoint captureEffect(const EffectState& effect);
-    static void initializeTree(Effect& effect, const Setting& setting);
+    static void initializeTree(Effect& value, const Setting& setting);
     static void initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
                                     const Texture& texture, u32 textureSlot, const Mat4& attachment,
                                     u32 seed);
@@ -381,15 +382,15 @@ public:
     class LocalSnapshot {
     private:
         friend class EffectTrees;
-        std::vector<EffectState> effects;
-        std::vector<Motion*> motions;
-        std::vector<TextureAnimator::Clock> clocks;
-        std::vector<TextureSet*> lenders;
-        bool presentationAdvanced = false;
-        u32 nextId = 1;
-        u64 nextInstance = 1;
-        std::weak_ptr<const u8> owner;
-        u64 epoch = 0;
+        std::vector<EffectState> m_effects;
+        std::vector<Motion*> m_motions;
+        std::vector<TextureAnimator::Clock> m_clocks;
+        std::vector<TextureSet*> m_lenders;
+        bool m_presentationAdvanced = false;
+        u32 m_nextId = 1;
+        u64 m_nextInstance = 1;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
     };
     /** Same-owner, same-resource-epoch in-memory history. No wire validation,
      * resource rebinding, or animation seeking is involved. Archives and lenders

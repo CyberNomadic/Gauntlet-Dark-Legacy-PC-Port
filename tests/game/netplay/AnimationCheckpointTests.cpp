@@ -41,7 +41,7 @@ TEST_CASE("animation wire clocks preserve native loop and hold boundaries exactl
 
 TEST_CASE("animation wire clocks reject malformed sizes flags and floating point state",
           "[netplay][animation-checkpoint]") {
-    AnimationPlayer player;
+    const AnimationPlayer player;
     const auto encoded = AnimationCheckpoint::encode(player.checkpoint());
     REQUIRE(encoded);
     REQUIRE(AnimationCheckpoint::decode(*encoded));

@@ -97,7 +97,8 @@ TEST_CASE("native voice queue replay restores admission with audible silent and 
     const s32 mode = GENERATE(0, 1, 2);
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
-    VoiceQueue reference, predicted;
+    VoiceQueue reference;
+    VoiceQueue predicted;
     predicted.bind(mode == 0 ? nullptr : &output);
     SoundClip clip;
     clip.sampleRate = 48000;
@@ -107,7 +108,7 @@ TEST_CASE("native voice queue replay restores admission with audible silent and 
     sequence.bank = "TEST";
     sequence.steps.push_back({&clip, false, false});
     usize commands = 0;
-    SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+    const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
         ++commands;
         if (mode == 2 && event.kind == SoundPlayer::Event::Kind::Play) {
             throw std::runtime_error("test optional voice output");
@@ -153,7 +154,8 @@ TEST_CASE("native voice queue replay restores admission with audible silent and 
 
 TEST_CASE("native voice queue history is owner and output binding specific",
           "[voice-queue-local-rewind]") {
-    VoiceQueue owner, foreign;
+    VoiceQueue owner;
+    VoiceQueue foreign;
     VoiceQueue::LocalSnapshot saved;
     CHECK_FALSE(owner.restoreLocal(saved));
     owner.saveLocal(saved);
@@ -169,8 +171,11 @@ TEST_CASE("native voice queue history is owner and output binding specific",
 
 TEST_CASE("native voice equality distinguishes admission and logical sound predecessors",
           "[voice-queue-local-rewind][native-equality]") {
-    VoiceQueue queue, foreign;
-    VoiceQueue::LocalSnapshot base, same, changed;
+    VoiceQueue queue;
+    const VoiceQueue foreign{};
+    VoiceQueue::LocalSnapshot base;
+    VoiceQueue::LocalSnapshot same;
+    VoiceQueue::LocalSnapshot changed;
     CHECK_FALSE(queue.equalLocal(base, base));
     SceneSoundEvents events;
     events.open(91, nullptr);
@@ -183,7 +188,7 @@ TEST_CASE("native voice equality distinguishes admission and logical sound prede
     queue.saveLocal(changed);
     CHECK_FALSE(queue.equalLocal(base, changed));
     REQUIRE(queue.restoreLocal(base));
-    SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
+    const SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
     SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
     const auto capture = [&](u64 tick) {
         events.beginTick(tick);
@@ -219,11 +224,11 @@ TEST_CASE("recorded voice queues restore their logical predecessor before correc
     VoiceQueue queue;
     queue.bind(&player);
     queue.recordTo(&events);
-    SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
+    const SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
     SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
-    constexpr FrameEventEmitter speaker{5, 12, 1, FrameEventEmitter::kNoSeat};
+    constexpr FrameEventEmitter kSpeaker{5, 12, 1, FrameEventEmitter::kNoSeat};
     std::vector<SoundPlayer::Event> output;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         if (event.kind == SoundPlayer::Event::Kind::Play) {
             output.push_back(event);
         }
@@ -231,7 +236,7 @@ TEST_CASE("recorded voice queues restore their logical predecessor before correc
     const auto capture = [&](u64 tick, u32 cue) {
         events.beginTick(tick);
         {
-            auto scope = events.scoped(speaker, cue);
+            auto scope = events.scoped(kSpeaker, cue);
             CHECK(queue.queue(sequence, 1) == kNoSound);
         }
         return events.endTick();
@@ -285,19 +290,26 @@ TEST_CASE("recorded voice queues restore their logical predecessor before correc
 
 TEST_CASE("recorded voice admission agrees for absent stalled and progressing output",
           "[voice-queue-local-rewind][scene-sound-events]") {
-    AudioMixer mixer(48000), stalledMixer(48000);
-    SoundPlayer player(mixer), stalledPlayer(stalledMixer);
-    SceneSoundEvents silent, running, stalled;
+    AudioMixer mixer(48000);
+    AudioMixer stalledMixer(48000);
+    SoundPlayer player(mixer);
+    SoundPlayer stalledPlayer(stalledMixer);
+    SceneSoundEvents silent;
+    SceneSoundEvents running;
+    SceneSoundEvents stalled;
     silent.open(14, nullptr);
     running.open(14, &player);
     stalled.open(14, &stalledPlayer);
-    VoiceQueue a, b, c;
+    VoiceQueue a;
+    VoiceQueue b;
+    VoiceQueue c;
     a.recordTo(&silent);
     b.recordTo(&running);
     c.recordTo(&stalled);
-    SoundClip clip{48000, 1, std::vector<f32>(4800, 0.25f)};
-    SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "CHARACTER", 2};
-    constexpr FrameEventEmitter emitter{2, 4, 1, 1};
+    const SoundClip clip{48000, 1, std::vector<f32>(4800, 0.25f)};
+    const SoundSequence sequence{
+        {{&clip, false, false}}, 1, SoundGainCurve::Linear, "CHARACTER", 2};
+    constexpr FrameEventEmitter kEmitter{2, 4, 1, 1};
     std::array<f32, 1600> samples{};
     for (u64 tick = 1; tick <= 90; ++tick) {
         std::array<SceneSoundEvents::Journal, 3> journals;
@@ -306,7 +318,7 @@ TEST_CASE("recorded voice admission agrees for absent stalled and progressing ou
              {std::pair{&a, &silent}, std::pair{&b, &running}, std::pair{&c, &stalled}}) {
             events->beginTick(tick);
             {
-                auto scope = events->scoped(emitter, 1);
+                auto scope = events->scoped(kEmitter, 1);
                 if (tick % 3 == 0 && queue->room(0.5f)) {
                     queue->queue(sequence, 1);
                 }
@@ -357,13 +369,13 @@ TEST_CASE("drained narration starts a new epoch without its previous logical pre
     events.open(81, nullptr);
     VoiceQueue queue;
     queue.recordTo(&events);
-    SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
+    const SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
     SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
-    constexpr FrameEventEmitter emitter{5, 12, 1, FrameEventEmitter::kNoSeat};
+    constexpr FrameEventEmitter kEmitter{5, 12, 1, FrameEventEmitter::kNoSeat};
     const auto capture = [&] {
         events.beginTick(1);
         {
-            auto scope = events.scoped(emitter, 1);
+            auto scope = events.scoped(kEmitter, 1);
             queue.queue(sequence, 1);
         }
         return events.endTick();
@@ -403,8 +415,8 @@ TEST_CASE("voice queue attachment rejects unfinished speech without mutating adm
     SoundPlayer output(mixer);
     VoiceQueue queue;
     queue.bind(&output);
-    SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
-    SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
+    const SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
+    const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
     const auto voice = queue.queue(sequence, 1);
     REQUIRE(voice != kNoSound);
     queue.hold(true);
@@ -413,7 +425,7 @@ TEST_CASE("voice queue attachment rejects unfinished speech without mutating adm
     SceneSoundEvents events;
     events.open(83, &output);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(queue.recordTo(&events), SceneSoundEvents::Unsupported);
     CHECK(commands == 0);
     CHECK(queue.canRestoreLocal(before));
@@ -435,8 +447,8 @@ TEST_CASE("voice queue detachment preserves clocks but discards output-only pred
     SoundPlayer output(mixer);
     VoiceQueue queue;
     queue.bind(&output);
-    SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
-    SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
+    const SoundClip clip{48000, 1, std::vector<f32>(48000, 0.25f)};
+    const SoundSequence sequence{{{&clip, false, false}}, 1, SoundGainCurve::Linear, "VOICE1", 1};
     const auto legacy = queue.queue(sequence, 1);
     REQUIRE(legacy != kNoSound);
     queue.update(1);
@@ -458,7 +470,7 @@ TEST_CASE("voice queue detachment preserves clocks but discards output-only pred
     queue.hold(false);
     queue.update(1);
     std::vector<SoundPlayer::Event> plays;
-    SoundPlayer::Capture observe(&output, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&output, [&](const auto& event) {
         if (event.kind == SoundPlayer::Event::Kind::Play) {
             plays.push_back(event);
         }
@@ -472,7 +484,9 @@ TEST_CASE("voice queue detachment preserves clocks but discards output-only pred
 
 TEST_CASE("voice queue recorder changes during capture fail before changing its binding",
           "[voice-queue-local-rewind][scene-sound-events]") {
-    SceneSoundEvents first, second, closed;
+    SceneSoundEvents first;
+    SceneSoundEvents second;
+    SceneSoundEvents closed;
     first.open(85, nullptr);
     second.open(86, nullptr);
     VoiceQueue queue;

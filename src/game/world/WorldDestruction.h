@@ -26,9 +26,9 @@ private:
 public:
     class LocalSnapshot {
         friend class WorldDestruction;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const WorldDestruction* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const WorldDestruction* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

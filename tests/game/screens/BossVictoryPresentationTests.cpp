@@ -368,7 +368,9 @@ TEST_CASE("native victory rewind survives lazy wizard binding and corrects an en
     ItemArchive archive;
     REQUIRE(archive.load(wizardFixture("victory-local-rewind")));
     test::FakeRenderDevice device;
-    BossVictoryPresentation actual, expected, foreign;
+    BossVictoryPresentation actual;
+    BossVictoryPresentation expected;
+    BossVictoryPresentation foreign;
     MessageTable strings;
     loadCaptions(strings);
     const std::array party{Vec3{2, 0, 3}, Vec3{7, 0, 1}};

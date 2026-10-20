@@ -23,17 +23,23 @@ bool DestructibleWalls::appendDigest(NativeStateDigest& digest, const LocalSnaps
     digest.wide(m_walls.size());
     for (usize i = 0; i < m_walls.size(); ++i) {
         const auto& wall = m_walls[i];
-        digest.value(saved ? saved->walls[i] : static_cast<const WallState&>(wall));
+        digest.value(saved ? saved->m_walls[i] : static_cast<const WallState&>(wall));
         digest.values(wall.transform, wall.collisionCentre, wall.armor, wall.minPlayers, wall.object);
         digest.wide(wall.surface.size());
-        for (const auto& triangle : wall.surface) digest.fields<4>(triangle);
+        for (const auto& triangle : wall.surface) {
+            digest.fields<4>(triangle);
+        }
         const auto& [id, base, radius, height, surface, node, score, reach, potion, acquisition] =
             wall.bounds;
         digest.values(id, base, radius, height, node, score, reach, potion);
         digest.wide(surface.size());
-        for (const auto& triangle : surface) digest.fields<4>(triangle);
+        for (const auto& triangle : surface) {
+            digest.fields<4>(triangle);
+        }
         digest.flag(acquisition.has_value());
-        if (acquisition) digest.fields<5>(*acquisition);
+        if (acquisition) {
+            digest.fields<5>(*acquisition);
+        }
         // The model's white override is derived from WallState::white on restore.
     }
     return digest.good();
@@ -54,21 +60,21 @@ bool DestructibleWalls::appendLocalDigest(NativeStateDigest& digest, const Local
 }
 
 void DestructibleWalls::saveLocal(LocalSnapshot& saved) const {
-    saved.walls.resize(m_walls.size());
+    saved.m_walls.resize(m_walls.size());
     for (usize index = 0; index < m_walls.size(); ++index) {
-        saved.walls[index] = m_walls[index];
+        saved.m_walls[index] = m_walls[index];
     }
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool DestructibleWalls::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding && saved.walls.size() == m_walls.size();
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding && saved.m_walls.size() == m_walls.size();
 }
 
 bool DestructibleWalls::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.walls == right.walls;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_walls == right.m_walls;
 }
 
 bool DestructibleWalls::restoreLocal(const LocalSnapshot& saved) {
@@ -77,7 +83,7 @@ bool DestructibleWalls::restoreLocal(const LocalSnapshot& saved) {
     }
     for (usize index = 0; index < m_walls.size(); ++index) {
         auto& wall = m_walls[index];
-        static_cast<WallState&>(wall) = saved.walls[index];
+        static_cast<WallState&>(wall) = saved.m_walls[index];
         showWhite(wall, wall.white);
     }
     ++m_checkpointGeneration;

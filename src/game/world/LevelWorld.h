@@ -70,20 +70,20 @@ public:
     // One bound stage, with immutable layouts, meshes and textures retained in place.
     class LocalSnapshot {
         friend class LevelWorld;
-        Simulation state;
-        WorldScene::LocalSnapshot scene;
-        WorldAnimator::LocalSnapshot worldAnimator;
-        WorldCollision::LocalSnapshot collision;
-        PlacedItems::LocalSnapshot placedItems;
-        SkorneArena::LocalSnapshot skorneArena;
-        FallingScenery::LocalSnapshot fallingScenery;
-        DestructibleWalls::LocalSnapshot walls;
-        WorldDestruction::LocalSnapshot destruction;
-        LevelTriggers::LocalSnapshot triggers;
-        Rotators::LocalSnapshot rotators;
-        TextureAnimator::Clock textures;
-        const LevelWorld* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        WorldScene::LocalSnapshot m_scene;
+        WorldAnimator::LocalSnapshot m_worldAnimator;
+        WorldCollision::LocalSnapshot m_collision;
+        PlacedItems::LocalSnapshot m_placedItems;
+        SkorneArena::LocalSnapshot m_skorneArena;
+        FallingScenery::LocalSnapshot m_fallingScenery;
+        DestructibleWalls::LocalSnapshot m_walls;
+        WorldDestruction::LocalSnapshot m_destruction;
+        LevelTriggers::LocalSnapshot m_triggers;
+        Rotators::LocalSnapshot m_rotators;
+        TextureAnimator::Clock m_textures;
+        const LevelWorld* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

@@ -127,9 +127,9 @@ private:
 public:
     class LocalSnapshot {
         friend class LegendPresentation;
-        Simulation state;
-        const LegendPresentation* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        const LegendPresentation* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

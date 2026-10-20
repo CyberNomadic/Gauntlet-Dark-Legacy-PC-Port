@@ -348,7 +348,9 @@ const CanonicalDigestSink::Digest& WorldCollision::geometryDigest() const {
         geometry.string("WorldCollision.geometry/1");
         const auto triangles = [&](const auto& values) {
             geometry.wide(values.size());
-            for (const auto& value : values) geometry.fields<4>(value);
+            for (const auto& value : values) {
+                geometry.fields<4>(value);
+            }
         };
         triangles(m_triangles);
         geometry.wide(m_moving.size());
@@ -366,7 +368,7 @@ bool WorldCollision::appendDigest(NativeStateDigest& digest, const LocalSnapshot
     digest.bytes(geometryDigest());
     for (usize i = 0; i < m_moving.size(); ++i) {
         const auto& [object, local, placed, boundsMin, boundsMax, world] = m_moving[i];
-        digest.value(saved ? saved->transforms[i] : world);
+        digest.value(saved ? saved->m_transforms[i] : world);
         (void)object; // Complete immutable roster is in geometryDigest().
         (void)local;
         // Placed triangles/bounds are derived by MovingObject::place from these
@@ -375,9 +377,8 @@ bool WorldCollision::appendDigest(NativeStateDigest& digest, const LocalSnapshot
         (void)boundsMin;
         (void)boundsMax;
     }
-    digest.values(saved ? saved->hidden : m_hidden,
-                  saved ? saved->contactOnly : m_contactOnly,
-                  saved ? saved->blockedFloorExits : m_blockedFloorExits);
+    digest.values(saved ? saved->m_hidden : m_hidden, saved ? saved->m_contactOnly : m_contactOnly,
+                  saved ? saved->m_blockedFloorExits : m_blockedFloorExits);
     return digest.good();
 }
 
@@ -396,26 +397,27 @@ bool WorldCollision::appendLocalDigest(NativeStateDigest& digest, const LocalSna
 }
 
 void WorldCollision::saveLocal(LocalSnapshot& saved) const {
-    saved.transforms.resize(m_moving.size());
+    saved.m_transforms.resize(m_moving.size());
     for (usize i = 0; i < m_moving.size(); ++i) {
-        saved.transforms[i] = m_moving[i].world;
+        saved.m_transforms[i] = m_moving[i].world;
     }
-    saved.hidden = m_hidden;
-    saved.contactOnly = m_contactOnly;
-    saved.blockedFloorExits = m_blockedFloorExits;
-    saved.owner = this;
-    saved.binding = m_localBinding;
+    saved.m_hidden = m_hidden;
+    saved.m_contactOnly = m_contactOnly;
+    saved.m_blockedFloorExits = m_blockedFloorExits;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
 }
 
 bool WorldCollision::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_localBinding && saved.binding.lock() == m_localBinding &&
-           saved.transforms.size() == m_moving.size();
+    return saved.m_owner == this && m_localBinding && saved.m_binding.lock() == m_localBinding &&
+           saved.m_transforms.size() == m_moving.size();
 }
 
 bool WorldCollision::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.transforms == right.transforms &&
-           left.hidden == right.hidden && left.contactOnly == right.contactOnly &&
-           left.blockedFloorExits == right.blockedFloorExits;
+    return canRestoreLocal(left) && canRestoreLocal(right) &&
+           left.m_transforms == right.m_transforms && left.m_hidden == right.m_hidden &&
+           left.m_contactOnly == right.m_contactOnly &&
+           left.m_blockedFloorExits == right.m_blockedFloorExits;
 }
 
 bool WorldCollision::restoreLocal(const LocalSnapshot& saved) {
@@ -423,13 +425,13 @@ bool WorldCollision::restoreLocal(const LocalSnapshot& saved) {
         return false;
     }
     for (usize i = 0; i < m_moving.size(); ++i) {
-        if (!sameTransform(m_moving[i].world, saved.transforms[i])) {
-            m_moving[i].place(saved.transforms[i]);
+        if (!sameTransform(m_moving[i].world, saved.m_transforms[i])) {
+            m_moving[i].place(saved.m_transforms[i]);
         }
     }
-    m_hidden = saved.hidden;
-    m_contactOnly = saved.contactOnly;
-    m_blockedFloorExits = saved.blockedFloorExits;
+    m_hidden = saved.m_hidden;
+    m_contactOnly = saved.m_contactOnly;
+    m_blockedFloorExits = saved.m_blockedFloorExits;
     return true;
 }
 

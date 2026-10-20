@@ -27,6 +27,7 @@ public:
     LevelTransporters& operator=(const LevelTransporters&) = delete;
     LevelTransporters(LevelTransporters&&) = delete;
     LevelTransporters& operator=(LevelTransporters&&) = delete;
+    ~LevelTransporters() = default;
     static constexpr s32 kItemType = 11;
     struct Contact {
         s32 instance = -1;
@@ -58,11 +59,11 @@ public:
     };
     class LocalSnapshot {
         friend class LevelTransporters;
-        std::vector<PadState> pads;
-        TextureAnimator::Clock textures;
-        bool presentationAdvanced = false;
-        const LevelTransporters* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        std::vector<PadState> m_pads;
+        TextureAnimator::Clock m_textures;
+        bool m_presentationAdvanced = false;
+        const LevelTransporters* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

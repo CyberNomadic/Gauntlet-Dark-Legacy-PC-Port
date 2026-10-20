@@ -35,6 +35,7 @@ public:
     }
     ParticleField(ParticleField&&) noexcept = default;
     ParticleField& operator=(ParticleField&&) noexcept = default;
+    ~ParticleField() = default;
     /** Exact native values under the same borrowed texture bindings. Generated
      * vertices and per-draw flipbook samples are deliberately excluded. */
     bool equalLocal(const ParticleField& other) const;
@@ -107,7 +108,7 @@ public:
               f32 presentationAlpha = -1.0f) const;
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const ParticleField&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const ParticleField& /*state*/);
     struct Entry {
         ParticleEmitter emitter;
         s32 sourceObject = -1;

@@ -74,8 +74,9 @@ bool NativeAgreement::recognizesTerminal(std::span<const u8> bytes) {
 }
 std::optional<std::pair<u64, u64>> NativeAgreement::terminalContext(std::span<const u8> bytes) {
     const auto message = decode(bytes);
-    if (!message || !message->terminal ||
-        (message->tick == 0 && message->kind != Kind::Failed)) return std::nullopt;
+    if (!message || !message->terminal || (message->tick == 0 && message->kind != Kind::Failed)) {
+        return std::nullopt;
+    }
     return std::pair{message->epoch, message->tick};
 }
 bool NativeAgreement::occupied(u8 peer) const {
@@ -119,7 +120,9 @@ bool NativeAgreement::open(u8 localPeer, u64 epoch, const Owners& owners,
 }
 bool NativeAgreement::openTerminal(u8 localPeer, u64 epoch, const Owners& owners,
                                   std::span<const Link> links, u64 terminalTick, Time now) {
-    if (terminalTick == 0 || !open(localPeer, epoch, owners, links, 1, now)) return false;
+    if (terminalTick == 0 || !open(localPeer, epoch, owners, links, 1, now)) {
+        return false;
+    }
     m_terminal = terminalTick;
     m_submit = terminalTick;
     return true;
@@ -177,14 +180,16 @@ bool NativeAgreement::update(Time now) {
             return false;
         }
     }
-    for (const auto& queue : m_outgoing) {
-        if (!queue.empty() && expired(queue.front().started, m_now)) {
-            const auto message = decode(queue.front().bytes);
-            fail(Failure::Timeout, message->tick);
-            return false;
-        }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    const auto overdue = std::ranges::find_if(m_outgoing, [&](const auto& queue) {
+        return !queue.empty() && expired(queue.front().started, m_now);
+    });
+    if (overdue == m_outgoing.end()) {
+        return true;
     }
-    return true;
+    const auto message = decode(overdue->front().bytes);
+    fail(Failure::Timeout, message->tick);
+    return false;
 }
 NativeAgreement::Admission NativeAgreement::admit(u8 peer, u64 tick, const Digest& digest) {
     if (tick <= m_agreed) {
@@ -294,6 +299,7 @@ NativeAgreement::Admission NativeAgreement::receive(PacketTransport::Connection 
     if (!m_open) {
         return Admission::Invalid;
     }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto link = std::ranges::find(m_links, connection);
     if (connection == 0 || link == m_links.end()) {
         return Admission::WrongPeer;
@@ -381,6 +387,7 @@ void NativeAgreement::disconnected(PacketTransport::Connection connection) {
     if (!m_open || connection == 0) {
         return;
     }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto link = std::ranges::find(m_links, connection);
     if (link != m_links.end()) {
         m_outgoing[static_cast<usize>(link - m_links.begin())].clear();

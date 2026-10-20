@@ -131,8 +131,10 @@ TEST_CASE("native retired combatant slots preserve identity and may be restored 
 
 TEST_CASE("combatant prepared values are owner bound single use and cleared on native teardown",
           "[combatant-checkpoint]") {
-    Combatant actor, other;
-    CombatantCheckpoint owner(actor, {}, {}), foreign(other, {}, {});
+    Combatant actor;
+    Combatant other;
+    CombatantCheckpoint owner(actor, {}, {});
+    const CombatantCheckpoint foreign(other, {}, {});
     const auto baseline = capture(owner);
     auto first = owner.prepareRestore(baseline);
     auto sibling = owner.prepareRestore(baseline);
@@ -210,7 +212,7 @@ TEST_CASE(
 
 TEST_CASE("combatant restore binds native child poses and auxiliary clocks without spawning",
           "[combatant-checkpoint][assets]") {
-    const auto name = GENERATE("CHIMERA", "LICH");
+    const auto* const name = GENERATE("CHIMERA", "LICH");
     auto first = std::make_unique<Fighter>(bossDefinition(name));
     auto replay = std::make_unique<Fighter>(bossDefinition(name));
     const auto views = std::array{visiblePlayer(3, {2, 0, 15}), visiblePlayer(1, {-9, 0, 11})};

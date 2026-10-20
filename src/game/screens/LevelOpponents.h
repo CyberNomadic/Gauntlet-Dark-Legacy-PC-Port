@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -88,12 +89,7 @@ public:
             (m_sim.deathContact && !m_sim.deathSound)) {
             return true;
         }
-        for (const SoundHandle yell : m_yells) {
-            if (yell != kNoSound) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::any_of(m_yells, [](SoundHandle yell) { return yell != kNoSound; });
     }
     /** Outside-pool phases that can change bodies, items, or missile blockers.
      * Ordinary native enemies and generators alone do not trigger this gate. */
@@ -188,7 +184,8 @@ private:
     SoundHandle playAt(std::string_view name, f32 level, const Vec3& at);
     void landEnemyMissiles(std::span<PlayerRuntime> players, const Events& events);
     /** One native landing in world/target/effect/sound/hurt/burst order. */
-    bool dispatchEnemyMissileHit(const EnemyMissileHit&, std::span<PlayerRuntime>, const Events&);
+    bool dispatchEnemyMissileHit(const EnemyMissileHit& /*hit*/,
+                                 std::span<PlayerRuntime> /*players*/, const Events& /*events*/);
     void playEnemyCues();
     std::vector<MissileTarget> swarmTargets() const;
     void strikeSwarm(s32 id, f32 damage, u32 flags, const Vec3& direction,

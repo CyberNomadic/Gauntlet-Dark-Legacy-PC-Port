@@ -82,9 +82,9 @@ public:
     bool canRestoreLocal(const LocalSnapshot& state) const;
     bool restoreLocal(const LocalSnapshot& state);
     bool appendNativeDigest(NativeStateDigest& digest) const;
-    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     /** Archives are registered by their owners before retained companion banks. */
-    bool registerNativeResources(NativeStateResources& resources) const;
+    bool registerNativeResources(NativeStateResources& registry) const;
     struct Checkpoint {
         Kind kind = Kind::None;
         std::string tree;

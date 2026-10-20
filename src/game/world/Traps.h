@@ -56,6 +56,7 @@ public:
     Traps& operator=(const Traps&) = delete;
     Traps(Traps&&) noexcept = default;
     Traps& operator=(Traps&&) noexcept = default;
+    ~Traps() = default;
     static constexpr s32 kResting = 0;
     static constexpr f32 kSecondsPerTickLeft = 1.0f / 30.0f; ///< a victim's respite
     static constexpr s32 kSpikes = 0;                        ///< the subtypes that pierce
@@ -141,9 +142,9 @@ public:
     /** In-memory history for this owner and its current bound stage. */
     class LocalSnapshot {
         friend class Traps;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const Traps* owner = nullptr;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const Traps* m_owner = nullptr;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

@@ -27,15 +27,21 @@ struct Wire final : PacketTransport {
     usize budget = std::numeric_limits<usize>::max();
     std::vector<Packet> sent;
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
-        if (result != SendResult::Sent) return result;
-        if (budget == 0) return SendResult::Congested;
+        if (result != SendResult::Sent) {
+            return result;
+        }
+        if (budget == 0) {
+            return SendResult::Congested;
+        }
         --budget;
         sent.push_back({connection, {bytes.begin(), bytes.end()}, delivery});
         return SendResult::Sent;
     }
     std::vector<Event> poll() override { return {}; }
-    std::optional<Statistics> statistics(Connection) const override { return std::nullopt; }
-    void close(Connection) override {}
+    std::optional<Statistics> statistics(Connection /*connection*/) const override {
+        return std::nullopt;
+    }
+    void close(Connection /*connection*/) override {}
 };
 
 std::vector<u8> inputBytes(std::span<const InputCommand> frame) {
@@ -46,8 +52,8 @@ std::vector<u8> inputBytes(std::span<const InputCommand> frame) {
 std::vector<u8> inputMessage(u8 origin, std::span<const InputCommand> frame,
                             u64 nextTick = 1, u64 serial = 1) {
     REQUIRE_FALSE(frame.empty());
-    RollbackExchange::Message message{frame.front().epoch, origin, nextTick, {},
-                                     {frame.begin(), frame.end()}, serial};
+    const RollbackExchange::Message message{frame.front().epoch,          origin, nextTick, {},
+                                            {frame.begin(), frame.end()}, serial};
     const auto encoded = RollbackExchange::encode(message);
     REQUIRE(encoded);
     return *encoded;
@@ -105,7 +111,9 @@ struct Room {
     bool loaded(u8 peer) {
         if (sessions[peer].context().transition != MatchTransition::Shop &&
             bound[peer] != sessions[peer].context().epoch) {
-            if (!inputs[peer].bind(sessions[peer])) return false;
+            if (!inputs[peer].bind(sessions[peer])) {
+                return false;
+            }
             bound[peer] = sessions[peer].context().epoch;
         }
         return sessions[peer].loaded();
@@ -122,17 +130,26 @@ struct Room {
         }
     }
     void commit() {
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (present(peer)) REQUIRE(loaded(peer));
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(loaded(peer));
+            }
+        }
         pump();
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (present(peer)) REQUIRE(sessions[peer].phase() == Phase::Running);
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(sessions[peer].phase() == Phase::Running);
+            }
+        }
     }
     void ready() { prepare(); commit(); }
     std::vector<InputCommand> commands(u8 peer, u64 tick, bool actions = true) const {
         std::vector<InputCommand> frame;
-        for (u8 seat = 0; seat < owners.size(); ++seat) {
-            if (owners[seat] != peer) continue;
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(owners.size()); ++seat) {
+            if (owners[seat] != peer) {
+                continue;
+            }
             InputCommand command;
             command.epoch = sessions[1].context().epoch;
             command.tick = tick;
@@ -143,8 +160,9 @@ struct Room {
                 command.magnitude = 0.5f;
                 command.aimDirection = Vec3{0, 0, 1};
                 command.heldButtons = static_cast<u32>(CommandHeld::ThrowPotion);
-                if (tick % 3 == 0)
+                if (tick % 3 == 0) {
                     command.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
+                }
             }
             frame.push_back(command);
         }
@@ -152,13 +170,17 @@ struct Room {
     }
     void advanceAll(u64 tick, bool actions) {
         for (u8 peer = 1; peer <= 4; ++peer) {
-            if (!present(peer)) continue;
+            if (!present(peer)) {
+                continue;
+            }
             CAPTURE(peer, tick);
             const auto frame = inputs[peer].advance();
             REQUIRE(frame);
             CHECK(frame->predictedSeats == 0);
             for (u8 source = 1; source <= 4; ++source) {
-                if (!present(source)) continue;
+                if (!present(source)) {
+                    continue;
+                }
                 for (const auto& expected : commands(source, tick, actions)) {
                     const auto& actual = frame->commands[expected.seat];
                     CHECK(inputBytes(std::span{&actual, 1}) == inputBytes(std::span{&expected, 1}));
@@ -169,17 +191,25 @@ struct Room {
         }
     }
     void agreeTerminal(MatchSession::Time now = MatchSession::Clock::now()) {
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (present(peer)) REQUIRE(inputs[peer].submitBoundaryDigest(now));
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(inputs[peer].submitBoundaryDigest(now));
+            }
+        }
         for (u8 pass = 0; pass < 4; ++pass) {
             for (u8 peer = 1; peer <= 4; ++peer) {
-                if (!present(peer)) continue;
+                if (!present(peer)) {
+                    continue;
+                }
                 sessions[peer].flush(wires[peer], now);
                 deliver(peer, now);
             }
         }
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (present(peer)) REQUIRE(inputs[peer].completeBoundary());
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(inputs[peer].completeBoundary());
+            }
+        }
     }
     MatchParty party() const {
         MatchParty result;
@@ -208,8 +238,9 @@ TEST_CASE("match control authenticates the fixed native startup delay", "[match-
     CHECK(bytes[4] == MatchControlPacket::kVersion);
     REQUIRE(MatchControlPacket::decode(bytes));
     CHECK(MatchControlPacket::decode(bytes)->context == context);
-    for (usize length = 0; length < bytes.size(); ++length)
+    for (usize length = 0; length < bytes.size(); ++length) {
         CHECK_FALSE(MatchControlPacket::decode(std::span{bytes}.first(length)));
+    }
     auto invalid = bytes;
     invalid.push_back(0);
     CHECK_FALSE(MatchControlPacket::decode(invalid));
@@ -231,7 +262,7 @@ TEST_CASE("native match delay must match the authenticated host prepare", "[matc
     REQUIRE(room->sessions[1].prepare(7));
     const auto offered = room->sessions[1].context();
     const std::array hostLink{MatchLink{1, kHost}};
-    for (u8 delay : {u8{0}, u8{1}}) {
+    for (u8 const delay : {u8{0}, u8{1}}) {
         MatchSession wrong;
         REQUIRE(wrong.open(2, room->owners, hostLink, delay));
         CHECK(wrong.receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) == Admission::Invalid);
@@ -265,7 +296,9 @@ TEST_CASE("native match holds authenticated inputs arriving before the local com
           "[match-lockstep][match-rollback]") {
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 3, 0});
     room->prepare();
-    for (u8 peer : {u8{1}, u8{2}, u8{3}}) REQUIRE(room->loaded(peer));
+    for (u8 const peer : {u8{1}, u8{2}, u8{3}}) {
+        REQUIRE(room->loaded(peer));
+    }
     room->sessions[2].flush(room->wires[2]); room->deliver(2);
     room->sessions[3].flush(room->wires[3]); room->deliver(3);
     REQUIRE(room->sessions[1].phase() == Phase::Running);
@@ -273,9 +306,9 @@ TEST_CASE("native match holds authenticated inputs arriving before the local com
     std::vector<u8> lateCommit;
     for (const auto& packet : room->wires[1].sent) {
         const auto control = MatchControlPacket::decode(packet.bytes);
-        if (packet.connection == 103 && control && control->kind == MatchControlKind::Commit)
+        if (packet.connection == 103 && control && control->kind == MatchControlKind::Commit) {
             lateCommit = packet.bytes;
-        else {
+        } else {
             const auto target = static_cast<u8>(packet.connection - 100);
             REQUIRE(room->sessions[target].receive(kHost, packet.bytes) == Admission::Accepted);
         }
@@ -365,7 +398,9 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
     std::map<u64, RollbackInputs::Commands> actual;
     const auto sample = [&](u8 peer, bool outage) {
         auto& inputs = room->inputs[peer];
-        if (!inputs.sampleReady()) return;
+        if (!inputs.sampleReady()) {
+            return;
+        }
         auto commands = room->commands(peer, inputs.sampleTick());
         if (outage) {
             for (auto& command : commands) {
@@ -375,12 +410,17 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
                 command.pressedButtons = static_cast<u32>(CommandPress::Attack);
             }
         }
-        for (const auto& command : commands) actual[command.tick][command.seat] = command;
+        for (const auto& command : commands) {
+            actual[command.tick][command.seat] = command;
+        }
         REQUIRE(inputs.sample(commands));
     };
     for (u64 tick = 1; tick <= 6; ++tick) {
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (room->present(peer)) sample(peer, false);
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (room->present(peer)) {
+                sample(peer, false);
+            }
+        }
         room->pump();
         room->advanceAll(tick, tick > delay);
         room->pump();
@@ -389,8 +429,9 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
     std::array<u64, 5> stalledHead{};
     std::array<u32, 5> waits{};
     for (u8 peer = 1; peer <= 4; ++peer) {
-        if (room->present(peer) && congested)
+        if (room->present(peer) && congested) {
             room->wires[peer].result = PacketTransport::SendResult::Congested;
+        }
     }
     // One virtual second, not a sleep or a claimed real-network latency test.
     // Sent datagrams are discarded in the loss variant; the congestion variant
@@ -398,12 +439,16 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
     for (u32 turn = 0; turn < 60; ++turn) {
         const auto now = outageAt + std::chrono::milliseconds{turn * 17};
         for (u8 peer = 1; peer <= 4; ++peer) {
-            if (!room->present(peer)) continue;
+            if (!room->present(peer)) {
+                continue;
+            }
             sample(peer, true);
             auto& inputs = room->inputs[peer];
             auto& session = room->sessions[peer];
             if (!inputs.advance()) {
-                if (stalledHead[peer] == 0) stalledHead[peer] = inputs.tick();
+                if (stalledHead[peer] == 0) {
+                    stalledHead[peer] = inputs.tick();
+                }
                 CHECK(inputs.tick() == stalledHead[peer]);
                 ++waits[peer];
             }
@@ -413,20 +458,25 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
             CHECK_FALSE(session.completeNativeBoundary(session.context().epoch, inputs.tick() - 1));
             session.update(1.0 / 60, now);
             session.flush(room->wires[peer], now);
-            for (const auto& packet : room->wires[peer].sent)
+            for (const auto& packet : room->wires[peer].sent) {
                 CHECK(RollbackExchange::recognizes(packet.bytes));
+            }
             room->wires[peer].sent.clear();
             REQUIRE(session.phase() == Phase::Running);
         }
     }
     for (u8 peer = 1; peer <= 4; ++peer) {
-        if (!room->present(peer)) continue;
+        if (!room->present(peer)) {
+            continue;
+        }
         CHECK(waits[peer] > RollbackInputs::kPredictionTicks);
         room->wires[peer].result = PacketTransport::SendResult::Sent;
     }
     room->pump(); // Only retained send history/receiver ACKs repair the gap.
     for (u8 peer = 1; peer <= 4; ++peer) {
-        if (!room->present(peer)) continue;
+        if (!room->present(peer)) {
+            continue;
+        }
         auto corrected = room->inputs[peer].inputs();
         const auto head = corrected.tick();
         REQUIRE(corrected.mismatchTick());
@@ -437,8 +487,11 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
             REQUIRE(frame);
             CHECK(frame->predictedSeats == 0);
             REQUIRE(actual.contains(tick));
-            for (u8 seat = 0; seat < roster.size(); ++seat) {
-                if (roster[seat] == 0) continue;
+            // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+            for (u8 seat = 0; seat < static_cast<u8>(roster.size()); ++seat) {
+                if (roster[seat] == 0) {
+                    continue;
+                }
                 CHECK(inputBytes(std::span{&frame->commands[seat], 1}) ==
                       inputBytes(std::span{&actual.at(tick)[seat], 1}));
             }
@@ -451,11 +504,16 @@ TEST_CASE("native sessions recover retained inputs after an outage beyond the pr
     // Recovery is not merely one unblocked tick: keep accepting fresh devices,
     // confirming all seats and progressing the ordinary session afterward.
     for (u32 turn = 0; turn < 12; ++turn) {
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (room->present(peer)) sample(peer, false);
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (room->present(peer)) {
+                sample(peer, false);
+            }
+        }
         room->pump();
         for (u8 peer = 1; peer <= 4; ++peer) {
-            if (!room->present(peer)) continue;
+            if (!room->present(peer)) {
+                continue;
+            }
             REQUIRE(room->inputs[peer].advance());
             REQUIRE(room->inputs[peer].complete());
             CHECK(room->sessions[peer].nativeConfirmed() == room->inputs[peer].tick() - 1);
@@ -556,10 +614,12 @@ TEST_CASE("native match conflict consumer failure and disconnect end the epoch",
             room->sessions[1].context().epoch,
             [](const RollbackExchange::Message&, std::optional<u8>) { return false; }));
         REQUIRE(room->sessions[1].loaded());
-        for (u8 peer : {u8{2}, u8{3}, u8{4}}) REQUIRE(room->loaded(peer));
+        for (u8 const peer : {u8{2}, u8{3}, u8{4}}) {
+            REQUIRE(room->loaded(peer));
+        }
         // Ready controls are admitted before any input heartbeat reaches the
         // rejecting consumer, giving it a real active-epoch admission failure.
-        for (u8 peer : {u8{2}, u8{3}, u8{4}}) {
+        for (u8 const peer : {u8{2}, u8{3}, u8{4}}) {
             REQUIRE(room->sessions[1].receive(
                 100 + peer, controlBytes(MatchControlKind::Ready, room->sessions[1].context())) ==
                     Admission::Accepted);
@@ -647,7 +707,9 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
     if (progress != 0) {
         host.flush(room->wires[1]); room->deliver(1);
         REQUIRE(room->inputs[2].advance());
-        if (progress == 2) REQUIRE(room->inputs[2].complete());
+        if (progress == 2) {
+            REQUIRE(room->inputs[2].complete());
+        }
     }
     if (progress == 0) {
         host.flush(room->wires[1]); room->deliver(1);
@@ -662,12 +724,17 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
     const auto next = host.context();
     CHECK(next.sourceEpoch == source.epoch);
     CHECK(next.sourceTick == 1);
-    if (transition == MatchTransition::Travel) REQUIRE(host.requestMovieSkip(0));
+    if (transition == MatchTransition::Travel) {
+        REQUIRE(host.requestMovieSkip(0));
+    }
     host.flush(room->wires[1]);
     std::vector<Wire::Packet> delayed;
     for (const auto& packet : room->wires[1].sent) {
-        if (RollbackExchange::recognizes(packet.bytes)) delayed.push_back(packet);
-        else REQUIRE(guest.receive(kHost, packet.bytes) == Admission::Accepted);
+        if (RollbackExchange::recognizes(packet.bytes)) {
+            delayed.push_back(packet);
+        } else {
+            REQUIRE(guest.receive(kHost, packet.bytes) == Admission::Accepted);
+        }
     }
     room->wires[1].sent.clear();
     REQUIRE(guest.nativeDraining());
@@ -677,18 +744,23 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
     CHECK_FALSE(guest.confirmNativeTick(source.epoch, 2));
     REQUIRE(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, next)) == Admission::Stale);
     CHECK(host.receive(102, inputMessage(2, remote)) == Admission::Accepted);
-    for (const auto& packet : delayed)
+    for (const auto& packet : delayed) {
         REQUIRE(guest.receive(kHost, packet.bytes) == Admission::Accepted);
+    }
     REQUIRE(room->inputs[2].completeBoundary());
     CHECK_FALSE(guest.nativeDraining());
     CHECK(guest.context() == next);
     CHECK(guest.phase() == Phase::Loading);
     REQUIRE(guest.travelParty());
-    for (usize seat = 0; seat < profiles.size(); ++seat)
-        if (profiles[seat])
+    for (usize seat = 0; seat < profiles.size(); ++seat) {
+        if (profiles[seat]) {
             CHECK(CharacterProfilePacket::encode(*(*guest.travelParty())[seat]) ==
                   CharacterProfilePacket::encode(*profiles[seat]));
-    if (transition == MatchTransition::Shop) REQUIRE(guest.shop().setup());
+        }
+    }
+    if (transition == MatchTransition::Shop) {
+        REQUIRE(guest.shop().setup());
+    }
     if (transition == MatchTransition::Travel) {
         CHECK(guest.movieSkipVotes() == 1);
         REQUIRE(guest.requestMovieSkip(1));
@@ -869,8 +941,9 @@ TEST_CASE("off-cadence terminal certificates reject disagreement and gate transi
     auto room = std::make_unique<Room>();
     room->ready();
     executeThrough(*room, 31);
-    for (u8 peer : {u8{1}, u8{2}})
+    for (u8 const peer : {u8{1}, u8{2}}) {
         REQUIRE(room->sessions[peer].observeNative(30, observed(), MatchSession::Time{}));
+    }
     pumpAgreement(*room);
     const auto epoch = room->sessions[1].context().epoch;
     const auto profiles = room->party();
@@ -953,18 +1026,21 @@ TEST_CASE("terminal epoch-wide failures stop current and draining epochs but not
     if (phase != 0) {
         executeThrough(*room, 1);
         if (phase == 1) {
-            for (u8 peer : {u8{1}, u8{2}})
+            for (u8 const peer : {u8{1}, u8{2}}) {
                 REQUIRE(room->inputs[peer].submitBoundaryDigest());
+            }
         } else {
             room->agreeTerminal();
             const auto profiles = room->party();
             REQUIRE(room->sessions[1].prepare(8, MatchTransition::Travel, &profiles));
             room->pump();
             REQUIRE(room->inputs[2].completeBoundary());
-            if (phase == 3) room->commit();
+            if (phase == 3) {
+                room->commit();
+            }
         }
     }
-    for (u8 peer : {u8{1}, u8{2}}) {
+    for (u8 const peer : {u8{1}, u8{2}}) {
         CAPTURE(phase, peer);
         auto& session = room->sessions[peer];
         const auto result = session.receive(peer == 1 ? 102 : kHost, bytes);
@@ -979,7 +1055,9 @@ TEST_CASE("terminal epoch-wide failures stop current and draining epochs but not
             CHECK(session.stopReason() == MatchStop::TransportFailure);
         }
     }
-    if (phase == 3) executeThrough(*room, 1);
+    if (phase == 3) {
+        executeThrough(*room, 1);
+    }
 }
 
 TEST_CASE("native match observations agree without snapshots or changing input progression",

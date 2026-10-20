@@ -77,6 +77,7 @@ void Generators::appendSimulationDigest(
     }
     digest.value(attention);
     digest.wide(bodies.size());
+    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): every body is checked before use
     for (usize index = 0; index < bodies.size(); ++index) {
         if (bodies[index] == nullptr) {
             digest.invalidate();
@@ -151,7 +152,8 @@ bool Generators::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsho
     for (const auto& slot : m_roster) {
         appendSlot(digest, slot);
     }
-    appendSimulationDigest(digest, saved.state, std::span<const TextureAnimator::Clock>{saved.clocks});
+    appendSimulationDigest(digest, saved.m_state,
+                           std::span<const TextureAnimator::Clock>{saved.m_clocks});
     return digest.good();
 }
 
@@ -272,27 +274,27 @@ bool sameDefinition(const Generators::Slot& a, const Generators::Slot& b) {
 } // namespace
 
 void Generators::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.clocks.resize(m_sim.bodies.size());
+    saved.m_state = m_sim;
+    saved.m_clocks.resize(m_sim.bodies.size());
     for (usize i = 0; i < m_sim.bodies.size(); ++i) {
-        saved.clocks[i] = m_sim.bodies[i]->textures.clock();
+        saved.m_clocks[i] = m_sim.bodies[i]->textures.clock();
     }
-    saved.owner = m_localBinding;
-    saved.epoch = m_localEpoch;
+    saved.m_owner = m_localBinding;
+    saved.m_epoch = m_localEpoch;
 }
 
 bool Generators::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner.lock() == m_localBinding && saved.epoch == m_localEpoch &&
-           saved.clocks.size() == saved.state.bodies.size();
+    return saved.m_owner.lock() == m_localBinding && saved.m_epoch == m_localEpoch &&
+           saved.m_clocks.size() == saved.m_state.bodies.size();
 }
 
 bool Generators::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
     if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
         return false;
     }
-    const auto& a = left.state;
-    const auto& b = right.state;
-    if (a.collision != b.collision || a.bodies != b.bodies || left.clocks != right.clocks ||
+    const auto& a = left.m_state;
+    const auto& b = right.m_state;
+    if (a.collision != b.collision || a.bodies != b.bodies || left.m_clocks != right.m_clocks ||
         !sameView(a.view, b.view)) {
         return false;
     }
@@ -314,9 +316,9 @@ bool Generators::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     for (usize i = 0; i < m_sim.bodies.size(); ++i) {
-        m_sim.bodies[i]->textures.restoreClock(saved.clocks[i]);
+        m_sim.bodies[i]->textures.restoreClock(saved.m_clocks[i]);
     }
     ++m_restoreGeneration;
     return true;

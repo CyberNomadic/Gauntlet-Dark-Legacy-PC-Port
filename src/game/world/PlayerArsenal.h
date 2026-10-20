@@ -40,10 +40,10 @@ public:
      * Shared cast effects and player inventory belong to the enclosing scene. */
     class LocalSnapshot {
         friend class PlayerArsenal;
-        Simulation state;
-        PlayerMissiles::LocalSnapshot missiles;
-        const PlayerArsenal* owner = nullptr;
-        std::weak_ptr<const u8> binding;
+        Simulation m_state;
+        PlayerMissiles::LocalSnapshot m_missiles;
+        const PlayerArsenal* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;
@@ -104,12 +104,12 @@ public:
         std::vector<MissileLaunch> missiles; ///< static physics specs, no visual bindings
     };
     struct WeaponCue {
-        std::string_view name{};                ///< named level/common/ambient cue, when nonempty
+        std::string_view name;                  ///< named level/common/ambient cue, when nonempty
         std::optional<u32> call = std::nullopt; ///< otherwise the bound figure's class voice call
         bool operator==(const WeaponCue&) const = default;
     };
     /** Native fan/element/class priority, without playing or decoding a voice. */
-    static WeaponCue weaponCue(u32 flags, const PlayerFigure& figure);
+    static WeaponCue weaponCue(u32 weapon, const PlayerFigure& figure);
     /** Pure release preparation from trusted local actor/figure state. No artwork,
      * texture, audio, collision or inventory mutation occurs. An explicit release
      * belongs to a caller's native event; otherwise ordinary release latches supply

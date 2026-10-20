@@ -133,6 +133,8 @@ struct AttackCheckpointFixture {
             return true;
         };
     }
+    AttackCheckpointFixture(const AttackCheckpointFixture&) = delete;
+    AttackCheckpointFixture& operator=(const AttackCheckpointFixture&) = delete;
     ~AttackCheckpointFixture() {
         attacks.clear();
         arsenal.clear();

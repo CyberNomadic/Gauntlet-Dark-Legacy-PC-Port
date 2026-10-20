@@ -52,7 +52,8 @@ TEST_CASE("destruction checkpoints rewind pending cart blasts without dispatchin
           "[rollback][world-destruction-checkpoint]") {
     const auto rate = GENERATE(30, 60);
     const f32 seconds = 1.0f / static_cast<f32>(rate);
-    Fixture original, restored;
+    Fixture original;
+    Fixture restored;
     for (int tick = 0; tick < rate / 10; ++tick) {
         original.step(seconds);
     }
@@ -99,8 +100,10 @@ TEST_CASE("destruction restore refuses malformed rosters and stale sibling plans
         case 1: invalid.objects[0].name += "different"; break;
         case 2: invalid.objects[0].parent = 500; break;
         case 3: invalid.controlled.push_back(0); break;
-        case 4: invalid.explosions.push_back({std::numeric_limits<f32>::quiet_NaN(), 0, 0}); break;
+        case 4: invalid.explosions.emplace_back(std::numeric_limits<f32>::quiet_NaN(), 0, 0); break;
         case 5: invalid.destroyed[1] = true; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner.restore(invalid));
         CHECK(fixture.owner.checkpoint() == state);
@@ -123,7 +126,7 @@ TEST_CASE("destruction restore refuses malformed rosters and stale sibling plans
     REQUIRE(stale);
     fixture.destruction.bind(fixture.layout);
     CHECK_FALSE(fixture.owner.canCommit(*stale));
-    Fixture other;
+    const Fixture other;
     auto foreign = other.owner.prepareRestore(*state);
     REQUIRE(foreign);
     CHECK_FALSE(fixture.owner.commitRestore(std::move(*foreign)));
@@ -133,19 +136,22 @@ TEST_CASE("destruction restore refuses malformed rosters and stale sibling plans
 TEST_CASE("native destruction rosters restore between independently loaded stage owners",
           "[rollback][world-destruction-checkpoint][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
-    const auto stage = GENERATE("G2", "D1", "J4");
+    const auto* const stage = GENERATE("G2", "D1", "J4");
     test::FakeRenderDevice device;
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
     const auto level = catalog.byName(stage);
     REQUIRE(level);
-    LevelWorld first, second;
+    LevelWorld first;
+    LevelWorld second;
     REQUIRE(first.load(device, root, *level));
     REQUIRE(second.load(device, root, *level));
-    WorldDestruction firstLedger, secondLedger;
+    WorldDestruction firstLedger;
+    WorldDestruction secondLedger;
     firstLedger.bind(first.layout());
     secondLedger.bind(second.layout());
-    WorldDestructionCheckpoint source{firstLedger}, target{secondLedger};
+    const WorldDestructionCheckpoint source{firstLedger};
+    WorldDestructionCheckpoint target{secondLedger};
     const auto state = source.checkpoint();
     REQUIRE(state);
     REQUIRE(target.restore(*state));
@@ -154,7 +160,8 @@ TEST_CASE("native destruction rosters restore between independently loaded stage
 }
 TEST_CASE("native destruction history rewinds pending events without emitting collaborator work",
           "[local-rewind][world-destruction-local-rewind]") {
-    Fixture reference, corrected;
+    Fixture reference;
+    Fixture corrected;
     struct Snapshot {
         WorldDestruction::LocalSnapshot destruction;
         WorldAnimator::LocalSnapshot animator;
@@ -233,7 +240,9 @@ TEST_CASE("native destruction equality includes undelivered explosions with iden
           "[local-rewind][world-destruction-local-rewind]") {
     Fixture fixture;
     REQUIRE(fixture.destruction.explode(0, {10, 2, 3}, fixture.scene, fixture.collision));
-    WorldDestruction::LocalSnapshot queued, drained, restored;
+    WorldDestruction::LocalSnapshot queued;
+    WorldDestruction::LocalSnapshot drained;
+    WorldDestruction::LocalSnapshot restored;
     fixture.destruction.saveLocal(queued);
     const auto visible = fixture.scene.objectVisible(0);
     const auto solid = fixture.collision.solid(0);

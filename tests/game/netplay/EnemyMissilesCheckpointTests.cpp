@@ -322,6 +322,8 @@ TEST_CASE("enemy missile wire bounds are exact and refusal leaves oversized nati
     case 2: oversized.rockHits.push_back({0, 0}); break;
     case 3: oversized.bursts[0].scenery.push_back(0); break;
     case 4: oversized.bursts[0].blast.stages.push_back(1); break;
+    default:
+        break;
     }
     REQUIRE(oversized.valid());
     const auto before = oversized;

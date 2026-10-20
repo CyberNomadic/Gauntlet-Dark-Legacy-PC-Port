@@ -81,7 +81,7 @@ public:
     /** Required before readiness. Only the host supplies rules; guests verify
      * their local content/runtime identity against its offer. No match opens
      * until every peer confirms the complete resolved native setup. */
-    bool configureNative(const NativeIdentity& identity,
+    bool configureNative(const NativeIdentity& local,
                          std::optional<NativeRules> hostRules = std::nullopt);
     bool nativeRequested() const { return m_native != nullptr; }
     /** Available while Starting, before Active/openMatch. The application builds
@@ -89,7 +89,7 @@ public:
      * that setup's exact digest. This class never loads scenes or reads config. */
     const NativeContract* nativeContract() const;
     bool nativeSetupPending() const;
-    bool confirmNativeSetup(const std::string& digest);
+    bool confirmNativeSetup(const std::string& setup);
     /** Empty until the exact setup has completed the native bootstrap agreement. */
     std::string_view confirmedNativeSetup() const;
     void leave();

@@ -24,7 +24,8 @@ struct NativeProbeImpairment {
     u32 outageMs = 0;
     u32 outagePeer = 0;
     bool enabled() const {
-        return latencyMs || jitterMs || lossPpm || reorderPpm || outageMs;
+        return (latencyMs != 0u) || (jitterMs != 0u) || (lossPpm != 0u) || (reorderPpm != 0u) ||
+               (outageMs != 0u);
     }
 };
 /** Two-to-four-process iroh test driver. Local-only by default; public relay
@@ -37,6 +38,8 @@ public:
     NativeProbeLink(bool host, const std::filesystem::path& ticket, std::string contract, u8 delay,
                     game::PlayScene& scene, u8 peers = 2, u8 localPeer = 0,
                     NativeProbeImpairment impairment = {}, bool relayOnly = false);
+    NativeProbeLink(const NativeProbeLink&) = delete;
+    NativeProbeLink& operator=(const NativeProbeLink&) = delete;
     ~NativeProbeLink();
     struct ConfirmedFrame {
         game::NativeRollbackDriver::ExecutedFrame frame;
@@ -117,7 +120,7 @@ private:
         u64 completed = 0;
     };
     void pump(bool send = true);
-    void execute(bool forward, Step& result);
+    void execute(bool forward, Step& step);
     void openMatch();
     void observePaths();
     bool every(bool Endpoint::*field) const;
@@ -141,7 +144,7 @@ private:
     u64 m_reported = 0;
     u64 m_predictionMaxTicks = 0;
     Clock::time_point m_due;
-    Clock::time_point m_sendDue{};
+    Clock::time_point m_sendDue;
     Clock::time_point m_pumped = Clock::now();
     std::map<u64, Clock::time_point> m_samples;
     std::map<u64, game::NativeRollbackDriver::ExecutedFrame> m_frames;

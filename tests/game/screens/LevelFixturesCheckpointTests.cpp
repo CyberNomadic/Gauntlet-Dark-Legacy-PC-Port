@@ -131,20 +131,23 @@ void checkNativeParticipants(const Fixture& actual, const Fixture& expected) {
 
 TEST_CASE("native fixture rewind discards wrong blast contacts before replaying one to eight ticks",
           "[rollback][local-rewind][level-fixtures-local-rewind]") {
-    Fixture uninterrupted, replay;
-    NativeContacts expected, actual;
-    const auto expectedEvents = expected.events(), actualEvents = actual.events();
+    Fixture uninterrupted;
+    Fixture replay;
+    NativeContacts expected;
+    NativeContacts actual;
+    const auto expectedEvents = expected.events();
+    const auto actualEvents = actual.events();
     NativeHistory history;
     std::array<LevelFixtures::LocalSnapshot, 8> expectedLocal;
     LevelFixtures::LocalSnapshot observed;
-    constexpr f32 seconds = 1.0f / 30.0f;
+    constexpr f32 kSeconds = 1.0f / 30.0f;
     usize delayedContacts = 0;
     s32 frame = 0;
     const auto step = [&](Fixture& fixture, const LevelFixtures::Events& events, s32 tick) {
         if (tick % 32 == 0) {
             fixture.fixtures.blast({0, 0, 0}, 12, 30, fixture.players, events);
         }
-        fixture.fixtures.advanceBlasts(seconds, fixture.players, events);
+        fixture.fixtures.advanceBlasts(kSeconds, fixture.players, events);
         const auto state = fixture.owner.checkpoint();
         REQUIRE(state);
         REQUIRE(state->valid());
@@ -172,7 +175,7 @@ TEST_CASE("native fixture rewind discards wrong blast contacts before replaying 
         for (s32 i = 0; i < length; ++i) {
             step(uninterrupted, expectedEvents, frame + i);
             replay.fixtures.blast({6, 0, 0}, 24, 80, replay.players, actualEvents);
-            replay.fixtures.advanceBlasts(seconds * 2, replay.players, actualEvents);
+            replay.fixtures.advanceBlasts(kSeconds * 2, replay.players, actualEvents);
         }
         REQUIRE(replay.owner.checkpoint() != before);
         const auto rejected = actual;
@@ -199,7 +202,8 @@ TEST_CASE("native fixture rewind discards wrong blast contacts before replaying 
 
 TEST_CASE("native fixture aggregate refuses foreign and stale children before changing siblings",
           "[rollback][local-rewind][level-fixtures-local-rewind]") {
-    Fixture source, other;
+    Fixture source;
+    Fixture other;
     LevelFixtures::LocalSnapshot saved;
     CHECK_FALSE(source.fixtures.equalLocal(saved, saved));
     source.fixtures.saveLocal(saved);
@@ -229,7 +233,10 @@ TEST_CASE("native fixture aggregate refuses foreign and stale children before ch
 TEST_CASE("native fixture equality distinguishes reached identities with the same blast geometry",
           "[rollback][local-rewind][level-fixtures-local-rewind][native-equality]") {
     Fixture fixture;
-    LevelFixtures::LocalSnapshot initial, first, second, repeated;
+    LevelFixtures::LocalSnapshot initial;
+    LevelFixtures::LocalSnapshot first;
+    LevelFixtures::LocalSnapshot second;
+    LevelFixtures::LocalSnapshot repeated;
     fixture.fixtures.saveLocal(initial);
     const auto hit = [&](s32 identity) {
         LevelFixtures::Events events;
@@ -267,7 +274,8 @@ TEST_CASE("native G2 fixture and world rewind retains compound children and spec
     REQUIRE(catalog.load(root));
     const auto level = catalog.byName("G2");
     REQUIRE(level);
-    Fixture uninterrupted, replay;
+    Fixture uninterrupted;
+    Fixture replay;
     for (Fixture* fixture : {&uninterrupted, &replay}) {
         fixture->fixtures.clear();
         REQUIRE(fixture->world.load(fixture->device, root, *level));
@@ -297,13 +305,17 @@ TEST_CASE("native G2 fixture and world rewind retains compound children and spec
         fixture->players[0].actor.spawn(3, {}, nullptr, origin + Vec3{4, 0, 0}, 0);
         fixture->players[1].actor.spawn(1, {}, nullptr, origin + Vec3{8, 0, 0}, 0);
     }
-    NativeContacts expected, actual;
-    const auto expectedEvents = expected.events(), actualEvents = actual.events();
+    NativeContacts expected;
+    NativeContacts actual;
+    const auto expectedEvents = expected.events();
+    const auto actualEvents = actual.events();
     NativeHistory history;
     std::array<LevelFixtures::LocalSnapshot, 8> expectedLocal;
     LevelFixtures::LocalSnapshot observed;
-    constexpr f32 seconds = 1.0f / 30.0f;
-    bool sawEffect = false, sawRubble = false, sawReached = false;
+    constexpr f32 kSeconds = 1.0f / 30.0f;
+    bool sawEffect = false;
+    bool sawRubble = false;
+    bool sawReached = false;
     s32 frame = 0;
     const auto step = [&](Fixture& fixture, const LevelFixtures::Events& events, s32 tick) {
         fixture.world.capturePresentation();
@@ -314,9 +326,9 @@ TEST_CASE("native G2 fixture and world rewind retains compound children and spec
             REQUIRE_FALSE(fixture.fixtures.barrels().standing(explosive));
             fixture.fixtures.blast(contact, 12, 30, fixture.players, events);
         }
-        fixture.world.update(seconds);
-        fixture.fixtures.update(1, seconds, fixture.players, events);
-        fixture.effects.update(seconds);
+        fixture.world.update(kSeconds);
+        fixture.fixtures.update(1, kSeconds, fixture.players, events);
+        fixture.effects.update(kSeconds);
     };
     for (s32 window = 0; window < 24; ++window) {
         const s32 length = 1 + window % 8;
@@ -338,7 +350,8 @@ TEST_CASE("native G2 fixture and world rewind retains compound children and spec
             replay.fixtures.worldExplosion(origin, replay.players, actualEvents);
             step(replay, actualEvents, frame + i);
         }
-        const auto uploads = replay.device.texturesCreated, updates = replay.device.textureUpdates;
+        const auto uploads = replay.device.texturesCreated;
+        const auto updates = replay.device.textureUpdates;
         const auto rejected = actual;
         history.restore(replay);
         CHECK(actual == rejected);
@@ -429,7 +442,8 @@ TEST_CASE("fixture aggregate rewinds complete delayed blast contacts without dup
           "[rollback][level-fixtures-checkpoint]") {
     const auto rate = GENERATE(30, 60);
     const f32 seconds = 1.0f / static_cast<f32>(rate);
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     const auto empty = first.owner.checkpoint();
     REQUIRE(empty);
     first.fixtures.blast({0, 0, 0}, 12, 30, first.players, first.events);
@@ -475,6 +489,8 @@ TEST_CASE("fixture aggregate preflights every child and invalidates stale siblin
             invalid.clouds.push_back({{0, 0, 0}, 1, std::numeric_limits<f32>::quiet_NaN(), 0});
             break;
         case 4: invalid.difficultyGain = 2; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner.restore(invalid));
         CHECK(fixture.owner.checkpoint() == state);
@@ -529,6 +545,8 @@ TEST_CASE("fixture capture and full validation agree without trusting incoming c
             invalid.rubble.pieces.push_back(
                 {static_cast<u32>(invalid.rubble.resources.size()), Mat4{1}});
             break;
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture.owner.prepareRestore(invalid));
@@ -581,6 +599,8 @@ TEST_CASE(
         case 5: ring.playerReady[1].first = ring.playerReady[0].first; break;
         case 6: ring.opponentReady.emplace_back(2, 0.5f); break;
         case 7: ring.reached.push_back(1); break; // Aggregate contact bound exceeded.
+        default:
+            break;
         }
         CHECK_FALSE(invalid.valid());
         CHECK_FALSE(fixture.owner.prepareRestore(invalid));
@@ -593,7 +613,8 @@ TEST_CASE("fixture poison cooldown replay preserves expiry order and repeated na
           "[rollback][level-fixtures-checkpoint][fixture-timers]") {
     const s32 rate = GENERATE(30, 60);
     const f32 seconds = 1.0f / static_cast<f32>(rate);
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     auto state = first.owner.checkpoint();
     REQUIRE(state);
     // This is an incoming authoritative poison-ring checkpoint. The production
@@ -659,12 +680,13 @@ TEST_CASE("fixture poison cooldown replay preserves expiry order and repeated na
 TEST_CASE("native fixture aggregate retains all seven rosters and restores without uploads",
           "[rollback][level-fixtures-checkpoint][assets]") {
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
-    const auto stage = GENERATE("G1", "F1", "J4");
+    const auto* const stage = GENERATE("G1", "F1", "J4");
     LevelCatalog catalog;
     REQUIRE(catalog.load(root));
     const auto level = catalog.byName(stage);
     REQUIRE(level);
-    Fixture first, second;
+    Fixture first;
+    Fixture second;
     first.fixtures.clear();
     second.fixtures.clear();
     REQUIRE(first.world.load(first.device, root, *level));
@@ -681,7 +703,8 @@ TEST_CASE("native fixture aggregate retains all seven rosters and restores witho
     CHECK(state->rocks.rocks.size() == first.fixtures.safeRocks().size());
     CHECK(state->scenery.props.size() == first.fixtures.scenery().size());
     CHECK(state->rubble.pieces.size() == first.fixtures.rubble().size());
-    const auto textures = second.device.texturesCreated, updates = second.device.textureUpdates;
+    const auto textures = second.device.texturesCreated;
+    const auto updates = second.device.textureUpdates;
     REQUIRE(second.owner.restore(*state));
     CHECK(second.owner.checkpoint() == state);
     CHECK(second.device.texturesCreated == textures);

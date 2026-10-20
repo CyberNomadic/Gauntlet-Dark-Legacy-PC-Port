@@ -199,7 +199,7 @@ TEST_CASE("missing flame frames preserve the burn timer and rewind without GPU w
 
 TEST_CASE("an empty burn mask preserves the uncut scroll fallback", "[game][fire]") {
     Fixture f;
-    Image emptyMask;
+    const Image emptyMask;
     REQUIRE(f.fire.start(f.device, Rect{10, 20, 40, 40}, f.scroll, {&emptyMask}, {nullptr}));
     CHECK(f.fire.compositeAlpha(3, 3) == kOpaque.a);
     CHECK(f.device.texturesCreated == 0);

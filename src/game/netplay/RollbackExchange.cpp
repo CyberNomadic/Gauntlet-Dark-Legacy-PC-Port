@@ -239,14 +239,14 @@ RollbackExchange::Admission RollbackExchange::validate(const Message& message,
     }
     return history.size() + added > kHistory ? Admission::Full : Admission::Accepted;
 }
-void RollbackExchange::commit(const Message& message, History incoming,
+void RollbackExchange::commit(const Message& message, const History& incoming,
                               std::optional<Progress> progress) {
     const u8 origin = message.origin;
     auto& history = m_history[origin];
     auto& through = m_received[m_local][origin];
-    for (auto& [tick, frame] : incoming) {
+    for (const auto& [tick, frame] : incoming) {
         if (tick > through) {
-            history.try_emplace(tick, std::move(frame));
+            history.try_emplace(tick, frame);
         }
     }
     while (through != std::numeric_limits<u64>::max() && history.contains(through + 1)) {
@@ -296,9 +296,13 @@ bool RollbackExchange::publish(std::span<const InputCommand> commands, u64 nextT
     }
     // Corrections may end at an earlier terminal. Pacing advertises the reached
     // high-water mark, never invents a backwards-moving progress report.
-    Message message{
-        m_epoch, m_local, std::max(nextTick, m_next[m_local]), m_received[m_local],
-        {commands.begin(), commands.end()}, m_progress[m_local].serial + 1, 0};
+    const Message message{m_epoch,
+                          m_local,
+                          std::max(nextTick, m_next[m_local]),
+                          m_received[m_local],
+                          {commands.begin(), commands.end()},
+                          m_progress[m_local].serial + 1,
+                          0};
     History incoming;
     const auto result = validate(message, incoming);
     if (result != Admission::Accepted) {
@@ -307,7 +311,7 @@ bool RollbackExchange::publish(std::span<const InputCommand> commands, u64 nextT
         }
         return result == Admission::Full ? fail(Failure::Window) : false;
     }
-    commit(message, std::move(incoming), Progress{message.progressSerial, 0, *time});
+    commit(message, incoming, Progress{message.progressSerial, 0, *time});
     return true;
 }
 RollbackExchange::Admission
@@ -317,6 +321,7 @@ RollbackExchange::receive(PacketTransport::Connection connection, std::span<cons
     if (!m_open || m_failure != Failure::None || connection == 0) {
         return Admission::WrongPeer;
     }
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
     const auto source = std::ranges::find(m_links, connection);
     if (source == m_links.end()) {
         return Admission::WrongPeer;
@@ -353,7 +358,7 @@ RollbackExchange::receive(PacketTransport::Connection connection, std::span<cons
     if (!consume || !consume(*message, transit)) {
         return Admission::Rejected;
     }
-    commit(*message, std::move(incoming), progress);
+    commit(*message, incoming, progress);
     return Admission::Accepted;
 }
 bool RollbackExchange::flush(PacketTransport& transport) {

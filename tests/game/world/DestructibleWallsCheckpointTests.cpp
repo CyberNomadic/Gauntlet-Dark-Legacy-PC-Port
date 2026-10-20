@@ -176,6 +176,8 @@ TEST_CASE("wall checkpoint plans reject malformed surfaces and stale binding tra
     case 5: invalid.walls[0].blinks = 4; break;
     case 6: invalid.walls[0].model = false; break;
     case 7: invalid.walls[0].object += 1; break;
+    default:
+        break;
     }
     CHECK_FALSE(fixture.owner.restore(invalid));
     CHECK(fixture.state() == before);
@@ -314,7 +316,9 @@ TEST_CASE("native wall history preserves collision ownership stable surfaces and
 TEST_CASE("native wall equality includes pending reveal blinks before the model changes",
           "[local-rewind][walls-local-rewind]") {
     Fixture fixture("walls-native-hidden-reveal");
-    DestructibleWalls::LocalSnapshot before, after, restored;
+    DestructibleWalls::LocalSnapshot before;
+    DestructibleWalls::LocalSnapshot after;
+    DestructibleWalls::LocalSnapshot restored;
     fixture.walls.setPlayerCount(2, fixture.collision);
     fixture.walls.saveLocal(before);
     const auto health = fixture.walls.wall(0).health;

@@ -17,7 +17,7 @@ namespace gdl::game {
  * visibility windows and volley progress; knows nothing about a scene, renderer or audio.
  * Events run synchronously, with payment settled before the first damaging strike. */
 class TurboMove {
-    friend void visitNativeState(NativeStateDigest&, const TurboMove&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const TurboMove& /*value*/);
 
 public:
     bool operator==(const TurboMove&) const = default;

@@ -64,6 +64,8 @@ struct NativePeer {
         REQUIRE(scene.beginRecordedAudio(context.epoch));
         REQUIRE(driver.bind(scene, context, id, NativeRollbackDriver::AudioMode::Required));
     }
+    NativePeer(const NativePeer&) = delete;
+    NativePeer& operator=(const NativePeer&) = delete;
     ~NativePeer() {
         driver.clear();
         scene.endRecordedAudio();
@@ -107,7 +109,11 @@ struct NativePair {
         REQUIRE(result[0] == Status::Advanced);
         REQUIRE(result[1] == Status::Advanced);
     }
-    void warm() { for (u32 tick = 0; tick < 420; ++tick) step(); }
+    void warm() {
+        for (u32 tick = 0; tick < 420; ++tick) {
+            step();
+        }
+    }
 };
 } // namespace
 
@@ -118,7 +124,8 @@ TEST_CASE("native rollback lifecycle runs sparse local seats through real scenes
     u32 moved = 0;
     for (u32 tick = 1; tick <= 420; ++tick) {
         CAPTURE(tick, delay);
-        SessionInputs::Frame first, second;
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
         if (tick > 360) {
             first[0].move = {{1, 0}, 0.5f};
             second[0].move = {{-1, 0}, 0.5f};
@@ -127,12 +134,12 @@ TEST_CASE("native rollback lifecycle runs sparse local seats through real scenes
         }
         const auto before = pair.host->scene.actor(0)->position();
         pair.step(first, second);
-        moved += before != pair.host->scene.actor(0)->position();
+        moved += static_cast<u32>(before != pair.host->scene.actor(0)->position());
         CHECK(pair.host->tick() == tick);
         CHECK(pair.guest->tick() == tick);
         CHECK(pair.host->driver.confirmedTick() == tick);
         CHECK(pair.guest->driver.confirmedTick() == tick);
-        for (s32 seat : {0, 2}) {
+        for (s32 const seat : {0, 2}) {
             CHECK(pair.host->scene.actor(seat)->position() == pair.guest->scene.actor(seat)->position());
             CHECK(pair.host->scene.actor(seat)->yaw() == pair.guest->scene.actor(seat)->yaw());
         }
@@ -159,8 +166,9 @@ TEST_CASE("native predicted dead-player Quit is confirmed while Wait keeps the m
     const bool quit = GENERATE(false, true);
     NativePair pair(delay, true);
     pair.warm();
-    for (u32 tick = 0; tick < 900 && !pair.host->scene.participants()[0].towerPrompt; ++tick)
+    for (u32 tick = 0; tick < 900 && !pair.host->scene.participants()[0].towerPrompt; ++tick) {
         pair.step();
+    }
     for (auto* peer : {pair.host.get(), pair.guest.get()}) {
         REQUIRE(peer->scene.participants()[0].towerPrompt);
         REQUIRE(peer->scene.participants()[1].life == PlayerLife::Standing);
@@ -180,7 +188,9 @@ TEST_CASE("native predicted dead-player Quit is confirmed while Wait keeps the m
     }
     REQUIRE(answered);
     if (!quit) {
-        for (u32 tick = 0; tick < 30; ++tick) pair.step();
+        for (u32 tick = 0; tick < 30; ++tick) {
+            pair.step();
+        }
         CHECK_FALSE(pair.host->scene.participants()[0].departed);
         return;
     }
@@ -205,6 +215,7 @@ TEST_CASE("native simultaneous Quit confirms the fixed roster without malformed 
     pair.warm();
     for (auto* peer : {pair.host.get(), pair.guest.get()}) {
         for (const auto& participant : peer->scene.participants()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
             auto& runtime = const_cast<PlayerRuntime&>(participant);
             runtime.life = PlayerLife::InTower;
             runtime.towerPrompt = true;

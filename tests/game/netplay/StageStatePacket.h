@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <span>
@@ -29,11 +30,11 @@ public:
     };
     static constexpr u32 kVersion = 7;
     static constexpr usize kHeaderBytes = 56;
-    static constexpr usize kMaxBytes = 512 * 1024;
-    static constexpr usize kMaxDecodedBytes = 4 * 1024 * 1024;
+    static constexpr usize kMaxBytes = static_cast<const usize>(512 * 1024);
+    static constexpr usize kMaxDecodedBytes = static_cast<const usize>(4 * 1024 * 1024);
     static constexpr usize kMaxRecords = 65535;
     static constexpr usize kMaxString = 4096;
-    static constexpr usize kMaxStringBytes = 64 * 1024;
+    static constexpr usize kMaxStringBytes = static_cast<const usize>(64 * 1024);
     static constexpr usize kMaxCatalogTriangles = 65535;
     // Fast avoids a second compression pass unless the plain candidate exceeds
     // the wire budget. Automatic compares both lossless candidates for tooling.

@@ -438,6 +438,7 @@ bool NativeStateResources::registerLookouts(const LookoutRoute& route,
 }
 
 NativeStateDigest::Resources NativeStateResources::resources() const {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the digest's owner pointer is never written through
     return {const_cast<NativeStateResources*>(this), append};
 }
 

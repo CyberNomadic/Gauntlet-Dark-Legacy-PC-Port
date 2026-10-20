@@ -57,6 +57,7 @@ struct Pool {
             spawn.asleep = slot == 3;
             spawn.generator = slot % 4;
             spawn.position = {static_cast<f32>(slot % 5 - 2) * 9, 0,
+                              // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
                               static_cast<f32>(slot / 5 - 2) * 9};
             REQUIRE(enemies.spawn(spawn, {}) == slot);
         }
@@ -506,15 +507,15 @@ TEST_CASE("local enemy rewind retains lazy artwork but rewinds its active roster
     };
     const auto originalDrawing = draw();
     REQUIRE_FALSE(originalDrawing.empty());
-    constexpr s32 newKind = 0;
-    REQUIRE_FALSE(pool.enemies.kindLoaded(newKind));
+    constexpr s32 kNewKind = 0;
+    REQUIRE_FALSE(pool.enemies.kindLoaded(kNewKind));
     Enemies::LocalSnapshot saved;
     REQUIRE(pool.enemies.saveLocal(saved));
     const auto before = pool.enemies.checkpoint();
     REQUIRE(before);
-    REQUIRE(pool.enemies.loadKind(newKind));
+    REQUIRE(pool.enemies.loadKind(kNewKind));
     EnemySpawn spawn;
-    spawn.kind = newKind;
+    spawn.kind = kNewKind;
     spawn.placed = true;
     spawn.priority = EnemySpawn::Priority::Visible;
     spawn.position = {80, 0, 80};
@@ -530,10 +531,10 @@ TEST_CASE("local enemy rewind retains lazy artwork but rewinds its active roster
     REQUIRE_FALSE(sameDrawing(originalDrawing, futureDrawing));
     const auto uploads = pool.device.texturesCreated;
     REQUIRE(pool.enemies.restoreLocal(saved));
-    CHECK_FALSE(pool.enemies.kindLoaded(newKind));
+    CHECK_FALSE(pool.enemies.kindLoaded(kNewKind));
     CHECK(pool.enemies.checkpoint() == before);
     CHECK(sameDrawing(draw(), originalDrawing));
-    REQUIRE(pool.enemies.loadKind(newKind));
+    REQUIRE(pool.enemies.loadKind(kNewKind));
     CHECK(pool.enemies.spawn(spawn, {}) == slot);
     for (s32 tick = 0; tick < 8; ++tick) {
         pool.step(tick);
@@ -605,7 +606,8 @@ TEST_CASE("native enemy equality sees pending work even when no body is visible"
     // pending outputs even for IT's zero-node art. Consuming those outputs is
     // itself native state, rather than an ignorable presentation observation.
     REQUIRE(pool.spawn({.kind = kItKind, .position = {10, 0, 0}, .placed = true}, {}));
-    Enemies::LocalSnapshot born, consumed;
+    Enemies::LocalSnapshot born;
+    Enemies::LocalSnapshot consumed;
     REQUIRE(pool.saveLocal(born));
     CHECK_FALSE(pool.equalLocal(initial, born));
     REQUIRE_FALSE(pool.takeBirths().empty());
@@ -645,6 +647,7 @@ TEST_CASE("local rewind of the native bodiless enemy runs without private game a
         state = *observed;
     }
     auto moved = std::move(saved);
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(pool.restoreLocal(saved));
     REQUIRE(pool.restoreLocal(moved));
     CHECK(pool.checkpoint() == before);
@@ -654,7 +657,7 @@ TEST_CASE("local rewind of the native bodiless enemy runs without private game a
     }
     REQUIRE(pool.restoreLocal(moved));
     CHECK(pool.checkpoint() == before);
-    HazardSurfaces replacementHazards;
+    const HazardSurfaces replacementHazards;
     pool.setHazards(&replacementHazards);
     CHECK_FALSE(pool.restoreLocal(moved));
     pool.setHazards(nullptr);
@@ -673,7 +676,9 @@ TEST_CASE("measure crowded native enemy save restore and eight tick replay costs
     const bool coldSaved = pool.enemies.saveLocal(saved);
     const auto coldEnd = Clock::now();
     REQUIRE(coldSaved);
-    std::vector<f64> saves, restores, replays;
+    std::vector<f64> saves;
+    std::vector<f64> restores;
+    std::vector<f64> replays;
     saves.reserve(256);
     restores.reserve(256);
     replays.reserve(256);

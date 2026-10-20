@@ -39,10 +39,12 @@ TowerCamera& TowerCamera::operator=(const TowerCamera& other) {
 }
 // A normal camera owns only scalar history. Moving its value need not alter
 // the source, and must not transfer either camera's restore-domain identity.
-TowerCamera::TowerCamera(TowerCamera&& other)
+TowerCamera::TowerCamera(TowerCamera&& other) noexcept
+    // NOLINTNEXTLINE(performance-move-constructor-init): a moved camera leaves its source intact
     : TowerCamera(static_cast<const TowerCamera&>(other)) {}
-TowerCamera& TowerCamera::operator=(TowerCamera&& other) {
-    return operator=(static_cast<const TowerCamera&>(other));
+TowerCamera& TowerCamera::operator=(TowerCamera&& other) noexcept {
+    operator=(static_cast<const TowerCamera&>(other));
+    return *this;
 }
 void TowerCamera::copyValues(const TowerCamera& other) noexcept {
     m_state = other.m_state;

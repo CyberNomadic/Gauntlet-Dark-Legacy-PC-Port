@@ -42,7 +42,7 @@ public:
         Obstacle box;
         std::optional<Floor> floor;
         std::optional<f32> collectedSeconds;
-        bool operator==(const Chest&) const;
+        bool operator==(const Chest& /*other*/) const;
     };
     struct State {
         static constexpr usize kMaxChests = 4096;
@@ -60,7 +60,7 @@ public:
         bool collision = false;
         bool layout = false;
         bool valid() const;
-        bool operator==(const State&) const;
+        bool operator==(const State& /*other*/) const;
     };
     class Prepared {
     public:

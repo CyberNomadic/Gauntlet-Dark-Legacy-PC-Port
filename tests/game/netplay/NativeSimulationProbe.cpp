@@ -195,12 +195,12 @@ Options parse(std::span<char*> args) {
 }
 
 std::string hex(std::span<const u8> bytes) {
-    constexpr std::string_view digits = "0123456789abcdef";
+    constexpr std::string_view kDigits = "0123456789abcdef";
     std::string result;
     result.reserve(bytes.size() * 2);
     for (const u8 byte : bytes) {
-        result += digits[byte >> 4U];
-        result += digits[byte & 15U];
+        result += kDigits[byte >> 4U];
+        result += kDigits[byte & 15U];
     }
     return result;
 }
@@ -314,14 +314,14 @@ Json networkMetrics(const test::NativeProbeLink::Metrics& value) {
 // world space, just as it must be at the device/network input boundary. No mouse
 // projection, current camera, wall clock or render cadence selects these inputs.
 std::vector<InputCommand> journal(const Options& options, u32 tick) {
-    constexpr std::array<Vec2, 4> directions{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
+    constexpr std::array<Vec2, 4> kDirections{Vec2{0, 1}, Vec2{1, 0}, Vec2{0, -1}, Vec2{-1, 0}};
     std::vector<InputCommand> commands;
     for (u32 seat = 0; seat < options.players; ++seat) {
         PlayInput input;
         if (options.workload == "combat" && tick > 360) {
             const u32 elapsed = tick - 361;
             const u32 phase = (elapsed + seat * 30) % 240;
-            const Vec2 direction = directions[(elapsed / 120 + seat) % directions.size()];
+            const Vec2 direction = kDirections[(elapsed / 120 + seat) % kDirections.size()];
             input.move = {direction, 1};
             input.aimDirection = Vec3{direction.x, 0, -direction.y};
             input.attack = phase < 90;
@@ -358,6 +358,7 @@ void run(const Options& options) {
     const std::string dataDigest = assetDigest(options.data);
     const std::string configuration = config.toJson();
     const auto configBytes =
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         std::span{reinterpret_cast<const u8*>(configuration.data()), configuration.size()};
     test::FakeRenderDevice device;
     device.recordDraws = false;
@@ -416,6 +417,7 @@ void run(const Options& options) {
                                           {"protocol", "native-rollback-probe-v4"}}
                                          .dump();
         const auto contractBytes =
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
             std::span{reinterpret_cast<const u8*>(contract.data()), contract.size()};
         auto network = std::make_unique<test::NativeProbeLink>(
             options.networkRole == "host", options.ticket, digest(contractBytes),
@@ -480,7 +482,11 @@ void run(const Options& options) {
     u32 movedTicks = 0;
     usize mostEnemies = 0;
     usize mostProjectiles = 0;
-    std::vector<f64> updateTimes, observationTimes, renderTimes, enemySaveTimes, enemyRestoreTimes;
+    std::vector<f64> updateTimes;
+    std::vector<f64> observationTimes;
+    std::vector<f64> renderTimes;
+    std::vector<f64> enemySaveTimes;
+    std::vector<f64> enemyRestoreTimes;
     auto enemySaved = options.enemyRoundtrip ? std::make_unique<Enemies::LocalSnapshot>() : nullptr;
     if (!options.timings.empty()) {
         updateTimes.reserve(options.ticks);
@@ -542,6 +548,7 @@ void run(const Options& options) {
         std::ranges::sort(observation.subsystems, {}, &SimulationObservation::Subsystem::name);
         if (tick == 1) {
             std::vector<std::string> names;
+            names.reserve(observation.subsystems.size());
             for (const auto& subsystem : observation.subsystems) {
                 names.push_back(subsystem.name);
             }
@@ -633,6 +640,7 @@ int main(int argc, char** argv) {
         if (!NativeOnlineIdentity::prepareProcessNumeric(&numericError)) {
             throw std::runtime_error(numericError);
         }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv
         if (argc == 2 && std::string_view(argv[1]) == "--help") {
             std::cout << "nativeprobe --report path.jsonl [--stage G1|tower|...] [--ticks 600] "
                          "[--players 1..4] [--render-every 0..60] [--workload idle|combat] "

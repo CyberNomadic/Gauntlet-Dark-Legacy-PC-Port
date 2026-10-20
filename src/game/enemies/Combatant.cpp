@@ -102,6 +102,7 @@ bool Combatant::spawn(CombatantAssets& stock, s32 id, const Vec3& position, f32 
     return true;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 bool Combatant::saveLocal(LocalSnapshot& snapshot) const {
     snapshot.m_owner.reset();
     if (!m_obstacles.empty() || !m_swarm.empty() ||
@@ -124,6 +125,7 @@ bool Combatant::saveLocal(LocalSnapshot& snapshot) const {
     return true;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 bool Combatant::canRestoreLocal(const LocalSnapshot& snapshot) const {
     if (snapshot.m_owner.lock() != m_localOwner || snapshot.m_epoch != m_localEpoch ||
         !m_obstacles.empty() || !m_swarm.empty() ||
@@ -195,6 +197,7 @@ bool Combatant::appendNativeDigest(NativeStateDigest& digest) const {
     return appendNativeDigest(digest, nullptr);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 bool Combatant::appendNativeDigest(NativeStateDigest& digest,
                                    const Combatant* expectedParent) const {
     if (!m_obstacles.empty() || !m_swarm.empty() || m_sim.childCount > m_children.size()) {
@@ -217,6 +220,7 @@ bool Combatant::appendLocalDigest(NativeStateDigest& digest,
     return appendLocalDigest(digest, snapshot, nullptr);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 bool Combatant::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& snapshot,
                                   const Combatant* expectedParent) const {
     appendSimulationDigest(digest, snapshot.m_state, expectedParent);
@@ -269,6 +273,7 @@ bool Combatant::Actor::equalLocal(const Actor& other) const {
                });
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 bool Combatant::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
     if (!canRestoreLocal(left) || !canRestoreLocal(right)) {
         return false;
@@ -294,6 +299,7 @@ bool Combatant::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right
     return true;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): subsystem checkpoints recurse into their parts by design
 void Combatant::restoreLocalValues(const LocalSnapshot& snapshot) {
     m_sim = snapshot.m_state;
     ++m_checkpointRevision;

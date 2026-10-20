@@ -169,9 +169,9 @@ TEST_CASE("generator checkpoint validates version scalar enums flags and absent 
     state.generators.front().box.enemyItem.reset();
     const auto bytes = GeneratorCheckpoint::encode(state);
     REQUIRE(bytes);
-    constexpr usize body = GeneratorCheckpoint::kHeaderBytes;
-    constexpr usize roster = body + GeneratorCheckpoint::kBodyBytes;
-    constexpr usize current = roster + GeneratorCheckpoint::kSlotBytes;
+    constexpr usize kBody = GeneratorCheckpoint::kHeaderBytes;
+    constexpr usize kRoster = kBody + GeneratorCheckpoint::kBodyBytes;
+    constexpr usize kCurrent = kRoster + GeneratorCheckpoint::kSlotBytes;
     const auto rejects = [&](usize offset, u32 value) {
         auto changed = *bytes;
         word(changed, offset, value);
@@ -183,19 +183,19 @@ TEST_CASE("generator checkpoint validates version scalar enums flags and absent 
     rejects(16, 1); // declared view lacks its bytes
     rejects(32, 5);
     rejects(20, std::bit_cast<u32>(std::numeric_limits<f32>::quiet_NaN()));
-    rejects(body + 8, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
-    rejects(current + 4, 3);     // presence enum
-    rejects(current + 4, 0x100); // not a truncated u8 enum
-    rejects(current + 8, static_cast<u32>(kEnemyKindCount));
-    rejects(current + 48, std::bit_cast<u32>(1.1f));  // birth ratio
-    rejects(current + 184, 32);                       // unknown packed boolean bit
-    rejects(current + 184, 2);                        // uncheckpointed boss figure
-    rejects(current + 184, 16);                       // cylindrical query without query presence
-    rejects(current + 220, std::bit_cast<u32>(0.5f)); // absent query radius
-    rejects(current + 220, 0x80000000);               // absent is canonical +0, not -0
-    rejects(current + 32, std::bit_cast<u32>(12.0f)); // different immutable threshold
-    rejects(current + 300, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
-    for (const usize offset : {roster + 92, current + 228}) {
+    rejects(kBody + 8, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
+    rejects(kCurrent + 4, 3);     // presence enum
+    rejects(kCurrent + 4, 0x100); // not a truncated u8 enum
+    rejects(kCurrent + 8, static_cast<u32>(kEnemyKindCount));
+    rejects(kCurrent + 48, std::bit_cast<u32>(1.1f));  // birth ratio
+    rejects(kCurrent + 184, 32);                       // unknown packed boolean bit
+    rejects(kCurrent + 184, 2);                        // uncheckpointed boss figure
+    rejects(kCurrent + 184, 16);                       // cylindrical query without query presence
+    rejects(kCurrent + 220, std::bit_cast<u32>(0.5f)); // absent query radius
+    rejects(kCurrent + 220, 0x80000000);               // absent is canonical +0, not -0
+    rejects(kCurrent + 32, std::bit_cast<u32>(12.0f)); // different immutable threshold
+    rejects(kCurrent + 300, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
+    for (const usize offset : {kRoster + 92, kCurrent + 228}) {
         rejects(offset, std::bit_cast<u32>(std::numeric_limits<f32>::quiet_NaN()));
     }
 }

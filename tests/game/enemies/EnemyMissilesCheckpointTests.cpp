@@ -299,8 +299,11 @@ TEST_CASE("enemy missile prepared restore is owner-bound single-use and invalida
     REQUIRE(pool->canCommit(*prepared));
     EnemyMissiles::Prepared moved = std::move(*prepared);
     CHECK_FALSE(pool->canCommit(*prepared));
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     REQUIRE(pool->commitRestore(std::move(moved)));
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(pool->canCommit(moved));
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(pool->commitRestore(std::move(moved)));
     CHECK_FALSE(pool->canCommit(*sibling));
     CHECK(capture(*pool) == baseline);
@@ -524,11 +527,14 @@ TEST_CASE("enemy missile resources survive shooter recycling and resolve origina
 
 TEST_CASE("native enemy missile rewind discards wrong flight branches and preserves pending hits",
           "[enemy-missiles-local-rewind]") {
-    Battle reference, predicted;
+    Battle reference;
+    Battle predicted;
     EnemyMissiles::LocalSnapshot saved;
     reference.advance(0.173f);
     predicted.advance(0.173f);
-    bool sawHits = false, sawBursts = false, sawReflections = false;
+    bool sawHits = false;
+    bool sawBursts = false;
+    bool sawReflections = false;
     s32 tick = 0;
     for (s32 window = 0; window < 48; ++window) {
         CAPTURE(window, tick);
@@ -567,7 +573,8 @@ TEST_CASE("native enemy missile rewind discards wrong flight branches and preser
 
 TEST_CASE("native enemy missile history refuses foreign and replaced bindings",
           "[enemy-missiles-local-rewind]") {
-    Battle first, other;
+    Battle first;
+    Battle other;
     EnemyMissiles::LocalSnapshot saved;
     CHECK_FALSE(first.pool.restoreLocal(saved));
     CHECK_FALSE(first.pool.equalLocal(saved, saved));
@@ -593,7 +600,8 @@ TEST_CASE(
     "[enemy-missiles-local-rewind][native-state-equality]") {
     Battle battle;
     battle.advance(0.173f);
-    EnemyMissiles::LocalSnapshot saved, changed;
+    EnemyMissiles::LocalSnapshot saved;
+    EnemyMissiles::LocalSnapshot changed;
     battle.pool.saveLocal(saved);
     battle.pool.saveLocal(changed);
     REQUIRE(battle.pool.equalLocal(saved, changed));
@@ -608,6 +616,7 @@ TEST_CASE(
     };
     const auto flight = [&]() -> EnemyMissile& {
         // This mutable pool owns the value; only its public observation is const.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         return const_cast<EnemyMissile&>(battle.pool.missile(0));
     };
     REQUIRE_FALSE(flight().pierced.empty());
@@ -654,7 +663,9 @@ TEST_CASE("enemy flight and lingering blast impacts retain births through compac
     REQUIRE(blast != 0);
     REQUIRE(blast != flight);
     const std::array views{player({0, 0, 0.5f}, 0), player({20, 0, 0}, 1)};
-    EnemyMissiles::LocalSnapshot saved, expectedNative, actualNative;
+    EnemyMissiles::LocalSnapshot saved;
+    EnemyMissiles::LocalSnapshot expectedNative;
+    EnemyMissiles::LocalSnapshot actualNative;
     pool.saveLocal(saved);
     const auto run = [&] {
         pool.update(1.0f / 60, nullptr, views);

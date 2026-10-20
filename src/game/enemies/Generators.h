@@ -66,6 +66,7 @@ public:
     Generators& operator=(const Generators&) = delete;
     Generators(Generators&&) = delete;
     Generators& operator=(Generators&&) = delete;
+    ~Generators() = default;
 
     static constexpr s32 kStates = 3;
     static constexpr f32 kCountdownScale = 6.0f;    ///< ticks a unit of interval counts for
@@ -208,7 +209,7 @@ public:
         Vec3 boxOffset{0};
         f32 boxYaw = 0;
         bool boss = false;
-        bool operator==(const Slot&) const;
+        bool operator==(const Slot& /*other*/) const;
     };
     const Slot& slot(usize index) const { return m_sim.generators[index]; }
 
@@ -229,7 +230,7 @@ public:
         std::optional<ViewVolume> view;
         std::optional<Vec3> attention;
         bool valid() const;
-        bool operator==(const Checkpoint&) const;
+        bool operator==(const Checkpoint& /*other*/) const;
     };
 
     /** Boss ItemFigure animation/particles are not yet resumable: their presence
@@ -240,6 +241,8 @@ public:
         Prepared(Prepared&&) noexcept;
         Prepared& operator=(Prepared&&) noexcept;
         ~Prepared();
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
 
     private:
         friend class Generators;
@@ -306,10 +309,10 @@ private:
 public:
     class LocalSnapshot {
         friend class Generators;
-        Simulation state;
-        std::vector<TextureAnimator::Clock> clocks;
-        std::weak_ptr<const u8> owner;
-        u64 epoch = 0;
+        Simulation m_state;
+        std::vector<TextureAnimator::Clock> m_clocks;
+        std::weak_ptr<const u8> m_owner;
+        u64 m_epoch = 0;
     };
     /** Stage-local native value copies, including boss-born generators. Artwork
      * and collision owners stay loaded; capture/restore never binds resources. */

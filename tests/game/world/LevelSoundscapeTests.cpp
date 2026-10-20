@@ -194,7 +194,7 @@ TEST_CASE("speech output failures preserve decoded native timing and chained wai
     {
         // Exercise an exception from the real optional output call, after its
         // source has decoded. No failure is injected into gameplay timing.
-        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+        const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
             if (event.kind == SoundPlayer::Event::Kind::Play) {
                 ++failures;
                 throw std::runtime_error("test audio output failure");
@@ -517,7 +517,7 @@ TEST_CASE("failed voice output preserves the complete announcement and logical b
     const std::array lines{std::string_view{"LINE"}, std::string_view{"OTHER"}};
     usize failures = 0;
     {
-        SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+        const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
             if (event.kind == SoundPlayer::Event::Kind::Play) {
                 ++failures;
                 throw std::runtime_error("test queued audio output failure");
@@ -1532,14 +1532,15 @@ TEST_CASE("native soundscape rewind restores both logical queues without emittin
     REQUIRE(character.load(root / "audio/CHARACTER"));
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
-    LevelSoundscape reference, predicted;
+    LevelSoundscape reference;
+    LevelSoundscape predicted;
     reference.open(root, nullptr, nullptr);
     predicted.open(root, &output, nullptr);
     LevelSoundscape::LocalSnapshot saved;
     usize commands = 0;
     // A missing-output reference and an actually failing output must make the
     // same logical admission choices before and after every corrected branch.
-    SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+    const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
         ++commands;
         if (event.kind == SoundPlayer::Event::Kind::Play) {
             throw std::runtime_error("test optional narration output");
@@ -1629,8 +1630,8 @@ TEST_CASE("native music requests agree with absent stalled and progressing mixer
             const auto voices = fixture->player.voiceCount();
             usize commands = 0;
             {
-                SoundPlayer::Capture capture(&fixture->player,
-                                             [&](const SoundPlayer::Event&) { ++commands; });
+                const SoundPlayer::Capture capture(&fixture->player,
+                                                   [&](const SoundPlayer::Event&) { ++commands; });
                 REQUIRE(fixture->soundscape.restoreLocal(saved));
             }
             CHECK(commands == 0);
@@ -1669,7 +1670,8 @@ TEST_CASE("native restored music resumes a discarded stop only at the next servi
     REQUIRE_FALSE(f.soundscape.desiredMusic().enabled);
     usize commands = 0;
     {
-        SoundPlayer::Capture capture(&f.player, [&](const SoundPlayer::Event&) { ++commands; });
+        const SoundPlayer::Capture capture(&f.player,
+                                           [&](const SoundPlayer::Event&) { ++commands; });
         REQUIRE(f.soundscape.restoreLocal(saved));
     }
     CHECK(commands == 0);
@@ -1700,7 +1702,8 @@ TEST_CASE("native soundscape history restores music zone party filters and guard
                        "params":[0,0,32,65,3,0,0,0,2,0,0,0]}]})");
     WorldLayout layout;
     REQUIRE(layout.load(root));
-    LevelSoundscape sounds, foreign;
+    LevelSoundscape sounds;
+    LevelSoundscape foreign;
     sounds.open(root, nullptr, nullptr);
     foreign.open(root, nullptr, nullptr);
     sounds.bindAmbience(layout);
@@ -1749,9 +1752,10 @@ TEST_CASE("scene soundscape captures finite cues and typed speech chains before 
     events.open(21, &output);
     sounds.recordTo(&events);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     events.beginTick(1);
-    LevelSoundscape::Speech first, second;
+    LevelSoundscape::Speech first;
+    LevelSoundscape::Speech second;
     {
         auto scope = events.scoped({1, 1, 1, 0}, 1);
         CHECK(sounds.playNamed("NAMED") == kNoSound);
@@ -1825,10 +1829,12 @@ TEST_CASE("native soundscape rewind restores narration predecessor independently
     REQUIRE(first.events.size() == 1);
     LevelSoundscape::LocalSnapshot saved;
     sounds.saveLocal(saved);
-    LevelSoundscape::LocalSnapshot changed, correct, replayed;
+    LevelSoundscape::LocalSnapshot changed;
+    LevelSoundscape::LocalSnapshot correct;
+    LevelSoundscape::LocalSnapshot replayed;
     sounds.saveLocal(changed);
     CHECK(sounds.equalLocal(saved, changed));
-    LevelSoundscape foreign;
+    const LevelSoundscape foreign;
     CHECK_FALSE(foreign.equalLocal(saved, changed));
     const auto wrong = capture(2, 99, "WRONG");
     REQUIRE(wrong.events.size() == 1);
@@ -1877,7 +1883,7 @@ TEST_CASE("recorded soundscape reports uncovered mixer paths instead of emitting
     events.open(23, &output);
     sounds.recordTo(&events);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(sounds.playNamed("NAMED"), SceneSoundEvents::Unsupported);
     events.beginTick(1);
     {
@@ -1912,7 +1918,7 @@ TEST_CASE("native soundscape restores opening and scroll lifetimes before final 
     events.open(71, &output);
     sounds.recordTo(&events);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     const auto gather = [&] {
         sounds.gatherLoops({}, {}, 1, false, nullptr, Vec3{1, 0, 0}, Vec3{-1, 0, 0});
         return events.endFrame();
@@ -2019,7 +2025,7 @@ TEST_CASE("recorded frame camera seeding removes discarded branch pan from repla
     LevelSoundscape::LocalSnapshot before;
     sounds.saveLocal(before);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     const auto capture = [&](u64 tick, const AmbientEar& ear) {
         events.beginTick(tick);
         sounds.prepareRecordedFrame(ear);
@@ -2099,7 +2105,7 @@ TEST_CASE("sound recorder attachment preflight preserves existing owned lifetime
     SceneSoundEvents events;
     events.open(75, &output);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(sounds.recordTo(&events), SceneSoundEvents::Unsupported);
     CHECK(commands == 0);
     CHECK_FALSE(sounds.recordingSounds());
@@ -2133,7 +2139,7 @@ TEST_CASE("soundscape recorder refuses queued barks before changing any owned ou
     SceneSoundEvents events;
     events.open(76, &output);
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     CHECK_FALSE(sounds.canAttachRecorder());
     CHECK_THROWS_AS(sounds.recordTo(&events), SceneSoundEvents::Unsupported);
     CHECK(commands == 0);
@@ -2163,7 +2169,7 @@ TEST_CASE("soundscape recorder refuses closed epochs before silencing proximity 
     sounds.saveLocal(before);
     SceneSoundEvents closed;
     usize commands = 0;
-    SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&output, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(sounds.recordTo(&closed), SceneSoundEvents::Unsupported);
     CHECK(commands == 0);
     CHECK(sounds.canRestoreLocal(before));

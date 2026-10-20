@@ -50,6 +50,7 @@ public:
     void add(f32 value) { add(std::bit_cast<u32>(value)); }
     void add(std::string_view value) {
         add(static_cast<u64>(value.size()));
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
         m_hash.update({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     void add(const Vec2& value) {
@@ -167,7 +168,8 @@ std::optional<std::array<u8, 32>> catalog(ItemArchive* archive, const TreeInfo* 
         return std::nullopt;
     }
     hash.tree(*tree);
-    std::set<u32> models, images;
+    std::set<u32> models;
+    std::set<u32> images;
     const auto addModels = [&](const std::string& name, s32 count) {
         const auto first = archive->models.find(name);
         hash.add(first.has_value());
@@ -467,6 +469,7 @@ LevelTransportersCheckpoint::prepareRestore(const State& state) const {
             if (!active || saved.animation.sequence != *active) {
                 return std::nullopt;
             }
+            // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
             sequence = &m_owner.m_tree->sequences[*active];
             const f32 period = (sequence->frameRate > 0 ? static_cast<f32>(sequence->frameRate)
                                                         : AnimationPlayer::kDefaultRate) *

@@ -23,15 +23,16 @@ struct Sounds {
 
 TEST_CASE("scene sounds record values before output and replay identical cues only once",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(1, &player);
     usize commands = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
     events.beginTick(1);
-    SoundCueToken first, second;
+    SoundCueToken first;
+    SoundCueToken second;
     {
         auto scope = events.scoped(kPlayer, 7);
         first = events.emit(sounds.a, 0.5f, -0.25f);
@@ -64,8 +65,9 @@ TEST_CASE("scene sounds record values before output and replay identical cues on
 
 TEST_CASE("scene sound identity is emitter local rather than global call order",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
-    SceneSoundEvents first, reordered;
+    const Sounds sounds;
+    SceneSoundEvents first;
+    SceneSoundEvents reordered;
     first.open(7, nullptr);
     reordered.open(7, nullptr);
     const auto emit = [&](SceneSoundEvents& events, FrameEventEmitter emitter, u32 cue,
@@ -99,13 +101,13 @@ TEST_CASE("scene sound identity is emitter local rather than global call order",
 
 TEST_CASE("corrected scene speech uses its logical predecessor not the discarded future voice",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(3, &player);
     std::vector<SoundPlayer::Event> output;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         if (event.kind == SoundPlayer::Event::Kind::Play) {
             output.push_back(event);
         }
@@ -151,13 +153,13 @@ TEST_CASE("corrected scene speech uses its logical predecessor not the discarded
 
 TEST_CASE("scene sound capture rejects uncovered calls before touching the mixer",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(4, &player);
     usize commands = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
+    const SoundPlayer::Capture observe(&player, [&](const auto&) { ++commands; });
     CHECK_THROWS_AS(events.emit(sounds.a), SceneSoundEvents::Unsupported);
     events.beginTick(1);
     CHECK_THROWS_AS(events.emit(sounds.a), SceneSoundEvents::Unsupported);
@@ -182,23 +184,24 @@ TEST_CASE("scene sound capture rejects uncovered calls before touching the mixer
 
 TEST_CASE("scene sound validation rejects invalid ticks and predecessor identities atomically",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     SceneSoundEvents events;
     CHECK_THROWS_AS(events.open(1, nullptr, 0), SceneSoundEvents::Unsupported);
     events.open(1, nullptr);
     CHECK_THROWS_AS(events.beginTick(0), SceneSoundEvents::Unsupported);
     CHECK_FALSE(events.recording());
     events.beginTick(1);
-    SoundCueToken first, second;
+    SoundCueToken first;
+    SoundCueToken second;
     {
         auto scope = events.scoped(kPlayer, 1);
         SoundCueToken malformed;
         malformed.event.epoch = 1;
         CHECK_FALSE(malformed);
         CHECK_THROWS_AS(events.emit(sounds.a, 1, 0, malformed), SceneSoundEvents::Unsupported);
-        SoundCueToken future{{1, 2, kPlayer, 1, 0}};
+        const SoundCueToken future{{1, 2, kPlayer, 1, 0}};
         CHECK_THROWS_AS(events.emit(sounds.a, 1, 0, future), SceneSoundEvents::Unsupported);
-        SoundCueToken sameTick{{1, 1, kPlayer, 1, 0}};
+        const SoundCueToken sameTick{{1, 1, kPlayer, 1, 0}};
         CHECK_THROWS_AS(events.emit(sounds.a, 1, 0, sameTick), SceneSoundEvents::Unsupported);
         first = events.emit(sounds.a);
         CHECK(first.event.occurrence == 0);
@@ -218,7 +221,7 @@ TEST_CASE("scene sound validation rejects invalid ticks and predecessor identiti
 
 TEST_CASE("scene sound correction refuses a predecessor removed earlier in the replay suffix",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     SceneSoundEvents events;
     events.open(1, nullptr);
     std::array<SceneSoundEvents::Journal, 2> journals;
@@ -243,7 +246,7 @@ TEST_CASE("scene sound correction refuses a predecessor removed earlier in the r
 
 TEST_CASE("scene sound resources allow identical decodes but reject changed native calls",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     SceneSoundEvents events;
     events.open(1, nullptr);
     auto copiedClip = sounds.clip;
@@ -272,15 +275,16 @@ TEST_CASE("scene sound resources allow identical decodes but reject changed nati
 
 TEST_CASE("scene sound capture aborts on unwinding and old scopes cannot change a new tick",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     SceneSoundEvents events;
     events.open(1, nullptr);
     events.beginTick(1);
     try {
+        // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores): the scope's unwind is the subject
         auto scope = events.scoped(kPlayer, 1);
         events.emit(sounds.a);
         throw std::runtime_error("discard this native branch");
-    } catch (const std::runtime_error&) {
+    } catch (const std::runtime_error&) { // NOLINT(bugprone-empty-catch): the unwind is the point
     }
     CHECK_FALSE(events.recording());
     events.beginTick(1);
@@ -306,13 +310,13 @@ TEST_CASE("scene sound capture aborts on unwinding and old scopes cannot change 
 
 TEST_CASE("scene sound dispatch stays once-only after playback ends and rejects retired deltas",
           "[scene-sound-events][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(1, &player);
     usize played = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         played += event.kind == SoundPlayer::Event::Kind::Play ? 1 : 0;
     });
     events.beginTick(1);
@@ -341,18 +345,19 @@ TEST_CASE("scene sound dispatch stays once-only after playback ends and rejects 
 }
 TEST_CASE("desired scene sounds distinguish repeating ambience from cancellable finite cues",
           "[scene-sound-events][scene-sound-loops][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(61, &player);
     std::vector<SoundPlayer::Event> played;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         if (event.kind == SoundPlayer::Event::Kind::Play) {
             played.push_back(event);
         }
     });
-    const FrameLoopKey once{kPlayer, 1, 1}, repeat{kEnemy, 1, 1};
+    const FrameLoopKey once{kPlayer, 1, 1};
+    const FrameLoopKey repeat{kEnemy, 1, 1};
     events.beginTick(1);
     SoundCueToken birth;
     {
@@ -397,8 +402,9 @@ TEST_CASE("corrected desired sound suffix reconciles final lifetimes without int
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(62, &player);
-    usize plays = 0, stops = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    usize plays = 0;
+    usize stops = 0;
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         plays += event.kind == SoundPlayer::Event::Kind::Play ? 1 : 0;
         stops += event.kind == SoundPlayer::Event::Kind::Stop ? 1 : 0;
     });
@@ -446,7 +452,7 @@ TEST_CASE("corrected desired sound suffix reconciles final lifetimes without int
 
 TEST_CASE("desired sound validation rejects malformed complete sets before output",
           "[scene-sound-events][scene-sound-loops][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     SceneSoundEvents events;
     events.open(63, nullptr);
     events.beginTick(1);
@@ -468,14 +474,14 @@ TEST_CASE("desired sound validation rejects malformed complete sets before outpu
 
 TEST_CASE("terminal correction cannot resurrect already retired sound dispatch identities",
           "[scene-sound-events][scene-sound-loops][local-rewind]") {
-    Sounds sounds;
+    const Sounds sounds;
     AudioMixer mixer(48000);
     SoundPlayer player(mixer);
     SceneSoundEvents events;
     events.open(64, &player);
     SceneSoundEvents::Result first;
     usize plays = 0;
-    SoundPlayer::Capture observe(&player, [&](const auto& event) {
+    const SoundPlayer::Capture observe(&player, [&](const auto& event) {
         plays += event.kind == SoundPlayer::Event::Kind::Play ? 1 : 0;
     });
     for (u64 tick = 1; tick <= 17; ++tick) {

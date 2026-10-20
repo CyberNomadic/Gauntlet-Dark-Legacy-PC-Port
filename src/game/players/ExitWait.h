@@ -16,7 +16,7 @@ namespace gdl::game {
  * (AudioPlayerBreath, player.c 2487: `S_WAITINGL` in the tower, else `S_WAITING`).
  */
 class ExitWait {
-    friend void visitNativeState(NativeStateDigest&, const ExitWait&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const ExitWait& /*value*/);
 
 public:
     bool operator==(const ExitWait&) const = default;

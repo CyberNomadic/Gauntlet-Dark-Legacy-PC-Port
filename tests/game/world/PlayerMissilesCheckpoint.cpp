@@ -149,16 +149,14 @@ bool PlayerMissiles::Checkpoint::valid() const {
             return false;
         }
     }
-    for (const auto& impact : impacts) {
-        if (!finite(impact.position) || impact.owner < 0 || impact.owner >= 4 ||
-            impact.potion < 0 || impact.potion > 4 || !finite(impact.potency) ||
-            !finite(impact.damage) || !validSound(impact.wallSound) || impact.node < -1 ||
-            impact.worldObject < -1 || impact.player < -1 || impact.player >= 4 ||
-            !finite(impact.direction) || !finite(impact.playerHitGap) || impact.playerHitGap < 0) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(impacts, [&](const auto& impact) {
+        return finite(impact.position) && impact.owner >= 0 && impact.owner < 4 &&
+               impact.potion >= 0 && impact.potion <= 4 && finite(impact.potency) &&
+               finite(impact.damage) && validSound(impact.wallSound) && impact.node >= -1 &&
+               impact.worldObject >= -1 && impact.player >= -1 && impact.player < 4 &&
+               finite(impact.direction) && finite(impact.playerHitGap) &&
+               impact.playerHitGap >= 0;
+    });
 }
 
 struct PlayerMissiles::Prepared::Data {

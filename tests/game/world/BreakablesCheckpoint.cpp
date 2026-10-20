@@ -313,17 +313,16 @@ bool BreakablesCheckpoint::canCommit(const Prepared& prepared) const {
             return false;
         }
     }
-    for (const auto& resource : data.resources) {
-        if (resource.tree != nullptr) {
-            const auto tree = resource.archive && resource.archive->loaded()
-                                  ? resource.archive->trees.find(resource.name)
-                                  : std::nullopt;
-            if (!tree || &resource.archive->trees.tree(*tree) != resource.tree) {
-                return false;
-            }
+    return std::ranges::all_of(data.resources, [](const auto& resource) {
+        if (resource.tree == nullptr) {
+            return true;
         }
-    }
-    return true;
+        const auto tree = resource.archive && resource.archive->loaded()
+                              ? resource.archive->trees.find(resource.name)
+                              : std::nullopt;
+        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): a found tree implies its archive
+        return tree.has_value() && &resource.archive->trees.tree(*tree) == resource.tree;
+    });
 }
 bool BreakablesCheckpoint::commitRestore(Prepared&& prepared) {
     if (!canCommit(prepared)) {

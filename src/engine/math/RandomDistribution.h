@@ -20,42 +20,45 @@ template <class Generator> std::optional<u32> boundedIndex(Generator& random, u6
     static_assert(Generator::min() < Generator::max());
     static_assert(static_cast<u64>(Generator::max()) <= 0xffffffffULL);
     static_assert(static_cast<u64>(Generator::min()) <= 0xffffffffULL);
-    constexpr u64 fullRange = u64{1} << 32;
-    if (count == 0 || count > fullRange) {
+    constexpr u64 kFullRange = u64{1} << 32;
+    if (count == 0 || count > kFullRange) {
         return std::nullopt;
     }
-    constexpr u32 sourceMask = [] {
+    constexpr u32 kSourceMask = [] {
         u32 mask = 0xffffffffU;
-        constexpr u64 range =
+        constexpr u64 kRange =
             static_cast<u64>(Generator::max()) - static_cast<u64>(Generator::min());
-        while (range < mask) {
+        while (kRange < mask) {
             mask >>= 1;
         }
         return mask;
     }();
-    constexpr auto sourceBits = std::bit_width(sourceMask);
+    constexpr auto kSourceBits = std::bit_width(kSourceMask);
     const auto sample = [&] {
-        u32 value;
+        u32 value = 0;
         do {
             value = static_cast<u32>(random() - Generator::min());
-        } while (value > sourceMask);
+        } while (value > kSourceMask);
         return value;
     };
-    u32 mask = sourceMask;
+    // NOLINTNEXTLINE(misc-const-correctness): widened when the source is narrower than 32 bits
+    u32 mask = kSourceMask;
+    // NOLINTNEXTLINE(misc-const-correctness): widened when the source is narrower than 32 bits
     u32 samples = 1;
-    if constexpr (sourceBits < 32) {
+    if constexpr (kSourceBits < 32) {
         while (static_cast<u64>(mask) + 1 < count) {
-            mask = (mask << sourceBits) | sourceMask;
+            mask = (mask << kSourceBits) | kSourceMask;
             ++samples;
         }
     }
     const auto bits = std::bit_width(mask);
     const u64 threshold = (static_cast<u64>(mask) + 1 - count) % count;
     for (;;) {
+        // NOLINTNEXTLINE(misc-const-correctness): widened when the source is narrower than 32 bits
         u32 value = sample();
-        if constexpr (sourceBits < 32) {
+        if constexpr (kSourceBits < 32) {
             for (u32 index = 1; index < samples; ++index) {
-                value = (value << sourceBits) | sample();
+                value = (value << kSourceBits) | sample();
             }
         }
         const u64 product = static_cast<u64>(value) * count;

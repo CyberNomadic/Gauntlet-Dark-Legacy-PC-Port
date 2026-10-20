@@ -197,6 +197,7 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
                                               : "Disconnect from this game?";
         break;
     case Action::Back:
+        // NOLINTNEXTLINE(bugprone-branch-clone): each page leaves for its own reason
         if (ui.view.page == Page::Finished) {
             leaveNetplay();
             return;

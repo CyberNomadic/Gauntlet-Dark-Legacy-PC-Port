@@ -689,12 +689,12 @@ std::vector<MissileImpact> PlayerMissiles::takeImpacts() {
 }
 
 void PlayerMissiles::saveLocal(LocalSnapshot& state) const {
-    state.owner.reset();
-    state.state = m_sim;
-    m_visuals.saveLocal(state.visuals);
-    state.device = m_device;
-    state.epoch = m_localEpoch;
-    state.owner = m_restoreOwner;
+    state.m_owner.reset();
+    state.m_state = m_sim;
+    m_visuals.saveLocal(state.m_visuals);
+    state.m_device = m_device;
+    state.m_epoch = m_localEpoch;
+    state.m_owner = m_restoreOwner;
 }
 
 bool PlayerMissiles::appendNativeDigest(NativeStateDigest& digest) const {
@@ -710,9 +710,9 @@ bool PlayerMissiles::appendLocalDigest(NativeStateDigest& digest, const LocalSna
         return false;
     }
     digest.string("PlayerMissiles.native.1");
-    digest.flag(state.device != nullptr);
-    digest.value(state.state);
-    return m_visuals.appendLocalDigest(digest, state.visuals) && digest.good();
+    digest.flag(state.m_device != nullptr);
+    digest.value(state.m_state);
+    return m_visuals.appendLocalDigest(digest, state.m_visuals) && digest.good();
 }
 
 bool PlayerMissiles::registerNativeResources(NativeStateResources& resources) const {
@@ -720,17 +720,17 @@ bool PlayerMissiles::registerNativeResources(NativeStateResources& resources) co
 }
 
 bool PlayerMissiles::canRestoreLocal(const LocalSnapshot& state) const {
-    return !state.owner.expired() && state.owner.lock() == m_restoreOwner &&
-           state.epoch == m_localEpoch && state.device == m_device &&
-           m_visuals.canRestoreLocal(state.visuals);
+    return !state.m_owner.expired() && state.m_owner.lock() == m_restoreOwner &&
+           state.m_epoch == m_localEpoch && state.m_device == m_device &&
+           m_visuals.canRestoreLocal(state.m_visuals);
 }
 
 bool PlayerMissiles::restoreLocal(const LocalSnapshot& state) {
     if (!canRestoreLocal(state)) {
         return false;
     }
-    m_sim = state.state;
-    (void)m_visuals.restoreLocal(state.visuals);
+    m_sim = state.m_state;
+    (void)m_visuals.restoreLocal(state.m_visuals);
     ++m_restoreGeneration;
     return true;
 }

@@ -46,6 +46,7 @@ public:
     NativeStateResources& operator=(const NativeStateResources&) = delete;
     NativeStateResources(NativeStateResources&&) = delete;
     NativeStateResources& operator=(NativeStateResources&&) = delete;
+    ~NativeStateResources() = default;
 
     /** Index authored trees/sequences once, then register any already-created
      * textures. Repeating a binding is harmless and admits newly lazy-loaded art. */
@@ -126,9 +127,9 @@ private:
     std::unordered_map<const Image*, ArchiveBinding> m_images;
     bool m_good = true;
 
-    bool bind(std::type_index type, const void* address, const Identity& identity);
+    bool bind(std::type_index type, const void* address, const Identity& value);
     const ArchiveBinding* archiveBinding(const ItemArchive& archive);
-    bool bindTree(const TreeInfo& tree, const Identity& identity);
+    bool bindTree(const TreeInfo& tree, const Identity& value);
     bool reject();
     static bool append(NativeStateDigest& digest, std::type_index type, const void* address,
                        void* context);

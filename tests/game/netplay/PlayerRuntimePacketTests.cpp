@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -188,7 +189,7 @@ TEST_CASE("participant packet rejects truncated trailing version and noncanonica
             continue;
         }
         CAPTURE(size);
-        auto truncated = std::vector<u8>(encoded->begin(), encoded->begin() + size);
+        auto truncated = std::vector<u8>(encoded->begin(), encoded->begin() + static_cast<std::ptrdiff_t>(size));
         CHECK_FALSE(PlayerRuntimePacket::decode(truncated));
         if (size >= PlayerRuntimePacket::kHeaderBytes) {
             resizeHeader(truncated);
@@ -255,12 +256,14 @@ TEST_CASE("participant packet has bounded vectors strings and aggregate allocati
     case 1: bad.rammed.push_back(2); break;
     case 2: bad.shockGaps.push_back({1, 0}); break;
     case 3: bad.save.helpSeen.push_back(1); break;
-    case 4: bad.save.moviesSeen.push_back("G2"); break;
+    case 4: bad.save.moviesSeen.emplace_back("G2"); break;
     case 5:
         // Each string is locally valid and individually transport-bounded;
         // together the payload exceeds the aggregate transport byte limit.
         bad.save.moviesSeen.assign(PlayerRuntimePacket::kMaxMovies,
                                    std::string(PlayerRuntimePacket::kMaxString, 'A'));
+        break;
+    default:
         break;
     }
     REQUIRE(bad.valid());
@@ -276,7 +279,7 @@ TEST_CASE("participant packet has bounded vectors strings and aggregate allocati
 
 TEST_CASE("participant packet restores exact native damage motion and random cue continuation",
           "[rollback][player-runtime-packet]") {
-    constexpr f32 stepSeconds = 1.0f / 60;
+    constexpr f32 kStepSeconds = 1.0f / 60;
     std::array<PlayerRuntime, 1> players;
     ClassStats stats;
     CharacterSave save;
@@ -305,7 +308,7 @@ TEST_CASE("participant packet restores exact native damage motion and random cue
         events.perform = [](usize, PartyMotion::Action) {};
         events.select = [](usize, const SelectorInput&, s32) {};
         events.advanceTurbo = [](usize, s32, f32) {};
-        PartyMotion::step(players, inputs, false, 0, 1, stepSeconds, collision, events);
+        PartyMotion::step(players, inputs, false, 0, 1, kStepSeconds, collision, events);
         players[0].hitSoundGap = std::max(players[0].hitSoundGap - 1, 0);
     };
     for (s32 time = 0; time < 19; ++time) {

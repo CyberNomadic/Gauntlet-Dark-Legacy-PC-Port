@@ -14,7 +14,9 @@ constexpr u32 kLoopingCart = 0x50000;
 bool WorldDestruction::appendDigest(NativeStateDigest& digest, const Simulation& state) const {
     digest.string("WorldDestruction/1");
     digest.wide(m_objects.size());
-    for (const auto& object : m_objects) digest.fields<9>(object);
+    for (const auto& object : m_objects) {
+        digest.fields<9>(object);
+    }
     digest.values(m_controlled, state);
     return digest.good();
 }
@@ -27,29 +29,29 @@ bool WorldDestruction::appendLocalDigest(NativeStateDigest& digest, const LocalS
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
     [[maybe_unused]] const auto& [state, binding, owner] = saved;
     if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
-    return appendDigest(digest, saved.state);
+    return appendDigest(digest, saved.m_state);
 }
 
 void WorldDestruction::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool WorldDestruction::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool WorldDestruction::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool WorldDestruction::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }

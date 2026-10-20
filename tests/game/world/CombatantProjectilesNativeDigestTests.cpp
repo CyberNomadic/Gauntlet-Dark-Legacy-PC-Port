@@ -98,7 +98,8 @@ struct Fixture {
 
 TEST_CASE("combatant native digest distinguishes semantic archive and spec bindings",
           "[native-digest][combatant-projectiles-native-digest]") {
-    Fixture a("combatant-native-digest-owner-a"), b("combatant-native-digest-owner-b");
+    Fixture a("combatant-native-digest-owner-a");
+    Fixture b("combatant-native-digest-owner-b");
     a.launch();
     b.launch();
     REQUIRE(a.pool.count() == 1);
@@ -148,7 +149,7 @@ TEST_CASE("combatant native digest follows one through eight tick native replay"
     NativeStateDigest stored(f.resources());
     REQUIRE(f.pool.appendLocalDigest(stored, saved));
     CHECK(stored.checkedFinish() == baseline);
-    std::array<NativeStateDigest::Digest, 8> expected;
+    std::array<NativeStateDigest::Digest, 8> expected{};
     auto advance = [&](s32 tick, bool wrong) {
         if (tick % 3 == 0) {
             f.launch(row, wrong);
@@ -187,7 +188,7 @@ TEST_CASE("combatant native digest retains undelivered impacts and refuses inval
     CHECK(f.hash() != baseline);
     REQUIRE(f.pool.restoreLocal(saved));
     CHECK(f.hash() == baseline);
-    CombatantProjectiles foreign;
+    const CombatantProjectiles foreign;
     NativeStateDigest invalid;
     const auto untouched = invalid.finish();
     CHECK_FALSE(foreign.appendLocalDigest(invalid, saved));
@@ -195,7 +196,7 @@ TEST_CASE("combatant native digest retains undelivered impacts and refuses inval
     f.pool.clear(f.effects);
     CHECK_FALSE(f.pool.appendLocalDigest(invalid, saved));
     CHECK(invalid.finish() == untouched);
-    CombatantProjectiles::LocalSnapshot empty;
+    const CombatantProjectiles::LocalSnapshot empty;
     CHECK_FALSE(f.pool.appendLocalDigest(invalid, empty));
 }
 
@@ -224,7 +225,7 @@ TEST_CASE("native combat area and launch visitors retain every mutable field",
         mutations[i](changed);
         CHECK(hash(changed) != baseline);
     }
-    CombatShot shot;
+    const CombatShot shot;
     const auto shotBaseline = hash(shot);
     const std::array<std::function<void(CombatShot&)>, 11> shotMutations{
         [](auto& v) { ++v.critter; }, [](auto& v) { ++v.damageIndex; },

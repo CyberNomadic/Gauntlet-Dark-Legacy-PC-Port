@@ -376,7 +376,8 @@ TEST_CASE("native boss victory completes on clip time with stalled stopped or ab
 }
 TEST_CASE("native boss sequence rewind restores death birth speech and confirmed visit timing",
           "[local-rewind][boss-sequence-local-rewind]") {
-    Fixture actual, expected;
+    Fixture actual;
+    Fixture expected;
     actual.loadLevel();
     expected.loadLevel();
     const auto root = test::scratchDirectory("boss-sequence-local-speech");

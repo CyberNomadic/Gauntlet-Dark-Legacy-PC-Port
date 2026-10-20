@@ -37,7 +37,7 @@ bool Breakables::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsho
         digest.invalidate();
         return false;
     }
-    return appendSimulationDigest(digest, saved.state);
+    return appendSimulationDigest(digest, saved.m_state);
 }
 
 bool Breakables::registerNativeResources(NativeStateResources& resources) const {
@@ -50,25 +50,25 @@ bool Breakables::registerNativeResources(NativeStateResources& resources) const 
 }
 
 void Breakables::saveLocal(LocalSnapshot& saved) const {
-    saved.state = m_sim;
-    saved.binding = m_checkpointBinding;
-    saved.owner = this;
+    saved.m_state = m_sim;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_owner = this;
 }
 
 bool Breakables::canRestoreLocal(const LocalSnapshot& saved) const {
-    return saved.owner == this && m_checkpointBinding &&
-           saved.binding.lock() == m_checkpointBinding;
+    return saved.m_owner == this && m_checkpointBinding &&
+           saved.m_binding.lock() == m_checkpointBinding;
 }
 
 bool Breakables::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state;
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state;
 }
 
 bool Breakables::restoreLocal(const LocalSnapshot& saved) {
     if (!canRestoreLocal(saved)) {
         return false;
     }
-    m_sim = saved.state;
+    m_sim = saved.m_state;
     ++m_checkpointGeneration;
     return true;
 }
@@ -307,7 +307,7 @@ f32 Breakables::opacity(const Barrel& barrel) {
 
 std::vector<Obstacle> Breakables::obstacles() const {
     std::vector<Obstacle> boxes;
-    for (auto& barrel : m_sim.barrels) {
+    for (const auto& barrel : m_sim.barrels) {
         if (barrel.shown && !barrel.gone && barrel.box.solid) {
             boxes.push_back(barrel.box);
         }
@@ -323,7 +323,7 @@ void Breakables::capturePresentation() {
 
 void Breakables::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 presentationAlpha) const {
-    for (auto& barrel : m_sim.barrels) {
+    for (const auto& barrel : m_sim.barrels) {
         if (barrel.shown && !barrel.gone) {
             barrel.figure.draw(device, clip, lighting, opacity(barrel), 1, nullptr,
                                TreeModel::Pass::All, presentationAlpha);

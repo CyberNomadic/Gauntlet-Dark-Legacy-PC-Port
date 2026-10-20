@@ -179,7 +179,8 @@ struct Pool {
 TEST_CASE("generator native hashes use semantic art bindings across separate loads",
           "[native-state-digest][generator-native-digest]") {
     const auto root = generatorDigestFixture();
-    Pool first(root), second(root);
+    Pool first(root);
+    Pool second(root);
     REQUIRE(first.enemies.archiveOf(kGruntKind) != second.enemies.archiveOf(kGruntKind));
     REQUIRE(first.generators.bodyResources()[0].tree != second.generators.bodyResources()[0].tree);
     CHECK(first.digest() == second.digest());
@@ -228,7 +229,8 @@ TEST_CASE("generator native hashes use semantic art bindings across separate loa
 TEST_CASE("generator native hashes retain suppressed and destroyed bodies",
           "[native-state-digest][generator-native-digest]") {
     const auto root = generatorDigestFixture();
-    Pool first(root), second(root);
+    Pool first(root);
+    Pool second(root);
     ViewVolume offscreen;
     offscreen.position = {10000, 0, 0};
     first.generators.setView(offscreen);
@@ -252,7 +254,8 @@ TEST_CASE("generator native hashes retain suppressed and destroyed bodies",
 
     // A destroyed boss retains its animation/emitter state even after it stops
     // drawing. Different settled/landing state must not disappear from the hash.
-    Pool landing(root), settled(root);
+    Pool landing(root);
+    Pool settled(root);
     landing.boss(false);
     settled.boss(true);
     REQUIRE(landing.generators.strike(2, 1000, 0));
@@ -266,7 +269,8 @@ TEST_CASE("generator native hashes retain suppressed and destroyed bodies",
 TEST_CASE("rewound species retain hashable artwork without becoming active again",
           "[native-state-digest][generator-native-digest][local-rewind]") {
     const auto root = generatorDigestFixture();
-    Pool corrected(root), uninterrupted(root);
+    Pool corrected(root);
+    const Pool uninterrupted(root);
     Generators::LocalSnapshot initialGenerators;
     Enemies::LocalSnapshot initialEnemies;
     corrected.generators.saveLocal(initialGenerators);
@@ -384,7 +388,8 @@ TEST_CASE("generator native hashes match corrected one to eight tick replays",
 TEST_CASE("generator native digest refuses missing resources and foreign or stale history",
           "[native-state-digest][generator-native-digest]") {
     const auto root = generatorDigestFixture();
-    Pool first(root), second(root);
+    Pool first(root);
+    const Pool second(root);
     NativeStateDigest missing;
     CHECK_FALSE(first.generators.appendNativeDigest(missing));
     CHECK_FALSE(missing.checkedFinish());

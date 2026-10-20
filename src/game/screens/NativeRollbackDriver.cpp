@@ -78,7 +78,7 @@ struct NativeRollbackDriver::Data {
         const bool audioBound =
             audioEpoch == (audioMode == AudioMode::Required ? context.epoch : 0);
         return failed == Failure::None && rosterMatches() && audioBound &&
-                       scene->canRestoreLocal(binding)
+                       scene != nullptr && scene->canRestoreLocal(binding)
                    ? true
                    : fail(Failure::Binding);
     }
@@ -308,7 +308,9 @@ SimulationObservation::Digest NativeRollbackDriver::agreementDigest(
     digest.string("NativeRollbackDriver.confirmed.1");
     digest.values(scene, arrivalVotes);
     digest.flag(terminal.has_value());
-    if (terminal) digest.fields<2>(*terminal);
+    if (terminal) {
+        digest.fields<2>(*terminal);
+    }
     return digest.finish();
 }
 

@@ -57,23 +57,25 @@ bool LevelWorld::appendDigest(NativeStateDigest& digest, const LocalSnapshot* sa
     digest.value(m_ref);
     digest.resource(&m_layout);
     digest.resource(&m_collision);
-    digest.values(m_movingObjects, saved ? saved->state : m_sim);
+    digest.values(m_movingObjects, saved ? saved->m_state : m_sim);
     digest.fields<5>(m_cameraRange);
     digest.wide(m_markers.size());
-    for (const auto& marker : m_markers) digest.fields<5>(marker);
+    for (const auto& marker : m_markers) {
+        digest.fields<5>(marker);
+    }
     m_textureAnimator.appendBindingDigest(digest);
-    digest.fields<3>(saved ? saved->textures : m_textureAnimator.clock());
+    digest.fields<3>(saved ? saved->m_textures : m_textureAnimator.clock());
     if (saved) {
-        m_scene.appendLocalDigest(digest, saved->scene);
-        m_worldAnimator.appendLocalDigest(digest, saved->worldAnimator);
-        m_collision.appendLocalDigest(digest, saved->collision);
-        m_placedItems.appendLocalDigest(digest, saved->placedItems);
-        m_skorneArena.appendLocalDigest(digest, saved->skorneArena);
-        m_fallingScenery.appendLocalDigest(digest, saved->fallingScenery);
-        m_walls.appendLocalDigest(digest, saved->walls);
-        m_destruction.appendLocalDigest(digest, saved->destruction);
-        m_triggers.appendLocalDigest(digest, saved->triggers);
-        m_rotators.appendLocalDigest(digest, saved->rotators);
+        m_scene.appendLocalDigest(digest, saved->m_scene);
+        m_worldAnimator.appendLocalDigest(digest, saved->m_worldAnimator);
+        m_collision.appendLocalDigest(digest, saved->m_collision);
+        m_placedItems.appendLocalDigest(digest, saved->m_placedItems);
+        m_skorneArena.appendLocalDigest(digest, saved->m_skorneArena);
+        m_fallingScenery.appendLocalDigest(digest, saved->m_fallingScenery);
+        m_walls.appendLocalDigest(digest, saved->m_walls);
+        m_destruction.appendLocalDigest(digest, saved->m_destruction);
+        m_triggers.appendLocalDigest(digest, saved->m_triggers);
+        m_rotators.appendLocalDigest(digest, saved->m_rotators);
     } else {
         m_scene.appendNativeDigest(digest);
         m_worldAnimator.appendNativeDigest(digest);
@@ -111,48 +113,49 @@ bool LevelWorld::registerNativeResources(NativeStateResources& resources) const 
 }
 
 void LevelWorld::saveLocal(LocalSnapshot& saved) const {
-    saved.owner = this;
-    saved.binding = m_checkpointBinding;
-    saved.state = m_sim;
-    saved.textures = m_textureAnimator.clock();
-    m_scene.saveLocal(saved.scene);
-    m_worldAnimator.saveLocal(saved.worldAnimator);
-    m_collision.saveLocal(saved.collision);
-    m_placedItems.saveLocal(saved.placedItems);
-    m_skorneArena.saveLocal(saved.skorneArena);
-    m_fallingScenery.saveLocal(saved.fallingScenery);
-    m_walls.saveLocal(saved.walls);
-    m_destruction.saveLocal(saved.destruction);
-    m_triggers.saveLocal(saved.triggers);
-    m_rotators.saveLocal(saved.rotators);
+    saved.m_owner = this;
+    saved.m_binding = m_checkpointBinding;
+    saved.m_state = m_sim;
+    saved.m_textures = m_textureAnimator.clock();
+    m_scene.saveLocal(saved.m_scene);
+    m_worldAnimator.saveLocal(saved.m_worldAnimator);
+    m_collision.saveLocal(saved.m_collision);
+    m_placedItems.saveLocal(saved.m_placedItems);
+    m_skorneArena.saveLocal(saved.m_skorneArena);
+    m_fallingScenery.saveLocal(saved.m_fallingScenery);
+    m_walls.saveLocal(saved.m_walls);
+    m_destruction.saveLocal(saved.m_destruction);
+    m_triggers.saveLocal(saved.m_triggers);
+    m_rotators.saveLocal(saved.m_rotators);
 }
 
 bool LevelWorld::canRestoreLocal(const LocalSnapshot& saved) const {
-    const auto binding = saved.binding.lock();
-    return saved.owner == this && binding && binding == m_checkpointBinding &&
-           m_scene.canRestoreLocal(saved.scene) &&
-           m_worldAnimator.canRestoreLocal(saved.worldAnimator) &&
-           m_collision.canRestoreLocal(saved.collision) &&
-           m_placedItems.canRestoreLocal(saved.placedItems) &&
-           m_skorneArena.canRestoreLocal(saved.skorneArena) &&
-           m_fallingScenery.canRestoreLocal(saved.fallingScenery) &&
-           m_walls.canRestoreLocal(saved.walls) &&
-           m_destruction.canRestoreLocal(saved.destruction) &&
-           m_triggers.canRestoreLocal(saved.triggers) && m_rotators.canRestoreLocal(saved.rotators);
+    const auto binding = saved.m_binding.lock();
+    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+           m_scene.canRestoreLocal(saved.m_scene) &&
+           m_worldAnimator.canRestoreLocal(saved.m_worldAnimator) &&
+           m_collision.canRestoreLocal(saved.m_collision) &&
+           m_placedItems.canRestoreLocal(saved.m_placedItems) &&
+           m_skorneArena.canRestoreLocal(saved.m_skorneArena) &&
+           m_fallingScenery.canRestoreLocal(saved.m_fallingScenery) &&
+           m_walls.canRestoreLocal(saved.m_walls) &&
+           m_destruction.canRestoreLocal(saved.m_destruction) &&
+           m_triggers.canRestoreLocal(saved.m_triggers) &&
+           m_rotators.canRestoreLocal(saved.m_rotators);
 }
 
 bool LevelWorld::equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const {
-    return canRestoreLocal(left) && canRestoreLocal(right) && left.state == right.state &&
-           left.textures == right.textures && m_scene.equalLocal(left.scene, right.scene) &&
-           m_worldAnimator.equalLocal(left.worldAnimator, right.worldAnimator) &&
-           m_collision.equalLocal(left.collision, right.collision) &&
-           m_placedItems.equalLocal(left.placedItems, right.placedItems) &&
-           m_skorneArena.equalLocal(left.skorneArena, right.skorneArena) &&
-           m_fallingScenery.equalLocal(left.fallingScenery, right.fallingScenery) &&
-           m_walls.equalLocal(left.walls, right.walls) &&
-           m_destruction.equalLocal(left.destruction, right.destruction) &&
-           m_triggers.equalLocal(left.triggers, right.triggers) &&
-           m_rotators.equalLocal(left.rotators, right.rotators);
+    return canRestoreLocal(left) && canRestoreLocal(right) && left.m_state == right.m_state &&
+           left.m_textures == right.m_textures && m_scene.equalLocal(left.m_scene, right.m_scene) &&
+           m_worldAnimator.equalLocal(left.m_worldAnimator, right.m_worldAnimator) &&
+           m_collision.equalLocal(left.m_collision, right.m_collision) &&
+           m_placedItems.equalLocal(left.m_placedItems, right.m_placedItems) &&
+           m_skorneArena.equalLocal(left.m_skorneArena, right.m_skorneArena) &&
+           m_fallingScenery.equalLocal(left.m_fallingScenery, right.m_fallingScenery) &&
+           m_walls.equalLocal(left.m_walls, right.m_walls) &&
+           m_destruction.equalLocal(left.m_destruction, right.m_destruction) &&
+           m_triggers.equalLocal(left.m_triggers, right.m_triggers) &&
+           m_rotators.equalLocal(left.m_rotators, right.m_rotators);
 }
 
 bool LevelWorld::restoreLocal(const LocalSnapshot& saved) {
@@ -161,18 +164,18 @@ bool LevelWorld::restoreLocal(const LocalSnapshot& saved) {
     }
     // Validate the bound stage before touching any child. Restores only copy native
     // values or rebuild derived collision/draw caches; they never fire gameplay events.
-    m_sim = saved.state;
-    m_textureAnimator.restoreClock(saved.textures);
-    m_scene.restoreLocal(saved.scene);
-    m_worldAnimator.restoreLocal(saved.worldAnimator);
-    m_collision.restoreLocal(saved.collision);
-    m_placedItems.restoreLocal(saved.placedItems);
-    m_skorneArena.restoreLocal(saved.skorneArena);
-    m_fallingScenery.restoreLocal(saved.fallingScenery);
-    m_walls.restoreLocal(saved.walls);
-    m_destruction.restoreLocal(saved.destruction);
-    m_triggers.restoreLocal(saved.triggers);
-    m_rotators.restoreLocal(saved.rotators);
+    m_sim = saved.m_state;
+    m_textureAnimator.restoreClock(saved.m_textures);
+    m_scene.restoreLocal(saved.m_scene);
+    m_worldAnimator.restoreLocal(saved.m_worldAnimator);
+    m_collision.restoreLocal(saved.m_collision);
+    m_placedItems.restoreLocal(saved.m_placedItems);
+    m_skorneArena.restoreLocal(saved.m_skorneArena);
+    m_fallingScenery.restoreLocal(saved.m_fallingScenery);
+    m_walls.restoreLocal(saved.m_walls);
+    m_destruction.restoreLocal(saved.m_destruction);
+    m_triggers.restoreLocal(saved.m_triggers);
+    m_rotators.restoreLocal(saved.m_rotators);
     ++m_checkpointGeneration;
     return true;
 }

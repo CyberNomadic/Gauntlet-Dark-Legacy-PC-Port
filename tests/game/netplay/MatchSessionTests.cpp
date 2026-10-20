@@ -159,8 +159,11 @@ struct Room {
             }
         }
         pump();
-        for (u8 peer = 1; peer <= 4; ++peer)
-            if (present(peer)) REQUIRE(inputs[peer].completeBoundary());
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            if (present(peer)) {
+                REQUIRE(inputs[peer].completeBoundary());
+            }
+        }
     }
     void ready(MatchTransition transition = MatchTransition::Start, u32 scene = 7,
                bool challengeWon = false) {

@@ -87,7 +87,7 @@ public:
     f32 secondsPerFrame() const { return m_secondsPerFrame; }
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const AnimationPlayer&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const AnimationPlayer& /*state*/);
     const TreeSequenceInfo* m_sequence = nullptr;
     u32 m_index = 0;
     u64 m_generation = 0;

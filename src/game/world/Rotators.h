@@ -44,6 +44,7 @@ public:
     Rotators& operator=(const Rotators&) = delete;
     Rotators(Rotators&&) noexcept = default;
     Rotators& operator=(Rotators&&) noexcept = default;
+    ~Rotators() = default;
 
     static constexpr s32 kSpinning = 0;
     static constexpr s32 kTurnedByPad = 2;
@@ -112,10 +113,10 @@ public:
      * separate owners and must be restored by the enclosing scene. */
     class LocalSnapshot {
         friend class Rotators;
-        Simulation state;
-        std::weak_ptr<const u8> binding;
-        const Rotators* owner = nullptr;
-        u64 epoch = 0;
+        Simulation m_state;
+        std::weak_ptr<const u8> m_binding;
+        const Rotators* m_owner = nullptr;
+        u64 m_epoch = 0;
     };
     void saveLocal(LocalSnapshot& saved) const;
     bool canRestoreLocal(const LocalSnapshot& saved) const;

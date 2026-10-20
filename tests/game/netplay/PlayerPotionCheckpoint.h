@@ -21,7 +21,7 @@ struct PlayerPotionState {
     std::optional<f32> textureFrame; ///< native missile-pool WEAPONS bank; absent before first use
     bool valid() const;
     /** Ordinary action/potion admission, independent of the generic action allowlist. */
-    static bool supports(const PlayerAnimator::Checkpoint& action);
+    static bool supports(const PlayerAnimator::Checkpoint& state);
     bool operator==(const PlayerPotionState&) const = default;
 };
 

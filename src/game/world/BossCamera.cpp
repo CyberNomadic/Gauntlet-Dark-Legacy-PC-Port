@@ -184,6 +184,7 @@ f32 BossCamera::wantedDistance(f32 nearest, f32 farthest) {
     if (m_margin < 0.0f) {
         band = kBackingOff;
         wanted += kOutStep;
+    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
     } else if (m_margin < kTightMargin && m_distance < farthest) {
         band = kBackingOff;
         wanted += 2.0f * (kWantedMargin - m_margin);
@@ -191,6 +192,7 @@ f32 BossCamera::wantedDistance(f32 nearest, f32 farthest) {
                (m_band & kBackingOff) != 0) {
         band = kBackingOff;
         wanted += 2.0f * (kWantedMargin - m_margin);
+    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
     } else if (m_margin > kLooseMargin) {
         band = kComingIn;
         wanted -= m_margin - kWantedMargin;

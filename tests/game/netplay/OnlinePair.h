@@ -222,7 +222,8 @@ struct OnlinePair {
         auto& timeline = inputs(session);
         std::vector<game::InputCommand> commands;
         const auto& context = session.context();
-        for (u8 seat = 0; seat < context.owners.size(); ++seat) {
+        // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
+        for (u8 seat = 0; seat < static_cast<u8>(context.owners.size()); ++seat) {
             if (context.owners[seat] == session.localPeer()) {
                 commands.push_back(game::SessionInputs::command(
                     local[commands.size()], context.epoch, timeline.sampleTick(),
@@ -233,10 +234,13 @@ struct OnlinePair {
     }
     std::optional<game::SessionInputs::Frame> advance(game::MatchSession& session) {
         const auto command = inputs(session).advance();
-        if (!command) return std::nullopt;
+        if (!command) {
+            return std::nullopt;
+        }
         game::SessionInputs::Frame result{};
-        for (usize seat = 0; seat < result.size(); ++seat)
+        for (usize seat = 0; seat < result.size(); ++seat) {
             result[seat] = game::SessionInputs::playInput(command->commands[seat]);
+        }
         return result;
     }
 };

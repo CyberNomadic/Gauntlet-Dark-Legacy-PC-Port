@@ -76,12 +76,13 @@ public:
     ItemFigure& operator=(const ItemFigure& other);
     ItemFigure(ItemFigure&&) noexcept = default;
     ItemFigure& operator=(ItemFigure&&) noexcept = default;
+    ~ItemFigure() = default;
     /** Same-process native equality under shared loaded artwork. Drawing caches
      * and the resource cache itself are not simulation state. */
     bool equalLocal(const ItemFigure& other) const;
     /** Register retained native bindings, including static fallback trees from
      * discarded branches. Archives must already have logical registry keys. */
-    bool registerNativeResources(NativeStateResources& resources) const;
+    bool registerNativeResources(NativeStateResources& registry) const;
     /** Value equality is local to the same bound artwork, not cross-load equivalence. */
     bool operator==(const ItemFigure& other) const { return equalLocal(other); }
 
@@ -205,7 +206,7 @@ public:
     Obstacle obstacle(const ItemInfo& info) const;
 
 private:
-    friend void visitNativeState(NativeStateDigest&, const ItemFigure&);
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const ItemFigure& /*figure*/);
     friend class ItemFigureCheckpoint;
     void refreshTextures();
 

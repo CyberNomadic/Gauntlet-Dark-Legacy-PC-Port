@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
@@ -20,7 +21,7 @@ public:
     static std::optional<std::array<u8, 32>> canonicalDigest(const Enemies::Checkpoint& state);
 
     static constexpr u32 kVersion = 4;
-    static constexpr usize kMaxBytes = 512 * 1024;
+    static constexpr usize kMaxBytes = static_cast<const usize>(512 * 1024);
     static constexpr usize kMaxNodes = 128;
     static constexpr usize kMaxTotalNodes = 2048;
     static constexpr usize kMaxEvents = 256;

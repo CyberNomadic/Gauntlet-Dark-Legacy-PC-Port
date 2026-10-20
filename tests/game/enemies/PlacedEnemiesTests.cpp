@@ -343,7 +343,8 @@ TEST_CASE("diagnostic placement preparation uses content not legacy mutation cou
 
 TEST_CASE("placed enemy native rewind survives watch and activation without repeating callbacks",
           "[placed-enemies-local-rewind]") {
-    PlacedEnemies owner, other;
+    PlacedEnemies owner;
+    PlacedEnemies other;
     const std::vector roster{placement({0, 0, 10}), placement({0, 0, 100})};
     owner.bind(roster);
     other.bind(roster);
@@ -386,6 +387,8 @@ TEST_CASE("placed enemy native rewind retains resource lifetime and replacement 
     case 3:
         storage->reset();
         storage->emplace().bind(roster);
+        break;
+    default:
         break;
     }
     const auto after = PlacedEnemiesCheckpoint::capture(storage->value());
@@ -544,6 +547,7 @@ TEST_CASE("native placed activation resumes the same enemy simulation after a de
     const auto uploads = device.texturesCreated;
     const auto observation = [](s32 tick) {
         ViewVolume view;
+        // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
         view.position.x = -40 + static_cast<f32>(tick / 12) * 20;
         return view;
     };
@@ -601,8 +605,10 @@ TEST_CASE("native placed activation resumes the same enemy simulation after a de
 
 TEST_CASE("native placement rewind replays corrected watch branches without spawning on restore",
           "[placed-enemies-local-rewind][native-equality]") {
-    PlacedEnemies reference, predicted;
+    PlacedEnemies reference;
+    PlacedEnemies predicted;
     std::vector<PlacedEnemies::Placement> roster;
+    roster.reserve(40);
     for (s32 row = 0; row < 40; ++row) {
         roster.push_back(placement({static_cast<f32>(row * 20), 0, 10}));
     }
@@ -614,6 +620,7 @@ TEST_CASE("native placement rewind replays corrected watch branches without spaw
     usize callbacks = 0;
     const auto advance = [&](PlacedEnemies& owner, s32 tick) {
         ViewVolume view;
+        // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
         view.position = {static_cast<f32>((tick / 4) * 20), 0, 0};
         owner.observe(view, view.position);
         std::vector<PlacedEnemies::Placement> born;
@@ -659,7 +666,8 @@ TEST_CASE("native placement rewind replays corrected watch branches without spaw
 
 TEST_CASE("native placement histories are invalidated only by roster or diagnostic replacement",
           "[placed-enemies-local-rewind][native-equality]") {
-    PlacedEnemies owner, foreign;
+    PlacedEnemies owner;
+    PlacedEnemies foreign;
     const std::vector roster{placement({0, 0, 10})};
     owner.bind(roster);
     foreign.bind(roster);
@@ -691,7 +699,8 @@ TEST_CASE("native placement equality includes every view field and unseen attent
     owner.bind({placement({0, 0, 100})});
     ViewVolume view;
     owner.observe(view, {});
-    PlacedEnemies::LocalSnapshot before, after;
+    PlacedEnemies::LocalSnapshot before;
+    PlacedEnemies::LocalSnapshot after;
     owner.saveLocal(before);
     const s32 change = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
     Vec3 attention{0};

@@ -254,6 +254,8 @@ TEST_CASE("runtime preparation is atomic single use and bound to participant lif
         case 4: bad.floor.placement = Mat4{std::numeric_limits<f32>::infinity()}; break;
         case 5: bad.helpHeard.resize(PlayerRuntimeCheckpoint::State::kMaxRecords + 1); break;
         case 6: bad.weaponGlow.effect = 7; break;
+        default:
+            break;
         }
         CHECK_FALSE(fixture.owner.prepareRestore(bad));
         CHECK_FALSE(fixture.owner.restore(bad));
@@ -330,12 +332,15 @@ TEST_CASE("runtime prepared values cannot survive owner address reuse",
     Fixture fixture;
     const auto baseline = fixture.owner.checkpoint();
     REQUIRE(baseline);
-    alignas(PlayerRuntimeCheckpoint) std::array<std::byte, sizeof(PlayerRuntimeCheckpoint)> storage;
+    alignas(PlayerRuntimeCheckpoint) std::array<std::byte, sizeof(PlayerRuntimeCheckpoint)>
+        storage{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     auto* owner = std::construct_at(reinterpret_cast<PlayerRuntimeCheckpoint*>(storage.data()),
                                     fixture.player(), &fixture.stats);
     auto prepared = owner->prepareRestore(*baseline);
     REQUIRE(prepared);
     std::destroy_at(owner);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
     owner = std::construct_at(reinterpret_cast<PlayerRuntimeCheckpoint*>(storage.data()),
                               fixture.player(), &fixture.stats);
     CHECK_FALSE(owner->canCommit(*prepared));

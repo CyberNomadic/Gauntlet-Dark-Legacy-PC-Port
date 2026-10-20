@@ -26,6 +26,7 @@ TreeSequenceInfo sequence(s32 frames, s32 rate) {
 TEST_CASE("native animation comparison preserves hidden clocks and resource binding",
           "[animation][local-rewind]") {
     const auto source = sequence(7, 24);
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare unequal
     const auto otherSource = source;
     AnimationPlayer player;
     player.start(source, 0);

@@ -96,7 +96,9 @@ template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessio
             const auto& frame = inputs[i]->lastFrame();
             REQUIRE(frame);
             for (u8 seat = 0; seat < InputCommand::kSeats; ++seat) {
-                if (sessions.front()->match().context().owners[seat] == 0) continue;
+                if (sessions.front()->match().context().owners[seat] == 0) {
+                    continue;
+                }
                 const auto& command = frame->commands[seat];
                 CHECK(command.tick == tick);
                 CHECK(command.seat == seat);

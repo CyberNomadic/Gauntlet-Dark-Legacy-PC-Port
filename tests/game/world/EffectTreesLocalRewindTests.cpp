@@ -179,12 +179,13 @@ TEST_CASE("native effect snapshots reject foreign closed moved and destroyed own
     CHECK_FALSE(a.restoreLocal(state));
     a.saveLocal(state);
     b = std::move(a);
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK_FALSE(a.restoreLocal(state));
     CHECK_FALSE(b.restoreLocal(state));
     a = std::move(b);
     CHECK_FALSE(a.restoreLocal(state));
     {
-        EffectTrees temporary;
+        const EffectTrees temporary;
         temporary.saveLocal(state);
     }
     CHECK_FALSE(a.restoreLocal(state));
@@ -204,13 +205,15 @@ TEST_CASE("native crowded effect history reports copy and eight tick replay cost
     }
     effects.update(0.2f);
     std::array<EffectTrees::LocalSnapshot, 16> history;
-    std::array<f64, 256> saves{}, restores{}, replays{};
+    std::array<f64, 256> saves{};
+    std::array<f64, 256> restores{};
+    std::array<f64, 256> replays{};
     using Clock = std::chrono::steady_clock;
     const auto ms = [](auto start) {
         return std::chrono::duration<f64, std::milli>(Clock::now() - start).count();
     };
-    for (usize i = 0; i < history.size(); ++i) {
-        effects.saveLocal(history[i]);
+    for (auto& i : history) {
+        effects.saveLocal(i);
     }
     for (usize i = 0; i < saves.size(); ++i) {
         auto start = Clock::now();
