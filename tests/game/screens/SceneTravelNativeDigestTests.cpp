@@ -203,7 +203,7 @@ TEST_CASE("travel native hashes survive independent bindings and one to eight ti
         for (s32 offset = 0; offset < distance; ++offset) {
             const auto expected = reference.step(tick + offset, false);
             const auto actual = correct.step(tick + offset, false);
-            CHECK(actual == expected);
+            CHECK((actual == expected));
             sawWaiting = sawWaiting || !std::get<1>(actual).empty();
         }
         REQUIRE(correct.digest() == reference.digest());

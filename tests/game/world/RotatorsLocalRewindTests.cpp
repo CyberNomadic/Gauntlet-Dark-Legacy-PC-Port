@@ -120,8 +120,8 @@ TEST_CASE("native rotator rewind restores spinning and first pad contacts after 
             CHECK(predicted.rotators.equalLocal(observed, expected[static_cast<usize>(step)]));
             REQUIRE(predicted.rotators.size() == reference.rotators.size());
             for (usize index = 0; index < reference.rotators.size(); ++index) {
-                CHECK(valuesOf(predicted.rotators.rotator(index)) ==
-                      valuesOf(reference.rotators.rotator(index)));
+                CHECK((valuesOf(predicted.rotators.rotator(index)) ==
+                      valuesOf(reference.rotators.rotator(index))));
             }
             for (const auto& cue : cues) {
                 stopped += cue.kind == RotatorCue::Kind::Stopped ? 1U : 0U;
@@ -212,7 +212,7 @@ TEST_CASE("native invisible turntable rewind preserves contact and delayed corre
             CHECK(predicted.equalLocal(observed, expected[static_cast<usize>(offset)]));
             REQUIRE(predicted.size() == reference.size());
             for (usize index = 0; index < reference.size(); ++index) {
-                CHECK(valuesOf(predicted.rotator(index)) == valuesOf(reference.rotator(index)));
+                CHECK((valuesOf(predicted.rotator(index)) == valuesOf(reference.rotator(index))));
             }
         }
     }

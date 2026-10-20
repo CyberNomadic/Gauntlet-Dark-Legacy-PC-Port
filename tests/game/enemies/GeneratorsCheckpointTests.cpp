@@ -266,7 +266,7 @@ TEST_CASE(
         REQUIRE(pool.enemies.restoreLocal(enemies));
         for (s32 i = 0; i < distance; ++i) {
             step(tick + i, false);
-            CHECK(observe() == expected[static_cast<usize>(i)]);
+            CHECK((observe() == expected[static_cast<usize>(i)]));
             Generators::LocalSnapshot corrected;
             pool.generators.saveLocal(corrected);
             CHECK(pool.generators.equalLocal(corrected, nativeExpected[static_cast<usize>(i)]));
