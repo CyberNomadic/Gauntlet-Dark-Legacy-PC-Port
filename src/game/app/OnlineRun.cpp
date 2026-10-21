@@ -55,6 +55,7 @@ struct OnlineRun::Impl {
     u64 reportedTick = 0;
     u64 networkTick = 0;
     u64 stallsSeen = 0;
+    std::optional<u8> chosenLead;
     std::optional<std::chrono::steady_clock::time_point> stalledSince;
 #endif
 };
@@ -496,7 +497,8 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                     // slowest lobby link; prediction covers what is left.
                     const auto link = session.linkStatistics();
                     const u8 lead = RollbackInputs::leadForPing(link ? link->pingMs : -1);
-                    if (session.adoptStartupDelay(lead)) {
+                    if (session.adoptStartupDelay(lead) && run.chosenLead != lead) {
+                        run.chosenLead = lead;
                         log::info("Online input delay {} tick(s) for a {} ms round trip", lead,
                                   link ? link->pingMs : -1);
                     }
