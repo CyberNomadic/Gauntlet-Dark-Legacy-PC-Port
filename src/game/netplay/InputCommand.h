@@ -72,6 +72,12 @@ struct InputCommand {
         return (pressedButtons & static_cast<u32>(button)) != 0;
     }
     bool valid() const;
+
+    /** The analogue fields rounded to coarse steps (a 1/256 turn of movement, 1/64 of its
+     * magnitude, a 1/256 turn of aim) so that a steady hand and a cursor drifting across a
+     * moving character send bit-identical commands tick after tick, which is what the
+     * held-input prediction needs to come true. Buttons and identity are untouched. */
+    InputCommand steadied() const;
 };
 
 /** Versioned, little-endian, bounded input datagrams. No native struct serialization.

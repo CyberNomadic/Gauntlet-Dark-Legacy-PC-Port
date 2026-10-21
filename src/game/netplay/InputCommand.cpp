@@ -36,6 +36,44 @@ bool validAim(const Vec3& aim) {
 }
 } // namespace
 
+namespace {
+constexpr f32 kTurnSteps = 256;
+constexpr f32 kMagnitudeSteps = 64;
+constexpr f32 kTau = 6.283185307179586f;
+
+/** The unit vector a turn's nearest step points along, as (cos, sin); the four axes come
+ * out exact rather than a rounding error off zero. */
+Vec2 steppedTurn(f32 radians) {
+    const auto step = static_cast<s32>(std::round(radians / kTau * kTurnSteps));
+    const s32 quarter = static_cast<s32>(kTurnSteps) / 4;
+    const s32 wrapped = ((step % static_cast<s32>(kTurnSteps)) + static_cast<s32>(kTurnSteps)) %
+                        static_cast<s32>(kTurnSteps);
+    if (wrapped % quarter == 0) {
+        constexpr std::array<Vec2, 4> kAxes{Vec2{1, 0}, Vec2{0, 1}, Vec2{-1, 0}, Vec2{0, -1}};
+        return kAxes[static_cast<usize>(wrapped / quarter)];
+    }
+    const f32 turn = static_cast<f32>(wrapped) * kTau / kTurnSteps;
+    return Vec2{std::cos(turn), std::sin(turn)};
+}
+} // namespace
+
+InputCommand InputCommand::steadied() const {
+    InputCommand result = *this;
+    result.magnitude =
+        std::clamp(std::round(magnitude * kMagnitudeSteps) / kMagnitudeSteps, 0.0f, 1.0f);
+    if (result.magnitude == 0 || !std::isfinite(direction.x) || !std::isfinite(direction.y)) {
+        result.direction = Vec2{0};
+    } else {
+        result.direction = steppedTurn(std::atan2(direction.y, direction.x));
+    }
+    if (aimDirection && std::isfinite(aimDirection->x) && std::isfinite(aimDirection->z) &&
+        glm::dot(*aimDirection, *aimDirection) > 0) {
+        const Vec2 turned = steppedTurn(std::atan2(aimDirection->x, aimDirection->z));
+        result.aimDirection = Vec3{turned.y, 0, turned.x};
+    }
+    return result;
+}
+
 bool InputCommand::valid() const {
     const f32 lengthSquared = glm::dot(direction, direction);
     return epoch != 0 && grant != 0 && seat < kSeats && std::isfinite(direction.x) &&

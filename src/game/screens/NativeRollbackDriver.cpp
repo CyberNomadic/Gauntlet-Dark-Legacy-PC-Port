@@ -77,8 +77,8 @@ struct NativeRollbackDriver::Data {
         const u64 audioEpoch = scene != nullptr ? scene->recordedAudioEpoch() : 0;
         const bool audioBound =
             audioEpoch == (audioMode == AudioMode::Required ? context.epoch : 0);
-        return failed == Failure::None && rosterMatches() && audioBound &&
-                       scene != nullptr && scene->canRestoreLocal(binding)
+        return failed == Failure::None && rosterMatches() && audioBound && scene != nullptr &&
+                       scene->canRestoreLocal(binding)
                    ? true
                    : fail(Failure::Binding);
     }
@@ -266,8 +266,8 @@ struct NativeRollbackDriver::Data {
                 if (!sceneDigest) {
                     return fail(Failure::Observation);
                 }
-                const ConfirmedDigest value{
-                    hash->first, agreementDigest(*sceneDigest, hash->second.control)};
+                const ConfirmedDigest value{hash->first,
+                                            agreementDigest(*sceneDigest, hash->second.control)};
                 if (hash->first % kDigestPeriod == 0) {
                     result.digests.push_back(value);
                 }
@@ -301,8 +301,9 @@ struct NativeRollbackDriver::Data {
 NativeRollbackDriver::NativeRollbackDriver() : m_data(std::make_unique<Data>()) {}
 NativeRollbackDriver::~NativeRollbackDriver() = default;
 
-SimulationObservation::Digest NativeRollbackDriver::agreementDigest(
-    const SimulationObservation::Digest& scene, const Control& control) {
+SimulationObservation::Digest
+NativeRollbackDriver::agreementDigest(const SimulationObservation::Digest& scene,
+                                      const Control& control) {
     const auto& [arrivalVotes, terminal] = control;
     NativeStateDigest digest;
     digest.string("NativeRollbackDriver.confirmed.1");
@@ -339,9 +340,11 @@ bool NativeRollbackDriver::bind(PlayScene& scene, const MatchContext& context, u
         // Keep negotiated profile admission at the epoch boundary. The native
         // digest hashes retained values as-is; it must not normalize or validate
         // gameplay through a transport projection on every tick.
-        std::ranges::any_of(scene.participants(), [](const PlayerRuntime& player) {
-            return player.departed || !CharacterProfile::capture(player.actor.save());
-        }) ||
+        std::ranges::any_of(scene.participants(),
+                            [](const PlayerRuntime& player) {
+                                return player.departed ||
+                                       !CharacterProfile::capture(player.actor.save());
+                            }) ||
         !candidate->inputs.open(localPeer, context.epoch, context.owners, context.grants,
                                 context.inputLead) ||
         !scene.saveLocal(candidate->binding) || !scene.nativeAgreementDigest() ||
@@ -374,9 +377,12 @@ bool NativeRollbackDriver::sample(const SessionInputs::Frame& local) {
         }
         const auto captured =
             data.scene->captureNativeInput(static_cast<s32>(seat), local[commands.size()]);
-        commands.push_back(
-            SessionInputs::command(captured, data.context.epoch, data.inputs.sampleTick(),
-                                   data.context.grants[seat], static_cast<u8>(seat)));
+        // Coarse analogue steps keep a steady hand's commands identical from tick to tick,
+        // so peers predicting it by holding its last input are right far more often.
+        commands.push_back(SessionInputs::command(captured, data.context.epoch,
+                                                  data.inputs.sampleTick(),
+                                                  data.context.grants[seat], static_cast<u8>(seat))
+                               .steadied());
     }
     if (commands.empty() || (!data.pending.empty() && commands.size() != data.pending.size())) {
         return data.fail(Failure::Input);
@@ -415,7 +421,7 @@ bool NativeRollbackDriver::clearPendingInput(u8 canonicalSeat) {
     for (auto& command : data.pending) {
         if (command.seat == canonicalSeat) {
             command = SessionInputs::command({}, command.epoch, command.tick, command.grant,
-                                              command.seat);
+                                             command.seat);
         }
     }
     return true;

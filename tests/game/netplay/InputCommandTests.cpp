@@ -1,8 +1,10 @@
 #include <array>
+#include <cmath>
 #include <limits>
 #include <span>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "game/netplay/InputCommand.h"
@@ -23,6 +25,52 @@ InputCommand sample() {
     result.heldButtons = static_cast<u32>(CommandHeld::Attack);
     result.pressedButtons = static_cast<u32>(CommandPress::UsePotion);
     return result;
+}
+
+TEST_CASE("steadied commands round analogue jitter away and stay valid", "[netplay][protocol]") {
+    InputCommand first = sample();
+    first.direction = glm::normalize(Vec2{0.6f, 0.8f});
+    first.magnitude = 0.731f;
+    const auto aimAt = [](f32 degrees) {
+        const f32 radians = glm::radians(degrees);
+        return Vec3{std::sin(radians), 0, std::cos(radians)};
+    };
+    first.aimDirection = aimAt(17.0f);
+    InputCommand second = first;
+    // A stick wobbling by a third of a degree and a cursor drifting a fifth of a degree
+    // across a moving character are the same command once steadied.
+    second.direction = glm::normalize(Vec2{0.605f, 0.797f});
+    second.magnitude = 0.734f;
+    second.aimDirection = aimAt(17.2f);
+    const InputCommand a = first.steadied();
+    const InputCommand b = second.steadied();
+    CHECK(a.valid());
+    CHECK(a.direction == b.direction);
+    CHECK(a.magnitude == b.magnitude);
+    CHECK(a.aimDirection == b.aimDirection);
+    CHECK(a.heldButtons == first.heldButtons);
+    CHECK(a.tick == first.tick);
+    CHECK(a.magnitude == Catch::Approx(0.734375f));
+    CHECK(glm::length(a.direction) == Catch::Approx(1.0f));
+    REQUIRE(a.aimDirection);
+    CHECK(glm::length(*a.aimDirection) == Catch::Approx(1.0f));
+    CHECK(a.aimDirection->y == 0);
+    // A quarter turn of aim is a different command; so is letting the stick go.
+    InputCommand turned = first;
+    turned.aimDirection = Vec3{1, 0, 0};
+    CHECK(turned.steadied().aimDirection != a.aimDirection);
+    InputCommand released = first;
+    released.magnitude = 0.004f;
+    CHECK(released.steadied().magnitude == 0);
+    CHECK(released.steadied().direction == Vec2{0});
+    CHECK(released.steadied().valid());
+    // The cursor dead zone's zero aim and an absent aim survive untouched.
+    InputCommand retained = first;
+    retained.aimDirection = Vec3{0};
+    CHECK(retained.steadied().aimDirection == Vec3{0});
+    InputCommand stick = first;
+    stick.aimDirection.reset();
+    CHECK_FALSE(stick.steadied().aimDirection);
 }
 
 TEST_CASE("input packets have a fixed endian and version independent of C++ layout",

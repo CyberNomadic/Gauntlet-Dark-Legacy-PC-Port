@@ -81,7 +81,8 @@ InputCommand actual(const Settings& settings, u8 seat, u64 tick) {
         // the release must also finish before the observation at tick 240.
         input.usePotion = tick == 4 + seat * 2 || tick == 112 + seat * 2;
     }
-    return SessionInputs::command(input, kEpoch, tick, settings.grants[seat], seat);
+    // The driver steadies what it samples; the expected command must match it bit for bit.
+    return SessionInputs::command(input, kEpoch, tick, settings.grants[seat], seat).steadied();
 }
 
 PlayScene::Inputs controls(const Settings& settings, const RollbackInputs::Commands& commands) {
@@ -442,8 +443,7 @@ void run(const Settings& settings) {
                 REQUIRE(digest);
                 // This reference starts after arrival and never leaves its
                 // stage, so its real coordinator control remains empty.
-                expectedDigests.emplace(
-                    tick, NativeRollbackDriver::agreementDigest(*digest, {}));
+                expectedDigests.emplace(tick, NativeRollbackDriver::agreementDigest(*digest, {}));
             }
         }
         REQUIRE(reference.vibrations.empty());
@@ -479,12 +479,9 @@ void run(const Settings& settings) {
     for (usize index = 1; index < settings.peers; ++index) {
         guests.push_back({static_cast<u8>(index + 1), 101 + index});
         const std::array host{RollbackExchange::Link{1, kHostLink}};
-        REQUIRE(peers[index]->exchange.open(static_cast<u8>(index + 1), kEpoch, settings.owners,
-                                            settings.grants, settings.delay, host,
-                                            [&, index] {
-                                                return wallNow * kWallTick / 3 +
-                                                       100'000'000 * (index + 1);
-                                            }));
+        REQUIRE(peers[index]->exchange.open(
+            static_cast<u8>(index + 1), kEpoch, settings.owners, settings.grants, settings.delay,
+            host, [&, index] { return wallNow * kWallTick / 3 + 100'000'000 * (index + 1); }));
     }
     REQUIRE(peers[0]->exchange.open(1, kEpoch, settings.owners, settings.grants, settings.delay,
                                     guests, [&] { return wallNow * kWallTick / 3 + 100'000'000; }));
