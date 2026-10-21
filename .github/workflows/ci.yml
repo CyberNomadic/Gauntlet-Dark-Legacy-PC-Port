@@ -19,8 +19,28 @@ env:
   VCPKG_DISABLE_METRICS: 1
 
 jobs:
+  # A change to documents alone (README, docs/, licences) builds, tests and lints nothing.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify the changed paths
+        id: classify
+        run: python3 scripts/ci_changes.py --base "$BASE" --head "$HEAD" --output "$GITHUB_OUTPUT"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+
   windows:
     name: Windows (MSVC)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -43,6 +63,8 @@ jobs:
 
   linux:
     name: Linux (GCC)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -71,6 +93,8 @@ jobs:
 
   netplay:
     name: Netplay transport (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -125,14 +149,19 @@ jobs:
           path: build/netplay/network-test-*/**/*.log
           if-no-files-found: warn
 
+  # Every unit under the full profile, in eight shards, each starting from the clean
+  # results its predecessor saved: a push re-lints only what it reached. The cache is
+  # saved whatever the outcome, so a failing shard still keeps the units it cleared.
   lint-shards:
     name: Lint shard ${{ matrix.shard }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     env:
       CXX: g++-14
     steps:
@@ -152,27 +181,34 @@ jobs:
         run: |
           python3 scripts/devenv.py -- cmake --preset linux-ninja-debug -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DGDL_ENABLE_NETPLAY=ON
           python3 scripts/devenv.py -- cmake --build --preset linux-ninja-debug --target compile_commands
-      - name: Cache clean lint results
-        uses: actions/cache@v4
+      - name: Restore clean lint results
+        uses: actions/cache/restore@v4
         with:
           path: build/lint-cache
-          key: tidy-v1-${{ runner.os }}-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
-          restore-keys: tidy-v1-${{ runner.os }}-${{ matrix.shard }}-
+          key: tidy-v2-${{ runner.os }}-${{ strategy.job-total }}-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: tidy-v2-${{ runner.os }}-${{ strategy.job-total }}-${{ matrix.shard }}-
       - name: clang-tidy
         run: python3 scripts/lint.py --shard-index ${{ matrix.shard }} --shard-count ${{ strategy.job-total }} --cache-dir build/lint-cache
+      - name: Save clean lint results
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build/lint-cache
+          key: tidy-v2-${{ runner.os }}-${{ strategy.job-total }}-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
 
-  # Preserve the single required-check name, and never accept a failed/skipped shard.
+  # Preserve the single required-check name: every shard passed, or nothing to lint.
   lint:
     name: Lint (clang-tidy)
-    needs: lint-shards
+    needs: [changes, lint-shards]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every lint shard to pass
-        run: test "$LINT_RESULT" = success
+        run: test "$LINT_RESULT" = success || { test "$CODE" = false && test "$LINT_RESULT" = skipped; }
         env:
           LINT_RESULT: ${{ needs.lint-shards.result }}
+          CODE: ${{ needs.changes.outputs.code }}
 
   # The tier that needs the game data: a self-hosted runner labelled "game-data" with the
   # disc extracted and unpacked, and GDL_ASSET_DIR / GDL_UNPACKED_DIR set in its environment.

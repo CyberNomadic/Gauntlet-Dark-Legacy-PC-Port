@@ -53,7 +53,8 @@ def dependencies(output: str, directory: pathlib.Path) -> list[pathlib.Path]:
 
 
 class CleanCache:
-    def __init__(self, root: pathlib.Path, directory: pathlib.Path, tidy: str):
+    def __init__(self, root: pathlib.Path, directory: pathlib.Path, tidy: str,
+                 profile: str = "full"):
         self.root = root
         self.directory = directory
         tidy_path = pathlib.Path(tidy).resolve()
@@ -70,6 +71,8 @@ class CleanCache:
         for path in (pathlib.Path(tidy).resolve(), self.compiler, pathlib.Path(__file__),
                      root / "scripts/lint.py"):
             self.identity.update(self.file_hash(path))
+        # A clean result under one set of checks says nothing about another.
+        self.identity.update(f"profile={profile}\0".encode())
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def file_hash(self, path: pathlib.Path) -> bytes:

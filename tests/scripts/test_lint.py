@@ -175,6 +175,25 @@ class DriverTests(unittest.TestCase):
         cache.remember.assert_not_called()
 
 
+class CacheIdentityTests(unittest.TestCase):
+    def test_profiles_never_share_clean_results(self):
+        import lint_cache
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "compile_commands.json").write_text("[]", encoding="utf-8")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "lint.py").write_text("", encoding="utf-8")
+            tidy = root / "clang-tidy"
+            tidy.write_text("", encoding="utf-8")
+            (root / "clang++").write_text("", encoding="utf-8")
+            full = lint_cache.CleanCache(root, root / "cache", str(tidy))
+            fast = lint_cache.CleanCache(root, root / "cache", str(tidy), "fast")
+            self.assertNotEqual(full.identity.hexdigest(), fast.identity.hexdigest())
+            self.assertEqual(full.identity.hexdigest(),
+                             lint_cache.CleanCache(root, root / "cache", str(tidy), "full")
+                             .identity.hexdigest())
+
+
 class ChangedTests(unittest.TestCase):
     """--changed lints the changed units and every unit reached through a changed header."""
 
@@ -213,6 +232,41 @@ class ChangedTests(unittest.TestCase):
                          ["src/engine/world/Scene.cpp", "src/game/world/Level.cpp",
                           "tests/game/world/LevelTests.cpp"])
         self.assertEqual(self.affected("docs/notes.md"), [])
+
+    def test_quick_mode_keeps_one_unit_per_changed_header(self):
+        quick = lambda *changed: [unit.relative_to(self.root).as_posix() for unit in lint.quick_units(
+            self.roster, [self.root / c for c in changed], lint.header_roster())]
+        # A header with a .cpp of its own is checked through that unit alone.
+        self.assertEqual(quick("src/engine/world/Scene.h"), ["src/engine/world/Scene.cpp"])
+        self.assertEqual(quick("src/game/world/Level.h"), ["src/game/world/Level.cpp"])
+        # One without is checked through the first unit that reaches it.
+        self.assertEqual(quick("src/engine/core/Types.h"), ["src/engine/world/Scene.cpp"])
+        # Changed units are always their own representatives; documents never are.
+        self.assertEqual(quick("src/game/app/App.cpp", "src/game/world/Level.h", "docs/a.md"),
+                         ["src/game/app/App.cpp", "src/game/world/Level.cpp"])
+        self.assertEqual(quick("src/unused/Nothing.h"), [])
+
+    def test_quick_mode_and_the_fast_profile_reach_clang_tidy(self):
+        with mock.patch.object(lint, "find_clang_tidy", return_value="clang-tidy"), \
+             mock.patch.object(lint, "translation_units", return_value=self.roster), \
+             mock.patch.object(lint, "changed_files", return_value=[self.root / "src/game/world/Level.h"]), \
+             mock.patch.object(lint, "run_one", return_value=[]) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lint.main(["--changed", "a..b", "--quick", "--profile", "fast"]), 0)
+        self.assertEqual([call.args[1:] for call in run.call_args_list],
+                         [(self.root / "src/game/world/Level.cpp", "fast")])
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            lint.main(["--quick"])
+
+    def test_the_fast_profile_leaves_out_the_analyzer_only(self):
+        self.assertEqual(lint.PROFILES["full"], [])
+        self.assertEqual(lint.PROFILES["fast"], ["--checks=-clang-analyzer-*"])
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(lint.subprocess, "run", return_value=completed) as run:
+            lint.run_one("clang-tidy", self.root / "src/game/app/App.cpp", "fast")
+            self.assertIn("--checks=-clang-analyzer-*", run.call_args.args[0])
+            lint.run_one("clang-tidy", self.root / "src/game/app/App.cpp")
+            self.assertNotIn("--checks=-clang-analyzer-*", run.call_args.args[0])
 
     def test_include_names_drop_the_source_roots(self):
         self.assertEqual(lint.include_name(self.root / "src/engine/core/Types.h"), "engine/core/Types.h")

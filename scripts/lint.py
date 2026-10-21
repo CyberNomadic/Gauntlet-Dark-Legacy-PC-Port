@@ -10,11 +10,15 @@ and build only compile_commands, avoiding build-only module mapper files.
     python scripts/lint.py src/game    # a subtree or single file
     python scripts/lint.py --shard-index 0 --shard-count 4  # first CI shard
     python scripts/lint.py --changed origin/main   # only what a change touches
+    python scripts/lint.py --changed origin/main --quick --profile fast   # the hook's gate
 
 --changed lints the translation units affected by the files that differ from a git
 revision (or a range such as a..b): the changed sources themselves and every unit
-that includes a changed header, directly or through other headers. The pre-push hook
-under scripts/hooks runs it over what is being pushed; nothing affected passes.
+that includes a changed header, directly or through other headers. --quick keeps one
+unit per changed header (its own .cpp when there is one) instead of the whole fan-out,
+and --profile fast leaves out the clang static analyzer, which costs two thirds of a
+unit's time; the pre-push hook under scripts/hooks runs that pair over what is being
+pushed, and CI runs the full profile over everything, cached. Nothing affected passes.
 """
 
 import argparse
@@ -119,6 +123,23 @@ def header_roster() -> list[pathlib.Path]:
                   for path in (ROOT / folder).rglob("*") if path.suffix in (".h", ".hpp", ".inl"))
 
 
+def quick_units(roster: list[pathlib.Path], changed: list[pathlib.Path],
+                headers: list[pathlib.Path]) -> list[pathlib.Path]:
+    """--quick: the changed units and, for each changed header, one unit that includes it,
+    its own .cpp when that is one of them, else the first; the full fan-out is CI's."""
+    roster_set = set(roster)
+    header_set = set(headers)
+    units = {unit for unit in changed if unit in roster_set}
+    for header in changed:
+        if header not in header_set:
+            continue
+        reached = affected_units(roster, [header], headers)
+        if reached:
+            home = header.with_suffix(".cpp")
+            units.add(home if home in reached else reached[0])
+    return sorted(units)
+
+
 def select_shard(units: list[pathlib.Path], index: int, count: int) -> list[pathlib.Path]:
     """Partition the complete sorted roster, without depending on machine paths or hashes."""
     if count < 1 or not 0 <= index < count:
@@ -126,8 +147,11 @@ def select_shard(units: list[pathlib.Path], index: int, count: int) -> list[path
     return units[index::count]
 
 
-def run_one(clang_tidy: str, unit: pathlib.Path) -> list[str]:
-    command = [clang_tidy, "-p", str(ROOT), "--quiet",
+PROFILES = {"full": [], "fast": ["--checks=-clang-analyzer-*"]}
+
+
+def run_one(clang_tidy: str, unit: pathlib.Path, profile: str = "full") -> list[str]:
+    command = [clang_tidy, "-p", str(ROOT), "--quiet", *PROFILES[profile],
                "--extra-arg=-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
                # The LLVM 18 analyzer crashes while inlining the MSVC 14.44 <format> sources;
                # keep it out of standard-library bodies.
@@ -161,7 +185,13 @@ def main(argv=None) -> int:
                         help="reuse clean results after hashing clang dependencies (GCC-style commands)")
     parser.add_argument("--changed", metavar="REVISION",
                         help="lint only the units affected by the sources that differ from REVISION")
+    parser.add_argument("--quick", action="store_true",
+                        help="with --changed: one unit per changed header instead of every includer")
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="full",
+                        help="fast leaves out the clang static analyzer (default: full)")
     args = parser.parse_args(argv)
+    if args.quick and not args.changed:
+        parser.error("--quick needs --changed")
     if args.jobs < 1:
         parser.error("--jobs must be positive")
     try:
@@ -173,7 +203,8 @@ def main(argv=None) -> int:
     if not roster:
         parser.error("no translation units found; check the paths and compilation database")
     if args.changed:
-        roster = affected_units(roster, changed_files(args.changed), header_roster())
+        select = quick_units if args.quick else affected_units
+        roster = select(roster, changed_files(args.changed), header_roster())
         if not roster:
             print(f"No translation units are affected by the changes since {args.changed}.")
             return 0
@@ -182,7 +213,7 @@ def main(argv=None) -> int:
     cache = None
     if args.cache_dir:
         try:
-            cache = CleanCache(ROOT, args.cache_dir, clang_tidy)
+            cache = CleanCache(ROOT, args.cache_dir, clang_tidy, args.profile)
         except (OSError, ValueError) as error:
             print(f"Lint cache unavailable; checking every unit: {error}", flush=True)
 
@@ -190,7 +221,7 @@ def main(argv=None) -> int:
         key = cache.key(unit) if cache else None
         if key and cache.contains(key):
             return [], True
-        findings = run_one(clang_tidy, unit)
+        findings = run_one(clang_tidy, unit, args.profile)
         if not findings and key and cache.key(unit) == key:
             try:
                 cache.remember(key)
@@ -199,7 +230,8 @@ def main(argv=None) -> int:
         return findings, False
 
     print(f"Lint shard {args.shard_index + 1}/{args.shard_count}: "
-          f"{len(units)} of {len(roster)} translation units, {args.jobs} workers", flush=True)
+          f"{len(units)} of {len(roster)} translation units, {args.jobs} workers, "
+          f"{args.profile} profile", flush=True)
     seen: set[str] = set()
     ordered: list[str] = []
     hits = 0
