@@ -274,7 +274,7 @@ TEST_CASE("secret result flags are bounded host context and secret entries have 
     const auto encoded =
         MatchControlPacket::encode({MatchControlKind::Prepare, MatchStop::None, context});
     REQUIRE(encoded);
-    REQUIRE(encoded->size() == 64);
+    REQUIRE(encoded->size() == MatchControlPacket::kBytes);
     CHECK((*encoded)[44] == 1);
     REQUIRE(MatchControlPacket::decode(*encoded));
     CHECK(MatchControlPacket::decode(*encoded)->context.challengeWon);

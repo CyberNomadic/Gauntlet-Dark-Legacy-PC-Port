@@ -15,8 +15,8 @@ using Failure = NativeAgreement::Failure;
 using Digest = NativeAgreement::Digest;
 using Bytes = std::array<u8, NativeAgreement::kPacketBytes>;
 
-Bytes encode(Kind kind, u64 epoch, u64 tick, const Digest& digest,
-             Failure failure = Failure::None, bool terminal = false) {
+Bytes encode(Kind kind, u64 epoch, u64 tick, const Digest& digest, Failure failure = Failure::None,
+             bool terminal = false) {
     Bytes bytes{};
     for (u32 i = 0; i < 4; ++i) {
         bytes[i] = static_cast<u8>((terminal ? kTerminalMagic : kMagic) >> (i * 8));
@@ -46,7 +46,11 @@ std::optional<Message> decode(std::span<const u8> bytes) {
         bytes[6] > static_cast<u8>(Failure::Transport)) {
         return std::nullopt;
     }
-    Message result{static_cast<Kind>(bytes[5]), static_cast<Failure>(bytes[6]), 0, 0, {},
+    Message result{static_cast<Kind>(bytes[5]),
+                   static_cast<Failure>(bytes[6]),
+                   0,
+                   0,
+                   {},
                    NativeAgreement::recognizesTerminal(bytes)};
     for (u32 i = 0; i < 8; ++i) {
         result.epoch |= static_cast<u64>(bytes[8 + i]) << (i * 8);
@@ -67,7 +71,8 @@ bool expired(NativeAgreement::Time start, NativeAgreement::Time now) {
 } // namespace
 
 bool NativeAgreement::recognizes(std::span<const u8> bytes) {
-    return bytes.size() >= 4 && (ByteReader(bytes).readU32() == kMagic || recognizesTerminal(bytes));
+    return bytes.size() >= 4 &&
+           (ByteReader(bytes).readU32() == kMagic || recognizesTerminal(bytes));
 }
 bool NativeAgreement::recognizesTerminal(std::span<const u8> bytes) {
     return bytes.size() >= 4 && ByteReader(bytes).readU32() == kTerminalMagic;
@@ -83,9 +88,10 @@ bool NativeAgreement::occupied(u8 peer) const {
     return peer != 0 && std::ranges::find(m_owners, peer) != m_owners.end();
 }
 bool NativeAgreement::open(u8 localPeer, u64 epoch, const Owners& owners,
-                           std::span<const Link> links, u32 period, Time now) {
+                           std::span<const Link> links, u32 period, Time now, u64 agreedThrough) {
     if (m_open || localPeer == 0 || localPeer > 4 || epoch == 0 || period == 0 ||
-        period > kMaxPeriod || std::ranges::find(owners, localPeer) == owners.end() ||
+        period > kMaxPeriod || agreedThrough % period != 0 ||
+        std::ranges::find(owners, localPeer) == owners.end() ||
         std::ranges::find(owners, 1) == owners.end() ||
         std::ranges::any_of(owners, [](u8 peer) { return peer > 4; })) {
         return false;
@@ -112,14 +118,15 @@ bool NativeAgreement::open(u8 localPeer, u64 epoch, const Owners& owners,
     m_local = localPeer;
     m_epoch = epoch;
     m_period = period;
-    m_submit = period;
+    m_agreed = agreedThrough;
+    m_submit = agreedThrough + period;
     m_now = now;
     m_owners = owners;
     m_links = connections;
     return true;
 }
 bool NativeAgreement::openTerminal(u8 localPeer, u64 epoch, const Owners& owners,
-                                  std::span<const Link> links, u64 terminalTick, Time now) {
+                                   std::span<const Link> links, u64 terminalTick, Time now) {
     if (terminalTick == 0 || !open(localPeer, epoch, owners, links, 1, now)) {
         return false;
     }
@@ -131,8 +138,8 @@ bool NativeAgreement::scheduled(u64 tick) const {
     return m_terminal ? tick == *m_terminal : tick != 0 && m_period != 0 && tick % m_period == 0;
 }
 bool NativeAgreement::inWindow(u64 tick) const {
-    return tick > m_agreed && (m_terminal ? tick == *m_terminal
-                                        : (tick - m_agreed) / m_period <= kWindow);
+    return tick > m_agreed &&
+           (m_terminal ? tick == *m_terminal : (tick - m_agreed) / m_period <= kWindow);
 }
 bool NativeAgreement::queueReady() const {
     for (u8 peer = 1; peer <= 4; ++peer) {
@@ -180,7 +187,8 @@ bool NativeAgreement::update(Time now) {
             return false;
         }
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
+    // libraries
     const auto overdue = std::ranges::find_if(m_outgoing, [&](const auto& queue) {
         return !queue.empty() && expired(queue.front().started, m_now);
     });
@@ -234,11 +242,16 @@ void NativeAgreement::settle() {
                     return;
                 }
             }
+            bool mismatch = false;
             for (u8 peer = 1; peer <= 4; ++peer) {
                 if (occupied(peer) && *pending.digests[peer] != digest) {
-                    fail(Failure::Mismatch, tick);
-                    return;
+                    m_mismatched[peer] = true;
+                    mismatch = true;
                 }
+            }
+            if (mismatch) {
+                fail(Failure::Mismatch, tick);
+                return;
             }
             if (!queueReady()) {
                 return;
@@ -287,10 +300,12 @@ NativeAgreement::Admission NativeAgreement::submit(u64 tick, const Digest& diges
         return result;
     }
     if (m_local != 1) {
-        m_outgoing[1].push_back({encode(Kind::Report, m_epoch, tick, digest, Failure::None,
-                                        m_terminal.has_value()), m_now});
+        m_outgoing[1].push_back(
+            {encode(Kind::Report, m_epoch, tick, digest, Failure::None, m_terminal.has_value()),
+             m_now});
     }
-    m_submit = m_terminal || tick > std::numeric_limits<u64>::max() - m_period ? 0 : tick + m_period;
+    m_submit =
+        m_terminal || tick > std::numeric_limits<u64>::max() - m_period ? 0 : tick + m_period;
     settle();
     return failed() ? Admission::Failed : Admission::Accepted;
 }
@@ -299,7 +314,8 @@ NativeAgreement::Admission NativeAgreement::receive(PacketTransport::Connection 
     if (!m_open) {
         return Admission::Invalid;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
+    // libraries
     const auto link = std::ranges::find(m_links, connection);
     if (connection == 0 || link == m_links.end()) {
         return Admission::WrongPeer;
@@ -387,7 +403,8 @@ void NativeAgreement::disconnected(PacketTransport::Connection connection) {
     if (!m_open || connection == 0) {
         return;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
+    // libraries
     const auto link = std::ranges::find(m_links, connection);
     if (link != m_links.end()) {
         m_outgoing[static_cast<usize>(link - m_links.begin())].clear();

@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "game/netplay/InputJournal.h"
 #include "game/netplay/RollbackSessionHarness.h"
 
 namespace {
@@ -49,8 +50,8 @@ std::vector<u8> inputBytes(std::span<const InputCommand> frame) {
     REQUIRE(encoded);
     return *encoded;
 }
-std::vector<u8> inputMessage(u8 origin, std::span<const InputCommand> frame,
-                            u64 nextTick = 1, u64 serial = 1) {
+std::vector<u8> inputMessage(u8 origin, std::span<const InputCommand> frame, u64 nextTick = 1,
+                             u64 serial = 1) {
     REQUIRE_FALSE(frame.empty());
     const RollbackExchange::Message message{frame.front().epoch,          origin, nextTick, {},
                                             {frame.begin(), frame.end()}, serial};
@@ -93,9 +94,9 @@ struct Room {
                                           ? PacketTransport::Delivery::Unreliable
                                           : PacketTransport::Delivery::Reliable));
             const auto admitted = sessions[target].receive(sender, packet.bytes, now);
-            REQUIRE((admitted == Admission::Accepted || admitted == Admission::Stale ||
-                     (sessions[target].phase() == Phase::Stopped &&
-                      admitted == Admission::WrongPhase)));
+            REQUIRE((
+                admitted == Admission::Accepted || admitted == Admission::Stale ||
+                (sessions[target].phase() == Phase::Stopped && admitted == Admission::WrongPhase)));
         }
     }
     void pump() {
@@ -142,7 +143,10 @@ struct Room {
             }
         }
     }
-    void ready() { prepare(); commit(); }
+    void ready() {
+        prepare();
+        commit();
+    }
     std::vector<InputCommand> commands(u8 peer, u64 tick, bool actions = true) const {
         std::vector<InputCommand> frame;
         // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
@@ -227,14 +231,15 @@ struct Room {
 };
 } // namespace
 
-TEST_CASE("match control authenticates the fixed native startup delay", "[match-lockstep][match-rollback]") {
+TEST_CASE("match control authenticates the fixed native startup delay",
+          "[match-lockstep][match-rollback]") {
     const u8 delay = GENERATE(u8{0}, u8{1}, u8{2});
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0}, delay);
     REQUIRE(room->sessions[1].prepare(7));
     const auto context = room->sessions[1].context();
     REQUIRE(context.inputLead == delay);
     const auto bytes = controlBytes(MatchControlKind::Prepare, context);
-    REQUIRE(bytes.size() == 64);
+    REQUIRE(bytes.size() == MatchControlPacket::kBytes);
     CHECK(bytes[4] == MatchControlPacket::kVersion);
     REQUIRE(MatchControlPacket::decode(bytes));
     CHECK(MatchControlPacket::decode(bytes)->context == context);
@@ -257,7 +262,8 @@ TEST_CASE("match control authenticates the fixed native startup delay", "[match-
     CHECK_FALSE(MatchControlPacket::decode(invalid));
 }
 
-TEST_CASE("native match delay must match the authenticated host prepare", "[match-lockstep][match-rollback]") {
+TEST_CASE("native match delay must match the authenticated host prepare",
+          "[match-lockstep][match-rollback]") {
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0}, 2);
     REQUIRE(room->sessions[1].prepare(7));
     const auto offered = room->sessions[1].context();
@@ -265,12 +271,14 @@ TEST_CASE("native match delay must match the authenticated host prepare", "[matc
     for (u8 const delay : {u8{0}, u8{1}}) {
         MatchSession wrong;
         REQUIRE(wrong.open(2, room->owners, hostLink, delay));
-        CHECK(wrong.receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) == Admission::Invalid);
+        CHECK(wrong.receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) ==
+              Admission::Invalid);
         CHECK(wrong.phase() == Phase::Lobby);
     }
     MatchSession invalid;
     CHECK_FALSE(invalid.open(2, room->owners, hostLink, 3));
-    CHECK(room->sessions[2].receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) == Admission::Accepted);
+    CHECK(room->sessions[2].receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) ==
+          Admission::Accepted);
 }
 
 TEST_CASE("native match advances identical complete frames on every peer without snapshots",
@@ -299,8 +307,10 @@ TEST_CASE("native match holds authenticated inputs arriving before the local com
     for (u8 const peer : {u8{1}, u8{2}, u8{3}}) {
         REQUIRE(room->loaded(peer));
     }
-    room->sessions[2].flush(room->wires[2]); room->deliver(2);
-    room->sessions[3].flush(room->wires[3]); room->deliver(3);
+    room->sessions[2].flush(room->wires[2]);
+    room->deliver(2);
+    room->sessions[3].flush(room->wires[3]);
+    room->deliver(3);
     REQUIRE(room->sessions[1].phase() == Phase::Running);
     room->sessions[1].flush(room->wires[1]);
     std::vector<u8> lateCommit;
@@ -316,9 +326,11 @@ TEST_CASE("native match holds authenticated inputs arriving before the local com
     room->wires[1].sent.clear();
     REQUIRE_FALSE(lateCommit.empty());
     REQUIRE(room->inputs[2].sample(room->commands(2, 1)));
-    room->sessions[2].flush(room->wires[2]); room->deliver(2);
+    room->sessions[2].flush(room->wires[2]);
+    room->deliver(2);
     REQUIRE(room->inputs[1].sample(room->commands(1, 1)));
-    room->sessions[1].flush(room->wires[1]); room->deliver(1);
+    room->sessions[1].flush(room->wires[1]);
+    room->deliver(1);
     REQUIRE(room->sessions[3].phase() == Phase::Loading);
     CHECK_FALSE(room->inputs[3].advance());
     CHECK_FALSE(room->inputs[3].sample(room->commands(3, 1)));
@@ -332,8 +344,10 @@ TEST_CASE("native match sends commit before input and preserves both through con
           "[match-lockstep][match-rollback]") {
     auto room = std::make_unique<Room>();
     room->prepare();
-    REQUIRE(room->loaded(1)); REQUIRE(room->loaded(2));
-    room->sessions[2].flush(room->wires[2]); room->deliver(2);
+    REQUIRE(room->loaded(1));
+    REQUIRE(room->loaded(2));
+    room->sessions[2].flush(room->wires[2]);
+    room->deliver(2);
     REQUIRE(room->sessions[1].phase() == Phase::Running);
     REQUIRE(room->inputs[1].sample(room->commands(1, 1)));
     room->wires[1].result = PacketTransport::SendResult::Congested;
@@ -345,11 +359,13 @@ TEST_CASE("native match sends commit before input and preserves both through con
     room->sessions[1].flush(room->wires[1]);
     REQUIRE(room->wires[1].sent.size() == 1);
     REQUIRE(MatchControlPacket::decode(room->wires[1].sent[0].bytes));
-    CHECK(MatchControlPacket::decode(room->wires[1].sent[0].bytes)->kind == MatchControlKind::Commit);
+    CHECK(MatchControlPacket::decode(room->wires[1].sent[0].bytes)->kind ==
+          MatchControlKind::Commit);
     room->deliver(1);
     REQUIRE(room->sessions[2].phase() == Phase::Running);
     room->wires[1].budget = std::numeric_limits<usize>::max();
-    room->sessions[1].flush(room->wires[1]); room->deliver(1);
+    room->sessions[1].flush(room->wires[1]);
+    room->deliver(1);
     REQUIRE(room->inputs[2].sample(room->commands(2, 1)));
     room->pump();
     room->advanceAll(1, true);
@@ -388,8 +404,8 @@ TEST_CASE("native prediction is bounded and never fabricates local device sample
 
 TEST_CASE("native sessions recover retained inputs after an outage beyond the prediction window",
           "[match-rollback][session-recovery]") {
-    const auto roster = GENERATE(MatchOwners{1, 2, 0, 0}, MatchOwners{1, 1, 1, 2},
-                                 MatchOwners{1, 2, 3, 4});
+    const auto roster =
+        GENERATE(MatchOwners{1, 2, 0, 0}, MatchOwners{1, 1, 1, 2}, MatchOwners{1, 2, 3, 4});
     const u8 delay = GENERATE(u8{0}, u8{1}, u8{2});
     const bool congested = GENERATE(false, true);
     CAPTURE(roster, delay, congested);
@@ -592,7 +608,8 @@ TEST_CASE("native match refuses global pause resume and replicated gameplay stre
     CHECK_FALSE(room->sessions[1].prepare(7, MatchTransition::Resume));
     auto context = room->sessions[1].context();
     CHECK_FALSE(MatchControlPacket::encode({MatchControlKind::Pause, MatchStop::None, context}));
-    CHECK_FALSE(MatchControlPacket::encode({MatchControlKind::RequestPause, MatchStop::None, context}));
+    CHECK_FALSE(
+        MatchControlPacket::encode({MatchControlKind::RequestPause, MatchStop::None, context}));
     context.transition = MatchTransition::Resume;
     CHECK_FALSE(context.valid());
     for (const std::array<u8, 4> obsolete :
@@ -620,9 +637,10 @@ TEST_CASE("native match conflict consumer failure and disconnect end the epoch",
         // Ready controls are admitted before any input heartbeat reaches the
         // rejecting consumer, giving it a real active-epoch admission failure.
         for (u8 const peer : {u8{2}, u8{3}, u8{4}}) {
-            REQUIRE(room->sessions[1].receive(
-                100 + peer, controlBytes(MatchControlKind::Ready, room->sessions[1].context())) ==
-                    Admission::Accepted);
+            REQUIRE(
+                room->sessions[1].receive(100 + peer, controlBytes(MatchControlKind::Ready,
+                                                                   room->sessions[1].context())) ==
+                Admission::Accepted);
         }
     } else {
         room->ready();
@@ -644,7 +662,8 @@ TEST_CASE("native match conflict consumer failure and disconnect end the epoch",
         host.flush(room->wires[1]);
     }
     REQUIRE(host.phase() == Phase::Stopped);
-    CHECK(host.stopReason() == (failure == 2 ? MatchStop::Disconnected : MatchStop::TransportFailure));
+    CHECK(host.stopReason() ==
+          (failure == 2 ? MatchStop::Disconnected : MatchStop::TransportFailure));
     CHECK_FALSE(room->inputs[1].advance());
     CHECK_FALSE(room->inputs[1].sample(room->commands(1, 2)));
 }
@@ -700,24 +719,29 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
     const auto remote = room->commands(2, 1);
     REQUIRE(room->inputs[1].sample(local));
     REQUIRE(room->inputs[2].sample(remote));
-    guest.flush(room->wires[2]); room->deliver(2);
+    guest.flush(room->wires[2]);
+    room->deliver(2);
     REQUIRE(room->inputs[1].advance());
     REQUIRE(room->inputs[1].submitBoundaryDigest());
     CHECK_FALSE(room->inputs[1].completeBoundary());
     if (progress != 0) {
-        host.flush(room->wires[1]); room->deliver(1);
+        host.flush(room->wires[1]);
+        room->deliver(1);
         REQUIRE(room->inputs[2].advance());
         if (progress == 2) {
             REQUIRE(room->inputs[2].complete());
         }
     }
     if (progress == 0) {
-        host.flush(room->wires[1]); room->deliver(1);
+        host.flush(room->wires[1]);
+        room->deliver(1);
         REQUIRE(room->inputs[2].advance());
     }
     room->agreeTerminal();
     const auto profiles = room->party();
-    ShopSetup shop; shop.source = 8; shop.destination = 9;
+    ShopSetup shop;
+    shop.source = 8;
+    shop.destination = 9;
     REQUIRE(host.prepare(8, transition, &profiles,
                          transition == MatchTransition::Shop ? &shop : nullptr,
                          transition == MatchTransition::SecretReturn));
@@ -742,7 +766,8 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
     CHECK(guest.travelParty() == nullptr);
     CHECK_FALSE(guest.loaded());
     CHECK_FALSE(guest.confirmNativeTick(source.epoch, 2));
-    REQUIRE(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, next)) == Admission::Stale);
+    REQUIRE(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, next)) ==
+            Admission::Stale);
     CHECK(host.receive(102, inputMessage(2, remote)) == Admission::Accepted);
     for (const auto& packet : delayed) {
         REQUIRE(guest.receive(kHost, packet.bytes) == Admission::Accepted);
@@ -765,23 +790,30 @@ TEST_CASE("native travel drains exact source inputs before profiles shop and new
         CHECK(guest.movieSkipVotes() == 1);
         REQUIRE(guest.requestMovieSkip(1));
         room->pump();
-        CHECK(host.movieSkipReady()); CHECK(guest.movieSkipReady());
+        CHECK(host.movieSkipReady());
+        CHECK(guest.movieSkipReady());
     }
     room->commit();
     CHECK(guest.receive(kHost, inputMessage(1, local)) == Admission::Stale);
     CHECK(host.receive(102, inputMessage(2, remote)) == Admission::Stale);
     if (transition == MatchTransition::Shop) {
-        CHECK(host.nativeHead() == 0); CHECK(guest.nativeHead() == 0);
-        REQUIRE(host.shop().finish()); REQUIRE(guest.shop().finish()); room->pump();
+        CHECK(host.nativeHead() == 0);
+        CHECK(guest.nativeHead() == 0);
+        REQUIRE(host.shop().finish());
+        REQUIRE(guest.shop().finish());
+        room->pump();
         REQUIRE(host.shop().finished());
         REQUIRE(host.prepare(9, MatchTransition::Travel, &profiles));
         CHECK(host.context().sourceTick == 0);
-        room->pump(); room->commit();
+        room->pump();
+        room->commit();
     }
-    CHECK(host.nativeHead() == 1); CHECK(guest.nativeHead() == 1);
+    CHECK(host.nativeHead() == 1);
+    CHECK(guest.nativeHead() == 1);
     REQUIRE(room->inputs[1].sample(room->commands(1, 1)));
     REQUIRE(room->inputs[2].sample(room->commands(2, 1)));
-    room->pump(); room->advanceAll(1, true);
+    room->pump();
+    room->advanceAll(1, true);
 }
 
 TEST_CASE("terminal agreement waits for missing earlier inputs despite a later source command",
@@ -797,7 +829,8 @@ TEST_CASE("terminal agreement waits for missing earlier inputs despite a later s
         hostCommands.insert(hostCommands.end(), local.begin(), local.end());
         REQUIRE(room->inputs[1].sample(local));
         REQUIRE(room->inputs[2].sample(room->commands(2, tick)));
-        guest.flush(room->wires[2]); room->deliver(2);
+        guest.flush(room->wires[2]);
+        room->deliver(2);
         REQUIRE(room->inputs[1].advance());
         REQUIRE(room->inputs[1].complete());
         REQUIRE(room->inputs[2].advance());
@@ -832,18 +865,32 @@ TEST_CASE("native transition fences refuse stale impossible and conflicting boun
     auto& guest = room->sessions[2];
     const auto old = guest.context();
     auto next = old;
-    ++next.epoch; next.transition = MatchTransition::Travel; next.scene = 8;
-    next.sourceEpoch = old.epoch; next.sourceTick = 2;
+    ++next.epoch;
+    next.transition = MatchTransition::Travel;
+    next.scene = 8;
+    next.sourceEpoch = old.epoch;
+    next.sourceTick = 2;
     REQUIRE(next.valid());
-    auto changed = next; changed.sourceEpoch = 0; CHECK_FALSE(changed.valid());
-    changed = next; ++changed.sourceEpoch; CHECK_FALSE(changed.valid());
-    changed = next; changed.sourceTick = 0;
-    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) == Admission::Invalid);
-    changed = next; changed.sourceTick = RollbackInputs::kMaxAhead + 2;
-    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) == Admission::Invalid);
-    REQUIRE(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, next)) == Admission::Accepted);
-    changed = next; ++changed.sourceTick;
-    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) == Admission::Invalid);
+    auto changed = next;
+    changed.sourceEpoch = 0;
+    CHECK_FALSE(changed.valid());
+    changed = next;
+    ++changed.sourceEpoch;
+    CHECK_FALSE(changed.valid());
+    changed = next;
+    changed.sourceTick = 0;
+    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) ==
+          Admission::Invalid);
+    changed = next;
+    changed.sourceTick = RollbackInputs::kMaxAhead + 2;
+    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) ==
+          Admission::Invalid);
+    REQUIRE(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, next)) ==
+            Admission::Accepted);
+    changed = next;
+    ++changed.sourceTick;
+    CHECK(guest.receive(kHost, controlBytes(MatchControlKind::Prepare, changed)) ==
+          Admission::Invalid);
     auto profiles = room->party();
     auto checkpoint = PartyCheckpointPacket::encode({next.epoch, 0, *profiles[0]});
     REQUIRE(checkpoint);
@@ -950,8 +997,8 @@ TEST_CASE("off-cadence terminal certificates reject disagreement and gate transi
     REQUIRE(room->sessions[1].observeNativeTerminal(epoch, 31, observed(), MatchSession::Time{}));
     CHECK_FALSE(room->sessions[1].completeNativeBoundary(epoch, 31));
     CHECK_FALSE(room->sessions[1].prepare(8, MatchTransition::Travel, &profiles));
-    REQUIRE(room->sessions[2].observeNativeTerminal(
-        epoch, 31, observed(mismatch ? 1 : 0), MatchSession::Time{}));
+    REQUIRE(room->sessions[2].observeNativeTerminal(epoch, 31, observed(mismatch ? 1 : 0),
+                                                    MatchSession::Time{}));
     room->wires[2].result = PacketTransport::SendResult::Congested;
     pumpAgreement(*room);
     CHECK_FALSE(room->sessions[1].nativeTerminalAgreed(epoch, 31));
@@ -1089,8 +1136,8 @@ TEST_CASE("native match observations agree without snapshots or changing input p
     }
 }
 
-TEST_CASE("native match observation mismatch stops every peer only after the full roster reports",
-          "[match-lockstep][match-native-agreement]") {
+TEST_CASE("a host observation mismatch orders the diverged peer to rebuild and the match goes on",
+          "[match-lockstep][match-native-agreement][journal]") {
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 3, 4});
     room->ready();
     executeThrough(*room, 30);
@@ -1099,16 +1146,80 @@ TEST_CASE("native match observation mismatch stops every peer only after the ful
     REQUIRE(room->sessions[3].observeNative(30, observed(), MatchSession::Time{}));
     pumpAgreement(*room);
     CHECK(room->sessions[1].phase() == Phase::Running);
+    CHECK_FALSE(room->sessions[1].resyncing());
     REQUIRE(room->sessions[1].nativeAgreement());
     CHECK(room->sessions[1].nativeAgreement()->agreedTick() == 0);
     REQUIRE(room->sessions[4].observeNative(30, observed(), MatchSession::Time{}));
     pumpAgreement(*room);
+    // Nobody stops: the host names peer two and restarts agreement at tick 30 everywhere.
     for (u8 peer = 1; peer <= 4; ++peer) {
-        CHECK(room->sessions[peer].phase() == Phase::Stopped);
-        CHECK(room->sessions[peer].stopReason() == MatchStop::TransportFailure);
-        CHECK(room->sessions[peer].nativeAgreement() == nullptr);
-        CHECK_FALSE(room->inputs[peer].sampleReady());
-        CHECK_FALSE(room->inputs[peer].advance());
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        REQUIRE(room->sessions[peer].resyncing());
+        CHECK(room->sessions[peer].resync()->tick == 30);
+        CHECK(room->sessions[peer].resync()->peers == 0b100);
+        REQUIRE(room->sessions[peer].nativeAgreement());
+        CHECK(room->sessions[peer].nativeAgreement()->agreedTick() == 30);
+        CHECK(room->inputs[peer].sampleReady());
+    }
+    const auto pending = room->sessions[1].pendingResync();
+    REQUIRE(pending);
+    CHECK(pending->tick == 30);
+    CHECK(pending->peers == 0b100);
+    CHECK(room->sessions[2].resyncRequested() == 30);
+    CHECK_FALSE(room->sessions[3].resyncRequested());
+    CHECK_FALSE(room->sessions[2].journalReady());
+    // The host alone sends the named peer the journal of the thirty confirmed ticks.
+    EpochInputJournal journal;
+    REQUIRE(journal.open(room->sessions[1].context().epoch, room->owners));
+    for (u64 tick = 1; tick <= 30; ++tick) {
+        JournalFrame frame;
+        for (u8 peer = 1; peer <= 4; ++peer) {
+            for (const auto& command : room->commands(peer, tick, false)) {
+                frame[command.seat] = command;
+            }
+        }
+        REQUIRE(journal.append(tick, frame));
+    }
+    const auto chunks = JournalPacket::chunks(journal, 1, 30, true);
+    REQUIRE_FALSE(chunks.empty());
+    CHECK_FALSE(room->sessions[2].queueJournal(2, chunks.front()));
+    CHECK_FALSE(room->sessions[1].queueJournal(3, chunks.front()));
+    for (const auto& chunk : chunks) {
+        REQUIRE(room->sessions[1].queueJournal(2, chunk));
+    }
+    CHECK(room->sessions[1].queuedJournal() == chunks.size());
+    REQUIRE(room->sessions[1].journalQueued(2));
+    CHECK_FALSE(room->sessions[1].pendingResync());
+    CHECK_FALSE(room->sessions[1].queueJournal(2, chunks.front()));
+    pumpAgreement(*room);
+    CHECK(room->sessions[1].queuedJournal() == 0);
+    REQUIRE(room->sessions[2].journalReady());
+    const auto commands = room->sessions[2].takeJournal();
+    CHECK(commands.size() == 30 * 4);
+    CHECK(commands.front().tick == 1);
+    CHECK(commands.back().tick == 30);
+    CHECK_FALSE(room->sessions[2].journalReady());
+    REQUIRE(room->sessions[2].finishResync());
+    CHECK_FALSE(room->sessions[2].resyncing());
+    CHECK_FALSE(room->sessions[2].finishResync());
+    pumpAgreement(*room);
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        CHECK_FALSE(room->sessions[peer].resyncing());
+    }
+    // Agreement continues from the restart with everyone in step.
+    executeThrough(*room, 60);
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        REQUIRE(room->sessions[peer].observeNative(60, observed(), MatchSession::Time{}));
+    }
+    pumpAgreement(*room);
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        REQUIRE(room->sessions[peer].nativeAgreement());
+        CHECK(room->sessions[peer].nativeAgreement()->agreedTick() == 60);
     }
 }
 

@@ -5,9 +5,10 @@
 #include <memory>
 #include <string>
 
-#include "game/netplay/RollbackExchange.h"
+#include "game/netplay/InputJournal.h"
 #include "game/netplay/NativeAgreement.h"
 #include "game/netplay/PartyCheckpoint.h"
+#include "game/netplay/RollbackExchange.h"
 #include "game/netplay/ShopSync.h"
 
 namespace gdl::game {
@@ -29,7 +30,9 @@ enum class MatchControlKind : u8 {
     Pause,
     RequestPause,
     Stop,
-    MovieSkipVote
+    MovieSkipVote,
+    Resync,    ///< host: the named peers rebuild from the journal at the given tick
+    ResyncDone ///< a rebuilt peer to the host, and the host on to everyone
 };
 struct MatchContext {
     u64 epoch = 0;
@@ -52,12 +55,14 @@ struct MatchControl {
     MatchStop stop = MatchStop::None;
     MatchContext context;
     u8 movieSkipVotes = 0; // occupied seat bits, never machine bits
+    u64 resyncTick = 0;    // Resync: the confirmed tick agreement restarts at
+    u8 resyncPeers = 0;    // Resync/ResyncDone: bit per peer id
     bool valid() const;
 };
 class MatchControlPacket {
 public:
-    static constexpr u8 kVersion = 7;
-    static constexpr usize kBytes = 64;
+    static constexpr u8 kVersion = 8;
+    static constexpr usize kBytes = 72;
     static std::optional<std::vector<u8>> encode(const MatchControl& control);
     static std::optional<MatchControl> decode(std::span<const u8> bytes);
 };
@@ -148,6 +153,32 @@ public:
     /** Local diagnostic, never peer-supplied text or an invitation/room code. */
     const std::string& failureDetail() const { return m_failureDetail; }
     u8 inputLead() const { return m_startupDelay; }
+
+    /** A rebuild the host ordered for the peers named by bit from the confirmed tick:
+     * every peer restarts digest agreement there and the named peers reload the stage
+     * and replay the journal the host sends them, while everyone else waits. */
+    struct Resync {
+        u64 tick = 0;
+        u8 peers = 0;
+        bool operator==(const Resync&) const = default;
+    };
+    static constexpr usize kJournalDeliveries = 1 << 16;
+    static constexpr usize kJournalCommands = 1 << 21;
+    static constexpr usize kRecentDigests = 16;
+    bool resyncing() const { return m_resync.has_value(); }
+    const Resync* resync() const { return m_resync ? &*m_resync : nullptr; }
+    /** The host's: the peers that still owe a rebuild and have no journal queued yet. */
+    std::optional<Resync> pendingResync() const;
+    /** Queues one journal chunk for a peer that owes a rebuild. */
+    bool queueJournal(u8 peer, const JournalPacket::Chunk& chunk);
+    bool journalQueued(u8 peer);
+    usize queuedJournal() const { return m_journalDeliveries.size(); }
+    /** A named peer's: the rebuild it was ordered to do, its journal once whole, and
+     * its completion, which tells the host and from there everyone. */
+    std::optional<u64> resyncRequested() const;
+    bool journalReady() const { return m_resyncTarget && m_journalComplete; }
+    std::vector<InputCommand> takeJournal();
+    bool finishResync();
     usize queuedControls() const { return m_controls.size(); }
 
 private:
@@ -156,8 +187,14 @@ private:
         std::vector<u8> bytes;
     };
     u8 peerOf(PacketTransport::Connection connection) const;
-    bool queue(u8 peer, MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0);
-    bool broadcast(MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0);
+    bool queue(u8 peer, MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0,
+               Resync resync = {});
+    bool broadcast(MatchControlKind kind, MatchStop reason = MatchStop::None, u8 votes = 0,
+                   Resync resync = {});
+    bool beginResync(Time now);
+    bool restartAgreement(u64 tick, Time now);
+    bool agreementFailed(Time now);
+    Admission journal(u8 peer, const JournalPacket::Chunk& chunk);
     void tryCommit();
     void stop(MatchStop reason, bool notify);
     void discardGameplay();
@@ -203,5 +240,12 @@ private:
     ShopSync m_shop;
     f64 m_loadingSeconds = 0;
     std::deque<ControlDelivery> m_controls;
+    std::deque<ControlDelivery> m_journalDeliveries;
+    std::map<u64, NativeAgreement::Digest> m_recentDigests;
+    std::optional<Resync> m_resync;
+    u8 m_journalQueuedPeers = 0;
+    bool m_resyncTarget = false;
+    bool m_journalComplete = false;
+    std::vector<InputCommand> m_journalIncoming;
 };
 } // namespace gdl::game

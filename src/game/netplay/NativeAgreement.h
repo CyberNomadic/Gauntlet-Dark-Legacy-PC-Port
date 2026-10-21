@@ -59,8 +59,10 @@ public:
     /** Validate and return the exact source epoch/tick of a terminal packet.
      * Tick zero is reserved for an epoch-wide failure, never a certificate. */
     static std::optional<std::pair<u64, u64>> terminalContext(std::span<const u8> bytes);
+    /** `agreedThrough` restarts a stream at a later multiple of the period, after a
+     * mismatch has been repaired, with every earlier tick taken as settled. */
     bool open(u8 localPeer, u64 epoch, const Owners& owners, std::span<const Link> links,
-              u32 period = 60, Time now = Clock::now());
+              u32 period = 60, Time now = Clock::now(), u64 agreedThrough = 0);
     /** One exact terminal certificate, in a distinct wire domain from periodic
      * reports even when its tick lies on the periodic schedule. */
     bool openTerminal(u8 localPeer, u64 epoch, const Owners& owners, std::span<const Link> links,
@@ -76,6 +78,8 @@ public:
     bool failed() const { return m_failure != Failure::None; }
     Failure failure() const { return m_failure; }
     u64 failureTick() const { return m_failureTick; }
+    /** On peer one after a mismatch: which peers' digests differed from its own. */
+    const std::array<bool, 5>& mismatchedPeers() const { return m_mismatched; }
     u64 agreedTick() const { return m_agreed; }
     std::optional<u64> terminalTick() const { return m_terminal; }
     u64 submitTick() const { return m_submit; }
@@ -108,6 +112,7 @@ private:
     u64 m_agreed = 0;
     Failure m_failure = Failure::None;
     u64 m_failureTick = 0;
+    std::array<bool, 5> m_mismatched{};
     Time m_now;
     Owners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};
