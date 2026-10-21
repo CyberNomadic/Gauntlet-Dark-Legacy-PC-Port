@@ -75,7 +75,7 @@ TEST_CASE("a powerup is named by the first of the original's list whose flags it
     REQUIRE(powerupTextId(9, 0x104) == "powerup.invisible"); // the earlier entry wins
     REQUIRE(powerupTextId(5, 0x80000) == "powerup.threeWayShot");
     REQUIRE(powerupTextId(5, 0x400000) == "powerup.fiveWayShot");
-    REQUIRE(powerupTextId(5, 0x1) == "powerup.weapon"); // an elemental weapon: the kind's name
+    REQUIRE(powerupTextId(5, 0x10) == "powerup.knockBack");
     REQUIRE(powerupTextId(7, 0) == "powerup.speedBoost");
     REQUIRE(powerupTextId(8, 0x55) == "powerup.magicBoost");
     REQUIRE(powerupTextId(6, 0x10000) == "powerup.invulnerable");
@@ -90,6 +90,20 @@ TEST_CASE("Gold and Silver invulnerability retain distinct inventory names",
     CHECK(powerupTextId(powerup::kArmor, 0x100000) == "powerup.goldInvulnerable");
     CHECK(powerupTextId(powerup::kArmor, 0x10000) == "powerup.invulnerable");
     CHECK(powerupTextId(powerup::kSpecial, 0x100000) == "powerup.mikey");
+}
+
+TEST_CASE("amulets are named by the element in their low nibble", "[game][players][powerups]") {
+    // items.c reads an amulet's element as a number (fire 1, lightning 2, light 3, acid 4),
+    // so light is not fire and lightning together.
+    CHECK(powerupTextId(powerup::kWeapon, 1) == "powerup.fireAmulet");
+    CHECK(powerupTextId(powerup::kWeapon, 2) == "powerup.lightningAmulet");
+    CHECK(powerupTextId(powerup::kWeapon, 3) == "powerup.lightAmulet");
+    CHECK(powerupTextId(powerup::kWeapon, 4) == "powerup.acidAmulet");
+    // A flagged weapon keeps its own name, and a nibble outside the elements is just a weapon.
+    CHECK(powerupTextId(powerup::kWeapon, 0x200) == "powerup.magicWeapon");
+    CHECK(powerupTextId(powerup::kWeapon, 0x203) == "powerup.magicWeapon");
+    CHECK(powerupTextId(powerup::kWeapon, 5) == "powerup.weapon");
+    CHECK(powerupTextId(powerup::kWeapon, 0) == "powerup.weapon");
 }
 
 TEST_CASE("keys are spent and potions taken out one at a time", "[game][players][inventory]") {

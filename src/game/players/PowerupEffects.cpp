@@ -192,10 +192,29 @@ PowerupEffects::Chrome PowerupEffects::chrome() const {
 }
 
 std::string_view powerupTextId(s32 kind, u32 flags) {
-    for (const PowerupName& name : kNames) {
-        if (name.kind == kind && (name.flags == 0 || (name.flags & flags) == name.flags)) {
-            return name.text;
+    const auto named = [&](bool flagged) -> std::string_view {
+        for (const PowerupName& name : kNames) {
+            if (name.kind == kind && (name.flags != 0) == flagged &&
+                (name.flags & flags) == name.flags) {
+                return name.text;
+            }
         }
+        return {};
+    };
+    if (const auto text = named(true); !text.empty()) {
+        return text;
+    }
+    // An amulet keeps its element in the weapon's low nibble (items.c's pickup dispatch), not
+    // in flag bits, so it is named after the flagged weapons and before the general name.
+    static constexpr std::array<std::string_view, 4> kAmulets{
+        "powerup.fireAmulet", "powerup.lightningAmulet", "powerup.lightAmulet",
+        "powerup.acidAmulet"};
+    const u32 element = flags & 0xFU;
+    if (kind == powerup::kWeapon && element >= 1 && element <= kAmulets.size()) {
+        return kAmulets[element - 1];
+    }
+    if (const auto text = named(false); !text.empty()) {
+        return text;
     }
     return "powerup.unknown";
 }

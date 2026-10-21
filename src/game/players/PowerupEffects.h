@@ -104,7 +104,7 @@ struct PowerupEffects {
 };
 
 /** The text id of a powerup's name for the selector, by its kind and flags: the first of the
- * original's list whose flags it carries, else its kind's general name. */
+ * original's list whose flags it carries, an amulet's element, else its kind's general name. */
 std::string_view powerupTextId(s32 kind, u32 flags);
 
 /** Coin stages cannot use Stop Time. Keep the carried item for the return journey. */
