@@ -655,15 +655,17 @@ TEST_CASE("native match conflict consumer failure and disconnect end the epoch",
     } else if (failure == 1) {
         CHECK(host.receive(102, inputMessage(2, room->commands(2, 1))) == Admission::Invalid);
     } else if (failure == 2) {
-        host.disconnected(102);
+        REQUIRE(host.disconnected(102));
+        CHECK(host.phase() == Phase::Running);
+        CHECK(host.dropped(2));
+        return; // the host drops that guest and plays on; nothing stops here
     } else {
         REQUIRE(room->inputs[1].sample(room->commands(1, 1)));
         room->wires[1].result = PacketTransport::SendResult::Invalid;
         host.flush(room->wires[1]);
     }
     REQUIRE(host.phase() == Phase::Stopped);
-    CHECK(host.stopReason() ==
-          (failure == 2 ? MatchStop::Disconnected : MatchStop::TransportFailure));
+    CHECK(host.stopReason() == MatchStop::TransportFailure);
     CHECK_FALSE(room->inputs[1].advance());
     CHECK_FALSE(room->inputs[1].sample(room->commands(1, 2)));
 }
@@ -942,8 +944,14 @@ void pumpAgreement(Room& room, MatchSession::Time now = {}) {
                                               : PacketTransport::Delivery::Reliable));
                 const auto target = source == 1 ? static_cast<u8>(packet.connection - 100) : u8{1};
                 const auto connection = source == 1 ? kHost : 100 + source;
+                if (room.sessions[target].dropped(source)) {
+                    continue; // that link is closed; its late traffic never arrives
+                }
                 const bool stopped = room.sessions[target].phase() == Phase::Stopped;
                 const auto result = room.sessions[target].receive(connection, packet.bytes, now);
+                CAPTURE(source, target, static_cast<u32>(result),
+                        RollbackExchange::recognizes(packet.bytes),
+                        NativeAgreement::recognizes(packet.bytes), packet.bytes.size());
                 if (stopped) {
                     // Reliable traffic already in flight can precede the Stop
                     // echo (notably a peer's scheduled observation at timeout).
@@ -1136,6 +1144,69 @@ TEST_CASE("native match observations agree without snapshots or changing input p
     }
 }
 
+TEST_CASE("the host sees which peer went quiet and drops it so the rest carry on",
+          "[match-lockstep][drop]") {
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 3, 0});
+    room->ready();
+    executeThrough(*room, 10);
+    CHECK(room->sessions[1].quietPeers().empty());
+    // Peer three stops sampling; the others predict it through the window, then wait.
+    const auto stepPair = [&] {
+        for (const u8 peer : {u8{1}, u8{2}}) {
+            if (room->inputs[peer].sampleReady()) {
+                REQUIRE(room->inputs[peer].sample(
+                    room->commands(peer, room->inputs[peer].sampleTick(), false)));
+            }
+        }
+        pumpAgreement(*room);
+        for (const u8 peer : {u8{1}, u8{2}}) {
+            if (room->inputs[peer].advance()) {
+                REQUIRE(room->inputs[peer].complete());
+            }
+        }
+    };
+    for (u32 attempt = 0; attempt < 12; ++attempt) {
+        stepPair();
+    }
+    CHECK(room->sessions[1].quietPeers() == std::vector<u8>{3});
+    CHECK(room->sessions[2].quietPeers() == std::vector<u8>{3});
+    REQUIRE(room->sessions[1].drop(3));
+    pumpAgreement(*room);
+    CHECK(room->sessions[3].phase() == Phase::Stopped);
+    CHECK(room->sessions[3].stopReason() == MatchStop::Left);
+    for (const u8 peer : {u8{1}, u8{2}}) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        const auto drops = room->sessions[peer].takeDrops();
+        REQUIRE(drops.size() == 1);
+        CHECK(drops.front().peer == 3);
+        CHECK(drops.front().tick == room->sessions[1].dropsFor(drops.front().epoch).front().tick);
+        REQUIRE(room->inputs[peer].inputs().suspend(3, drops.front().tick));
+    }
+    CHECK(room->sessions[1].quietPeers().empty());
+    // The two go on and agree at each cadence without peer three.
+    for (const u64 cadence : {u64{30}, u64{60}}) {
+        CAPTURE(cadence);
+        for (u32 attempt = 0; attempt < 200 && (room->inputs[1].confirmedTick() < cadence ||
+                                                room->inputs[2].confirmedTick() < cadence);
+             ++attempt) {
+            stepPair();
+        }
+        for (const u8 peer : {u8{1}, u8{2}}) {
+            CAPTURE(peer);
+            REQUIRE(room->inputs[peer].confirmedTick() >= cadence);
+            REQUIRE(room->sessions[peer].observeNative(cadence, observed(), MatchSession::Time{}));
+        }
+        pumpAgreement(*room);
+        for (const u8 peer : {u8{1}, u8{2}}) {
+            CAPTURE(peer);
+            CHECK(room->sessions[peer].phase() == Phase::Running);
+            REQUIRE(room->sessions[peer].nativeAgreement());
+            CHECK(room->sessions[peer].nativeAgreement()->agreedTick() == cadence);
+        }
+    }
+}
+
 TEST_CASE("a host observation mismatch orders the diverged peer to rebuild and the match goes on",
           "[match-lockstep][match-native-agreement][journal]") {
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 3, 4});
@@ -1243,9 +1314,11 @@ TEST_CASE("native match guest observation failure retains shared stop through co
     CHECK(room->wires[2].sent.empty());
     room->wires[2].result = PacketTransport::SendResult::Sent;
     pumpAgreement(*room);
-    for (u8 peer = 1; peer <= 4; ++peer) {
-        CHECK(room->sessions[peer].phase() == Phase::Stopped);
-        CHECK(room->sessions[peer].stopReason() == MatchStop::TransportFailure);
+    // The retained stop arrives at last: the host drops that guest and the rest play on.
+    for (const u8 peer : {u8{1}, u8{3}, u8{4}}) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        CHECK(room->sessions[peer].dropped(2));
     }
 }
 
@@ -1263,13 +1336,19 @@ TEST_CASE("native match observation timeout uses monotonic time even while simul
     pumpAgreement(*room);
     guest.update(0, MatchSession::Time{} + std::chrono::seconds{9});
     CHECK(guest.phase() == Phase::Running);
+    // The host's own digest is late but in before the guest gives up.
+    REQUIRE(room->sessions[1].observeNative(30, observed(),
+                                            MatchSession::Time{} + std::chrono::seconds{9}));
     guest.update(0, MatchSession::Time{} + NativeAgreement::kTimeout);
     CHECK(guest.phase() == Phase::Stopped);
     CHECK(guest.stopReason() == MatchStop::TransportFailure);
     room->wires[2].result = PacketTransport::SendResult::Sent;
     pumpAgreement(*room, MatchSession::Time{} + NativeAgreement::kTimeout);
-    CHECK(room->sessions[1].phase() == Phase::Stopped);
-    CHECK(room->sessions[1].stopReason() == MatchStop::TransportFailure);
+    // Its stop reaches the host, which drops it and agrees the tick alone.
+    CHECK(room->sessions[1].phase() == Phase::Running);
+    CHECK(room->sessions[1].dropped(2));
+    REQUIRE(room->sessions[1].nativeAgreement());
+    CHECK(room->sessions[1].nativeAgreement()->agreedTick() == 30);
 }
 
 TEST_CASE("native match observation demux preserves authentication and old epoch isolation",
@@ -1349,23 +1428,17 @@ TEST_CASE("native match missing scheduled observations and malformed current rep
     CHECK(room->sessions[2].stopReason() == MatchStop::TransportFailure);
 }
 
-TEST_CASE("native match observation transport failure and disconnect stop surviving peers",
-          "[match-lockstep][match-native-agreement]") {
+TEST_CASE("a guest's failed transport or lost link drops it and the rest agree without it",
+          "[match-lockstep][match-native-agreement][drop]") {
     const bool disconnected = GENERATE(false, true);
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 3, 4});
     room->ready();
     executeThrough(*room, 30);
+    REQUIRE(room->sessions[1].observeNative(30, observed(), MatchSession::Time{}));
     if (disconnected) {
-        REQUIRE(room->sessions[1].observeNative(30, observed(), MatchSession::Time{}));
-        room->sessions[1].disconnected(102);
-        CHECK(room->sessions[1].phase() == Phase::Stopped);
-        CHECK(room->sessions[1].stopReason() == MatchStop::TransportFailure);
-        pumpAgreement(*room);
-        for (const u8 peer : {u8{3}, u8{4}}) {
-            CHECK(room->sessions[peer].phase() == Phase::Stopped);
-            CHECK(room->sessions[peer].stopReason() == MatchStop::TransportFailure);
-        }
+        REQUIRE(room->sessions[1].disconnected(102));
     } else {
+        // The guest's own stop reaches the host instead of a closed link.
         auto& guest = room->sessions[2];
         REQUIRE(guest.observeNative(30, observed(), MatchSession::Time{}));
         room->wires[2].result = PacketTransport::SendResult::Invalid;
@@ -1374,9 +1447,22 @@ TEST_CASE("native match observation transport failure and disconnect stop surviv
         CHECK(guest.stopReason() == MatchStop::TransportFailure);
         room->wires[2].result = PacketTransport::SendResult::Sent;
         pumpAgreement(*room);
-        for (u8 peer = 1; peer <= 4; ++peer) {
-            CHECK(room->sessions[peer].phase() == Phase::Stopped);
-            CHECK(room->sessions[peer].stopReason() == MatchStop::TransportFailure);
-        }
+    }
+    // The lost guest is dropped, and the agreement it owed settles without it.
+    CHECK(room->sessions[1].phase() == Phase::Running);
+    CHECK(room->sessions[1].dropped(2));
+    pumpAgreement(*room);
+    for (const u8 peer : {u8{3}, u8{4}}) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        CHECK(room->sessions[peer].dropped(2));
+        REQUIRE(room->sessions[peer].observeNative(30, observed(), MatchSession::Time{}));
+    }
+    pumpAgreement(*room);
+    for (const u8 peer : {u8{1}, u8{3}, u8{4}}) {
+        CAPTURE(peer);
+        CHECK(room->sessions[peer].phase() == Phase::Running);
+        REQUIRE(room->sessions[peer].nativeAgreement());
+        CHECK(room->sessions[peer].nativeAgreement()->agreedTick() == 30);
     }
 }

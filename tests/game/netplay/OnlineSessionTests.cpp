@@ -771,6 +771,36 @@ TEST_CASE("online admission rejects malformed or changed identities atomically",
     CHECK(host.service.leaves == 1);
 }
 
+TEST_CASE("a started guest's lost link drops it and the host session carries on",
+          "[netplay][online-session][drop]") {
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    REQUIRE(pair.hostInputs.advance());
+    REQUIRE(pair.hostInputs.complete());
+    pair.hostWire.events.push_back({EventType::Disconnected, 1, {}, {}});
+    pair.hostSession.update(0);
+    CHECK(pair.hostSession.failure() == Failure::None);
+    CHECK(pair.hostSession.phase() == Phase::Active);
+    REQUIRE(pair.host.phase() == MatchSession::Phase::Running);
+    CHECK(pair.host.dropped(2));
+    const auto drops = pair.host.takeDrops();
+    REQUIRE(drops.size() == 1);
+    CHECK(drops.front().peer == 2);
+    REQUIRE(pair.hostInputs.inputs().suspend(2, drops.front().tick));
+    // The host confirms its own ticks alone from here on.
+    for (u32 step = 0; step < 4; ++step) {
+        if (pair.hostInputs.sampleReady()) {
+            REQUIRE(pair.hostInputs.sample(inputs(pair.host, pair.hostInputs)));
+        }
+        REQUIRE(pair.hostInputs.advance());
+        REQUIRE(pair.hostInputs.complete());
+    }
+    CHECK(pair.hostInputs.confirmedTick() >= 4);
+    CHECK(pair.hostSession.flush());
+    CHECK(pair.hostSession.phase() == Phase::Active);
+}
+
 TEST_CASE("online state fails closed after a started member departs or changes",
           "[netplay][online-session]") {
     Client host;
@@ -780,11 +810,6 @@ TEST_CASE("online state fails closed after a started member departs or changes",
     snapshot.started = true;
     host.publish(snapshot);
     REQUIRE(host.session.match().prepare(7));
-    SECTION("disconnect") {
-        host.wire.incoming.push_back({EventType::Disconnected, 1, {}, {}});
-        host.session.update(0);
-        CHECK(host.session.failure() == Failure::Transport);
-    }
     SECTION("service removal") {
         snapshot.members.pop_back();
         ++snapshot.revision;

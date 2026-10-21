@@ -47,6 +47,7 @@ public:
         m_inputs = {};
         m_lastFrame.reset();
     }
+    game::RollbackInputs& inputs() { return m_inputs; }
     bool sample(std::span<const game::InputCommand> commands) {
         return running() && m_inputs.sample(commands) && publish();
     }

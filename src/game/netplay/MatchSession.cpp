@@ -79,13 +79,14 @@ bool MatchControl::valid() const {
     const bool vote = kind == MatchControlKind::MovieSkipVote;
     const bool resync = kind == MatchControlKind::Resync;
     const bool done = kind == MatchControlKind::ResyncDone;
+    const bool drop = kind == MatchControlKind::Drop;
     constexpr u8 kGuestBits = 0b11100; // peers two to four
-    if ((resyncTick != 0) != resync || (resyncPeers != 0) != (resync || done) ||
+    if ((resyncTick != 0) != (resync || drop) || (resyncPeers != 0) != (resync || done || drop) ||
         (resync && resyncTick % MatchSession::kNativeAgreementPeriod != 0) ||
-        (resyncPeers & ~kGuestBits) != 0 || (done && std::popcount(resyncPeers) != 1)) {
+        (resyncPeers & ~kGuestBits) != 0 || ((done || drop) && std::popcount(resyncPeers) != 1)) {
         return false;
     }
-    return context.valid() && static_cast<u8>(kind) <= 8 && static_cast<u8>(stop) <= 4 &&
+    return context.valid() && static_cast<u8>(kind) <= 9 && static_cast<u8>(stop) <= 4 &&
            ((kind == MatchControlKind::Stop) == (stop != MatchStop::None)) &&
            (vote == (movieSkipVotes != 0)) && (movieSkipVotes & ~seatsOf(context.owners)) == 0 &&
            (!vote || hasEntryMovie(context.transition)) && kind != MatchControlKind::Pause &&
@@ -265,6 +266,11 @@ bool MatchSession::beginNativeInputs() {
                       links)) {
         return false;
     }
+    for (const auto& drop : m_dropped) {
+        if (drop.peer != 0) {
+            inputs->suspend(drop.peer);
+        }
+    }
     m_exchange = std::move(inputs);
     m_nativeNextTick = 1;
     return true;
@@ -280,7 +286,8 @@ bool MatchSession::ensureNativeAgreement(Time now) {
             links.push_back({peer, m_links[peer]});
         }
     }
-    if (!agreement->open(m_local, m_context.epoch, m_owners, links, kNativeAgreementPeriod, now)) {
+    if (!agreement->open(m_local, m_context.epoch, activeOwners(), links, kNativeAgreementPeriod,
+                         now)) {
         failNativeAgreement(NativeAgreement::Failure::Protocol);
         return false;
     }
@@ -298,7 +305,7 @@ bool MatchSession::ensureTerminalAgreement(u64 tick, Time now) {
             links.push_back({peer, m_links[peer]});
         }
     }
-    if (!agreement->openTerminal(m_local, m_context.epoch, m_owners, links, tick, now)) {
+    if (!agreement->openTerminal(m_local, m_context.epoch, activeOwners(), links, tick, now)) {
         return false;
     }
     m_terminalAgreement = std::move(agreement);
@@ -340,8 +347,8 @@ bool MatchSession::restartAgreement(u64 tick, Time now) {
             links.push_back({peer, m_links[peer]});
         }
     }
-    if (!agreement->open(m_local, m_context.epoch, m_owners, links, kNativeAgreementPeriod, now,
-                         tick)) {
+    if (!agreement->open(m_local, m_context.epoch, activeOwners(), links, kNativeAgreementPeriod,
+                         now, tick)) {
         return false;
     }
     // Digests already taken past the restart are offered again to the new stream.
@@ -450,6 +457,11 @@ bool MatchSession::acceptPreparedContext(const MatchContext& context, MatchParty
     m_context = context;
     m_travelParty = std::move(party);
     m_shop.begin(m_context.epoch, m_local, m_owners, m_context.grants);
+    for (const auto& drop : m_dropped) {
+        if (drop.peer != 0) {
+            m_shop.suspend(drop.peer);
+        }
+    }
     discardGameplay();
     if (!beginNativeInputs()) {
         stop(MatchStop::TransportFailure, false);
@@ -635,7 +647,7 @@ void MatchSession::tryCommit() {
     if (!host() || m_phase != Phase::Loading) {
         return;
     }
-    for (const auto owner : m_owners) {
+    for (const auto owner : activeOwners()) {
         if (owner != 0 && !m_loaded[owner]) {
             return;
         }
@@ -699,7 +711,7 @@ bool MatchSession::requestMovieSkip(u8 seat) {
 bool MatchSession::movieSkipReady() const {
     const auto required = seatsOf(m_owners);
     return m_phase == Phase::Loading && hasEntryMovie(m_context.transition) && required != 0 &&
-           m_movieSkipVotes == required;
+           (m_movieSkipVotes & required) == required;
 }
 void MatchSession::stop(MatchStop reason, bool notify) {
     if (m_phase == Phase::Offline || m_phase == Phase::Stopped) {
@@ -736,10 +748,101 @@ void MatchSession::stop(MatchStop reason, bool notify) {
 void MatchSession::leave() {
     stop(MatchStop::Left, true);
 }
-void MatchSession::disconnected(PacketTransport::Connection connection) {
+MatchOwners MatchSession::activeOwners() const {
+    MatchOwners owners = m_owners;
+    for (auto& owner : owners) {
+        if (owner != 0 && m_dropped[owner].peer != 0) {
+            owner = 0;
+        }
+    }
+    return owners;
+}
+void MatchSession::applyDrop(const Drop& drop) {
+    m_dropped[drop.peer] = drop;
+    m_pendingDrops.push_back(drop);
+    m_loaded[drop.peer] = true;
+    m_movieSkipVotes |= seatsOf(m_owners, drop.peer);
+    for (auto* agreement : {m_nativeAgreement.get(), m_terminalAgreement.get(),
+                            m_drainingAgreement.get(), m_drainingTerminal.get()}) {
+        if (agreement) {
+            agreement->suspend(drop.peer);
+        }
+    }
+    for (auto* exchange : {m_exchange.get(), m_drainingInputs.get()}) {
+        if (exchange) {
+            exchange->suspend(drop.peer);
+        }
+    }
+    m_shop.suspend(drop.peer);
+    if (m_pendingNativeShop) {
+        m_pendingNativeShop->suspend(drop.peer);
+    }
+    log::warn("Online peer {} dropped at epoch {} tick {}: its seats hold still", drop.peer,
+              drop.epoch, drop.tick);
+}
+bool MatchSession::drop(u8 peer) {
+    const bool playing =
+        m_phase == Phase::Running || (m_phase == Phase::Loading && m_context.epoch > 1);
+    if (!host() || peer < 2 || peer > 4 || m_dropped[peer].peer != 0 ||
+        std::ranges::find(m_owners, peer) == m_owners.end() || !playing) {
+        return false;
+    }
+    const Drop drop{peer, m_context.epoch,
+                    (m_exchange ? m_exchange->receivedThrough(peer) : 0) + 1};
+    // The control goes out on the link as it stands, the dropped peer's included.
+    if (!broadcast(MatchControlKind::Drop, MatchStop::None, 0,
+                   Resync{drop.tick, static_cast<u8>(1U << peer)})) {
+        stop(MatchStop::TransportFailure, true);
+        return false;
+    }
+    applyDrop(drop);
+    m_links[peer] = 0;
+    if (m_phase == Phase::Loading) {
+        tryCommit();
+    }
+    return true;
+}
+std::vector<MatchSession::Drop> MatchSession::dropsFor(u64 epoch) const {
+    std::vector<Drop> result;
+    for (const auto& drop : m_dropped) {
+        if (drop.peer != 0) {
+            result.push_back({drop.peer, epoch, drop.epoch == epoch ? drop.tick : 1});
+        }
+    }
+    return result;
+}
+std::vector<MatchSession::Drop> MatchSession::takeDrops() {
+    return std::exchange(m_pendingDrops, {});
+}
+std::vector<u8> MatchSession::quietPeers() const {
+    std::vector<u8> result;
+    if (m_phase != Phase::Running || !m_exchange) {
+        return result;
+    }
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        if (peer == m_local || m_dropped[peer].peer != 0 ||
+            std::ranges::find(m_owners, peer) == m_owners.end()) {
+            continue;
+        }
+        if (m_exchange->receivedThrough(peer) + RollbackInputs::kPredictionTicks <
+            m_nativeNextTick) {
+            result.push_back(peer);
+        }
+    }
+    return result;
+}
+bool MatchSession::disconnected(PacketTransport::Connection connection) {
     const auto peer = peerOf(connection);
     if (peer == 0) {
-        return;
+        return false;
+    }
+    if (m_dropped[peer].peer != 0 || (host() && peer != 1 && drop(peer))) {
+        m_links[peer] = 0;
+        std::erase_if(m_controls,
+                      [&](const auto& queued) { return queued.connection == connection; });
+        std::erase_if(m_journalDeliveries,
+                      [&](const auto& queued) { return queued.connection == connection; });
+        return true;
     }
     if (m_nativeAgreement) {
         m_nativeAgreement->disconnected(connection);
@@ -772,6 +875,7 @@ void MatchSession::disconnected(PacketTransport::Connection connection) {
     } else {
         stop(MatchStop::Disconnected, host());
     }
+    return false;
 }
 void MatchSession::update(f64 seconds, Time now) {
     for (auto* agreement : {m_terminalAgreement.get(), m_drainingTerminal.get()}) {
@@ -850,6 +954,11 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
                 m_pendingNativeShop = std::make_unique<ShopSync>();
                 m_pendingNativeShop->begin(message.context.epoch, m_local, m_owners,
                                            message.context.grants);
+                for (const auto& drop : m_dropped) {
+                    if (drop.peer != 0) {
+                        m_pendingNativeShop->suspend(drop.peer);
+                    }
+                }
             }
             // Even an already-executed boundary needs the scene adapter's
             // terminal-outcome check before acknowledging travel. A Shop has
@@ -944,12 +1053,40 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
         }
         return Admission::Accepted;
     }
+    case MatchControlKind::Drop: {
+        if (host() || peer != 1) {
+            return Admission::WrongPeer;
+        }
+        for (u8 dropped = 2; dropped <= 4; ++dropped) {
+            if ((message.resyncPeers & (1U << dropped)) == 0) {
+                continue;
+            }
+            if (m_dropped[dropped].peer != 0) {
+                return Admission::Stale;
+            }
+            if (dropped == m_local) {
+                m_failureDetail = "You were dropped from the online game for not responding.";
+                stop(MatchStop::Left, false);
+                return Admission::Accepted;
+            }
+            applyDrop({dropped, m_context.epoch, message.resyncTick});
+        }
+        return Admission::Accepted;
+    }
     case MatchControlKind::Pause:
     case MatchControlKind::RequestPause: return Admission::Invalid;
-    case MatchControlKind::Stop:
+    case MatchControlKind::Stop: {
+        const auto link = m_links[peer];
+        if (host() && peer != 1 && drop(peer)) {
+            // A guest that leaves on its own is dropped; nothing more goes to it.
+            std::erase_if(m_controls,
+                          [&](const auto& queued) { return queued.connection == link; });
+            return Admission::Accepted;
+        }
         stop(host() && message.stop != MatchStop::TransportFailure ? MatchStop::Left : message.stop,
              host());
         return Admission::Accepted;
+    }
     case MatchControlKind::Prepare: break;
     }
     return Admission::Invalid;
@@ -1166,7 +1303,7 @@ bool MatchSession::confirmNativeTick(u64 epoch, u64 through) {
         (m_pendingNativeContext && through > m_pendingNativeContext->sourceTick)) {
         return false;
     }
-    for (const auto owner : m_owners) {
+    for (const auto owner : activeOwners()) {
         if (owner != 0 && m_exchange->receivedThrough(owner) < through) {
             return false;
         }
@@ -1276,6 +1413,10 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
         }
         if (result != PacketTransport::SendResult::Sent) {
             const auto connection = control.connection;
+            if (peerOf(connection) == 0) {
+                m_controls.pop_front(); // that link closed after this was queued
+                continue;
+            }
             disconnected(connection);
             return;
         }

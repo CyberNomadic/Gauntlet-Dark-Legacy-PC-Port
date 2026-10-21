@@ -86,9 +86,9 @@ struct Room {
         const auto& context = sessions[peer].context();
         for (usize seat = 0; seat < owners.size(); ++seat) {
             if (owners[seat] == peer) {
-                commands.push_back(SessionInputs::command(local[commands.size()], context.epoch,
-                                    inputs[peer].sampleTick(), context.grants[seat],
-                                    static_cast<u8>(seat)));
+                commands.push_back(SessionInputs::command(
+                    local[commands.size()], context.epoch, inputs[peer].sampleTick(),
+                    context.grants[seat], static_cast<u8>(seat)));
             }
         }
         return inputs[peer].sample(commands);
@@ -704,7 +704,8 @@ TEST_CASE("ready input sampling leaves the caller's attack levels unchanged",
     REQUIRE(room.sample(2, input));
     REQUIRE(room.inputs[2].inputs().redundantInputs().size() == 1);
     CHECK(room.inputs[2].inputs().redundantInputs().front().held(CommandHeld::Attack) == held);
-    CHECK(room.inputs[2].inputs().redundantInputs().front().pressed(CommandPress::Attack) == pressed);
+    CHECK(room.inputs[2].inputs().redundantInputs().front().pressed(CommandPress::Attack) ==
+          pressed);
 }
 
 TEST_CASE("load timeout aborts even before the prepare message reaches a guest",
@@ -725,33 +726,44 @@ TEST_CASE("load timeout aborts even before the prepare message reaches a guest",
     CHECK(room.sessions[2].stopReason() == MatchStop::LoadTimeout);
 }
 
-TEST_CASE("departure stops every remaining machine without stale input or state revival",
-          "[netplay][match-session]") {
+TEST_CASE("a guest's lost link drops it while the host and the rest carry on",
+          "[netplay][match-session][drop]") {
     Room room;
     room.ready();
     auto& host = room.sessions[1];
-    const auto oldPrepare = message(host, MatchControlKind::Prepare);
-    auto expectedStop = MatchStop::Disconnected;
+    auto guestStop = MatchStop::Disconnected;
     SECTION("running") {}
     SECTION("loading next stage") {
         room.completeOne();
         const auto profiles = room.party();
         REQUIRE(host.prepare(8, MatchTransition::Travel, &profiles));
         room.pump();
-        // The retained source certificate must fail closed if a participant
-        // disconnects before the destination's all-ready commit.
-        expectedStop = MatchStop::TransportFailure;
+        guestStop = MatchStop::TransportFailure; // its retained source certificate fails
     }
-    host.disconnected(1); // remote peer 2, NOT host peer 1
-    room.sessions[2].disconnected(99);
+    REQUIRE(host.disconnected(1)); // remote peer 2, NOT host peer 1
+    CHECK(host.dropped(2));
+    CHECK(host.phase() != Phase::Stopped);
+    CHECK_FALSE(room.sessions[2].disconnected(99)); // its host is gone
     room.pump();
-    for (u8 peer = 1; peer <= 4; ++peer) {
-        CHECK(room.sessions[peer].phase() == Phase::Stopped);
-        CHECK(room.sessions[peer].stopReason() == expectedStop);
-        CHECK_FALSE(room.inputs[peer].advance());
-        CHECK_FALSE(room.sample(peer, {}));
+    CHECK(room.sessions[2].phase() == Phase::Stopped);
+    CHECK(room.sessions[2].stopReason() == guestStop);
+    for (const u8 peer : {u8{1}, u8{3}, u8{4}}) {
+        CAPTURE(peer);
+        CHECK(room.sessions[peer].phase() != Phase::Stopped);
+        CHECK(room.sessions[peer].dropped(2));
+        CHECK_FALSE(room.sessions[peer].dropped(3));
+        const auto drops = room.sessions[peer].takeDrops();
+        REQUIRE(drops.size() == 1);
+        CHECK(drops.front().peer == 2);
+        CHECK(room.sessions[peer].takeDrops().empty());
+        REQUIRE(room.sessions[peer].dropsFor(drops.front().epoch).size() == 1);
+        CHECK(room.sessions[peer].dropsFor(drops.front().epoch).front().tick == drops.front().tick);
+        CHECK(room.sessions[peer].dropsFor(drops.front().epoch + 1).front().tick == 1);
+        CHECK((room.inputs[peer].inputs().suspend(2, drops.front().tick) ||
+               room.sessions[peer].phase() == Phase::Loading));
     }
-    CHECK(room.sessions[3].receive(99, oldPrepare) == Admission::WrongPhase);
+    CHECK_FALSE(host.drop(2)); // once
+    CHECK_FALSE(host.drop(1)); // never the host
 }
 
 TEST_CASE("transport send failure terminates loading instead of pretending a start succeeded",

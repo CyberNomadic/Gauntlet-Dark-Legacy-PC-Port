@@ -125,9 +125,8 @@ void HostedRoom::disconnect(Connection id) {
     if (!m_host) {
         fail(Failure::Connection);
     } else if (!peer.empty()) {
-        if (m_room.started) {
-            fail(Failure::Connection);
-        } else {
+        // A started room keeps its roster; the match decides what a lost guest means.
+        if (!m_room.started) {
             std::erase_if(m_room.members, [&](const auto& row) { return row.peer == peer; });
             changed(true);
         }

@@ -628,7 +628,13 @@ void OnlineSession::event(const PacketTransport::Event& event) {
                 }
                 return;
             }
-            m_match.disconnected(event.connection);
+            if (m_match.disconnected(event.connection)) {
+                // The match dropped that guest and carries on without it.
+                if (link != m_links.end()) {
+                    m_links.erase(link);
+                }
+                return;
+            }
             fail(Failure::Transport);
         } // An already removed lobby member is no longer part of this lifetime.
         return;

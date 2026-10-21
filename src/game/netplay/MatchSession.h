@@ -31,8 +31,9 @@ enum class MatchControlKind : u8 {
     RequestPause,
     Stop,
     MovieSkipVote,
-    Resync,    ///< host: the named peers rebuild from the journal at the given tick
-    ResyncDone ///< a rebuilt peer to the host, and the host on to everyone
+    Resync,     ///< host: the named peers rebuild from the journal at the given tick
+    ResyncDone, ///< a rebuilt peer to the host, and the host on to everyone
+    Drop        ///< host: the named peer is out; its seats hold still from the given tick
 };
 struct MatchContext {
     u64 epoch = 0;
@@ -55,8 +56,8 @@ struct MatchControl {
     MatchStop stop = MatchStop::None;
     MatchContext context;
     u8 movieSkipVotes = 0; // occupied seat bits, never machine bits
-    u64 resyncTick = 0;    // Resync: the confirmed tick agreement restarts at
-    u8 resyncPeers = 0;    // Resync/ResyncDone: bit per peer id
+    u64 resyncTick = 0;    // Resync: the tick agreement restarts at; Drop: the first still tick
+    u8 resyncPeers = 0;    // Resync/ResyncDone/Drop: bit per peer id
     bool valid() const;
 };
 class MatchControlPacket {
@@ -110,7 +111,6 @@ public:
     /** Global pause has no shared tick boundary and is deliberately unsupported. */
     static bool requestPause() { return false; }
     void leave();
-    void disconnected(PacketTransport::Connection connection);
     /** seconds is lifecycle elapsed time; now is independent monotonic watchdog time. */
     void update(f64 seconds, Time now = Clock::now());
     Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
@@ -180,6 +180,28 @@ public:
     bool journalReady() const { return m_resyncTarget && m_journalComplete; }
     std::vector<InputCommand> takeJournal();
     bool finishResync();
+
+    /** A peer the host has dropped: its seats hold neutral input from `tick` of `epoch`
+     * on, and from the first tick of every later epoch; its characters stay in the party. */
+    struct Drop {
+        u8 peer = 0;
+        u64 epoch = 0;
+        u64 tick = 0;
+        bool operator==(const Drop&) const = default;
+    };
+    /** The host's: drops a guest from the match and tells everyone, the guest included
+     * when still reachable. The first still tick is the one after its last input seen. */
+    bool drop(u8 peer);
+    bool dropped(u8 peer) const { return peer < m_dropped.size() && m_dropped[peer].peer != 0; }
+    /** Every drop so far, with the tick a driver of `epoch` holds the seats still from. */
+    std::vector<Drop> dropsFor(u64 epoch) const;
+    /** Drops not yet applied to the running driver, each taken once. */
+    std::vector<Drop> takeDrops();
+    /** Peers whose input lags the local head by more than the prediction window: the
+     * ones a stall is waiting on. */
+    std::vector<u8> quietPeers() const;
+    /** False when the lost link ends the match; true when the peer was dropped instead. */
+    bool disconnected(PacketTransport::Connection connection);
     usize queuedControls() const { return m_controls.size(); }
 
 private:
@@ -195,6 +217,9 @@ private:
     bool beginResync(Time now);
     bool restartAgreement(u64 tick, Time now);
     bool agreementFailed(Time now);
+    /** The roster without dropped peers, for streams opened after a drop. */
+    MatchOwners activeOwners() const;
+    void applyDrop(const Drop& drop);
     Admission journal(u8 peer, const JournalPacket::Chunk& chunk);
     void tryCommit();
     void stop(MatchStop reason, bool notify);
@@ -248,5 +273,7 @@ private:
     bool m_resyncTarget = false;
     bool m_journalComplete = false;
     std::vector<InputCommand> m_journalIncoming;
+    std::array<Drop, 5> m_dropped{};
+    std::vector<Drop> m_pendingDrops;
 };
 } // namespace gdl::game

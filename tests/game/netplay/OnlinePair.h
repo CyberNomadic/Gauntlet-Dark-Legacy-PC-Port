@@ -54,7 +54,8 @@ struct OnlinePair {
         };
         std::vector<Delayed> delayed;
         u64 polls = 0;
-        u64 latency = 0; ///< receiver polls; zero preserves the immediate harness
+        u64 latency = 0;     ///< receiver polls; zero preserves the immediate harness
+        bool silent = false; ///< sends succeed but reach nobody: a peer gone quiet
         std::function<SendResult(std::span<const u8>, Delivery)> beforeSend;
         bool configurePeer(std::string peer, bool isHost) override {
             identity = std::move(peer);
@@ -86,6 +87,9 @@ struct OnlinePair {
                 }
             }
             Event event{EventType::Message, host ? 99U : 1U, {bytes.begin(), bytes.end()}, {}};
+            if (silent) {
+                return SendResult::Sent;
+            }
             if (latency == 0) {
                 remote->events.push_back(std::move(event));
             } else {
