@@ -1453,6 +1453,28 @@ TEST_CASE("an obstructed muzzle still produces impact feedback without launching
     f.audio.close();
 }
 
+TEST_CASE("a fence only the party walks against lets a weapon out of the muzzle",
+          "[game][world][player-arsenal][projectile-impact]") {
+    const auto root = impactAssets();
+    Fixture f;
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    f.arsenal.bind({f.device, f.classes, f.weapons, f.collision, f.effects, f.audio, nullptr,
+                    "S_WEAPONHITWOOD"});
+    // PlayerStartMissile clears the muzzle with WeaponWallCollide's mask, which leaves out the
+    // 0x100 fences that hold the party back: B5's lava ledge is one, and shots cross it.
+    CollisionTriangle fence;
+    fence.normal = {0, 0, -1};
+    fence.vertices = {Vec3{-30, -5, 22}, Vec3{30, -5, 22}, Vec3{0, 40, 22}};
+    fence.objectFlags = 0x100;
+    f.collision.build({fence});
+    PlayerFigure figure;
+    f.arsenal.launchWeapon(f.actor, &figure, {0, 0, 1}, 1, false);
+    CHECK(f.arsenal.missiles().count() == 1);
+    CHECK(f.effects.count() == 0);
+    f.arsenal.clear();
+    f.effects.clear();
+}
+
 TEST_CASE("spread volleys leave every impact but sound only the centre shot",
           "[game][world][player-arsenal][projectile-impact]") {
     const auto root = impactAssets();

@@ -382,8 +382,11 @@ PlayerArsenal::WeaponCue PlayerArsenal::weaponCue(u32 weapon, const PlayerFigure
 
 Vec3 PlayerArsenal::weaponMuzzle(const MissileLaunch& first) const {
     const f32 radius = first.spec->radius;
+    // PlayerStartMissile clears the muzzle with WeaponWallCollide, so the fences only the
+    // party walks against (a lava ledge's) are no obstruction to the shot.
     return m_resources->collision.resolveWalls(
-        first.position, radius, first.position.y - radius * 0.5f, first.position.y + radius * 0.5f);
+        first.position, radius, first.position.y - radius * 0.5f, first.position.y + radius * 0.5f,
+        nullptr, std::nullopt, WorldCollision::WallPush::All, WorldCollision::kMissileQueryFlags);
 }
 
 void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
