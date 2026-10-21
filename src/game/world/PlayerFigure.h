@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -278,6 +279,10 @@ private:
                    RenderDevice& device);
     void applyCostumeTextures(TreeModel& model, f32 frameBlend) const;
     Mat4 poseTransform(usize node, const TreePose& pose) const;
+    /** A costume node's body-space matrix under posed class nodes: its own class node's, or,
+     * for a piece the action tree does not name, its rest offset hanging from the nearest
+     * named ancestor so that it rides the limb it is attached to. */
+    Mat4 nodeTransform(usize node, std::span<const Mat4> matrices) const;
     bool gameplayBindingMatches(const GameplayCheckpoint& state) const;
     /** Binds `object` of `archive` as the lone node of `tree` into `model` when it changed. */
     static void bindObject(RenderDevice& device, ItemArchive& archive, std::string_view object,

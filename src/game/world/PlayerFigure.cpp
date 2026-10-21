@@ -463,12 +463,9 @@ ItemArchive* PlayerFigure::effects() {
 
 bool PlayerFigure::registerNativeResources(NativeStateResources& resources) const {
     if (!resources.registerArchive(m_costumeArchive, m_costumeResourceKey) ||
-        (m_actions.loaded() &&
-         !resources.registerAnimations(m_actions, m_actionResourceKey)) ||
-        (m_effects.loaded() &&
-         !resources.registerArchive(m_effects, m_effectResourceKey)) ||
-        (m_sharedTextures.loaded() &&
-         !resources.registerTextures(m_sharedTextures, "powerups")) ||
+        (m_actions.loaded() && !resources.registerAnimations(m_actions, m_actionResourceKey)) ||
+        (m_effects.loaded() && !resources.registerArchive(m_effects, m_effectResourceKey)) ||
+        (m_sharedTextures.loaded() && !resources.registerTextures(m_sharedTextures, "powerups")) ||
         (m_familiarTextures.loaded() &&
          !resources.registerTextures(m_familiarTextures, "weapons"))) {
         return false;
@@ -506,19 +503,31 @@ Mat4 PlayerFigure::rootAttachment(const Mat4& body) const {
     if (m_costume == nullptr || m_costume->nodes.empty()) {
         return body;
     }
-    return body * (m_action.transforms.empty() ? glm::translate(Mat4{1}, m_costume->worldPosition(0))
-                                              : m_action.transforms.front());
+    return body * (m_action.transforms.empty()
+                       ? glm::translate(Mat4{1}, m_costume->worldPosition(0))
+                       : m_action.transforms.front());
 }
 
 Mat4 PlayerFigure::poseTransform(usize node, const TreePose& pose) const {
     if (m_costume == nullptr || node >= m_costume->nodes.size()) {
         return Mat4{1};
     }
-    const auto matrices = pose.matrices();
-    const s32 source = node < m_classNodeOfNode.size() ? m_classNodeOfNode[node] : -1;
-    return source >= 0 && static_cast<usize>(source) < matrices.size()
-               ? matrices[static_cast<usize>(source)]
-               : glm::translate(Mat4{1}, m_costume->worldPosition(node));
+    return nodeTransform(node, pose.matrices());
+}
+
+Mat4 PlayerFigure::nodeTransform(usize node, std::span<const Mat4> matrices) const {
+    Mat4 offset{1};
+    s32 current = static_cast<s32>(node);
+    for (usize steps = 0; current >= 0 && steps < m_costume->nodes.size(); ++steps) {
+        const auto index = static_cast<usize>(current);
+        const s32 source = index < m_classNodeOfNode.size() ? m_classNodeOfNode[index] : -1;
+        if (source >= 0 && static_cast<usize>(source) < matrices.size()) {
+            return matrices[static_cast<usize>(source)] * offset;
+        }
+        offset = glm::translate(Mat4{1}, m_costume->nodes[index].position) * offset;
+        current = m_costume->nodes[index].parent;
+    }
+    return offset;
 }
 
 Mat4 PlayerFigure::rootAttachment(const Mat4& body, const TreePose& pose) const {
@@ -558,10 +567,7 @@ void PlayerFigure::preparePresentation(f32 frameBlend) const {
     const auto matrices = m_visualPose.matrices();
     m_visualTransforms.resize(m_costume->nodes.size());
     for (usize n = 0; n < m_visualTransforms.size(); ++n) {
-        const s32 source = m_classNodeOfNode[n];
-        m_visualTransforms[n] = source >= 0 && static_cast<usize>(source) < matrices.size()
-                                    ? matrices[static_cast<usize>(source)]
-                                    : glm::translate(Mat4{1.0f}, m_costume->worldPosition(n));
+        m_visualTransforms[n] = nodeTransform(n, matrices);
     }
 }
 
@@ -672,10 +678,7 @@ void PlayerFigure::drawPose(RenderDevice& device, const Mat4& clip, const Mat4& 
     const auto matrices = pose.matrices();
     std::vector<Mat4> transforms(m_costume->nodes.size());
     for (usize node = 0; node < transforms.size(); ++node) {
-        const s32 source = m_classNodeOfNode[node];
-        transforms[node] = source >= 0 && static_cast<usize>(source) < matrices.size()
-                               ? matrices[static_cast<usize>(source)]
-                               : glm::translate(Mat4{1}, m_costume->worldPosition(node));
+        transforms[node] = nodeTransform(node, matrices);
     }
     // Absolute display texture clock relative to this figure's bind. Does not
     // advance either the local texture clock or the gameplay animator.
@@ -925,8 +928,7 @@ void PlayerFigure::saveLocal(LocalSnapshot& state) const {
 }
 
 bool PlayerFigure::appendState(NativeStateDigest& digest, const ActionState& actions,
-                               const TextureAnimator::Clock& textures,
-                               f32 companionAlpha) const {
+                               const TextureAnimator::Clock& textures, f32 companionAlpha) const {
     if (!m_costumeArchive.loaded() || !m_costume) {
         digest.invalidate();
         return false;
@@ -937,8 +939,8 @@ bool PlayerFigure::appendState(NativeStateDigest& digest, const ActionState& act
     digest.resource(m_actionTree);
     // These immutable bindings control native hand/head attachment evaluation;
     // peers may own separate allocations of the same authored class/costume.
-    digest.values(m_handNode, m_armNode, m_armHidden, m_backNode, m_classNodeOfNode,
-                  m_staysInHand, m_phoenixSide);
+    digest.values(m_handNode, m_armNode, m_armHidden, m_backNode, m_classNodeOfNode, m_staysInHand,
+                  m_phoenixSide);
     m_costumeTextures.appendBindingDigest(digest);
     digest.fields<5>(actions);
     digest.fields<3>(textures);
@@ -951,8 +953,7 @@ bool PlayerFigure::appendNativeDigest(NativeStateDigest& digest) const {
            m_companion.appendNativeDigest(digest) && m_familiar.appendNativeDigest(digest);
 }
 
-bool PlayerFigure::appendLocalDigest(NativeStateDigest& digest,
-                                    const LocalSnapshot& saved) const {
+bool PlayerFigure::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -964,8 +965,7 @@ bool PlayerFigure::appendLocalDigest(NativeStateDigest& digest,
 }
 
 bool PlayerFigure::canRestoreLocal(const LocalSnapshot& state) const {
-    return state.m_owner.lock() == m_localOwner &&
-           m_companion.canRestoreLocal(state.m_companion) &&
+    return state.m_owner.lock() == m_localOwner && m_companion.canRestoreLocal(state.m_companion) &&
            m_familiar.canRestoreLocal(state.m_familiar);
 }
 
@@ -1139,7 +1139,8 @@ bool PlayerFigure::canCommitGameplay(const PreparedGameplay& prepared) const {
            prepared.m_data->companionBinding == m_companion.bindingRevision() &&
            gameplayBindingMatches(prepared.m_data->state);
 }
-// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts are taken in place
+// The prepared state's parts are taken in place rather than moved whole.
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 bool PlayerFigure::commitGameplayRestore(PreparedGameplay&& prepared) {
     if (!canCommitGameplay(prepared)) {
         return false;

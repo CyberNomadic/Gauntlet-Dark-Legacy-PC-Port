@@ -1,12 +1,14 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <format>
 #include <type_traits>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/assets/AnimationSet.h"
 #include "engine/io/File.h"
 
 #include "FakeRenderDevice.h"
@@ -525,8 +527,10 @@ TEST_CASE("Phoenix does not suppress the earned familiar's attack animation",
     CHECK(samePose);
 }
 
-/** A costume with a wrist and an unmapped ornament, sharing a tiny synthetic mesh. */
-std::filesystem::path costumeFixture(std::string_view name, bool animated) {
+/** A costume with a wrist and an unmapped ornament, sharing a tiny synthetic mesh. The
+ * ornament stands on its own unless `ornamentParent` hangs it under another node. */
+std::filesystem::path costumeFixture(std::string_view name, bool animated,
+                                     s32 ornamentParent = -1) {
     const auto root = test::scratchDirectory(name);
     const auto costume = root / "PLAYERS/WAR/BLU";
     std::filesystem::create_directories(costume);
@@ -540,10 +544,12 @@ std::filesystem::path costumeFixture(std::string_view name, bool animated) {
         {"index":2,"name":"WEAP_HOLD","file":"mesh.obj","meshTriangles":1}]})");
     writeTextFile(costume / "textures.json", R"({"defs":[],"bitmaps":[
         {"index":0,"name":"SKIN","file":"skin.png","width":2,"height":2,"flags":0}]})");
-    writeTextFile(costume / "animations.json", R"({"trees":[
-        {"name":"WAR_BLU","nodes":[
-            {"name":"HAND","object":"R_WRIST","position":[1,2,3]},
-            {"name":"ORNAMENT","object":"ORNAMENT","position":[4,0,0]}],"sequences":[]}]})");
+    writeTextFile(costume / "animations.json", std::format(R"({{"trees":[
+        {{"name":"WAR_BLU","nodes":[
+            {{"name":"HAND","object":"R_WRIST","position":[1,2,3]}},
+            {{"name":"ORNAMENT","object":"ORNAMENT","position":[4,0,0],"parent":{}}}],
+         "sequences":[]}}]}})",
+                                                           ornamentParent));
     if (animated) {
         const auto actions = root / "PLAYERS/WAR/ANIM";
         std::filesystem::create_directories(actions);
@@ -570,6 +576,32 @@ TEST_CASE("the effect parent uses the costume root's mapped pose rather than cla
     CHECK(Vec3{figure->rootAttachment(body)[3]} == Vec3{17, 28, 39});
     const PlayerFigure missing;
     CHECK(missing.rootAttachment(body) == body);
+}
+
+TEST_CASE("a costume piece the action tree does not name rides its nearest named ancestor",
+          "[game][figure][alpha-attachments]") {
+    test::FakeRenderDevice device;
+    const Mat4 body = glm::translate(Mat4{1}, Vec3{10, 20, 30});
+    // On its own, the ornament stays at its authored place in the body.
+    const auto loose = costumeFixture("figure-loose-ornament", true);
+    CharacterSave save;
+    save.color = 1;
+    auto figure = PlayerFigure::load(device, loose, save, false);
+    REQUIRE(figure);
+    figure->animate(0, 1, 1.0f / 60.0f);
+    REQUIRE(figure->attachment(body, "ORNAMENT").has_value());
+    CHECK(Vec3{(*figure->attachment(body, "ORNAMENT"))[3]} == Vec3{14, 20, 30});
+    // Hung under the hand, it keeps its offset from the hand's posed place (the blue
+    // knight's tiered plates and plume hang this way under UPPERTOR and HEAD).
+    const auto hung = costumeFixture("figure-hung-ornament", true, 0);
+    figure = PlayerFigure::load(device, hung, save, false);
+    REQUIRE(figure);
+    figure->animate(0, 1, 1.0f / 60.0f);
+    REQUIRE(figure->attachment(body, "ORNAMENT").has_value());
+    CHECK(Vec3{(*figure->attachment(body, "ORNAMENT"))[3]} == Vec3{21, 28, 39});
+    CHECK(Vec3{(*figure->attachment(body, "R_WRIST"))[3]} == Vec3{17, 28, 39});
+    figure->draw(device, Mat4{1}, body, {}, 1, false);
+    CHECK_FALSE(device.draws.empty());
 }
 
 TEST_CASE("costume and held weapon texture scrolling interpolates without clearing the hit skin",
@@ -799,6 +831,55 @@ TEST_CASE("native player costumes bind and draw every colour of the sixteen cost
             REQUIRE(figure);
             figure->draw(device, Mat4{1}, Mat4{1}, {}, 1, false);
             CHECK_FALSE(device.draws.empty());
+        }
+    }
+}
+
+TEST_CASE("every meshed piece of every levelled costume hangs from a node its class animates",
+          "[game][figure][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/objects.ngc").parent_path().parent_path();
+    for (s32 character = 0; character < kStartingClassCount * 2; ++character) {
+        AnimationSet actions;
+        REQUIRE(actions.load(PlayerFigure::classFolder(root, character, "ANIM")));
+        const auto action = actions.find(PlayerFigure::actionsClassOf(root, character));
+        REQUIRE(action.has_value());
+        const TreeInfo& bones = actions.tree(*action);
+        const std::string_view cls = classCode(archiveClassOf(character));
+        for (s32 color = 0; color < kColorCount; ++color) {
+            for (s32 tier = 0; tier < 10; ++tier) {
+                CharacterSave save;
+                save.character = character;
+                save.color = color;
+                save.progress().experience = levelExperience(std::max(tier * 10, 1));
+                const auto directory = PlayerFigure::costumeDirectory(root, save);
+                CAPTURE(cls, color, tier, directory.filename());
+                AnimationSet costume;
+                REQUIRE(costume.load(directory));
+                const auto tree = costume.find(std::format("{}_{}", cls, colorCode(color)));
+                REQUIRE(tree.has_value());
+                const TreeInfo& pieces = costume.tree(*tree);
+                for (const TreeNodeInfo& node : pieces.nodes) {
+                    if (node.object.empty()) {
+                        continue;
+                    }
+                    // Walk up to the nearest node the class animates; a piece without one
+                    // would stand still while the body moves.
+                    const TreeNodeInfo* current = &node;
+                    bool anchored = false;
+                    for (usize steps = 0; current != nullptr && steps < pieces.nodes.size();
+                         ++steps) {
+                        if (bones.findNode(current->name).has_value()) {
+                            anchored = true;
+                            break;
+                        }
+                        current = current->parent >= 0
+                                      ? &pieces.nodes[static_cast<usize>(current->parent)]
+                                      : nullptr;
+                    }
+                    CAPTURE(node.name, node.object);
+                    CHECK(anchored);
+                }
+            }
         }
     }
 }
