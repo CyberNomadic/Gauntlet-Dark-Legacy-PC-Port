@@ -210,19 +210,19 @@ TEST_CASE("native follow-camera value history rewinds marker turns and party smo
             expected[frame] = camera.localState();
         }
         camera.restoreLocal(*history.find(tick));
-        CHECK(cameraValues(camera.localState()) == cameraValues(before));
+        CHECK((cameraValues(camera.localState()) == cameraValues(before)));
         for (u64 frame = 0; frame < distance; ++frame) {
             step(camera, tick + frame, false);
         }
         camera.restoreLocal(*history.find(tick));
         for (u64 frame = 0; frame < distance; ++frame) {
             step(camera, tick + frame, true);
-            CHECK(cameraValues(camera.localState()) == cameraValues(expected[frame]));
+            CHECK((cameraValues(camera.localState()) == cameraValues(expected[frame])));
         }
         camera.restoreLocal(*history.find(tick));
         step(camera, tick, true);
         step(reference, tick, true);
-        CHECK(cameraValues(camera.localState()) == cameraValues(reference.localState()));
+        CHECK((cameraValues(camera.localState()) == cameraValues(reference.localState())));
         turned = turned || camera.turning();
         switched = switched || camera.marker() == 1;
     }

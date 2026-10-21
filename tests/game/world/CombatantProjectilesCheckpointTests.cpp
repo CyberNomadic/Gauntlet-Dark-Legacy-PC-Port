@@ -370,11 +370,11 @@ TEST_CASE("combatant sound phases and linked SFXX rows retain their own identiti
     REQUIRE(cues.size() == 5);
     const u64 birth = std::get<0>(cues[0]);
     REQUIRE(birth != 0);
-    CHECK(cues[0] == std::tuple{birth, Phase::Launch, 0, std::string{"S_SHARED"}});
-    CHECK(cues[1] == std::tuple{birth, Phase::Launch, 2, std::string{"S_LINK"}});
-    CHECK(cues[2] == std::tuple{birth, Phase::Morph, 1, std::string{"S_MORPH"}});
-    CHECK(cues[3] == std::tuple{birth, Phase::End, 0, std::string{"S_SHARED"}});
-    CHECK(cues[4] == std::tuple{birth, Phase::End, 2, std::string{"S_LINK"}});
+    CHECK((cues[0] == std::tuple{birth, Phase::Launch, 0, std::string{"S_SHARED"}}));
+    CHECK((cues[1] == std::tuple{birth, Phase::Launch, 2, std::string{"S_LINK"}}));
+    CHECK((cues[2] == std::tuple{birth, Phase::Morph, 1, std::string{"S_MORPH"}}));
+    CHECK((cues[3] == std::tuple{birth, Phase::End, 0, std::string{"S_SHARED"}}));
+    CHECK((cues[4] == std::tuple{birth, Phase::End, 2, std::string{"S_LINK"}}));
     REQUIRE(frame.finite.events.size() == cues.size());
     for (const auto& event : frame.finite.events) {
         CHECK(event.id.occurrence == 0); // no unrelated phase or linked row advances this cue

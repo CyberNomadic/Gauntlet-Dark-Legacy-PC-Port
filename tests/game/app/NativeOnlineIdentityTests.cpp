@@ -15,7 +15,7 @@
 #include "game/app/NativeOnlineIdentity.h"
 
 #if defined(_WIN32) && defined(_MSC_VER)
-#include <float.h>
+#include <cfloat>
 #include <windows.h>
 #endif
 #if defined(_WIN32) && defined(_M_X64)
@@ -184,6 +184,7 @@ TEST_CASE("prepared numeric identity agrees on a new thread without sharing live
     REQUIRE(input);
     const auto& copy = *input;
     auto worker = std::async(std::launch::async,
+                             // NOLINTNEXTLINE(bugprone-exception-escape): a throw surfaces through the future
                              [copy] { return NativeOnlineIdentity::numericMatches(copy); });
     CHECK(worker.get());
     CHECK(NativeOnlineIdentity::prepareProcessNumeric());
@@ -199,11 +200,15 @@ TEST_CASE("native runtime linkage agrees with actual linked math and control add
         HMODULE owner = nullptr;
         REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the Win32 call names a function by address
                                    reinterpret_cast<LPCWSTR>(function), &owner) != 0);
 #if defined(_MT) && !defined(_DLL)
         CHECK(owner == executable);
 #elif defined(_DLL)
-        CHECK(owner != executable);
+        // A CRT function's address may be its import thunk inside the executable,
+        // so the dynamic profile is confirmed by the runtime library being loaded.
+        CHECK((GetModuleHandleW(L"ucrtbase.dll") != nullptr ||
+               GetModuleHandleW(L"ucrtbased.dll") != nullptr));
 #endif
     };
     check(static_cast<double (*)(double)>(&::sin));
@@ -231,6 +236,7 @@ TEST_CASE("static runtime identity ignores an actual incidental system UCRT",
     INFO(error);
     REQUIRE(before);
     {
+        // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
         struct Module {
             HMODULE handle;
             ~Module() {
@@ -245,6 +251,7 @@ TEST_CASE("static runtime identity ignores an actual incidental system UCRT",
         HMODULE externalOwner = nullptr;
         REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the Win32 call names a function by address
                                    reinterpret_cast<LPCWSTR>(externalSin), &externalOwner) != 0);
         // A real alternative math implementation is present, but it is not the
         // statically linked function whose provenance capture() verifies.
@@ -271,10 +278,11 @@ TEST_CASE("Windows numeric policy rejects flushing and exception-mask drift with
     const auto source = strings();
     const auto input = NativeOnlineIdentity::snapshot(source);
     REQUIRE(input);
+    // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
     struct Restore {
         unsigned int value = _mm_getcsr();
         ~Restore() { _mm_setcsr(value); }
-    } restore;
+    } const restore{};
     for (const unsigned int mask : {0x8000U, 0x0040U, 0x0080U}) {
         CAPTURE(mask);
         _mm_setcsr((restore.value & ~0x003fU) ^ mask);
@@ -296,9 +304,10 @@ TEST_CASE("Windows numeric policy detects later CRT FMA changes instead of reset
     const auto input = NativeOnlineIdentity::snapshot(source);
     REQUIRE(input);
     CHECK(_get_FMA3_enable() == 0);
+    // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
     struct Restore {
         ~Restore() { _set_FMA3_enable(0); }
-    } restore;
+    } const restore{};
     if (_set_FMA3_enable(1) == 0) {
         SUCCEED("This processor has no UCRT FMA3 path; startup still pins the disabled profile");
         return;

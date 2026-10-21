@@ -13,6 +13,7 @@ namespace gdl {
  * User-facing text by identifier, read from a language's JSON file so the game never holds
  * literal strings. A fallback language covers identifiers a translation lacks.
  */
+// NOLINTNEXTLINE(bugprone-exception-escape): the map's move is not noexcept on every library
 class StringTable {
 public:
     /** Loads `directory/<language>.json` over `directory/<fallback>.json`; false when neither
