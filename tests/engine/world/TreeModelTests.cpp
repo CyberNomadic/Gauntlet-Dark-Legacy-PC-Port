@@ -1196,3 +1196,94 @@ TEST_CASE("tree texture overrides follow each sequence and reset between shared 
 }
 
 } // namespace
+
+namespace {
+
+/** A lava pool: a square pad (texture 0) under a slightly larger mask plate whose indexed
+ * picture (texture 1) shows nothing but holds a centred square. */
+std::filesystem::path poolFigure(std::string_view name) {
+    const auto dir = test::scratchDirectory(name);
+    std::filesystem::create_directories(dir / "models");
+    std::filesystem::create_directories(dir / "textures");
+    writeTextFile(dir / "models/000_POOL.obj",
+                  "v -2 0 -2\nv 2 0 -2\nv 2 0 2\nv -2 0 2\n"
+                  "v -2.2 0.15 -2.2\nv 2.2 0.15 -2.2\nv 2.2 0.15 2.2\nv -2.2 0.15 2.2\n"
+                  "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 1 0\n"
+                  "usemtl tex0\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n"
+                  "usemtl tex1\nf 5/1/1 6/2/1 7/3/1\nf 5/1/1 7/3/1 8/4/1\n");
+    writeTextFile(dir / "objects.json", R"({"objects": [
+  {"index": 0, "name": "POOL", "file": "models/000_POOL.obj", "meshTriangles": 4}]})");
+    writeFile(dir / "textures/000_LAVA.png", test::kTinyPng);
+    writeTextFile(dir / "textures.json", R"({"defs": [], "bitmaps": [
+  {"index": 0, "name": "LAVA", "file": "textures/000_LAVA.png", "width": 8, "height": 8, "flags": 0},
+  {"index": 1, "name": "", "width": 8, "height": 8, "flags": 140,
+   "silhouette": ["00000000", "00111100", "00111100", "00111100",
+                  "00111100", "00111100", "00111100", "00000000"]}]})");
+    writeTextFile(dir / "animations.json", R"({"trees": [
+  {"name": "POOL", "prefix": "", "sequences": [], "nodes": [
+    {"name": "POOL", "object": "POOL", "type": 0, "flags": 0, "objectFlags": 0, "parent": -1,
+     "position": [0.0, 0.0, 0.0]}]}]})");
+    test::convertModelFixture(dir);
+    return dir;
+}
+
+} // namespace
+
+TEST_CASE("an authored silhouette cuts the flat part beneath it instead of drawing",
+          "[world][model][silhouette]") {
+    const auto dir = poolFigure("tree-model-silhouette");
+    ModelSet models;
+    TextureSet textures;
+    AnimationSet trees;
+    REQUIRE(models.load(dir));
+    REQUIRE(textures.load(dir));
+    REQUIRE(trees.load(dir));
+    test::FakeRenderDevice device;
+    TreeModel model;
+    REQUIRE(model.bind(trees.tree(0), models, textures, device));
+    device.draws.clear();
+    model.draw(device, Mat4{1}, Mat4{1});
+    // The mask plate is not drawn; the pad is, cut by the mask's shape.
+    REQUIRE(device.draws.size() == 1);
+    const auto& draw = device.draws[0];
+    CHECK(draw.texture == &textures.texture(device, 0));
+    CHECK(draw.state.lightmapCutout);
+    CHECK(draw.state.lightmap == textures.silhouetteTexture(device, 1));
+    REQUIRE(draw.vertices.size() == 6);
+    // The pad's corner (-2, -2) sits 0.2 of 4.4 units into the plate from its corner, whose
+    // picture coordinate the fixture flips down (OBJ counts v from the bottom); the archive
+    // keeps 1/128 of a unit.
+    const auto corner = std::ranges::find_if(draw.vertices, [](const ImmediateVertex& v) {
+        return v.position.x < -1.9f && v.position.z < -1.9f;
+    });
+    REQUIRE(corner != draw.vertices.end());
+    CHECK(corner->uv2.x == Approx(0.2f / 4.4f).margin(2e-3f));
+    CHECK(corner->uv2.y == Approx(1.0f - 0.2f / 4.4f).margin(2e-3f));
+    for (const ImmediateVertex& v : draw.vertices) {
+        CHECK(v.uv2.x >= 0.0f);
+        CHECK(v.uv2.x <= 1.0f);
+        CHECK(v.uv2.y >= 0.0f);
+        CHECK(v.uv2.y <= 1.0f);
+    }
+}
+
+TEST_CASE("a figure without silhouette masks draws every part uncut",
+          "[world][model][silhouette]") {
+    const auto dir = sampleFigure("tree-model-no-silhouette");
+    ModelSet models;
+    TextureSet textures;
+    AnimationSet trees;
+    REQUIRE(models.load(dir));
+    REQUIRE(textures.load(dir));
+    REQUIRE(trees.load(dir));
+    test::FakeRenderDevice device;
+    TreeModel model;
+    REQUIRE(model.bind(trees.tree(0), models, textures, device));
+    device.draws.clear();
+    model.draw(device, Mat4{1}, Mat4{1});
+    REQUIRE(device.draws.size() == 2);
+    for (const auto& draw : device.draws) {
+        CHECK_FALSE(draw.state.lightmapCutout);
+        CHECK(draw.state.lightmap == nullptr);
+    }
+}

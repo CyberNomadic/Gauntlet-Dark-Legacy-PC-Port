@@ -34,6 +34,9 @@ bool TextureSet::load(const std::filesystem::path& directory) {
     m_byName.clear();
     m_images.clear();
     m_textures.clear();
+    m_silhouettes.clear();
+    m_silhouetteKnown.clear();
+    m_silhouetteTextures.clear();
     m_nativeBitmaps.clear();
     m_nativePixels.clear();
     m_directory = directory;
@@ -154,6 +157,48 @@ void TextureSet::releaseTextures() {
     for (std::unique_ptr<Texture>& texture : m_textures) {
         texture.reset();
     }
+    for (std::unique_ptr<Texture>& texture : m_silhouetteTextures) {
+        texture.reset();
+    }
+}
+
+const Image* TextureSet::silhouette(u32 index) {
+    GDL_VERIFY(index < m_entries.size(), "texture index out of range");
+    if (m_silhouettes.size() != m_entries.size()) {
+        m_silhouettes.assign(m_entries.size(), std::nullopt);
+        m_silhouetteKnown.assign(m_entries.size(), false);
+    }
+    if (!m_silhouetteKnown[index]) {
+        m_silhouetteKnown[index] = true;
+        const TextureSetEntry& entry = m_entries[index];
+        if (!entry.noPicture && !entry.external() && index < m_nativeBitmaps.size()) {
+            try {
+                m_silhouettes[index] =
+                    formats::decodeGcSilhouette(m_nativeBitmaps[index], m_nativePixels);
+            } catch (const std::exception& e) {
+                log::warn("Texture {}: its silhouette cannot be read: {}", entry.name, e.what());
+            }
+        }
+    }
+    return m_silhouettes[index] ? &*m_silhouettes[index] : nullptr;
+}
+
+const Texture* TextureSet::silhouetteTexture(RenderDevice& device, u32 index) {
+    const Image* image = silhouette(index);
+    if (image == nullptr) {
+        return nullptr;
+    }
+    if (m_silhouetteTextures.size() != m_entries.size()) {
+        m_silhouetteTextures.resize(m_entries.size());
+    }
+    std::unique_ptr<Texture>& texture = m_silhouetteTextures[index];
+    if (!texture) {
+        TextureDesc desc{image->width, image->height, TextureFilter::Linear,
+                         TextureWrap::ClampToEdge};
+        desc.generateMipmaps = true;
+        texture = device.createTexture(desc, image->pixels);
+    }
+    return texture.get();
 }
 
 bool TextureSet::loadNative(const std::filesystem::path& directory,

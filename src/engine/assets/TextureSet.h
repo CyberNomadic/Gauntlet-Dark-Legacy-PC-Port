@@ -59,6 +59,12 @@ public:
 
     /** GPU texture, created on first use; throws like image(). */
     const Texture& texture(RenderDevice& device, u32 index);
+    /** The shape of a native indexed texture whose palette shows nothing (see
+     * decodeGcSilhouette): white where its index is set, clear elsewhere. Null for a
+     * texture that draws, or that is not native. */
+    const Image* silhouette(u32 index);
+    /** The silhouette as a clamped GPU texture, created on first use; null without one. */
+    const Texture* silhouetteTexture(RenderDevice& device, u32 index);
     /** Already-created native slot only; no decode, cache population or GPU work. */
     const Texture* cachedTexture(u32 index) const {
         return index < m_textures.size() ? m_textures[index].get() : nullptr;
@@ -80,6 +86,9 @@ private:
     std::unordered_map<std::string, u32> m_byName;
     std::vector<Image> m_images;
     std::vector<std::unique_ptr<Texture>> m_textures;
+    std::vector<std::optional<Image>> m_silhouettes;
+    std::vector<bool> m_silhouetteKnown;
+    std::vector<std::unique_ptr<Texture>> m_silhouetteTextures;
 };
 
 } // namespace gdl

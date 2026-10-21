@@ -90,6 +90,9 @@ public:
         m_control->draws.setTextureFiltering(filtering);
     }
     void setSmoothSprites(bool enabled) override { m_control->draws.setSmoothSprites(enabled); }
+    void setAuthoredSilhouettes(bool enabled) override {
+        m_control->draws.setAuthoredSilhouettes(enabled);
+    }
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> pixels) override {
         m_control->events.emplace_back("create");

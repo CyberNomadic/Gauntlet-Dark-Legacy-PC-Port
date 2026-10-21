@@ -186,4 +186,57 @@ Image decodeGcTexture(const ArchiveBitmap& bitmap, std::span<const u8> texturesF
     return image;
 }
 
+std::optional<Image> decodeGcSilhouette(const ArchiveBitmap& bitmap,
+                                        std::span<const u8> texturesFile) {
+    if (bitmap.width == 0 || bitmap.height == 0) {
+        return std::nullopt;
+    }
+    const Coding coding = codingFor(bitmap.format);
+    if (coding != Coding::Indexed4 && coding != Coding::Indexed8) {
+        return std::nullopt;
+    }
+    const u32 entries = coding == Coding::Indexed4 ? kPaletteEntries4 : kPaletteEntries8;
+    const u32 bits = bitsPerPixel(bitmap.format);
+    const Tile tile = tileFor(bits);
+    const usize pixelsAt = usize{bitmap.dataOffset} + pixelDataOffset(bitmap.format);
+    const usize pixelBytes = usize{tiledTexelCount(bitmap.width, bitmap.height, tile)} * bits / 8;
+    if (bitmap.dataOffset > texturesFile.size() ||
+        usize{entries} * 2 > texturesFile.size() - bitmap.dataOffset ||
+        pixelsAt > texturesFile.size() || pixelBytes > texturesFile.size() - pixelsAt) {
+        return std::nullopt;
+    }
+    const std::span<const u8> paletteBytes =
+        texturesFile.subspan(bitmap.dataOffset, usize{entries} * 2);
+    std::array<u8, kPaletteEntries8> alpha{};
+    for (u32 i = 0; i < entries; ++i) {
+        alpha[i] = rgb5a3ToColor(readBigU16(paletteBytes, usize{i} * 2)).a;
+    }
+    const std::span<const u8> pixels = texturesFile.subspan(pixelsAt, pixelBytes);
+    Image image = Image::filled(bitmap.width, bitmap.height, Color::transparent());
+    bool drawn = false;
+    for (u32 y = 0; y < bitmap.height; ++y) {
+        for (u32 x = 0; x < bitmap.width; ++x) {
+            const usize texel = tiledIndex(x, y, bitmap.width, tile);
+            u8 index = 0;
+            if (coding == Coding::Indexed8) {
+                index = pixels[texel];
+            } else {
+                const u8 pair = pixels[texel / 2];
+                index = (texel % 2 == 0) ? static_cast<u8>(pair >> 4U) : static_cast<u8>(pair & 0x0FU);
+            }
+            if (alpha[index] != 0) {
+                return std::nullopt; // it draws: no silhouette to recover
+            }
+            if (index != 0) {
+                image.setPixel(x, y, Color::white());
+                drawn = true;
+            }
+        }
+    }
+    if (!drawn) {
+        return std::nullopt;
+    }
+    return image;
+}
+
 } // namespace gdl::formats

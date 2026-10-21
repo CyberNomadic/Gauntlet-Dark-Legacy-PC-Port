@@ -90,6 +90,11 @@ void main() {
     } else if (pc.scale.z < 0.0) {
         outColor = blendFrames(base, sampleSprite(uSecondImage, uSecondSampler, vUv),
                                -pc.scale.z) * vColor;
+    } else if (pc.effectData0.y > 0.5) {
+        // An authored silhouette: the second texture's clear texels cut the draw away.
+        if (texture(uSecondTexture, vUv2).a < 0.5) {
+            discard;
+        }
     } else {
         // The lightmap's alpha carries its intensity, like the console's second texture stage.
         outColor.rgb *= texture(uSecondTexture, vUv2).a;

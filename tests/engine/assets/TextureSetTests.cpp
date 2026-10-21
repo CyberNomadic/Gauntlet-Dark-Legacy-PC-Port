@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <string_view>
 
@@ -11,6 +12,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "formats/GcTexture.h"
+#include "fixtures/NativeModelFixture.h"
 #include "formats/ModelArchive.h"
 
 namespace {
@@ -186,3 +188,35 @@ TEST_CASE("the last Plague acid frame ends exactly at the texture file boundary"
 }
 
 } // namespace
+
+TEST_CASE("an indexed texture whose palette shows nothing keeps its silhouette",
+          "[assets][textures][silhouette]") {
+    const auto dir = test::scratchDirectory("texture-set-silhouette");
+    std::filesystem::create_directories(dir / "textures");
+    writeFile(dir / "textures/000_LAVA.png", test::kTinyPng);
+    writeTextFile(dir / "textures.json", R"({"defs": [], "bitmaps": [
+  {"index": 0, "name": "LAVA", "file": "textures/000_LAVA.png", "width": 8, "height": 8, "flags": 0},
+  {"index": 1, "name": "", "width": 8, "height": 8, "flags": 140,
+   "silhouette": ["00000000", "00111100", "00111100", "00111100",
+                  "00111100", "00111100", "00111100", "00000000"]}]})");
+    test::convertModelFixture(dir);
+    TextureSet set;
+    REQUIRE(set.load(dir));
+    REQUIRE(set.size() == 2);
+    CHECK(set.silhouette(0) == nullptr);
+    const Image* shape = set.silhouette(1);
+    REQUIRE(shape != nullptr);
+    CHECK(shape->width == 8);
+    CHECK(shape->pixel(0, 0).a == 0);
+    CHECK(shape->pixel(3, 3) == Color::white());
+    CHECK(shape->pixel(7, 4).a == 0);
+    // The picture itself draws nothing, which is why the shape is worth keeping.
+    const Image& blank = set.image(1);
+    CHECK(std::ranges::all_of(blank.pixels, [](u8 byte) { return byte == 0; }));
+    test::FakeRenderDevice device;
+    CHECK(set.silhouetteTexture(device, 0) == nullptr);
+    const Texture* texture = set.silhouetteTexture(device, 1);
+    REQUIRE(texture != nullptr);
+    CHECK(device.lastTextureDesc.wrap == TextureWrap::ClampToEdge);
+    CHECK(set.silhouetteTexture(device, 1) == texture);
+}

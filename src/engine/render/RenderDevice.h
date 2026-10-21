@@ -59,6 +59,9 @@ struct DrawState {
     bool depthTest = true;     ///< false accepts every depth, independently of depth writes
     bool mipmaps = false;      ///< world draws opt in; canvas text and movies retain base sampling
     bool clampTexture = false; ///< material override; does not alter the shared texture
+    /** The lightmap is an authored silhouette: its clear texels cut the draw away instead
+     * of darkening it. */
+    bool lightmapCutout = false;
     bool alphaToCoverage = false; ///< allow MSAA coverage for depth-writing cutout surfaces
     bool smoothSprite = false;    ///< opt-in magnification of soft, camera-facing pickup art
     f32 darken = 0.0f;            ///< how much of its colour is taken away: 0 none, 1 all
@@ -125,6 +128,8 @@ public:
     virtual void setTextureFiltering(u32 filtering) = 0;
     /** Enables optional magnification filtering only on draws which explicitly opt in. */
     virtual void setSmoothSprites(bool enabled) = 0;
+    /** Whether a lightmap cutout cuts; off, such a draw shows whole, as the console did. */
+    virtual void setAuthoredSilhouettes(bool enabled) = 0;
 
     /** Uploads packed RGBA8 mip levels, rows top to bottom, largest level first. */
     virtual std::unique_ptr<Texture> createTexture(const TextureDesc& desc,

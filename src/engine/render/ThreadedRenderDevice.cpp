@@ -257,6 +257,10 @@ void ThreadedRenderDevice::setTextureFiltering(u32 filtering) {
 void ThreadedRenderDevice::setSmoothSprites(bool enabled) {
     m_impl->configure([enabled](Impl& worker) { worker.backend->setSmoothSprites(enabled); });
 }
+void ThreadedRenderDevice::setAuthoredSilhouettes(bool enabled) {
+    m_impl->configure(
+        [enabled](Impl& worker) { worker.backend->setAuthoredSilhouettes(enabled); });
+}
 std::unique_ptr<Texture> ThreadedRenderDevice::createTexture(const TextureDesc& desc,
                                                              std::span<const u8> pixels) {
     auto lease =

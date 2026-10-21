@@ -58,6 +58,7 @@ public:
     u32 presentationSampleCount() const override { return presentationSamples; }
     void setTextureFiltering(u32 filtering) override { textureFiltering = filtering; }
     void setSmoothSprites(bool enabled) override { smoothSprites = enabled; }
+    void setAuthoredSilhouettes(bool enabled) override { authoredSilhouettes = enabled; }
 
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> rgba8Pixels) override {
@@ -127,6 +128,7 @@ public:
     u32 presentationChanges = 0;
     u32 textureFiltering = 1;
     bool smoothSprites = false;
+    bool authoredSilhouettes = true;
 
 private:
     FakeTexture m_white{1, 1};

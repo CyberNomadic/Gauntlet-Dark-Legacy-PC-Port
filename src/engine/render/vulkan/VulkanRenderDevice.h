@@ -42,6 +42,7 @@ public:
         m_desc.textureFiltering = validTextureFiltering(filtering);
     }
     void setSmoothSprites(bool enabled) override { m_smoothSprites = enabled; }
+    void setAuthoredSilhouettes(bool enabled) override { m_authoredSilhouettes = enabled; }
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> rgba8Pixels) override;
     void updateTexture(Texture& texture, std::span<const u8> rgba8Pixels) override;
@@ -98,6 +99,7 @@ private:
     std::optional<Extent2D> m_windowSize;
     RenderDeviceDesc m_desc;
     bool m_smoothSprites = false;
+    bool m_authoredSilhouettes = true;
     bool m_presentationPending = false;
     std::unique_ptr<VulkanContext> m_context;
     std::unique_ptr<VulkanSwapchain> m_swapchain;

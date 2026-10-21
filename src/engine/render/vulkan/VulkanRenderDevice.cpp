@@ -641,7 +641,9 @@ void VulkanRenderDevice::draw(const ImmediateBatch& batch, const Texture& textur
                      firstTexture.description().filter == TextureFilter::Linear
                  ? 1.0f
                  : 0.0f,
-             0, 0, 0}};
+             m_authoredSilhouettes && state.lightmapCutout && state.lightmap != nullptr ? 1.0f
+                                                                                       : 0.0f,
+             0, 0}};
     vkCmdPushConstants(cmd, m_pipeline->layout(),
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        VulkanPipeline::kPushConstantSize, &constants);

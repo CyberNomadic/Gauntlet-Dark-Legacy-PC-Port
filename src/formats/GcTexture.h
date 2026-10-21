@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <span>
 
 #include "engine/core/Types.h"
@@ -28,5 +29,14 @@ usize bitmapDataSize(const ArchiveBitmap& bitmap);
  * which become white with the intensity as alpha, as the game's built-in palettes do.
  */
 Image decodeGcTexture(const ArchiveBitmap& bitmap, std::span<const u8> texturesFile);
+
+/**
+ * The shape of an indexed bitmap whose palette shows nothing: every entry its texels name is
+ * clear, so the picture never draws, yet its indices still hold what the artists drew.
+ * White where the index is set and clear elsewhere; none for a bitmap that draws, that is
+ * not indexed, or whose indices are all nought.
+ */
+std::optional<Image> decodeGcSilhouette(const ArchiveBitmap& bitmap,
+                                        std::span<const u8> texturesFile);
 
 } // namespace gdl::formats

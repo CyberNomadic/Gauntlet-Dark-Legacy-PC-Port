@@ -95,7 +95,149 @@ TreeModel::Shape TreeModel::makeShape(const Mesh& mesh, TextureSet& textures, Re
         shape.translucent.push_back(entry.translucent() || source->entry(index).translucent());
         shape.slots.push_back(part.texture);
     }
+    cutBySilhouettes(shape, textures, device, lenders);
     return shape;
+}
+
+namespace {
+
+/** The flat part a silhouette mask lies over, and every vertex's place in the mask. */
+struct SilhouetteCut {
+    usize part = 0;
+    std::vector<Vec2> uv;
+};
+
+std::optional<SilhouetteCut> silhouetteCut(const Mesh& mesh, usize maskPart,
+                                           const Image& silhouette) {
+    const MeshPart& mask = mesh.parts[maskPart];
+    if (mask.indices.size() < 3) {
+        return std::nullopt;
+    }
+    f32 lowest = std::numeric_limits<f32>::max();
+    f32 highest = std::numeric_limits<f32>::lowest();
+    Vec2 lo{std::numeric_limits<f32>::max()};
+    Vec2 hi{std::numeric_limits<f32>::lowest()};
+    for (const u32 index : mask.indices) {
+        const Vec3& at = mesh.vertices[index].position;
+        lowest = std::min(lowest, at.y);
+        highest = std::max(highest, at.y);
+        lo = glm::min(lo, Vec2{at.x, at.z});
+        hi = glm::max(hi, Vec2{at.x, at.z});
+    }
+    constexpr f32 kFlat = 0.05f; // a mask lies level
+    constexpr f32 kUnder = 1.0f; // and what it cuts lies this close beneath or above it
+    if (highest - lowest > kFlat) {
+        return std::nullopt;
+    }
+    // The mask's first triangle maps the ground onto its picture.
+    const MeshVertex& a = mesh.vertices[mask.indices[0]];
+    const MeshVertex& b = mesh.vertices[mask.indices[1]];
+    const MeshVertex& c = mesh.vertices[mask.indices[2]];
+    const glm::mat2 ground{Vec2{b.position.x - a.position.x, b.position.z - a.position.z},
+                           Vec2{c.position.x - a.position.x, c.position.z - a.position.z}};
+    if (std::abs(glm::determinant(ground)) < 1e-6f) {
+        return std::nullopt;
+    }
+    const glm::mat2 toTriangle = glm::inverse(ground);
+    const auto picture = [&](const Vec3& at) {
+        const Vec2 st = toTriangle * Vec2{at.x - a.position.x, at.z - a.position.z};
+        return a.uv + st.x * (b.uv - a.uv) + st.y * (c.uv - a.uv);
+    };
+    // What stands off the ground (a generator's mound over its pool) keeps whole: it is
+    // placed at the set texel nearest the shape's centre.
+    u64 sumX = 0;
+    u64 sumY = 0;
+    u64 set = 0;
+    for (u32 y = 0; y < silhouette.height; ++y) {
+        for (u32 x = 0; x < silhouette.width; ++x) {
+            if (silhouette.pixel(x, y).a != 0) {
+                sumX += x;
+                sumY += y;
+                ++set;
+            }
+        }
+    }
+    if (set == 0) {
+        return std::nullopt;
+    }
+    const auto centreX = static_cast<u32>(sumX / set);
+    const auto centreY = static_cast<u32>(sumY / set);
+    Vec2 keep{0.5f, 0.5f};
+    u64 nearest = std::numeric_limits<u64>::max();
+    for (u32 y = 0; y < silhouette.height; ++y) {
+        for (u32 x = 0; x < silhouette.width; ++x) {
+            if (silhouette.pixel(x, y).a == 0) {
+                continue;
+            }
+            const u64 dx = x > centreX ? x - centreX : centreX - x;
+            const u64 dy = y > centreY ? y - centreY : centreY - y;
+            if (dx * dx + dy * dy < nearest) {
+                nearest = dx * dx + dy * dy;
+                keep = {(static_cast<f32>(x) + 0.5f) / static_cast<f32>(silhouette.width),
+                        (static_cast<f32>(y) + 0.5f) / static_cast<f32>(silhouette.height)};
+            }
+        }
+    }
+    const Vec2 margin = (hi - lo) * 0.05f;
+    const auto under = [&](const Vec3& at) {
+        return std::abs(at.y - lowest) <= kUnder && at.x >= lo.x - margin.x &&
+               at.x <= hi.x + margin.x && at.z >= lo.y - margin.y && at.z <= hi.y + margin.y;
+    };
+    usize best = maskPart;
+    usize bestCount = 0;
+    for (usize q = 0; q < mesh.parts.size(); ++q) {
+        if (q == maskPart) {
+            continue;
+        }
+        const auto count = static_cast<usize>(std::ranges::count_if(
+            mesh.parts[q].indices, [&](u32 index) { return under(mesh.vertices[index].position); }));
+        if (count > bestCount) {
+            best = q;
+            bestCount = count;
+        }
+    }
+    if (bestCount < 3) {
+        return std::nullopt;
+    }
+    SilhouetteCut cut;
+    cut.part = best;
+    cut.uv.assign(mesh.vertices.size(), keep);
+    for (const u32 index : mesh.parts[best].indices) {
+        const Vec3& at = mesh.vertices[index].position;
+        if (under(at)) {
+            cut.uv[index] = picture(at);
+        }
+    }
+    return cut;
+}
+
+} // namespace
+
+void TreeModel::cutBySilhouettes(Shape& shape, TextureSet& textures, RenderDevice& device,
+                                 std::span<TextureSet* const> lenders) {
+    shape.cutouts.assign(shape.mesh->parts.size(), nullptr);
+    shape.hidden.assign(shape.mesh->parts.size(), false);
+    for (usize p = 0; p < shape.mesh->parts.size(); ++p) {
+        const auto binding = TextureBindings(textures, lenders).slot(shape.mesh->parts[p].texture);
+        if (!binding) {
+            continue;
+        }
+        const Image* silhouette = binding->set->silhouette(binding->index);
+        if (silhouette == nullptr) {
+            continue;
+        }
+        const auto cut = silhouetteCut(*shape.mesh, p, *silhouette);
+        if (!cut) {
+            continue;
+        }
+        const Texture* texture = binding->set->silhouetteTexture(device, binding->index);
+        if (texture == nullptr) {
+            continue;
+        }
+        shape.hidden[p] = true;
+        shape.cutouts[cut->part] = texture;
+        shape.cutoutUv = cut->uv;
+    }
 }
 
 void TreeModel::include(const Shape& shape, const Vec3& offset, bool& first) {
@@ -337,10 +479,14 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         }
         for (usize p = 0; p < shape.mesh->parts.size(); ++p) {
             const bool deferred = blended || !depthWrite;
-            if ((pass == Pass::Opaque && deferred) || (pass == Pass::Blended && !deferred)) {
+            if ((pass == Pass::Opaque && deferred) || (pass == Pass::Blended && !deferred) ||
+                (p < shape.hidden.size() && shape.hidden[p])) {
                 continue;
             }
             const MeshPart& part = shape.mesh->parts[p];
+            // A silhouette cut shares the second stage with a skin mask; the mask wins.
+            const Texture* cutout =
+                mask == nullptr && p < shape.cutouts.size() ? shape.cutouts[p] : nullptr;
             m_batch.clear();
             m_batch.begin(PrimitiveTopology::TriangleList);
             for (const u32 index : part.indices) {
@@ -379,7 +525,11 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                 if (fading) {
                     color.a = static_cast<u8>(static_cast<f32>(color.a) * opacity);
                 }
-                m_batch.vertex(Vec3{placed}, color, uv);
+                if (cutout != nullptr) {
+                    m_batch.vertex(Vec3{placed}, color, uv, shape.cutoutUv[index]);
+                } else {
+                    m_batch.vertex(Vec3{placed}, color, uv);
+                }
             }
             m_batch.end();
             DrawState state;
@@ -402,6 +552,10 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                 state.blend = BlendMode::Opaque;
             }
             state.maskedTexture = mask;
+            if (cutout != nullptr) {
+                state.lightmap = cutout;
+                state.lightmapCutout = true;
+            }
             // This explicit pass belongs to world pickups, not actor/world cutouts or UI.
             state.smoothSprite = pass == Pass::Blended && node.facing != 0 && blended;
             // setPrimAlpha sets the console's alpha compare (greater than 2) for every

@@ -22,6 +22,7 @@ public:
     u32 presentationSampleCount() const override;
     void setTextureFiltering(u32 filtering) override;
     void setSmoothSprites(bool enabled) override;
+    void setAuthoredSilhouettes(bool enabled) override;
     std::unique_ptr<Texture> createTexture(const TextureDesc& desc,
                                            std::span<const u8> pixels) override;
     void updateTexture(Texture& texture, std::span<const u8> pixels) override;

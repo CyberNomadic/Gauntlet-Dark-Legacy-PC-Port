@@ -134,6 +134,12 @@ private:
         std::vector<const Texture*> textures; ///< one per mesh part
         std::vector<bool> translucent;        ///< one per mesh part
         std::vector<u32> slots;               ///< the set's texture index, one per part
+        /** An authored silhouette (an indexed mask whose palette shows nothing, see
+         * TextureSet::silhouette) cuts the flat part it lies over instead of drawing: the
+         * cut per part, the parts that are masks, and every vertex's place in the mask. */
+        std::vector<const Texture*> cutouts;
+        std::vector<bool> hidden;
+        std::vector<Vec2> cutoutUv;
     };
     /** An object node's meshes for one sequence: the one shown at `start` and each frame
      * after, in order; none for a sequence it shows nothing in. */
@@ -177,6 +183,9 @@ private:
 
     static Shape makeShape(const Mesh& mesh, TextureSet& textures, RenderDevice& device,
                            std::span<TextureSet* const> lenders);
+    /** Turns the shape's silhouette masks into cutouts of the parts they lie over. */
+    static void cutBySilhouettes(Shape& shape, TextureSet& textures, RenderDevice& device,
+                                 std::span<TextureSet* const> lenders);
     static void selectFrame(Node& node, u32 sequence, s32 frame);
     static void selectPresentationFrame(Node& node, u32 sequence, f32 frame);
     /** Grows the bounds around `shape` at `offset`. */

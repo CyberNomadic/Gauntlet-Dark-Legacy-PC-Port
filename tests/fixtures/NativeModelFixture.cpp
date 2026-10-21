@@ -179,6 +179,31 @@ void appendPixels(Bytes& bytes, const Image& image) {
     }
 }
 
+/** An indexed mask whose palette shows nothing: sixteen clear entries, then the rows'
+ * characters as indices ('1' set), in the GameCube's 8x8 four-bit tiles. */
+void appendSilhouette(Bytes& bytes, const nlohmann::json& rows, u32 width, u32 height) {
+    constexpr u32 kTileSize = 8;
+    constexpr usize kPaletteBytes = 32;
+    bytes.data.insert(bytes.data.end(), kPaletteBytes, 0);
+    const auto index = [&](u32 x, u32 y) -> u8 {
+        if (x >= width || y >= height || rows.empty()) {
+            return 0;
+        }
+        const auto& row = rows.at(y * rows.size() / height).get_ref<const std::string&>();
+        return !row.empty() && row.at(x * row.size() / width) == '1' ? 1 : 0;
+    };
+    for (u32 tileY = 0; tileY < height; tileY += kTileSize) {
+        for (u32 tileX = 0; tileX < width; tileX += kTileSize) {
+            for (u32 y = 0; y < kTileSize; ++y) {
+                for (u32 x = 0; x < kTileSize; x += 2) {
+                    bytes.data.push_back(static_cast<u8>(
+                        (index(tileX + x, tileY + y) << 4U) | index(tileX + x + 1, tileY + y)));
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 void convertModelFixture(const std::filesystem::path& directory) {
@@ -277,7 +302,12 @@ void convertModelFixture(const std::filesystem::path& directory) {
         archive.u16At(record + 22, bitmap.at("width").get<u16>());
         archive.u16At(record + 24, bitmap.at("height").get<u16>());
         archive.u32At(record + 12, static_cast<u32>(pixels.data.size()));
-        if ((flags & (formats::bitmap_flags::kInvalid | formats::bitmap_flags::kExternal)) == 0) {
+        if (bitmap.contains("silhouette")) {
+            archive.data.at(record) = formats::bitmap_format::kIndexed4Gc;
+            appendSilhouette(pixels, bitmap.at("silhouette"), bitmap.at("width").get<u16>(),
+                             bitmap.at("height").get<u16>());
+        } else if ((flags & (formats::bitmap_flags::kInvalid | formats::bitmap_flags::kExternal)) ==
+                   0) {
             const Image image = loadImageFile(directory / bitmap.at("file").get<std::string>());
             // Small stand-in pictures are expanded to the fixture's authored dimensions.
             const auto width = bitmap.at("width").get<u16>();
