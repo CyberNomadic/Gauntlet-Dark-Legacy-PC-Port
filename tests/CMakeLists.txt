@@ -92,6 +92,7 @@ add_executable(tests
     game/netplay/RollbackExchangeTests.cpp
     game/screens/NativeSoundIdentityTests.cpp
     game/netplay/RollbackInputsTests.cpp
+    game/netplay/InputJournalTests.cpp
     game/netplay/FrameEventLedgerTests.cpp
     game/screens/PlayerLocalRewindTests.cpp
     game/screens/PlayerSimulationEqualityTests.cpp

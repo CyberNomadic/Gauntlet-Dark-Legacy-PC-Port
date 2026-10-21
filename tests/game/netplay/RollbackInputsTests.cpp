@@ -68,6 +68,55 @@ struct Fixture {
 bool same(const InputCommand& a, const InputCommand& b) {
     return InputPacket::encode(std::span{&a, 1}) == InputPacket::encode(std::span{&b, 1});
 }
+TEST_CASE("adopted journal input is actual for every seat and sampling resumes after it",
+          "[netplay][rollback-inputs][journal]") {
+    RollbackInputs inputs;
+    REQUIRE(inputs.open(1, 9, {1, 2, 0, 0}, {11, 12, 0, 0}, 0));
+    const auto command = [](u64 tick, u8 seat, f32 x) {
+        InputCommand result;
+        result.epoch = 9;
+        result.tick = tick;
+        result.grant = seat == 0 ? 11 : 12;
+        result.seat = seat;
+        result.direction = {x, 0};
+        result.magnitude = x == 0 ? 0.0f : 1.0f;
+        return result;
+    };
+    for (u64 tick = 1; tick <= 10; ++tick) {
+        REQUIRE(inputs.adoptActual(command(tick, 0, tick > 5 ? 1.0f : 0.0f)));
+        REQUIRE(inputs.adoptActual(command(tick, 1, 0.0f)));
+    }
+    REQUIRE(inputs.actualFrame(10));
+    CHECK((*inputs.actualFrame(10))[0].magnitude == 1);
+    CHECK_FALSE(inputs.actualFrame(11));
+    // Contradictions, foreign grants and other epochs are refused; repeats are not.
+    CHECK_FALSE(inputs.adoptActual(command(3, 0, 1.0f)));
+    CHECK(inputs.adoptActual(command(3, 0, 0.0f)));
+    auto wrongGrant = command(11, 0, 0.0f);
+    wrongGrant.grant = 99;
+    CHECK_FALSE(inputs.adoptActual(wrongGrant));
+    auto wrongEpoch = command(11, 0, 0.0f);
+    wrongEpoch.epoch = 8;
+    CHECK_FALSE(inputs.adoptActual(wrongEpoch));
+    for (u64 tick = 1; tick <= 10; ++tick) {
+        REQUIRE(inputs.ready());
+        const auto frame = inputs.advance();
+        REQUIRE(frame);
+        CHECK(frame->predictedSeats == 0);
+    }
+    CHECK(inputs.confirmedTick() == 10);
+    CHECK(inputs.tick() == 11);
+    // The adopted tail of local input keeps sampling ahead of the next tick.
+    REQUIRE(inputs.adoptActual(command(11, 0, 1.0f)));
+    REQUIRE(inputs.resumeSampling());
+    CHECK(inputs.sampleTick() == 12);
+    CHECK(inputs.redundantInputs().size() == 8);
+    CHECK_FALSE(inputs.sampleReady()); // a tick ahead of the head with no delay
+    REQUIRE(inputs.adoptActual(command(11, 1, 0.0f)));
+    REQUIRE(inputs.advance());
+    CHECK(inputs.sampleReady());
+}
+
 TEST_CASE("the startup delay follows the measured round trip", "[netplay][rollback-inputs]") {
     CHECK(RollbackInputs::leadForPing(-1) == 1);
     CHECK(RollbackInputs::leadForPing(0) == 0);

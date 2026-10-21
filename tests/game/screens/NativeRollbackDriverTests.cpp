@@ -150,6 +150,65 @@ TEST_CASE("rollback agreement includes all native coordinator control fields",
     CHECK(NativeRollbackDriver::agreementDigest(scene, control) != travel);
 }
 
+TEST_CASE("a scene rebuilt from the confirmed journal stands where the live one stands",
+          "[native-rollback-driver][journal][assets]") {
+    auto live = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0});
+    REQUIRE(live->driver.bind(live->scene, live->match, 1));
+    SessionInputs::Frame walking;
+    walking[0].move = {{0, 1}, 1};
+    SessionInputs::Frame attacking;
+    attacking[1].attack = true; // the remote peer owns seat one
+    constexpr u64 kThrough = 90;
+    for (u64 tick = 1; tick <= kThrough; ++tick) {
+        live->remote(2, tick, tick >= 30 && tick < 70 ? attacking : SessionInputs::Frame{});
+        live->progress(tick);
+        REQUIRE(live->driver.sample(tick >= 20 && tick < 60 ? walking : SessionInputs::Frame{}));
+        REQUIRE(live->driver.advance().status == Status::Advanced);
+    }
+    REQUIRE(live->driver.confirmedTick() == kThrough);
+    const auto& journal = live->driver.journal();
+    REQUIRE(journal.through() == kThrough);
+    CHECK(journal.frame(25)->at(0).magnitude == 1);
+    CHECK(journal.frame(40)->at(1).held(CommandHeld::Attack));
+
+    auto rebuilt = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0});
+    REQUIRE(rebuilt->driver.bind(rebuilt->scene, rebuilt->match, 1));
+    CHECK_FALSE(rebuilt->driver.finishRebuild());
+    std::vector<InputCommand> commands;
+    for (const auto& frame : journal.frames()) {
+        commands.push_back(frame[0]);
+        commands.push_back(frame[1]);
+    }
+    REQUIRE(rebuilt->driver.adopt(commands));
+    REQUIRE(rebuilt->driver.beginRebuild(kThrough));
+    CHECK(rebuilt->driver.rebuilding());
+    usize digests = 0;
+    while (rebuilt->driver.nextTick() <= kThrough) {
+        const auto result = rebuilt->driver.advance();
+        REQUIRE(result.status == Status::Advanced);
+        digests += result.digests.size();
+    }
+    // Only the resync point's own digest is reported, never the ticks replayed to it.
+    CHECK(digests == 1);
+    REQUIRE(rebuilt->driver.finishRebuild());
+    CHECK_FALSE(rebuilt->driver.rebuilding());
+    CHECK(rebuilt->driver.confirmedTick() == kThrough);
+    CHECK(rebuilt->driver.sampleTick() == kThrough + 1);
+    CHECK(rebuilt->driver.journal().through() == kThrough);
+    REQUIRE(rebuilt->scene.nativeAgreementDigest());
+    CHECK(rebuilt->scene.nativeAgreementDigest() == live->scene.nativeAgreementDigest());
+    CHECK(rebuilt->driver.statistics().corrections == 0);
+    // Both continue in step from there.
+    for (auto* fixture : {live.get(), rebuilt.get()}) {
+        fixture->remote(2, kThrough + 1, attacking);
+        fixture->progress(kThrough + 1);
+        REQUIRE(fixture->driver.sample(walking));
+        REQUIRE(fixture->driver.advance().status == Status::Advanced);
+    }
+    CHECK(rebuilt->scene.nativeAgreementDigest() == live->scene.nativeAgreementDigest());
+    CHECK(rebuilt->driver.journal().frames().back()[0].magnitude == 1);
+}
+
 TEST_CASE("rollback hashes the corrected saved frame only after every seat confirms it",
           "[native-rollback-driver][native-rollback-digest][assets]") {
     const bool mismatched = GENERATE(false, true);
@@ -214,8 +273,9 @@ TEST_CASE("confirmed rollback hashes distinguish pending non-unanimous arrival v
     std::array<std::optional<NativeRollbackDriver::ConfirmedDigest>, 2> agreements;
     for (usize voted = 0; voted < 2; ++voted) {
         auto fixture = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0}, false, "G5");
-        for (u64 tick = 1; tick <= 100 &&
-                           fixture->scene.startCamera().ticksLeft() > StartCamera::kSkipBelow; ++tick) {
+        for (u64 tick = 1;
+             tick <= 100 && fixture->scene.startCamera().ticksLeft() > StartCamera::kSkipBelow;
+             ++tick) {
             REQUIRE(fixture->scene.recordStep(1, tick, kStep, {}).outcome == PlayOutcome::Running);
         }
         REQUIRE(fixture->scene.startCamera().phase() == StartCamera::Phase::Hold);
@@ -366,8 +426,8 @@ TEST_CASE("shipping-order sampling admits the captured tick immediately after co
     auto& driver = fixture->driver;
     fixture->match.inputLead = delay;
     REQUIRE(fixture->scene.beginRecordedAudio(kEpoch));
-    REQUIRE(driver.bind(fixture->scene, fixture->match, 1,
-                        NativeRollbackDriver::AudioMode::Required));
+    REQUIRE(
+        driver.bind(fixture->scene, fixture->match, 1, NativeRollbackDriver::AudioMode::Required));
     usize physicalAudio = 0;
     const SoundPlayer::Capture watch(&fixture->sounds, [&](const auto&) { ++physicalAudio; });
     fixture->predict(4);
@@ -395,8 +455,8 @@ TEST_CASE("shipping-order sampling admits the captured tick immediately after co
     CHECK(corrected.frames.back().tick == 5);
     CHECK(driver.sampleTick() == capturedTick + 1);
     REQUIRE(corrected.audio);
-    const auto admitted = std::ranges::find(driver.redundantInputs(), capturedTick,
-                                            &InputCommand::tick);
+    const auto admitted =
+        std::ranges::find(driver.redundantInputs(), capturedTick, &InputCommand::tick);
     REQUIRE(admitted != driver.redundantInputs().end());
     CHECK(admitted->pressed(CommandPress::Attack));
     CHECK(admitted->held(CommandHeld::Attack));
@@ -438,8 +498,8 @@ TEST_CASE("local pause clears only its seat's unsampled controls without rewriti
     auto fixture = std::make_unique<Fixture>(MatchOwners{1, 2, 1, 0}, true, "G1", true);
     auto& driver = fixture->driver;
     REQUIRE(fixture->scene.beginRecordedAudio(kEpoch));
-    REQUIRE(driver.bind(fixture->scene, fixture->match, 1,
-                        NativeRollbackDriver::AudioMode::Required));
+    REQUIRE(
+        driver.bind(fixture->scene, fixture->match, 1, NativeRollbackDriver::AudioMode::Required));
     CHECK(driver.clearPendingInput(0)); // A pause need not have a queued press.
     CHECK(driver.clearPendingInput(2));
     usize physicalAudio = 0;
@@ -460,7 +520,7 @@ TEST_CASE("local pause clears only its seat's unsampled controls without rewriti
     pending[0].attack = pending[0].attackPressed = pending[0].usePotion = true;
     pending[0].menu.start = true;
     pending[1].attack = pending[1].attackPressed = pending[1].usePotion = true;
-    REQUIRE(driver.sample(pending)); // Local index 1 is canonical seat 2.
+    REQUIRE(driver.sample(pending));          // Local index 1 is canonical seat 2.
     CHECK_FALSE(driver.clearPendingInput(1)); // Another peer owns this seat.
     CHECK_FALSE(driver.clearPendingInput(3)); // Unoccupied.
     CHECK_FALSE(driver.clearPendingInput(4)); // Outside the roster.
@@ -619,7 +679,8 @@ TEST_CASE("native rollback replaces an earlier terminal without fabricating post
         CHECK(confirmed.frames.empty());
         REQUIRE(confirmed.terminalDigest);
         CHECK(confirmed.terminalDigest->tick == 3);
-        CHECK(confirmed.terminalDigest->digest == NativeRollbackDriver::agreementDigest(
+        CHECK(confirmed.terminalDigest->digest ==
+              NativeRollbackDriver::agreementDigest(
                   *quitDigest, {driver.arrivalVotes(), driver.tentativeTerminal()}));
         CHECK(confirmed.digests.empty());
         REQUIRE(confirmed.audio.has_value() == audio);
@@ -728,8 +789,8 @@ TEST_CASE("terminal agreement hashes the exact confirmed final frame on and off 
     const auto expected = NativeRollbackDriver::agreementDigest(
         *savedHash, {driver.arrivalVotes(), driver.tentativeTerminal()});
     REQUIRE(fixture->device.beginFrame());
-    scene.render(fixture->device, glm::ortho(0.0f, 640.0f, 448.0f, 0.0f, -1.0f, 1.0f),
-                 640, 448, false, 0.5f);
+    scene.render(fixture->device, glm::ortho(0.0f, 640.0f, 448.0f, 0.0f, -1.0f, 1.0f), 640, 448,
+                 false, 0.5f);
     fixture->device.endFrame();
     CHECK(scene.nativeLocalDigest(final) == savedHash);
     fixture->remote(4, terminalTick);
@@ -1055,8 +1116,8 @@ TEST_CASE("active native rollback measures warm eight frame corrections with rec
                   << " confirmed-digest=" << (index == 0 ? "absent" : "present")
                   << " samples=" << bucket.size() << " replay-frames=8 audio=recorded"
                   << " p50-ms=" << bucket[bucket.size() / 2]
-                  << " p95-ms=" << bucket[bucket.size() * 95 / 100]
-                  << " max-ms=" << bucket.back() << '\n';
+                  << " p95-ms=" << bucket[bucket.size() * 95 / 100] << " max-ms=" << bucket.back()
+                  << '\n';
     }
     CHECK(driver.statistics().corrections == kSamples);
     CHECK(driver.statistics().maxReplay == 8);

@@ -99,6 +99,16 @@ public:
      * Replaying old ticks never waits for peer pacing. advance() enforces the
      * eight-tick prediction bound independently of this scheduling advice. */
     bool timeSyncIdle() const;
+    /** Every occupied seat's actual command at a tick, once all of them are held. */
+    std::optional<Commands> actualFrame(u64 tick) const;
+    /** Takes a trusted journal command as actual input, local seats included, outside
+     * the live admission window: a journal is replayed from the first tick, not
+     * predicted. Refuses a wrong epoch, grant or owner, or a value contradicting one
+     * already held. */
+    bool adoptActual(const InputCommand& command);
+    /** After an adopted journal has been executed, local sampling continues at the tick
+     * after the last local command held, never before the next tick to simulate. */
+    bool resumeSampling();
 
 private:
     using Actual = std::array<std::optional<InputCommand>, InputCommand::kSeats>;

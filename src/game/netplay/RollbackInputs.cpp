@@ -364,6 +364,77 @@ RollbackInputs::Admission RollbackInputs::observePeerTick(u8 peer, u64 epoch, u6
     return Admission::Accepted;
 }
 
+std::optional<RollbackInputs::Commands> RollbackInputs::actualFrame(u64 tick) const {
+    const auto frame = m_actual.find(tick);
+    if (!m_open || frame == m_actual.end() || !complete(frame->second)) {
+        return std::nullopt;
+    }
+    Commands result{};
+    for (usize seat = 0; seat < result.size(); ++seat) {
+        if (frame->second[seat]) {
+            result[seat] = *frame->second[seat];
+        }
+    }
+    return result;
+}
+
+bool RollbackInputs::adoptActual(const InputCommand& command) {
+    if (!m_open || !command.valid() || command.tick == 0 || command.epoch != m_epoch ||
+        command.seat >= m_owners.size() || m_owners[command.seat] == 0 ||
+        command.grant != m_grants[command.seat]) {
+        return false;
+    }
+    auto& slot = m_actual[command.tick][command.seat];
+    if (slot) {
+        return same(*slot, command);
+    }
+    slot = command;
+    const auto used = m_used.find(command.tick);
+    if (used != m_used.end() && !same(command, used->second.commands[command.seat])) {
+        m_mismatch = m_mismatch ? std::min(*m_mismatch, command.tick) : command.tick;
+    }
+    while (m_actualThrough != std::numeric_limits<u64>::max()) {
+        const auto next = m_actual.find(m_actualThrough + 1);
+        if (next == m_actual.end() || !complete(next->second)) {
+            break;
+        }
+        ++m_actualThrough;
+    }
+    return true;
+}
+
+bool RollbackInputs::resumeSampling() {
+    if (!m_open || replaying() || m_mismatch) {
+        return false;
+    }
+    u64 last = m_next - 1;
+    for (auto frame = m_actual.lower_bound(m_next); frame != m_actual.end(); ++frame) {
+        bool local = frame->first == last + 1;
+        for (usize seat = 0; seat < m_owners.size() && local; ++seat) {
+            local = m_owners[seat] != m_local || frame->second[seat].has_value();
+        }
+        if (!local) {
+            break;
+        }
+        last = frame->first;
+    }
+    m_sample = last + 1;
+    m_redundancy.clear();
+    for (u64 tick = last >= kRedundantTicks ? last - kRedundantTicks + 1 : 1; tick <= last;
+         ++tick) {
+        const auto frame = m_actual.find(tick);
+        if (frame == m_actual.end()) {
+            continue;
+        }
+        for (usize seat = 0; seat < m_owners.size(); ++seat) {
+            if (m_owners[seat] == m_local && frame->second[seat]) {
+                m_redundancy.push_back(*frame->second[seat]);
+            }
+        }
+    }
+    return true;
+}
+
 bool RollbackInputs::timeSyncIdle() const {
     if (!m_open || replaying()) {
         return false;

@@ -40,6 +40,8 @@ struct NativeRollbackDriver::Data {
     // another every-frame history. Correction discards the wrong suffix.
     std::map<u64, State> hashes;
     Statistics stats;
+    EpochInputJournal journal;
+    std::optional<u64> rebuildThrough;
     Failure failed = Failure::None;
     u64 confirmed = 0;
     bool terminalReported = false;
@@ -119,13 +121,16 @@ struct NativeRollbackDriver::Data {
     }
     bool step(Result& result, bool replay) {
         const u64 tick = inputs.tick();
-        if (control.terminal || !history.capture(tick, [&](State& saved) {
+        // A rebuild keeps history only where a correction could still reach.
+        const bool keepHistory =
+            !rebuildThrough || tick + LocalStateHistory<State>::kCapacity > *rebuildThrough;
+        if (control.terminal || (keepHistory && !history.capture(tick, [&](State& saved) {
                 if (!scene->saveLocal(saved.scene)) {
                     return false;
                 }
                 saved.control = control;
                 return true;
-            })) {
+            }))) {
             return fail(Failure::Snapshot);
         }
         const auto frame = inputs.advance();
@@ -156,7 +161,8 @@ struct NativeRollbackDriver::Data {
         if (output.outcome != PlayOutcome::Running) {
             control.terminal = Terminal{tick, output.outcome};
         }
-        if (tick % kDigestPeriod == 0 || control.terminal) {
+        const bool observed = !rebuildThrough || tick >= *rebuildThrough;
+        if ((tick % kDigestPeriod == 0 && observed) || control.terminal) {
             if (hashes.size() >= Ledger::kHistory) {
                 return fail(Failure::Observation);
             }
@@ -277,6 +283,14 @@ struct NativeRollbackDriver::Data {
                 }
                 hash = hashes.erase(hash);
             }
+            for (u64 tick = confirmed + 1; tick <= through; ++tick) {
+                const auto frame = inputs.actualFrame(tick);
+                // A journal that has reached its half-hour simply stops growing.
+                if (!frame || (!journal.append(tick, *frame) &&
+                               journal.through() < EpochInputJournal::kMaxFrames)) {
+                    return fail(Failure::Journal);
+                }
+            }
             confirmed = through;
         }
         if (!terminalReported && control.terminal && control.terminal->tick <= confirmed) {
@@ -318,7 +332,8 @@ NativeRollbackDriver::agreementDigest(const SimulationObservation::Digest& scene
 bool NativeRollbackDriver::bind(PlayScene& scene, const MatchContext& context, u8 localPeer,
                                 AudioMode audio) {
     if (!context.valid() || context.transition == MatchTransition::Shop || context.tickRate != 60 ||
-        context.inputLead > RollbackInputs::kMaxDelay || context.epoch <= m_latestEpoch ||
+        context.inputLead > RollbackInputs::kMaxDelay || context.epoch < m_latestEpoch ||
+        (context.epoch == m_latestEpoch && !m_rebinding) ||
         scene.recordedAudioEpoch() != (audio == AudioMode::Required ? context.epoch : 0)) {
         return false;
     }
@@ -348,7 +363,8 @@ bool NativeRollbackDriver::bind(PlayScene& scene, const MatchContext& context, u
         !candidate->inputs.open(localPeer, context.epoch, context.owners, context.grants,
                                 context.inputLead) ||
         !scene.saveLocal(candidate->binding) || !scene.nativeAgreementDigest() ||
-        !candidate->ledger.reset(context.epoch)) {
+        !candidate->ledger.reset(context.epoch) ||
+        !candidate->journal.open(context.epoch, context.owners)) {
         return false;
     }
     if (existing == m_loads.end()) {
@@ -357,6 +373,47 @@ bool NativeRollbackDriver::bind(PlayScene& scene, const MatchContext& context, u
     m_data = std::move(candidate);
     m_latestEpoch = context.epoch;
     return true;
+}
+bool NativeRollbackDriver::rebind(PlayScene& scene, const MatchContext& context, u8 localPeer,
+                                  AudioMode audio) {
+    if (context.epoch != m_latestEpoch) {
+        return false;
+    }
+    m_rebinding = true;
+    const bool bound = bind(scene, context, localPeer, audio);
+    m_rebinding = false;
+    return bound;
+}
+const EpochInputJournal& NativeRollbackDriver::journal() const {
+    return m_data->journal;
+}
+bool NativeRollbackDriver::adopt(std::span<const InputCommand> commands) {
+    auto& data = *m_data;
+    if (data.failed != Failure::None || commands.empty()) {
+        return false;
+    }
+    return std::ranges::all_of(
+        commands, [&](const InputCommand& command) { return data.inputs.adoptActual(command); });
+}
+bool NativeRollbackDriver::beginRebuild(u64 through) {
+    auto& data = *m_data;
+    if (!data.valid() || data.rebuildThrough || through == 0 || data.inputs.tick() != 1) {
+        return false;
+    }
+    data.rebuildThrough = through;
+    return true;
+}
+bool NativeRollbackDriver::finishRebuild() {
+    auto& data = *m_data;
+    if (!data.rebuildThrough || data.failed != Failure::None ||
+        data.inputs.tick() != *data.rebuildThrough + 1 || !data.inputs.resumeSampling()) {
+        return false;
+    }
+    data.rebuildThrough.reset();
+    return true;
+}
+bool NativeRollbackDriver::rebuilding() const {
+    return m_data->rebuildThrough.has_value();
 }
 void NativeRollbackDriver::clear() {
     m_data = std::make_unique<Data>();
@@ -462,7 +519,7 @@ NativeRollbackDriver::Result NativeRollbackDriver::advance(bool forward) {
             return result;
         }
         if (forward && !data.control.terminal && !data.terminalReported) {
-            if (data.inputs.timeSyncIdle()) {
+            if (!data.rebuildThrough && data.inputs.timeSyncIdle()) {
                 ++data.stats.pacingIdles;
             } else if (!data.inputs.ready()) {
                 ++data.stats.stalls;

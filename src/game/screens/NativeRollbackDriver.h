@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include "game/netplay/InputJournal.h"
 #include "game/netplay/MatchSession.h"
 #include "game/netplay/RollbackInputs.h"
 #include "game/screens/PlayScene.h"
@@ -75,8 +76,8 @@ public:
     };
     /** Common schema for a captured native scene and its same-tick control.
      * Offline input-reference harnesses use this with their actual control. */
-    static SimulationObservation::Digest agreementDigest(
-        const SimulationObservation::Digest& scene, const Control& control);
+    static SimulationObservation::Digest agreementDigest(const SimulationObservation::Digest& scene,
+                                                         const Control& control);
 
     NativeRollbackDriver();
     ~NativeRollbackDriver();
@@ -121,6 +122,20 @@ public:
     std::span<const InputCommand> redundantInputs() const;
     std::vector<InputCommand> resendInputs(u64 firstTick) const;
     const Statistics& statistics() const;
+    /** The epoch's confirmed input record so far. */
+    const EpochInputJournal& journal() const;
+    /** Binds a freshly loaded scene to the bound epoch again, for a peer rebuilding the
+     * stage from a journal; otherwise as bind(). */
+    bool rebind(PlayScene& scene, const MatchContext& context, u8 localPeer,
+                AudioMode audio = AudioMode::Disabled);
+    /** Takes trusted journal commands as actual input for any seat, local ones included. */
+    bool adopt(std::span<const InputCommand> commands);
+    /** Replays adopted input to `through` from the first tick without pacing, per-tick
+     * history or digests before it. Call before advancing; finishRebuild() once the head
+     * has passed `through` resumes local sampling where the journal left off. */
+    bool beginRebuild(u64 through);
+    bool finishRebuild();
+    bool rebuilding() const;
     Failure failure() const;
 
 private:
@@ -129,5 +144,6 @@ private:
     std::unique_ptr<Data> m_data;
     std::vector<std::shared_ptr<Load>> m_loads;
     u64 m_latestEpoch = 0;
+    bool m_rebinding = false;
 };
 } // namespace gdl::game

@@ -12,6 +12,7 @@ add_library(game STATIC
     netplay/InputCommand.cpp
     netplay/InputTimeline.cpp
     netplay/RollbackInputs.cpp
+    netplay/InputJournal.cpp
     netplay/RollbackExchange.cpp
     netplay/FrameEventLedger.cpp
     world/SceneSoundEvents.cpp
