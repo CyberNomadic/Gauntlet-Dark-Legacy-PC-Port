@@ -482,6 +482,11 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             run.reportedTick = completed;
             log::info("Native online progress: epoch {} tick {} ({})", epoch, completed,
                       session.host() ? "host" : "guest");
+            const auto stats = run.nativePlay.rollbackStatistics();
+            log::info("Native rollback: {} native ticks, {} replayed, {} corrections (longest "
+                      "replay {}), {} stalls, {} pacing idles, confirmed tick {}",
+                      stats.nativeTicks, stats.replayTicks, stats.corrections, stats.maxReplay,
+                      stats.stalls, stats.pacingIdles, run.nativePlay.confirmedTick());
         }
         switch (phase) {
         case NativeOnlinePlay::Phase::Loading:
