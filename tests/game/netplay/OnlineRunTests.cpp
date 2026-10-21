@@ -121,6 +121,16 @@ TEST_CASE("the network line reads ping, corrected share, lead and relay", "[netp
           "140 ms  79% corrected  8 ahead  relay");
 }
 
+TEST_CASE("a stall is announced after a second with the seconds left to its deadline",
+          "[netplay][online-run]") {
+    CHECK_FALSE(OnlineRun::stallNotice(0.0));
+    CHECK_FALSE(OnlineRun::stallNotice(0.9));
+    CHECK(OnlineRun::stallNotice(1.0) == "Waiting for another player... 14s");
+    CHECK(OnlineRun::stallNotice(7.5) == "Waiting for another player... 8s");
+    CHECK(OnlineRun::stallNotice(14.99) == "Waiting for another player... 1s");
+    CHECK(OnlineRun::stallNotice(20.0) == "Waiting for another player... 0s");
+}
+
 TEST_CASE("menu-created iroh rooms select characters ready and enter the shared tower",
           "[netplay][online-lobby][assets]") {
     REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());

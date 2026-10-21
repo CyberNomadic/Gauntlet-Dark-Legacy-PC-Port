@@ -1,6 +1,8 @@
 #include "game/app/OnlineRun.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <format>
 #include <future>
 
@@ -51,6 +53,8 @@ struct OnlineRun::Impl {
     u64 reportedEpoch = 0;
     u64 reportedTick = 0;
     u64 networkTick = 0;
+    u64 stallsSeen = 0;
+    std::optional<std::chrono::steady_clock::time_point> stalledSince;
 #endif
 };
 OnlineRun::OnlineRun() = default;
@@ -71,6 +75,14 @@ void OnlineRun::close() {
     m_status.clear();
     m_networkTexture.reset();
     m_network.clear();
+}
+std::optional<std::string> OnlineRun::stallNotice(f64 stalledSeconds) {
+    if (stalledSeconds < kStallNoticeSeconds) {
+        return std::nullopt;
+    }
+    const auto left =
+        static_cast<s32>(std::ceil(std::max(kStallDeadlineSeconds - stalledSeconds, 0.0)));
+    return std::format("Waiting for another player... {}s", left);
 }
 std::string OnlineRun::networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
                                       u64 ticksAhead) {
@@ -536,6 +548,39 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         } else if (phase != NativeOnlinePlay::Phase::Playing &&
                    phase != NativeOnlinePlay::Phase::Paused) {
             network(*run.device, "");
+        }
+        // Inputs that stop arriving starve the simulation. Say so after a moment and end
+        // the session at a deadline rather than freezing until the transport gives up.
+        std::optional<std::string> stall;
+        if (phase == NativeOnlinePlay::Phase::Playing) {
+            const auto stalls = run.nativePlay.rollbackStatistics().stalls;
+            const auto now = std::chrono::steady_clock::now();
+            if (stalls > run.stallsSeen) {
+                run.stallsSeen = stalls;
+                if (!run.stalledSince) {
+                    run.stalledSince = now;
+                }
+            } else {
+                run.stalledSince.reset();
+            }
+            if (run.stalledSince) {
+                const f64 seconds = std::chrono::duration<f64>(now - *run.stalledSince).count();
+                if (seconds >= kStallDeadlineSeconds) {
+                    status(
+                        *run.device,
+                        "Another player stopped responding. Online session ended. Escape exits.");
+                    session.leave();
+                    run.finished = true;
+                    return;
+                }
+                stall = stallNotice(seconds);
+            }
+        } else {
+            run.stalledSince.reset();
+        }
+        if (stall) {
+            status(*run.device, *stall);
+            return;
         }
         switch (phase) {
         case NativeOnlinePlay::Phase::Loading:

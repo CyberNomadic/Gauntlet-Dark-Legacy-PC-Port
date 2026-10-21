@@ -60,6 +60,13 @@ public:
     static std::string networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
                                       u64 ticksAhead);
     const std::string& network() const { return m_network; }
+    /** How long a simulation starved of a peer's inputs waits before the session ends. */
+    static constexpr f64 kStallDeadlineSeconds = 15;
+    /** Seconds a stall may last before the players are told about it. */
+    static constexpr f64 kStallNoticeSeconds = 1;
+    /** The status shown `stalledSeconds` into a stall: nothing at first, then the wait
+     * and the seconds left before the deadline. */
+    static std::optional<std::string> stallNotice(f64 stalledSeconds);
 
 private:
     bool connect(RenderDevice& device, const GameContext& context, bool localOnly,
