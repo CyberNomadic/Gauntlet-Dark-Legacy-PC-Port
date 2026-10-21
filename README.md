@@ -49,11 +49,3 @@ python scripts/scenario.py genie --build
 Open an [issue](https://github.com/sabishii-bit/Gauntlet-Dark-Legacy-PC-Port/issues)
 with your build version, OS, and steps to reproduce it. Please do not upload
 game assets.
-
-## License
-
-Original project code is licensed under [GNU GPLv3](LICENSE) (`GPL-3.0-only`).
-Copyright (C) 2026 sabishii-bit and contributors.
-
-Third-party components retain their own licenses. Retail game assets are not
-covered by this license and remain the property of their respective owners.
