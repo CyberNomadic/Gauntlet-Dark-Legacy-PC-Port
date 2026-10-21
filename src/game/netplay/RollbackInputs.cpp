@@ -24,6 +24,16 @@ bool same(const InputCommand& a, const InputCommand& b) {
 }
 } // namespace
 
+u8 RollbackInputs::leadForPing(s32 pingMs) {
+    if (pingMs < 0) {
+        return 1;
+    }
+    if (pingMs < kNoDelayPingMs) {
+        return 0;
+    }
+    return pingMs < kOneTickPingMs ? 1 : kMaxDelay;
+}
+
 bool RollbackInputs::occupied(u8 peer) const {
     return peer > 0 && peer <= 4 && std::ranges::find(m_owners, peer) != m_owners.end();
 }

@@ -16,6 +16,7 @@
 
 #include "game/app/NativeOnlineIdentity.h"
 #include "game/netplay/HostedRoom.h"
+#include "game/netplay/RollbackInputs.h"
 #include "game/screens/NativeOnlinePlay.h"
 #include "game/screens/OnlineParty.h"
 #endif
@@ -491,6 +492,14 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 }
                 if (!run.interactive && session.host() && room->members.size() > 1 &&
                     (run.autoStart || menu.start || menu.select)) {
+                    // The delay every peer will buffer its own inputs by comes from the
+                    // slowest lobby link; prediction covers what is left.
+                    const auto link = session.linkStatistics();
+                    const u8 lead = RollbackInputs::leadForPing(link ? link->pingMs : -1);
+                    if (session.adoptStartupDelay(lead)) {
+                        log::info("Online input delay {} tick(s) for a {} ms round trip", lead,
+                                  link ? link->pingMs : -1);
+                    }
                     session.start();
                 }
             }

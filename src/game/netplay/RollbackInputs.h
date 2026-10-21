@@ -44,6 +44,13 @@ public:
     static constexpr u64 kMaxAhead = 120;
     static constexpr u64 kPeerSkew = 2;
     static constexpr u8 kMaxDelay = 2;
+    /** Round trips under which a startup delay of zero and of one tick still leave the
+     * eight-tick prediction window enough room; longer trips take the longest delay. */
+    static constexpr s32 kNoDelayPingMs = 20;
+    static constexpr s32 kOneTickPingMs = 60;
+    /** The local input delay a measured round trip calls for; an unknown ping keeps the
+     * one-tick default. */
+    static u8 leadForPing(s32 pingMs);
 
     /** Remote progress initially has unknown transit age. Use the conservative
      * eight-tick pacing allowance until its first report, without extending the

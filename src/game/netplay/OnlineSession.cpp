@@ -864,6 +864,15 @@ bool OnlineSession::ready(bool value) {
     m_ready = ReadyRequest{m_room->revision, value};
     return true;
 }
+bool OnlineSession::adoptStartupDelay(u8 delay) {
+    if (!m_host || !m_native || !m_native->hostRules || m_native->contract ||
+        delay > RollbackInputs::kMaxDelay ||
+        (m_phase != Phase::Lobby && m_phase != Phase::Joining)) {
+        return false;
+    }
+    m_native->hostRules->startupDelay = delay;
+    return true;
+}
 bool OnlineSession::start() {
     if (m_phase != Phase::Lobby || !m_host || !connected() || !m_room || !m_native || m_ready ||
         m_selections.size() != m_localPlayers ||

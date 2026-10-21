@@ -100,6 +100,10 @@ public:
     const std::string& failureDetail() const { return m_failureDetail; }
     bool host() const { return m_host; }
     bool connected() const;
+    /** The host's startup input delay for the match about to start, chosen from the
+     * lobby's measured links; refused once the contract carrying it exists, on a guest,
+     * or beyond the rollback's longest delay. */
+    bool adoptStartupDelay(u8 delay);
     /** The slowest live link's transport figures: the highest ping, whether any link
      * is relayed, and all pending bytes; nothing before a link exists. */
     std::optional<PacketTransport::Statistics> linkStatistics() const;

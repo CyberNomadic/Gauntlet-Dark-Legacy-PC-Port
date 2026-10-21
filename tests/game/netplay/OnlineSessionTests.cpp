@@ -256,7 +256,8 @@ std::vector<u8> prepare(MatchOwners owners = {1, 2, 0, 0}) {
     REQUIRE(bytes);
     return *bytes;
 }
-std::vector<InputCommand> inputs(const MatchSession& session, const test::RollbackSessionHarness& timeline,
+std::vector<InputCommand> inputs(const MatchSession& session,
+                                 const test::RollbackSessionHarness& timeline,
                                  bool pressed = false) {
     std::vector<InputCommand> result;
     const auto& context = session.context();
@@ -371,7 +372,8 @@ TEST_CASE("post-frame flushing sends once without polling or advancing clocks",
 TEST_CASE("native guest flush preserves sampled edges and redundant inputs through congestion",
           "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair{{}, true, 2, 2};
-    pair.prepare(); pair.ready();
+    pair.prepare();
+    pair.ready();
     std::vector<RollbackExchange::Message> attempts;
     bool congested = true;
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
@@ -411,7 +413,8 @@ TEST_CASE("native guest flush preserves sampled edges and redundant inputs throu
         }
         const auto host = pair.hostInputs.advance();
         const auto guest = pair.guestInputs.advance();
-        REQUIRE(host); REQUIRE(guest);
+        REQUIRE(host);
+        REQUIRE(guest);
         CHECK(InputPacket::encode(host->commands) == InputPacket::encode(guest->commands));
         CHECK(host->predictedSeats == 0);
         CHECK(guest->predictedSeats == 0);
@@ -428,7 +431,8 @@ TEST_CASE("native guest flush preserves sampled edges and redundant inputs throu
 TEST_CASE("native backpressure resends retained input without resampling an edge",
           "[netplay][online-session][early-input-flush]") {
     test::OnlinePair pair;
-    pair.prepare(); pair.ready();
+    pair.prepare();
+    pair.ready();
     usize sends = 0;
     std::vector<InputCommand> recorded;
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery delivery) {
@@ -527,6 +531,27 @@ TEST_CASE("online sessions handle split local seats, sparse rosters and unordere
     REQUIRE(host.timeline.advance());
     CHECK(guest.timeline.complete());
     CHECK(host.timeline.complete());
+}
+
+TEST_CASE("the host adopts a startup delay before its contract forms and guests cannot",
+          "[netplay][online-session]") {
+    Client guest(false);
+    CHECK_FALSE(guest.session.adoptStartupDelay(2));
+    Client host;
+    CHECK_FALSE(host.session.adoptStartupDelay(RollbackInputs::kMaxDelay + 1));
+    REQUIRE(host.session.adoptStartupDelay(2));
+    auto snapshot = room();
+    snapshot.members = {{kGuest, {0}, true}, {kHost, {3}, true}, {kOther, {1}, true}};
+    host.publish(snapshot);
+    host.connect();
+    host.wire.connect(kOther, 2);
+    host.session.update(0);
+    snapshot.started = true;
+    host.publish(snapshot);
+    REQUIRE(host.session.nativeContract() != nullptr);
+    CHECK(host.session.nativeContract()->rules.startupDelay == 2);
+    CHECK_FALSE(host.session.adoptStartupDelay(0));
+    CHECK(host.session.match().inputLead() == 2);
 }
 
 TEST_CASE("online host has peer one even when it does not occupy seat zero",

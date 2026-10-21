@@ -68,6 +68,16 @@ struct Fixture {
 bool same(const InputCommand& a, const InputCommand& b) {
     return InputPacket::encode(std::span{&a, 1}) == InputPacket::encode(std::span{&b, 1});
 }
+TEST_CASE("the startup delay follows the measured round trip", "[netplay][rollback-inputs]") {
+    CHECK(RollbackInputs::leadForPing(-1) == 1);
+    CHECK(RollbackInputs::leadForPing(0) == 0);
+    CHECK(RollbackInputs::leadForPing(19) == 0);
+    CHECK(RollbackInputs::leadForPing(20) == 1);
+    CHECK(RollbackInputs::leadForPing(59) == 1);
+    CHECK(RollbackInputs::leadForPing(60) == 2);
+    CHECK(RollbackInputs::leadForPing(400) == RollbackInputs::kMaxDelay);
+}
+
 } // namespace
 
 TEST_CASE("rollback local buffering is negotiated and never predicts a local seat",
