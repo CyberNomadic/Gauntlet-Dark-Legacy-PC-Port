@@ -19,6 +19,10 @@
 #endif
 
 namespace gdl::game {
+namespace {
+constexpr u64 kNetworkLineTicks = 60; ///< one second at the native tick rate
+constexpr u32 kNetworkTextPixels = 24;
+} // namespace
 struct OnlineRun::Impl {
 #if GDL_ENABLE_NETPLAY
     RenderDevice* device = nullptr;
@@ -46,6 +50,7 @@ struct OnlineRun::Impl {
     bool finished = false;
     u64 reportedEpoch = 0;
     u64 reportedTick = 0;
+    u64 networkTick = 0;
 #endif
 };
 OnlineRun::OnlineRun() = default;
@@ -64,6 +69,37 @@ void OnlineRun::close() {
     m_impl.reset();
     m_statusTexture.reset();
     m_status.clear();
+    m_networkTexture.reset();
+    m_network.clear();
+}
+std::string OnlineRun::networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
+                                      u64 ticksAhead) {
+    std::string line = pingMs >= 0 ? std::format("{} ms", pingMs) : std::string("ping ?");
+    const u64 percent = nativeTicks == 0 ? 0 : (corrections * 100 + nativeTicks / 2) / nativeTicks;
+    line += std::format("  {}% corrected  {} ahead", percent, ticksAhead);
+    if (relayed) {
+        line += "  relay";
+    }
+    return line;
+}
+void OnlineRun::network(RenderDevice& device, std::string line) {
+    if (line == m_network) {
+        return;
+    }
+    m_network = std::move(line);
+    if (m_network.empty()) {
+        m_networkTexture.reset();
+        return;
+    }
+    try {
+        const auto image = rasterizeSystemText(m_network, kNetworkTextPixels);
+        m_networkTexture = device.createTexture(
+            {image.width, image.height, TextureFilter::Linear, TextureWrap::ClampToEdge},
+            image.pixels);
+    } catch (const std::exception& error) {
+        m_networkTexture.reset();
+        log::warn("Network line: {}", error.what());
+    }
 }
 void OnlineRun::status(RenderDevice& device, std::string message) {
     if (message == m_status) {
@@ -410,8 +446,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 run.nativeSetup = NativePlaySetup::create(
                     run.config, session.room()->settings, *profiles, run.options,
                     {rules.scene, rules.autoMelee, rules.autoActivateItems, rules.expandedShop,
-                     rules.autoAim,
-                     identity.build, identity.content, identity.data});
+                     rules.autoAim, identity.build, identity.content, identity.data});
             }
             if (!run.nativeSetup || !session.confirmNativeSetup(run.nativeSetup->digest())) {
                 status(*run.device, "Online party setup disagrees. Escape exits.");
@@ -488,6 +523,20 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                       stats.nativeTicks, stats.replayTicks, stats.corrections, stats.maxReplay,
                       stats.stalls, stats.pacingIdles, run.nativePlay.confirmedTick());
         }
+        if ((phase == NativeOnlinePlay::Phase::Playing ||
+             phase == NativeOnlinePlay::Phase::Paused) &&
+            completed / kNetworkLineTicks != run.networkTick / kNetworkLineTicks) {
+            run.networkTick = completed;
+            const auto link = session.linkStatistics();
+            const auto stats = run.nativePlay.rollbackStatistics();
+            const u64 confirmed = run.nativePlay.confirmedTick();
+            network(*run.device, networkSummary(link ? link->pingMs : -1, link && link->relayed,
+                                                stats.nativeTicks, stats.corrections,
+                                                completed > confirmed ? completed - confirmed : 0));
+        } else if (phase != NativeOnlinePlay::Phase::Playing &&
+                   phase != NativeOnlinePlay::Phase::Paused) {
+            network(*run.device, "");
+        }
         switch (phase) {
         case NativeOnlinePlay::Phase::Loading:
             status(*run.device, "Loading the shared stage...");
@@ -506,8 +555,8 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             break;
         case NativeOnlinePlay::Phase::Failed: {
             const auto detail = run.nativePlay.failureDetail();
-            status(*run.device, std::format("{}{} Escape exits.", detail,
-                                            detail.ends_with('.') ? "" : "."));
+            status(*run.device,
+                   std::format("{}{} Escape exits.", detail, detail.ends_with('.') ? "" : "."));
             run.finished = true;
             break;
         }
@@ -561,6 +610,16 @@ void OnlineRun::render(RenderDevice& device, const Mat4& projection, f32 width, 
     (void)seconds;
     (void)frameBlend;
 #endif
+    if (m_networkTexture != nullptr) {
+        Canvas canvas;
+        canvas.begin(device, projection, {.depthWrite = false, .depthTest = false});
+        const auto textWidth = static_cast<f32>(m_networkTexture->width()) / 2;
+        const auto textHeight = static_cast<f32>(m_networkTexture->height()) / 2;
+        canvas.fill({width - textWidth - 12, 4, textWidth + 8, textHeight + 4},
+                    Color::rgba(0, 0, 0, 160));
+        canvas.draw(*m_networkTexture, {width - textWidth - 8, 6, textWidth, textHeight});
+        canvas.end();
+    }
     if (m_statusTexture != nullptr) {
         Canvas canvas;
         canvas.begin(device, projection, {.depthWrite = false, .depthTest = false});

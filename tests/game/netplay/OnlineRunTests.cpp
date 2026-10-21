@@ -114,6 +114,13 @@ void exerciseLobby(RenderDevice& hostDevice, RenderDevice& guestDevice,
     guestDevice.waitIdle();
 }
 
+TEST_CASE("the network line reads ping, corrected share, lead and relay", "[netplay][online-run]") {
+    CHECK(OnlineRun::networkSummary(12, false, 3000, 48, 3) == "12 ms  2% corrected  3 ahead");
+    CHECK(OnlineRun::networkSummary(-1, true, 0, 0, 0) == "ping ?  0% corrected  0 ahead  relay");
+    CHECK(OnlineRun::networkSummary(140, true, 1200, 948, 8) ==
+          "140 ms  79% corrected  8 ahead  relay");
+}
+
 TEST_CASE("menu-created iroh rooms select characters ready and enter the shared tower",
           "[netplay][online-lobby][assets]") {
     REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
@@ -234,13 +241,14 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
         }
         REQUIRE(finished());
     };
-    REQUIRE(runs[0]->openLobby(*devices[0], contexts[0], {}, "test", std::string(64, 'a'), 2, true));
+    REQUIRE(
+        runs[0]->openLobby(*devices[0], contexts[0], {}, "test", std::string(64, 'a'), 2, true));
     pump([&] { return !runs[0]->lobby().invitation.empty(); });
     // The actual provider invitation stays private; never include it in INFO/CAPTURE.
     const auto invitation = runs[0]->lobby().invitation;
     for (usize peer = 1; peer < runs.size(); ++peer) {
         REQUIRE(runs[peer]->openLobby(*devices[peer], contexts[peer], invitation, "test",
-                                       std::string(64, 'a'), 1, true));
+                                      std::string(64, 'a'), 1, true));
     }
     pump([&] {
         return std::ranges::all_of(runs, [](const auto& run) {
@@ -263,7 +271,8 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     const RoomSettings rules{4, 2, 1};
     REQUIRE(runs[0]->settings(rules));
     pump([&] {
-        return std::ranges::all_of(runs, [&](const auto& run) { return run->lobby().settings == rules; });
+        return std::ranges::all_of(runs,
+                                   [&](const auto& run) { return run->lobby().settings == rules; });
     });
     for (const auto& run : runs) {
         REQUIRE(run->ready(true));
@@ -306,10 +315,12 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     // not silently shrink the roster or persist their speculative live party.
     runs[1]->close();
     active[1] = false;
-    pump([&] {
-        return runs[0]->lobby().page == NetplayMenu::Page::Finished &&
-               runs[2]->lobby().page == NetplayMenu::Page::Finished;
-    }, false);
+    pump(
+        [&] {
+            return runs[0]->lobby().page == NetplayMenu::Page::Finished &&
+                   runs[2]->lobby().page == NetplayMenu::Page::Finished;
+        },
+        false);
     const std::array stopped{runs[0]->simulatedTick(), runs[2]->simulatedTick()};
     const std::array detail{runs[0]->status(), runs[2]->status()};
     CHECK_FALSE(detail[0].empty());

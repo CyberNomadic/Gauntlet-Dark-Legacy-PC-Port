@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "engine/net/PeerTransport.h"
@@ -99,6 +100,9 @@ public:
     const std::string& failureDetail() const { return m_failureDetail; }
     bool host() const { return m_host; }
     bool connected() const;
+    /** The slowest live link's transport figures: the highest ping, whether any link
+     * is relayed, and all pending bytes; nothing before a link exists. */
+    std::optional<PacketTransport::Statistics> linkStatistics() const;
     const RoomSnapshot* room() const { return m_room ? &*m_room : nullptr; }
     std::span<const u8> seats() const { return m_seats; }
     const PartyBootstrap::Party* party() const {

@@ -54,15 +54,24 @@ public:
                 f32 frameBlend);
     void close();
     const std::string& status() const { return m_status; }
+    /** The line drawn in the corner while playing: ping, the share of ticks the rollback
+     * has corrected, how far the shown tick runs ahead of the confirmed one, and whether
+     * the slowest link goes through a relay. Unknown ping reads as such. */
+    static std::string networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
+                                      u64 ticksAhead);
+    const std::string& network() const { return m_network; }
 
 private:
     bool connect(RenderDevice& device, const GameContext& context, bool localOnly,
                  const std::string& invitation, const std::string& build,
                  const std::string& content, u8 localPlayers);
     void status(RenderDevice& device, std::string message);
+    void network(RenderDevice& device, std::string line);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
     std::unique_ptr<Texture> m_statusTexture;
     std::string m_status;
+    std::unique_ptr<Texture> m_networkTexture;
+    std::string m_network;
 };
 } // namespace gdl::game

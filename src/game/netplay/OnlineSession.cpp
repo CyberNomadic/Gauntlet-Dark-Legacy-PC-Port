@@ -174,10 +174,9 @@ std::vector<u8> nativeBytes(NativeKind kind, const std::string& scope,
     if (kind == NativeKind::Offer) {
         const auto& rules = contract.rules;
         word(bytes, rules.scene);
-        const auto flags = static_cast<u8>(static_cast<u8>(rules.autoMelee) |
-                                           (static_cast<u8>(rules.autoActivateItems) << 1U) |
-                                           (static_cast<u8>(rules.expandedShop) << 2U) |
-                                           (static_cast<u8>(rules.autoAim) << 3U));
+        const auto flags = static_cast<u8>(
+            static_cast<u8>(rules.autoMelee) | (static_cast<u8>(rules.autoActivateItems) << 1U) |
+            (static_cast<u8>(rules.expandedShop) << 2U) | (static_cast<u8>(rules.autoAim) << 3U));
         bytes.insert(bytes.end(), {flags, rules.startupDelay, kNativeInitialization, 0});
         string(bytes, contract.identity.build);
         string(bytes, contract.identity.runtime);
@@ -426,6 +425,25 @@ std::vector<std::string> OnlineSession::allowed() const {
     }
     return result;
 }
+std::optional<PacketTransport::Statistics> OnlineSession::linkStatistics() const {
+    std::optional<PacketTransport::Statistics> worst;
+    for (const auto& [peer, connection] : m_links) {
+        const auto link = m_transport.statistics(connection);
+        if (!link) {
+            continue;
+        }
+        if (!worst) {
+            worst = *link;
+            continue;
+        }
+        worst->pingMs = std::max(worst->pingMs, link->pingMs);
+        worst->pendingBytes += link->pendingBytes;
+        worst->queueMicroseconds = std::max(worst->queueMicroseconds, link->queueMicroseconds);
+        worst->relayed = worst->relayed || link->relayed;
+    }
+    return worst;
+}
+
 bool OnlineSession::connected() const {
     if (!m_room) {
         return false;
@@ -668,7 +686,7 @@ void OnlineSession::event(const PacketTransport::Event& event) {
     }
     const auto statistics = m_transport.statistics(event.connection);
     const auto admission = m_match.receive(event.connection, event.bytes, std::nullopt,
-                                          statistics ? statistics->pingMs : -1);
+                                           statistics ? statistics->pingMs : -1);
     if (admission != MatchSession::Admission::Accepted &&
         admission != MatchSession::Admission::Stale) {
         fail(Failure::Protocol);
