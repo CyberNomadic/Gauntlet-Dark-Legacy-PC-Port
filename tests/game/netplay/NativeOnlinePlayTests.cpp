@@ -426,6 +426,44 @@ TEST_CASE("native online bootstrap opens canonical sparse fresh parties on both 
     CHECK(compared >= 6);
 }
 
+TEST_CASE("a guest gone quiet is dropped by the host and its character stands still",
+          "[native-online-play][native-rollback-online][drop][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", true);
+    pair->settle();
+    pair->synchronize();
+    SessionInputs::Frame first;
+    SessionInputs::Frame second;
+    first[kHostDevice].move = {{1, 0}, 0.5f};
+    second[kGuestDevice].move = {{-1, 0}, 0.5f};
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step(first, second);
+    }
+    // The guest's sends stop reaching the host: it predicts, then waits.
+    pair->guestWire.silent = true;
+    for (u32 frame = 0; frame < 40; ++frame) {
+        REQUIRE(pair->host.update(first) != NativeOnlinePlay::Phase::Failed);
+        REQUIRE(pair->guest.update(second) != NativeOnlinePlay::Phase::Failed);
+    }
+    CHECK(pair->host.rollbackStatistics().stalls > 0);
+    REQUIRE(pair->hostSession.match().quietPeers() == std::vector<u8>{2});
+    REQUIRE(pair->hostSession.match().drop(2));
+    const u64 before = pair->host.simulatedTick();
+    for (u32 frame = 0; frame < 150; ++frame) {
+        REQUIRE(pair->host.update(first) != NativeOnlinePlay::Phase::Failed);
+        pair->guest.update(second); // told it is out; its session ends
+    }
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->host.simulatedTick() > before + 100);
+    CHECK(pair->host.confirmedTick() > before + 90);
+    CHECK(pair->hostSession.match().quietPeers().empty());
+    const auto* actor = pair->host.scene()->actor(kSeats[1]);
+    REQUIRE(actor != nullptr);
+    CHECK_FALSE(actor->moving());
+    CHECK(pair->host.scene()->actor(kSeats[0])->moving());
+    CHECK(pair->guestSession.match().phase() == MatchSession::Phase::Stopped);
+    CHECK(pair->guestSession.match().stopReason() == MatchStop::Left);
+}
+
 TEST_CASE(
     "a guest whose simulation diverges rebuilds from the host's journal and the match goes on",
     "[native-online-play][native-rollback-online][journal][assets]") {

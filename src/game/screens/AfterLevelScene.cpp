@@ -372,6 +372,13 @@ std::optional<usize> AfterLevelScene::captureOnlinePointer(s32 seat, MenuInput& 
     return row < 0 ? std::nullopt : std::optional{static_cast<usize>(row)};
 }
 
+bool AfterLevelScene::abandonLane(s32 seat) {
+    if (!m_open) {
+        return false;
+    }
+    m_session.abandon(seat);
+    return true;
+}
 bool AfterLevelScene::focusOnline(s32 seat, usize row) {
     return m_open && m_session.focus(seat, row);
 }

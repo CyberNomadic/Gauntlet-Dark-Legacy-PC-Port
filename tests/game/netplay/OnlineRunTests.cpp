@@ -183,7 +183,7 @@ TEST_CASE("online lobby starts and resumes on host and guest Vulkan renderers",
     exerciseLobby(*hostRenderer, *guestRenderer, [&] { hostWindow->pollEvents(); });
 }
 
-TEST_CASE("three real iroh menu peers run four split-seat players and fail closed on departure",
+TEST_CASE("three real iroh menu peers run four split-seat players and play on when one departs",
           "[netplay][online-lobby][online-lobby-multipeer][assets]") {
     REQUIRE(NativeOnlineIdentity::prepareProcessNumeric());
     const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
@@ -321,31 +321,27 @@ TEST_CASE("three real iroh menu peers run four split-seat players and fail close
     runs[0]->resume();
     step();
     CHECK(runs[0]->status().empty());
-    // A real provider departure after start must stop both surviving machines,
-    // not silently shrink the roster or persist their speculative live party.
+    // A real provider departure after start drops that guest: both surviving
+    // machines say so, keep simulating and never finish or save on its account.
     runs[1]->close();
     active[1] = false;
-    pump(
-        [&] {
-            return runs[0]->lobby().page == NetplayMenu::Page::Finished &&
-                   runs[2]->lobby().page == NetplayMenu::Page::Finished;
-        },
-        false);
-    const std::array stopped{runs[0]->simulatedTick(), runs[2]->simulatedTick()};
-    const std::array detail{runs[0]->status(), runs[2]->status()};
-    CHECK_FALSE(detail[0].empty());
-    CHECK_FALSE(detail[1].empty());
-    for (u32 frame = 0; frame < 20; ++frame) {
-        step();
+    const std::string notice = "A player dropped out of the online game. The game goes on.";
+    pump([&] { return runs[0]->status() == notice && runs[2]->status() == notice; });
+    for (const usize peer : {usize{0}, usize{2}}) {
+        confirmed[peer] = runs[peer]->confirmedTick();
     }
-    CHECK(runs[0]->simulatedTick() == stopped[0]);
-    CHECK(runs[2]->simulatedTick() == stopped[1]);
-    CHECK(runs[0]->status() == detail[0]);
-    CHECK(runs[2]->status() == detail[1]);
-    for (const auto& run : runs) {
-        CHECK_FALSE(run->playing());
-        CHECK_FALSE(run->hasCompletedProgress());
-        CHECK_FALSE(run->saveCompletedProgress());
+    pump([&] {
+        return runs[0]->confirmedTick() >= confirmed[0] + 90 &&
+               runs[2]->confirmedTick() >= confirmed[2] + 90 && runs[0]->status().empty() &&
+               runs[2]->status().empty();
+    });
+    CHECK_FALSE(runs[1]->playing());
+    for (const usize peer : {usize{0}, usize{2}}) {
+        CAPTURE(peer);
+        CHECK(runs[peer]->playing());
+        CHECK(runs[peer]->lobby().page != NetplayMenu::Page::Finished);
+        CHECK_FALSE(runs[peer]->hasCompletedProgress());
+        CHECK_FALSE(runs[peer]->saveCompletedProgress());
     }
     CHECK((autoSaves == std::array<u32, 3>{}));
     CHECK((manualSaves == std::array<u32, 3>{}));

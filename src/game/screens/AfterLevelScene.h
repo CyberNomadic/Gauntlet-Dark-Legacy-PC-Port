@@ -33,6 +33,8 @@ public:
     /** Translate this peer's mouse into an authenticated row request, without buying locally. */
     std::optional<usize> captureOnlinePointer(s32 seat, MenuInput& input);
     bool focusOnline(s32 seat, usize row);
+    /** Ends a seat's lane for a player who dropped out of the online game. */
+    bool abandonLane(s32 seat);
     void render(RenderDevice& device, const Mat4& projection, f32 width, f32 height);
     const ShopSession& session() const { return m_session; }
     /** The sounds the last update asked for, by name, whether or not audio is on. */

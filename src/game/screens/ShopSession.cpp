@@ -166,6 +166,14 @@ void ShopSession::cue(const ShopLane& lane, ShopCue cue) {
 std::vector<ShopEvent> ShopSession::takeEvents() {
     return std::exchange(m_events, {});
 }
+void ShopSession::abandon(s32 player) {
+    const auto found =
+        std::ranges::find(m_lanes, player, [](const ShopLane& lane) { return lane.member.player; });
+    if (found != m_lanes.end() && found->phase != ShopPhase::Done) {
+        found->phase = ShopPhase::Done;
+        found->phaseSeconds = 0;
+    }
+}
 bool ShopSession::focus(s32 player, usize row) {
     const auto found =
         std::ranges::find(m_lanes, player, [](const ShopLane& lane) { return lane.member.player; });

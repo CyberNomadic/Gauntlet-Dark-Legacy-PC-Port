@@ -86,6 +86,8 @@ public:
     void update(f64 seconds, const Inputs& inputs, const std::array<s32, 4>* potions = nullptr);
     /** Focus a visible mouse-picked row; transactions still use update's ordinary rules. */
     bool focus(s32 player, usize row);
+    /** Ends a lane at once for a player who is no longer there. */
+    void abandon(s32 player);
     bool finished() const;
     const std::vector<ShopLane>& lanes() const { return m_lanes; }
     const ShopCatalog& catalog() const { return m_catalog; }

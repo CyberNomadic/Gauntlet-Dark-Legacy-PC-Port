@@ -538,7 +538,7 @@ struct NativeOnlinePlay::Data {
         if (returning) {
             level = std::move(parent);
             level->scene.resumeFromChallenge(members);
-            if (!level->bind(match)) {
+            if (!level->bind(match) || !applyDrops(*level)) {
                 fail(Failure::Scene);
                 return false;
             }
@@ -548,6 +548,10 @@ struct NativeOnlinePlay::Data {
                 !candidate->scene.open(*device, context, candidate->world, members, options) ||
                 !candidate->scene.nativePresentationReady() || !candidate->bind(match)) {
                 fail(Failure::Assets);
+                return false;
+            }
+            if (!applyDrops(*candidate)) {
+                fail(Failure::Scene);
                 return false;
             }
             level = std::move(candidate);
@@ -569,6 +573,15 @@ struct NativeOnlinePlay::Data {
         return true;
     }
 
+    /** Every drop so far holds its seats still in the level's driver. */
+    bool applyDrops(Level& target) {
+        for (const auto& drop : session->match().dropsFor(session->match().context().epoch)) {
+            if (!target.driver.suspend(drop.peer, drop.tick)) {
+                return false;
+            }
+        }
+        return true;
+    }
     /** The host's: the confirmed journal to the resync tick plus the unconfirmed tail it
      * holds, queued for every peer that owes a rebuild. */
     bool serveJournal(MatchSession& match, const MatchSession::Resync& pending) {
@@ -618,7 +631,8 @@ struct NativeOnlinePlay::Data {
         if (!candidate->world.load(*device, context.unpackedRoot, *current) ||
             !candidate->scene.open(*device, context, candidate->world, levelMembers, options) ||
             !candidate->scene.nativePresentationReady() || !candidate->bindDriver(match) ||
-            !candidate->driver.adopt(commands) || !candidate->driver.beginRebuild(*through)) {
+            !applyDrops(*candidate) || !candidate->driver.adopt(commands) ||
+            !candidate->driver.beginRebuild(*through)) {
             log::error(
                 "Native online resync: the stage could not be reloaded or the journal adopted");
             return fail(Failure::Scene);
@@ -659,6 +673,14 @@ struct NativeOnlinePlay::Data {
         auto& match = session->match();
         auto& sync = match.shop();
         if (!shopFinished) {
+            // A dropped player's lane ends at once rather than holding the shop.
+            for (const auto& drop : match.dropsFor(epoch)) {
+                for (usize seat = 0; seat < match.context().owners.size(); ++seat) {
+                    if (match.context().owners[seat] == drop.peer) {
+                        shop.abandonLane(static_cast<s32>(seat));
+                    }
+                }
+            }
             const auto local = selection->inputs(*session, devices);
             if (!local) {
                 return fail(Failure::Input);
@@ -803,6 +825,11 @@ struct NativeOnlinePlay::Data {
         if (boundary && match.pendingNativeContext() &&
             !boundary->matches(*match.pendingNativeContext())) {
             return fail(Failure::Scene);
+        }
+        for (const auto& drop : match.takeDrops()) {
+            if (drop.epoch == epoch && !level->driver.suspend(drop.peer, drop.tick)) {
+                return fail(Failure::Input);
+            }
         }
         if (const auto pending = match.pendingResync()) {
             if (!serveJournal(match, *pending)) {

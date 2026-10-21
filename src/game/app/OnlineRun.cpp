@@ -1,6 +1,7 @@
 #include "game/app/OnlineRun.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -25,6 +26,7 @@ namespace gdl::game {
 namespace {
 constexpr u64 kNetworkLineTicks = 60; ///< one second at the native tick rate
 constexpr u32 kNetworkTextPixels = 24;
+constexpr s64 kNoticeSeconds = 5; ///< how long a one-off message such as a drop stays
 } // namespace
 struct OnlineRun::Impl {
 #if GDL_ENABLE_NETPLAY
@@ -55,6 +57,9 @@ struct OnlineRun::Impl {
     u64 reportedTick = 0;
     u64 networkTick = 0;
     u64 stallsSeen = 0;
+    std::array<bool, 5> droppedSeen{};
+    std::string notice;
+    std::optional<std::chrono::steady_clock::time_point> noticeUntil;
     std::optional<u8> chosenLead;
     std::optional<std::chrono::steady_clock::time_point> stalledSince;
 #endif
@@ -565,9 +570,9 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         // the session at a deadline rather than freezing until the transport gives up.
         std::optional<std::string> stall;
         const bool resyncing = session.match().resyncing();
+        const auto now = std::chrono::steady_clock::now();
         if (phase == NativeOnlinePlay::Phase::Playing && !resyncing) {
             const auto stalls = run.nativePlay.rollbackStatistics().stalls;
-            const auto now = std::chrono::steady_clock::now();
             if (stalls > run.stallsSeen) {
                 run.stallsSeen = stalls;
                 if (!run.stalledSince) {
@@ -579,17 +584,43 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             if (run.stalledSince) {
                 const f64 seconds = std::chrono::duration<f64>(now - *run.stalledSince).count();
                 if (seconds >= kStallDeadlineSeconds) {
-                    status(
-                        *run.device,
-                        "Another player stopped responding. Online session ended. Escape exits.");
-                    session.leave();
-                    run.finished = true;
-                    return;
+                    // The host drops whoever went quiet and the game goes on; a guest
+                    // leaves only when it is the host that went quiet.
+                    const auto quiet = session.match().quietPeers();
+                    bool dropped = false;
+                    if (session.host()) {
+                        for (const u8 peer : quiet) {
+                            dropped = session.match().drop(peer) || dropped;
+                        }
+                    }
+                    const bool hostQuiet = std::ranges::find(quiet, u8{1}) != quiet.end();
+                    if (dropped) {
+                        run.stalledSince.reset();
+                    } else if (session.host() || hostQuiet) {
+                        status(*run.device, "Another player stopped responding. Online session "
+                                            "ended. Escape exits.");
+                        session.leave();
+                        run.finished = true;
+                        return;
+                    }
                 }
-                stall = stallNotice(seconds);
+                if (run.stalledSince) {
+                    stall = stallNotice(seconds);
+                }
             }
         } else {
             run.stalledSince.reset();
+        }
+        // Whoever dropped out, at the deadline above or by losing its link, the game goes on.
+        bool newlyDropped = false;
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            const bool gone = session.match().dropped(peer);
+            newlyDropped = newlyDropped || (gone && !run.droppedSeen[peer]);
+            run.droppedSeen[peer] = gone;
+        }
+        if (newlyDropped) {
+            run.notice = "A player dropped out of the online game. The game goes on.";
+            run.noticeUntil = now + std::chrono::seconds(kNoticeSeconds);
         }
         if (stall) {
             status(*run.device, *stall);
@@ -604,7 +635,10 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             status(*run.device, "Loading the shared stage...");
             break;
         case NativeOnlinePlay::Phase::Playing:
-        case NativeOnlinePlay::Phase::Shopping: status(*run.device, ""); break;
+        case NativeOnlinePlay::Phase::Shopping:
+            status(*run.device,
+                   run.noticeUntil && now < *run.noticeUntil ? run.notice : std::string{});
+            break;
         case NativeOnlinePlay::Phase::Paused:
             status(*run.device, "Local menu open - the game continues for everyone.");
             break;

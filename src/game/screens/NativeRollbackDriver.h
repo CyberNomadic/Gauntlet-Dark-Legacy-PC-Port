@@ -137,6 +137,8 @@ public:
      * history or digests before it. Call before advancing; finishRebuild() once the head
      * has passed `through` resumes local sampling where the journal left off. */
     bool beginRebuild(u64 through);
+    /** A dropped peer's seats hold neutral input from `fromTick` on; see RollbackInputs. */
+    bool suspend(u8 peer, u64 fromTick);
     bool finishRebuild();
     bool rebuilding() const;
     Failure failure() const;

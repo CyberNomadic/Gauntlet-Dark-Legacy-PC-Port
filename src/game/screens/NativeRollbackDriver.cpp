@@ -399,6 +399,10 @@ bool NativeRollbackDriver::adopt(std::span<const InputCommand> commands) {
     return std::ranges::all_of(
         commands, [&](const InputCommand& command) { return data.inputs.adoptActual(command); });
 }
+bool NativeRollbackDriver::suspend(u8 peer, u64 fromTick) {
+    auto& data = *m_data;
+    return data.failed == Failure::None && data.inputs.suspend(peer, fromTick);
+}
 bool NativeRollbackDriver::beginRebuild(u64 through) {
     auto& data = *m_data;
     if (!data.valid() || data.rebuildThrough || through == 0 || data.inputs.tick() != 1) {
