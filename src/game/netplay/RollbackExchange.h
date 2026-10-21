@@ -77,6 +77,9 @@ public:
                       const std::function<bool(const Message&, std::optional<u8>)>& consume);
     bool flush(PacketTransport& transport);
     void disconnected(PacketTransport::Connection connection);
+    /** Stops sending to a dropped peer and waiting on its acknowledgements; its own
+     * earlier inputs are still resent to the others. */
+    void suspend(u8 peer);
     Failure failure() const { return m_failure; }
     u64 receivedThrough(u8 origin) const;
     u64 acknowledgedThrough(u8 receiver, u8 origin) const;
@@ -110,6 +113,7 @@ private:
     Clock m_clock;
     u64 m_lastTime = 0;
     std::array<u8, 5> m_sendOrigin{1, 1, 1, 1, 1};
+    std::array<bool, 5> m_suspended{};
     Failure m_failure = Failure::None;
 };
 } // namespace gdl::game

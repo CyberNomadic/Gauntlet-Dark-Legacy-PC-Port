@@ -195,8 +195,8 @@ TEST_CASE("a two-peer post-level epoch waits for profiles setup and every shop c
     CHECK(pair.guest.context().scene == 3585);
     CHECK(pair.host.context() == pair.guest.context());
 }
-TEST_CASE("disconnect discards pending shop transactions without releasing the save barrier",
-          "[netplay][online-shop]") {
+TEST_CASE("a dropped guest's pending shop transaction is discarded and the shop ends for the rest",
+          "[netplay][online-shop][drop]") {
     test::OnlinePair pair;
     pair.prepare();
     pair.ready();
@@ -212,11 +212,11 @@ TEST_CASE("disconnect discards pending shop transactions without releasing the s
     REQUIRE(pair.guest.shop().sample(1, buy));
     const auto pending = pair.guest.shop().outgoing().front().bytes;
     REQUIRE(pair.host.shop().finish());
-    pair.host.disconnected(1);
-    CHECK(pair.host.phase() == MatchSession::Phase::Stopped);
-    CHECK_FALSE(pair.host.shop().finished());
-    CHECK_FALSE(pair.host.shop().setup());
+    REQUIRE(pair.host.disconnected(1));
+    CHECK(pair.host.phase() == MatchSession::Phase::Running);
+    CHECK(pair.host.dropped(2));
+    REQUIRE(pair.host.shop().setup());
+    CHECK(pair.host.shop().finished()); // the dropped seat holds the shop no longer
     CHECK(pair.host.receive(1, pending) == MatchSession::Admission::WrongPeer);
-    CHECK_FALSE(pair.host.prepare(3585, MatchTransition::Travel, &party));
 }
 } // namespace

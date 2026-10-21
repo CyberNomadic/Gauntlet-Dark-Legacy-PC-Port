@@ -85,7 +85,18 @@ std::optional<std::pair<u64, u64>> NativeAgreement::terminalContext(std::span<co
     return std::pair{message->epoch, message->tick};
 }
 bool NativeAgreement::occupied(u8 peer) const {
-    return peer != 0 && std::ranges::find(m_owners, peer) != m_owners.end();
+    return peer != 0 && !m_suspended[peer] && std::ranges::find(m_owners, peer) != m_owners.end();
+}
+void NativeAgreement::suspend(u8 peer) {
+    if (!m_open || peer == 0 || peer > 4 || peer == m_local || !occupied(peer)) {
+        return;
+    }
+    m_suspended[peer] = true;
+    m_outgoing[peer].clear();
+    m_links[peer] = 0;
+    if (!failed()) {
+        settle();
+    }
 }
 bool NativeAgreement::open(u8 localPeer, u64 epoch, const Owners& owners,
                            std::span<const Link> links, u32 period, Time now, u64 agreedThrough) {

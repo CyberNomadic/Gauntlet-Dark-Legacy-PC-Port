@@ -88,11 +88,67 @@ bool RollbackInputs::open(u8 localPeer, u64 epoch, const Owners& owners, const G
     return true;
 }
 
-bool RollbackInputs::complete(const Actual& frame) const {
+bool RollbackInputs::suspendedSeat(usize seat, u64 tick) const {
+    const u8 owner = m_owners[seat];
+    return owner != 0 && m_suspendedFrom[owner] != 0 && tick >= m_suspendedFrom[owner];
+}
+
+InputCommand RollbackInputs::neutral(u8 seat, u64 tick) const {
+    InputCommand command;
+    command.epoch = m_epoch;
+    command.tick = tick;
+    command.grant = m_grants[seat];
+    command.seat = seat;
+    return command;
+}
+
+bool RollbackInputs::complete(u64 tick, const Actual& frame) const {
     for (usize seat = 0; seat < m_owners.size(); ++seat) {
-        if (m_owners[seat] != 0 && !frame[seat]) {
+        if (m_owners[seat] != 0 && !frame[seat] && !suspendedSeat(seat, tick)) {
             return false;
         }
+    }
+    return true;
+}
+
+bool RollbackInputs::suspend(u8 peer, u64 fromTick) {
+    if (!m_open || !occupied(peer) || peer == m_local || fromTick == 0) {
+        return false;
+    }
+    if (m_suspendedFrom[peer] != 0) {
+        return m_suspendedFrom[peer] == fromTick;
+    }
+    m_suspendedFrom[peer] = fromTick;
+    // Ticks already executed on a prediction become actual neutral input; a prediction
+    // that was not neutral is corrected like any other.
+    for (auto& [tick, actual] : m_actual) {
+        if (tick < fromTick) {
+            continue;
+        }
+        for (usize seat = 0; seat < m_owners.size(); ++seat) {
+            if (m_owners[seat] == peer && !actual[seat]) {
+                actual[seat] = neutral(static_cast<u8>(seat), tick);
+            }
+        }
+    }
+    for (const auto& [tick, used] : m_used) {
+        if (tick < fromTick) {
+            continue;
+        }
+        for (usize seat = 0; seat < m_owners.size(); ++seat) {
+            if (m_owners[seat] == peer &&
+                !same(used.commands[seat], neutral(static_cast<u8>(seat), tick))) {
+                m_mismatch = m_mismatch ? std::min(*m_mismatch, tick) : tick;
+            }
+        }
+    }
+    while (m_actualThrough != std::numeric_limits<u64>::max()) {
+        const auto next = m_actual.find(m_actualThrough + 1);
+        if (next == m_actual.end() ? !complete(m_actualThrough + 1, Actual{})
+                                   : !complete(m_actualThrough + 1, next->second)) {
+            break;
+        }
+        ++m_actualThrough;
     }
     return true;
 }
@@ -103,9 +159,14 @@ RollbackInputs::Admission RollbackInputs::admit(u8 peer, std::span<const InputCo
         return Admission::Invalid;
     }
     std::map<u64, Actual> incoming;
+    bool ignored = false;
     for (const auto& command : commands) {
         if (!command.valid() || command.tick == 0) {
             return Admission::Invalid;
+        }
+        if (m_suspendedFrom[peer] != 0 && command.tick >= m_suspendedFrom[peer]) {
+            ignored = true; // a dropped peer's seats already hold neutral input here
+            continue;
         }
         if (command.epoch != m_epoch) {
             return Admission::WrongEpoch;
@@ -127,6 +188,9 @@ RollbackInputs::Admission RollbackInputs::admit(u8 peer, std::span<const InputCo
     }
     if (incoming.size() > kRedundantTicks) {
         return Admission::Invalid;
+    }
+    if (incoming.empty()) {
+        return ignored ? Admission::Stale : Admission::Invalid;
     }
     bool newInput = false;
     bool retained = false;
@@ -177,7 +241,8 @@ RollbackInputs::Admission RollbackInputs::admit(u8 peer, std::span<const InputCo
     }
     while (m_actualThrough != std::numeric_limits<u64>::max()) {
         const auto next = m_actual.find(m_actualThrough + 1);
-        if (next == m_actual.end() || !complete(next->second)) {
+        if (next == m_actual.end() ? !complete(m_actualThrough + 1, Actual{})
+                                   : !complete(m_actualThrough + 1, next->second)) {
             break;
         }
         ++m_actualThrough;
@@ -281,11 +346,15 @@ std::optional<RollbackInputs::Frame> RollbackInputs::advance() {
         return std::nullopt;
     }
     Frame frame;
-    const auto actual = m_actual.find(m_next);
+    auto actual = m_actual.find(m_next);
     // NOLINTNEXTLINE(bugprone-too-small-loop-variable): seats and peers number at most five
     for (u8 seat = 0; seat < static_cast<u8>(m_owners.size()); ++seat) {
         if (m_owners[seat] == 0) {
             continue;
+        }
+        if ((actual == m_actual.end() || !actual->second[seat]) && suspendedSeat(seat, m_next)) {
+            actual = m_actual.try_emplace(m_next).first;
+            actual->second[seat] = neutral(seat, m_next);
         }
         if (actual != m_actual.end() && actual->second[seat]) {
             frame.commands[seat] = *actual->second[seat];
@@ -366,13 +435,16 @@ RollbackInputs::Admission RollbackInputs::observePeerTick(u8 peer, u64 epoch, u6
 
 std::optional<RollbackInputs::Commands> RollbackInputs::actualFrame(u64 tick) const {
     const auto frame = m_actual.find(tick);
-    if (!m_open || frame == m_actual.end() || !complete(frame->second)) {
+    if (!m_open || tick == 0 ||
+        !complete(tick, frame == m_actual.end() ? Actual{} : frame->second)) {
         return std::nullopt;
     }
     Commands result{};
     for (usize seat = 0; seat < result.size(); ++seat) {
-        if (frame->second[seat]) {
+        if (frame != m_actual.end() && frame->second[seat]) {
             result[seat] = *frame->second[seat];
+        } else if (suspendedSeat(seat, tick)) {
+            result[seat] = neutral(static_cast<u8>(seat), tick);
         }
     }
     return result;
@@ -410,7 +482,8 @@ bool RollbackInputs::adoptActual(const InputCommand& command) {
     }
     while (m_actualThrough != std::numeric_limits<u64>::max()) {
         const auto next = m_actual.find(m_actualThrough + 1);
-        if (next == m_actual.end() || !complete(next->second)) {
+        if (next == m_actual.end() ? !complete(m_actualThrough + 1, Actual{})
+                                   : !complete(m_actualThrough + 1, next->second)) {
             break;
         }
         ++m_actualThrough;
@@ -455,7 +528,8 @@ bool RollbackInputs::timeSyncIdle() const {
         return false;
     }
     for (u8 peer = 1; peer <= 4; ++peer) {
-        if (peer != m_local && occupied(peer) && m_next > m_peerTicks[peer] &&
+        if (peer != m_local && occupied(peer) && m_suspendedFrom[peer] == 0 &&
+            m_next > m_peerTicks[peer] &&
             m_next - m_peerTicks[peer] > kPeerSkew + m_peerTransitTicks[peer]) {
             return true;
         }

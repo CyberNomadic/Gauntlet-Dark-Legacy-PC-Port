@@ -111,12 +111,21 @@ public:
     /** After an adopted journal has been executed, local sampling continues at the tick
      * after the last local command held, never before the next tick to simulate. */
     bool resumeSampling();
+    /** From `fromTick` on, a dropped peer's seats hold neutral input that counts as
+     * actual: nothing is predicted, nothing is awaited and the journal records it. Its
+     * input for earlier ticks is still taken, anything later is ignored. */
+    bool suspend(u8 peer, u64 fromTick);
+    bool suspended(u8 peer) const {
+        return peer < m_suspendedFrom.size() && m_suspendedFrom[peer] != 0;
+    }
 
 private:
     using Actual = std::array<std::optional<InputCommand>, InputCommand::kSeats>;
     bool occupied(u8 peer) const;
     Admission admit(u8 peer, std::span<const InputCommand> commands);
-    bool complete(const Actual& frame) const;
+    bool complete(u64 tick, const Actual& frame) const;
+    bool suspendedSeat(usize seat, u64 tick) const;
+    InputCommand neutral(u8 seat, u64 tick) const;
     InputCommand prediction(u8 seat, u64 tick) const;
     void trim();
     bool m_open = false;
@@ -132,6 +141,7 @@ private:
     Grants m_grants{};
     std::array<u64, 5> m_peerTicks{};
     std::array<u8, 5> m_peerTransitTicks{};
+    std::array<u64, 5> m_suspendedFrom{};
     Actual m_predictionSeed;
     std::map<u64, Actual> m_actual;
     std::map<u64, Frame> m_used;

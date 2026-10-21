@@ -154,8 +154,7 @@ TEST_CASE("native agreement validates the exact authenticated frozen star",
         links = {{1, kHost}, {3, 103}};
         owners[2] = 3;
         break;
-    default:
-        break;
+    default: break;
     }
     CHECK_FALSE(stream.open(local, epoch, owners, links, period, Time{}));
     CHECK_FALSE(stream.canSubmit());
@@ -195,6 +194,26 @@ TEST_CASE("native agreement requires every peer including the host once per sche
             }
         }
     }
+}
+
+TEST_CASE("a suspended peer no longer holds the host's agreement and is told nothing",
+          "[netplay][native-agreement][drop]") {
+    Room room({1, 2, 3, 0});
+    REQUIRE(room.streams[1].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+    REQUIRE(room.streams[2].submit(kPeriod, digest(kPeriod), room.now) == Admission::Accepted);
+    REQUIRE(room.streams[2].flush(room.wires[2], room.now));
+    room.deliver(2);
+    CHECK(room.streams[1].agreedTick() == 0); // peer three has not reported
+    room.streams[1].suspend(3);
+    CHECK(room.streams[1].agreedTick() == kPeriod);
+    CHECK_FALSE(room.streams[1].failed());
+    REQUIRE(room.streams[1].flush(room.wires[1], room.now));
+    for (const auto& message : room.wires[1].sent) {
+        CHECK(message.connection == Room::connection(2));
+    }
+    CHECK_FALSE(room.wires[1].sent.empty());
+    room.deliver(1);
+    CHECK(room.streams[2].agreedTick() == kPeriod);
 }
 
 TEST_CASE("native agreement does not compare a partial peer roster",
@@ -343,7 +362,8 @@ TEST_CASE("terminal agreement has one exact u64 tick and a separate periodic wir
     CHECK(NativeAgreement::terminalContext(bytes) == std::pair{kEpoch, tick});
     CHECK(periodic.receive(102, bytes, Time::max()) == Admission::Stale);
     CHECK_FALSE(periodic.failed());
-    CHECK(host.receive(102, packet(1, kEpoch, tick, digest(tick)), Time::max()) == Admission::Stale);
+    CHECK(host.receive(102, packet(1, kEpoch, tick, digest(tick)), Time::max()) ==
+          Admission::Stale);
     CHECK_FALSE(host.failed());
     CHECK(host.receive(102, bytes, Time{}) == (mismatch ? Admission::Failed : Admission::Accepted));
     Wire verdict;
@@ -404,8 +424,7 @@ TEST_CASE("native agreement refuses malformed flags and noncanonical terminal me
     case 9: bytes = packet(3, kEpoch, kPeriod, {}, Failure::None); break;
     case 10: bytes = packet(3, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
     case 11: bytes = packet(1, kEpoch, kPeriod, digest(kPeriod), Failure::Mismatch); break;
-    default:
-        break;
+    default: break;
     }
     CHECK(room.streams[1].receive(102, bytes, room.now) == Admission::Invalid);
     CHECK(room.streams[1].failure() == Failure::Protocol);
@@ -419,7 +438,8 @@ TEST_CASE("native agreement submission cannot omit ticks or claim an unsubmitted
     Room room;
     CHECK(room.streams[2].submit(0, {}, room.now) == Admission::Invalid);
     CHECK(room.streams[2].submit(kPeriod + 1, {}, room.now) == Admission::Invalid);
-    CHECK(room.streams[2].submit(static_cast<u64>(2) * kPeriod, {}, room.now) == Admission::Invalid);
+    CHECK(room.streams[2].submit(static_cast<u64>(2) * kPeriod, {}, room.now) ==
+          Admission::Invalid);
     CHECK(room.streams[2].submitTick() == kPeriod);
     CHECK(room.streams[2].queuedPackets() == 0);
     CHECK(room.streams[2].receive(kHost, packet(2, kEpoch, kPeriod, {}), room.now) ==

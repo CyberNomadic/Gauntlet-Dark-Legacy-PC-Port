@@ -55,6 +55,8 @@ public:
     std::optional<ShopStep> take();
     bool finish();
     bool finished() const;
+    /** A dropped peer holds the shop no longer: it counts as finished. */
+    void suspend(u8 peer);
     const ShopSetup* setup() const { return m_setup ? &*m_setup : nullptr; }
     const std::deque<Delivery>& outgoing() const { return m_outgoing; }
     void sent() { m_outgoing.pop_front(); }

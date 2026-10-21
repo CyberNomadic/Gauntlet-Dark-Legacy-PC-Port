@@ -117,6 +117,64 @@ TEST_CASE("adopted journal input is actual for every seat and sampling resumes a
     CHECK(inputs.sampleReady());
 }
 
+TEST_CASE("a dropped peer's seats hold neutral actual input from the first still tick",
+          "[netplay][rollback-inputs][drop]") {
+    RollbackInputs inputs;
+    REQUIRE(inputs.open(1, 9, {1, 2, 0, 0}, {11, 12, 0, 0}, 0));
+    const auto command = [](u64 tick, u8 seat, f32 x) {
+        InputCommand result;
+        result.epoch = 9;
+        result.tick = tick;
+        result.grant = seat == 0 ? 11 : 12;
+        result.seat = seat;
+        result.direction = {x, 0};
+        result.magnitude = x == 0 ? 0.0f : 1.0f;
+        return result;
+    };
+    // Peer two sends three ticks of movement and goes quiet.
+    for (u64 tick = 1; tick <= 3; ++tick) {
+        REQUIRE(inputs.submit(2, std::array{command(tick, 1, 1.0f)}) ==
+                RollbackInputs::Admission::Accepted);
+    }
+    for (u64 tick = 1; tick <= 5; ++tick) {
+        REQUIRE(inputs.sample(std::array{command(tick, 0, 0.0f)}));
+        REQUIRE(inputs.advance());
+    }
+    CHECK(inputs.confirmedTick() == 3);
+    CHECK_FALSE(inputs.suspend(1, 4)); // never the local peer
+    CHECK_FALSE(inputs.suspend(3, 4)); // not in the room
+    CHECK_FALSE(inputs.suspend(2, 0));
+    REQUIRE(inputs.suspend(2, 4));
+    CHECK(inputs.suspended(2));
+    CHECK(inputs.suspend(2, 4)); // the same drop again is fine
+    CHECK_FALSE(inputs.suspend(2, 5));
+    // Ticks 4 and 5 ran on a held prediction of movement; neutral is actual now.
+    REQUIRE(inputs.mismatchTick() == 4);
+    REQUIRE(inputs.rewind(4));
+    for (u64 tick = 4; tick <= 5; ++tick) {
+        const auto frame = inputs.advance();
+        REQUIRE(frame);
+        CHECK(frame->predictedSeats == 0);
+        CHECK(frame->commands[1].magnitude == 0);
+        CHECK(frame->commands[1].grant == 12);
+    }
+    CHECK(inputs.confirmedTick() == 5);
+    // Later input from the dropped peer is ignored; an earlier resend is still taken.
+    CHECK(inputs.submit(2, std::array{command(6, 1, 1.0f)}) == RollbackInputs::Admission::Stale);
+    CHECK(inputs.submit(2, std::array{command(2, 1, 1.0f)}) ==
+          RollbackInputs::Admission::Duplicate);
+    // Nothing waits on the dropped seat from here on, and the journal sees its stillness.
+    REQUIRE(inputs.sample(std::array{command(6, 0, 0.0f)}));
+    REQUIRE(inputs.ready());
+    const auto frame = inputs.advance();
+    REQUIRE(frame);
+    CHECK(frame->predictedSeats == 0);
+    REQUIRE(inputs.actualFrame(6));
+    CHECK((*inputs.actualFrame(6))[1].magnitude == 0);
+    CHECK(inputs.confirmedTick() == 6);
+    CHECK_FALSE(inputs.timeSyncIdle());
+}
+
 TEST_CASE("the startup delay follows the measured round trip", "[netplay][rollback-inputs]") {
     CHECK(RollbackInputs::leadForPing(-1) == 1);
     CHECK(RollbackInputs::leadForPing(0) == 0);

@@ -334,6 +334,11 @@ bool ShopSync::finish() {
     m_finished[m_local] = true;
     return true;
 }
+void ShopSync::suspend(u8 peer) {
+    if (peer != 0 && peer < m_finished.size()) {
+        m_finished[peer] = true;
+    }
+}
 bool ShopSync::finished() const {
     return m_local == 1 && m_setup &&
            std::ranges::all_of(m_owners, [this](u8 peer) { return peer == 0 || m_finished[peer]; });

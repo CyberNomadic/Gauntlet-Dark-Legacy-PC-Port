@@ -74,6 +74,8 @@ public:
     bool flush(PacketTransport& transport, Time now = Clock::now());
     bool update(Time now = Clock::now());
     void disconnected(PacketTransport::Connection connection);
+    /** A dropped peer is awaited no more and told nothing; pending ticks settle without it. */
+    void suspend(u8 peer);
     bool canSubmit() const;
     bool failed() const { return m_failure != Failure::None; }
     Failure failure() const { return m_failure; }
@@ -113,6 +115,7 @@ private:
     Failure m_failure = Failure::None;
     u64 m_failureTick = 0;
     std::array<bool, 5> m_mismatched{};
+    std::array<bool, 5> m_suspended{};
     Time m_now;
     Owners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};

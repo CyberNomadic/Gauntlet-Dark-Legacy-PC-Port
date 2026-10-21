@@ -272,7 +272,7 @@ void RollbackExchange::trim() {
         }
         u64 acknowledged = m_received[m_local][origin];
         for (u8 peer = 1; peer <= 4; ++peer) {
-            if (occupied(peer)) {
+            if (occupied(peer) && !m_suspended[peer]) {
                 acknowledged = std::min(acknowledged, m_received[peer][origin]);
             }
         }
@@ -445,6 +445,13 @@ bool RollbackExchange::fail(Failure reason) {
         m_failure = reason;
     }
     return false;
+}
+void RollbackExchange::suspend(u8 peer) {
+    if (peer == 0 || peer > 4 || !occupied(peer)) {
+        return;
+    }
+    m_suspended[peer] = true;
+    m_links[peer] = 0;
 }
 void RollbackExchange::disconnected(PacketTransport::Connection connection) {
     if (connection != 0 && std::ranges::find(m_links, connection) != m_links.end()) {
