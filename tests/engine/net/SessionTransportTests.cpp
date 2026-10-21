@@ -47,7 +47,7 @@ void confirm(OnlineSession& session) {
     const auto& agreed = *session.nativeContract();
     const NativePlaySetup::Contract contract{
         agreed.rules.scene,        agreed.rules.autoMelee, agreed.rules.autoActivateItems,
-        agreed.rules.expandedShop, agreed.identity.build,  agreed.identity.content,
+        agreed.rules.expandedShop, agreed.rules.autoAim, agreed.identity.build,  agreed.identity.content,
         agreed.identity.data};
     const auto setup = NativePlaySetup::create(GameConfig{}, session.room()->settings,
                                                *session.party(), {}, contract);

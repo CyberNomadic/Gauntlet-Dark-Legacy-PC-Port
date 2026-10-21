@@ -89,6 +89,7 @@ std::unique_ptr<NativePlaySetup> NativePlaySetup::create(const GameConfig& local
     result->m_config.combat.autoMelee = contract.autoMelee;
     result->m_config.combat.autoActivateItems = contract.autoActivateItems;
     result->m_config.game.expandedShop = contract.expandedShop;
+    result->m_config.combat.autoAim = contract.autoAim;
     result->m_options = options;
     result->m_scene = contract.scene;
     result->m_party.reserve(count);
@@ -107,6 +108,7 @@ std::unique_ptr<NativePlaySetup> NativePlaySetup::create(const GameConfig& local
     digest.boolean(contract.autoMelee);
     digest.boolean(contract.autoActivateItems);
     digest.boolean(contract.expandedShop);
+    digest.boolean(contract.autoAim);
     digest.string(result->m_config.text.language);
     digest.real(result->m_stopTimeTotal); // Initial campaign value, never a live-state digest.
     digest.boolean(options.position.has_value());

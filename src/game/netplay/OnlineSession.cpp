@@ -135,13 +135,14 @@ std::optional<NativeMessage> decodeNative(std::span<const u8> bytes) {
             contract.rules.scene = reader.readU32();
             const u8 flags = reader.readU8();
             contract.rules.startupDelay = reader.readU8();
-            if ((flags & ~7U) != 0 || reader.readU8() != kNativeInitialization ||
+            if ((flags & ~15U) != 0 || reader.readU8() != kNativeInitialization ||
                 reader.readU8() != 0) {
                 return std::nullopt;
             }
             contract.rules.autoMelee = (flags & 1U) != 0;
             contract.rules.autoActivateItems = (flags & 2U) != 0;
             contract.rules.expandedShop = (flags & 4U) != 0;
+            contract.rules.autoAim = (flags & 8U) != 0;
             contract.identity.build = string(reader, 256);
             contract.identity.runtime = string(reader, 256);
             contract.identity.content = string(reader, 64);
@@ -175,7 +176,8 @@ std::vector<u8> nativeBytes(NativeKind kind, const std::string& scope,
         word(bytes, rules.scene);
         const auto flags = static_cast<u8>(static_cast<u8>(rules.autoMelee) |
                                            (static_cast<u8>(rules.autoActivateItems) << 1U) |
-                                           (static_cast<u8>(rules.expandedShop) << 2U));
+                                           (static_cast<u8>(rules.expandedShop) << 2U) |
+                                           (static_cast<u8>(rules.autoAim) << 3U));
         bytes.insert(bytes.end(), {flags, rules.startupDelay, kNativeInitialization, 0});
         string(bytes, contract.identity.build);
         string(bytes, contract.identity.runtime);

@@ -384,6 +384,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 rules->autoMelee = run.config.combat.autoMelee;
                 rules->autoActivateItems = run.config.combat.autoActivateItems;
                 rules->expandedShop = run.config.game.expandedShop;
+                rules->autoAim = run.config.combat.autoAim;
             }
             if (!identity || !run.identityInputs ||
                 !NativeOnlineIdentity::numericMatches(*run.identityInputs) ||
@@ -409,6 +410,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 run.nativeSetup = NativePlaySetup::create(
                     run.config, session.room()->settings, *profiles, run.options,
                     {rules.scene, rules.autoMelee, rules.autoActivateItems, rules.expandedShop,
+                     rules.autoAim,
                      identity.build, identity.content, identity.data});
             }
             if (!run.nativeSetup || !session.confirmNativeSetup(run.nativeSetup->digest())) {

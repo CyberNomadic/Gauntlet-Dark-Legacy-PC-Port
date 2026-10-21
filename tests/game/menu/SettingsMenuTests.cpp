@@ -356,6 +356,8 @@ TEST_CASE("Combat auto melee changes are shared persisted and reversible from ev
         CHECK(f.menu.menu().definition().title == "Combat");
         CHECK(f.menu.menu().definition().items[0].text == "Auto Melee");
         CHECK(f.menu.menu().definition().items[2].text == "Auto-Use Item");
+        CHECK(f.menu.menu().definition().items[3].text == "Auto Aim");
+        CHECK(f.menu.menu().definition().items[3].value == "On");
         CHECK(f.menu.menu().definition().items[0].value == "Off");
         f.fail = true;
         f.right();
@@ -388,6 +390,11 @@ TEST_CASE("Combat auto melee changes are shared persisted and reversible from ev
         CHECK(f.config.combat.autoActivateItems);
         f.choose(1);
         CHECK(f.config.combat.enemyHealthBars);
+        f.choose(3);
+        CHECK_FALSE(f.config.combat.autoAim);
+        CHECK(f.menu.menu().definition().items[3].value == "Off");
+        f.choose(3);
+        CHECK(f.config.combat.autoAim);
         f.back();
         f.back();
         CHECK(f.menu.page() == SettingsMenu::Page::Root);

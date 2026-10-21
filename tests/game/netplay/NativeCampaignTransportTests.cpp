@@ -145,7 +145,7 @@ struct CampaignPeer {
         REQUIRE(session.party());
         const NativePlaySetup::Contract contract{
             agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
-            agreed->rules.expandedShop, agreed->identity.build,  agreed->identity.content,
+            agreed->rules.expandedShop, agreed->rules.autoAim, agreed->identity.build,  agreed->identity.content,
             agreed->identity.data};
         setup = NativePlaySetup::create(config, session.room()->settings, *session.party(),
                                         options, contract);

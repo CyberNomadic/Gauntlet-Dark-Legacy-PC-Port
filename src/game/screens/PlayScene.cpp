@@ -375,10 +375,17 @@ void PlayScene::launchWeapon(usize index, const Vec3& direction, f32 scale, bool
     if (index < m_players.size()) {
         m_arsenal.launchWeapon(
             m_players[index].actor, m_players[index].figure.get(), direction, scale, spreads,
-            m_players[index].cursorAiming
-                ? std::nullopt
-                : m_attacks.aim(m_players[index].actor, direction, attackTargets()));
+            m_players[index].cursorAiming ? std::nullopt : assistedAim(index, direction));
     }
+}
+
+std::optional<Vec3> PlayScene::assistedAim(usize index, const Vec3& direction) {
+    // Auto Aim off (the original's per-pad control option): shots, the familiar's spit and
+    // the standing attack keep the way the player faces; touch and melee reach are unaffected.
+    if (m_context.config != nullptr && !m_context.config->combat.autoAim) {
+        return std::nullopt;
+    }
+    return m_attacks.aim(m_players[index].actor, direction, attackTargets());
 }
 
 std::optional<std::filesystem::path> PlayScene::figureDirectory(s32 player) const {

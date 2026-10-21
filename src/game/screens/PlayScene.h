@@ -516,6 +516,9 @@ private:
     void sayWithName(usize index, std::string_view line, f32 wait);
     void updateHazardSurfaces(f32 seconds);
     void launchWeapon(usize index, const Vec3& direction, f32 scale, bool spreads);
+    /** The release-time target of a member looking along `direction`, or none with the
+     * Auto Aim setting off. */
+    std::optional<Vec3> assistedAim(usize index, const Vec3& direction);
     usize standingCount() const;
     bool isDown(usize index) const {
         return index < m_players.size() && m_players[index].life != PlayerLife::Standing;

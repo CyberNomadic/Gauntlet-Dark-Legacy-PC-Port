@@ -317,6 +317,9 @@ void SettingsMenu::rebuild(s32 selection) {
         add(text("settings.autoActivateItems"), 2);
         definition.items.back().value =
             text(m_config.combat.autoActivateItems ? "settings.on" : "settings.off");
+        add(text("settings.autoAim"), 3);
+        definition.items.back().value =
+            text(m_config.combat.autoAim ? "settings.on" : "settings.off");
         break;
     case Page::Difficulty:
         definition.title = text("settings.difficulty");
@@ -481,6 +484,7 @@ void SettingsMenu::change(s32 direction) {
         case 0: next.combat.autoMelee = !next.combat.autoMelee; break;
         case 1: next.combat.enemyHealthBars = !next.combat.enemyHealthBars; break;
         case 2: next.combat.autoActivateItems = !next.combat.autoActivateItems; break;
+        case 3: next.combat.autoAim = !next.combat.autoAim; break;
         default: return;
         }
     } else {

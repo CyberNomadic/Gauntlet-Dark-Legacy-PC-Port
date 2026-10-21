@@ -204,6 +204,7 @@ void GameConfig::mergeJson(std::string_view json) {
             read(options.at("combat"), "autoMelee", combat.autoMelee);
             read(options.at("combat"), "enemyHealthBars", combat.enemyHealthBars);
             read(options.at("combat"), "autoActivateItems", combat.autoActivateItems);
+            read(options.at("combat"), "autoAim", combat.autoAim);
         }
         if (options.contains("multiplayer")) {
             if (!options.at("multiplayer").is_string()) {
@@ -376,7 +377,8 @@ std::string GameConfig::toJson() const {
         {"combat",
          {{"autoMelee", combat.autoMelee},
           {"enemyHealthBars", combat.enemyHealthBars},
-          {"autoActivateItems", combat.autoActivateItems}}},
+          {"autoActivateItems", combat.autoActivateItems},
+          {"autoAim", combat.autoAim}}},
         {"multiplayer", MultiplayerConfig::kNames[static_cast<usize>(multiplayer.mode)]}};
     root["controls"] = {{"explicitMovement", true},
                         {"keyboard",

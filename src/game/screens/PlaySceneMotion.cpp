@@ -48,10 +48,7 @@ PartyMotion::Events PlayScene::motionEvents() {
             },
         .thrownImpact = [this](usize i, f32 damage) { hurt(i, damage, HurtKind::Blow, true); },
         .aim =
-            [this](usize i) {
-                const PlayerActor& actor = m_players[i].actor;
-                return m_attacks.aim(actor, actor.facing(), attackTargets());
-            },
+            [this](usize i) { return assistedAim(i, m_players[i].actor.facing()); },
         .limitMovement = [this](usize index, const Vec3& before,
                                 const Vec3& after) { return limitStep(index, before, after); },
         .attackDeed =
@@ -113,9 +110,8 @@ void PlayScene::perform(usize i, PartyMotion::Action action) {
     case PartyMotion::Action::FamiliarShot:
         m_arsenal.launchFamiliar(
             m_players[i].actor, m_players[i].figure.get(),
-            m_players[i].cursorAiming
-                ? std::nullopt
-                : m_attacks.aim(m_players[i].actor, m_players[i].actor.facing(), attackTargets()));
+            m_players[i].cursorAiming ? std::nullopt
+                                      : assistedAim(i, m_players[i].actor.facing()));
         break;
     case PartyMotion::Action::StrongThrow:
         launchWeapon(i, m_players[i].actor.facing(), kStrongThrowScale, true);
@@ -123,9 +119,8 @@ void PlayScene::perform(usize i, PartyMotion::Action action) {
     case PartyMotion::Action::SuperShot:
         m_arsenal.launchSuperShot(
             m_players[i].actor, m_players[i].figure.get(),
-            m_players[i].cursorAiming
-                ? std::nullopt
-                : m_attacks.aim(m_players[i].actor, m_players[i].actor.facing(), attackTargets()));
+            m_players[i].cursorAiming ? std::nullopt
+                                      : assistedAim(i, m_players[i].actor.facing()));
         break;
     case PartyMotion::Action::ShieldPotion: m_attacks.shieldPotion(i, m_players); break;
     case PartyMotion::Action::ItemAttack: m_attacks.useItemAttack(i, m_players); break;

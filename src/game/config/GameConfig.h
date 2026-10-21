@@ -79,6 +79,9 @@ struct CombatConfig {
     bool autoMelee = false; ///< unpressed close attacks while moving; manual attacks are unchanged
     bool enemyHealthBars = true;   ///< floating meters on golems, gargoyles and generals
     bool autoActivateItems = true; ///< newly collected powerups start enabled
+    /** Release-time targeting of shots and the familiar's spit, and the standing attack's
+     * turn toward the target: the original's per-pad Auto Aim control option. */
+    bool autoAim = true;
 };
 
 struct GameOptionsConfig {

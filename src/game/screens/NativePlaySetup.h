@@ -19,7 +19,7 @@ namespace gdl::game {
  * including while a secret level retains its parent scene. */
 class NativePlaySetup {
 public:
-    static constexpr u32 kDigestVersion = 1;
+    static constexpr u32 kDigestVersion = 2;
     static constexpr u32 kTickRate = 60;
     static constexpr usize kMaxIdentifierBytes = 256;
     static constexpr usize kMaxLanguageBytes = 32;
@@ -31,6 +31,7 @@ public:
         bool autoMelee = false;
         bool autoActivateItems = true;
         bool expandedShop = false;
+        bool autoAim = true;
         std::string build;   ///< executable/simulation compatibility identifier
         std::string content; ///< native asset tree identifier
         std::string data;    ///< resolved gameplay/text data identifier

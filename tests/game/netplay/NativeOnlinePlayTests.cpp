@@ -217,7 +217,7 @@ struct NativePair {
         REQUIRE(session.room());
         const NativePlaySetup::Contract contract{
             agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
-            agreed->rules.expandedShop, agreed->identity.build,  agreed->identity.content,
+            agreed->rules.expandedShop, agreed->rules.autoAim, agreed->identity.build,  agreed->identity.content,
             agreed->identity.data};
         auto result = NativePlaySetup::create(config, session.room()->settings, *session.party(),
                                               options, contract);

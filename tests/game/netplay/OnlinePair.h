@@ -181,7 +181,7 @@ struct OnlinePair {
                     const game::NativePlaySetup::Contract contract{agreed.rules.scene,
                                                                    agreed.rules.autoMelee,
                                                                    agreed.rules.autoActivateItems,
-                                                                   agreed.rules.expandedShop,
+                                                                   agreed.rules.expandedShop, agreed.rules.autoAim,
                                                                    agreed.identity.build,
                                                                    agreed.identity.content,
                                                                    agreed.identity.data};

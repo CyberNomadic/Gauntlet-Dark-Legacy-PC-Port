@@ -65,6 +65,7 @@ TEST_CASE("combat is opt-in and movie volume persists independently of other aud
     CHECK_FALSE(config.combat.autoMelee);
     CHECK(config.combat.enemyHealthBars);
     CHECK(config.combat.autoActivateItems);
+    CHECK(config.combat.autoAim);
     CHECK(config.audio.movieVolume == 1.0f);
     REQUIRE(config.loadFile(test::dataDirectory() / "config.json"));
     CHECK_FALSE(config.combat.autoMelee);
@@ -76,9 +77,12 @@ TEST_CASE("combat is opt-in and movie volume persists independently of other aud
     CHECK(config.combat.enemyHealthBars);
     CHECK(config.combat.autoActivateItems);
     config.mergeJson(R"({"game":{"combat":{"enemyHealthBars":false,"autoActivateItems":false}}})");
+    CHECK(config.combat.autoAim); // old settings keep aiming on, as the game always did
+    config.mergeJson(R"({"game":{"combat":{"autoAim":false}}})");
     GameConfig restored;
     restored.mergeJson(config.toJson());
     CHECK(restored.combat.autoMelee);
+    CHECK_FALSE(restored.combat.autoAim);
     CHECK_FALSE(restored.combat.enemyHealthBars);
     CHECK_FALSE(restored.combat.autoActivateItems);
     CHECK(restored.audio.movieVolume == 0.125f);

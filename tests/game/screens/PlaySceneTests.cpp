@@ -5421,3 +5421,76 @@ TEST_CASE("the lich comes for a party that waits by the crypt's gate",
 }
 
 } // namespace
+
+TEST_CASE("auto aim off keeps a standing throw on the player's facing",
+          "[game][screens][auto-aim][combat-settings][assets]") {
+    const bool enabled = GENERATE(true, false);
+    CAPTURE(enabled);
+    const auto root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    const auto level = levels.byName("G1");
+    REQUIRE(level);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AIM";
+    save.progress().inventory.addPowerup(powerup::kArmor, powerup::kInvulnerable, 0, -1);
+    constexpr s32 kPlayer = 2;
+    const std::array party{PartyMember{kPlayer, save}};
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{18.8f, 0.2f, 0.7f};
+    options.yaw = std::numbers::pi_v<f32> * 0.5f;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    for (s32 frame = 0; frame < 400 && awaitingEntrance(scene); ++frame) {
+        REQUIRE(scene.update(1.0 / 60.0, {}) == PlayOutcome::Running);
+    }
+    REQUIRE_FALSE(awaitingEntrance(scene));
+    // Change the live setting after opening, as the pause menu does.
+    REQUIRE(config.combat.autoAim);
+    config.combat.autoAim = enabled;
+    REQUIRE(scene.actor(kPlayer));
+    const auto& actor = *scene.actor(kPlayer);
+    const f32 facing = actor.yaw();
+    // A grunt ten units off, a quarter turn to the side: inside the acquisition cone.
+    const f32 aside = facing - 0.4f;
+    const Vec3 goal = actor.position() + Vec3{10.0f * std::sin(aside), 0, 10.0f * std::cos(aside)};
+    REQUIRE(world.collision().floorAt(goal, 0.5f, 0.5f));
+    auto& enemies = scene.enemies();
+    REQUIRE(enemies.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.placed = true;
+    spawn.position = goal;
+    spawn.direction = Vec3{-1, 0, 0};
+    const auto enemy = enemies.spawn(spawn, {});
+    REQUIRE(enemy);
+    REQUIRE(scene.missiles().count() == 0);
+    for (s32 frame = 0; frame < 90 && scene.missiles().count() == 0; ++frame) {
+        PlayScene::Inputs input{};
+        input[kPlayer].attack = true;
+        REQUIRE(scene.update(1.0 / 60.0, input) == PlayOutcome::Running);
+    }
+    REQUIRE(scene.missiles().count() >= 1);
+    const Vec3 velocity = scene.missiles().missile(0).velocity;
+    const Vec3 toward = enemies.positionOf(*enemy) - actor.position();
+    const f32 shotYaw = std::atan2(velocity.x, velocity.z);
+    const f32 targetYaw = std::atan2(toward.x, toward.z);
+    CAPTURE(facing, shotYaw, targetYaw, actor.yaw());
+    if (enabled) {
+        CHECK(std::abs(shotYaw - targetYaw) < 0.1f);
+        CHECK(std::abs(actor.yaw() - targetYaw) < 0.1f);
+    } else {
+        CHECK(std::abs(shotYaw - facing) < 0.05f);
+        CHECK(actor.yaw() == Approx(facing));
+    }
+    scene.close();
+}

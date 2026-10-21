@@ -179,7 +179,7 @@ struct Network {
         const NativePlaySetup::Contract native{contract->rules.scene,
                                                contract->rules.autoMelee,
                                                contract->rules.autoActivateItems,
-                                               contract->rules.expandedShop,
+                                               contract->rules.expandedShop, contract->rules.autoAim,
                                                contract->identity.build,
                                                contract->identity.content,
                                                contract->identity.data};
