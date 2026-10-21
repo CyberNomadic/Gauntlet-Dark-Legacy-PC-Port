@@ -1199,8 +1199,8 @@ TEST_CASE("tree texture overrides follow each sequence and reset between shared 
 
 namespace {
 
-/** A lava pool: a square pad (texture 0) under a slightly larger mask plate whose indexed
- * picture (texture 1) shows nothing but holds a centred square. */
+/** A lava pool: a square pad and a mound rising from it (texture 0) under a slightly larger
+ * mask plate whose indexed picture (texture 1) shows nothing but holds a centred square. */
 std::filesystem::path poolFigure(std::string_view name) {
     const auto dir = test::scratchDirectory(name);
     std::filesystem::create_directories(dir / "models");
@@ -1208,11 +1208,13 @@ std::filesystem::path poolFigure(std::string_view name) {
     writeTextFile(dir / "models/000_POOL.obj",
                   "v -2 0 -2\nv 2 0 -2\nv 2 0 2\nv -2 0 2\n"
                   "v -2.2 0.15 -2.2\nv 2.2 0.15 -2.2\nv 2.2 0.15 2.2\nv -2.2 0.15 2.2\n"
+                  "v -1 0.1 -1\nv 1 0.1 -1\nv 0 3 0\n"
                   "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 1 0\n"
                   "usemtl tex0\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n"
+                  "f 9/1/1 10/2/1 11/3/1\n"
                   "usemtl tex1\nf 5/1/1 6/2/1 7/3/1\nf 5/1/1 7/3/1 8/4/1\n");
     writeTextFile(dir / "objects.json", R"({"objects": [
-  {"index": 0, "name": "POOL", "file": "models/000_POOL.obj", "meshTriangles": 4}]})");
+  {"index": 0, "name": "POOL", "file": "models/000_POOL.obj", "meshTriangles": 5}]})");
     writeFile(dir / "textures/000_LAVA.png", test::kTinyPng);
     writeTextFile(dir / "textures.json", R"({"defs": [], "bitmaps": [
   {"index": 0, "name": "LAVA", "file": "textures/000_LAVA.png", "width": 8, "height": 8, "flags": 0},
@@ -1249,7 +1251,19 @@ TEST_CASE("an authored silhouette cuts the flat part beneath it instead of drawi
     CHECK(draw.texture == &textures.texture(device, 0));
     CHECK(draw.state.lightmapCutout);
     CHECK(draw.state.lightmap == textures.silhouetteTexture(device, 1));
-    REQUIRE(draw.vertices.size() == 6);
+    REQUIRE(draw.vertices.size() == 9);
+    // The mound rising from the pad keeps whole: its three corners share one set texel.
+    std::vector<Vec2> mound;
+    for (const ImmediateVertex& v : draw.vertices) {
+        if (v.position.y > 0.05f) {
+            mound.push_back(v.uv2);
+        }
+    }
+    REQUIRE(mound.size() == 3);
+    CHECK(mound[1] == mound[0]);
+    CHECK(mound[2] == mound[0]);
+    CHECK(mound[0].x == Approx(0.5f).margin(0.07f));
+    CHECK(mound[0].y == Approx(0.5f).margin(0.07f));
     // The pad's corner (-2, -2) sits 0.2 of 4.4 units into the plate from its corner, whose
     // picture coordinate the fixture flips down (OBJ counts v from the bottom); the archive
     // keeps 1/128 of a unit.

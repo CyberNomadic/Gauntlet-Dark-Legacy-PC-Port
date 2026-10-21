@@ -125,7 +125,7 @@ std::optional<SilhouetteCut> silhouetteCut(const Mesh& mesh, usize maskPart,
         hi = glm::max(hi, Vec2{at.x, at.z});
     }
     constexpr f32 kFlat = 0.05f; // a mask lies level
-    constexpr f32 kUnder = 1.0f; // and what it cuts lies this close beneath or above it
+    constexpr f32 kUnder = 0.25f; // and what it cuts lies this close beneath or above it
     if (highest - lowest > kFlat) {
         return std::nullopt;
     }
@@ -183,29 +183,51 @@ std::optional<SilhouetteCut> silhouetteCut(const Mesh& mesh, usize maskPart,
         return std::abs(at.y - lowest) <= kUnder && at.x >= lo.x - margin.x &&
                at.x <= hi.x + margin.x && at.z >= lo.y - margin.y && at.z <= hi.y + margin.y;
     };
+    // A triangle is cut only when it lies level under the mask: the pool, not the mound that
+    // rises from it.
+    const auto level = [&](const MeshPart& part, usize triangle) {
+        for (usize c = 0; c < 3; ++c) {
+            if (!under(mesh.vertices[part.indices[triangle + c]].position)) {
+                return false;
+            }
+        }
+        return true;
+    };
     usize best = maskPart;
     usize bestCount = 0;
     for (usize q = 0; q < mesh.parts.size(); ++q) {
         if (q == maskPart) {
             continue;
         }
-        const auto count = static_cast<usize>(std::ranges::count_if(
-            mesh.parts[q].indices, [&](u32 index) { return under(mesh.vertices[index].position); }));
+        usize count = 0;
+        for (usize k = 0; k + 2 < mesh.parts[q].indices.size(); k += 3) {
+            count += level(mesh.parts[q], k) ? 1 : 0;
+        }
         if (count > bestCount) {
             best = q;
             bestCount = count;
         }
     }
-    if (bestCount < 3) {
+    if (bestCount == 0) {
         return std::nullopt;
+    }
+    // A vertex a sloped triangle shares keeps whole, so nothing rising is ever cut.
+    constexpr u8 kLevel = 1;
+    constexpr u8 kSloped = 2;
+    std::vector<u8> roles(mesh.vertices.size(), 0);
+    const MeshPart& part = mesh.parts[best];
+    for (usize k = 0; k + 2 < part.indices.size(); k += 3) {
+        const u8 role = level(part, k) ? kLevel : kSloped;
+        for (usize c = 0; c < 3; ++c) {
+            roles[part.indices[k + c]] |= role;
+        }
     }
     SilhouetteCut cut;
     cut.part = best;
     cut.uv.assign(mesh.vertices.size(), keep);
-    for (const u32 index : mesh.parts[best].indices) {
-        const Vec3& at = mesh.vertices[index].position;
-        if (under(at)) {
-            cut.uv[index] = picture(at);
+    for (usize index = 0; index < mesh.vertices.size(); ++index) {
+        if (roles[index] == kLevel) {
+            cut.uv[index] = picture(mesh.vertices[index].position);
         }
     }
     return cut;
