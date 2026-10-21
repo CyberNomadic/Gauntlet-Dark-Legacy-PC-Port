@@ -307,4 +307,39 @@ std::vector<JournalPacket::Chunk> JournalPacket::chunks(const EpochInputJournal&
     return result;
 }
 
+std::vector<JournalPacket::Chunk>
+JournalPacket::tailChunks(u64 epoch, std::vector<InputCommand> commands, bool markLast) {
+    std::vector<Chunk> result;
+    std::erase_if(commands, [epoch](const InputCommand& command) {
+        return command.epoch != epoch || !command.valid() || command.tick == 0;
+    });
+    std::ranges::sort(commands, [](const InputCommand& a, const InputCommand& b) {
+        return a.seat != b.seat ? a.seat < b.seat : a.tick < b.tick;
+    });
+    // Every tick may be its own run, so this many always fit the wire.
+    const usize perChunk = (kMaxBytes - kHeaderBytes) / kRunBytes;
+    usize start = 0;
+    while (start < commands.size()) {
+        usize end = start + 1;
+        while (end < commands.size() && end - start < perChunk &&
+               commands[end].seat == commands[start].seat &&
+               commands[end].tick == commands[end - 1].tick + 1) {
+            ++end;
+        }
+        Chunk chunk;
+        chunk.epoch = epoch;
+        chunk.firstTick = commands[start].tick;
+        chunk.count = static_cast<u16>(end - start);
+        chunk.seats = static_cast<u8>(1U << commands[start].seat);
+        chunk.commands.assign(commands.begin() + static_cast<std::ptrdiff_t>(start),
+                              commands.begin() + static_cast<std::ptrdiff_t>(end));
+        result.push_back(std::move(chunk));
+        start = end;
+    }
+    if (markLast && !result.empty()) {
+        result.back().last = true;
+    }
+    return result;
+}
+
 } // namespace gdl::game

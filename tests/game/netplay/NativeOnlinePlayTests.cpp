@@ -7,10 +7,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/audio/AudioMixer.h"
+
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "engine/audio/AudioMixer.h"
 #include "game/netplay/OnlinePair.h"
+#include "game/players/PlayerActor.h"
 #include "game/screens/AfterLevelScene.h"
 #include "game/screens/NativeOnlinePlay.h"
 #include "game/screens/OnlineParty.h"
@@ -217,8 +219,8 @@ struct NativePair {
         REQUIRE(session.room());
         const NativePlaySetup::Contract contract{
             agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
-            agreed->rules.expandedShop, agreed->rules.autoAim, agreed->identity.build,  agreed->identity.content,
-            agreed->identity.data};
+            agreed->rules.expandedShop, agreed->rules.autoAim,   agreed->identity.build,
+            agreed->identity.content,   agreed->identity.data};
         auto result = NativePlaySetup::create(config, session.room()->settings, *session.party(),
                                               options, contract);
         REQUIRE(result);
@@ -424,6 +426,72 @@ TEST_CASE("native online bootstrap opens canonical sparse fresh parties on both 
     CHECK(compared >= 6);
 }
 
+TEST_CASE(
+    "a guest whose simulation diverges rebuilds from the host's journal and the match goes on",
+    "[native-online-play][native-rollback-online][journal][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", true);
+    pair->settle();
+    pair->synchronize();
+    for (u32 frame = 0; frame < 40; ++frame) {
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
+        first[kHostDevice].move = {{1, 0}, 0.5f};
+        second[kGuestDevice].move = {{-1, 0}, 0.5f};
+        pair->step(first, second);
+    }
+    REQUIRE(pair->host.rollbackStatistics().nativeTicks > 0);
+    // A divergence put straight into the guest's scene: its own character stands where the
+    // host never saw it go, so the next confirmed digests disagree.
+    // The scene has no door for a planted divergence; this is the one place that needs one.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): see above
+    auto* actor = const_cast<PlayerActor*>(pair->guest.scene()->actor(kSeats[1]));
+    REQUIRE(actor != nullptr);
+    actor->place(actor->position() + Vec3{30, 0, 0});
+    bool ordered = false;
+    u32 rebuiltAt = 0;
+    u64 orderedTick = 0;
+    for (u32 frame = 0; frame < 600 && rebuiltAt == 0; ++frame) {
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
+        first[kHostDevice].move = {{frame % 40 < 20 ? 1.0f : -1.0f, 0}, 0.5f};
+        second[kGuestDevice].move = {{frame % 30 < 15 ? -1.0f : 1.0f, 0}, 0.5f};
+        pair->step(first, second);
+        if (!ordered && pair->hostSession.match().resyncing()) {
+            ordered = true;
+            orderedTick = pair->hostSession.match().resync()->tick;
+            CHECK(pair->hostSession.match().resync()->peers == 0b100);
+        }
+        if (ordered && !pair->hostSession.match().resyncing() &&
+            !pair->guestSession.match().resyncing()) {
+            rebuiltAt = frame;
+        }
+    }
+    REQUIRE(ordered);
+    REQUIRE(rebuiltAt > 0);
+    CHECK(orderedTick % MatchSession::kNativeAgreementPeriod == 0);
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->guest.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->host.failure() == NativeOnlinePlay::Failure::None);
+    CHECK(pair->guest.failure() == NativeOnlinePlay::Failure::None);
+    CHECK(pair->guest.confirmedTick() >= orderedTick);
+    // Both carry on and agree past the resync point.
+    const u64 resumed = pair->guest.simulatedTick();
+    for (u32 frame = 0; frame < 150; ++frame) {
+        SessionInputs::Frame first;
+        SessionInputs::Frame second;
+        first[kHostDevice].move = {{frame % 40 < 20 ? 1.0f : -1.0f, 0}, 0.5f};
+        second[kGuestDevice].move = {{frame % 30 < 15 ? -1.0f : 1.0f, 0}, 0.5f};
+        pair->step(first, second);
+    }
+    CHECK(pair->guest.simulatedTick() > resumed + 100);
+    CHECK(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->guest.phase() == NativeOnlinePlay::Phase::Playing);
+    REQUIRE(pair->hostSession.match().nativeAgreement() != nullptr);
+    CHECK(pair->hostSession.match().nativeAgreement()->agreedTick() > orderedTick);
+    CHECK_FALSE(pair->hostSession.match().resyncing());
+    CHECK_FALSE(pair->guestSession.match().resyncing());
+}
+
 TEST_CASE("native online local pause fences only the owned device while agreed ticks continue",
           "[native-online-play][native-pause][assets]") {
     auto pair = std::make_unique<NativePair>(immediateTower());
@@ -597,10 +665,9 @@ TEST_CASE("shipping renders predicted local movement with only the native interp
     pair->hostWire.latency = pair->guestWire.latency = 4;
     const auto* scene = pair->guest.scene();
     REQUIRE(scene);
-    const auto local = std::ranges::find(scene->participants(), kSeats[1],
-                                        [](const PlayerRuntime& player) {
-                                            return player.actor.player();
-                                        });
+    const auto local =
+        std::ranges::find(scene->participants(), kSeats[1],
+                          [](const PlayerRuntime& player) { return player.actor.player(); });
     REQUIRE(local != scene->participants().end());
     REQUIRE(local->figure);
     REQUIRE_FALSE(local->transport.active());
@@ -638,8 +705,8 @@ TEST_CASE("shipping renders predicted local movement with only the native interp
 
     const auto samePositions = [](const test::RecordedDraw& a, const test::RecordedDraw& b) {
         return a.texture == b.texture && a.vertices.size() == b.vertices.size() &&
-               std::ranges::equal(a.vertices, b.vertices, {},
-                                   &ImmediateVertex::position, &ImmediateVertex::position);
+               std::ranges::equal(a.vertices, b.vertices, {}, &ImmediateVertex::position,
+                                  &ImmediateVertex::position);
     };
     for (const f32 alpha : {0.0f, 0.5f, 1.0f}) {
         CAPTURE(delay, *movementFrame, alpha);
@@ -658,17 +725,18 @@ TEST_CASE("shipping renders predicted local movement with only the native interp
         const Mat4 body = PlayerFigure::bodyPlacement(base, local->actor.save(), worn);
         const auto camera = currentCamera.interpolate(previousCamera, alpha);
         const auto frame = CameraFrame::of(camera);
-        const Mat4 clip = camera.clipTransform(pair->guestConfig.horizontalFovRadians(), 1280,
-                                               720, Mat4{1});
+        const Mat4 clip =
+            camera.clipTransform(pair->guestConfig.horizontalFovRadians(), 1280, 720, Mat4{1});
         reference.draws.clear();
         local->figure->draw(reference, clip, body, scene->world()->lighting(), 1,
                             local->move.weaponHidden(), &frame, alpha);
         REQUIRE_FALSE(reference.draws.empty());
         for (const auto& expected : reference.draws) {
             REQUIRE_FALSE(expected.vertices.empty());
-            const auto actual = std::ranges::find_if(pair->guestDevice.draws, [&](const auto& draw) {
-                return samePositions(draw, expected);
-            });
+            const auto actual =
+                std::ranges::find_if(pair->guestDevice.draws, [&](const auto& draw) {
+                    return samePositions(draw, expected);
+                });
             REQUIRE(actual != pair->guestDevice.draws.end());
             CHECK(actual->transform == clip);
         }
@@ -679,10 +747,9 @@ TEST_CASE("shipping renders predicted local movement with only the native interp
         const auto predicted = reference.draws;
         const Mat4 oldBase = glm::rotate(glm::translate(Mat4{1}, initial), yaw, Vec3{0, 1, 0});
         reference.draws.clear();
-        local->figure->draw(reference, clip,
-                            PlayerFigure::bodyPlacement(oldBase, local->actor.save(), worn),
-                            scene->world()->lighting(), 1, local->move.weaponHidden(), &frame,
-                            alpha);
+        local->figure->draw(
+            reference, clip, PlayerFigure::bodyPlacement(oldBase, local->actor.save(), worn),
+            scene->world()->lighting(), 1, local->move.weaponHidden(), &frame, alpha);
         REQUIRE(reference.draws.size() == predicted.size());
         CHECK(samePositions(reference.draws.front(), predicted.front()) == (alpha == 0));
         CHECK(pair->guest.simulatedTick() == nativeTick);
@@ -707,7 +774,7 @@ TEST_CASE("native pause discards only one local device's unpublished stalled tap
     bool blocked = true;
     pair->guestWire.beforeSend = [&](std::span<const u8> bytes, auto) {
         return blocked && RollbackExchange::recognizes(bytes) ? PeerTransport::SendResult::Congested
-                                                             : PeerTransport::SendResult::Sent;
+                                                              : PeerTransport::SendResult::Sent;
     };
     u32 held = 0;
     for (u32 frame = 0; frame < 40 && held < 3; ++frame) {
@@ -1345,7 +1412,7 @@ TEST_CASE("native terminal departure waits for exact off-cadence state agreement
 
     pair->guestWire.beforeSend = {};
     for (u32 frame = 0; frame < 30 && (pair->host.phase() != NativeOnlinePlay::Phase::Finished ||
-                                        pair->guest.phase() != NativeOnlinePlay::Phase::Finished);
+                                       pair->guest.phase() != NativeOnlinePlay::Phase::Finished);
          ++frame) {
         pair->step();
     }

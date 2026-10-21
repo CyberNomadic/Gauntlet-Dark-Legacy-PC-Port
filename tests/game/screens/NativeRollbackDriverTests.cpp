@@ -188,8 +188,8 @@ TEST_CASE("a scene rebuilt from the confirmed journal stands where the live one 
         REQUIRE(result.status == Status::Advanced);
         digests += result.digests.size();
     }
-    // Only the resync point's own digest is reported, never the ticks replayed to it.
-    CHECK(digests == 1);
+    // Nothing replayed up to the resync point is reported; agreement restarts past it.
+    CHECK(digests == 0);
     REQUIRE(rebuilt->driver.finishRebuild());
     CHECK_FALSE(rebuilt->driver.rebuilding());
     CHECK(rebuilt->driver.confirmedTick() == kThrough);

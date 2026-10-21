@@ -3,8 +3,8 @@
 #include <memory>
 #include <string_view>
 
-#include "game/screens/NativeRollbackDriver.h"
 #include "game/screens/NativePlaySetup.h"
+#include "game/screens/NativeRollbackDriver.h"
 #include "game/screens/OnlineCompletion.h"
 #include "game/screens/OnlineLevelEntry.h"
 
@@ -20,7 +20,16 @@ class OnlineSession;
  * The device, session, selection and borrowed context services must outlive us. */
 class NativeOnlinePlay {
 public:
-    enum class Phase : u8 { Closed, Loading, Playing, Paused, Shopping, Finished, Failed };
+    enum class Phase : u8 {
+        Closed,
+        Loading,
+        Playing,
+        Paused,
+        Shopping,
+        Resyncing, ///< this peer waits for, or replays, the host's journal
+        Finished,
+        Failed
+    };
     enum class Failure : u8 { None, Session, Scene, Assets, Input, Presentation, Party };
 
     NativeOnlinePlay();

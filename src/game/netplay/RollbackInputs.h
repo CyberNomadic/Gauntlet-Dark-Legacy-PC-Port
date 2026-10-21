@@ -101,6 +101,8 @@ public:
     bool timeSyncIdle() const;
     /** Every occupied seat's actual command at a tick, once all of them are held. */
     std::optional<Commands> actualFrame(u64 tick) const;
+    /** Every actual command held for any seat after a tick, in tick then seat order. */
+    std::vector<InputCommand> actualAfter(u64 tick) const;
     /** Takes a trusted journal command as actual input, local seats included, outside
      * the live admission window: a journal is replayed from the first tick, not
      * predicted. Refuses a wrong epoch, grant or owner, or a value contradicting one

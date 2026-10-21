@@ -94,14 +94,19 @@ struct NativeOnlinePlay::Data {
             unbind();
             scene.close();
         }
-        bool bind(MatchSession& session) {
+        bool bind(MatchSession& session) { return bindDriver(session) && attach(session); }
+        bool bindDriver(MatchSession& session) {
             const auto& agreed = session.context();
-            if (!scene.beginRecordedAudio(agreed.epoch) ||
-                !driver.bind(scene, agreed, session.localPeer(),
-                             NativeRollbackDriver::AudioMode::Required)) {
-                return false;
-            }
-            if (!session.attachNativeInputs(agreed.epoch,
+            return scene.beginRecordedAudio(agreed.epoch) &&
+                   driver.bind(scene, agreed, session.localPeer(),
+                               NativeRollbackDriver::AudioMode::Required);
+        }
+        /** Routes the room's input to the driver; a rebuilding scene attaches only once
+         * its head stands near the room's, so nothing arrives too early to admit. */
+        bool attach(MatchSession& session) {
+            const auto& agreed = session.context();
+            if (!session.attachNativeInputs(
+                    agreed.epoch,
                     [this](const RollbackExchange::Message& message, std::optional<u8> transit) {
                         const auto admitted = [](RollbackInputs::Admission result) {
                             return result == RollbackInputs::Admission::Accepted ||
@@ -148,6 +153,8 @@ struct NativeOnlinePlay::Data {
     std::function<void(s32, s32, ControlFeedback)> vibrate;
     std::function<void(u16)> unlockClasses;
     std::unique_ptr<Level> level, parent;
+    std::vector<PartyMember> levelMembers; ///< the party the current level was loaded with
+    bool levelResumed = false; ///< a parent brought back from a challenge cannot be reloaded
     std::optional<LevelRef> current, secretParent;
     std::optional<Boundary> boundary;
     struct ConfirmedTerminal {
@@ -187,6 +194,8 @@ struct NativeOnlinePlay::Data {
         // both native scenes before their campaign-owned configuration/timer.
         level.reset();
         parent.reset();
+        levelMembers.clear();
+        levelResumed = false;
         boundary.reset();
         terminal.reset();
         current.reset();
@@ -326,8 +335,7 @@ struct NativeOnlinePlay::Data {
             fail(Failure::Scene);
             return false;
         }
-        if (!session->match().completeNativeBoundary(boundary->sourceEpoch,
-                                                     boundary->sourceTick)) {
+        if (!session->match().completeNativeBoundary(boundary->sourceEpoch, boundary->sourceTick)) {
             fail(Failure::Session);
             return false;
         }
@@ -525,6 +533,8 @@ struct NativeOnlinePlay::Data {
         if (entry.phase() != OnlineLevelEntry::Phase::Ready) {
             return false;
         }
+        levelMembers.assign(members.begin(), members.end());
+        levelResumed = returning;
         if (returning) {
             level = std::move(parent);
             level->scene.resumeFromChallenge(members);
@@ -536,8 +546,7 @@ struct NativeOnlinePlay::Data {
             auto candidate = std::make_unique<Level>();
             if (!candidate->world.load(*device, context.unpackedRoot, *destination) ||
                 !candidate->scene.open(*device, context, candidate->world, members, options) ||
-                !candidate->scene.nativePresentationReady() ||
-                !candidate->bind(match)) {
+                !candidate->scene.nativePresentationReady() || !candidate->bind(match)) {
                 fail(Failure::Assets);
                 return false;
             }
@@ -560,6 +569,91 @@ struct NativeOnlinePlay::Data {
         return true;
     }
 
+    /** The host's: the confirmed journal to the resync tick plus the unconfirmed tail it
+     * holds, queued for every peer that owes a rebuild. */
+    bool serveJournal(MatchSession& match, const MatchSession::Resync& pending) {
+        if (!level || level->driver.journal().through() < pending.tick) {
+            return false;
+        }
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            if ((pending.peers & (1U << peer)) == 0) {
+                continue;
+            }
+            auto chunks = JournalPacket::chunks(level->driver.journal(), 1, pending.tick, false);
+            auto tail = JournalPacket::tailChunks(
+                epoch, level->driver.actualInputsAfter(pending.tick), true);
+            if (chunks.empty()) {
+                return false;
+            }
+            if (tail.empty()) {
+                chunks.back().last = true;
+            }
+            chunks.insert(chunks.end(), std::make_move_iterator(tail.begin()),
+                          std::make_move_iterator(tail.end()));
+            for (const auto& chunk : chunks) {
+                if (!match.queueJournal(peer, chunk)) {
+                    return false;
+                }
+            }
+            if (!match.journalQueued(peer)) {
+                return false;
+            }
+            log::info("Native online resync: {} journal chunks to tick {} queued for peer {}",
+                      chunks.size(), pending.tick, peer);
+        }
+        return true;
+    }
+    /** A named peer's: reload the stage as the epoch began and replay the journal to the
+     * resync tick, then rejoin the room's input where its own recorded input ends. */
+    Phase rebuild(MatchSession& match) {
+        const auto through = match.resyncRequested();
+        if (!through || !level || levelResumed || !current) {
+            return fail(Failure::Scene);
+        }
+        const auto commands = match.takeJournal();
+        log::warn("Native online resync: rebuilding {} to tick {} from {} journal commands",
+                  current->name, *through, commands.size());
+        level->unbind();
+        auto candidate = std::make_unique<Level>();
+        if (!candidate->world.load(*device, context.unpackedRoot, *current) ||
+            !candidate->scene.open(*device, context, candidate->world, levelMembers, options) ||
+            !candidate->scene.nativePresentationReady() || !candidate->bindDriver(match) ||
+            !candidate->driver.adopt(commands) || !candidate->driver.beginRebuild(*through)) {
+            log::error(
+                "Native online resync: the stage could not be reloaded or the journal adopted");
+            return fail(Failure::Scene);
+        }
+        while (candidate->driver.nextTick() <= *through) {
+            // Outputs of replayed ticks were heard and felt before the divergence.
+            const auto status = candidate->driver.advance(true).status;
+            if (status != NativeRollbackDriver::Status::Advanced) {
+                log::error(
+                    "Native online resync: replay stopped at tick {} (status {}, failure {})",
+                    candidate->driver.nextTick(), static_cast<u32>(status),
+                    static_cast<u32>(candidate->driver.failure()));
+                return fail(Failure::Scene);
+            }
+        }
+        if (!candidate->driver.finishRebuild()) {
+            log::error(
+                "Native online resync: the rebuilt driver could not resume sampling at tick {}",
+                candidate->driver.nextTick());
+            return fail(Failure::Scene);
+        }
+        if (!candidate->attach(match)) {
+            log::error("Native online resync: the rebuilt scene could not attach to the room");
+            return fail(Failure::Scene);
+        }
+        level = std::move(candidate);
+        terminal.reset();
+        outcome = NativeRollbackDriver::Status::Held;
+        if (!match.finishResync()) {
+            return fail(Failure::Session);
+        }
+        log::info("Native online resync: {} rebuilt to tick {} (epoch {}, peer {})", current->name,
+                  *through, epoch, match.localPeer());
+        return phase = Phase::Playing;
+    }
     Phase updateShop(const SessionInputs::Frame& devices) {
         completion.close();
         auto& match = session->match();
@@ -710,6 +804,19 @@ struct NativeOnlinePlay::Data {
             !boundary->matches(*match.pendingNativeContext())) {
             return fail(Failure::Scene);
         }
+        if (const auto pending = match.pendingResync()) {
+            if (!serveJournal(match, *pending)) {
+                return fail(Failure::Session);
+            }
+        }
+        if (match.resyncRequested()) {
+            if (!match.journalReady()) {
+                // Hold the diverged scene still; the room's input keeps arriving.
+                quiet();
+                return phase = Phase::Resyncing;
+            }
+            return rebuild(match);
+        }
         const auto local = selection->inputs(*session, localDevices);
         if (!local || !level->driver.sample(*local)) {
             return fail(Failure::Input);
@@ -763,8 +870,7 @@ struct NativeOnlinePlay::Data {
         level->scene.dispatchRecordedAudio(*result.audio);
         level->scene.serviceRecordedAudio(1.0f / 60);
         if (end && level->driver.confirmedTick() >= *end &&
-            (!terminal || terminal->outcome != NativeRollbackDriver::Status::Travel) &&
-            !boundary) {
+            (!terminal || terminal->outcome != NativeRollbackDriver::Status::Travel) && !boundary) {
             return fail(Failure::Scene);
         }
         if (terminal && match.nativeTerminalAgreed(epoch, terminal->tick)) {

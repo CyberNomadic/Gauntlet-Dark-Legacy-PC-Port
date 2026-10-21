@@ -378,6 +378,21 @@ std::optional<RollbackInputs::Commands> RollbackInputs::actualFrame(u64 tick) co
     return result;
 }
 
+std::vector<InputCommand> RollbackInputs::actualAfter(u64 tick) const {
+    std::vector<InputCommand> result;
+    if (!m_open) {
+        return result;
+    }
+    for (auto frame = m_actual.upper_bound(tick); frame != m_actual.end(); ++frame) {
+        for (const auto& command : frame->second) {
+            if (command) {
+                result.push_back(*command);
+            }
+        }
+    }
+    return result;
+}
+
 bool RollbackInputs::adoptActual(const InputCommand& command) {
     if (!m_open || !command.valid() || command.tick == 0 || command.epoch != m_epoch ||
         command.seat >= m_owners.size() || m_owners[command.seat] == 0 ||

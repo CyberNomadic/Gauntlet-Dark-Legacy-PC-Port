@@ -67,6 +67,14 @@ public:
     static std::optional<MatchControl> decode(std::span<const u8> bytes);
 };
 
+/** A rebuild the host ordered for the peers named by bit from the confirmed tick: every
+ * peer restarts digest agreement there and the named peers reload the stage and replay the
+ * journal the host sends them, while everyone else waits. */
+struct MatchResync {
+    u64 tick = 0;
+    u8 peers = 0;
+    bool operator==(const MatchResync&) const = default;
+};
 /** Native shared-simulation lifecycle and authenticated rollback input routing.
  * Every peer owns its simulation/history; this owner transports only controls,
  * actual inputs and confirmed digests. No snapshots, replicated audio, host
@@ -154,14 +162,7 @@ public:
     const std::string& failureDetail() const { return m_failureDetail; }
     u8 inputLead() const { return m_startupDelay; }
 
-    /** A rebuild the host ordered for the peers named by bit from the confirmed tick:
-     * every peer restarts digest agreement there and the named peers reload the stage
-     * and replay the journal the host sends them, while everyone else waits. */
-    struct Resync {
-        u64 tick = 0;
-        u8 peers = 0;
-        bool operator==(const Resync&) const = default;
-    };
+    using Resync = MatchResync;
     static constexpr usize kJournalDeliveries = 1 << 16;
     static constexpr usize kJournalCommands = 1 << 21;
     static constexpr usize kRecentDigests = 16;

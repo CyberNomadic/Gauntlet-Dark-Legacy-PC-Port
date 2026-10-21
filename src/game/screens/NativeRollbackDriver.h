@@ -124,6 +124,9 @@ public:
     const Statistics& statistics() const;
     /** The epoch's confirmed input record so far. */
     const EpochInputJournal& journal() const;
+    /** Actual input held beyond a tick for any seat: what a rebuilding peer needs after
+     * the journal so that it never contradicts input it already sent. */
+    std::vector<InputCommand> actualInputsAfter(u64 tick) const;
     /** Binds a freshly loaded scene to the bound epoch again, for a peer rebuilding the
      * stage from a journal; otherwise as bind(). */
     bool rebind(PlayScene& scene, const MatchContext& context, u8 localPeer,

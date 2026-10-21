@@ -324,6 +324,7 @@ bool OnlineRun::playing() const {
     if (m_impl && !m_impl->finished) {
         const auto phase = m_impl->nativePlay.phase();
         return phase == NativeOnlinePlay::Phase::Loading ||
+               phase == NativeOnlinePlay::Phase::Resyncing ||
                phase == NativeOnlinePlay::Phase::Playing ||
                phase == NativeOnlinePlay::Phase::Shopping ||
                phase == NativeOnlinePlay::Phase::Paused;
@@ -563,7 +564,8 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         // Inputs that stop arriving starve the simulation. Say so after a moment and end
         // the session at a deadline rather than freezing until the transport gives up.
         std::optional<std::string> stall;
-        if (phase == NativeOnlinePlay::Phase::Playing) {
+        const bool resyncing = session.match().resyncing();
+        if (phase == NativeOnlinePlay::Phase::Playing && !resyncing) {
             const auto stalls = run.nativePlay.rollbackStatistics().stalls;
             const auto now = std::chrono::steady_clock::now();
             if (stalls > run.stallsSeen) {
@@ -593,6 +595,10 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             status(*run.device, *stall);
             return;
         }
+        if (resyncing && phase == NativeOnlinePlay::Phase::Playing) {
+            status(*run.device, "Waiting for a player to resynchronise...");
+            return;
+        }
         switch (phase) {
         case NativeOnlinePlay::Phase::Loading:
             status(*run.device, "Loading the shared stage...");
@@ -601,6 +607,9 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
         case NativeOnlinePlay::Phase::Shopping: status(*run.device, ""); break;
         case NativeOnlinePlay::Phase::Paused:
             status(*run.device, "Local menu open - the game continues for everyone.");
+            break;
+        case NativeOnlinePlay::Phase::Resyncing:
+            status(*run.device, "Resynchronising with the host...");
             break;
         case NativeOnlinePlay::Phase::Finished:
             // Keep the final input relay alive until the user leaves. Another

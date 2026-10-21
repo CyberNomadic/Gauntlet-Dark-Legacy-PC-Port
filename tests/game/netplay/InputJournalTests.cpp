@@ -180,4 +180,53 @@ TEST_CASE("journal packets reject malformed bytes and impossible chunks", "[netp
     CHECK_FALSE(JournalPacket::recognizes(std::span(noise).first(3)));
 }
 
+TEST_CASE("tail chunks cut loose commands at seat and tick gaps and fit the wire",
+          "[netplay][journal]") {
+    std::vector<InputCommand> loose;
+    for (u64 tick = 31; tick <= 40; ++tick) {
+        loose.push_back(command(tick, 0, 1.0f));
+    }
+    for (u64 tick = 31; tick <= 35; ++tick) {
+        loose.push_back(command(tick, 2));
+    }
+    loose.push_back(command(38, 2)); // a gap at 36 and 37
+    auto foreign = command(50, 1);
+    foreign.epoch = 99; // another epoch's command is dropped
+    loose.push_back(foreign);
+    const auto chunks = JournalPacket::tailChunks(kEpoch, loose, true);
+    REQUIRE(chunks.size() == 3);
+    CHECK(chunks[0].seats == 1);
+    CHECK(chunks[0].firstTick == 31);
+    CHECK(chunks[0].count == 10);
+    CHECK_FALSE(chunks[0].last);
+    CHECK(chunks[1].seats == 4);
+    CHECK(chunks[1].firstTick == 31);
+    CHECK(chunks[1].count == 5);
+    CHECK(chunks[2].seats == 4);
+    CHECK(chunks[2].firstTick == 38);
+    CHECK(chunks[2].count == 1);
+    CHECK(chunks[2].last);
+    for (const auto& chunk : chunks) {
+        const auto bytes = JournalPacket::encode(chunk);
+        REQUIRE(bytes);
+        const auto decoded = JournalPacket::decode(*bytes);
+        REQUIRE(decoded);
+        CHECK(decoded->commands.size() == chunk.commands.size());
+    }
+    // One seat changing every tick splits at the wire's run capacity.
+    std::vector<InputCommand> busy;
+    for (u64 tick = 1; tick <= 100; ++tick) {
+        busy.push_back(command(tick, 1, tick % 2 == 0 ? 1.0f : -1.0f));
+    }
+    const auto pieces = JournalPacket::tailChunks(kEpoch, busy, false);
+    CHECK(pieces.size() == 4);
+    for (const auto& piece : pieces) {
+        const auto bytes = JournalPacket::encode(piece);
+        REQUIRE(bytes);
+        CHECK(bytes->size() <= JournalPacket::kMaxBytes);
+        CHECK_FALSE(piece.last);
+    }
+    CHECK(JournalPacket::tailChunks(kEpoch, {}, true).empty());
+}
+
 } // namespace

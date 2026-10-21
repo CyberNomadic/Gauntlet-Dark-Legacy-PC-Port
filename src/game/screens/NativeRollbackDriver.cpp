@@ -161,7 +161,8 @@ struct NativeRollbackDriver::Data {
         if (output.outcome != PlayOutcome::Running) {
             control.terminal = Terminal{tick, output.outcome};
         }
-        const bool observed = !rebuildThrough || tick >= *rebuildThrough;
+        // Agreement restarts after the resync point; its own tick was settled by the host.
+        const bool observed = !rebuildThrough || tick > *rebuildThrough;
         if ((tick % kDigestPeriod == 0 && observed) || control.terminal) {
             if (hashes.size() >= Ledger::kHistory) {
                 return fail(Failure::Observation);
@@ -386,6 +387,9 @@ bool NativeRollbackDriver::rebind(PlayScene& scene, const MatchContext& context,
 }
 const EpochInputJournal& NativeRollbackDriver::journal() const {
     return m_data->journal;
+}
+std::vector<InputCommand> NativeRollbackDriver::actualInputsAfter(u64 tick) const {
+    return m_data->inputs.actualAfter(tick);
 }
 bool NativeRollbackDriver::adopt(std::span<const InputCommand> commands) {
     auto& data = *m_data;

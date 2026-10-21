@@ -400,6 +400,8 @@ bool MatchSession::finishResync() {
     m_resyncTarget = false;
     m_journalComplete = false;
     m_journalIncoming.clear();
+    // The rebuilt scene confirms again from the resync tick onward.
+    m_nativeCompleted = std::min(m_nativeCompleted, m_resync->tick);
     m_resync->peers &= static_cast<u8>(~done.peers);
     if (m_resync->peers == 0) {
         m_resync.reset();
@@ -1131,8 +1133,11 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     return Admission::Invalid; // Legacy bare input packets cannot enter this protocol.
 }
 bool MatchSession::attachNativeInputs(u64 epoch, NativeInputConsumer consumer) {
-    if (m_phase != Phase::Loading || epoch != m_context.epoch || !m_exchange || m_loaded[m_local] ||
-        m_nativeConsumer || !consumer) {
+    // A rebuilt scene attaches again while running; nothing else does after loading.
+    const bool loading = m_phase == Phase::Loading && !m_loaded[m_local];
+    const bool rebuilding = m_phase == Phase::Running && m_resyncTarget;
+    if ((!loading && !rebuilding) || epoch != m_context.epoch || !m_exchange || m_nativeConsumer ||
+        !consumer) {
         return false;
     }
     m_nativeConsumer = std::move(consumer);

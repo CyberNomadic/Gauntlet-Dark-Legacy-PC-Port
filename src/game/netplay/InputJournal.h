@@ -24,7 +24,7 @@ using JournalFrame = std::array<InputCommand, InputCommand::kSeats>;
  */
 class EpochInputJournal {
 public:
-    static constexpr usize kMaxFrames = 60 * 60 * 30; ///< half an hour at the native rate
+    static constexpr usize kMaxFrames = usize{60} * 60 * 30; ///< half an hour at the native rate
 
     bool open(u64 epoch, const RollbackInputs::Owners& owners);
     void clear();
@@ -80,6 +80,10 @@ public:
      * the final one is marked last when `markLast`. Empty when the range is not recorded. */
     static std::vector<Chunk> chunks(const EpochInputJournal& journal, u64 firstTick, u64 lastTick,
                                      bool markLast);
+    /** Chunks for loose commands of one epoch, one seat each, cut at gaps and at the
+     * wire's size; the final chunk is marked last when `markLast`. */
+    static std::vector<Chunk> tailChunks(u64 epoch, std::vector<InputCommand> commands,
+                                         bool markLast);
 };
 
 } // namespace gdl::game

@@ -1196,7 +1196,7 @@ TEST_CASE("a host observation mismatch orders the diverged peer to rebuild and t
     CHECK(room->sessions[1].queuedJournal() == 0);
     REQUIRE(room->sessions[2].journalReady());
     const auto commands = room->sessions[2].takeJournal();
-    CHECK(commands.size() == 30 * 4);
+    CHECK(commands.size() == usize{30} * 4);
     CHECK(commands.front().tick == 1);
     CHECK(commands.back().tick == 30);
     CHECK_FALSE(room->sessions[2].journalReady());
