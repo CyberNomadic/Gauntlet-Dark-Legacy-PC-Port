@@ -91,15 +91,8 @@ std::optional<std::string> OnlineRun::stallNotice(f64 stalledSeconds) {
         static_cast<s32>(std::ceil(std::max(kStallDeadlineSeconds - stalledSeconds, 0.0)));
     return std::format("Waiting for another player... {}s", left);
 }
-std::string OnlineRun::networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
-                                      u64 ticksAhead) {
-    std::string line = pingMs >= 0 ? std::format("{} ms", pingMs) : std::string("ping ?");
-    const u64 percent = nativeTicks == 0 ? 0 : (corrections * 100 + nativeTicks / 2) / nativeTicks;
-    line += std::format("  {}% corrected  {} ahead", percent, ticksAhead);
-    if (relayed) {
-        line += "  relay";
-    }
-    return line;
+std::string OnlineRun::networkSummary(s32 pingMs) {
+    return pingMs >= 0 ? std::format("{} ms", pingMs) : std::string("ping ?");
 }
 void OnlineRun::network(RenderDevice& device, std::string line) {
     if (line == m_network) {
@@ -564,11 +557,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             completed / kNetworkLineTicks != run.networkTick / kNetworkLineTicks) {
             run.networkTick = completed;
             const auto link = session.linkStatistics();
-            const auto stats = run.nativePlay.rollbackStatistics();
-            const u64 confirmed = run.nativePlay.confirmedTick();
-            network(*run.device, networkSummary(link ? link->pingMs : -1, link && link->relayed,
-                                                stats.nativeTicks, stats.corrections,
-                                                completed > confirmed ? completed - confirmed : 0));
+            network(*run.device, networkSummary(link ? link->pingMs : -1));
         } else if (phase != NativeOnlinePlay::Phase::Playing &&
                    phase != NativeOnlinePlay::Phase::Paused) {
             network(*run.device, "");

@@ -56,11 +56,9 @@ public:
                 f32 frameBlend);
     void close();
     const std::string& status() const { return m_status; }
-    /** The line drawn in the corner while playing: ping, the share of ticks the rollback
-     * has corrected, how far the shown tick runs ahead of the confirmed one, and whether
-     * the slowest link goes through a relay. Unknown ping reads as such. */
-    static std::string networkSummary(s32 pingMs, bool relayed, u64 nativeTicks, u64 corrections,
-                                      u64 ticksAhead);
+    /** The line drawn in the corner while playing: the ping alone; the rollback's other
+     * figures go to the log. Unknown ping reads as such. */
+    static std::string networkSummary(s32 pingMs);
     const std::string& network() const { return m_network; }
     /** How long a simulation starved of a peer's inputs waits before the session ends. */
     static constexpr f64 kStallDeadlineSeconds = 15;

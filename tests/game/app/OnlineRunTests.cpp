@@ -114,11 +114,10 @@ void exerciseLobby(RenderDevice& hostDevice, RenderDevice& guestDevice,
     guestDevice.waitIdle();
 }
 
-TEST_CASE("the network line reads ping, corrected share, lead and relay", "[netplay][online-run]") {
-    CHECK(OnlineRun::networkSummary(12, false, 3000, 48, 3) == "12 ms  2% corrected  3 ahead");
-    CHECK(OnlineRun::networkSummary(-1, true, 0, 0, 0) == "ping ?  0% corrected  0 ahead  relay");
-    CHECK(OnlineRun::networkSummary(140, true, 1200, 948, 8) ==
-          "140 ms  79% corrected  8 ahead  relay");
+TEST_CASE("the network line reads the ping alone", "[netplay][online-run]") {
+    CHECK(OnlineRun::networkSummary(12) == "12 ms");
+    CHECK(OnlineRun::networkSummary(140) == "140 ms");
+    CHECK(OnlineRun::networkSummary(-1) == "ping ?");
 }
 
 TEST_CASE("a stall is announced after a second with the seconds left to its deadline",
