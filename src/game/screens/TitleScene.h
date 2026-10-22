@@ -86,6 +86,7 @@ private:
 
     bool m_open = false;
     bool m_startMenu = false;
+    std::string m_optionsLanguage; ///< the text language when the options opened
     RenderDevice* m_device = nullptr;
     GameContext m_context;
     MenuScreen m_screen;

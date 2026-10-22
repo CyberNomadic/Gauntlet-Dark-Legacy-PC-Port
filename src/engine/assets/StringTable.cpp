@@ -18,6 +18,7 @@ bool StringTable::load(const std::filesystem::path& directory, std::string_view 
                        std::string_view fallback) {
     m_entries.clear();
     m_language.clear();
+    m_directory = directory;
     bool any = false;
     if (fallback != language) {
         any = merge(directory / (std::string(fallback) + ".json"));
@@ -31,6 +32,33 @@ bool StringTable::load(const std::filesystem::path& directory, std::string_view 
         m_language = fallback;
     }
     return any;
+}
+
+std::vector<StringTable::Language> StringTable::available(const std::filesystem::path& directory) {
+    std::vector<Language> languages;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".json") {
+            continue;
+        }
+        try {
+            const std::vector<u8> bytes = readFile(entry.path());
+            const nlohmann::json root = nlohmann::json::parse(bytes.begin(), bytes.end());
+            if (!root.is_object()) {
+                continue;
+            }
+            Language language;
+            language.code = entry.path().stem().string();
+            language.name = root.contains("language.name") && root.at("language.name").is_string()
+                                ? root.at("language.name").get<std::string>()
+                                : language.code;
+            languages.push_back(std::move(language));
+        } catch (const std::exception& e) {
+            log::warn("Strings {}: {}", entry.path().string(), e.what());
+        }
+    }
+    std::ranges::sort(languages, {}, &Language::code);
+    return languages;
 }
 
 std::string_view StringTable::get(std::string_view id) const {
@@ -49,7 +77,8 @@ std::string StringTable::digest() const {
     };
     const auto text = [&](std::string_view value) {
         word(value.size());
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially copyable buffer
+        // A byte view of a trivially copyable buffer.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         hash.update({reinterpret_cast<const u8*>(value.data()), value.size()});
     };
     text("gdl-effective-string-table-v1");

@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -13,9 +14,12 @@ using namespace gdl;
 
 std::filesystem::path sampleTables() {
     const auto dir = test::scratchDirectory("string-tables");
-    writeTextFile(dir / "en.json", R"({"menu.start": "Start", "menu.back": "Back"})");
+    writeTextFile(dir / "en.json",
+                  R"({"language.name": "English", "menu.start": "Start", "menu.back": "Back"})");
     writeTextFile(dir / "fr.json", R"({"menu.start": "Commencer"})");
     writeTextFile(dir / "bad.json", "{oops");
+    writeTextFile(dir / "list.json", "[1, 2]");
+    writeTextFile(dir / "notes.txt", "{}");
     return dir;
 }
 
@@ -24,7 +28,7 @@ TEST_CASE("a translation overrides the fallback entry by entry", "[assets][text]
     StringTable table;
     REQUIRE(table.load(dir, "fr"));
     REQUIRE(table.language() == "fr");
-    REQUIRE(table.size() == 2);
+    REQUIRE(table.size() == 3); // language.name comes with the fallback
     REQUIRE(table.get("menu.start") == "Commencer");
     REQUIRE(table.get("menu.back") == "Back");
     REQUIRE(table.has("menu.back"));
@@ -101,6 +105,21 @@ TEST_CASE(
     StringTable second;
     REQUIRE(second.load(directory, "en"));
     CHECK(second.digest() != first.digest());
+}
+
+TEST_CASE("a directory's languages are its tables by code, named as they name themselves",
+          "[assets][text][language]") {
+    const auto dir = sampleTables();
+    // Broken, non-object and non-JSON files are not languages; a table without a name goes
+    // by its code; codes come in order.
+    const std::vector<StringTable::Language> expected{{"en", "English"}, {"fr", "fr"}};
+    REQUIRE(StringTable::available(dir) == expected);
+    StringTable table;
+    REQUIRE(table.load(dir, "fr"));
+    REQUIRE(table.languages() == expected);
+    REQUIRE(
+        StringTable::available(test::scratchDirectory("string-tables-none") / "missing").empty());
+    REQUIRE(StringTable{}.languages().empty());
 }
 
 } // namespace

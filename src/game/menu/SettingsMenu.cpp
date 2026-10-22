@@ -12,6 +12,7 @@
 namespace gdl::game {
 namespace {
 constexpr s32 kGraphicsCode = 4;
+constexpr s32 kLanguageCode = 5;
 constexpr s32 kVideoRows = 10;
 constexpr s32 kAudioSliders = 3;
 constexpr s32 kAudioX = 160;
@@ -35,6 +36,17 @@ u32 cycleChoice(std::span<const u32> choices, u32 value, s32 direction) {
 } // namespace
 std::string SettingsMenu::text(std::string_view id) const {
     return std::string(m_strings != nullptr ? m_strings->get(id) : id);
+}
+std::vector<StringTable::Language> SettingsMenu::languages() const {
+    return m_strings != nullptr ? m_strings->languages() : std::vector<StringTable::Language>{};
+}
+std::string SettingsMenu::languageName() const {
+    for (const auto& language : languages()) {
+        if (language.code == m_config.text.language) {
+            return language.name;
+        }
+    }
+    return m_config.text.language;
 }
 void SettingsMenu::open(const GameConfig& config, const StringTable* strings, Persist persist,
                         const TextPainter& painter, const MenuScreen& screen,
@@ -278,6 +290,7 @@ void SettingsMenu::rebuild(s32 selection) {
         add(text("settings.combat"), 2);
         rows.toggle(text("settings.expandedShop"), 3, m_config.game.expandedShop);
         rows.toggle(text("settings.autoSave"), 4, m_config.game.autoSave);
+        rows.value(text("settings.language"), kLanguageCode, languageName());
         break;
     case Page::Combat:
         definition.title = text("settings.combat");
@@ -428,6 +441,22 @@ void SettingsMenu::change(s32 direction) {
             next.game.expandedShop = !next.game.expandedShop;
         } else if (code == 4) {
             next.game.autoSave = !next.game.autoSave;
+        } else if (code == kLanguageCode) {
+            // The next language the text directory holds; a lone one stays.
+            const auto choices = languages();
+            if (choices.empty()) {
+                return;
+            }
+            const auto current =
+                std::ranges::find(choices, next.text.language, &StringTable::Language::code);
+            const auto count = static_cast<s32>(choices.size());
+            const s32 index =
+                current == choices.end() ? 0 : static_cast<s32>(current - choices.begin());
+            next.text.language =
+                choices[static_cast<usize>((index + direction + count) % count)].code;
+            if (next.text.language == m_config.text.language) {
+                return;
+            }
         } else {
             return;
         }

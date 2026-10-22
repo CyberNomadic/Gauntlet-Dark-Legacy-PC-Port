@@ -7,6 +7,7 @@
 #include "engine/assets/BitmapFont.h"
 #include "engine/assets/StringTable.h"
 #include "engine/core/Types.h"
+#include "engine/io/File.h"
 #include "engine/ui/TextPainter.h"
 
 #include "FakeRenderDevice.h"
@@ -84,8 +85,10 @@ TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings]
     Fixture f;
     f.choose(1);
     REQUIRE(f.menu.page() == SettingsMenu::Page::Game);
-    REQUIRE(f.menu.menu().definition().items.size() == 5);
+    REQUIRE(f.menu.menu().definition().items.size() == 6);
     CHECK(f.menu.menu().definition().items.front().text == "Difficulty");
+    CHECK(f.menu.menu().definition().items.back().text == "Language");
+    CHECK(f.menu.menu().definition().items.back().value == "English");
     f.choose(3);
     CHECK(f.config.game.expandedShop);
     CHECK_FALSE(f.config.game.autoSave);
@@ -1584,4 +1587,70 @@ TEST_CASE("Controls is heard: moves, choices and the depth of a step back",
     CHECK(f.menu.depth() == 0);
     f.release();
     CHECK(f.menu.update(back, 1).action == MenuAction::Back);
+}
+
+TEST_CASE("Game Options turns the language through the tables the text directory holds",
+          "[settings][language]") {
+    const auto dir = test::scratchDirectory("settings-languages");
+    writeTextFile(dir / "en.json",
+                  R"({"language.name": "English", "settings.language": "Language",
+                      "menu.gameOptions": "Game Options"})");
+    writeTextFile(dir / "xx.json", R"({"language.name": "Testish"})");
+    Fixture f;
+    StringTable strings;
+    REQUIRE(strings.load(dir, "en"));
+    f.menu.open(f.config, &strings,
+                [&](const GameConfig& next) {
+                    if (f.fail) {
+                        return false;
+                    }
+                    f.config = next;
+                    ++f.writes;
+                    return true;
+                },
+                f.painter, {}, {});
+    f.choose(1);
+    REQUIRE(f.menu.page() == SettingsMenu::Page::Game);
+    const auto& items = f.menu.menu().definition().items;
+    REQUIRE(items.back().text == "Language");
+    CHECK(items.back().value == "English");
+    f.focus(5);
+    f.right();
+    CHECK(f.config.text.language == "xx");
+    CHECK(f.writes == 1);
+    CHECK(f.menu.menu().definition().items.back().value == "Testish");
+    f.release();
+    f.right();
+    CHECK(f.config.text.language == "en");
+    CHECK(f.writes == 2);
+    f.release();
+    MenuInput left;
+    left.left = true;
+    f.menu.update(left, 1);
+    CHECK(f.config.text.language == "xx");
+    CHECK(f.writes == 3);
+    f.release();
+    // Choosing the row turns it on as well; a failed write leaves the language alone.
+    f.fail = true;
+    f.select();
+    CHECK(f.config.text.language == "xx");
+    CHECK(f.writes == 3);
+    // With one table there is nothing to turn to, and nothing is written.
+    const auto lone = test::scratchDirectory("settings-one-language");
+    writeTextFile(lone / "en.json", R"({"language.name": "English"})");
+    StringTable one;
+    REQUIRE(one.load(lone, "en"));
+    f.fail = false;
+    f.config.text.language = "en";
+    f.menu.open(f.config, &one,
+                [&](const GameConfig&) {
+                    ++f.writes;
+                    return true;
+                },
+                f.painter, {}, {});
+    f.choose(1);
+    f.focus(5);
+    f.right();
+    CHECK(f.config.text.language == "en");
+    CHECK(f.writes == 3);
 }

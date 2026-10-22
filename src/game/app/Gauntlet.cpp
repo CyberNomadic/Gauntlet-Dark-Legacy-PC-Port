@@ -685,6 +685,17 @@ bool Gauntlet::applySettings(const GameConfig& config, bool persist) {
         (!persist &&
          !config.display.matchesWindow(window().windowMode(), window().displayOptions().window));
     try {
+        // Another language's tables take the place of the current ones, which every screen
+        // reads through the same table; menus write their text again as they come back,
+        // while a level's own messages change with the next level loaded.
+        if (config.text.language != m_config.text.language) {
+            StringTable next;
+            if (!next.load(m_options.dataDirectory / kTextDirectory, config.text.language)) {
+                log::warn("No text tables for language '{}'", config.text.language);
+                return false;
+            }
+            m_strings = std::move(next);
+        }
         const bool presentationChanged = config.display.vsync != m_config.display.vsync ||
                                          config.display.sampleCount != m_config.display.sampleCount;
         const bool rateChanged =

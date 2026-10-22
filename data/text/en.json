@@ -1,4 +1,5 @@
 {
+  "language.name": "English",
   "controls.player": "Player",
   "controls.auto": "Automatic",
   "controls.keyboard": "Mouse and Keyboard",
@@ -86,6 +87,7 @@
   "settings.difficulty": "Difficulty",
   "settings.expandedShop": "Expanded Shop",
   "settings.autoSave": "Auto-Save",
+  "settings.language": "Language",
   "shop.goldInvulnerability": "Gold\nInvulnerability",
   "shop.pojo": "Pojo",
   "shop.fiveWayShot": "5-Way\nShot",

@@ -380,6 +380,7 @@ void TitleScene::openTitleMenu(bool startMenu) {
 }
 
 void TitleScene::openOptionsMenu() {
+    m_optionsLanguage = m_context.strings != nullptr ? m_context.strings->language() : "";
     auto menu = MenuDefinition::parchment();
     menu.title = std::string(text("menu.options"));
     menu.fades = true;
@@ -405,6 +406,13 @@ void TitleScene::closeOptionsMenu() {
         playMenuSound(kSoundScroll);
     }
     m_optionsMenu.close();
+    // The title menu is written again in a language chosen while it waited.
+    if (m_context.strings != nullptr && m_context.strings->language() != m_optionsLanguage &&
+        m_titleMenu.isOpen()) {
+        const auto selected = m_titleMenu.selection();
+        openTitleMenu(m_startMenu);
+        m_titleMenu.focus(static_cast<usize>(selected));
+    }
 }
 
 void TitleScene::drawGlowText(s32 x, s32 y, std::string_view label) {

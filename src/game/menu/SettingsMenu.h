@@ -55,6 +55,9 @@ private:
     void commit(GameConfig next);
     f32& audioVolume(usize row);
     std::string text(std::string_view id) const;
+    std::vector<StringTable::Language> languages() const;
+    /** What the chosen language calls itself, else its code. */
+    std::string languageName() const;
     OptionMenu m_menu;
     ControlSettings m_controls;
     MenuDefinition m_backdrop;

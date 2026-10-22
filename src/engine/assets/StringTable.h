@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "engine/core/Types.h"
 
@@ -16,6 +17,16 @@ namespace gdl {
 // NOLINTNEXTLINE(bugprone-exception-escape): the map's move is not noexcept on every library
 class StringTable {
 public:
+    /** A language a directory holds: its code (the file's name) and the name it calls itself
+     * (`language.name`), the code again when it gives none. */
+    struct Language {
+        std::string code;
+        std::string name;
+        bool operator==(const Language&) const = default;
+    };
+    /** Every language with a table in `directory`, by code. */
+    static std::vector<Language> available(const std::filesystem::path& directory);
+
     /** Loads `directory/<language>.json` over `directory/<fallback>.json`; false when neither
      * loads. */
     bool load(const std::filesystem::path& directory, std::string_view language,
@@ -24,6 +35,8 @@ public:
     bool loaded() const { return !m_entries.empty(); }
     usize size() const { return m_entries.size(); }
     const std::string& language() const { return m_language; }
+    /** The languages the directory this loaded from holds. */
+    std::vector<Language> languages() const { return available(m_directory); }
 
     /** SHA-256 of the effective language and ordered key/value bytes, including
      * fallback entries. File paths, JSON formatting and map iteration are not
@@ -37,6 +50,7 @@ public:
 private:
     bool merge(const std::filesystem::path& file);
 
+    std::filesystem::path m_directory;
     std::string m_language;
     std::unordered_map<std::string, std::string> m_entries;
 };
