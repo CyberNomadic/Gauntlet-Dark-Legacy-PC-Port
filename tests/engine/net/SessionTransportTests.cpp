@@ -7,9 +7,9 @@
 #include "engine/net/SessionTransport.h"
 
 #include "game/netplay/HostedRoom.h"
+#include "game/netplay/NativePlaySetup.h"
 #include "game/netplay/OnlineSession.h"
 #include "game/rollback/RollbackSessionHarness.h"
-#include "game/netplay/NativePlaySetup.h"
 
 namespace {
 using namespace gdl;
@@ -47,16 +47,16 @@ void confirm(OnlineSession& session) {
     const auto& agreed = *session.nativeContract();
     const NativePlaySetup::Contract contract{
         agreed.rules.scene,        agreed.rules.autoMelee, agreed.rules.autoActivateItems,
-        agreed.rules.expandedShop, agreed.rules.autoAim, agreed.identity.build,  agreed.identity.content,
-        agreed.identity.data};
+        agreed.rules.expandedShop, agreed.rules.autoAim,   agreed.identity.build,
+        agreed.identity.content,   agreed.identity.data};
     const auto setup = NativePlaySetup::create(GameConfig{}, session.room()->settings,
                                                *session.party(), {}, contract);
     REQUIRE(setup);
     REQUIRE(session.confirmNativeSetup(setup->digest()));
 }
-template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessions,
-                                         std::span<test::RollbackSessionHarness* const> inputs,
-                                         Step pump) {
+template <class Step>
+void exchangeFrames(std::span<OnlineSession* const> sessions,
+                    std::span<test::RollbackSessionHarness* const> inputs, Step pump) {
     REQUIRE(sessions.size() == inputs.size());
     for (u64 tick = 1; tick <= 32; ++tick) {
         for (usize i = 0; i < sessions.size(); ++i) {
@@ -107,7 +107,7 @@ template <class Step> void exchangeFrames(std::span<OnlineSession* const> sessio
                 const auto bytes = InputPacket::encode(std::span(&command, 1));
                 REQUIRE(bytes);
                 CHECK(bytes == InputPacket::encode(
-                    std::span(&inputs.front()->lastFrame()->commands[seat], 1)));
+                                   std::span(&inputs.front()->lastFrame()->commands[seat], 1)));
             }
             CHECK(sessions[i]->match().nativeConfirmed() == tick);
         }
@@ -187,12 +187,15 @@ TEST_CASE(
     exchangeFrames(sessions, inputs, pump);
     CHECK(host.match().phase() == MatchSession::Phase::Running);
     CHECK(guest.match().phase() == MatchSession::Phase::Running);
+    // A guest that leaves mid-match is dropped; the host and its match carry on.
     guest.leave();
-    until([&] { return host.phase() == OnlineSession::Phase::Failed; },
+    until([&] { return host.match().dropped(2); },
           [&] {
               host.update(0.002);
               guest.update(0.002);
           });
+    CHECK(host.phase() == OnlineSession::Phase::Active);
+    CHECK(host.match().phase() == MatchSession::Phase::Running);
 }
 
 TEST_CASE("provider room rejects incompatible content without losing the host", "[netplay][iroh]") {
