@@ -1108,7 +1108,7 @@ TEST_CASE("controls capture waits for release and binds the chosen player's mous
     f.right();  // automatic -> keyboard
     REQUIRE(f.config.controls[2].device.empty());
     CHECK(f.menu.menu().definition().items[0].value == "Mouse and Keyboard");
-    f.menu.menu().focus(5); // Quick Attack
+    f.focus(4); // Quick Attack, by its action rather than its row under the scheme
     physical.beginPoll();
     physical.setKey(Key::Enter, true);
     step();
@@ -1132,7 +1132,7 @@ TEST_CASE("controls capture waits for release and binds the chosen player's mous
     physical.setKey(Key::MouseRight, false);
     step();
     f.fail = true;
-    f.menu.menu().focus(5);
+    f.focus(4);
     f.select();
     physical.beginPoll();
     step();
@@ -1269,7 +1269,8 @@ TEST_CASE("control pages sit above a horizontal action bar and arrows support mo
     f.menu.update(readPlayerMenuInput(physical, f.config, 0), 1);
     const auto& menu = f.menu.menu();
     const auto& definition = menu.definition();
-    const usize page = rumble ? 8 : 7;
+    // The device, its control scheme, six actions and the rumble row when there is one.
+    const usize page = rumble ? 9 : 8;
     REQUIRE(definition.items.size() == page + 4);
     CHECK(definition.items[page].text.empty());
     CHECK(definition.items[page].value == "Page 1/4");
@@ -1653,4 +1654,47 @@ TEST_CASE("Game Options turns the language through the tables the text directory
     f.right();
     CHECK(f.config.text.language == "en");
     CHECK(f.writes == 3);
+}
+
+TEST_CASE("a keyboard player's control scheme stands under its device, is turned and restored",
+          "[settings][controls][robotron]") {
+    Fixture f;
+    f.menu.menu().focus(4);
+    f.select();
+    f.select(); // Player 1: the automatic profile holds the mouse and keyboard
+    const auto& items = f.menu.menu().definition().items;
+    REQUIRE(items.size() > 2);
+    CHECK(items[0].code == 100);
+    REQUIRE(items[1].code == 106);
+    CHECK(items[1].text == "Control Scheme");
+    CHECK(items[1].value == "Tank");
+    f.focus(106);
+    f.right();
+    CHECK(f.menu.menu().definition().items[1].value == "Robotron");
+    CHECK(f.config.controls[0].scheme == KeyboardScheme::Tank); // staged until Apply
+    f.release();
+    f.applyControls();
+    CHECK(f.config.controls[0].scheme == KeyboardScheme::Robotron);
+    CHECK(f.writes == 1);
+    f.focus(106);
+    f.select(); // choosing the row turns it too
+    CHECK(f.menu.menu().definition().items[1].value == "Tank");
+    f.release();
+    f.focus(102); // Restore Defaults
+    f.select();
+    CHECK(f.menu.menu().definition().items[1].value == "Tank");
+    f.applyControls();
+    CHECK(f.config.controls[0].scheme == KeyboardScheme::Tank);
+    // A player on a controller alone has no scheme to choose.
+    Input physical;
+    PadSnapshot pad;
+    pad.connected = true;
+    pad.guid = "scheme-pad";
+    physical.setPad(2, pad);
+    f.back();
+    f.menu.menu().focus(2);
+    f.select();
+    f.menu.update(readPlayerMenuInput(physical, f.config, 2), 1);
+    const auto& padItems = f.menu.menu().definition().items;
+    CHECK(std::ranges::find(padItems, 106, &MenuItem::code) == padItems.end());
 }

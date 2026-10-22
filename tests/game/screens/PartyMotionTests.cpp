@@ -7,6 +7,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/core/Types.h"
 
@@ -1585,3 +1586,58 @@ TEST_CASE("the combo button with half the meter lifts a warrior's partner ahead,
     CHECK(f.players[1].actor.position().x > 0.5f); // its own stick again
 }
 } // namespace
+
+TEST_CASE("the Robotron scheme walks the camera's way, faces the mouse and keeps the forward gait",
+          "[controls][cursor][party-motion][robotron][assets]") {
+    const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
+                          .parent_path()
+                          .parent_path()
+                          .parent_path()
+                          .parent_path();
+    test::FakeRenderDevice device;
+    Fixture f;
+    f.players[1].life = PlayerLife::InTower;
+    auto& player = f.players[0];
+    player.figure = PlayerFigure::load(device, root, player.actor.save(), false);
+    REQUIRE(player.figure);
+    f.events.advanceTurbo = [](usize, s32, f32) {};
+    f.events.perform = [](usize, PartyMotion::Action) {};
+    // The mouse points east; the camera looks along +z, so W is +z, S -z, A -x and D +x.
+    const auto key = GENERATE(Key::W, Key::S, Key::A, Key::D);
+    CAPTURE(static_cast<int>(key));
+    Vec3 way{0, 0, 1};
+    if (key == Key::S) {
+        way = Vec3{0, 0, -1};
+    } else if (key == Key::A) {
+        way = Vec3{-1, 0, 0};
+    } else if (key == Key::D) {
+        way = Vec3{1, 0, 0};
+    }
+    Input keyboard;
+    keyboard.setKey(key, true);
+    auto& input = f.inputs[3];
+    input.move = readMoveInput(keyboard, PlayBindings{}, true, kNoPad);
+    REQUIRE(input.move.magnitude == 1.0f);
+    input.aimDirection = Vec3{1, 0, 0};
+    input.freeMove = true;
+    bool shooting = false;
+    SECTION("walking") {}
+    SECTION("shooting while walking keeps the forward moving shot") {
+        input.attack = true;
+        shooting = true;
+    }
+    for (s32 frame = 0; frame < 120; ++frame) {
+        f.step();
+    }
+    const auto& animator = player.figure->animator();
+    CHECK(animator.running() == !shooting);
+    CHECK(animator.strafing() == shooting);
+    const f32 pace = shooting ? PlayerAnimator::kStrafePace : PlayerAnimator::kRunPace;
+    CHECK(animator.moveScale() == Approx(pace));
+    const Vec3 before = player.actor.position();
+    f.step();
+    const Vec3 step = player.actor.position() - before;
+    CHECK(glm::length(step) == Approx(player.actor.speed() * pace / 30.0f).margin(0.0001f));
+    CHECK(glm::dot(glm::normalize(step), way) == Approx(1.0f).margin(0.001f));
+    CHECK(player.actor.yaw() == Approx(std::atan2(1.0f, 0.0f)));
+}

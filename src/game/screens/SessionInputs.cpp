@@ -17,6 +17,7 @@ constexpr std::array kPlayHeld{
     Binding{CommandHeld::Turbo, &PlayInput::turbo},
     Binding{CommandHeld::Combo, &PlayInput::combo},
     Binding{CommandHeld::ThrowPotion, &PlayInput::throwPotion},
+    Binding{CommandHeld::FreeMove, &PlayInput::freeMove},
 };
 constexpr std::array kPlayPress{
     Binding{CommandPress::UsePotion, &PlayInput::usePotion},

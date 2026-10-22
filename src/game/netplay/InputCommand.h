@@ -23,6 +23,7 @@ enum class CommandHeld : u16 {
     MenuLeft = 1U << 8U,
     MenuRight = 1U << 9U,
     ThrowPotion = 1U << 10U, ///< held wind-up strength, including concealed input frames
+    FreeMove = 1U << 11U,    ///< the Robotron scheme: the move is the camera's under mouse aim
 };
 
 enum class CommandPress : u32 {
@@ -53,7 +54,7 @@ enum class CommandPress : u32 {
  * Zero retains current facing; absence selects ordinary camera-relative stick movement. */
 struct InputCommand {
     static constexpr usize kSeats = 4;
-    static constexpr u32 kHeldMask = (1U << 11U) - 1U;
+    static constexpr u32 kHeldMask = (1U << 12U) - 1U;
     static constexpr u32 kPressMask = ((1U << 19U) - 1U) & ~(1U << 1U);
     u64 epoch = 0;
     u64 tick = 0;
@@ -86,7 +87,7 @@ struct InputCommand {
  * The transport must authenticate the sender separately; a packet cannot name its peer. */
 class InputPacket {
 public:
-    static constexpr u16 kVersion = 4;
+    static constexpr u16 kVersion = 5;
     static constexpr usize kMaxCommands = 16;
     static constexpr usize kHeaderBytes = 8;
     static constexpr usize kCommandBytes = 56;

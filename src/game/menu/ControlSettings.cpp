@@ -14,6 +14,7 @@ constexpr s32 kDefaults = 102;
 constexpr s32 kBack = 103;
 constexpr s32 kApply = 104;
 constexpr s32 kRumble = 105;
+constexpr s32 kScheme = 106;
 constexpr s32 kActionCount = 3;
 constexpr s32 kActionY = 268;
 constexpr s32 kActionGap = 24;
@@ -126,6 +127,12 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
     const auto actions = controlActions();
     const auto assigned = controlDevices(config, m_devices)[static_cast<usize>(m_player)];
     const bool canBind = assigned.keyboard || m_devices.isPadConnected(assigned.pad);
+    // The mouse and keyboard's scheme stands at the top of their settings.
+    if (assigned.keyboard) {
+        rows.value(text("controls.scheme"), kScheme,
+                   text(profile.scheme == KeyboardScheme::Robotron ? "controls.robotron"
+                                                                   : "controls.tank"));
+    }
     const auto buttonLabel = [&](PadButton button) {
         switch (button) {
         case PadButton::LeftStickUp: return text("controls.stickUp");
@@ -343,7 +350,7 @@ ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, Gam
         (mapped.left || mapped.right) && !mapped.back && !mapped.select && m_player >= 0;
     if (turned) {
         const auto code = menu.definition().items[static_cast<usize>(menu.selection())].code;
-        if (code == kDevice || code == kNext || code == kRumble) {
+        if (code == kDevice || code == kNext || code == kRumble || code == kScheme) {
             event = {MenuAction::Choice, code, 0, mapped.left ? -1 : 1};
         }
     }
@@ -380,6 +387,12 @@ ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, Gam
         profile.rumble = !profile.rumble;
         m_failed = false;
         rebuild(menu.selection());
+    } else if (event.code == kScheme) {
+        auto& profile = m_draft.controls[static_cast<usize>(m_player)];
+        profile.scheme = profile.scheme == KeyboardScheme::Tank ? KeyboardScheme::Robotron
+                                                                : KeyboardScheme::Tank;
+        m_failed = false;
+        rebuild(menu.selection());
     } else if (event.code == kDevice) {
         auto& profile = m_draft.controls[static_cast<usize>(m_player)];
         const auto devices = choices(m_draft);
@@ -414,6 +427,7 @@ ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, Gam
         profile.play = PlayBindings{};
         profile.menu = MenuBindings{};
         profile.rumble = true;
+        profile.scheme = KeyboardScheme::Tank;
         profile.customized = true;
         m_failed = false;
         rebuild(menu.selection());

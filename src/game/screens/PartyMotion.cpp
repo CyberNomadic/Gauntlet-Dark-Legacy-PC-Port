@@ -299,7 +299,10 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                                     ? actor.position() + Vec3{portable::sin(actor.yaw()), 0,
                                                               portable::cos(actor.yaw())}
                                     : actor.position() + toward;
-            move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
+            // Tank steps relative to where the mouse points; Robotron walks the camera's way.
+            if (!inputs[player].freeMove) {
+                move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
+            }
             if (animator == nullptr || !animator->shoving()) {
                 const f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
                 if (steeringTurbo) {
@@ -378,7 +381,8 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                 }
             }
             const bool cursorForward =
-                aim && in.move.direction.x == 0.0f && in.move.direction.y > 0.0f;
+                aim && (in.freeMove ? in.move.any()
+                                    : in.move.direction.x == 0.0f && in.move.direction.y > 0.0f);
             if (deed == PlayerDeed::None && move.any() && !in.strafe && (!aim || cursorForward) &&
                 !in.attackPressed && !in.chargePressed && !in.turboAttackPressed &&
                 actor.save().autoAttack && animator != nullptr && animator->canAutoMelee() &&
@@ -415,12 +419,16 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         if (players[i].figure != nullptr) {
             // Mouse aim locks facing, but forward movement uses the ordinary full-stick
             // gait. Backing up, sidestepping, and moving shots retain their strafe actions.
+            // Under Robotron every step is a forward one: the plain gait, or the forward
+            // moving shot.
+            const bool freeMove = aim && inputs[player].freeMove;
             const bool cursorForward = aim && !inputs[player].strafe && !inputs[player].attack &&
-                                       inputs[player].move.direction.x == 0.0f &&
-                                       inputs[player].move.direction.y > 0.0f;
+                                       (freeMove || (inputs[player].move.direction.x == 0.0f &&
+                                                     inputs[player].move.direction.y > 0.0f));
             players[i].figure->setStrafe(
                 strafes && !cursorForward
-                    ? strafeWayOf(PlayerActor::headingOf(move, cameraYaw), actor.yaw())
+                    ? (freeMove ? StrafeWay::Forward
+                                : strafeWayOf(PlayerActor::headingOf(move, cameraYaw), actor.yaw()))
                     : StrafeWay::None);
         }
         players[i].glow.step(seconds);

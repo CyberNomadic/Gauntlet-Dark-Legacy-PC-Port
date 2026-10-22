@@ -1,6 +1,8 @@
 #include "game/config/ControlProfiles.h"
 
+#include <algorithm>
 #include <array>
+#include <string>
 #include <string_view>
 
 #include <nlohmann/json.hpp>
@@ -69,6 +71,12 @@ void readControlProfiles(const nlohmann::json& json, GameConfig& config) {
         if (profile.occurrence < 0 || profile.occurrence >= Input::kMaxPads) {
             throw FormatError("invalid controller occurrence");
         }
+        const std::string scheme = value.value("scheme", std::string{"tank"});
+        const auto named = std::ranges::find(kKeyboardSchemeNames, std::string_view{scheme});
+        if (named == kKeyboardSchemeNames.end()) {
+            throw FormatError("unknown keyboard scheme");
+        }
+        profile.scheme = static_cast<KeyboardScheme>(named - kKeyboardSchemeNames.begin());
         profile.customized = value.contains("bindings");
         profile.play = config.play;
         profile.menu = config.menu;
@@ -114,10 +122,12 @@ void readControlProfiles(const nlohmann::json& json, GameConfig& config) {
 nlohmann::json writeControlProfiles(const GameConfig& config) {
     auto result = nlohmann::json::array();
     for (auto profile : config.controls) {
-        nlohmann::json value{{"device", profile.device},
-                             {"name", profile.name},
-                             {"occurrence", profile.occurrence},
-                             {"rumble", profile.rumble}};
+        nlohmann::json value{
+            {"device", profile.device},
+            {"name", profile.name},
+            {"occurrence", profile.occurrence},
+            {"rumble", profile.rumble},
+            {"scheme", std::string(kKeyboardSchemeNames[static_cast<usize>(profile.scheme)])}};
         if (profile.customized) {
             for (const auto actions : kPersistedActions) {
                 for (const auto& action : actions) {

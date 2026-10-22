@@ -98,3 +98,27 @@ TEST_CASE("native lockstep detects conflicting semantic choices without changing
     CHECK((*frame)[3].hintTopic == command.hintTopic);
     CHECK((*frame)[3].hintRevision == command.hintRevision);
 }
+
+TEST_CASE("the Robotron scheme travels with a player's inputs as a held bit",
+          "[netplay][protocol][controls]") {
+    PlayInput input;
+    input.freeMove = true;
+    input.move = {Vec2{0, 1}, 1.0f};
+    input.aimDirection = Vec3{1, 0, 0};
+    const auto command = SessionInputs::command(input, 9, 1, 2, 3);
+    CHECK(command.held(CommandHeld::FreeMove));
+    CHECK(command.valid());
+    const auto bytes = InputPacket::encode(std::array{command});
+    REQUIRE(bytes);
+    const auto decoded = InputPacket::decode(*bytes);
+    REQUIRE(decoded);
+    REQUIRE(decoded->size() == 1);
+    const PlayInput back = SessionInputs::playInput(decoded->front());
+    CHECK(back.freeMove);
+    CHECK(back.move.direction == input.move.direction);
+    CHECK(back.aimDirection == input.aimDirection);
+    PlayInput tank;
+    tank.move = input.move;
+    CHECK_FALSE(SessionInputs::command(tank, 9, 1, 2, 3).held(CommandHeld::FreeMove));
+    CHECK_FALSE(SessionInputs::playInput(SessionInputs::command(tank, 9, 1, 2, 3)).freeMove);
+}

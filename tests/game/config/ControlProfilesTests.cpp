@@ -29,11 +29,14 @@ TEST_CASE("player profiles persist independent mouse and controller mappings",
     config.controls[1].rumble = false;
     config.controls[1].customized = true;
     config.controls[1].play.padAttack = {PadButton::Button12};
+    config.controls[2].scheme = KeyboardScheme::Robotron;
     GameConfig restored;
     restored.mergeJson(config.toJson());
     CHECK(restored.toJson() == config.toJson());
     CHECK_FALSE(restored.controls[1].rumble);
     CHECK(restored.controls[0].rumble);
+    CHECK(restored.controls[2].scheme == KeyboardScheme::Robotron);
+    CHECK(restored.controls[0].scheme == KeyboardScheme::Tank);
     CHECK(playBindings(restored, 2).attack == std::vector{Key::MouseRight});
     CHECK(playBindings(restored, 0).attack == config.play.attack);
     CHECK(menuBindings(restored, 2).start == std::vector{Key::F2});
@@ -48,6 +51,10 @@ TEST_CASE("player profiles persist independent mouse and controller mappings",
     auto invalid = nlohmann::json::parse(config.toJson());
     invalid["controls"]["players"][1]["occurrence"] = -1;
     CHECK_THROWS_AS(restored.mergeJson(invalid.dump()), FormatError);
+    auto unknownScheme = nlohmann::json::parse(config.toJson());
+    unknownScheme["controls"]["players"][2]["scheme"] = "twin-stick";
+    CHECK_THROWS_AS(restored.mergeJson(unknownScheme.dump()), FormatError);
+    CHECK(restored.controls[2].scheme == KeyboardScheme::Robotron);
 }
 TEST_CASE("shop bindings inherit defaults and round-trip independent player overrides",
           "[controls][config][shop-commands]") {

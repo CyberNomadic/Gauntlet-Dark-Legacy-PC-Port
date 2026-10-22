@@ -988,6 +988,8 @@ PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
         const auto& bindings = playBindings(m_config, player);
         PlayInput& in = inputs[static_cast<usize>(player)];
         in.move = readMoveInput(input(), bindings, source.keyboard, source.pad);
+        in.freeMove = source.keyboard && m_config.controls[static_cast<usize>(player)].scheme ==
+                                             KeyboardScheme::Robotron;
         if (m_cursorInput[static_cast<usize>(player)].update(input(), bindings, source.keyboard,
                                                              source.pad)) {
             const Vec2 cursor{input().pointer().x, input().pointer().y};
