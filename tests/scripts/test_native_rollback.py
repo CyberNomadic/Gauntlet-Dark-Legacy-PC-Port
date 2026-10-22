@@ -124,7 +124,7 @@ class NativeRollbackRunnerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="native-rollback-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()  # as the scripts do
         self.probe = self.directory / "nativeprobe.exe"
         self.probe.touch()
         self.children = []
@@ -572,7 +572,7 @@ class NativeRollbackReportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="native-rollback-report-")
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()  # as the scripts do
         self.left = self.directory / "first.jsonl"
         self.right = self.directory / "second.jsonl"
         for path, cadence in ((self.left, 0), (self.right, 3)):

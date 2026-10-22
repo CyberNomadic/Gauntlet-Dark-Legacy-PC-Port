@@ -65,6 +65,7 @@ class HookTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / "scripts" / "hooks").mkdir(parents=True)
             (root / "scripts" / "hooks" / "pre-push").write_text("#!/usr/bin/env python\n")
+            (root / "scripts" / "hooks" / "__pycache__").mkdir()
             # No repository: nothing to do, nothing wrong.
             self.assertTrue(setup.install_hooks(root, out=lambda *_: None))
             (root / ".git" / "hooks").mkdir(parents=True)
@@ -73,6 +74,7 @@ class HookTests(unittest.TestCase):
             installed = root / ".git" / "hooks" / "pre-push"
             self.assertEqual(installed.read_text(), "#!/usr/bin/env python\n")
             self.assertEqual(len(messages), 1)
+            self.assertFalse((root / ".git" / "hooks" / "__pycache__").exists())
             # A second run keeps the installed copy quietly; a foreign hook is reported.
             self.assertTrue(setup.install_hooks(root, out=messages.append))
             installed.write_text("#!/bin/sh\nexit 0\n")

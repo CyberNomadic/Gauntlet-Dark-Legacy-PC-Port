@@ -412,8 +412,8 @@ def install_hooks(root: pathlib.Path = ROOT, out=print) -> bool:
         return True
     complete = True
     for source in sorted((root / "scripts" / "hooks").iterdir()):
-        if source.name.endswith(".py") or source.name.startswith("."):
-            continue
+        if not source.is_file() or source.name.endswith(".py") or source.name.startswith("."):
+            continue  # a __pycache__ left by loading a hook as a module is not a hook
         target = hooks / source.name
         if target.exists():
             if (target.read_bytes() != source.read_bytes() and

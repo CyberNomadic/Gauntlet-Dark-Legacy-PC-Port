@@ -84,7 +84,7 @@ class NativeReportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="native-determinism-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()  # as the scripts do
         self.left, self.right = self.directory / "left.jsonl", self.directory / "right.jsonl"
         write_rows(self.left, observations())
         write_rows(self.right, observations(cadence=1))
@@ -345,7 +345,7 @@ class NativeRunnerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="native-runner-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()  # as the scripts do
         self.probe = self.directory / "nativeprobe.exe"
         self.probe.touch()
 

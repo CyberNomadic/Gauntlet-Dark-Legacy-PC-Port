@@ -15,10 +15,16 @@ HOOK = ROOT / "scripts" / "hooks" / "pre-push"
 
 
 def load_hook():
+    """The hook as a module, leaving no __pycache__ beside it for setup.py to trip over."""
     loader = importlib.machinery.SourceFileLoader("pre_push", str(HOOK))
     spec = importlib.util.spec_from_loader("pre_push", loader)
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
