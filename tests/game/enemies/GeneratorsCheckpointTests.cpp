@@ -13,10 +13,10 @@
 
 #include "engine/io/File.h"
 
-#include "../world/ProjectileCheckpointFixture.h"
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/enemies/Generators.h"
+#include "game/party/ProjectileCheckpointFixture.h"
 
 namespace {
 using namespace gdl;

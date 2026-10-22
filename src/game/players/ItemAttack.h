@@ -6,9 +6,9 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+#include "game/party/PlayerMissiles.h"
 #include "game/players/PlayerAnimator.h"
 #include "game/players/PowerupEffects.h"
-#include "game/world/PlayerMissiles.h"
 
 namespace gdl::game {
 /** PlayerMotion's item attack descriptors and ProcessEffects' expanding hit volume.

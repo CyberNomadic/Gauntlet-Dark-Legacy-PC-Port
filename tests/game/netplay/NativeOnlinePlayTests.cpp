@@ -11,13 +11,13 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/level/TowerAccess.h"
+#include "game/netplay/NativeOnlinePlay.h"
 #include "game/netplay/OnlinePair.h"
+#include "game/netplay/OnlineParty.h"
 #include "game/players/PlayerActor.h"
-#include "game/screens/AfterLevelScene.h"
-#include "game/screens/NativeOnlinePlay.h"
-#include "game/screens/OnlineParty.h"
-#include "game/screens/SimulationObserver.h"
-#include "game/world/TowerAccess.h"
+#include "game/rollback/SimulationObserver.h"
+#include "game/scenes/AfterLevelScene.h"
 
 namespace {
 using namespace gdl;

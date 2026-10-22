@@ -14,8 +14,8 @@
 #include "engine/io/File.h"
 #include "engine/net/SessionTransport.h"
 
-#include "game/netplay/InputCommand.h"
-#include "game/netplay/InputTimeline.h"
+#include "game/rollback/InputCommand.h"
+#include "game/rollback/InputTimeline.h"
 
 namespace {
 

@@ -186,7 +186,7 @@ bool BurnDialogueScroll::restoreLocal(const LocalSnapshot& saved) {
 }
 
 bool BurnDialogueScroll::appendSimulationDigest(NativeStateDigest& digest,
-                                                 const Simulation& state) {
+                                                const Simulation& state) {
     digest.string("burn-scroll-native-v1");
     const auto& [art, area, timer, active] = state;
     digest.flag(art != nullptr);

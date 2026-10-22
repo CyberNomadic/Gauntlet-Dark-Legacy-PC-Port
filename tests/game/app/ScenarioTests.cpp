@@ -10,11 +10,11 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/app/Scenario.h"
-#include "game/enemies/LegendItems.h"
-#include "game/players/LevelRecord.h"
-#include "game/players/Progression.h"
-#include "game/world/LevelWorld.h"
-#include "game/world/TowerAccess.h"
+#include "game/bosses/LegendItems.h"
+#include "game/characters/LevelRecord.h"
+#include "game/characters/Progression.h"
+#include "game/level/LevelWorld.h"
+#include "game/level/TowerAccess.h"
 
 namespace {
 

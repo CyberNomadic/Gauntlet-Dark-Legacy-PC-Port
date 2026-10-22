@@ -3,7 +3,7 @@
 #include <optional>
 #include <span>
 
-#include "game/players/CharacterSave.h"
+#include "game/characters/CharacterSave.h"
 
 namespace gdl::game {
 /** Public, selected-class state exchanged before loading. No disk slot, path,

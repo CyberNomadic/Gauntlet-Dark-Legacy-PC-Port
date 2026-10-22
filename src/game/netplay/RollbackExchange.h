@@ -6,7 +6,7 @@
 
 #include "engine/net/PacketTransport.h"
 
-#include "game/netplay/RollbackInputs.h"
+#include "game/rollback/RollbackInputs.h"
 
 namespace gdl::game {
 

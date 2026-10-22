@@ -1,82 +1,84 @@
 # Everything except main() lives in a library so the tests can link it.
-# Modules, lowest first: config (settings), players (class data, progression, saves, and the
-# characters as they stand in a level), world (the levels the game plays in and their
-# cameras), menu (widgets), screens (full screens and what they receive), app (the driver and
-# attract flow). A module only includes those below it.
-# netplay contains transport-independent commands/timelines and bounded selected-character
-# data from players; screens adapts them to gameplay, and app owns the input boundary.
+# Modules by subject, lowest first: config (settings), combat (damage rules), characters
+# (class data, saves, inventory, progression), players (a character's body and controls),
+# camera, audio (what a level sounds like), effects, level (the levels and what stands in
+# them), party (the party in a level, frame by frame), enemies (the swarm and the level's
+# opponents), critters, bosses, tower (between levels, with Sumner), shop, hud, menu
+# (widgets and the in-game menus), rollback (commands, timelines and checkpoints), netplay
+# (rooms and sessions), scenes (the full screens), app (the driver and attract flow). A
+# module includes only those below it; app owns the input boundary.
 add_library(game STATIC
     netplay/AssetDigest.cpp
-    screens/NetplayMenu.cpp
+    menu/NetplayMenu.cpp
     netplay/HostedRoom.cpp
-    netplay/InputCommand.cpp
-    netplay/InputTimeline.cpp
-    netplay/RollbackInputs.cpp
-    netplay/InputJournal.cpp
+    rollback/InputCommand.cpp
+    rollback/InputTimeline.cpp
+    rollback/RollbackInputs.cpp
+    rollback/InputJournal.cpp
     netplay/RollbackExchange.cpp
-    netplay/FrameEventLedger.cpp
-    world/SceneSoundEvents.cpp
-    world/NativeStateResources.cpp
+    rollback/FrameEventLedger.cpp
+    audio/SceneSoundEvents.cpp
+    level/NativeStateResources.cpp
     netplay/NativeAgreement.cpp
-    netplay/ShotIdentity.cpp
-    netplay/EffectIdentity.cpp
-    netplay/PotionIdentity.cpp
-    world/WorldMotion.cpp
-    screens/TurboEmission.cpp
-    screens/TurboEffectResources.cpp
+    rollback/ShotIdentity.cpp
+    rollback/EffectIdentity.cpp
+    rollback/PotionIdentity.cpp
+    level/WorldMotion.cpp
+    effects/TurboEmission.cpp
+    effects/TurboEffectResources.cpp
     combat/MeleeGeometry.cpp
     netplay/MatchSession.cpp
     netplay/ShopSync.cpp
     netplay/OnlineSession.cpp
     netplay/CharacterProfile.cpp
-    netplay/PartyCheckpoint.cpp
-    netplay/PartyBootstrap.cpp
-    screens/NativeRollbackDriver.cpp
-    screens/NativePlaySetup.cpp
-    screens/NativeOnlinePlay.cpp
-    screens/OnlineParty.cpp
-    screens/OnlineLevelEntry.cpp
-    screens/OnlineCompletion.cpp
+    rollback/PartyCheckpoint.cpp
+    characters/PartyBootstrap.cpp
+    rollback/NativeRollbackDriver.cpp
+    netplay/NativePlaySetup.cpp
+    netplay/NativeOnlinePlay.cpp
+    netplay/OnlineParty.cpp
+    netplay/OnlineLevelEntry.cpp
+    netplay/OnlineCompletion.cpp
     app/OnlineRun.cpp
     app/NativeOnlineIdentity.cpp
     app/NumericWitness.cpp
-    screens/PlaySceneSimulation.cpp
-    screens/PlayerNativeState.cpp
-    screens/PlayInput.h
-    screens/SessionInputs.cpp
-    world/StaticScenery.cpp
+    scenes/PlaySceneSimulation.cpp
+    scenes/PlayerNativeState.cpp
+    party/PlayInput.h
+    rollback/SessionInputs.cpp
+    level/StaticScenery.cpp
     enemies/DeathRules.cpp
     enemies/EnemiesDeath.cpp
-    screens/LevelOpponentsDeath.cpp
-    screens/LevelOpponentsLoot.cpp
-    world/SecretChallenge.cpp
-    screens/ChallengeHud.cpp
-    screens/RuneMeter.cpp
-    screens/PlaySceneChallenge.cpp
-    world/DestructibleWalls.cpp
-    world/MissileTarget.cpp
+    enemies/LevelOpponentsDeath.cpp
+    enemies/LevelOpponentsLoot.cpp
+    level/SecretChallenge.cpp
+    hud/ChallengeHud.cpp
+    hud/RuneMeter.cpp
+    scenes/PlaySceneChallenge.cpp
+    level/DestructibleWalls.cpp
+    level/MissileTarget.cpp
     menu/SettingsMenu.cpp
     menu/SettingsRows.cpp
     menu/ControlSettings.cpp
-    menu/ControlPrompts.cpp
+    hud/ControlPrompts.cpp
     menu/VideoSettings.cpp
-    menu/CompassHud.cpp
-    screens/SaveMenu.cpp
-    screens/PauseMenu.cpp
-    players/ShopPurchase.h
-    players/ShopPurchase.cpp
-    players/LevelResults.h
-    players/LevelResults.cpp
-    screens/InventoryPanel.h
-    screens/InventoryPanel.cpp
-    screens/ShopSession.h
-    screens/ShopSession.cpp
-    screens/AfterLevelScene.h
-    screens/AfterLevelScene.cpp
-    screens/AutoSaveIcon.cpp
-    screens/AfterLevelPresentation.cpp
-    screens/FinalStatsPresentation.cpp
-    screens/ShopLayout.cpp
+    hud/CompassHud.cpp
+    menu/SaveMenu.cpp
+    menu/PauseMenu.cpp
+    characters/ShopPurchase.h
+    characters/ShopPurchase.cpp
+    characters/LevelResults.h
+    characters/LevelResults.cpp
+    hud/InventoryPanel.h
+    hud/InventoryPanel.cpp
+    shop/ShopSession.h
+    shop/ShopSession.cpp
+    scenes/AfterLevelScene.h
+    scenes/AfterLevelScene.cpp
+    hud/AutoSaveIcon.cpp
+    scenes/AfterLevelPresentation.cpp
+    scenes/FinalStatsPresentation.cpp
+    shop/ShopLayout.cpp
     app/Gauntlet.h
     app/Gauntlet.cpp
     app/GauntletNetplay.cpp
@@ -84,8 +86,8 @@ add_library(game STATIC
     app/BuildLabel.cpp
     app/LevelDebugOverlay.cpp
     app/LevelCompletion.h
-    app/MusicDuck.h
-    app/MusicDuck.cpp
+    audio/MusicDuck.h
+    audio/MusicDuck.cpp
     app/CommandLine.h
     app/CommandLine.cpp
     app/AssetRoots.h
@@ -98,31 +100,31 @@ add_library(game STATIC
     config/MultiplayerMode.h
     config/GameConfig.cpp
     config/ControlProfiles.cpp
-    players/ClassData.h
+    characters/ClassData.h
     players/MagicPerks.h
     players/MagicPerks.cpp
-    players/ClassData.cpp
-    players/NativeClassData.h
-    players/NativeClassData.cpp
-    players/Progression.h
-    players/Progression.cpp
-    players/CharacterSave.h
-    players/CharacterSave.cpp
-    players/AutoSave.cpp
-    players/NameCheats.h
-    players/NameCheats.cpp
+    characters/ClassData.cpp
+    characters/NativeClassData.h
+    characters/NativeClassData.cpp
+    characters/Progression.h
+    characters/Progression.cpp
+    characters/CharacterSave.h
+    characters/CharacterSave.cpp
+    characters/AutoSave.cpp
+    characters/NameCheats.h
+    characters/NameCheats.cpp
     players/TurboMeter.h
     players/TurboMeter.cpp
     players/TurboMove.cpp
-    players/Party.h
-    players/Party.cpp
-    players/Inventory.h
-    players/Inventory.cpp
+    characters/Party.h
+    characters/Party.cpp
+    characters/Inventory.h
+    characters/Inventory.cpp
     players/MikeyDecoy.cpp
-    players/Relics.h
-    players/Relics.cpp
-    players/LevelRecord.h
-    players/LevelRecord.cpp
+    characters/Relics.h
+    characters/Relics.cpp
+    characters/LevelRecord.h
+    characters/LevelRecord.cpp
     players/ItemPickup.h
     players/ItemPickup.cpp
     players/PickupVoices.cpp
@@ -131,8 +133,8 @@ add_library(game STATIC
     combat/BodyContact.cpp
     combat/Damage.cpp
     combat/DamageTypes.cpp
-    screens/PlayerPowerups.h
-    screens/PlayerPowerups.cpp
+    party/PlayerPowerups.h
+    party/PlayerPowerups.cpp
     players/PowerupEffects.h
     players/PowerupEffects.cpp
     players/EnemyShrink.h
@@ -148,8 +150,8 @@ add_library(game STATIC
     players/PlayerCapture.cpp
     players/ComboMove.h
     players/ComboMove.cpp
-    screens/PartyCombo.h
-    screens/PartyCombo.cpp
+    party/PartyCombo.h
+    party/PartyCombo.cpp
     players/PlayerTransport.h
     players/PlayerTransport.cpp
     players/PlayerAnimator.h
@@ -159,23 +161,23 @@ add_library(game STATIC
     players/Knockback.cpp
     players/PlayerImpact.h
     players/PlayerImpact.cpp
-    world/LevelCatalog.h
-    world/LevelCatalog.cpp
-    world/LevelItemArchives.h
-    world/LevelItemArchives.cpp
-    world/ItemFigure.h
-    world/ItemFigure.cpp
-    world/ItemSupport.cpp
-    world/BodyCollision.cpp
-    world/MoveStrikes.h
-    world/MoveStrikes.cpp
-    world/Breakables.h
-    world/Breakables.cpp
-    world/Rubble.h
-    world/Rubble.cpp
-    world/SafeRocks.h
-    world/SafeRocks.cpp
-    players/LevelWatch.cpp
+    level/LevelCatalog.h
+    level/LevelCatalog.cpp
+    level/LevelItemArchives.h
+    level/LevelItemArchives.cpp
+    level/ItemFigure.h
+    level/ItemFigure.cpp
+    level/ItemSupport.cpp
+    party/BodyCollision.cpp
+    party/MoveStrikes.h
+    party/MoveStrikes.cpp
+    level/Breakables.h
+    level/Breakables.cpp
+    level/Rubble.h
+    level/Rubble.cpp
+    level/SafeRocks.h
+    level/SafeRocks.cpp
+    characters/LevelWatch.cpp
     enemies/EnemyKinds.cpp
     enemies/EnemyAnimator.cpp
     enemies/EnemyFeedback.h
@@ -184,104 +186,104 @@ add_library(game STATIC
     enemies/EnemyMissiles.cpp
     enemies/Enemies.cpp
     enemies/Generators.cpp
-    enemies/CritterData.cpp
+    critters/CritterData.cpp
     enemies/NativeCritterData.cpp
-    enemies/CritterMovement.cpp
-    enemies/CritterPatrol.cpp
-    enemies/CritterStatues.cpp
+    critters/CritterMovement.cpp
+    critters/CritterPatrol.cpp
+    critters/CritterStatues.cpp
     enemies/PlacedEnemies.cpp
-    enemies/CombatantBreath.cpp
-    enemies/CombatantProjectile.cpp
-    world/CombatantProjectiles.cpp
-    enemies/Critters.cpp
-    enemies/Combatant.cpp
-    enemies/CombatantParts.cpp
-    enemies/CombatantNodes.cpp
-    enemies/CombatantGaze.cpp
-    enemies/MoveDefinition.cpp
-    enemies/CombatantAssets.cpp
-    enemies/CombatantMoves.cpp
-    enemies/CombatantMotion.cpp
-    enemies/CombatantAttacks.cpp
-    enemies/CombatantGrabs.cpp
-    enemies/CombatantView.cpp
-    enemies/CombatantVisual.cpp
-    enemies/Golem.cpp
-    enemies/General.cpp
-    enemies/Gargoyle.cpp
-    enemies/BossDefinition.cpp
-    enemies/CombatantPatterns.cpp
-    enemies/CritterArea.cpp
-    enemies/CombatantAreas.cpp
-    enemies/BossCoins.cpp
-    enemies/SkorneRelics.cpp
-    enemies/Bosses.cpp
-    enemies/LegendItems.cpp
-    world/Chests.h
-    world/Chests.cpp
-    world/LockedGates.h
-    world/LockedGates.cpp
-    world/Traps.h
-    world/Traps.cpp
-    world/TowerAccess.h
-    world/TowerAccess.cpp
-    world/ExitPortals.h
-    world/ExitPortals.cpp
-    world/LevelTransporters.h
-    world/LevelTransporters.cpp
-    world/LevelWorld.h
-    world/LevelWorld.cpp
-    world/WorldDestruction.cpp
-    world/TowerCamera.h
-    world/TowerCamera.cpp
-    world/BossCamera.h
-    world/BossCamera.cpp
-    world/CameraShake.h
-    world/CameraShake.cpp
-    world/StartCamera.h
-    world/StartCamera.cpp
-    world/SumnerFigure.h
-    world/SumnerFigure.cpp
-    world/SumnerHints.h
-    world/SumnerHints.cpp
-    world/PlayerMissiles.h
-    world/PlayerMissiles.cpp
-    world/MissileStreak.cpp
-    world/TargetAssist.cpp
-    world/BlobShadow.cpp
-    world/PlayerFigure.cpp
-    world/PlayerFamiliar.cpp
-    world/MikeyFigure.cpp
-    world/WeaponGlow.cpp
-    world/CameraMovementLimit.cpp
-    world/SkorneArena.cpp
-    world/FallingPiece.cpp
-    world/FallingScenery.cpp
-    screens/TowerPromotion.cpp
-    screens/TowerRelics.cpp
-    screens/TowerCompletion.cpp
-    screens/PlaySceneRelics.cpp
-    screens/PlayScenePromotion.cpp
-    screens/PlaySceneRewind.cpp
-    world/PlayerArsenal.cpp
-    world/PotionEmission.cpp
-    world/LevelSoundscape.cpp
-    world/VoiceQueue.cpp
-    world/EffectTrees.h
-    world/DynamicLights.cpp
-    world/EffectTrees.cpp
-    world/PlacedItems.h
-    world/PlacedItems.cpp
-    world/AmbientSounds.h
-    world/AmbientSounds.cpp
-    world/MusicAreas.h
-    world/MusicAreas.cpp
-    world/LevelTriggers.h
-    world/LevelTriggers.cpp
-    world/HazardSurfaces.h
-    world/HazardSurfaces.cpp
-    world/Rotators.h
-    world/Rotators.cpp
+    critters/CombatantBreath.cpp
+    critters/CombatantProjectile.cpp
+    critters/CombatantProjectiles.cpp
+    critters/Critters.cpp
+    critters/Combatant.cpp
+    critters/CombatantParts.cpp
+    critters/CombatantNodes.cpp
+    critters/CombatantGaze.cpp
+    critters/MoveDefinition.cpp
+    critters/CombatantAssets.cpp
+    critters/CombatantMoves.cpp
+    critters/CombatantMotion.cpp
+    critters/CombatantAttacks.cpp
+    critters/CombatantGrabs.cpp
+    critters/CombatantView.cpp
+    critters/CombatantVisual.cpp
+    critters/Golem.cpp
+    critters/General.cpp
+    critters/Gargoyle.cpp
+    bosses/BossDefinition.cpp
+    critters/CombatantPatterns.cpp
+    critters/CritterArea.cpp
+    critters/CombatantAreas.cpp
+    bosses/BossCoins.cpp
+    bosses/SkorneRelics.cpp
+    bosses/Bosses.cpp
+    bosses/LegendItems.cpp
+    level/Chests.h
+    level/Chests.cpp
+    level/LockedGates.h
+    level/LockedGates.cpp
+    level/Traps.h
+    level/Traps.cpp
+    level/TowerAccess.h
+    level/TowerAccess.cpp
+    level/ExitPortals.h
+    level/ExitPortals.cpp
+    level/LevelTransporters.h
+    level/LevelTransporters.cpp
+    level/LevelWorld.h
+    level/LevelWorld.cpp
+    level/WorldDestruction.cpp
+    camera/TowerCamera.h
+    camera/TowerCamera.cpp
+    camera/BossCamera.h
+    camera/BossCamera.cpp
+    camera/CameraShake.h
+    camera/CameraShake.cpp
+    camera/StartCamera.h
+    camera/StartCamera.cpp
+    tower/SumnerFigure.h
+    tower/SumnerFigure.cpp
+    tower/SumnerHints.h
+    tower/SumnerHints.cpp
+    party/PlayerMissiles.h
+    party/PlayerMissiles.cpp
+    effects/MissileStreak.cpp
+    party/TargetAssist.cpp
+    effects/BlobShadow.cpp
+    party/PlayerFigure.cpp
+    party/PlayerFamiliar.cpp
+    party/MikeyFigure.cpp
+    effects/WeaponGlow.cpp
+    camera/CameraMovementLimit.cpp
+    level/SkorneArena.cpp
+    level/FallingPiece.cpp
+    level/FallingScenery.cpp
+    tower/TowerPromotion.cpp
+    tower/TowerRelics.cpp
+    tower/TowerCompletion.cpp
+    scenes/PlaySceneRelics.cpp
+    scenes/PlayScenePromotion.cpp
+    scenes/PlaySceneRewind.cpp
+    party/PlayerArsenal.cpp
+    effects/PotionEmission.cpp
+    audio/LevelSoundscape.cpp
+    audio/VoiceQueue.cpp
+    effects/EffectTrees.h
+    effects/DynamicLights.cpp
+    effects/EffectTrees.cpp
+    level/PlacedItems.h
+    level/PlacedItems.cpp
+    audio/AmbientSounds.h
+    audio/AmbientSounds.cpp
+    audio/MusicAreas.h
+    audio/MusicAreas.cpp
+    level/LevelTriggers.h
+    level/LevelTriggers.cpp
+    level/HazardSurfaces.h
+    level/HazardSurfaces.cpp
+    level/Rotators.h
+    level/Rotators.cpp
     menu/ScrollBox.h
     menu/ScrollBox.cpp
     menu/MenuInput.h
@@ -294,86 +296,86 @@ add_library(game STATIC
     menu/BurnDialogueScroll.cpp
     menu/NameEntry.h
     menu/NameEntry.cpp
-    screens/GameContext.h
-    screens/TitleScene.h
-    screens/TitleScene.cpp
-    screens/MovieScene.h
-    screens/MovieScene.cpp
-    screens/IdleScreen.cpp
-    screens/IdleScreen.h
-    screens/AttractScene.cpp
-    screens/AttractScene.h
-    screens/SmokeTestScene.h
-    screens/SmokeTestScene.cpp
-    screens/SelectLane.h
-    screens/SelectLane.cpp
-    screens/StatusBox.h
-    screens/StatusBox.cpp
-    screens/PowerupSelector.h
-    screens/PowerupSelector.cpp
-    screens/HelpMessages.h
-    screens/HelpMessages.cpp
-    screens/TransitionScreen.h
-    screens/TransitionScreen.cpp
-    screens/LevelLoadingScreen.h
-    screens/LevelLoadingScreen.cpp
-    screens/PortalDeparture.h
-    screens/PortalDeparture.cpp
-    screens/LevelExitSpeech.cpp
-    screens/PickupHud.h
-    screens/PickupHud.cpp
-    screens/BossMeter.h
-    screens/BossMeter.cpp
-    screens/BossVictory.h
-    screens/BossVictory.cpp
-    screens/BossVictoryPresentation.cpp
-    screens/BossSequence.cpp
-    screens/LevelArrivalPresentation.cpp
-    screens/LevelMessages.cpp
-    screens/GameOver.cpp
-    screens/SumnerVisit.cpp
-    screens/PlayerSelectScene.h
-    screens/PlayerSelectScene.cpp
-    screens/LegendPresentation.h
-    screens/LegendPresentation.cpp
-    screens/PlayScene.h
-    screens/PartyMotion.cpp
-    screens/PartyCollision.cpp
-    screens/FloorRiding.cpp
-    screens/PartyFigures.cpp
-    screens/PartyNames.cpp
-    screens/PartyHud.cpp
-    screens/PartyRecords.cpp
-    screens/TriggerCues.cpp
-    screens/TowerWelcome.cpp
-    screens/PartyPickups.cpp
-    screens/LevelFixtures.cpp
-    screens/LevelOpponents.cpp
-    screens/OpponentSimulation.cpp
-    screens/OpponentPlacements.cpp
-    screens/PlayerAttacks.cpp
-    screens/EnemyMissileEmission.cpp
-    screens/CritterCueEmission.cpp
-    screens/PartyLighting.cpp
-    screens/EnemyFeedbackEmission.cpp
-    screens/PartyDamage.cpp
-    screens/PlayerItemAttacks.cpp
+    scenes/GameContext.h
+    scenes/TitleScene.h
+    scenes/TitleScene.cpp
+    scenes/MovieScene.h
+    scenes/MovieScene.cpp
+    scenes/IdleScreen.cpp
+    scenes/IdleScreen.h
+    scenes/AttractScene.cpp
+    scenes/AttractScene.h
+    scenes/SmokeTestScene.h
+    scenes/SmokeTestScene.cpp
+    scenes/SelectLane.h
+    scenes/SelectLane.cpp
+    hud/StatusBox.h
+    hud/StatusBox.cpp
+    hud/PowerupSelector.h
+    hud/PowerupSelector.cpp
+    hud/HelpMessages.h
+    hud/HelpMessages.cpp
+    scenes/TransitionScreen.h
+    scenes/TransitionScreen.cpp
+    scenes/LevelLoadingScreen.h
+    scenes/LevelLoadingScreen.cpp
+    party/PortalDeparture.h
+    party/PortalDeparture.cpp
+    tower/LevelExitSpeech.cpp
+    hud/PickupHud.h
+    hud/PickupHud.cpp
+    hud/BossMeter.h
+    hud/BossMeter.cpp
+    bosses/BossVictory.h
+    bosses/BossVictory.cpp
+    bosses/BossVictoryPresentation.cpp
+    bosses/BossSequence.cpp
+    tower/LevelArrivalPresentation.cpp
+    hud/LevelMessages.cpp
+    tower/GameOver.cpp
+    tower/SumnerVisit.cpp
+    scenes/PlayerSelectScene.h
+    scenes/PlayerSelectScene.cpp
+    bosses/LegendPresentation.h
+    bosses/LegendPresentation.cpp
+    scenes/PlayScene.h
+    party/PartyMotion.cpp
+    party/PartyCollision.cpp
+    party/FloorRiding.cpp
+    party/PartyFigures.cpp
+    party/PartyNames.cpp
+    hud/PartyHud.cpp
+    party/PartyRecords.cpp
+    level/TriggerCues.cpp
+    tower/TowerWelcome.cpp
+    party/PartyPickups.cpp
+    level/LevelFixtures.cpp
+    enemies/LevelOpponents.cpp
+    enemies/OpponentSimulation.cpp
+    enemies/OpponentPlacements.cpp
+    party/PlayerAttacks.cpp
+    effects/EnemyMissileEmission.cpp
+    effects/CritterCueEmission.cpp
+    party/PartyLighting.cpp
+    effects/EnemyFeedbackEmission.cpp
+    party/PartyDamage.cpp
+    scenes/PlayerItemAttacks.cpp
     players/ItemAttack.cpp
-    players/HeadGem.cpp
-    players/BodyGlow.cpp
+    effects/HeadGem.cpp
+    effects/BodyGlow.cpp
     players/MeleeStreak.cpp
     players/ExitWait.cpp
-    world/PowerupCompanion.cpp
-    world/WeaponTrail.cpp
-    screens/PlayerHealth.cpp
-    screens/PlayScene.cpp
-    screens/PlaySceneTransport.cpp
-    screens/PlaySceneMotion.cpp
-    screens/PlaySceneHarm.cpp
-    screens/PlaySceneCamera.cpp
-    screens/PlaySceneSwitch.cpp
-    screens/SwitchCutscene.cpp
-    screens/SwitchCutscene.h)
+    party/PowerupCompanion.cpp
+    effects/WeaponTrail.cpp
+    party/PlayerHealth.cpp
+    scenes/PlayScene.cpp
+    scenes/PlaySceneTransport.cpp
+    scenes/PlaySceneMotion.cpp
+    scenes/PlaySceneHarm.cpp
+    scenes/PlaySceneCamera.cpp
+    scenes/PlaySceneSwitch.cpp
+    level/SwitchCutscene.cpp
+    level/SwitchCutscene.h)
 
 add_library(gdl::game ALIAS game)
 

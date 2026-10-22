@@ -5,11 +5,11 @@
 #include <memory>
 #include <string>
 
-#include "game/netplay/InputJournal.h"
 #include "game/netplay/NativeAgreement.h"
-#include "game/netplay/PartyCheckpoint.h"
 #include "game/netplay/RollbackExchange.h"
 #include "game/netplay/ShopSync.h"
+#include "game/rollback/InputJournal.h"
+#include "game/rollback/PartyCheckpoint.h"
 
 namespace gdl::game {
 

@@ -1,0 +1,1336 @@
+#include <algorithm>
+#include <filesystem>
+#include <string>
+#include <string_view>
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include "engine/assets/ItemArchive.h"
+#include "engine/core/Types.h"
+#include "engine/io/AssetLocator.h"
+#include "engine/io/File.h"
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
+#include "fixtures/NativeModelFixture.h"
+#include "formats/AnimationTree.h"
+#include "game/bosses/LegendItems.h"
+#include "game/effects/EffectTrees.h"
+#include "game/enemies/EnemyKinds.h"
+
+namespace {
+
+using namespace gdl;
+using namespace gdl::game;
+
+TEST_CASE("Acid Raid draws its native cloud and animated rain", "[effects][acid-rain][assets]") {
+    const auto* costume = GENERATE("YEL", "BLU", "RED", "GRE");
+    CAPTURE(costume);
+    const auto root =
+        test::assetOrSkip(std::string{"PLAYERS/SOR/SFX"} + costume + "/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "SOR_PWRB2", Vec3{0}));
+    WorldLighting lighting;
+    lighting.ambient = Vec3{1};
+    lighting.lightColor = Vec3{0};
+    const auto rain = archive.textures.find("TE2SORRAINTEX01");
+    REQUIRE(rain);
+    for (s32 step = 0; step < 15; ++step) {
+        CAPTURE(step);
+        effects.update(1.0f / 30);
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, lighting);
+        REQUIRE(device.draws.size() == 2);
+        CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
+            return draw.texture ==
+                   &archive.textures.texture(device, *rain + (((step + 1) / 2) % 7));
+        }));
+        for (const auto& draw : device.draws) {
+            REQUIRE(draw.texture != nullptr);
+            CHECK(draw.texture != &device.whiteTexture());
+        }
+    }
+    effects.update(1.6f);
+    CHECK(effects.count() == 0);
+}
+
+std::filesystem::path presentationFixture() {
+    const auto root = test::scratchDirectory("effect-presentation");
+    writeTextFile(root / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    writeTextFile(root / "objects.json", R"({"objects":[{"name":"TRI","file":"tri.obj"}]})");
+    writeFile(root / "white.png", test::kTinyPng);
+    writeTextFile(root / "textures.json",
+                  R"({"bitmaps":[{"name":"WHITE","file":"white.png","width":2,"height":2}]})");
+    writeTextFile(root / "animations.json", R"({"trees":[
+      {"name":"MOVING","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+       "sequences":[{"name":"ACTIVE","frames":4,"frameRate":30,
+       "tracks":[{"node":0,"flags":32,"frames":[0,3],"values":[0,3]}]}]}]})");
+    test::convertModelFixture(root);
+    return root;
+}
+
+TEST_CASE("effect provenance is caller-owned and survives visual restore morph and retirement",
+          "[effects][effect-identity]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 2;
+    setting.then = "MOVING";
+    setting.morphIn = 0.1f;
+    const auto id = effects.startSet(device, archive, "MOVING", {}, setting);
+    REQUIRE(id != 0);
+    const auto before = effects.checkpoint(id);
+    REQUIRE(before);
+    const EffectTrees::Provenance origin{2, 7, 3, 5};
+    CHECK(effects.tag(id, origin));
+    CHECK(effects.tag(id, origin));
+    CHECK(effects.effect(0).provenance == origin);
+    CHECK(effects.checkpoint(id) == before); // visual state excludes ownership
+    CHECK_FALSE(effects.tag(id, {2, 8, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {-1, 7, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {4, 7, 3, 5}));
+    CHECK_FALSE(effects.tag(id, {2, 0, 3, 5}));
+    CHECK_FALSE(effects.tag(id + 1, origin));
+    effects.update(1.0f / 60);
+    CHECK(effects.effect(0).continuity == before->continuity);
+    REQUIRE(effects.restore(id, *before));
+    CHECK(effects.effect(0).provenance == origin);
+    const auto instance = effects.effect(0).instance;
+    effects.update(0.2f);
+    REQUIRE(effects.count() == 1);
+    CHECK(effects.effect(0).continuity == before->continuity + 1);
+    CHECK(effects.effect(0).instance == instance);
+    CHECK(effects.effect(0).provenance == origin);
+    effects.update(1.0f / 60);
+    CHECK(effects.effect(0).continuity == before->continuity + 1);
+    effects.finish(id);
+    CHECK(effects.effect(0).retiring);
+    CHECK(effects.effect(0).provenance == origin);
+    effects.stop(id);
+    CHECK_FALSE(effects.tag(id, origin));
+}
+
+TEST_CASE("effect opacity combines an explicit alpha with the timed fade",
+          "[effects][effect-opacity]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 1;
+    setting.fadeSeconds = 0.5f;
+    setting.alpha = 0.75f;
+    REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+    CHECK(effects.effect(0).opacity() == Catch::Approx(0.75f));
+    effects.update(0.75f);
+    CHECK(effects.effect(0).opacity() == Catch::Approx(0.375f));
+    effects.update(0.26f);
+    CHECK(effects.count() == 0);
+    for (const f32 alpha : {-1.0f, 2.0f}) {
+        effects.clear();
+        setting.alpha = alpha;
+        REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+        CHECK(effects.effect(0).opacity() == std::clamp(alpha, 0.0f, 1.0f));
+    }
+}
+
+TEST_CASE("future effect texture clocks preserve first use and exact lender ordering",
+          "[effects][weapon-replay]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    ItemArchive other;
+    REQUIRE(other.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    TextureSet fallback;
+    TextureSet explicitBank;
+    const std::array<TextureSet*, 1> fallbackLenders{&fallback};
+    const std::array<TextureSet*, 1> explicitLenders{&explicitBank};
+    EffectTrees effects;
+    effects.setTextureLenders(fallbackLenders);
+    for (s32 repeat = 0; repeat < 3; ++repeat) {
+        CHECK_FALSE(effects.textureFrame(archive));
+        CHECK_FALSE(effects.textureFrame(archive, explicitLenders));
+        effects.update(0.25f);
+        CHECK(effects.count() == 0);
+    }
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    const u32 id = effects.startSet(device, archive, "MOVING", {}, setting, explicitLenders);
+    REQUIRE(id != 0);
+    REQUIRE(effects.textureFrame(archive, explicitLenders));
+    CHECK(*effects.textureFrame(archive, explicitLenders) == 0);
+    CHECK_FALSE(effects.textureFrame(archive));
+    CHECK_FALSE(effects.textureFrame(other, explicitLenders));
+    effects.update(0.25f);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(7.5f));
+    CHECK(*effects.textureFrame(archive, explicitLenders) ==
+          effects.textureFrame(effects.effect(0)));
+    effects.stop(id);
+    CHECK(effects.count() == 0);
+    effects.update(0.25f);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    effects.setTextureLenders(explicitLenders);
+    CHECK_FALSE(effects.textureFrame(archive, fallbackLenders));
+    effects.setTextureLenders(fallbackLenders);
+    REQUIRE(effects.textureFrame(archive, explicitLenders));
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+    REQUIRE(effects.textureFrame(archive));
+    CHECK(*effects.textureFrame(archive) == 0);
+    CHECK(*effects.textureFrame(archive, explicitLenders) == Catch::Approx(15));
+    effects.clear();
+    CHECK_FALSE(effects.textureFrame(archive));
+    CHECK_FALSE(effects.textureFrame(archive, explicitLenders));
+}
+
+TEST_CASE("explicit effect morph clocks hold only the birth and preserve the flight time",
+          "[effects][alpha-effects]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 2.1f;
+    setting.velocity = Vec3{0, 0, 20};
+    setting.then = "MOVING";
+    setting.morphIn = 0.1f;
+    setting.holdForMorph = true;
+    REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+    effects.update(0.05f);
+    REQUIRE(effects.count() == 1);
+    CHECK(effects.effect(0).position == Vec3{0});
+    CHECK_FALSE(effects.effect(0).repeats);
+    effects.update(0.1f); // half this update belongs to the flight
+    REQUIRE(effects.count() == 1);
+    CHECK(effects.effect(0).position.z == Catch::Approx(1));
+    CHECK(effects.effect(0).then.empty());
+    CHECK(effects.effect(0).repeats);
+    CHECK(effects.effect(0).secondsLeft == Catch::Approx(1.95f));
+    effects.update(1.9f);
+    REQUIRE(effects.count() == 1);
+    CHECK(effects.effect(0).position.z == Catch::Approx(39));
+    effects.update(0.1f);
+    CHECK(effects.count() == 0);
+    // A morph without the hold bit still travels throughout its birth.
+    setting.holdForMorph = false;
+    REQUIRE(effects.startSet(device, archive, "MOVING", {}, setting) != 0);
+    effects.update(0.05f);
+    CHECK(effects.effect(0).position.z == Catch::Approx(1));
+}
+
+TEST_CASE("sparse effect trees opt into empty missing static objects without losing particles",
+          "[effects][weapon-streak]") {
+    const auto root = presentationFixture();
+    writeTextFile(root / "animations.json", R"({
+      "particles":[{"enables":16928,"texture":"WHITE","particleLife":[1,0],
+                    "rate":[30,30,30,30],"flags":128,"flagMask":128}],
+      "trees":[{"name":"SPARSE","nodes":[
+        {"name":"XNWEAP","object":"ABSENT","parent":-1,"position":[0,2,0]},
+        {"name":"EMITTER","parent":0,"position":[0,1,0],"particle":0},
+        {"name":"VISIBLE","object":"TRI","parent":0,"position":[0,0,0]}],
+        "sequences":[{"name":"ACTIVE","frames":0,"frameRate":30}]}]})");
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    CHECK(effects.startSet(device, archive, "SPARSE", {}, setting) == 0);
+    setting.missingObjectsAreEmpty = true;
+    REQUIRE(effects.startSet(device, archive, "SPARSE", {}, setting) != 0);
+    effects.update(0.1f);
+    REQUIRE(effects.count() == 1);
+    const auto& effect = effects.effect(0);
+    REQUIRE(effect.model);
+    CHECK(effect.model->nodeCount() ==
+          1); // Keep valid meshes rather than dropping the whole model.
+    REQUIRE(effect.particles.field().size() == 1);
+    CHECK(effect.particles.field().particleCount() > 0);
+    CHECK(Vec3(effect.particles.field().emitter(0).node()[3]) == Vec3(0, 3, 0));
+    CHECK(effect.tree->nodes[0].object == "ABSENT"); // Original asset and node indexing unchanged.
+    effects.draw(device, Mat4{1}, {});
+    CHECK(device.draws.size() >= 2); // Existing geometry and its particles both survive.
+    effects.clear();
+    setting.missingObjectsAreEmpty = false;
+    CHECK(effects.startSet(device, archive, "SPARSE", {}, setting) == 0);
+}
+
+TEST_CASE("effect presentation samples attachments and fractional poses without advancing clocks",
+          "[effects][presentation]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    setting.emitParticles = false;
+    const u32 id = effects.startSet(device, archive, "MOVING", {7, 0, 0}, setting);
+    REQUIRE(id != 0);
+    effects.capturePresentation();
+    effects.moveTo(id, {11, 0, 0});
+    effects.update(1.0f / 60);
+    const f32 nativeFrame = effects.effect(0).player.frame();
+    const auto remaining = effects.remaining(id);
+    const f32 age = effects.effect(0).lived;
+    const Mat4 nativePose = effects.effect(0).pose.matrices()[0];
+    for (const f32 fraction : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.5f}) {
+        CAPTURE(fraction);
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {}, nullptr, fraction);
+        REQUIRE(device.draws.size() == 1);
+        CHECK(device.draws[0].vertices[0].position.x == Catch::Approx(7 + 4 * fraction));
+        CHECK(device.draws[0].vertices[0].position.y == Catch::Approx(0.5f * fraction));
+        CHECK(effects.effect(0).player.frame() == nativeFrame);
+        CHECK(effects.effect(0).lived == age);
+        CHECK(effects.effect(0).pose.matrices()[0] == nativePose);
+        CHECK(effects.effect(0).position == Vec3{11, 0, 0});
+        CHECK(effects.remaining(id) == remaining);
+    }
+    effects.finish(id);
+    device.draws.clear();
+    effects.draw(device, Mat4{1}, {}, nullptr, 0.0f);
+    CHECK(device.draws.empty());
+}
+
+TEST_CASE("effect presentation snaps new spawns teleports redirects and loop cuts",
+          "[effects][presentation]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    setting.emitParticles = false;
+    effects.capturePresentation();
+    const u32 id = effects.startSet(device, archive, "MOVING", {7, 0, 0}, setting);
+    const auto corner = [&](f32 fraction) {
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {}, nullptr, fraction);
+        REQUIRE(device.draws.size() == 1);
+        return device.draws[0].vertices[0].position;
+    };
+    CHECK(corner(0).x == 7);
+    effects.capturePresentation();
+    effects.moveTo(id, {100, 0, 0});
+    CHECK(corner(0).x == 100);
+    effects.capturePresentation();
+    effects.redirect(id, {102, 0, 0}, {0, 0, -10});
+    CHECK(corner(0).x == 102);
+    effects.update(3.0f / 30);
+    effects.capturePresentation();
+    effects.update(1.0f / 30);
+    CHECK(effects.effect(0).player.frame() == 0);
+    CHECK(corner(0.5f).y == Catch::Approx(0));
+    effects.stop(id);
+    device.draws.clear();
+    effects.draw(device, Mat4{1}, {}, nullptr, 0);
+    CHECK(device.draws.empty());
+}
+
+TEST_CASE("held effects do not replay the last particle movement on successive render frames",
+          "[effects][presentation][particles]") {
+    ItemArchive archive;
+    REQUIRE(archive.load(presentationFixture()));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    ParticleDescriptor descriptor;
+    descriptor.emitFrames = 30;
+    descriptor.particleLife = 30;
+    descriptor.rate.fill(1);
+    descriptor.speed = 2;
+    descriptor.width = {1, 1, 1, 1};
+    descriptor.red = descriptor.green = descriptor.blue = descriptor.alpha = {255, 255, 255, 255};
+    effects.startParticles(device, archive, descriptor, 0, Mat4{1});
+    effects.capturePresentation();
+    effects.update(1.0f / 30);
+    REQUIRE(effects.count() == 1);
+    REQUIRE(effects.effect(0).trails.particleCount() > 0);
+    effects.capturePresentation(); // the scene then holds instead of stepping effects
+    const auto point = [&](f32 fraction) {
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {}, nullptr, fraction);
+        REQUIRE_FALSE(device.draws.empty());
+        return device.draws[0].vertices[0].position;
+    };
+    const Vec3 held = point(-1);
+    for (const f32 fraction : {0.0f, 0.25f, 0.75f, 1.0f}) {
+        CHECK(point(fraction) == held);
+        CHECK(effects.effect(0).trails.particleCount() == 1);
+    }
+}
+
+TEST_CASE("standalone player emitters animate native sprites and retain their particle tails",
+          "[effects][player-particles][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    TextureAnimator clock;
+    clock.bind(archive.trees.textureAnimations(), archive.textures, device);
+    for (const auto* name : {"WIZ_HEAD_Y", "DRAGKEY_PART"}) {
+        CAPTURE(name);
+        const auto slot = archive.textures.find(name);
+        REQUIRE(slot);
+        const auto& animations = archive.trees.textureAnimations();
+        const auto animation = std::ranges::find(animations, name, &TextureAnimationInfo::name);
+        REQUIRE(animation != animations.end());
+        const bool cyclesOnClock = std::string_view{name} == "WIZ_HEAD_Y";
+        // Native WEAPONS records 21/74: both store ten frames, but the
+        // dragon-key sprite is keyed (flag 53), not a free-running cycle.
+        CHECK(animation->flag == (cyclesOnClock ? -1 : 53));
+        CHECK(animation->frames == 10);
+        CHECK(animation->rate == 2);
+        ParticleDescriptor descriptor;
+        descriptor.texture = name;
+        descriptor.emitFrames = 30;
+        descriptor.particleLife = 15;
+        descriptor.rate.fill(1);
+        descriptor.width = {1, 1, 1, 1};
+        descriptor.alpha = descriptor.red = descriptor.green =
+            descriptor.blue = {255, 255, 255, 255};
+        EffectTrees effects;
+        const u32 id = effects.startParticles(device, archive, descriptor, *slot, Mat4{1});
+        bool changed = false;
+        const Texture* original = &archive.textures.texture(device, *slot);
+        clock.clear();
+        clock.bind(archive.trees.textureAnimations(), archive.textures, device);
+        for (u32 frame = 1; frame <= 10; ++frame) {
+            clock.step();
+            effects.update(1.0f / 30);
+            REQUIRE(effects.count() == 1);
+            const auto& field = effects.effect(0).trails;
+            CHECK(field.particleCount() == frame);
+            for (usize i = 0; i < clock.size(); ++i) {
+                if (!clock.keyed(i) && clock.slot(i) == *slot && clock.motion(i).frame != nullptr) {
+                    CHECK(field.textureOf(0) == clock.motion(i).frame);
+                }
+            }
+            if (!cyclesOnClock) {
+                CHECK(field.textureOf(0) == original);
+            }
+            changed |= field.textureOf(0) != original;
+        }
+        CHECK(changed == cyclesOnClock);
+        effects.finish(id);
+        effects.update(1.0f / 30);
+        REQUIRE(effects.playing(id));
+        CHECK(effects.effect(0).trails.particleCount() == 10);
+        effects.draw(device, Mat4{1}, {});
+        CHECK_FALSE(device.draws.empty());
+        for (s32 frame = 0; frame < 16; ++frame) {
+            effects.update(1.0f / 30);
+        }
+        CHECK_FALSE(effects.playing(id));
+        effects.startParticles(device, archive, descriptor, *slot, Mat4{1});
+        effects.clear();
+        CHECK(effects.count() == 0);
+    }
+}
+
+TEST_CASE("Garm eye ribbons inherit camera-facing parent transforms before drawing their mesh",
+          "[effects][garm][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/GARM/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    for (const std::string_view name : {"GAR1ATK1P1", "GAR1ATK1P2"}) {
+        INFO(name);
+        EffectTrees effects;
+        EffectTrees::Setting setting;
+        setting.yaw = 0.7f;
+        REQUIRE(effects.startSet(device, archive, name, {10, 15, 20}, setting));
+        effects.update(0.1f);
+        REQUIRE(effects.count() == 1);
+        const auto& effect = effects.effect(0);
+        const auto& tree = *effect.tree;
+        WorldCamera view;
+        view.position = {40, 30, -50};
+        view.yaw = -0.4f;
+        view.pitch = 0.2f;
+        const auto camera = CameraFrame::of(view);
+        std::vector<Mat4> expected(tree.nodes.size());
+        std::vector<Vec3> corners;
+        for (usize n = 0; n < tree.nodes.size(); ++n) {
+            const auto& node = tree.nodes[n];
+            const Mat4 parent =
+                node.parent >= 0 ? expected[static_cast<usize>(node.parent)] : effect.transform();
+            expected[n] =
+                camera.face(parent * TreePose::localMatrix(effect.pose.poses()[n], node.position),
+                            CameraFrame::facingOf(node.objectFlags));
+            if (!node.object.empty()) {
+                const auto mesh = archive.models.find(node.object);
+                REQUIRE(mesh);
+                const auto& geometry = archive.models.mesh(*mesh);
+                REQUIRE(geometry.parts.size() == 1);
+                REQUIRE_FALSE(geometry.parts[0].indices.empty());
+                // Native strips retain their indexed corner order; vertex storage order is not
+                // necessarily draw order as it was in the flattened OBJ reference.
+                const auto first = geometry.parts[0].indices[0];
+                corners.emplace_back(expected[n] * Vec4{geometry.vertices[first].position, 1});
+            }
+        }
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {}, &camera);
+        REQUIRE(device.draws.size() == corners.size());
+        REQUIRE(corners.size() == 2);
+        for (usize i = 0; i < corners.size(); ++i) {
+            CHECK(glm::distance(device.draws[i].vertices[0].position, corners[i]) < 0.001f);
+        }
+    }
+}
+
+TEST_CASE("retail potion fades keep the startup visible and remove each mesh at its authored end",
+          "[effects][vfx-timing][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root));
+    test::FakeRenderDevice device;
+    TextureAnimator animator;
+    animator.bind(weapons.trees.textureAnimations(), weapons.textures, device);
+    // Check the raw disk modes, not just fixtures built from the same runtime constants.
+    STATIC_REQUIRE(TextureAnimationInfo::kFadeIn == formats::TextureAnimation::kFadeIn);
+    STATIC_REQUIRE(TextureAnimationInfo::kFadeOut == formats::TextureAnimation::kFadeOut);
+    for (const std::string_view name : {"MP_LIGHT", "MP_FIRE"}) {
+        INFO(name);
+        const auto treeIndex = weapons.trees.find(name);
+        REQUIRE(treeIndex);
+        const auto& tree = weapons.trees.tree(*treeIndex);
+        REQUIRE(tree.sequences.size() == 1);
+        CHECK(tree.sequences[0].frameRate == 60); // 15 animation frames per second
+        usize fades = 0;
+        for (const auto& node : tree.nodes) {
+            if (node.textureAnimation < 0) {
+                continue;
+            }
+            const auto& mod =
+                weapons.trees.textureAnimations().at(static_cast<usize>(node.textureAnimation));
+            if (!mod.fades()) {
+                continue;
+            }
+            ++fades;
+            INFO(node.name);
+            REQUIRE(mod.source == -5);
+            REQUIRE(mod.frames > 0);
+            CHECK(animator.motionAt(node.textureAnimation, 0)->alpha == 1.0f);
+            CHECK(animator.motionAt(node.textureAnimation, mod.offset)->alpha == 1.0f);
+            CHECK(animator.motionAt(node.textureAnimation, mod.offset + mod.frames)->alpha == 0.0f);
+            CHECK(animator.motionAt(node.textureAnimation, tree.sequences[0].frames - 1)->alpha ==
+                  0.0f);
+        }
+        CHECK(fades == (name == "MP_LIGHT" ? 1 : 3));
+        EffectTrees effects;
+        REQUIRE(effects.start(device, weapons, name, Vec3{0}));
+        const auto drawMeshes = [&] {
+            device.draws.clear();
+            const auto& effect = effects.effect(0);
+            auto model = *effect.model;
+            model.setAppearance(effect.unlit, effect.tint, effect.depthWrite, effect.additive);
+            // Fire's sparks have their own texture/transform tracks and may
+            // outlive its rings. Isolate meshes governed by these fade nodes.
+            for (usize i = 0; i < tree.nodes.size(); ++i) {
+                bool faded = false;
+                for (s32 n = static_cast<s32>(i); n >= 0;
+                     n = tree.nodes[static_cast<usize>(n)].parent) {
+                    const s32 mod = tree.nodes[static_cast<usize>(n)].textureAnimation;
+                    if (mod >= 0 &&
+                        weapons.trees.textureAnimations()[static_cast<usize>(mod)].fades()) {
+                        faded = true;
+                        break;
+                    }
+                }
+                if (!faded) {
+                    model.setMeshAlpha(i, 0);
+                }
+            }
+            model.draw(device, Mat4{1}, effect.transform(), {}, effect.pose.matrices());
+        };
+        drawMeshes();
+        REQUIRE_FALSE(device.draws.empty());
+        // At 15 fps, LIGHT's subtree is clear by frame 12; FIRE's last ring by 32.
+        const s32 endFrame = name == "MP_LIGHT" ? 12 : 32;
+        for (s32 tick = 0; tick < endFrame * 2 + 1; ++tick) {
+            effects.update(1.0f / 30);
+        }
+        REQUIRE(effects.count() == 1); // authored animation still running, not lifetime culling
+        drawMeshes();
+        CHECK(device.draws.empty());
+    }
+}
+
+TEST_CASE("the melee ward gem flash emits both authored orange particle trails",
+          "[effects][enemy-melee][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path();
+    ItemArchive powerups;
+    REQUIRE(powerups.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, powerups, "GETGEMORANGE", {2, 4, 6}));
+    REQUIRE(effects.count() == 1);
+    effects.update(0.2f);
+    const auto& effect = effects.effect(0);
+    const auto& field = effect.particles.field();
+    REQUIRE(field.size() == 2);
+    CHECK(field.particleCount() > 0);
+    CHECK(effect.position == Vec3{2, 4, 6});
+    for (usize i = 0; i < field.size(); ++i) {
+        CHECK(field.textureOf(i) != &device.whiteTexture());
+    }
+    effects.draw(device, Mat4{1}, {});
+    CHECK_FALSE(device.draws.empty());
+    effects.clear();
+    powerups.release();
+}
+
+TEST_CASE("lion gargoyle breath resolves FBALLX from the loaded weapons archive",
+          "[effects][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    test::assetOrSkip("MONSTERS/GAR_LION/ANIM.PS2");
+    ItemArchive weapons;
+    ItemArchive lion;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    REQUIRE(lion.load(root / "MONSTERS/GAR_LION"));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    const std::array<TextureSet*, 1> lenders{&weapons.textures};
+    effects.setTextureLenders(lenders);
+    REQUIRE_FALSE(lion.textures.find("FBALLX"));
+    REQUIRE(effects.start(device, lion, "FIREFX", Vec3{0}));
+    effects.update(0.4f); // both authored emitters wait 0.27 seconds before birth
+    REQUIRE(effects.count() == 1);
+    const auto& field = effects.effect(0).particles.field();
+    REQUIRE(field.size() > 0);
+    REQUIRE(field.particleCount() > 0);
+    const auto slot = weapons.textures.find("FBALLX");
+    REQUIRE(slot);
+    REQUIRE(field.size() == 2);
+    CHECK(field.emitter(1).descriptor().texture == "FBALLX");
+    CHECK(field.textureOf(1) == &weapons.textures.texture(device, *slot));
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE_FALSE(device.draws.empty());
+    CHECK(device.draws.back().texture == field.textureOf(1));
+    effects.clear();
+}
+
+TEST_CASE("GETGARG pickup burst survives a four-frame batch", "[effects][assets]") {
+    const auto directory = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(directory));
+    test::FakeRenderDevice device;
+    EffectTrees single;
+    EffectTrees batch;
+    REQUIRE(single.start(device, archive, "GETGARG", Vec3{0}));
+    REQUIRE(batch.start(device, archive, "GETGARG", Vec3{0}));
+    for (s32 i = 0; i < 4; ++i) {
+        single.update(1.0f / 30);
+    }
+    batch.update(4.0f / 30);
+    REQUIRE(single.count() == 1);
+    REQUIRE(batch.count() == 1);
+    const auto& expected = single.effect(0).particles.field();
+    const auto& actual = batch.effect(0).particles.field();
+    REQUIRE(actual.particleCount() > 0);
+    CHECK(actual.particleCount() == expected.particleCount());
+}
+
+TEST_CASE("all authored monster generator effects bind their particle textures and emit",
+          "[generators][effects][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/ZOM/ANIM.PS2").parent_path().parent_path().parent_path();
+    usize checked = 0;
+    for (s32 kind = 0; kind < kSwarmKindCount; ++kind) {
+        const std::string directory = "MONSTERS/" + std::string(enemyKind(kind).name);
+        test::assetOrSkip(directory + "/ANIM.PS2");
+        ItemArchive archive;
+        REQUIRE(archive.load(root / directory));
+        for (const auto* name : {"GENHIT", "GENDIE"}) {
+            INFO(directory << "/" << name);
+            const auto treeIndex = archive.trees.find(name);
+            // Garm minions have no generator trees. WIND has an empty death
+            // placeholder and no hit tree; do not invent particles for either.
+            if (kind == 27 || (kind == 26 && std::string_view(name) == "GENHIT")) {
+                CHECK_FALSE(treeIndex);
+                continue;
+            }
+            REQUIRE(treeIndex);
+            const auto& tree = archive.trees.tree(*treeIndex);
+            const auto count = std::ranges::count_if(
+                tree.nodes, [](const TreeNodeInfo& node) { return node.particle >= 0; });
+            if (kind == 26) {
+                CHECK(count == 0);
+                continue;
+            }
+            test::FakeRenderDevice device;
+            EffectTrees effects;
+            EffectTrees::Setting setting;
+            setting.yaw = 1.1f;
+            REQUIRE(effects.startSet(device, archive, name, Vec3{9, 2, -8}, setting) != 0);
+            CHECK(effects.effect(0).particles.field().size() == static_cast<usize>(count));
+            effects.update(0.25f);
+            REQUIRE(effects.count() == 1);
+            const auto& particles = effects.effect(0).particles.field();
+            CHECK(particles.particleCount() > 0);
+            for (usize i = 0; i < particles.size(); ++i) {
+                CHECK(particles.textureOf(i) != &device.whiteTexture());
+            }
+            effects.draw(device, Mat4{1}, {});
+            CHECK_FALSE(device.draws.empty());
+            ++checked;
+        }
+    }
+    CHECK(checked == 52);
+}
+
+TEST_CASE("zero-frame effects retain the thirty-frame fallback at their authored rate",
+          "[game][world][effects]") {
+    const auto root = test::scratchDirectory("effect-zero-frame");
+    writeTextFile(root / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    writeTextFile(root / "objects.json", R"({"objects":[{"name":"TRI","file":"tri.obj"}]})");
+    writeFile(root / "white.png", test::kTinyPng);
+    writeTextFile(root / "textures.json",
+                  R"({"bitmaps":[{"name":"WHITE","file":"white.png","width":2,"height":2}]})");
+    writeTextFile(root / "animations.json", R"({"trees":[
+      {"name":"STILL","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+       "sequences":[{"name":"ACTIVE","frames":0,"frameRate":60}]}]})");
+    ItemArchive archive;
+    test::convertModelFixture(root);
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "STILL", Vec3{0}));
+    REQUIRE(effects.effect(0).secondsLeft == Catch::Approx(2));
+    effects.update(1.9f);
+    REQUIRE(effects.count() == 1);
+    effects.update(0.11f);
+    REQUIRE(effects.count() == 0);
+    EffectTrees::Setting setting;
+    setting.seconds = 3;
+    REQUIRE(effects.startSet(device, archive, "STILL", Vec3{0}, setting) != 0);
+    REQUIRE(effects.effect(0).secondsLeft == Catch::Approx(3));
+}
+
+TEST_CASE("effect transforms retain pitch roll and scale from a full attachment",
+          "[game][world][effects]") {
+    EffectTrees::Effect effect;
+    effect.scale = 2;
+    effect.position = {5, 6, 7};
+    REQUIRE(effect.transform() == glm::scale(glm::translate(Mat4{1}, effect.position), Vec3{2}));
+    effect.attachment = glm::rotate(Mat4{1}, 0.7f, glm::normalize(Vec3{1, 0, 1}));
+    Mat4 expected = glm::scale(*effect.attachment, Vec3{2});
+    expected[3] = Vec4{effect.position, 1};
+    REQUIRE(effect.transform() == expected);
+    effect.yaw = 1; // full attachment replaces the world-yaw path
+    REQUIRE(effect.transform() == expected);
+    // A stretch scales each axis on top of the scale.
+    effect.attachment.reset();
+    effect.yaw = 0;
+    effect.stretch = Vec3{2.5f, 1.0f, 2.5f};
+    REQUIRE(effect.transform() ==
+            glm::scale(glm::translate(Mat4{1}, effect.position), Vec3{5.0f, 2.0f, 5.0f}));
+}
+
+TEST_CASE("an effect can tell how long it has left and fade out over its last moments",
+          "[game][world][effects][suicide]") {
+    const auto root = test::scratchDirectory("effect-fade");
+    writeTextFile(root / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    writeTextFile(root / "objects.json", R"({"objects":[{"name":"TRI","file":"tri.obj"}]})");
+    writeFile(root / "white.png", test::kTinyPng);
+    writeTextFile(root / "textures.json",
+                  R"({"bitmaps":[{"name":"WHITE","file":"white.png","width":2,"height":2}]})");
+    writeTextFile(root / "animations.json", R"({"trees":[
+      {"name":"SMOKE","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+       "sequences":[{"name":"ACTIVE","frames":30,"frameRate":30}]}]})");
+    ItemArchive archive;
+    test::convertModelFixture(root);
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.emitParticles = false;
+    setting.fadeSeconds = 0.5f;
+    const u32 id = effects.startSet(device, archive, "SMOKE", Vec3{0}, setting);
+    REQUIRE(id != 0);
+    REQUIRE(effects.remaining(id).has_value());
+    CHECK(*effects.remaining(id) == Catch::Approx(1.0f).margin(0.05f));
+    CHECK_FALSE(effects.remaining(id + 1).has_value());
+    const auto drawnAlpha = [&] {
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, WorldLighting{});
+        REQUIRE_FALSE(device.draws.empty());
+        REQUIRE_FALSE(device.draws.back().vertices.empty());
+        return device.draws.back().vertices.front().color.a;
+    };
+    CHECK(drawnAlpha() == 255);
+    effects.update(0.75f); // a quarter of a second left: half way faded
+    CHECK(*effects.remaining(id) == Catch::Approx(0.25f).margin(0.05f));
+    const u8 fading = drawnAlpha();
+    CHECK(fading < 200);
+    CHECK(fading > 60);
+}
+
+TEST_CASE("persistent effects hold their last pose until explicitly released",
+          "[game][world][effects][tower-relics]") {
+    const auto root = test::scratchDirectory("effect-persistent");
+    writeTextFile(root / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    writeTextFile(root / "objects.json", R"({"objects":[{"name":"TRI","file":"tri.obj"}]})");
+    writeFile(root / "white.png", test::kTinyPng);
+    writeTextFile(root / "textures.json",
+                  R"({"bitmaps":[{"name":"WHITE","file":"white.png","width":2,"height":2}]})");
+    writeTextFile(root / "animations.json", R"({"trees":[
+      {"name":"PIECE","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+       "sequences":[{"name":"ACTIVE","frames":30,"frameRate":30}]}]})");
+    ItemArchive archive;
+    test::convertModelFixture(root);
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.persistent = true;
+    setting.loop = false;
+    setting.settled = true;
+    setting.emitParticles = false;
+    const auto id = effects.startSet(device, archive, "PIECE", Vec3{0}, setting);
+    REQUIRE(id != 0);
+    REQUIRE(effects.effect(0).player.frame() == 29);
+    effects.update(1000);
+    REQUIRE(effects.count() == 1);
+    REQUIRE(effects.effect(0).player.frame() == 29);
+    effects.stop(id);
+    REQUIRE(effects.count() == 0);
+    setting.settled = false;
+    REQUIRE(effects.startSet(device, archive, "PIECE", Vec3{0}, setting) != 0);
+    REQUIRE(effects.effect(0).player.frame() == 0);
+    effects.update(0.5f);
+    REQUIRE(effects.effect(0).player.frame() == 15);
+    effects.update(1000);
+    REQUIRE(effects.count() == 1);
+    REQUIRE(effects.effect(0).player.frame() == 29);
+    effects.clear();
+    REQUIRE(effects.count() == 0);
+}
+
+TEST_CASE("an effect gives off its light a unit over it while it plays, swelling if asked",
+          "[game][world][effects][lights]") {
+    const auto root = test::scratchDirectory("effect-light");
+    writeTextFile(root / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    writeTextFile(root / "objects.json", R"({"objects":[{"name":"TRI","file":"tri.obj"}]})");
+    writeFile(root / "white.png", test::kTinyPng);
+    writeTextFile(root / "textures.json",
+                  R"({"bitmaps":[{"name":"WHITE","file":"white.png","width":2,"height":2}]})");
+    writeTextFile(root / "animations.json", R"({"trees":[
+      {"name":"GLOW","nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+       "sequences":[{"name":"ACTIVE","frames":30,"frameRate":30}]}]})");
+    ItemArchive archive;
+    test::convertModelFixture(root);
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.emitParticles = false;
+    REQUIRE(effects.startSet(device, archive, "GLOW", Vec3{3, 0, 4}, setting) != 0);
+    setting.light = EffectTrees::Light{Vec3{2, 0, 0}, 24.0f};
+    REQUIRE(effects.startSet(device, archive, "GLOW", Vec3{5, 1, 5}, setting) != 0);
+    std::vector<PointLight> lights;
+    effects.lights(lights);
+    REQUIRE(lights.size() == 1); // the unlit one gives none
+    CHECK(lights[0].position == Vec3{5, 2, 5});
+    CHECK(lights[0].radius == 24.0f);
+    CHECK(lights[0].intensity == 2.0f);
+    CHECK(lights[0].color == Vec3{2, 0, 0});
+    // A swelling light is nothing as it starts, whole half way through its life.
+    effects.clear();
+    setting.light->swells = true;
+    REQUIRE(effects.startSet(device, archive, "GLOW", Vec3{0}, setting) != 0);
+    lights.clear();
+    effects.lights(lights);
+    CHECK(lights.empty());
+    effects.update(0.5f);
+    lights.clear();
+    effects.lights(lights);
+    REQUIRE(lights.size() == 1);
+    CHECK(lights[0].radius == Catch::Approx(24.0f).margin(1.0f));
+    // Gone with the effect.
+    effects.update(2.0f);
+    lights.clear();
+    effects.lights(lights);
+    CHECK(lights.empty());
+}
+
+TEST_CASE("Wraith's waiting portal retains its authored static scale throughout its hold",
+          "[game][world][effects][wraith][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/WRAITH/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 100;
+    REQUIRE(effects.startSet(device, archive, "INITFX", Vec3{0}, setting) != 0);
+    for (const f32 elapsed : {0.0f, 0.5f, 2.0f}) {
+        effects.update(elapsed);
+        REQUIRE(effects.count() == 1);
+        const auto& effect = effects.effect(0);
+        REQUIRE(effect.pose.poses().size() == 5);
+        const Vec3 scale = effect.pose.poses()[1].scale;
+        REQUIRE(scale.x == Catch::Approx(0.001f));
+        REQUIRE(scale.y == Catch::Approx(0.001f));
+        REQUIRE(scale.z == Catch::Approx(0.001f));
+        REQUIRE(glm::length(Vec3{effect.pose.matrices()[2][0]}) == Catch::Approx(0.001f));
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {});
+        REQUIRE_FALSE(device.draws.empty());
+    }
+}
+
+TEST_CASE("Wraith emergence smoke preserves its growing geometry when facing the camera",
+          "[game][world][effects][wraith][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/WRAITH/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "GENFX2", Vec3{0}));
+    effects.update(2.0f);
+    REQUIRE(effects.effect(0).pose.poses()[0].scale.y > 1.0f);
+    effects.draw(device, Mat4{1}, {});
+    const auto ordinary = device.draws;
+    REQUIRE_FALSE(ordinary.empty());
+    device.draws.clear();
+    const CameraFrame camera = CameraFrame::at({0, 10, -20});
+    effects.draw(device, Mat4{1}, {}, &camera);
+    REQUIRE(device.draws.size() == ordinary.size());
+    for (usize i = 0; i < ordinary.size(); ++i) {
+        const auto& before = ordinary[i].vertices;
+        const auto& after = device.draws[i].vertices;
+        REQUIRE(before.size() >= 3);
+        REQUIRE(after.size() == before.size());
+        const f32 original = glm::length(before[1].position - before[0].position);
+        REQUIRE(original > 0);
+        REQUIRE(glm::length(after[1].position - after[0].position) == Catch::Approx(original));
+    }
+}
+
+TEST_CASE("Yeti stomp geometry draws through the floor using its authored depth policy",
+          "[game][world][effects][yeti][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/YETI/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "ATTACK4FX", Vec3{0, -3, 0}));
+    effects.update(0.2f);
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE_FALSE(device.draws.empty());
+    for (const auto& draw : device.draws) {
+        REQUIRE_FALSE(draw.state.depthTest);
+        REQUIRE_FALSE(draw.state.depthWrite);
+    }
+}
+
+TEST_CASE("Yeti grab trail scrolls its subtree rather than the record's unrelated texture slot",
+          "[game][world][effects][yeti][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/YETI/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "ATTACK11FXB", Vec3{0}));
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.size() == 1);
+    REQUIRE(device.draws.front().state.uvScale == Vec2(0, 1));
+    REQUIRE(device.draws.front().state.uvOffset == Vec2(0));
+    effects.update(94.0f / 30);
+    device.draws.clear();
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.front().state.uvScale == Vec2(0, 1));
+    effects.update(5.0f / 30);
+    device.draws.clear();
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.front().state.uvScale.x > 0);
+    REQUIRE(device.draws.front().state.uvOffset.x < 0);
+    effects.update(1);
+    REQUIRE(effects.count() == 0);
+}
+
+TEST_CASE("Yeti frost breath preserves the staggered frame of each mist branch",
+          "[game][world][effects][yeti][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/YETI/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE(effects.start(device, archive, "ATTACK3FX", Vec3{0}));
+    effects.update(10.0f / 30);
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE(device.draws.size() == 18);
+    // The first pair shares slot 11 but has animation delays of 1 and 9 frames.
+    // All branches using the last node's delay would render the same texture.
+    REQUIRE(device.draws[0].texture == &archive.textures.texture(device, 12 + 9));
+    REQUIRE(device.draws[1].texture == &archive.textures.texture(device, 12 + 1));
+    REQUIRE(device.draws[0].texture != device.draws.back().texture);
+}
+
+TEST_CASE("a node-attached effect draws with the moving parent's full basis",
+          "[game][world][effects][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    const auto id = effects.startSet(device, archive, "MP_FIRE", Vec3{0}, {});
+    REQUIRE(id != 0);
+    effects.draw(device, Mat4{1}, {});
+    const auto local = device.draws;
+    REQUIRE_FALSE(local.empty());
+    for (const f32 angle : {0.6f, -1.2f}) {
+        const Mat4 parent =
+            glm::rotate(glm::translate(Mat4{1}, Vec3{4, 7, 9}), angle, Vec3{1, 0, 0});
+        effects.placeAt(id, parent);
+        REQUIRE(effects.effect(0).transform() == parent);
+        device.draws.clear();
+        effects.draw(device, Mat4{1}, {});
+        REQUIRE(device.draws.size() == local.size());
+        f32 error = 0;
+        for (usize d = 0; d < local.size(); ++d) {
+            REQUIRE(device.draws[d].vertices.size() == local[d].vertices.size());
+            for (usize v = 0; v < local[d].vertices.size(); ++v) {
+                const Vec3 expected{parent * Vec4{local[d].vertices[v].position, 1}};
+                error =
+                    std::max(error, glm::distance(device.draws[d].vertices[v].position, expected));
+            }
+        }
+        REQUIRE(error < 0.001f);
+    }
+}
+
+TEST_CASE("legend effects carry a world-space trail and draw its sprites facing the camera",
+          "[game][world][effects][assets]") {
+    const auto root = test::assetOrSkip("ITEMS/LEVELB6/ANIM.PS2").parent_path();
+    ItemArchive items;
+    REQUIRE(items.load(root));
+    test::FakeRenderDevice device;
+    test::FakeTexture particleTexture{1, 1};
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 6.0f;
+    setting.velocity = Vec3{20.0f, 0.0f, 0.0f};
+    setting.unlit = true;
+    setting.depthWrite = false;
+    const u32 id = effects.startSet(device, items, "LEGENDPRJ", Vec3{0.0f}, setting);
+    REQUIRE(id != 0);
+    effects.attachTrail(id, LegendShow::trailOf(34), particleTexture);
+    effects.update(1.0f / 30.0f);
+    const ParticleEmitter& emitter = effects.effect(0).trails.emitter(0);
+    REQUIRE(emitter.particles().size() == 1);
+    const Vec3 origin = emitter.particles()[0].origin;
+    effects.update(1.0f / 30.0f);
+    REQUIRE(emitter.particles().size() == 2);
+    REQUIRE(emitter.particles()[0].origin == origin);
+    REQUIRE(emitter.particles()[1].origin.x > origin.x);
+    CameraFrame camera;
+    camera.right = Vec3{0.0f, 0.0f, 1.0f};
+    effects.draw(device, Mat4{1.0f}, {}, &camera);
+    REQUIRE_FALSE(device.draws.empty());
+    const auto& particles = device.draws.back();
+    REQUIRE(particles.texture == &particleTexture);
+    REQUIRE_FALSE(particles.state.depthWrite);
+    REQUIRE(particles.vertices.size() == 12);
+    REQUIRE(particles.vertices[1].position - particles.vertices[0].position == camera.right * 2.0f);
+    effects.stop(id);
+    REQUIRE(effects.count() == 0);
+    device.draws.clear();
+    effects.draw(device, Mat4{1.0f}, {});
+    REQUIRE(device.draws.empty());
+}
+
+TEST_CASE("dragon FIRE plays both authored particle nodes without requiring a mesh",
+          "[game][world][effects][breath][assets]") {
+    const auto root = test::assetOrSkip("MONSTERS/DRAGON/ANIM.PS2").parent_path();
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    const auto id = effects.startSet(device, archive, "FIRE", Vec3{0}, {});
+    REQUIRE(id != 0);
+    REQUIRE(effects.effect(0).particles.field().size() == 2);
+    const Mat4 parent = glm::rotate(glm::translate(Mat4{1}, Vec3{4, 8, 12}), 0.6f, Vec3{1, 0, 0});
+    effects.placeAt(id, parent);
+    effects.update(1.0f / 30);
+    const auto& effect = effects.effect(0);
+    const auto& particles = effect.particles.field();
+    REQUIRE(particles.particleCount() > 0);
+    REQUIRE(particles.emitter(0).descriptor().texture == "DRAGONBREATH");
+    REQUIRE(particles.emitter(1).descriptor().texture == "FBALLX");
+    REQUIRE(particles.textureOf(0) != &device.whiteTexture());
+    REQUIRE(particles.textureOf(1) != &device.whiteTexture());
+    for (usize i = 0; i < particles.size(); ++i) {
+        REQUIRE(particles.emitter(i).node() == parent * effect.pose.matrices()[i + 1]);
+        REQUIRE(particles.emitter(i).descriptor().direction == effect.tree->nodes[i + 1].direction);
+    }
+    effects.draw(device, Mat4{1}, {});
+    REQUIRE_FALSE(device.draws.empty());
+    REQUIRE_FALSE(device.draws.front().vertices.empty());
+    // Frame replacement preserves the emitter; this tree has no texture-motion track.
+    const auto textureSlot = archive.textures.find("DRAGONBREATH");
+    REQUIRE(textureSlot.has_value());
+    const test::FakeTexture frame{1, 1};
+    // The public tree-particle binding also supports shared archive frame animations.
+    TreeParticles replacement;
+    replacement.bind(*effect.tree, archive, device, parent, effect.pose.matrices());
+    replacement.step(1.0f / 30, parent, effect.pose.matrices());
+    const auto count = replacement.field().particleCount();
+    replacement.setTextureFrame(*textureSlot, frame);
+    REQUIRE(replacement.field().textureOf(0) == &frame);
+    REQUIRE(replacement.field().particleCount() == count);
+    for (s32 i = 0; i < 15; ++i) {
+        effects.update(1.0f / 30);
+    }
+    const Mat4 moved = glm::translate(parent, Vec3{2, 3, 4});
+    effects.placeAt(id, moved);
+    effects.update(1.0f / 30);
+    REQUIRE(particles.emitter(0).node() == moved * effect.pose.matrices()[1]);
+    for (s32 i = 0; i < 60; ++i) {
+        effects.update(1.0f / 30);
+    }
+    REQUIRE(particles.particleCount() == 0); // template fades, not an invented endless flame
+    effects.stop(id);
+    REQUIRE_FALSE(effects.playing(id));
+}
+
+TEST_CASE("an effect tree plays its sequence once where it was started, then goes",
+          "[game][world][effects][assets]") {
+    const std::filesystem::path root =
+        test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    REQUIRE_FALSE(effects.start(device, weapons, "NO_SUCH_TREE", Vec3{0.0f}));
+    REQUIRE(effects.start(device, weapons, "MP_FIRE", Vec3{5.0f, 1.0f, -3.0f}, 0.5f));
+    REQUIRE(effects.count() == 1);
+    REQUIRE(effects.effect(0).name == "MP_FIRE");
+    REQUIRE(effects.effect(0).scale == 0.5f);
+    // Thirty-seven frames of a fifteenth of a second: drawn meanwhile, gone in two and a half.
+    bool drew = false;
+    s32 steps = 0;
+    while (effects.count() > 0 && steps < 240) {
+        effects.update(1.0f / 60.0f);
+        device.draws.clear();
+        effects.draw(device, Mat4{1.0f}, WorldLighting{});
+        drew = drew || !device.draws.empty();
+        ++steps;
+    }
+    REQUIRE(drew);
+    REQUIRE(effects.count() == 0);
+    REQUIRE(steps > 120);
+    REQUIRE(steps < 180);
+    effects.start(device, weapons, "MP_ACID", Vec3{0.0f});
+    effects.clear();
+    REQUIRE(effects.count() == 0);
+}
+
+TEST_CASE("a fast legend charge holds its final pose for the unscaled effect lifetime",
+          "[game][world][effects][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 1.0f;
+    setting.loop = false;
+    setting.playbackRate = LegendShow::kBurstPlaybackRate;
+    const u32 id = effects.startSet(device, weapons, "COMBO_BLU", Vec3{0.0f}, setting);
+    REQUIRE(id != 0);
+    for (s32 i = 0; i < 30; ++i) {
+        effects.update(1.0f / 60.0f);
+    }
+    REQUIRE(effects.playing(id));
+    REQUIRE(effects.effect(0).player.finished());
+    const f32 lastFrame = effects.effect(0).player.frame();
+    effects.update(0.1f);
+    REQUIRE(effects.effect(0).player.frame() == lastFrame);
+    for (s32 i = 0; i < 30; ++i) {
+        effects.update(1.0f / 60.0f);
+    }
+    REQUIRE_FALSE(effects.playing(id));
+}
+
+TEST_CASE("an effect can be turned, carried along and kept repeating until it is stopped",
+          "[game][world][effects][assets]") {
+    const std::filesystem::path root =
+        test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.yaw = 1.0f;
+    setting.velocity = Vec3{10.0f, 0.0f, 0.0f};
+    setting.seconds = 30.0f; // far longer than the tree's one playing
+    REQUIRE(effects.startSet(device, weapons, "NO_SUCH_TREE", Vec3{0.0f}, setting) == 0);
+    const u32 id = effects.startSet(device, weapons, "MP_FIRE", Vec3{0.0f, 1.0f, 0.0f}, setting);
+    REQUIRE(id != 0);
+    for (s32 i = 0; i < 600; ++i) {
+        effects.update(1.0f / 60.0f);
+    }
+    REQUIRE(effects.count() == 1); // still going, ten seconds on
+    REQUIRE(effects.effect(0).position.x > 99.0f);
+    REQUIRE(effects.effect(0).yaw == 1.0f);
+    effects.stop(id);
+    REQUIRE(effects.count() == 0);
+    // Left to itself it goes when its time is up.
+    setting.seconds = 0.5f;
+    REQUIRE(effects.startSet(device, weapons, "MP_FIRE", Vec3{0.0f}, setting) != 0);
+    for (s32 i = 0; i < 40; ++i) {
+        effects.update(1.0f / 60.0f);
+    }
+    REQUIRE(effects.count() == 0);
+}
+
+TEST_CASE("an effect played through gives way to the tree named to take over, by name",
+          "[game][world][effects][assets]") {
+    const std::filesystem::path root =
+        test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    ItemArchive weapons;
+    REQUIRE(weapons.load(root / "WEAPONS"));
+    test::FakeRenderDevice device;
+    EffectTrees effects;
+    EffectTrees::Setting setting;
+    setting.seconds = 5.0f;
+    setting.then = "MP_ACID";
+    REQUIRE(effects.startSet(device, weapons, "MP_FIRE", Vec3{0.0f}, setting) != 0);
+    REQUIRE(effects.effect(0).name == "MP_FIRE");
+    for (s32 i = 0; i < 180; ++i) {
+        effects.update(1.0f / 60.0f); // the fire's two and a half seconds
+    }
+    REQUIRE(effects.count() == 1);
+    REQUIRE(effects.effect(0).name == "MP_ACID");
+    REQUIRE(effects.effect(0).repeats);
+    for (s32 i = 0; i < 150; ++i) {
+        effects.update(1.0f / 60.0f);
+    }
+    REQUIRE(effects.count() == 0); // the five seconds are up
+    // The crypt's book of protection burns on the lich as a tree with a sequence of no
+    // frames, which stays its whole time.
+    const std::filesystem::path crypt = root / "ITEMS" / "LEVELG5";
+    if (AssetLocator(crypt).find("ANIM.PS2")) {
+        ItemArchive items;
+        REQUIRE(items.load(crypt));
+        setting.then = "LEGENDFX";
+        REQUIRE(effects.startSet(device, items, "LEGENDPRJ", Vec3{0.0f}, setting) != 0);
+        for (s32 i = 0; i < 60; ++i) {
+            effects.update(1.0f / 60.0f);
+        }
+        REQUIRE(effects.count() == 1);
+        REQUIRE(effects.effect(0).name == "LEGENDFX");
+        for (s32 i = 0; i < 180; ++i) {
+            effects.update(1.0f / 60.0f);
+        }
+        REQUIRE(effects.count() == 1);
+        for (s32 i = 0; i < 90; ++i) {
+            effects.update(1.0f / 60.0f);
+        }
+        REQUIRE(effects.count() == 0);
+    }
+}
+
+TEST_CASE("the classes' turbo effects play through, flip-books that start late and all",
+          "[game][world][effects][assets]") {
+    const std::filesystem::path root = test::assetOrSkip("PLAYERS/WIZ/SFXBLU/ANIM.PS2")
+                                           .parent_path()
+                                           .parent_path()
+                                           .parent_path()
+                                           .parent_path();
+    test::FakeRenderDevice device;
+    for (const char* cls : {"WAR", "VAL", "WIZ", "ARC", "DWF", "KNI", "SOR", "JES"}) {
+        ItemArchive archive;
+        REQUIRE(archive.load(root / "PLAYERS" / cls / "SFXBLU"));
+        for (usize t = 0; t < archive.trees.size(); ++t) {
+            const std::string name = archive.trees.tree(static_cast<u32>(t)).name;
+            CAPTURE(cls, name);
+            EffectTrees effects;
+            if (!effects.start(device, archive, name, Vec3{0.0f})) {
+                continue; // a tree with nothing to bind
+            }
+            for (s32 i = 0; i < 400 && effects.count() > 0; ++i) {
+                effects.update(1.0f / 60.0f);
+                effects.draw(device, Mat4{1.0f}, WorldLighting{});
+            }
+            REQUIRE(effects.count() == 0);
+        }
+    }
+}
+
+TEST_CASE("every player effect export retains retail node and sequence texture controls",
+          "[game][effects][assets][unpacked][player-effects]") {
+    for (const char* cls : {"WAR", "VAL", "WIZ", "ARC", "DWF", "KNI", "SOR", "JES"}) {
+        for (const char* color : {"YEL", "BLU", "RED", "GRE"}) {
+            const auto folder =
+                std::filesystem::path{"PLAYERS"} / cls / (std::string{"SFX"} + color);
+            CAPTURE(cls, color);
+            const auto rawPath = test::assetOrSkip((folder / "ANIM.PS2").generic_string());
+            const auto exportPath =
+                test::unpackedOrSkip((folder / "animations.json").generic_string());
+            const auto raw = formats::AnimationFile::parse(readFile(rawPath));
+            AnimationSet exported;
+            REQUIRE(exported.load(exportPath.parent_path()));
+            REQUIRE(exported.size() == raw.trees.size());
+            for (const auto& tree : raw.trees) {
+                const auto index = exported.find(tree.name);
+                REQUIRE(index);
+                const auto& actual = exported.tree(*index);
+                REQUIRE(actual.nodes.size() == tree.nodes.size());
+                REQUIRE(actual.sequences.size() == tree.sequences.size());
+                for (usize i = 0; i < tree.nodes.size(); ++i) {
+                    CHECK(actual.nodes[i].textureAnimation == tree.nodes[i].textureAnimation);
+                }
+                for (usize i = 0; i < tree.sequences.size(); ++i) {
+                    if (tree.sequences[i].textureAnimationCount > 0) {
+                        CHECK(actual.sequences[i].textureAnimationStart ==
+                              tree.sequences[i].textureAnimationStart);
+                    }
+                    CHECK(actual.sequences[i].textureAnimationCount ==
+                          tree.sequences[i].textureAnimationCount);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Jester strong and turbo trails use their delayed texture windows",
+          "[game][effects][assets][player-effects]") {
+    const auto directory = test::assetOrSkip("PLAYERS/JES/SFXYEL/ANIM.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive archive;
+    REQUIRE(archive.load(directory));
+    TextureAnimator textures;
+    textures.bind(archive.trees.textureAnimations(), archive.textures, device);
+    for (const auto* name : {"JES_PWRA2", "JES_PWRA3", "JES_PWRC1"}) {
+        CAPTURE(name);
+        const auto index = archive.trees.find(name);
+        REQUIRE(index);
+        const auto& tree = archive.trees.tree(*index);
+        const auto node = std::ranges::find_if(
+            tree.nodes, [](const auto& value) { return value.textureAnimation >= 0; });
+        REQUIRE(node != tree.nodes.end());
+        const auto& control =
+            archive.trees.textureAnimations()[static_cast<usize>(node->textureAnimation)];
+        REQUIRE(control.offset > 0);
+        REQUIRE(textures.motionAt(node->textureAnimation, 0));
+        CHECK(textures.motionAt(node->textureAnimation, 0)->scale.x == 0);
+        CHECK(textures.motionAt(node->textureAnimation, control.offset)->scale.x == 0);
+        CHECK(textures.motionAt(node->textureAnimation, control.offset + 1)->scale.x > 0);
+        CHECK(textures
+                  .motionAt(node->textureAnimation, control.offset + control.frames + control.rate)
+                  ->offset.x == Catch::Approx(1));
+    }
+}
+
+} // namespace

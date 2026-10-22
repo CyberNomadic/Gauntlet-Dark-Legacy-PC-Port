@@ -1,0 +1,153 @@
+#include "game/hud/ChallengeHud.h"
+
+#include <algorithm>
+#include <cmath>
+#include <exception>
+#include <span>
+
+#include "engine/core/Log.h"
+#include "engine/io/NativeStateDigest.h"
+
+namespace gdl::game {
+namespace {
+constexpr f32 kSize = 128;
+constexpr f32 kUpperTop = 23;
+constexpr f32 kUpperHeight = 41;
+constexpr f32 kUpperTravel = 39;
+constexpr f32 kLowerTop = 105;
+constexpr f32 kLowerHeight = 23;
+constexpr f32 kLowerTravel = 38;
+constexpr f32 kAnimationRate = 30;
+} // namespace
+
+bool ChallengeHud::bind(RenderDevice& device, ItemArchive& archive) {
+    clear();
+    const auto frame = archive.textures.find("TIMER");
+    const auto sand = archive.textures.find("TIMER_SAND");
+    if (!frame || !sand) {
+        return false;
+    }
+    try {
+        m_frame = &archive.textures.texture(device, *frame);
+        m_sand = &archive.textures.texture(device, *sand);
+        for (const auto& animation : archive.trees.textureAnimations()) {
+            if (animation.name == "SAND_ANIM") {
+                m_falling.bind(std::span{&animation, usize{1}}, archive.textures, device);
+                break;
+            }
+        }
+        return true;
+    } catch (const std::exception& error) {
+        log::warn("Challenge hourglass: {}", error.what());
+        clear();
+        return false;
+    }
+}
+
+void ChallengeHud::clear() {
+    m_localBinding = std::make_shared<const u8>(0);
+    m_frame = nullptr;
+    m_sand = nullptr;
+    m_falling.clear();
+    m_sim.frames = 0;
+}
+
+void ChallengeHud::step(f32 seconds) {
+    m_sim.frames += std::max(seconds, 0.0f) * kAnimationRate;
+    const auto frames = static_cast<u32>(m_sim.frames);
+    m_sim.frames -= static_cast<f32>(frames);
+    m_falling.step(frames);
+}
+
+ChallengeHud::Sand ChallengeHud::sand(f32 remaining, f32 duration) {
+    const f32 elapsed = duration > 0 ? std::clamp(1 - remaining / duration, 0.0f, 1.0f) : 1;
+    return sandAt(elapsed);
+}
+
+ChallengeHud::Sand ChallengeHud::sandAt(f32 elapsed) {
+    const f32 upperTravel = std::round(kUpperTravel * elapsed);
+    const f32 lowerTravel = std::round(kLowerTravel * elapsed);
+    const f32 upperUv = (kUpperTop + kUpperHeight * elapsed) / kSize;
+    const f32 lowerUv = (kLowerTop - kLowerTravel * elapsed) / kSize;
+    return {{1, kUpperTop + 1 + upperTravel, kSize, kUpperHeight - upperTravel},
+            {0, upperUv, 1, 0.5f - upperUv},
+            {1, kLowerTop + 1 - lowerTravel, kSize, kLowerHeight + lowerTravel},
+            {0, lowerUv, 1, 1 - lowerUv}};
+}
+
+void ChallengeHud::draw(Canvas& canvas, f32 remaining, f32 duration, bool running) const {
+    draw(canvas, look(remaining, duration, running));
+}
+
+ChallengeHud::Look ChallengeHud::look(f32 remaining, f32 duration, bool running) const {
+    return {duration > 0 ? std::clamp(1 - remaining / duration, 0.0f, 1.0f) : 1,
+            running && m_falling.size() != 0 && m_falling.motion(0).frame != nullptr
+                ? m_falling.counter(0)
+                : -1};
+}
+
+bool ChallengeHud::accepts(const Look& look) const {
+    return m_frame != nullptr && m_sand != nullptr && std::isfinite(look.elapsed) &&
+           look.elapsed >= 0 && look.elapsed <= 1 &&
+           (look.fallingFrame == -1 ||
+            (look.fallingFrame >= 0 &&
+             m_falling.cycleFrame(0, static_cast<usize>(look.fallingFrame)) != nullptr));
+}
+
+void ChallengeHud::draw(Canvas& canvas, const Look& look) const {
+    if (!accepts(look)) {
+        return;
+    }
+    canvas.draw(*m_frame, {1, 1, kSize, kSize});
+    if (look.fallingFrame >= 0) {
+        constexpr Rect kFalling{63, 58, 8, 32};
+        canvas.draw(*m_falling.cycleFrame(0, static_cast<usize>(look.fallingFrame)), kFalling);
+    }
+    const auto shape = sandAt(look.elapsed);
+    canvas.draw(*m_sand, shape.upper, shape.upperUv, Color::white());
+    canvas.draw(*m_sand, shape.lower, shape.lowerUv, Color::white());
+}
+
+void ChallengeHud::saveLocal(LocalSnapshot& saved) const {
+    saved.m_state = m_sim;
+    saved.m_owner = this;
+    saved.m_binding = m_localBinding;
+    saved.m_falling = m_falling.clock();
+}
+
+bool ChallengeHud::canRestoreLocal(const LocalSnapshot& saved) const {
+    return saved.m_owner == this && saved.m_binding.lock() == m_localBinding;
+}
+
+bool ChallengeHud::restoreLocal(const LocalSnapshot& saved) {
+    if (!canRestoreLocal(saved)) {
+        return false;
+    }
+    m_sim = saved.m_state;
+    m_falling.restoreClock(saved.m_falling);
+    return true;
+}
+
+bool ChallengeHud::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    digest.string("challenge-hud-native-v1");
+    digest.resource(m_frame);
+    digest.resource(m_sand);
+    m_falling.appendBindingDigest(digest);
+    digest.fields<1>(saved ? saved->m_state : m_sim);
+    digest.fields<3>(saved ? saved->m_falling : m_falling.clock());
+    return digest.good();
+}
+
+bool ChallengeHud::appendNativeDigest(NativeStateDigest& digest) const {
+    return appendDigest(digest, nullptr);
+}
+
+bool ChallengeHud::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
+    return appendDigest(digest, &saved);
+}
+
+} // namespace gdl::game

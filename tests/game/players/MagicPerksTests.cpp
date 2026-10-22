@@ -2,8 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-
-#include "game/players/ClassData.h"
+#include "game/characters/ClassData.h"
 #include "game/players/MagicPerks.h"
 
 using namespace gdl;

@@ -1,0 +1,68 @@
+#pragma once
+
+#include <optional>
+#include <vector>
+
+#include "engine/core/Types.h"
+
+namespace gdl::game {
+
+/** A level gained (or lost): from what, to what, and whether it crossed a tier. */
+struct LevelChange {
+    s32 player = -1;
+    s32 from = 1;
+    s32 to = 1;
+    /** Whether the change crossed a milestone: every tenth level, when the costume changes
+     * and the class has something to say. */
+    bool milestone() const { return to / kLevelsPerTier != from / kLevelsPerTier; }
+    bool gained() const { return to > from; }
+
+    static constexpr s32 kLevelsPerTier = 10;
+};
+
+/**
+ * Watches the party's levels for changes. Told each player's level as often as it likes, it
+ * reports the changes since it last looked, so whatever grants experience need not know what
+ * a level means, and whatever answers a level gained (the fanfare, the costume) need not
+ * know where the experience came from.
+ */
+class LevelWatch {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& visitor, const LevelWatch& value) {
+        const auto& [marks] = value;
+        visitor.value(marks);
+    }
+
+public:
+    bool operator==(const LevelWatch&) const = default;
+
+    struct Mark {
+        s32 player = -1;
+        s32 level = 1;
+        bool operator==(const Mark&) const = default;
+        template <class Visitor> friend void visitNativeState(Visitor& visitor, const Mark& value) {
+            visitor.template fields<2>(value);
+        }
+    };
+    struct Checkpoint {
+        std::vector<Mark> marks;
+        bool valid() const;
+        bool operator==(const Checkpoint&) const = default;
+    };
+    Checkpoint checkpoint() const { return {m_marks}; }
+    /** Ordered comparison for a prepared transaction; performs no allocation. */
+    bool matches(const Checkpoint& state) const noexcept { return m_marks == state.marks; }
+    /** Preserve party order without announcing, healing, or observing a level. */
+    bool restore(const Checkpoint& state);
+    /** Notes `level` for `player`; the first sighting sets the mark and reports nothing. */
+    std::optional<LevelChange> observe(s32 player, s32 level);
+    /** Forgets a player, or everyone. */
+    void forget(s32 player);
+    void clear() { m_marks.clear(); }
+    std::optional<s32> markOf(s32 player) const;
+
+private:
+    std::vector<Mark> m_marks;
+};
+
+} // namespace gdl::game

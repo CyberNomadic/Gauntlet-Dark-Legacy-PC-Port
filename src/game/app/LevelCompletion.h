@@ -4,7 +4,7 @@
 
 #include "engine/core/Types.h"
 
-#include "game/screens/ShopSession.h"
+#include "game/shop/ShopSession.h"
 
 namespace gdl::game {
 /** game_main's completed-level route: init_gamemovie (when a final boss fell),

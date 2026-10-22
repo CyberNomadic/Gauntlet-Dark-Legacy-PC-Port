@@ -6,8 +6,8 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+#include "game/party/PlayerMissiles.h"
 #include "game/players/MeleeSelection.h"
-#include "game/world/PlayerMissiles.h"
 
 namespace gdl::game {
 /** Ordered, pointer-free cylinder geometry for read-only melee queries. Targets

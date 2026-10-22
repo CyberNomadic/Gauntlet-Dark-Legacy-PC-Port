@@ -4,10 +4,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "game/enemies/LevelOpponents.h"
+#include "game/party/PlayerPowerups.h"
 #include "game/players/MikeyDecoy.h"
 #include "game/players/PowerupEffects.h"
-#include "game/screens/LevelOpponents.h"
-#include "game/screens/PlayerPowerups.h"
 
 namespace {
 using namespace gdl;

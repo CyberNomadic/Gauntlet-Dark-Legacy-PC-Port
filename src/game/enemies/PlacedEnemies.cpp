@@ -76,8 +76,7 @@ bool PlacedEnemies::appendNativeDigest(NativeStateDigest& digest) const {
     return appendStateDigest(digest, m_sim);
 }
 
-bool PlacedEnemies::appendLocalDigest(NativeStateDigest& digest,
-                                     const LocalSnapshot& saved) const {
+bool PlacedEnemies::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;

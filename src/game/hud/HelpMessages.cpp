@@ -1,0 +1,436 @@
+#include "game/hud/HelpMessages.h"
+
+#include <algorithm>
+#include <format>
+
+#include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+
+#include "game/menu/ScrollBox.h"
+
+namespace gdl::game {
+
+void visitNativeState(NativeStateDigest& digest, const HelpMessages& value) {
+    digest.string("help-messages-native-v1");
+    const auto& [strings, lines, id, priority, player, number, speaker, ticksLeft, pauseLeft,
+                 posted] = value;
+    digest.flag(strings != nullptr);
+    if (strings) {
+        digest.value(*strings);
+    }
+    digest.values(lines, id, priority, player, number, speaker, ticksLeft, pauseLeft, posted);
+}
+
+namespace {
+
+constexpr std::array<HelpMessageSpec, 125> kSpecs{{
+    {HelpMessages::kUseMagicOnDeath, "USEMAGIC", "S_USEMAGIC"},
+    {HelpMessages::kDoorNeedsKey, "USEKEYOPENDOOR", "S_USEKEY"},
+    {HelpMessages::kChestNeedsKey, "USEKEYOPENCHEST", "S_USEKEY2"},
+    {HelpMessages::kPotionsFull, "FULLOFBOMBS", "S_MAGICFULL"},
+    {HelpMessages::kKeysFull, "FULLOFKEYS", "S_KEYFULL"},
+    {HelpMessages::kTrapsMove, "TRAPMOVE", "S_TRAPSMAKE"},
+    {HelpMessages::kNoPotion, "COLLECTMAGICFIRST", "S_COLLECTPOT"},
+    {7, "USEMAGIC2", "S_USEMAGIC2"},
+    {8, "SAVEKEYS", "S_SAVEKEYS"},
+    {HelpMessages::kTransporter, "TRANSPORTERSMOVEYOU", "S_TRANSPORTER"},
+    {HelpMessages::kEveryoneToExit, "HOWTOEXIT", "S_SAMEEXIT"},
+    {HelpMessages::kShotMagic, "SHOOTPOTIONLESSER", "S_SHOOTINGMAGIC"},
+    {HelpMessages::kWastedMagic, "DONTWASTEMAGIC", "S_DONTWASTE"},
+    {15, "EATMEAT", "S_MEATGIVES"},
+    {16, "EATFRUIT", "S_FRUITGIVES"},
+    {17, "COLLECTGOLD", "S_COLLECTGOLD"},
+    {28, "POISONEDFOOD", "S_POISONEDFOOD"},
+    {94, "THROWMAGIC", "S_THROWMAGIC"},
+    {95, "MAGICSHIELD", "S_SHIELDMAGIC"},
+    {HelpMessages::kSecretWalls, "FOUNDSECRETWALLS", "S_MULTIPLEHITS"},
+    {HelpMessages::kTrapsHurt, "AVOIDOBJECTS", "S_AVOID"},
+    {HelpMessages::kDestroyGenerators, "KILLGENERATORS", "S_DESTROY"},
+    {HelpMessages::kRandomChest, "RANDOMCHEST", "S_SILVER"},
+    {HelpMessages::kBarrelsHold, "WOODBARREL", "S_SOMEBARRELS"},
+    {HelpMessages::kRedBarrels, "REDBARREL", "S_SHOOTRED"},
+    {HelpMessages::kGreenBarrels, "GREENBARREL", "S_SHOOTGREEN"},
+    // message.c's descriptor IDs and text indices, resolved against ENGLISH's names.
+    {32, "SPEEDUP", "S_XSPEED"},
+    {33, "MAGICUP", "S_XMAGIC"},
+    {35, "INVULNERABILITY", "S_INVULVOX"},
+    {36, "INVISIBILITY", "S_INVISVOX"},
+    {37, "THREEWAYS", "S_3WAYSHOTVOX"},
+    {38, "REFLECTSHOT", "S_REFLECTVOX"},
+    {39, "SEETHRU", "S_XRAYVOX"},
+    {40, "REDAMULET", "S_FIREAMVOX"},
+    {41, "BLUEAMULET", "S_LGHTNGAMVOX"},
+    {42, "YELAMULET", "S_LIGHTAMVOX"},
+    {43, "GREENAMULET", "S_ACIDAMVOX"},
+    {47, "FIVEWAYS", "S_5WAYSHOTVOX"},
+    {48, "SUPERSHOT", "S_SUPERVOX"},
+    {49, "HALO", "S_ANTIDEATHVOX"},
+    {51, "TIMESTOP", "S_STOPPEDVOX"},
+    {52, "REFLECTARMOR", "S_REFLECTSHVOX"},
+    {53, "LEVITATION", "S_LEVVOX"},
+    {54, "INVULNERABILITY", "S_INVULVOX"},
+    {81, "FIREBREATHE", "S_FIREBRVOX"},
+    {82, "ACIDBREATHE", "S_ACIDBRVOX"},
+    {83, "ELECBREATHE", "S_LGHTNGBRVOX"},
+    {84, "PHOENIX", "S_PHOENIXVOX"},
+    {86, "HAMMERMSG", "S_HAMMERVOX"},
+    {87, "RAPIDFIREMSG", "S_RAPIDFIREVOX"},
+    {88, "GROWTHMSG", "S_GROWTHVOX"},
+    {HelpMessages::kNowIt, "ISNOWIT", "S_NOWIT", HelpRepeat::Always, -1, 40},
+    {89, "SHRINKMSG", "S_SHRINKVOX"},
+    {91, "FIRESHIELDMSG", "S_FIREWALLSHVOX"},
+    {92, "ELECSHIELDMSG", "S_LGHTNGSHVOX"},
+    {93, "POJOMSG", "S_POJOVOX", HelpRepeat::Always},
+    {98, "MASKMSG", "S_MASKVOX"},
+    {99, "HORNSMSG", "S_HORNSVOX"},
+    {100, "GAUNTLETMSG", "S_GAUNTLETVOX"},
+    {113, "TURBOBOOST", "S_TURBOBOOST"},
+    {132, "GASMASK", "S_GASMASK"},
+    {148, "MIKEY", "S_PICKUPCRYST", HelpRepeat::OnceForAll, -1, 50, false, true},
+    {149, "HANDOFDEATH", "S_PICKUPCRYST", HelpRepeat::OnceForAll, -1, 50, false, true},
+    {150, "HEALTHVAMP", "S_PICKUPCRYST", HelpRepeat::OnceForAll, -1, 50, false, true},
+    // The classes' turbo attacks by name: the lesser, then the greater.
+    {57, "WAR_TURBO", "S_FIREARC", HelpRepeat::OncePerSession, 1, 60, true},
+    {58, "WAR_TURBO", "S_PLASMATRAIL", HelpRepeat::OncePerSession, 2, 70, true},
+    {60, "VAL_TURBO", "S_MULTIBLADE", HelpRepeat::OncePerSession, 1, 60, true},
+    {61, "VAL_TURBO", "S_SKYLANCE", HelpRepeat::OncePerSession, 2, 70, true},
+    {63, "WIZ_TURBO", "S_ROCKSHOWER", HelpRepeat::OncePerSession, 1, 60, true},
+    {64, "WIZ_TURBO", "S_DEMONSKULL", HelpRepeat::OncePerSession, 2, 70, true},
+    {66, "ARC_TURBO", "S_DOUBLEBOW", HelpRepeat::OncePerSession, 1, 60, true},
+    {67, "ARC_TURBO", "S_BFG", HelpRepeat::OncePerSession, 2, 70, true},
+    {69, "DWF_TURBO", "S_TURB_DWF", HelpRepeat::OncePerSession, 1, 60, true},
+    {70, "DWF_TURBO", "S_TURC_DWF", HelpRepeat::OncePerSession, 2, 70, true},
+    {72, "KNI_TURBO", "S_TURB_KNI", HelpRepeat::OncePerSession, 1, 60, true},
+    {73, "KNI_TURBO", "S_TURC_KNI", HelpRepeat::OncePerSession, 2, 70, true},
+    {75, "SOR_TURBO", "S_TURB_SOR", HelpRepeat::OncePerSession, 1, 60, true},
+    {76, "SOR_TURBO", "S_TURC_SOR", HelpRepeat::OncePerSession, 2, 70, true},
+    {78, "JES_TURBO", "S_TURB_JES", HelpRepeat::OncePerSession, 1, 60, true},
+    {79, "JES_TURBO", "S_TURC_JES", HelpRepeat::OncePerSession, 2, 70, true},
+    {HelpMessages::kAlreadyHaveRune, "ALREADYHAVERUNE", "S_ALREADYRUNE", HelpRepeat::Always},
+    // The classes' two-player combos by name, from the COMBOS lines, once a character, in
+    // the class's own bank (message.c 216: category 2, priority 70).
+    {HelpMessages::kFirstComboName + 0, "COMBOS", "S_PINBALL", HelpRepeat::OncePerPlayer, 0, 70,
+     true},
+    {HelpMessages::kFirstComboName + 1, "COMBOS", "S_SPINKICK", HelpRepeat::OncePerPlayer, 1, 70,
+     true},
+    {HelpMessages::kFirstComboName + 2, "COMBOS", "S_DOPPEL", HelpRepeat::OncePerPlayer, 2, 70,
+     true},
+    {HelpMessages::kFirstComboName + 3, "COMBOS", "S_AERIAL", HelpRepeat::OncePerPlayer, 3, 70,
+     true},
+    {HelpMessages::kFirstComboName + 4, "COMBOS", "S_SCHARGE", HelpRepeat::OncePerPlayer, 4, 70,
+     true},
+    {HelpMessages::kFirstComboName + 5, "COMBOS", "S_DBOMBER", HelpRepeat::OncePerPlayer, 5, 70,
+     true},
+    {HelpMessages::kFirstComboName + 6, "COMBOS", "S_BIGFOOT", HelpRepeat::OncePerPlayer, 6, 70,
+     true},
+    {HelpMessages::kFirstComboName + 7, "COMBOS", "S_CANNONBALL", HelpRepeat::OncePerPlayer, 7, 70,
+     true},
+    {HelpMessages::kUseTurbo, "USETURBO", "S_USETURBO"},
+    {HelpMessages::kUseCombo, "USECOMBO", "S_USECOMBO"},
+    // The legend items by name as they are found, one to a realm: the castle's scimitar to
+    // the sky's javelin. The underworld's and the battlefield's have no item; their rows keep
+    // the realm numbering.
+    {HelpMessages::kFirstLegendName + 1, "LEGEND_ITEMS000", "S_SCIMITARVOX"},
+    {HelpMessages::kFirstLegendName + 2, "LEGEND_ITEMS001", "S_ICEAXEVOX"},
+    {HelpMessages::kFirstLegendName + 3, "LEGEND_ITEMS002", "S_LAMPVOX"},
+    {HelpMessages::kFirstLegendName + 4, "LEGEND_ITEMS003", "S_BELLOWSVOX"},
+    {HelpMessages::kFirstLegendName + 5, "LEGEND_ITEMS004", "S_SAVIORVOX"},
+    {HelpMessages::kFirstLegendName + 6, "LEGEND_ITEMS005", "S_SAVIORVOX"},
+    {HelpMessages::kFirstLegendName + 7, "LEGEND_ITEMS006", "S_BOOKVOX"},
+    {HelpMessages::kFirstLegendName + 8, "LEGEND_ITEMS007", "S_SAVIORVOX"},
+    {HelpMessages::kFirstLegendName + 9, "LEGEND_ITEMS008", "S_PARCHVOX"},
+    {HelpMessages::kFirstLegendName + 10, "LEGEND_ITEMS009", "S_LANTERNVOX"},
+    {HelpMessages::kFirstLegendName + 11, "LEGEND_ITEMS010", "S_JAVELINVOX"},
+    {HelpMessages::kHealthFull, "HEALTHFULL", "S_HEALTHFULL", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kLevelUp, "LEVELUP", "S_GAINEDLEVEL", HelpRepeat::Always},
+    {HelpMessages::kBlastsDestroy, "EXPDESTROY", "S_EXPDSTITMS"},
+    {HelpMessages::kGasSpoils, "GASPOISON", "S_GASFOODBAD"},
+    {HelpMessages::kLearnBlock, "LEARNBLOCK", "S_LEARNBLOCK", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kAllOnPlatform, "ALLPLATFORM", "S_ALLPLATFRM", HelpRepeat::OncePerSession},
+    {HelpMessages::kAllOnTrigger, "ALLTRIGGER", "S_TRIGGERVOX", HelpRepeat::OncePerSession},
+    {HelpMessages::kDeathDrainsExperience, "DEATHDRAINEXP", "S_DEATHDRAINXP"},
+    {HelpMessages::kDeathLeavesExperience, "DEATHDIEEXP", "S_DIESAFTERXP"},
+    {HelpMessages::kDeathDrainsHealth, "DEATHDRAINHEALTH", "S_DEATHDRAINS"},
+    {HelpMessages::kDeathLeavesHealth, "DEATHDIEHEALTH", "S_DIESAFTER"},
+    {HelpMessages::kGeneralsCarry, "GENSCARRY", "S_GENSCARRY"},
+    {HelpMessages::kChestsExplode, "CHESTSEXPL", "S_CHESTSEXPL"},
+    {HelpMessages::kGargoylesRelease, "DEFEATGAR", "S_DEFGRG4GLD"},
+    // What a class family's potion magic learns at levels 25 and 50 (fn_8005BA1C).
+    {HelpMessages::kFirstMagicPerk + 0, "WARMAGIC1", "S_MAGJNK2SILV", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 1, "WARMAGIC2", "S_MAGJNK2GLD", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 2, "VALMAGIC1", "S_MAGSTOPTRP", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 3, "VALMAGIC2", "S_MAGDSTTRP", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 4, "WIZMAGIC1", "S_MAGCLFRUIT", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 5, "WIZMAGIC2", "S_MAGCLMEAT", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 6, "ARCMAGIC1", "S_MAGSHOWWALLS", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kFirstMagicPerk + 7, "ARCMAGIC2", "S_MAGDSTWLLS", HelpRepeat::OncePerPlayer},
+    {HelpMessages::kHealingMagic, "MAGIC99", "S_MAGICHEAL", HelpRepeat::OncePerPlayer},
+}};
+
+/** The string lists a message naming a player is filled from (message.c 769). */
+constexpr std::string_view kColorNames = "PLAYER_COLOR";
+constexpr std::string_view kClassNames = "PLAYER_CLASS";
+constexpr std::string_view kPojoName = "POJO";
+constexpr std::string_view kNamesSlot = "%s %s";
+
+/** The original's ink for players one to four: dark yellow, blue, red and green. */
+constexpr std::array<Color, 4> kInks{Color::rgba(0x1F, 0x1F, 0x00), Color::rgba(0x00, 0x00, 0x1F),
+                                     Color::rgba(0x1F, 0x00, 0x00), Color::rgba(0x00, 0x1F, 0x00)};
+
+template <class Reader>
+bool historyWanted(const HelpMessageSpec& spec, s32 player, std::span<const Reader> party) {
+    const auto sawIt = [&](const Reader& reader) {
+        return reader.seen != nullptr && std::ranges::binary_search(*reader.seen, spec.id);
+    };
+    const auto heardIt = [&](const Reader& reader) {
+        return reader.heard != nullptr && std::ranges::binary_search(*reader.heard, spec.id);
+    };
+    // Told once: a player's own message until that player has seen it, a lesson until
+    // everyone playing has, a session's until anyone playing has heard it since loading.
+    if (spec.repeat == HelpRepeat::Always) {
+        return true;
+    }
+    if (spec.repeat == HelpRepeat::OncePerSession) {
+        return std::ranges::none_of(party, heardIt);
+    }
+    return std::ranges::any_of(party, [&](const Reader& reader) {
+        return (spec.repeat != HelpRepeat::OncePerPlayer || reader.player == player) &&
+               !sawIt(reader);
+    });
+}
+
+} // namespace
+
+const HelpMessageSpec* HelpMessages::specOf(s32 id) {
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
+    const auto found = std::ranges::find(kSpecs, id, &HelpMessageSpec::id);
+    return found != kSpecs.end() ? &*found : nullptr;
+}
+
+bool HelpMessages::wanted(s32 id, s32 player, std::span<const HelpHistory> party) {
+    const auto* spec = specOf(id);
+    return spec != nullptr && historyWanted(*spec, player, party);
+}
+
+Color HelpMessages::inkOf(s32 player) {
+    return player >= 0 && static_cast<usize>(player) < kInks.size()
+               ? kInks[static_cast<usize>(player)]
+               : ScrollBox::kTextColor;
+}
+
+bool HelpMessages::gameplayTip(s32 id) {
+    return (id >= kDoorNeedsKey && id <= 28) || id == 94 || id == 95 || id == kUseTurbo ||
+           id == kUseCombo || (id >= kBlastsDestroy && id <= kChestsExplode);
+}
+
+HelpMessages::VoiceLead HelpMessages::voiceLead(s32 id, bool multiplayer) {
+    if (id == kNowPojo || id == kNowIt) {
+        return VoiceLead::PlayerName;
+    }
+    if (id == kLevelUp || id == kShrunk) {
+        return VoiceLead::PlayerHas;
+    }
+    if (multiplayer) {
+        // Retail does not prefix shield, gas-mask, turbo or crystal announcements.
+        static constexpr std::array kNamed{32,  33,  35,  36,  37,  38,  39,  40,  41,  42,
+                                           43,  47,  48,  49,  51,  52,  53,  54,  81,  82,
+                                           83,  84,  86,  87,  88,  98,  99,  100, 114, 115,
+                                           116, 117, 118, 119, 120, 121, 122, 123, 124};
+        if (std::ranges::find(kNamed, id) != kNamed.end()) {
+            return VoiceLead::PlayerHas;
+        }
+    }
+    return VoiceLead::None;
+}
+
+f32 HelpMessages::voiceWait(s32 id, VoiceLead lead) {
+    constexpr f32 kAloneWait = 0.5f;
+    constexpr f32 kHasWait = 4.0f;
+    constexpr f32 kLevelWait = 1.0f;
+    constexpr f32 kNameWait = 5.0f;
+    switch (lead) {
+    case VoiceLead::PlayerName: return kNameWait;
+    case VoiceLead::PlayerHas: return id == kLevelUp ? kLevelWait : kHasWait;
+    case VoiceLead::None:
+    default: return kAloneWait;
+    }
+}
+
+void HelpMessages::clear() {
+    m_lines.clear();
+    m_id = -1;
+    m_number = -1;
+    m_speaker = {};
+    m_priority = 0;
+    m_ticksLeft = 0;
+    m_pauseLeft = 0;
+    m_posted = 0;
+}
+
+std::string_view HelpMessages::listEntry(std::string_view list, s32 entry) const {
+    const auto found = m_strings->find(list);
+    if (!found.has_value() || entry < 0) {
+        return {};
+    }
+    const MessageInfo& info = m_strings->message(*found);
+    return static_cast<usize>(entry) < info.pages.size() ? info.pages[static_cast<usize>(entry)]
+                                                         : std::string_view{};
+}
+
+std::string HelpMessages::speakerLine(s32 id, s32 player, HelpSpeaker speaker) const {
+    if (speaker.pojo && id != kNowPojo) {
+        return std::string{listEntry(kPojoName, 0)};
+    }
+    const std::string_view color = listEntry(kColorNames, player);
+    const std::string_view name = listEntry(kClassNames, speaker.character);
+    if (name.empty()) {
+        return std::string{color}; // a class the list does not name
+    }
+    return std::format("{} {}", color, name);
+}
+
+const HelpMessageSpec* HelpMessages::post(s32 id, s32 player, std::span<const HelpReader> party,
+                                          s32 number, HelpSpeaker speaker) {
+    const HelpMessageSpec* spec = specOf(id);
+    if (spec == nullptr || m_strings == nullptr) {
+        return nullptr;
+    }
+    // One at a time, unless it outranks what is up; the pause between them is the lessons'.
+    const bool lesson = id <= 28 || id == 44 || id == 45 || id == 55 || id == 80;
+    if ((showing() && m_priority >= spec->priority) || (lesson && m_pauseLeft > 0)) {
+        return nullptr;
+    }
+    const auto concerns = [&](const HelpReader& reader) {
+        return spec->repeat != HelpRepeat::OncePerPlayer || reader.player == player;
+    };
+    const bool wanted = historyWanted(*spec, player, party);
+    const auto message = m_strings->find(spec->text);
+    if (!wanted || !message.has_value()) {
+        return nullptr;
+    }
+    auto lines = linesFor({id, player, number, speaker});
+    if (lines.empty()) {
+        return nullptr;
+    }
+    m_lines = std::move(lines);
+    const auto note = [id](std::vector<s32>* list) {
+        if (list != nullptr && !std::ranges::binary_search(*list, id)) {
+            list->insert(std::ranges::upper_bound(*list, id), id);
+        }
+    };
+    for (const HelpReader& reader : party) {
+        if (concerns(reader)) {
+            note(reader.seen);
+            note(reader.heard);
+        }
+    }
+    m_id = id;
+    m_priority = spec->priority;
+    m_player = player;
+    m_number = number;
+    m_speaker = speaker;
+    m_ticksLeft = static_cast<s32>(m_lines.size()) * kTicksPerLine + kTicksOver;
+    return spec;
+}
+
+std::optional<HelpMessages::Look> HelpMessages::look() const {
+    return showing() ? std::optional{Look{m_id, m_player, m_number, m_speaker}} : std::nullopt;
+}
+
+std::vector<std::string> HelpMessages::linesFor(const Look& look) const {
+    const auto* spec = specOf(look.id);
+    if (spec == nullptr || m_strings == nullptr) {
+        return {};
+    }
+    const auto message = m_strings->find(spec->text);
+    if (!message) {
+        return {};
+    }
+    const MessageInfo& info = m_strings->message(*message);
+    // The strings keep a message's lines as its pages.
+    std::vector<std::string> lines;
+    for (usize page = 0; page < info.pages.size(); ++page) {
+        if (spec->line >= 0 && page != static_cast<usize>(spec->line)) {
+            continue;
+        }
+        for (std::string& line : ScrollBox::splitLines(info.pages[page])) {
+            // A number the message asks for ("LEVEL %d") is filled in.
+            if (const auto at = line.find("%d"); at != std::string::npos && look.number >= 0) {
+                line.replace(at, 2, std::to_string(look.number));
+            }
+            // So is the colour and class of the one a message names.
+            if (line == kNamesSlot && look.speaker.character >= 0) {
+                if (std::string named = speakerLine(look.id, look.player, look.speaker);
+                    !named.empty()) {
+                    line = std::move(named);
+                }
+            }
+            lines.push_back(std::move(line));
+        }
+    }
+    return lines;
+}
+
+void HelpMessages::update(s32 ticks) {
+    m_pauseLeft = std::max(m_pauseLeft - ticks, 0);
+    if (m_ticksLeft <= 0) {
+        return;
+    }
+    m_ticksLeft -= ticks;
+    if (m_ticksLeft <= 0) {
+        m_ticksLeft = 0;
+        m_priority = 0;
+        m_pauseLeft = kPauses[std::min(m_posted, kPauses.size() - 1)];
+        ++m_posted;
+    }
+}
+
+Rect HelpMessages::areaFor(const TextPainter& text, const Vec2& head) const {
+    return areaForLines(text, head, m_lines);
+}
+
+Rect HelpMessages::areaForLines(const TextPainter& text, const Vec2& head,
+                                std::span<const std::string> lines) {
+    s32 widest = 0;
+    for (const std::string& line : lines) {
+        widest = std::max(widest, text.measure(line));
+    }
+    const auto width = static_cast<f32>(widest + kMarginAcross);
+    const auto height =
+        static_cast<f32>(static_cast<s32>(lines.size()) * text.lineHeight() + kMarginDown);
+    const f32 left =
+        std::clamp(head.x - width * 0.5f, 0.0f, std::max(static_cast<f32>(kWidest) - width, 0.0f));
+    const f32 top = std::clamp(head.y - static_cast<f32>(kAboveHead) - height * 0.5f, 2.0f,
+                               std::max(static_cast<f32>(kLowest) - height, 2.0f));
+    return Rect{left, top, width, height};
+}
+
+void HelpMessages::draw(Canvas& canvas, const TextPainter& text, const Texture* scroll,
+                        const Vec2& head) const {
+    if (!showing() || !text.ready()) {
+        return;
+    }
+    drawLines(canvas, text, scroll, head, m_lines, m_player);
+}
+
+void HelpMessages::drawLines(Canvas& canvas, const TextPainter& text, const Texture* scroll,
+                             const Vec2& head, std::span<const std::string> lines, s32 player) {
+    if (lines.empty() || !text.ready()) {
+        return;
+    }
+    const Rect area = areaForLines(text, head, lines);
+    if (scroll != nullptr) {
+        canvas.draw(*scroll, area, Color::white().withAlpha(kScrollAlpha));
+    }
+    TextStyle style;
+    style.color = inkOf(player);
+    const auto centre = static_cast<s32>(area.x + area.width * 0.5f);
+    s32 y = static_cast<s32>(area.y) + kMarginDown / 2;
+    for (const std::string& line : lines) {
+        text.draw(canvas, -centre, y, line, style);
+        y += text.lineHeight();
+    }
+}
+
+} // namespace gdl::game

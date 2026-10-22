@@ -10,9 +10,9 @@
 #include "TestSupport.h"
 #include "game/app/LevelCompletion.h"
 #include "game/app/Scenario.h"
-#include "game/players/Party.h"
-#include "game/screens/AfterLevelScene.h"
-#include "game/screens/PlayerSelectScene.h"
+#include "game/characters/Party.h"
+#include "game/scenes/AfterLevelScene.h"
+#include "game/scenes/PlayerSelectScene.h"
 
 namespace {
 using namespace gdl;

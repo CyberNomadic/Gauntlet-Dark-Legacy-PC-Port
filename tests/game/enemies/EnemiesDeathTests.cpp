@@ -13,8 +13,8 @@
 #include "TestSupport.h"
 #include "game/enemies/DeathTestSupport.h"
 #include "game/enemies/Enemies.h"
-#include "game/world/LevelCatalog.h"
-#include "game/world/LevelWorld.h"
+#include "game/level/LevelCatalog.h"
+#include "game/level/LevelWorld.h"
 
 namespace {
 using namespace gdl;

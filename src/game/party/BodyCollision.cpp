@@ -1,0 +1,119 @@
+#include "game/party/BodyCollision.h"
+
+#include <algorithm>
+#include <cmath>
+
+#include "game/players/PlayerActor.h"
+
+namespace gdl::game {
+Vec3 BodyCollision::resolveItems(const Vec3& from, const Vec3& to, f32 radius, f32 height,
+                                 std::span<const Obstacle> items) {
+    if (items.empty() || radius <= 0 || height <= 0) {
+        return to;
+    }
+    const f32 distance = glm::length(Vec2{to.x - from.x, to.z - from.z});
+    const auto steps = std::max(1, static_cast<s32>(std::ceil(distance / (radius * 0.5f))));
+    const Vec3 step = (to - from) / static_cast<f32>(steps);
+    Vec3 position = from;
+    for (s32 i = 0; i < steps; ++i) {
+        position += step;
+        for (const Obstacle& item : items) {
+            if (!item.solid || position.y >= item.centre.y + item.height ||
+                position.y + height <= item.centre.y) {
+                continue;
+            }
+            // Horizontal push-out uses the body's actual vertical overlap, not the item's
+            // own height as a substitute for the player's height.
+            const Vec3 probe{position.x, item.centre.y, position.z};
+            const Vec3 pushed = item.pushOut(probe, radius);
+            position.x = pushed.x;
+            position.z = pushed.z;
+        }
+    }
+    position.y = to.y;
+    return position;
+}
+
+Vec3 BodyCollision::resolve(const Vec3& from, const Vec3& to, f32 radius, f32 height,
+                            std::span<const MissileTarget> bodies) {
+    Vec2 position{from.x, from.z};
+    Vec2 remaining{to.x - from.x, to.z - from.z};
+    // Re-sweep the slide, so resolving one body cannot push through another.
+    for (s32 iteration = 0; iteration < 4; ++iteration) {
+        const f32 lengthSquared = glm::dot(remaining, remaining);
+        if (lengthSquared < 1e-10f) {
+            break;
+        }
+        f32 first = 1;
+        Vec2 normal{0};
+        bool hit = false;
+        for (const auto& body : bodies) {
+            if (body.radius <= 0 || body.height <= 0 ||
+                std::min(from.y, to.y) >= body.base.y + body.height ||
+                std::max(from.y, to.y) + height <= body.base.y) {
+                continue;
+            }
+            const Vec2 delta = position - Vec2{body.base.x, body.base.z};
+            const f32 reach = radius + body.radius;
+            const f32 separation = glm::dot(delta, delta) - reach * reach;
+            const f32 toward = glm::dot(delta, remaining);
+            // A spawn/animation may begin overlapping. Allow escape, not a deeper step.
+            if (toward >= 0) {
+                continue;
+            }
+            const f32 discriminant = toward * toward - lengthSquared * separation;
+            if (discriminant < 0) {
+                continue;
+            }
+            const f32 time =
+                separation <= 0 ? 0 : (-toward - std::sqrt(discriminant)) / lengthSquared;
+            if (time < 0 || time > first) {
+                continue;
+            }
+            const Vec2 contact = delta + remaining * time;
+            const f32 distance = glm::length(contact);
+            if (distance <= 1e-5f) {
+                continue;
+            }
+            first = time;
+            normal = contact / distance;
+            hit = true;
+        }
+        position += remaining * first;
+        if (!hit) {
+            break;
+        }
+        remaining *= 1 - first;
+        remaining -= normal * std::min(glm::dot(remaining, normal), 0.0f);
+    }
+    return {position.x, to.y, position.y};
+}
+
+Vec3 BodyCollision::resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to,
+                                    std::span<const MissileTarget> bodies,
+                                    std::span<const Obstacle> generators,
+                                    const WorldCollision* collision) {
+    Vec3 resolved = resolve(from, to, player.radius(), player.height(), bodies);
+    resolved = resolveItems(from, resolved, player.radius(), player.height(), generators);
+    if (collision != nullptr) {
+        // A body's push can leave the player in a wall: put PlayerWallCollide's sphere
+        // back out of the still faces it is in front of. Animated contacts have already
+        // been swept. A face the player stands behind is air to it (BTriLineCol), so it
+        // is never put through a one-sided railing.
+        const Vec3 lift{0.0f,
+                        player.followPoint().y - player.position().y + PlayerActor::kWallSphereLift,
+                        0.0f};
+        resolved = collision->resolveSphere(resolved + lift, player.reach(), true) - lift;
+        const Vec3 checked = resolve(from, resolved, player.radius(), player.height(), bodies);
+        if (glm::distance(checked, resolved) > 1e-4f) {
+            return {from.x, to.y, from.z};
+        }
+        const Vec3 itemChecked =
+            resolveItems(resolved, resolved, player.radius(), player.height(), generators);
+        if (glm::distance(itemChecked, resolved) > 1e-4f) {
+            return {from.x, to.y, from.z};
+        }
+    }
+    return resolved;
+}
+} // namespace gdl::game

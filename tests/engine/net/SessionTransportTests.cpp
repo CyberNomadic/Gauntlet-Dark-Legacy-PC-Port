@@ -8,8 +8,8 @@
 
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/OnlineSession.h"
-#include "game/netplay/RollbackSessionHarness.h"
-#include "game/screens/NativePlaySetup.h"
+#include "game/rollback/RollbackSessionHarness.h"
+#include "game/netplay/NativePlaySetup.h"
 
 namespace {
 using namespace gdl;

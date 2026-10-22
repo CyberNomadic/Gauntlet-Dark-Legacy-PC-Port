@@ -5,7 +5,7 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
-#include "game/players/Inventory.h"
+#include "game/characters/Inventory.h"
 
 namespace gdl {
 class NativeStateDigest;

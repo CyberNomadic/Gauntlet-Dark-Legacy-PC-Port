@@ -7,10 +7,10 @@
 #include "engine/core/Types.h"
 
 #include "TestSupport.h"
+#include "game/characters/ClassData.h"
 #include "game/combat/Damage.h"
 #include "game/combat/DamageTypes.h"
-#include "game/enemies/CritterData.h"
-#include "game/players/ClassData.h"
+#include "game/critters/CritterData.h"
 
 namespace {
 using namespace gdl;

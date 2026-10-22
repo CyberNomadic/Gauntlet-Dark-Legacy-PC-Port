@@ -5,13 +5,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "FakeRenderDevice.h"
-#include "TestSupport.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/enemies/Generators.h"
-#include "game/world/NativeStateResources.h"
+#include "game/level/NativeStateResources.h"
 
 namespace {
 using namespace gdl;
@@ -159,8 +160,7 @@ struct Pool {
     void step(s32 tick, bool wrong = false) {
         players[0].position.x = wrong ? -80.0f : static_cast<f32>(tick % 13);
         generators.setPlayerCount(wrong ? 4 : 1 + (tick / 6) % 2);
-        generators.setView(std::nullopt, wrong ? std::optional<Vec3>{{10000, 0, 0}}
-                                             : std::nullopt);
+        generators.setView(std::nullopt, wrong ? std::optional<Vec3>{{10000, 0, 0}} : std::nullopt);
         if (tick % 7 == 2) {
             (void)generators.strike(0, wrong ? 1000.0f : 1.0f, 0);
         }
@@ -284,16 +284,15 @@ TEST_CASE("rewound species retain hashable artwork without becoming active again
     info.radius = 2;
     info.height = 5;
     REQUIRE(corrected.generators.placeBoss(
-        corrected.device, info, *corrected.enemies.archive(kGruntKind), corrected.enemies,
-        kRatKind, glm::translate(Mat4{1}, Vec3{60, 0, 0}), &corrected.collision, "RATGEN"));
+        corrected.device, info, *corrected.enemies.archive(kGruntKind), corrected.enemies, kRatKind,
+        glm::translate(Mat4{1}, Vec3{60, 0, 0}), &corrected.collision, "RATGEN"));
     REQUIRE(corrected.generators.count() == 3);
     const auto* retainedArchive = corrected.enemies.archiveOf(kRatKind);
     REQUIRE(retainedArchive);
     REQUIRE(retainedArchive->trees.find("RATGEN"));
-    const std::array retainedShots{
-        corrected.enemies.projectileModel(kRatKind, 0),
-        corrected.enemies.projectileModel(kRatKind, 1),
-        corrected.enemies.projectileModel(kRatKind, 2)};
+    const std::array retainedShots{corrected.enemies.projectileModel(kRatKind, 0),
+                                   corrected.enemies.projectileModel(kRatKind, 1),
+                                   corrected.enemies.projectileModel(kRatKind, 2)};
     for (const auto* model : retainedShots) {
         REQUIRE(model);
     }

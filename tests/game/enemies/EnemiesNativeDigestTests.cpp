@@ -5,13 +5,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "FakeRenderDevice.h"
-#include "TestSupport.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+
+#include "FakeRenderDevice.h"
+#include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/enemies/Enemies.h"
-#include "game/world/NativeStateResources.h"
+#include "game/level/NativeStateResources.h"
 
 namespace {
 using namespace gdl;
@@ -25,8 +26,7 @@ std::filesystem::path enemyDigestFixture() {
     std::filesystem::create_directories(archive);
     writeTextFile(archive / "body.obj",
                   "v 0 0 1\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nusemtl tex0\nf 1//1 2//1 3//1\n");
-    writeTextFile(archive / "objects.json",
-                  R"({"objects":[{"name":"BODY","file":"body.obj"}]})");
+    writeTextFile(archive / "objects.json", R"({"objects":[{"name":"BODY","file":"body.obj"}]})");
     writeFile(archive / "skin.png", test::kTinyPng);
     writeTextFile(archive / "textures.json", R"({"bitmaps":[
       {"name":"SKIN","file":"skin.png","width":2,"height":2},
@@ -94,9 +94,10 @@ struct Pool {
     auto visible(s32 slot = 0) const {
         const auto observation = enemies.observe(slot);
         REQUIRE(observation);
-        return std::tuple{observation->instance, observation->health, observation->fullHealth,
-                          observation->asleep, observation->alpha, enemies.positionOf(slot),
-                          enemies.yawOf(slot), enemies.animatorOf(slot)->action()};
+        return std::tuple{observation->instance,   observation->health,
+                          observation->fullHealth, observation->asleep,
+                          observation->alpha,      enemies.positionOf(slot),
+                          enemies.yawOf(slot),     enemies.animatorOf(slot)->action()};
     }
 
     void step(s32 tick, bool wrong = false) {
@@ -125,8 +126,7 @@ struct Pool {
 };
 
 template <class T>
-NativeStateDigest::Digest valueHash(const T& value,
-                                  NativeStateDigest::Resources resources = {}) {
+NativeStateDigest::Digest valueHash(const T& value, NativeStateDigest::Resources resources = {}) {
     NativeStateDigest sink(resources);
     sink.value(value);
     const auto result = sink.checkedFinish();
@@ -152,10 +152,10 @@ TEST_CASE("enemy native digests identify independently loaded artwork and ignore
         const auto native = first.digest();
         REQUIRE(native == second.digest());
         for (const f32 alpha : {-1.0f, 0.0f, 0.37f, 1.0f}) {
-            first.enemies.draw(first.device, Mat4{1}, WorldLighting{}, nullptr, nullptr,
-                                nullptr, alpha);
+            first.enemies.draw(first.device, Mat4{1}, WorldLighting{}, nullptr, nullptr, nullptr,
+                               alpha);
             first.enemies.drawShadows(first.device, Mat4{1}, Vec3{0, 30, 30}, WorldLighting{},
-                                       alpha);
+                                      alpha);
             drew = drew || !first.device.draws.empty();
             first.device.draws.clear();
             CHECK(first.digest() == native);
@@ -256,7 +256,7 @@ TEST_CASE("enemy native digest refuses unknown resources foreign histories and c
     CHECK_FALSE(unknown.checkedFinish());
     NativeStateResources authoredOnly;
     REQUIRE(authoredOnly.registerArchive(*first.enemies.archiveOf(kGruntKind),
-                                          "stage/enemy-native-fixture/swarm/4"));
+                                         "stage/enemy-native-fixture/swarm/4"));
     NativeStateDigest missingBuiltin(authoredOnly.resources());
     CHECK_FALSE(first.enemies.appendNativeDigest(missingBuiltin));
     CHECK_FALSE(missingBuiltin.checkedFinish());
@@ -271,8 +271,9 @@ TEST_CASE("enemy native digest refuses unknown resources foreign histories and c
     CHECK_FALSE(closed.checkedFinish());
 }
 
-TEST_CASE("native inactive body values and enemy animation requests are not presentation projections",
-          "[native-state-digest][enemies-native-digest][enemy-animator-native-digest]") {
+TEST_CASE(
+    "native inactive body values and enemy animation requests are not presentation projections",
+    "[native-state-digest][enemies-native-digest][enemy-animator-native-digest]") {
     const Enemies::BodyState inactive;
     const auto empty = valueHash(inactive);
     const auto changed = [&](auto&& mutate) {

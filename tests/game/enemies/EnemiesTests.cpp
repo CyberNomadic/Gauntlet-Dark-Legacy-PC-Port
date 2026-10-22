@@ -23,12 +23,12 @@
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/EnemyMissiles.h"
-#include "game/screens/LevelFixtures.h"
-#include "game/screens/LevelOpponents.h"
-#include "game/screens/PlayerHealth.h"
-#include "game/world/HazardSurfaces.h"
-#include "game/world/LevelCatalog.h"
-#include "game/world/LevelWorld.h"
+#include "game/enemies/LevelOpponents.h"
+#include "game/level/HazardSurfaces.h"
+#include "game/level/LevelCatalog.h"
+#include "game/level/LevelFixtures.h"
+#include "game/level/LevelWorld.h"
+#include "game/party/PlayerHealth.h"
 
 namespace {
 

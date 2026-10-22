@@ -105,7 +105,8 @@ TEST_CASE("native enemy animation equality covers requests clocks unbound values
     changed([&] { animator.setThrowInterval(0.5f); });
     changed([&] { animator.update(1, 1.0f / 60); });
 
-    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare unequal
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare
+    // unequal
     const auto foreignTree = tree;
     EnemyAnimator foreign;
     REQUIRE(foreign.bind(foreignTree));

@@ -10,7 +10,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/enemies/Enemies.h"
-#include "game/netplay/NativeProbeTiming.h"
+#include "game/rollback/NativeProbeTiming.h"
 
 namespace {
 using namespace gdl;
@@ -56,9 +56,10 @@ struct Pool {
             spawn.placed = true;
             spawn.asleep = slot == 3;
             spawn.generator = slot % 4;
-            spawn.position = {static_cast<f32>(slot % 5 - 2) * 9, 0,
-                              // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
-                              static_cast<f32>(slot / 5 - 2) * 9};
+            spawn.position = {
+                static_cast<f32>(slot % 5 - 2) * 9, 0,
+                // NOLINTNEXTLINE(bugprone-integer-division): integer division picks the grid row
+                static_cast<f32>(slot / 5 - 2) * 9};
             REQUIRE(enemies.spawn(spawn, {}) == slot);
         }
     }

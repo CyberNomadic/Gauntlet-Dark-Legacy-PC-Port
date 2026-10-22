@@ -8,6 +8,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "engine/io/NativeStateDigest.h"
+
 #include "game/enemies/EnemyMissiles.h"
 
 namespace {
@@ -31,7 +32,7 @@ struct ModelBinding {
 };
 
 NativeStateDigest::Digest nativeHash(const EnemyMissiles& pool,
-                                    NativeStateDigest::Resources resources = {}) {
+                                     NativeStateDigest::Resources resources = {}) {
     NativeStateDigest digest(resources);
     REQUIRE(pool.appendNativeDigest(digest));
     REQUIRE(digest.checkedFinish());
@@ -125,16 +126,16 @@ TEST_CASE("enemy native digest rewinds flight contacts staged blasts RNG and pen
     held.held = 0.437f;
     pool.launch(held, {0, 3, 0}, {0, 3, 60}, 1, nullptr, 5);
     pool.blast({{12, 3, 0}, 7.5f, 10, EnemyBlast::kGas, {0.27f, 0.43f, 0.33f}, 2, true});
-    const std::array players{EnemyView{0, {0, 0, 0.5f}, 1, 6},
-                             EnemyView{2, {12, 0, 0}, 1, 6}, EnemyView{3, {13, 0, 0}, 1, 6}};
+    const std::array players{EnemyView{0, {0, 0, 0.5f}, 1, 6}, EnemyView{2, {12, 0, 0}, 1, 6},
+                             EnemyView{3, {13, 0, 0}, 1, 6}};
     const std::array swarm{MissileTarget{9, {12, 0, 1}, 1, 6}};
     auto step = [&](f32 seconds, s32 scenery) {
         pool.update(seconds, nullptr, players, swarm, {},
-                     [=](const PickupBlastReach&, std::vector<s32>& touched) {
-                         if (std::ranges::find(touched, scenery) == touched.end()) {
-                             touched.push_back(scenery);
-                         }
-                     });
+                    [=](const PickupBlastReach&, std::vector<s32>& touched) {
+                        if (std::ranges::find(touched, scenery) == touched.end()) {
+                            touched.push_back(scenery);
+                        }
+                    });
     };
     step(0.173f, 42);
     EnemyMissiles::LocalSnapshot saved;
@@ -206,8 +207,8 @@ TEST_CASE("enemy native digest includes undelivered rock damage",
     box.halfAcross = box.halfAlong = 2;
     box.height = 6;
     const std::array stops{MissileStop{.box = box, .rock = 3, .rockHealth = 40}};
-    pool.launch(*enemyMissileOf(kGarmBroodKind, EnemyMissileKind::kBolt), {0, 3, 0}, {0, 3, 40},
-                 1, nullptr, 2);
+    pool.launch(*enemyMissileOf(kGarmBroodKind, EnemyMissileKind::kBolt), {0, 3, 0}, {0, 3, 40}, 1,
+                nullptr, 2);
     pool.update(0.1f, nullptr, {}, {}, stops);
     const auto baseline = nativeHash(pool);
     EnemyMissiles::LocalSnapshot saved;

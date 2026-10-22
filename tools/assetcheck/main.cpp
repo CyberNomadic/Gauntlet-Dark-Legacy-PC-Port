@@ -18,8 +18,8 @@
 #include "engine/world/AssetAudit.h"
 
 #include "DataAudit.h"
-#include "game/world/LevelCatalog.h"
-#include "game/world/LevelItemArchives.h"
+#include "game/level/LevelCatalog.h"
+#include "game/level/LevelItemArchives.h"
 
 namespace {
 using namespace gdl;

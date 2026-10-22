@@ -11,10 +11,10 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 
-#include "game/players/ClassData.h"
-#include "game/players/Progression.h"
-#include "game/world/ExitPortals.h"
-#include "game/world/TowerAccess.h"
+#include "game/characters/ClassData.h"
+#include "game/characters/Progression.h"
+#include "game/level/ExitPortals.h"
+#include "game/level/TowerAccess.h"
 
 namespace gdl::game {
 

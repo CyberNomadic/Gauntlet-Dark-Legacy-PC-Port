@@ -7,7 +7,7 @@
 
 #include "engine/io/ByteReader.h"
 
-#include "game/players/NameCheats.h"
+#include "game/characters/NameCheats.h"
 
 namespace gdl::game {
 namespace {

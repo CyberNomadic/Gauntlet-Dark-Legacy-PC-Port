@@ -12,7 +12,7 @@
 #include "engine/core/Types.h"
 
 #include "TestSupport.h"
-#include "game/players/ClassData.h"
+#include "game/characters/ClassData.h"
 #include "game/players/PlayerAnimator.h"
 
 namespace {

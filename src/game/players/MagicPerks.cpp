@@ -1,6 +1,6 @@
 #include "game/players/MagicPerks.h"
 
-#include "game/players/ClassData.h"
+#include "game/characters/ClassData.h"
 
 namespace gdl::game {
 namespace {

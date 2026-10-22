@@ -9,7 +9,7 @@
 #include "engine/core/SpecialMembers.h"
 #include "engine/render/RenderDevice.h"
 
-#include "game/world/TowerCamera.h"
+#include "game/camera/TowerCamera.h"
 
 namespace gdl::game {
 

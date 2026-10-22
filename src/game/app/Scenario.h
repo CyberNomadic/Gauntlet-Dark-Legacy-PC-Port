@@ -7,8 +7,8 @@
 
 #include "engine/core/Types.h"
 
-#include "game/screens/PlayScene.h"
-#include "game/screens/ShopSession.h"
+#include "game/scenes/PlayScene.h"
+#include "game/shop/ShopSession.h"
 
 namespace gdl::game {
 

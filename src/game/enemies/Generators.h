@@ -19,8 +19,8 @@
 #include "engine/world/WorldLighting.h"
 
 #include "game/enemies/Enemies.h"
-#include "game/world/ItemFigure.h"
-#include "game/world/PlayerMissiles.h"
+#include "game/level/ItemFigure.h"
+#include "game/party/PlayerMissiles.h"
 
 namespace gdl::game {
 

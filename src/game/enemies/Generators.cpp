@@ -15,9 +15,9 @@
 #include "engine/io/NativeStateDigest.h"
 #include "engine/math/PortableMath.h"
 
-#include "game/world/ItemSupport.h"
-#include "game/world/NativeStateResources.h"
-#include "game/world/TargetAssist.h"
+#include "game/level/ItemSupport.h"
+#include "game/level/NativeStateResources.h"
+#include "game/party/TargetAssist.h"
 
 namespace gdl::game {
 

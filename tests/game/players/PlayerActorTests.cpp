@@ -9,10 +9,10 @@
 #include "engine/world/WorldCollision.h"
 
 #include "TestSupport.h"
-#include "game/players/CharacterSave.h"
-#include "game/players/ClassData.h"
+#include "game/characters/CharacterSave.h"
+#include "game/characters/ClassData.h"
+#include "game/characters/Progression.h"
 #include "game/players/PlayerActor.h"
-#include "game/players/Progression.h"
 
 namespace {
 

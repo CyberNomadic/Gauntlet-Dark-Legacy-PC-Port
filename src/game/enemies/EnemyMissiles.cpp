@@ -10,9 +10,9 @@
 #include "engine/core/Types.h"
 #include "engine/math/PortableMath.h"
 
-#include "game/enemies/CombatantProjectile.h"
+#include "game/critters/CombatantProjectile.h"
+#include "game/effects/DynamicLights.h"
 #include "game/players/EnemyShrink.h"
-#include "game/world/DynamicLights.h"
 
 namespace gdl::game {
 

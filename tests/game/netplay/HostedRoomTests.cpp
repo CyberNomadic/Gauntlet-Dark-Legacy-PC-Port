@@ -10,10 +10,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "game/netplay/HostedRoom.h"
-#include "game/netplay/InputCommand.h"
+#include "game/netplay/NativePlaySetup.h"
 #include "game/netplay/OnlineSession.h"
-#include "game/netplay/RollbackSessionHarness.h"
-#include "game/screens/NativePlaySetup.h"
+#include "game/rollback/InputCommand.h"
+#include "game/rollback/RollbackSessionHarness.h"
 
 namespace {
 using namespace gdl;

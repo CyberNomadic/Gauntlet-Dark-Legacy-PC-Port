@@ -9,156 +9,156 @@ include(Catch)
 # No production target links these snapshots or their compression dependency.
 find_package(lz4 CONFIG REQUIRED)
 add_library(game_diagnostics STATIC
-    game/enemies/CombatantCheckpoint.cpp
-    game/enemies/CrittersCheckpoint.cpp
+    game/critters/CombatantCheckpoint.cpp
+    game/critters/CrittersCheckpoint.cpp
     game/enemies/PlacedEnemiesCheckpoint.cpp
-    game/screens/PlayerAttacksCheckpoint.cpp
-    game/screens/OpponentCombatCheckpoint.cpp
-    game/screens/LevelFixturesCheckpoint.cpp
-    game/world/ItemFigureCheckpoint.cpp
-    game/world/CombatantProjectilesCheckpoint.cpp
-    game/world/ChestsCheckpoint.cpp
-    game/world/LockedGatesCheckpoint.cpp
-    game/world/BreakablesCheckpoint.cpp
-    game/world/SafeRocksCheckpoint.cpp
-    game/world/StaticSceneryCheckpoint.cpp
-    game/world/RubbleCheckpoint.cpp
-    game/world/TrapsCheckpoint.cpp
-    game/world/DestructibleWallsCheckpoint.cpp
-    game/world/PlacedItemsCheckpoint.cpp
-    game/world/LevelTransportersCheckpoint.cpp
-    game/world/ExitPortalsCheckpoint.cpp
+    game/party/PlayerAttacksCheckpoint.cpp
+    game/enemies/OpponentCombatCheckpoint.cpp
+    game/level/LevelFixturesCheckpoint.cpp
+    game/level/ItemFigureCheckpoint.cpp
+    game/critters/CombatantProjectilesCheckpoint.cpp
+    game/level/ChestsCheckpoint.cpp
+    game/level/LockedGatesCheckpoint.cpp
+    game/level/BreakablesCheckpoint.cpp
+    game/level/SafeRocksCheckpoint.cpp
+    game/level/StaticSceneryCheckpoint.cpp
+    game/level/RubbleCheckpoint.cpp
+    game/level/TrapsCheckpoint.cpp
+    game/level/DestructibleWallsCheckpoint.cpp
+    game/level/PlacedItemsCheckpoint.cpp
+    game/level/LevelTransportersCheckpoint.cpp
+    game/level/ExitPortalsCheckpoint.cpp
     engine/world/WorldStateCheckpoint.cpp
-    game/world/PlayerMissilesCheckpoint.cpp
-    game/world/EffectTreesCheckpoint.cpp
-    game/world/RotatorsCheckpoint.cpp
-    game/world/LevelWorldCheckpoint.cpp
-    game/world/PlayerArsenalCheckpoint.cpp
-    game/world/WorldDestructionCheckpoint.cpp
-    game/world/FallingSceneryCheckpoint.cpp
-    game/world/TowerCameraCheckpoint.cpp
-    game/netplay/PlayerHealthCheckpoint.cpp
-    game/netplay/PlayerPoseCheckpoint.cpp
-    game/netplay/PlayerPotionCheckpoint.cpp
-    game/netplay/TurboEffectCheckpoint.cpp
-    game/netplay/PlayerActionCheckpoint.cpp
-    game/netplay/AnimationCheckpoint.cpp
-    game/netplay/RandomCheckpoint.cpp
-    game/netplay/EnemyMissilesCheckpoint.cpp
-    game/netplay/EnemyPoolCheckpoint.cpp
-    game/netplay/GeneratorCheckpoint.cpp
-    game/netplay/PlacedEnemyCheckpoint.cpp
-    game/netplay/PlayerTurboCheckpoint.cpp
-    game/netplay/PlayerKnockbackCheckpoint.cpp
-    game/screens/PlayerRuntimeCheckpoint.cpp
+    game/party/PlayerMissilesCheckpoint.cpp
+    game/effects/EffectTreesCheckpoint.cpp
+    game/level/RotatorsCheckpoint.cpp
+    game/level/LevelWorldCheckpoint.cpp
+    game/party/PlayerArsenalCheckpoint.cpp
+    game/level/WorldDestructionCheckpoint.cpp
+    game/level/FallingSceneryCheckpoint.cpp
+    game/camera/TowerCameraCheckpoint.cpp
+    game/rollback/PlayerHealthCheckpoint.cpp
+    game/rollback/PlayerPoseCheckpoint.cpp
+    game/rollback/PlayerPotionCheckpoint.cpp
+    game/rollback/TurboEffectCheckpoint.cpp
+    game/rollback/PlayerActionCheckpoint.cpp
+    game/rollback/AnimationCheckpoint.cpp
+    game/rollback/RandomCheckpoint.cpp
+    game/enemies/EnemyMissilesCheckpoint.cpp
+    game/rollback/EnemyPoolCheckpoint.cpp
+    game/rollback/GeneratorCheckpoint.cpp
+    game/rollback/PlacedEnemyCheckpoint.cpp
+    game/rollback/PlayerTurboCheckpoint.cpp
+    game/rollback/PlayerKnockbackCheckpoint.cpp
+    game/party/PlayerRuntimeCheckpoint.cpp
     game/enemies/OpponentState.cpp
-    game/screens/OpponentResources.cpp
-    game/screens/OpponentCheckpoint.cpp
-    game/screens/CombatResources.cpp
-    game/screens/CombatRollbackCheckpoint.cpp
-    game/screens/StageResources.cpp
-    game/netplay/CombatStatePacket.cpp
-    game/netplay/StageStatePacket.cpp
-    game/netplay/PlayerRuntimePacket.cpp)
+    game/enemies/OpponentResources.cpp
+    game/enemies/OpponentCheckpoint.cpp
+    game/enemies/CombatResources.cpp
+    game/enemies/CombatRollbackCheckpoint.cpp
+    game/scenes/StageResources.cpp
+    game/rollback/CombatStatePacket.cpp
+    game/rollback/StageStatePacket.cpp
+    game/rollback/PlayerRuntimePacket.cpp)
 target_include_directories(game_diagnostics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(game_diagnostics PUBLIC gdl::game PRIVATE lz4::lz4)
 gdl_apply_compiler_options(game_diagnostics)
 
 add_executable(tests
     engine/io/NativeStateDigestTests.cpp
-    game/screens/PlayerNativeStateTests.cpp
+    game/scenes/PlayerNativeStateTests.cpp
     game/enemies/EnemyMissilesNativeDigestTests.cpp
-    game/world/CombatantProjectilesNativeDigestTests.cpp
-    game/world/LevelTriggersNativeDigestTests.cpp
-    game/world/SecretChallengeNativeDigestTests.cpp
-    game/world/NativeStateResourcesTests.cpp
+    game/critters/CombatantProjectilesNativeDigestTests.cpp
+    game/level/LevelTriggersNativeDigestTests.cpp
+    game/level/SecretChallengeNativeDigestTests.cpp
+    game/level/NativeStateResourcesTests.cpp
     game/enemies/GeneratorNativeDigestTests.cpp
     game/enemies/EnemiesNativeDigestTests.cpp
-    game/enemies/CombatantNativeDigestTests.cpp
+    game/critters/CombatantNativeDigestTests.cpp
     game/enemies/PlacedEnemiesNativeDigestTests.cpp
     game/enemies/OpponentOwnersNativeDigestTests.cpp
-    game/enemies/CritterStatuesNativeDigestTests.cpp
-    game/world/CameraMeterNativeDigestTests.cpp
-    game/world/EffectTreesNativeDigestTests.cpp
-    game/screens/PlayerAttackNativeDigestTests.cpp
-    game/world/PlayerFigureNativeDigestTests.cpp
-    game/world/LevelWorldNativeDigestTests.cpp
-    game/screens/LevelFixturesNativeDigestTests.cpp
-    game/world/SceneAudioNativeDigestTests.cpp
-    game/screens/SceneTravelNativeDigestTests.cpp
-    game/screens/SceneHudNativeDigestTests.cpp
-    game/screens/PlaySceneNativeStateDigestTests.cpp
-    game/netplay/LocalStateHistoryTests.cpp
+    game/critters/CritterStatuesNativeDigestTests.cpp
+    game/camera/CameraMeterNativeDigestTests.cpp
+    game/effects/EffectTreesNativeDigestTests.cpp
+    game/party/PlayerAttackNativeDigestTests.cpp
+    game/party/PlayerFigureNativeDigestTests.cpp
+    game/level/LevelWorldNativeDigestTests.cpp
+    game/level/LevelFixturesNativeDigestTests.cpp
+    game/audio/SceneAudioNativeDigestTests.cpp
+    game/scenes/SceneTravelNativeDigestTests.cpp
+    game/hud/SceneHudNativeDigestTests.cpp
+    game/scenes/PlaySceneNativeStateDigestTests.cpp
+    game/rollback/LocalStateHistoryTests.cpp
     game/netplay/RollbackExchangeTests.cpp
-    game/screens/NativeSoundIdentityTests.cpp
-    game/netplay/RollbackInputsTests.cpp
-    game/netplay/InputJournalTests.cpp
-    game/netplay/FrameEventLedgerTests.cpp
-    game/screens/PlayerLocalRewindTests.cpp
-    game/screens/PlayerSimulationEqualityTests.cpp
-    game/netplay/NativeProbeTimingTests.cpp
+    game/audio/NativeSoundIdentityTests.cpp
+    game/rollback/RollbackInputsTests.cpp
+    game/rollback/InputJournalTests.cpp
+    game/rollback/FrameEventLedgerTests.cpp
+    game/party/PlayerLocalRewindTests.cpp
+    game/party/PlayerSimulationEqualityTests.cpp
+    game/rollback/NativeProbeTimingTests.cpp
     engine/app/ApplicationTimingTests.cpp
     engine/math/Mt19937Tests.cpp
     game/netplay/HostedRoomTests.cpp
-    game/netplay/InputCommandTests.cpp
-    game/netplay/InputTimelineTests.cpp
-    game/netplay/ShotIdentityTests.cpp
-    game/netplay/PlayerActionCheckpointTests.cpp
-    game/netplay/PlayerTurboCheckpointTests.cpp
-    game/netplay/AnimationCheckpointTests.cpp
-    game/netplay/RandomCheckpointTests.cpp
-    game/netplay/EnemyMissilesCheckpointTests.cpp
-    game/netplay/EnemyPoolCheckpointTests.cpp
-    game/netplay/GeneratorCheckpointTests.cpp
-    game/netplay/PlacedEnemyCheckpointTests.cpp
-    game/screens/OpponentPlacementsTests.cpp
-    game/screens/PlayerAttacksCheckpointTests.cpp
-    game/screens/PlayerRuntimeCheckpointTests.cpp
-    game/screens/CombatRollbackCheckpointTests.cpp
-    game/netplay/PlayerRuntimePacketTests.cpp
-    game/netplay/CombatStatePacketTests.cpp
-    game/netplay/PlayerHealthCheckpointTests.cpp
-    game/screens/OpponentCombatCheckpointTests.cpp
-    game/screens/OpponentLootCheckpointTests.cpp
-    game/netplay/StageStatePacketTests.cpp
-    game/netplay/CanonicalDigestSinkTests.cpp
-    game/world/PlayerCompanionCheckpointTests.cpp
-    game/screens/PartyLightingTests.cpp
-    game/world/ExitPortalsCheckpointTests.cpp
-    game/world/LevelTransportersCheckpointTests.cpp
-    game/screens/CombatResourcesTests.cpp
-    game/world/ChestsCheckpointTests.cpp
-    game/world/LockedGatesCheckpointTests.cpp
-    game/world/BreakablesCheckpointTests.cpp
-    game/world/SafeRocksCheckpointTests.cpp
-    game/world/StaticSceneryCheckpointTests.cpp
-    game/world/RubbleCheckpointTests.cpp
-    game/world/TrapsCheckpointTests.cpp
-    game/world/FallingSceneryCheckpointTests.cpp
-    game/world/DestructibleWallsCheckpointTests.cpp
-    game/world/RotatorsCheckpointTests.cpp
-    game/world/RotatorsLocalRewindTests.cpp
-    game/world/PlacedItemsCheckpointTests.cpp
-    game/world/PreparedPickupBirthTests.cpp
-    game/screens/LevelFixturesCheckpointTests.cpp
-    game/world/LevelWorldCheckpointTests.cpp
-    game/world/TowerCameraCheckpointTests.cpp
+    game/rollback/InputCommandTests.cpp
+    game/rollback/InputTimelineTests.cpp
+    game/rollback/ShotIdentityTests.cpp
+    game/rollback/PlayerActionCheckpointTests.cpp
+    game/rollback/PlayerTurboCheckpointTests.cpp
+    game/rollback/AnimationCheckpointTests.cpp
+    game/rollback/RandomCheckpointTests.cpp
+    game/enemies/EnemyMissilesPacketTests.cpp
+    game/rollback/EnemyPoolCheckpointTests.cpp
+    game/rollback/GeneratorCheckpointTests.cpp
+    game/rollback/PlacedEnemyCheckpointTests.cpp
+    game/enemies/OpponentPlacementsTests.cpp
+    game/party/PlayerAttacksCheckpointTests.cpp
+    game/party/PlayerRuntimeCheckpointTests.cpp
+    game/enemies/CombatRollbackCheckpointTests.cpp
+    game/rollback/PlayerRuntimePacketTests.cpp
+    game/rollback/CombatStatePacketTests.cpp
+    game/rollback/PlayerHealthCheckpointTests.cpp
+    game/enemies/OpponentCombatCheckpointTests.cpp
+    game/enemies/OpponentLootCheckpointTests.cpp
+    game/rollback/StageStatePacketTests.cpp
+    game/rollback/CanonicalDigestSinkTests.cpp
+    game/party/PlayerCompanionCheckpointTests.cpp
+    game/party/PartyLightingTests.cpp
+    game/level/ExitPortalsCheckpointTests.cpp
+    game/level/LevelTransportersCheckpointTests.cpp
+    game/enemies/CombatResourcesTests.cpp
+    game/level/ChestsCheckpointTests.cpp
+    game/level/LockedGatesCheckpointTests.cpp
+    game/level/BreakablesCheckpointTests.cpp
+    game/level/SafeRocksCheckpointTests.cpp
+    game/level/StaticSceneryCheckpointTests.cpp
+    game/level/RubbleCheckpointTests.cpp
+    game/level/TrapsCheckpointTests.cpp
+    game/level/FallingSceneryCheckpointTests.cpp
+    game/level/DestructibleWallsCheckpointTests.cpp
+    game/level/RotatorsCheckpointTests.cpp
+    game/level/RotatorsLocalRewindTests.cpp
+    game/level/PlacedItemsCheckpointTests.cpp
+    game/level/PreparedPickupBirthTests.cpp
+    game/level/LevelFixturesCheckpointTests.cpp
+    game/level/LevelWorldCheckpointTests.cpp
+    game/camera/TowerCameraCheckpointTests.cpp
     engine/world/WorldStateCheckpointTests.cpp
     engine/world/WorldCollapsedCollisionTests.cpp
-    game/world/WorldDestructionCheckpointTests.cpp
-    game/screens/EnemyFeedbackEmissionTests.cpp
-    game/screens/PartyDamageTests.cpp
-    game/world/PlayerArsenalCheckpointTests.cpp
-    game/world/MoveStrikesCheckpointTests.cpp
-    game/netplay/EffectIdentityTests.cpp
-    game/netplay/PlayerPoseCheckpointTests.cpp
-    game/netplay/PlayerPotionCheckpointTests.cpp
-    game/world/WorldMotionTests.cpp
-    game/screens/TurboEmissionTests.cpp
-    game/netplay/TurboEffectResourcesTests.cpp
-    game/netplay/TurboEffectCheckpointTests.cpp
+    game/level/WorldDestructionCheckpointTests.cpp
+    game/effects/EnemyFeedbackEmissionTests.cpp
+    game/party/PartyDamageTests.cpp
+    game/party/PlayerArsenalCheckpointTests.cpp
+    game/party/MoveStrikesCheckpointTests.cpp
+    game/rollback/EffectIdentityTests.cpp
+    game/rollback/PlayerPoseCheckpointTests.cpp
+    game/rollback/PlayerPotionCheckpointTests.cpp
+    game/level/WorldMotionTests.cpp
+    game/effects/TurboEmissionTests.cpp
+    game/effects/TurboEffectResourcesTests.cpp
+    game/rollback/TurboEffectCheckpointTests.cpp
     game/combat/MeleeGeometryTests.cpp
-    game/netplay/PlayerKnockbackCheckpointTests.cpp
+    game/rollback/PlayerKnockbackCheckpointTests.cpp
     game/players/MeleeSelectionTests.cpp
     game/players/PlayerActorCheckpointTests.cpp
     game/enemies/EnemyAnimatorCheckpointTests.cpp
@@ -166,50 +166,50 @@ add_executable(tests
     game/enemies/GeneratorsCheckpointTests.cpp
     game/enemies/EnemyMissilesCheckpointTests.cpp
     game/enemies/PlacedEnemiesTests.cpp
-    game/enemies/CritterStatuesCheckpointTests.cpp
-    game/screens/OpponentSimulationTests.cpp
-    game/screens/OpponentResourcesTests.cpp
-    game/screens/CombatProgressCheckpointTests.cpp
+    game/critters/CritterStatuesCheckpointTests.cpp
+    game/enemies/OpponentSimulationTests.cpp
+    game/enemies/OpponentResourcesTests.cpp
+    game/enemies/CombatProgressCheckpointTests.cpp
     game/netplay/MatchSessionTests.cpp
     game/netplay/ShopSyncTests.cpp
-    game/screens/OnlineCompletionTests.cpp
+    game/netplay/OnlineCompletionTests.cpp
     game/netplay/OnlineSessionTests.cpp
     game/netplay/CharacterProfileTests.cpp
-    game/netplay/PartyCheckpointTests.cpp
-    game/netplay/PartyBootstrapTests.cpp
+    game/characters/PartyCheckpointTests.cpp
+    game/characters/PartyBootstrapTests.cpp
     game/netplay/OnlinePartyTests.cpp
     game/netplay/MeasuredPacketTransportTests.cpp
-    game/netplay/SessionInputsTests.cpp
+    game/rollback/SessionInputsTests.cpp
     game/app/BuildLabelTests.cpp
     game/app/LevelDebugOverlayTests.cpp
     game/app/GameCursorTests.cpp
-    game/screens/PlaySceneRumbleTests.cpp
-    game/world/StaticSceneryTests.cpp
+    game/scenes/PlaySceneRumbleTests.cpp
+    game/level/StaticSceneryTests.cpp
     game/config/ControlProfilesTests.cpp
-    game/menu/ControlPromptsTests.cpp
+    game/hud/ControlPromptsTests.cpp
     game/players/CursorAimTests.cpp
     game/enemies/DeathRulesTests.cpp
     game/enemies/EnemiesDeathTests.cpp
-    game/screens/LevelOpponentsDeathTests.cpp
-    game/screens/PlaySceneAmbienceTests.cpp
-    game/world/DestructibleWallsTests.cpp
-    game/world/MissileTargetTests.cpp
+    game/enemies/LevelOpponentsDeathTests.cpp
+    game/scenes/PlaySceneAmbienceTests.cpp
+    game/level/DestructibleWallsTests.cpp
+    game/level/MissileTargetTests.cpp
     game/combat/DamageTests.cpp
     game/combat/BodyContactTests.cpp
     game/combat/DamageTypesTests.cpp
-    game/screens/PlayerPowerupsTests.cpp
+    game/party/PlayerPowerupsTests.cpp
     game/menu/SettingsMenuTests.cpp
     game/menu/SettingsRowsTests.cpp
     game/menu/VideoSettingsTests.cpp
-    game/menu/CompassHudTests.cpp
-    game/screens/SaveMenuTests.cpp
-    game/screens/PauseMenuTests.cpp
+    game/hud/CompassHudTests.cpp
+    game/menu/SaveMenuTests.cpp
+    game/menu/PauseMenuTests.cpp
     formats/ShopWadTests.cpp
-    game/players/ShopTests.cpp
-    game/screens/AfterLevelSceneTests.cpp
-    game/screens/AutoSaveIconTests.cpp
-    game/screens/PostShopReturnTests.cpp
-    game/screens/InventoryPanelTests.cpp
+    game/characters/ShopTests.cpp
+    game/scenes/AfterLevelSceneTests.cpp
+    game/hud/AutoSaveIconTests.cpp
+    game/scenes/PostShopReturnTests.cpp
+    game/hud/InventoryPanelTests.cpp
     TestSupport.h
     fixtures/ReferenceObj.cpp
     fixtures/ReferenceObjTests.cpp
@@ -276,7 +276,7 @@ add_executable(tests
     engine/world/WorldSceneTests.cpp
     engine/world/TextureAnimatorTests.cpp
     engine/world/WorldAnimatorTests.cpp
-    game/world/WorldDestructionTests.cpp
+    game/level/WorldDestructionTests.cpp
     engine/world/ParticleSystemTests.cpp
     engine/world/ParticleCheckpointTests.cpp
     engine/world/ParticleFieldTests.cpp
@@ -292,39 +292,39 @@ add_executable(tests
     engine/assets/WorldDataTests.cpp
     engine/assets/MessageTableTests.cpp
     game/menu/ScrollBoxTests.cpp
-    game/world/SumnerFigureTests.cpp
-    game/world/SumnerHintsTests.cpp
-    game/world/PlayerMissilesTests.cpp
-    game/world/PlayerMissilesCheckpointTests.cpp
-    game/world/EffectTreesPoolCheckpointTests.cpp
-    game/world/EffectTreesLocalRewindTests.cpp
-    game/world/ItemFigureLocalRewindTests.cpp
-    game/world/TargetAssistTests.cpp
-    game/world/BodyCollisionTests.cpp
-    game/world/BlobShadowTests.cpp
-    game/world/PlayerFigureTests.cpp
-    game/world/AssetCensusTests.cpp
-    game/world/PlayerFamiliarTests.cpp
-    game/world/MikeyFigureTests.cpp
-    game/world/WeaponGlowTests.cpp
-    game/world/CameraMovementLimitTests.cpp
-    game/world/SkorneArenaTests.cpp
-    game/world/FallingPieceTests.cpp
-    game/world/FallingSceneryTests.cpp
-    game/enemies/SkorneTests.cpp
-    game/enemies/SpiderQueenTests.cpp
-    game/enemies/LichTests.cpp
-    game/world/PlayerArsenalTests.cpp
-    game/world/PotionEmissionTests.cpp
-    game/world/PotionFlightTests.cpp
-    game/world/PojoTests.cpp
-    game/world/PojoVoiceTests.cpp
-    game/world/LevelSoundscapeTests.cpp
-    game/world/VoiceQueueTests.cpp
+    game/tower/SumnerFigureTests.cpp
+    game/tower/SumnerHintsTests.cpp
+    game/party/PlayerMissilesTests.cpp
+    game/party/PlayerMissilesCheckpointTests.cpp
+    game/effects/EffectTreesPoolCheckpointTests.cpp
+    game/effects/EffectTreesLocalRewindTests.cpp
+    game/level/ItemFigureLocalRewindTests.cpp
+    game/party/TargetAssistTests.cpp
+    game/party/BodyCollisionTests.cpp
+    game/effects/BlobShadowTests.cpp
+    game/party/PlayerFigureTests.cpp
+    game/level/AssetCensusTests.cpp
+    game/party/PlayerFamiliarTests.cpp
+    game/party/MikeyFigureTests.cpp
+    game/effects/WeaponGlowTests.cpp
+    game/camera/CameraMovementLimitTests.cpp
+    game/level/SkorneArenaTests.cpp
+    game/level/FallingPieceTests.cpp
+    game/level/FallingSceneryTests.cpp
+    game/bosses/SkorneTests.cpp
+    game/bosses/SpiderQueenTests.cpp
+    game/bosses/LichTests.cpp
+    game/party/PlayerArsenalTests.cpp
+    game/effects/PotionEmissionTests.cpp
+    game/party/PotionFlightTests.cpp
+    game/party/PojoTests.cpp
+    game/party/PojoVoiceTests.cpp
+    game/audio/LevelSoundscapeTests.cpp
+    game/audio/VoiceQueueTests.cpp
     game/menu/HintMenuTests.cpp
-    game/world/PlacedItemsTests.cpp
-    game/world/AmbientSoundsTests.cpp
-    game/world/MusicAreasTests.cpp
+    game/level/PlacedItemsTests.cpp
+    game/audio/AmbientSoundsTests.cpp
+    game/audio/MusicAreasTests.cpp
     engine/world/WorldLightingTests.cpp
     engine/ui/CanvasTests.cpp
     engine/ui/TextPainterTests.cpp
@@ -343,50 +343,50 @@ add_executable(tests
     game/app/ScenarioTests.cpp
     game/app/AttractSequencerTests.cpp
     game/app/LevelCompletionTests.cpp
-    game/app/MusicDuckTests.cpp
-    game/screens/MovieSceneTests.cpp
+    game/audio/MusicDuckTests.cpp
+    game/scenes/MovieSceneTests.cpp
     game/menu/MenuInputTests.cpp
     game/menu/OptionMenuTests.cpp
-    game/screens/TitleSceneTests.cpp
-    game/screens/IdleScreenTests.cpp
-    game/screens/AttractSceneTests.cpp
+    game/scenes/TitleSceneTests.cpp
+    game/scenes/IdleScreenTests.cpp
+    game/scenes/AttractSceneTests.cpp
     game/config/GameConfigTests.cpp
-    game/players/ClassDataTests.cpp
-    game/players/NativeClassDataTests.cpp
+    game/characters/ClassDataTests.cpp
+    game/characters/NativeClassDataTests.cpp
     game/enemies/NativeCritterDataTests.cpp
-    game/enemies/CombatantBindingsTests.cpp
+    game/critters/CombatantBindingsTests.cpp
     game/app/AssetRootsTests.cpp
-    game/screens/NativeGameplayTests.cpp
+    game/scenes/NativeGameplayTests.cpp
     game/players/MagicPerksTests.cpp
-    game/players/ProgressionTests.cpp
-    game/players/CharacterSaveTests.cpp
-    game/players/AutoSaveTests.cpp
-    game/players/NameCheatsTests.cpp
-    game/players/PartyTests.cpp
+    game/characters/ProgressionTests.cpp
+    game/characters/CharacterSaveTests.cpp
+    game/characters/AutoSaveTests.cpp
+    game/characters/NameCheatsTests.cpp
+    game/characters/PartyTests.cpp
     game/players/TurboMeterTests.cpp
     game/players/TurboMoveTests.cpp
-    game/players/InventoryTests.cpp
+    game/characters/InventoryTests.cpp
     game/players/MikeyDecoyTests.cpp
-    game/players/RelicsTests.cpp
+    game/characters/RelicsTests.cpp
     game/players/ItemPickupTests.cpp
     game/players/PowerupEffectsTests.cpp
     game/players/EnemyShrinkTests.cpp
     game/players/PowerupEndingsTests.cpp
-    game/screens/PowerupSelectorTests.cpp
-    game/screens/TransitionScreenTests.cpp
-    game/screens/LevelLoadingScreenTests.cpp
-    game/screens/PortalDepartureTests.cpp
-    game/screens/LevelExitSpeechTests.cpp
-    game/world/DynamicLightsTests.cpp
-    game/world/EffectTreesTests.cpp
-    game/world/EffectCheckpointTests.cpp
-    game/world/CombatantProjectilesTests.cpp
-    game/world/CombatantProjectilesCheckpointTests.cpp
+    game/hud/PowerupSelectorTests.cpp
+    game/scenes/TransitionScreenTests.cpp
+    game/scenes/LevelLoadingScreenTests.cpp
+    game/party/PortalDepartureTests.cpp
+    game/tower/LevelExitSpeechTests.cpp
+    game/effects/DynamicLightsTests.cpp
+    game/effects/EffectTreesTests.cpp
+    game/effects/EffectCheckpointTests.cpp
+    game/critters/CombatantProjectilesTests.cpp
+    game/critters/CombatantProjectilesCheckpointTests.cpp
     game/players/PlayerControlsTests.cpp
     game/players/PlayerActorTests.cpp
     game/players/PlayerCaptureTests.cpp
     game/players/ComboMoveTests.cpp
-    game/screens/PartyComboTests.cpp
+    game/party/PartyComboTests.cpp
     game/players/PlayerTransportTests.cpp
     game/players/PlayerAnimatorTests.cpp
     game/players/PlayerAnimatorCadenceTests.cpp
@@ -394,20 +394,20 @@ add_executable(tests
     game/players/ItemAttackTests.cpp
     game/players/KnockbackTests.cpp
     game/players/PlayerImpactTests.cpp
-    game/world/LevelWorldTests.cpp
-    game/world/LevelCatalogTests.cpp
-    game/world/LevelItemArchivesTests.cpp
-    game/world/TowerAccessTests.cpp
-    game/players/LevelRecordTests.cpp
-    game/world/ExitPortalsTests.cpp
-    game/world/LevelTransportersTests.cpp
-    game/screens/PlaySceneTransportTests.cpp
-    game/screens/PlaySceneSwitchTests.cpp
-    game/screens/SwitchCutsceneTests.cpp
-    game/world/LevelFixturesTests.cpp
-    game/world/RubbleTests.cpp
-    game/world/SafeRocksTests.cpp
-    game/players/LevelWatchTests.cpp
+    game/level/LevelWorldTests.cpp
+    game/level/LevelCatalogTests.cpp
+    game/level/LevelItemArchivesTests.cpp
+    game/level/TowerAccessTests.cpp
+    game/characters/LevelRecordTests.cpp
+    game/level/ExitPortalsTests.cpp
+    game/level/LevelTransportersTests.cpp
+    game/scenes/PlaySceneTransportTests.cpp
+    game/scenes/PlaySceneSwitchTests.cpp
+    game/level/SwitchCutsceneTests.cpp
+    game/level/LevelFixturesFloorsTests.cpp
+    game/level/RubbleTests.cpp
+    game/level/SafeRocksTests.cpp
+    game/characters/LevelWatchTests.cpp
     game/enemies/EnemyKindsTests.cpp
     game/enemies/EnemyAnimatorTests.cpp
     game/enemies/EnemyFeedbackTests.cpp
@@ -415,84 +415,84 @@ add_executable(tests
     game/enemies/EnemyMissilesTests.cpp
     game/enemies/EnemiesTests.cpp
     game/enemies/GeneratorsTests.cpp
-    game/enemies/CrittersTests.cpp
-    game/enemies/CombatantTests.cpp
-    game/enemies/CombatantCheckpointTests.cpp
-    game/enemies/CombatantLocalRewindTests.cpp
-    game/enemies/CrittersLocalRewindTests.cpp
-    game/enemies/BossLocalRewindTests.cpp
-    game/enemies/CrittersCheckpointTests.cpp
-    game/enemies/ChimeraTests.cpp
-    game/enemies/CombatantGazeTests.cpp
-    game/enemies/CombatantGrabsTests.cpp
-    game/enemies/CombatantNodesTests.cpp
-    game/world/CameraShakeTests.cpp
-    game/enemies/CritterAttackSelectionTests.cpp
-    game/enemies/CritterAreaTests.cpp
-    game/enemies/CritterMovementTests.cpp
-    game/enemies/CritterPatrolTests.cpp
-    game/enemies/CritterStatuesTests.cpp
-    game/enemies/GargoyleTests.cpp
-    game/enemies/CombatantBreathTests.cpp
-    game/enemies/CombatantProjectileTests.cpp
+    game/critters/CrittersTests.cpp
+    game/critters/CombatantTests.cpp
+    game/critters/CombatantCheckpointTests.cpp
+    game/critters/CombatantLocalRewindTests.cpp
+    game/critters/CrittersLocalRewindTests.cpp
+    game/bosses/BossLocalRewindTests.cpp
+    game/critters/CrittersCheckpointTests.cpp
+    game/bosses/ChimeraTests.cpp
+    game/critters/CombatantGazeTests.cpp
+    game/critters/CombatantGrabsTests.cpp
+    game/critters/CombatantNodesTests.cpp
+    game/camera/CameraShakeTests.cpp
+    game/critters/CritterAttackSelectionTests.cpp
+    game/critters/CritterAreaTests.cpp
+    game/critters/CritterMovementTests.cpp
+    game/critters/CritterPatrolTests.cpp
+    game/critters/CritterStatuesTests.cpp
+    game/critters/GargoyleTests.cpp
+    game/critters/CombatantBreathTests.cpp
+    game/critters/CombatantProjectileTests.cpp
     formats/CritterWadTests.cpp
-    game/enemies/BossCoinsTests.cpp
-    game/enemies/BossesTests.cpp
-    game/enemies/LegendItemsTests.cpp
-    game/world/MoveStrikesTests.cpp
-    game/screens/HelpMessagesTests.cpp
-    game/world/LevelTriggersTests.cpp
-    game/world/LevelTriggersCheckpointTests.cpp
-    game/world/HazardSurfacesTests.cpp
-    game/world/RotatorsTests.cpp
-    game/world/TowerCameraTests.cpp
-    game/world/BossCameraTests.cpp
-    game/world/StartCameraTests.cpp
-    game/screens/StatusBoxTests.cpp
-    game/screens/PickupHudTests.cpp
-    game/screens/BossMeterTests.cpp
-    game/screens/ChallengeHudTests.cpp
-    game/screens/RuneMeterTests.cpp
-    game/screens/PlaySceneChallengeTests.cpp
-    game/world/SecretChallengeTests.cpp
-    game/screens/BossVictoryTests.cpp
-    game/screens/BossVictoryPresentationTests.cpp
-    game/screens/BossSequenceTests.cpp
-    game/screens/LevelArrivalPresentationTests.cpp
-    game/screens/LevelMessagesTests.cpp
-    game/screens/GameOverTests.cpp
-    game/screens/SumnerVisitTests.cpp
-    game/screens/TowerPromotionTests.cpp
-    game/screens/TowerRelicsTests.cpp
-    game/screens/TowerCompletionTests.cpp
-    game/screens/LegendPresentationTests.cpp
-    game/screens/PlaySceneTests.cpp
-    game/screens/PlaySceneG4Tests.cpp
-    game/screens/MultiplayerJourneyTests.cpp
-    game/screens/PartyMotionTests.cpp
-    game/screens/PartyCollisionTests.cpp
-    game/players/HeadGemTests.cpp
-    game/players/BodyGlowTests.cpp
+    game/bosses/BossCoinsTests.cpp
+    game/bosses/BossesTests.cpp
+    game/bosses/LegendItemsTests.cpp
+    game/party/MoveStrikesTests.cpp
+    game/hud/HelpMessagesTests.cpp
+    game/level/LevelTriggersTests.cpp
+    game/level/LevelTriggersCheckpointTests.cpp
+    game/level/HazardSurfacesTests.cpp
+    game/level/RotatorsTests.cpp
+    game/camera/TowerCameraTests.cpp
+    game/camera/BossCameraTests.cpp
+    game/camera/StartCameraTests.cpp
+    game/hud/StatusBoxTests.cpp
+    game/hud/PickupHudTests.cpp
+    game/hud/BossMeterTests.cpp
+    game/hud/ChallengeHudTests.cpp
+    game/hud/RuneMeterTests.cpp
+    game/scenes/PlaySceneChallengeTests.cpp
+    game/level/SecretChallengeTests.cpp
+    game/bosses/BossVictoryTests.cpp
+    game/bosses/BossVictoryPresentationTests.cpp
+    game/bosses/BossSequenceTests.cpp
+    game/tower/LevelArrivalPresentationTests.cpp
+    game/hud/LevelMessagesTests.cpp
+    game/tower/GameOverTests.cpp
+    game/tower/SumnerVisitTests.cpp
+    game/tower/TowerPromotionTests.cpp
+    game/tower/TowerRelicsTests.cpp
+    game/tower/TowerCompletionTests.cpp
+    game/bosses/LegendPresentationTests.cpp
+    game/scenes/PlaySceneTests.cpp
+    game/scenes/PlaySceneG4Tests.cpp
+    game/scenes/MultiplayerJourneyTests.cpp
+    game/party/PartyMotionTests.cpp
+    game/party/PartyCollisionTests.cpp
+    game/effects/HeadGemTests.cpp
+    game/effects/BodyGlowTests.cpp
     game/players/MeleeStreakTests.cpp
     game/players/ExitWaitTests.cpp
-    game/world/PowerupCompanionTests.cpp
-    game/world/WeaponTrailTests.cpp
-    game/screens/FloorRidingTests.cpp
-    game/world/NativeTraversalTests.cpp
-    game/screens/PartyFiguresTests.cpp
-    game/screens/PartyNamesTests.cpp
-    game/screens/PartyHudTests.cpp
-    game/screens/PartyRecordsTests.cpp
-    game/screens/TriggerCuesTests.cpp
-    game/screens/TowerWelcomeTests.cpp
-    game/screens/PartyPickupsTests.cpp
-    game/screens/LevelFixturesTests.cpp
-    game/screens/LevelOpponentsTests.cpp
-    game/screens/PlayerHealthTests.cpp
-    game/screens/PlayerAttacksTests.cpp
+    game/party/PowerupCompanionTests.cpp
+    game/effects/WeaponTrailTests.cpp
+    game/party/FloorRidingTests.cpp
+    game/level/NativeTraversalTests.cpp
+    game/party/PartyFiguresTests.cpp
+    game/party/PartyNamesTests.cpp
+    game/hud/PartyHudTests.cpp
+    game/party/PartyRecordsTests.cpp
+    game/level/TriggerCuesTests.cpp
+    game/tower/TowerWelcomeTests.cpp
+    game/party/PartyPickupsTests.cpp
+    game/level/LevelFixturesTests.cpp
+    game/enemies/LevelOpponentsTests.cpp
+    game/party/PlayerHealthTests.cpp
+    game/party/PlayerAttacksTests.cpp
     game/menu/NameEntryTests.cpp
-    game/screens/SelectLaneTests.cpp
-    game/screens/PlayerSelectSceneTests.cpp
+    game/scenes/SelectLaneTests.cpp
+    game/scenes/PlayerSelectSceneTests.cpp
     formats/PlayerDataWadTests.cpp
     formats/TplFileTests.cpp
     formats/IcoWriterTests.cpp
@@ -502,14 +502,14 @@ add_executable(tests
 target_link_libraries(tests PRIVATE game_diagnostics gdl::engine gdl::formats gdl::game Catch2::Catch2WithMain SDL3::SDL3)
 # Focused native gameplay/presentation checks without unrelated GPU or full-suite builds.
 add_executable(gameplayregressions
-    game/enemies/EnemiesTests.cpp game/enemies/CombatantTests.cpp engine/world/TreeModelTests.cpp
-    game/screens/PostShopReturnTests.cpp
-    game/screens/LevelFixturesTests.cpp
-    game/world/PowerupCompanionTests.cpp game/config/GameConfigTests.cpp
-    game/players/ShopTests.cpp game/players/AutoSaveTests.cpp
-    game/world/SecretChallengeTests.cpp game/screens/PlaySceneChallengeTests.cpp
-    game/world/LevelSoundscapeTests.cpp game/screens/PlaySceneAmbienceTests.cpp
-    game/screens/PlaySceneSwitchTests.cpp game/screens/TriggerCuesTests.cpp
+    game/enemies/EnemiesTests.cpp game/critters/CombatantTests.cpp engine/world/TreeModelTests.cpp
+    game/scenes/PostShopReturnTests.cpp
+    game/level/LevelFixturesTests.cpp
+    game/party/PowerupCompanionTests.cpp game/config/GameConfigTests.cpp
+    game/characters/ShopTests.cpp game/characters/AutoSaveTests.cpp
+    game/level/SecretChallengeTests.cpp game/scenes/PlaySceneChallengeTests.cpp
+    game/audio/LevelSoundscapeTests.cpp game/scenes/PlaySceneAmbienceTests.cpp
+    game/scenes/PlaySceneSwitchTests.cpp game/level/TriggerCuesTests.cpp
     engine/world/WorldAnimatorTests.cpp
     fixtures/NativeModelFixture.cpp fixtures/ReferenceObj.cpp fixtures/NativeSoundBank.cpp)
 target_link_libraries(gameplayregressions PRIVATE gdl::game Catch2::Catch2WithMain)
@@ -521,15 +521,15 @@ gdl_apply_compiler_options(gameplayregressions)
 set_target_properties(gameplayregressions PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
 # Focused character-form, inventory and progression regressions with native gameplay checks.
-add_executable(playerformtests game/world/PojoTests.cpp game/world/PojoVoiceTests.cpp game/players/NameCheatsTests.cpp
-    game/players/InventoryTests.cpp game/players/CharacterSaveTests.cpp
-    game/world/PlayerFigureTests.cpp game/world/PlayerArsenalTests.cpp
-    game/world/PlayerMissilesTests.cpp
-    game/world/EffectTreesTests.cpp
-    game/screens/PlayerAttacksTests.cpp
-    game/screens/PartyPickupsTests.cpp game/screens/PlaySceneTests.cpp
+add_executable(playerformtests game/party/PojoTests.cpp game/party/PojoVoiceTests.cpp game/characters/NameCheatsTests.cpp
+    game/characters/InventoryTests.cpp game/characters/CharacterSaveTests.cpp
+    game/party/PlayerFigureTests.cpp game/party/PlayerArsenalTests.cpp
+    game/party/PlayerMissilesTests.cpp
+    game/effects/EffectTreesTests.cpp
+    game/party/PlayerAttacksTests.cpp
+    game/party/PartyPickupsTests.cpp game/scenes/PlaySceneTests.cpp
     game/netplay/CharacterProfileTests.cpp
-    game/world/PowerupCompanionTests.cpp fixtures/NativeModelFixture.cpp
+    game/party/PowerupCompanionTests.cpp fixtures/NativeModelFixture.cpp
     fixtures/ReferenceObj.cpp fixtures/NativeSoundBank.cpp)
 target_link_libraries(playerformtests PRIVATE gdl::game Catch2::Catch2WithMain)
 target_include_directories(playerformtests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -539,11 +539,11 @@ gdl_apply_compiler_options(playerformtests)
 set_target_properties(playerformtests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
 if(GDL_ENABLE_NETPLAY)
     target_link_libraries(tests PRIVATE gdl::engine_net)
-    target_sources(tests PRIVATE engine/net/SessionTransportTests.cpp game/netplay/OnlineRunTests.cpp
+    target_sources(tests PRIVATE engine/net/SessionTransportTests.cpp game/app/OnlineRunTests.cpp
         game/netplay/NativeCampaignTransportTests.cpp)
     # Fast, asset-free native adapter and room checks, separate from GPU fixtures.
     add_executable(netplaytests engine/net/SessionTransportTests.cpp
-        engine/io/Sha256Tests.cpp game/netplay/AssetDigestTests.cpp game/screens/NetplayMenuTests.cpp
+        engine/io/Sha256Tests.cpp game/netplay/AssetDigestTests.cpp game/menu/NetplayMenuTests.cpp
         game/netplay/HostedRoomTests.cpp game/netplay/OnlineSessionTests.cpp
         game/app/CommandLineTests.cpp)
     target_link_libraries(netplaytests PRIVATE gdl::game gdl::engine_net Catch2::Catch2WithMain)
@@ -555,78 +555,78 @@ if(GDL_ENABLE_NETPLAY)
         engine/assets/AssetScopeTests.cpp
         engine/world/WorldSceneTests.cpp
         engine/world/TreeModelTests.cpp
-        game/netplay/ShotIdentityTests.cpp
-        game/world/PlayerArsenalTests.cpp
-        game/world/PotionEmissionTests.cpp
-        game/world/PotionFlightTests.cpp
-        game/netplay/PlayerActionCheckpointTests.cpp
-        game/netplay/PlayerTurboCheckpointTests.cpp
-        game/netplay/AnimationCheckpointTests.cpp
-        game/netplay/RandomCheckpointTests.cpp
-        game/netplay/EnemyMissilesCheckpointTests.cpp
-        game/netplay/EnemyPoolCheckpointTests.cpp
-        game/netplay/GeneratorCheckpointTests.cpp
-        game/netplay/PlacedEnemyCheckpointTests.cpp
-        game/screens/OpponentPlacementsTests.cpp
-        game/screens/PlayerAttacksCheckpointTests.cpp
-        game/screens/PlayerRuntimeCheckpointTests.cpp
-        game/screens/CombatRollbackCheckpointTests.cpp
-        game/netplay/PlayerRuntimePacketTests.cpp
-        game/netplay/CombatStatePacketTests.cpp
-        game/netplay/PlayerHealthCheckpointTests.cpp
-        game/screens/OpponentCombatCheckpointTests.cpp
-        game/screens/OpponentLootCheckpointTests.cpp
-        game/netplay/StageStatePacketTests.cpp
-        game/netplay/CanonicalDigestSinkTests.cpp
-        game/world/PlayerCompanionCheckpointTests.cpp
-        game/screens/PartyLightingTests.cpp
-        game/enemies/CombatantCheckpointTests.cpp
-        game/enemies/CrittersCheckpointTests.cpp
-        game/world/CombatantProjectilesCheckpointTests.cpp
-        game/world/ExitPortalsCheckpointTests.cpp
-        game/world/LevelTransportersCheckpointTests.cpp
-        game/screens/CombatResourcesTests.cpp
-        game/world/ChestsCheckpointTests.cpp
-        game/world/LockedGatesCheckpointTests.cpp
-        game/world/BreakablesCheckpointTests.cpp
-        game/world/SafeRocksCheckpointTests.cpp
-        game/world/StaticSceneryCheckpointTests.cpp
-        game/world/RubbleCheckpointTests.cpp
-        game/world/TrapsCheckpointTests.cpp
-        game/world/FallingSceneryCheckpointTests.cpp
-        game/world/DestructibleWallsCheckpointTests.cpp
-        game/world/RotatorsCheckpointTests.cpp
-        game/world/RotatorsLocalRewindTests.cpp
-        game/world/PlacedItemsCheckpointTests.cpp
-        game/world/PreparedPickupBirthTests.cpp
-        game/screens/LevelFixturesCheckpointTests.cpp
-        game/world/LevelWorldCheckpointTests.cpp
-        game/world/TowerCameraCheckpointTests.cpp
+        game/rollback/ShotIdentityTests.cpp
+        game/party/PlayerArsenalTests.cpp
+        game/effects/PotionEmissionTests.cpp
+        game/party/PotionFlightTests.cpp
+        game/rollback/PlayerActionCheckpointTests.cpp
+        game/rollback/PlayerTurboCheckpointTests.cpp
+        game/rollback/AnimationCheckpointTests.cpp
+        game/rollback/RandomCheckpointTests.cpp
+        game/enemies/EnemyMissilesPacketTests.cpp
+        game/rollback/EnemyPoolCheckpointTests.cpp
+        game/rollback/GeneratorCheckpointTests.cpp
+        game/rollback/PlacedEnemyCheckpointTests.cpp
+        game/enemies/OpponentPlacementsTests.cpp
+        game/party/PlayerAttacksCheckpointTests.cpp
+        game/party/PlayerRuntimeCheckpointTests.cpp
+        game/enemies/CombatRollbackCheckpointTests.cpp
+        game/rollback/PlayerRuntimePacketTests.cpp
+        game/rollback/CombatStatePacketTests.cpp
+        game/rollback/PlayerHealthCheckpointTests.cpp
+        game/enemies/OpponentCombatCheckpointTests.cpp
+        game/enemies/OpponentLootCheckpointTests.cpp
+        game/rollback/StageStatePacketTests.cpp
+        game/rollback/CanonicalDigestSinkTests.cpp
+        game/party/PlayerCompanionCheckpointTests.cpp
+        game/party/PartyLightingTests.cpp
+        game/critters/CombatantCheckpointTests.cpp
+        game/critters/CrittersCheckpointTests.cpp
+        game/critters/CombatantProjectilesCheckpointTests.cpp
+        game/level/ExitPortalsCheckpointTests.cpp
+        game/level/LevelTransportersCheckpointTests.cpp
+        game/enemies/CombatResourcesTests.cpp
+        game/level/ChestsCheckpointTests.cpp
+        game/level/LockedGatesCheckpointTests.cpp
+        game/level/BreakablesCheckpointTests.cpp
+        game/level/SafeRocksCheckpointTests.cpp
+        game/level/StaticSceneryCheckpointTests.cpp
+        game/level/RubbleCheckpointTests.cpp
+        game/level/TrapsCheckpointTests.cpp
+        game/level/FallingSceneryCheckpointTests.cpp
+        game/level/DestructibleWallsCheckpointTests.cpp
+        game/level/RotatorsCheckpointTests.cpp
+        game/level/RotatorsLocalRewindTests.cpp
+        game/level/PlacedItemsCheckpointTests.cpp
+        game/level/PreparedPickupBirthTests.cpp
+        game/level/LevelFixturesCheckpointTests.cpp
+        game/level/LevelWorldCheckpointTests.cpp
+        game/camera/TowerCameraCheckpointTests.cpp
         engine/world/WorldStateCheckpointTests.cpp
         engine/world/WorldCollapsedCollisionTests.cpp
         engine/world/WorldCollisionTests.cpp
         engine/world/ParticleFieldTests.cpp
-        game/world/WorldDestructionCheckpointTests.cpp
-        game/screens/EnemyFeedbackEmissionTests.cpp
-        game/world/LevelTriggersCheckpointTests.cpp
-        game/screens/PartyDamageTests.cpp
-        game/screens/HelpMessagesTests.cpp
-        game/world/PlayerArsenalCheckpointTests.cpp
-        game/world/MoveStrikesCheckpointTests.cpp
-        game/netplay/EffectIdentityTests.cpp
-        game/netplay/PlayerPoseCheckpointTests.cpp
-        game/netplay/PlayerPotionCheckpointTests.cpp
+        game/level/WorldDestructionCheckpointTests.cpp
+        game/effects/EnemyFeedbackEmissionTests.cpp
+        game/level/LevelTriggersCheckpointTests.cpp
+        game/party/PartyDamageTests.cpp
+        game/hud/HelpMessagesTests.cpp
+        game/party/PlayerArsenalCheckpointTests.cpp
+        game/party/MoveStrikesCheckpointTests.cpp
+        game/rollback/EffectIdentityTests.cpp
+        game/rollback/PlayerPoseCheckpointTests.cpp
+        game/rollback/PlayerPotionCheckpointTests.cpp
         engine/world/ParticleCheckpointTests.cpp
-        game/world/EffectCheckpointTests.cpp
-        game/world/WorldMotionTests.cpp
-        game/screens/TurboEmissionTests.cpp
-        game/netplay/TurboEffectResourcesTests.cpp
-        game/netplay/TurboEffectCheckpointTests.cpp
-        game/world/PlayerMissilesTests.cpp
-        game/world/PlayerMissilesCheckpointTests.cpp
-        game/world/EffectTreesPoolCheckpointTests.cpp
+        game/effects/EffectCheckpointTests.cpp
+        game/level/WorldMotionTests.cpp
+        game/effects/TurboEmissionTests.cpp
+        game/effects/TurboEffectResourcesTests.cpp
+        game/rollback/TurboEffectCheckpointTests.cpp
+        game/party/PlayerMissilesTests.cpp
+        game/party/PlayerMissilesCheckpointTests.cpp
+        game/effects/EffectTreesPoolCheckpointTests.cpp
         game/combat/MeleeGeometryTests.cpp
-        game/netplay/PlayerKnockbackCheckpointTests.cpp
+        game/rollback/PlayerKnockbackCheckpointTests.cpp
         game/players/KnockbackTests.cpp
         game/players/PlayerActorCheckpointTests.cpp
         game/enemies/EnemyAnimatorCheckpointTests.cpp
@@ -636,12 +636,12 @@ if(GDL_ENABLE_NETPLAY)
         game/enemies/GeneratorsCheckpointTests.cpp
         game/enemies/EnemyMissilesCheckpointTests.cpp
         game/enemies/PlacedEnemiesTests.cpp
-        game/enemies/CritterStatuesCheckpointTests.cpp
-        game/screens/OpponentSimulationTests.cpp
-        game/screens/OpponentResourcesTests.cpp
-        game/screens/CombatProgressCheckpointTests.cpp
-        game/screens/LevelOpponentsTests.cpp
-        game/screens/LevelOpponentsDeathTests.cpp
+        game/critters/CritterStatuesCheckpointTests.cpp
+        game/enemies/OpponentSimulationTests.cpp
+        game/enemies/OpponentResourcesTests.cpp
+        game/enemies/CombatProgressCheckpointTests.cpp
+        game/enemies/LevelOpponentsTests.cpp
+        game/enemies/LevelOpponentsDeathTests.cpp
         game/enemies/EnemyMissilesTests.cpp
         game/enemies/GeneratorsTests.cpp
         game/players/TurboMeterTests.cpp game/players/TurboMoveTests.cpp
@@ -649,16 +649,16 @@ if(GDL_ENABLE_NETPLAY)
         engine/world/AnimationPlayerTests.cpp engine/world/WorldAnimatorTests.cpp
         game/players/PlayerAnimatorTests.cpp
         game/netplay/MeasuredPacketTransportTests.cpp
-        game/screens/OnlineCompletionTests.cpp
+        game/netplay/OnlineCompletionTests.cpp
         engine/audio/SoundPlayerTests.cpp
-        game/netplay/OnlineRunTests.cpp game/netplay/NativeCampaignTransportTests.cpp
-        game/screens/TitleSceneTests.cpp
-        game/netplay/InputCommandTests.cpp
-        game/netplay/InputTimelineTests.cpp game/netplay/SessionInputsTests.cpp
+        game/app/OnlineRunTests.cpp game/netplay/NativeCampaignTransportTests.cpp
+        game/scenes/TitleSceneTests.cpp
+        game/rollback/InputCommandTests.cpp
+        game/rollback/InputTimelineTests.cpp game/rollback/SessionInputsTests.cpp
         game/netplay/MatchSessionTests.cpp game/netplay/ShopSyncTests.cpp game/players/CursorAimTests.cpp
-        game/screens/PartyMotionTests.cpp game/screens/PartyFiguresTests.cpp
-        game/screens/FloorRidingTests.cpp
-        game/screens/PlayerAttacksTests.cpp game/enemies/EnemiesTests.cpp
+        game/party/PartyMotionTests.cpp game/party/PartyFiguresTests.cpp
+        game/party/FloorRidingTests.cpp
+        game/party/PlayerAttacksTests.cpp game/enemies/EnemiesTests.cpp
         fixtures/NativeModelFixture.cpp fixtures/ReferenceObj.cpp fixtures/NativeSoundBank.cpp)
     target_link_libraries(netplayplaytests PRIVATE game_diagnostics gdl::game Catch2::Catch2WithMain)
     target_include_directories(netplayplaytests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -668,153 +668,153 @@ if(GDL_ENABLE_NETPLAY)
     gdl_apply_compiler_options(netplayplaytests)
     set_target_properties(netplayplaytests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
     # Actual gameplay, independent-process determinism observations; no replicas.
-    add_executable(nativeprobe game/netplay/NativeSimulationProbe.cpp game/netplay/NativeProbeLink.cpp
-        game/screens/SimulationObserver.cpp game/screens/SimulationObserverBindings.cpp)
+    add_executable(nativeprobe game/rollback/NativeSimulationProbe.cpp game/rollback/NativeProbeLink.cpp
+        game/rollback/SimulationObserver.cpp game/rollback/SimulationObserverBindings.cpp)
     target_link_libraries(nativeprobe PRIVATE game_diagnostics gdl::game gdl::engine_net)
     target_include_directories(nativeprobe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(nativeprobe PRIVATE
         GDL_TEST_ASSET_DIR="${GDL_ASSET_DIR}" GDL_TEST_DATA_DIR="${GDL_DATA_DIR}")
     gdl_apply_compiler_options(nativeprobe)
     set_target_properties(nativeprobe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
-    target_sources(netplayplaytests PRIVATE game/screens/SimulationSeedTests.cpp
-        game/screens/SimulationObserver.cpp game/screens/SimulationObserverBindings.cpp
-        game/screens/NativePresentationReadinessTests.cpp
-        game/netplay/HintInputCommandTests.cpp game/screens/NativeHintInputTests.cpp
-        game/screens/NativeAgreementSceneTests.cpp
+    target_sources(netplayplaytests PRIVATE game/rollback/SimulationSeedTests.cpp
+        game/rollback/SimulationObserver.cpp game/rollback/SimulationObserverBindings.cpp
+        game/scenes/NativePresentationReadinessTests.cpp
+        game/rollback/HintInputCommandTests.cpp game/rollback/NativeHintInputTests.cpp
+        game/netplay/NativeAgreementSceneTests.cpp
         game/netplay/NativeAgreementTests.cpp
         game/netplay/OnlineNativeBootstrapTests.cpp game/netplay/NativeOnlinePlayTests.cpp
         game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp
-        game/screens/SimulationObservationTests.cpp game/screens/PlaySceneSimulationCameraTests.cpp
-        game/netplay/LockstepInputsTests.cpp game/netplay/LockstepInputs.cpp game/netplay/MatchLockstepTests.cpp
-        game/screens/NativeRollbackLifecycleTests.cpp game/screens/NativePlaySetupTests.cpp
-        game/world/SpeechTimingTests.cpp)
-    add_executable(simulationtests game/screens/SimulationSeedTests.cpp
+        game/rollback/SimulationObservationTests.cpp game/scenes/PlaySceneSimulationCameraTests.cpp
+        game/rollback/LockstepInputsTests.cpp game/rollback/LockstepInputs.cpp game/rollback/MatchLockstepTests.cpp
+        game/rollback/NativeRollbackLifecycleTests.cpp game/netplay/NativePlaySetupTests.cpp
+        game/audio/SpeechTimingTests.cpp)
+    add_executable(simulationtests game/rollback/SimulationSeedTests.cpp
         engine/io/NativeStateDigestTests.cpp
-        engine/io/Sha256Tests.cpp game/netplay/CanonicalDigestSinkTests.cpp
+        engine/io/Sha256Tests.cpp game/rollback/CanonicalDigestSinkTests.cpp
         engine/world/WorldCollisionTests.cpp engine/world/WorldAnimatorTests.cpp
         engine/world/WorldSceneTests.cpp
-        game/screens/PlayerNativeStateTests.cpp
+        game/scenes/PlayerNativeStateTests.cpp
         game/enemies/EnemyMissilesNativeDigestTests.cpp
-        game/world/CombatantProjectilesNativeDigestTests.cpp
-        game/world/LevelTriggersNativeDigestTests.cpp
-        game/world/SecretChallengeNativeDigestTests.cpp
-        game/world/NativeStateResourcesTests.cpp
+        game/critters/CombatantProjectilesNativeDigestTests.cpp
+        game/level/LevelTriggersNativeDigestTests.cpp
+        game/level/SecretChallengeNativeDigestTests.cpp
+        game/level/NativeStateResourcesTests.cpp
         engine/assets/MessageTableTests.cpp
         engine/assets/BitmapFontTests.cpp
         engine/ui/TextPainterTests.cpp
         game/enemies/GeneratorNativeDigestTests.cpp
         game/enemies/EnemiesNativeDigestTests.cpp
-        game/enemies/CombatantNativeDigestTests.cpp
+        game/critters/CombatantNativeDigestTests.cpp
         game/enemies/PlacedEnemiesNativeDigestTests.cpp
         game/enemies/OpponentOwnersNativeDigestTests.cpp
-        game/enemies/CritterStatuesNativeDigestTests.cpp
-        game/world/CameraMeterNativeDigestTests.cpp
-        game/world/EffectTreesNativeDigestTests.cpp
-        game/screens/PlayerAttackNativeDigestTests.cpp
-        game/world/PlayerFigureNativeDigestTests.cpp
-        game/world/LevelWorldNativeDigestTests.cpp
-        game/screens/LevelFixturesNativeDigestTests.cpp
-        game/world/SceneAudioNativeDigestTests.cpp
-        game/screens/SceneTravelNativeDigestTests.cpp
-        game/screens/SceneHudNativeDigestTests.cpp
-        game/screens/PlaySceneNativeStateDigestTests.cpp
-        game/netplay/EnemyPoolCheckpointTests.cpp
-        game/netplay/EnemyMissilesCheckpointTests.cpp
-        game/netplay/PlacedEnemyCheckpointTests.cpp
+        game/critters/CritterStatuesNativeDigestTests.cpp
+        game/camera/CameraMeterNativeDigestTests.cpp
+        game/effects/EffectTreesNativeDigestTests.cpp
+        game/party/PlayerAttackNativeDigestTests.cpp
+        game/party/PlayerFigureNativeDigestTests.cpp
+        game/level/LevelWorldNativeDigestTests.cpp
+        game/level/LevelFixturesNativeDigestTests.cpp
+        game/audio/SceneAudioNativeDigestTests.cpp
+        game/scenes/SceneTravelNativeDigestTests.cpp
+        game/hud/SceneHudNativeDigestTests.cpp
+        game/scenes/PlaySceneNativeStateDigestTests.cpp
+        game/rollback/EnemyPoolCheckpointTests.cpp
+        game/enemies/EnemyMissilesPacketTests.cpp
+        game/rollback/PlacedEnemyCheckpointTests.cpp
         game/enemies/EnemiesDeathTests.cpp game/enemies/EnemyAnimatorTests.cpp
-        game/screens/LevelOpponentsDeathTests.cpp
+        game/enemies/LevelOpponentsDeathTests.cpp
         engine/world/AnimationPlayerTests.cpp
-        game/screens/PlaySceneLocalRewindTests.cpp
-        game/screens/PlaySceneOutputTests.cpp
-        game/screens/SimulationObserverBossTests.cpp
-        game/netplay/NativeRollbackSceneTests.cpp
-        game/screens/NativeRollbackDriverTests.cpp
-        game/screens/PlaySceneControlEqualityTests.cpp
-        game/world/SceneSoundEventsTests.cpp
-        game/screens/TriggerCuesTests.cpp
-        game/screens/PlayerAttacksCheckpointTests.cpp
-        game/world/MoveStrikesCheckpointTests.cpp
-        game/screens/OpponentCombatCheckpointTests.cpp
+        game/scenes/PlaySceneLocalRewindTests.cpp
+        game/scenes/PlaySceneOutputTests.cpp
+        game/rollback/SimulationObserverBossTests.cpp
+        game/rollback/NativeRollbackSceneTests.cpp
+        game/rollback/NativeRollbackDriverTests.cpp
+        game/scenes/PlaySceneControlEqualityTests.cpp
+        game/audio/SceneSoundEventsTests.cpp
+        game/level/TriggerCuesTests.cpp
+        game/party/PlayerAttacksCheckpointTests.cpp
+        game/party/MoveStrikesCheckpointTests.cpp
+        game/enemies/OpponentCombatCheckpointTests.cpp
         game/enemies/EnemyMissilesCheckpointTests.cpp
         game/enemies/PlacedEnemiesTests.cpp
-        game/enemies/CritterStatuesCheckpointTests.cpp
-        game/screens/BossMeterTests.cpp
-        game/world/ExitPortalsCheckpointTests.cpp
-        game/world/LevelTransportersCheckpointTests.cpp
-        game/screens/PortalDepartureTests.cpp
-        game/screens/LevelArrivalPresentationTests.cpp
-        game/world/SumnerFigureTests.cpp
-        game/screens/PartyHudTests.cpp
-        game/screens/ChallengeHudTests.cpp
-        game/screens/LevelMessagesTests.cpp
-        game/screens/SumnerVisitTests.cpp
+        game/critters/CritterStatuesCheckpointTests.cpp
+        game/hud/BossMeterTests.cpp
+        game/level/ExitPortalsCheckpointTests.cpp
+        game/level/LevelTransportersCheckpointTests.cpp
+        game/party/PortalDepartureTests.cpp
+        game/tower/LevelArrivalPresentationTests.cpp
+        game/tower/SumnerFigureTests.cpp
+        game/hud/PartyHudTests.cpp
+        game/hud/ChallengeHudTests.cpp
+        game/hud/LevelMessagesTests.cpp
+        game/tower/SumnerVisitTests.cpp
         game/menu/ScrollBoxTests.cpp
         game/menu/HintMenuTests.cpp
         game/menu/BurnDialogueScrollTests.cpp
-        game/world/SumnerHintsTests.cpp
-        game/screens/TowerPromotionTests.cpp
-        game/screens/BossVictoryPresentationTests.cpp
-        game/screens/LegendPresentationTests.cpp
+        game/tower/SumnerHintsTests.cpp
+        game/tower/TowerPromotionTests.cpp
+        game/bosses/BossVictoryPresentationTests.cpp
+        game/bosses/LegendPresentationTests.cpp
         engine/world/WorldStateCheckpointTests.cpp
-        game/world/PlacedItemsCheckpointTests.cpp game/world/PlacedItemsTests.cpp
-        game/world/SafeRocksCheckpointTests.cpp game/world/RubbleCheckpointTests.cpp
-        game/world/LevelTriggersCheckpointTests.cpp
-        game/world/LevelWorldCheckpointTests.cpp game/screens/LevelFixturesCheckpointTests.cpp
-        game/world/FallingSceneryCheckpointTests.cpp game/world/DestructibleWallsCheckpointTests.cpp
-        game/world/WorldDestructionCheckpointTests.cpp game/world/SkorneArenaTests.cpp
+        game/level/PlacedItemsCheckpointTests.cpp game/level/PlacedItemsTests.cpp
+        game/level/SafeRocksCheckpointTests.cpp game/level/RubbleCheckpointTests.cpp
+        game/level/LevelTriggersCheckpointTests.cpp
+        game/level/LevelWorldCheckpointTests.cpp game/level/LevelFixturesCheckpointTests.cpp
+        game/level/FallingSceneryCheckpointTests.cpp game/level/DestructibleWallsCheckpointTests.cpp
+        game/level/WorldDestructionCheckpointTests.cpp game/level/SkorneArenaTests.cpp
         game/enemies/GeneratorsTests.cpp game/enemies/GeneratorsCheckpointTests.cpp
-        game/enemies/CombatantLocalRewindTests.cpp game/enemies/CombatantCheckpointTests.cpp
-        game/enemies/CrittersLocalRewindTests.cpp game/enemies/CrittersCheckpointTests.cpp
-        game/enemies/BossLocalRewindTests.cpp
+        game/critters/CombatantLocalRewindTests.cpp game/critters/CombatantCheckpointTests.cpp
+        game/critters/CrittersLocalRewindTests.cpp game/critters/CrittersCheckpointTests.cpp
+        game/bosses/BossLocalRewindTests.cpp
         engine/world/TreePoseTests.cpp
         engine/world/ParticleLocalRewindTests.cpp engine/world/ParticleSystemTests.cpp
-        game/world/EffectTreesLocalRewindTests.cpp game/world/EffectTreesTests.cpp
-        game/world/ItemFigureLocalRewindTests.cpp
-        game/world/ChestsCheckpointTests.cpp game/world/LockedGatesCheckpointTests.cpp
-        game/world/BreakablesCheckpointTests.cpp game/world/TrapsCheckpointTests.cpp
-        game/world/RotatorsCheckpointTests.cpp game/world/StaticSceneryCheckpointTests.cpp
-        game/world/RotatorsLocalRewindTests.cpp
-        game/world/EffectTreesPoolCheckpointTests.cpp game/world/EffectCheckpointTests.cpp
-        game/world/PlayerMissilesTests.cpp game/world/PlayerMissilesCheckpointTests.cpp
-        game/world/CombatantProjectilesTests.cpp game/world/CombatantProjectilesCheckpointTests.cpp
-        game/screens/TowerRelicsTests.cpp
-        game/world/TowerCameraTests.cpp game/world/TowerCameraCheckpointTests.cpp
-        game/world/PowerupCompanionTests.cpp game/world/PlayerFamiliarTests.cpp
-        game/netplay/LocalStateHistoryTests.cpp
+        game/effects/EffectTreesLocalRewindTests.cpp game/effects/EffectTreesTests.cpp
+        game/level/ItemFigureLocalRewindTests.cpp
+        game/level/ChestsCheckpointTests.cpp game/level/LockedGatesCheckpointTests.cpp
+        game/level/BreakablesCheckpointTests.cpp game/level/TrapsCheckpointTests.cpp
+        game/level/RotatorsCheckpointTests.cpp game/level/StaticSceneryCheckpointTests.cpp
+        game/level/RotatorsLocalRewindTests.cpp
+        game/effects/EffectTreesPoolCheckpointTests.cpp game/effects/EffectCheckpointTests.cpp
+        game/party/PlayerMissilesTests.cpp game/party/PlayerMissilesCheckpointTests.cpp
+        game/critters/CombatantProjectilesTests.cpp game/critters/CombatantProjectilesCheckpointTests.cpp
+        game/tower/TowerRelicsTests.cpp
+        game/camera/TowerCameraTests.cpp game/camera/TowerCameraCheckpointTests.cpp
+        game/party/PowerupCompanionTests.cpp game/party/PlayerFamiliarTests.cpp
+        game/rollback/LocalStateHistoryTests.cpp
         game/netplay/RollbackExchangeTests.cpp
-        game/screens/NativeSoundIdentityTests.cpp
-        game/netplay/RollbackInputsTests.cpp
-        game/netplay/FrameEventLedgerTests.cpp
-        game/screens/PlayerLocalRewindTests.cpp
-        game/screens/PlayerSimulationEqualityTests.cpp
-        game/screens/PlayerRuntimeCheckpointTests.cpp
-        game/world/PlayerCompanionCheckpointTests.cpp game/world/PlayerFigureTests.cpp
-        game/screens/PartyMotionTests.cpp game/screens/PartyFiguresTests.cpp
+        game/audio/NativeSoundIdentityTests.cpp
+        game/rollback/RollbackInputsTests.cpp
+        game/rollback/FrameEventLedgerTests.cpp
+        game/party/PlayerLocalRewindTests.cpp
+        game/party/PlayerSimulationEqualityTests.cpp
+        game/party/PlayerRuntimeCheckpointTests.cpp
+        game/party/PlayerCompanionCheckpointTests.cpp game/party/PlayerFigureTests.cpp
+        game/party/PartyMotionTests.cpp game/party/PartyFiguresTests.cpp
         game/players/PlayerActorCheckpointTests.cpp
-        game/netplay/NativeProbeTimingTests.cpp
+        game/rollback/NativeProbeTimingTests.cpp
         game/enemies/EnemiesCheckpointTests.cpp engine/world/TextureAnimatorTests.cpp
-        game/screens/SimulationObserver.cpp game/screens/SimulationObserverBindings.cpp
-        game/screens/NativePresentationReadinessTests.cpp
+        game/rollback/SimulationObserver.cpp game/rollback/SimulationObserverBindings.cpp
+        game/scenes/NativePresentationReadinessTests.cpp
         engine/app/ApplicationTimingTests.cpp
-        game/netplay/InputCommandTests.cpp
-        game/netplay/HintInputCommandTests.cpp game/screens/NativeHintInputTests.cpp
-        game/screens/NativeAgreementSceneTests.cpp
+        game/rollback/InputCommandTests.cpp
+        game/rollback/HintInputCommandTests.cpp game/rollback/NativeHintInputTests.cpp
+        game/netplay/NativeAgreementSceneTests.cpp
         game/netplay/NativeAgreementTests.cpp
         game/netplay/OnlineSessionTests.cpp game/netplay/OnlineNativeBootstrapTests.cpp
-        game/netplay/NativeOnlinePlayTests.cpp game/netplay/OnlineRunTests.cpp
+        game/netplay/NativeOnlinePlayTests.cpp game/app/OnlineRunTests.cpp
         game/netplay/NativeCampaignTransportTests.cpp
         game/netplay/OnlinePartyTests.cpp
         game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp engine/assets/StringTableTests.cpp
-        game/screens/SimulationObservationTests.cpp game/screens/PlaySceneSimulationCameraTests.cpp
-        game/netplay/LockstepInputsTests.cpp game/netplay/LockstepInputs.cpp game/netplay/MatchLockstepTests.cpp
-        game/netplay/MatchSessionTests.cpp game/netplay/ShopSyncTests.cpp game/players/ShopTests.cpp
-        game/screens/AfterLevelSceneTests.cpp
-        game/screens/NativeRollbackLifecycleTests.cpp game/screens/NativePlaySetupTests.cpp
-        game/world/SpeechTimingTests.cpp
-        game/world/VoiceQueueTests.cpp game/world/LevelSoundscapeTests.cpp
-        game/screens/BossSequenceTests.cpp fixtures/NativeSoundBank.cpp fixtures/NativeModelFixture.cpp
-        fixtures/ReferenceObj.cpp game/screens/PlayerAttacksTests.cpp game/screens/PartyPickupsTests.cpp
-        game/screens/PlaySceneTests.cpp engine/math/Mt19937Tests.cpp)
+        game/rollback/SimulationObservationTests.cpp game/scenes/PlaySceneSimulationCameraTests.cpp
+        game/rollback/LockstepInputsTests.cpp game/rollback/LockstepInputs.cpp game/rollback/MatchLockstepTests.cpp
+        game/netplay/MatchSessionTests.cpp game/netplay/ShopSyncTests.cpp game/characters/ShopTests.cpp
+        game/scenes/AfterLevelSceneTests.cpp
+        game/rollback/NativeRollbackLifecycleTests.cpp game/netplay/NativePlaySetupTests.cpp
+        game/audio/SpeechTimingTests.cpp
+        game/audio/VoiceQueueTests.cpp game/audio/LevelSoundscapeTests.cpp
+        game/bosses/BossSequenceTests.cpp fixtures/NativeSoundBank.cpp fixtures/NativeModelFixture.cpp
+        fixtures/ReferenceObj.cpp game/party/PlayerAttacksTests.cpp game/party/PartyPickupsTests.cpp
+        game/scenes/PlaySceneTests.cpp engine/math/Mt19937Tests.cpp)
     target_link_libraries(simulationtests PRIVATE game_diagnostics gdl::game Catch2::Catch2WithMain)
     target_include_directories(simulationtests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(simulationtests PRIVATE
@@ -823,24 +823,24 @@ if(GDL_ENABLE_NETPLAY)
     set_target_properties(simulationtests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${CMAKE_BINARY_DIR}/bin>")
 endif()
 target_sources(tests PRIVATE engine/io/Sha256Tests.cpp game/netplay/AssetDigestTests.cpp
-    game/screens/PlaySceneLocalRewindTests.cpp
-    game/screens/PlaySceneOutputTests.cpp
-    game/screens/SimulationObserverBossTests.cpp
-    game/netplay/NativeRollbackSceneTests.cpp
-    game/screens/NativeRollbackDriverTests.cpp
-    game/screens/PlaySceneControlEqualityTests.cpp
-    game/world/SceneSoundEventsTests.cpp
-    game/screens/SimulationObserver.cpp game/screens/SimulationObserverBindings.cpp
-    game/screens/NativePresentationReadinessTests.cpp
-    game/netplay/HintInputCommandTests.cpp game/screens/NativeHintInputTests.cpp
-    game/screens/NetplayMenuTests.cpp
-    game/screens/SimulationSeedTests.cpp game/screens/SimulationObservationTests.cpp
-    game/screens/PlaySceneSimulationCameraTests.cpp game/screens/NativePlaySetupTests.cpp
-    game/screens/NativeRollbackLifecycleTests.cpp game/netplay/LockstepInputsTests.cpp game/netplay/LockstepInputs.cpp
-    game/screens/NativeAgreementSceneTests.cpp
-    game/netplay/MatchLockstepTests.cpp game/netplay/NativeAgreementTests.cpp
+    game/scenes/PlaySceneLocalRewindTests.cpp
+    game/scenes/PlaySceneOutputTests.cpp
+    game/rollback/SimulationObserverBossTests.cpp
+    game/rollback/NativeRollbackSceneTests.cpp
+    game/rollback/NativeRollbackDriverTests.cpp
+    game/scenes/PlaySceneControlEqualityTests.cpp
+    game/audio/SceneSoundEventsTests.cpp
+    game/rollback/SimulationObserver.cpp game/rollback/SimulationObserverBindings.cpp
+    game/scenes/NativePresentationReadinessTests.cpp
+    game/rollback/HintInputCommandTests.cpp game/rollback/NativeHintInputTests.cpp
+    game/menu/NetplayMenuTests.cpp
+    game/rollback/SimulationSeedTests.cpp game/rollback/SimulationObservationTests.cpp
+    game/scenes/PlaySceneSimulationCameraTests.cpp game/netplay/NativePlaySetupTests.cpp
+    game/rollback/NativeRollbackLifecycleTests.cpp game/rollback/LockstepInputsTests.cpp game/rollback/LockstepInputs.cpp
+    game/netplay/NativeAgreementSceneTests.cpp
+    game/rollback/MatchLockstepTests.cpp game/netplay/NativeAgreementTests.cpp
     game/netplay/OnlineNativeBootstrapTests.cpp game/netplay/NativeOnlinePlayTests.cpp
-    game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp game/world/SpeechTimingTests.cpp)
+    game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp game/audio/SpeechTimingTests.cpp)
 target_link_libraries(tests PRIVATE Vulkan::Headers volk::volk GPUOpen::VulkanMemoryAllocator)
 target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(tests PRIVATE

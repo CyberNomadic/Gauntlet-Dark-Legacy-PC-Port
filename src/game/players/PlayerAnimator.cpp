@@ -8,30 +8,28 @@
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
 
-#include "game/players/ClassData.h"
+#include "game/characters/ClassData.h"
 
 namespace gdl::game {
 
 void visitNativeState(NativeStateDigest& digest, const PlayerAnimator& value) {
-    const auto& [tree, sequences, current, footfall, entered, released, meleeBlow, melee,
-                 character, chain, quickPress, strongPress, quickHeld, strongHeld, moved,
-                 shielded, pushed, potionUsed, potionThrown, potionThrowTicks,
-                 potionThrowReleased, dead, turboBegan, strongReleased, potionShielded,
-                 shieldAsked, legendAsked, legendReleased, superReleased, superHeld,
-                 itemReleased, rapid, speed, guardArmor, strafe, comboClass, comboRide,
-                 potionLatch, attackSeconds, phaseSeconds, shotFrame, stillTicks,
-                 fidgetTicks, player, pose, previous, presentationPrevious,
+    const auto& [tree, sequences, current, footfall, entered, released, meleeBlow, melee, character,
+                 chain, quickPress, strongPress, quickHeld, strongHeld, moved, shielded, pushed,
+                 potionUsed, potionThrown, potionThrowTicks, potionThrowReleased, dead, turboBegan,
+                 strongReleased, potionShielded, shieldAsked, legendAsked, legendReleased,
+                 superReleased, superHeld, itemReleased, rapid, speed, guardArmor, strafe,
+                 comboClass, comboRide, potionLatch, attackSeconds, phaseSeconds, shotFrame,
+                 stillTicks, fidgetTicks, player, pose, previous, presentationPrevious,
                  presentationGeneration] = value;
     digest.resource(tree);
     digest.values(sequences, current, footfall, entered, released, meleeBlow);
     digest.fields<3>(melee);
-    digest.values(character, chain, quickPress, strongPress, quickHeld, strongHeld, moved,
-                  shielded, pushed, potionUsed, potionThrown, potionThrowTicks,
-                  potionThrowReleased, dead, turboBegan, strongReleased, potionShielded,
-                  shieldAsked, legendAsked, legendReleased, superReleased, superHeld,
-                  itemReleased, rapid, speed, guardArmor, strafe, comboClass, comboRide,
-                  potionLatch, attackSeconds, phaseSeconds, shotFrame, stillTicks,
-                  fidgetTicks, player, pose, previous, presentationPrevious,
+    digest.values(character, chain, quickPress, strongPress, quickHeld, strongHeld, moved, shielded,
+                  pushed, potionUsed, potionThrown, potionThrowTicks, potionThrowReleased, dead,
+                  turboBegan, strongReleased, potionShielded, shieldAsked, legendAsked,
+                  legendReleased, superReleased, superHeld, itemReleased, rapid, speed, guardArmor,
+                  strafe, comboClass, comboRide, potionLatch, attackSeconds, phaseSeconds,
+                  shotFrame, stillTicks, fidgetTicks, player, pose, previous, presentationPrevious,
                   presentationGeneration);
 }
 

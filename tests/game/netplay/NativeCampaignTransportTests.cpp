@@ -11,16 +11,17 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/net/SessionTransport.h"
+
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "engine/net/SessionTransport.h"
 #include "game/app/NativeOnlineIdentity.h"
+#include "game/level/ExitPortals.h"
 #include "game/netplay/HostedRoom.h"
+#include "game/netplay/NativeOnlinePlay.h"
+#include "game/netplay/OnlineParty.h"
 #include "game/netplay/OnlineSession.h"
-#include "game/screens/AfterLevelScene.h"
-#include "game/screens/NativeOnlinePlay.h"
-#include "game/screens/OnlineParty.h"
-#include "game/world/ExitPortals.h"
+#include "game/scenes/AfterLevelScene.h"
 
 namespace {
 using namespace gdl;
@@ -29,9 +30,8 @@ using Clock = std::chrono::steady_clock;
 
 // These identities deliberately describe one in-process test contract. This
 // exercises the real bootstrap exchange, not the separate file-hash audit.
-const OnlineSession::NativeIdentity kIdentity{
-    "campaign-transport-test", "same-process-runtime", std::string(64, 'a'),
-    std::string(64, 'b'), "en"};
+const OnlineSession::NativeIdentity kIdentity{"campaign-transport-test", "same-process-runtime",
+                                              std::string(64, 'a'), std::string(64, 'b'), "en"};
 
 template <class Done, class Step>
 void until(std::string_view stage, Done done, Step step,
@@ -54,8 +54,9 @@ std::unique_ptr<SessionTransport> openTransport(const std::string& invitation = 
     std::string error;
     auto wire = openSessionTransport({true, invitation}, error);
     REQUIRE(wire);
-    until("local endpoint ready", [&] { return wire->phase() != SessionTransport::Phase::Opening; },
-          [] {}, std::chrono::seconds(15));
+    until(
+        "local endpoint ready", [&] { return wire->phase() != SessionTransport::Phase::Opening; },
+        [] {}, std::chrono::seconds(15));
     // Invitations never enter assertion diagnostics or files.
     REQUIRE(wire->phase() == SessionTransport::Phase::Ready);
     return wire;
@@ -145,10 +146,10 @@ struct CampaignPeer {
         REQUIRE(session.party());
         const NativePlaySetup::Contract contract{
             agreed->rules.scene,        agreed->rules.autoMelee, agreed->rules.autoActivateItems,
-            agreed->rules.expandedShop, agreed->rules.autoAim, agreed->identity.build,  agreed->identity.content,
-            agreed->identity.data};
-        setup = NativePlaySetup::create(config, session.room()->settings, *session.party(),
-                                        options, contract);
+            agreed->rules.expandedShop, agreed->rules.autoAim,   agreed->identity.build,
+            agreed->identity.content,   agreed->identity.data};
+        setup = NativePlaySetup::create(config, session.room()->settings, *session.party(), options,
+                                        contract);
         REQUIRE(setup);
         REQUIRE(session.confirmNativeSetup(setup->digest()));
     }
@@ -209,9 +210,10 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
     const auto options = authoredExit(assets, levels, *source);
     // Load the fixture before opening either network endpoint. No loading cost
     // is misreported as missing network progress and no live state is patched.
-    auto host = std::make_unique<CampaignPeer>(openTransport(), true, 2, 22, assets, levels, strings);
-    auto guest = std::make_unique<CampaignPeer>(openTransport(host->wire->invitation()), false,
-                                               0, 20, assets, levels, strings);
+    auto host =
+        std::make_unique<CampaignPeer>(openTransport(), true, 2, 22, assets, levels, strings);
+    auto guest = std::make_unique<CampaignPeer>(openTransport(host->wire->invitation()), false, 0,
+                                                20, assets, levels, strings);
     const auto peers = std::array{host.get(), guest.get()};
     OnlineSession::NativeRules rules;
     rules.scene = *sourceScene;
@@ -247,16 +249,22 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
         lobbyStep);
     REQUIRE(host->session.ready());
     REQUIRE(guest->session.ready());
-    until("all room members ready", [&] {
-        const auto* room = host->session.room();
-        return (room != nullptr) && std::ranges::all_of(room->members, &RoomMember::ready);
-    }, lobbyStep);
+    until(
+        "all room members ready",
+        [&] {
+            const auto* room = host->session.room();
+            return (room != nullptr) && std::ranges::all_of(room->members, &RoomMember::ready);
+        },
+        lobbyStep);
     REQUIRE(host->session.start());
-    until("native setup agreement", [&] {
-        return std::ranges::all_of(peers, [](const auto* peer) {
-            return peer->session.phase() == OnlineSession::Phase::Active;
-        });
-    }, lobbyStep);
+    until(
+        "native setup agreement",
+        [&] {
+            return std::ranges::all_of(peers, [](const auto* peer) {
+                return peer->session.phase() == OnlineSession::Phase::Active;
+            });
+        },
+        lobbyStep);
     REQUIRE(host->setup);
     REQUIRE(guest->setup);
     CHECK(host->setup->digest() == guest->setup->digest());
@@ -276,22 +284,25 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
     CHECK(host->session.match().context().scene == *sourceScene);
 
     std::array<bool, 2> sawSource{};
-    until("authored exit and confirmed shop entry", [&] {
-        return std::ranges::all_of(peers, [](const auto* peer) {
-            return peer->play.phase() == NativeOnlinePlay::Phase::Shopping;
-        });
-    }, [&] {
-        for (usize index = 0; index < peers.size(); ++index) {
-            auto& peer = *peers[index];
-            peer.step();
-            if (const auto* scene = peer.play.scene()) {
-                sawSource[index] |= scene->world()->ref() == *source &&
-                                    peer.play.confirmedTick() > 0;
+    until(
+        "authored exit and confirmed shop entry",
+        [&] {
+            return std::ranges::all_of(peers, [](const auto* peer) {
+                return peer->play.phase() == NativeOnlinePlay::Phase::Shopping;
+            });
+        },
+        [&] {
+            for (usize index = 0; index < peers.size(); ++index) {
+                auto& peer = *peers[index];
+                peer.step();
+                if (const auto* scene = peer.play.scene()) {
+                    sawSource[index] |=
+                        scene->world()->ref() == *source && peer.play.confirmedTick() > 0;
+                }
+                CHECK(peer.saves == 0);
+                CHECK(peer.unlocks == 0);
             }
-            CHECK(peer.saves == 0);
-            CHECK(peer.unlocks == 0);
-        }
-    });
+        });
     CHECK(std::ranges::all_of(sawSource, [](bool seen) { return seen; }));
     const auto shopContext = host->session.match().context();
     CHECK(shopContext == guest->session.match().context());
@@ -301,7 +312,8 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
     CHECK(shopContext.sourceTick > 0);
     REQUIRE(host->play.shopScene());
     REQUIRE(guest->play.shopScene());
-    sameParty(host->play.shopScene()->session().party(), guest->play.shopScene()->session().party());
+    sameParty(host->play.shopScene()->session().party(),
+              guest->play.shopScene()->session().party());
     for (auto* peer : peers) {
         for (const auto& member : peer->play.shopScene()->session().party()) {
             CHECK(member.save.progress().levels.hasBeaten(source->realmId, source->index));
@@ -311,31 +323,34 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
     u32 menuFrames = 0;
     std::array<bool, 2> sawShopping{};
     std::array<bool, 2> sawInventory{};
-    until("normal shop commands and tower return", [&] {
-        return std::ranges::all_of(peers, [](const auto* peer) {
-            return peer->play.phase() == NativeOnlinePlay::Phase::Playing && peer->play.scene() &&
-                   peer->play.scene()->world()->isTower();
-        });
-    }, [&] {
-        for (usize index = 0; index < peers.size(); ++index) {
-            auto& peer = *peers[index];
-            if (const auto* shop = peer.play.shopScene()) {
-                REQUIRE(peer.session.seats().size() == 1);
-                const auto seat = peer.session.seats().front();
-                const auto& lanes = shop->session().lanes();
-                const auto own = std::ranges::find(lanes, seat,
-                    [](const ShopLane& lane) { return lane.member.player; });
-                REQUIRE(own != lanes.end());
-                sawShopping[index] |= own->phase == ShopPhase::Shopping;
-                sawInventory[index] |= own->phase == ShopPhase::Inventory;
+    until(
+        "normal shop commands and tower return",
+        [&] {
+            return std::ranges::all_of(peers, [](const auto* peer) {
+                return peer->play.phase() == NativeOnlinePlay::Phase::Playing &&
+                       peer->play.scene() && peer->play.scene()->world()->isTower();
+            });
+        },
+        [&] {
+            for (usize index = 0; index < peers.size(); ++index) {
+                auto& peer = *peers[index];
+                if (const auto* shop = peer.play.shopScene()) {
+                    REQUIRE(peer.session.seats().size() == 1);
+                    const auto seat = peer.session.seats().front();
+                    const auto& lanes = shop->session().lanes();
+                    const auto own = std::ranges::find(
+                        lanes, seat, [](const ShopLane& lane) { return lane.member.player; });
+                    REQUIRE(own != lanes.end());
+                    sawShopping[index] |= own->phase == ShopPhase::Shopping;
+                    sawInventory[index] |= own->phase == ShopPhase::Inventory;
+                }
+                MenuInput menu;
+                menu.start = menuFrames % 30 == 0;
+                menu.select = menuFrames % 30 == 15;
+                peer.step(menu);
             }
-            MenuInput menu;
-            menu.start = menuFrames % 30 == 0;
-            menu.select = menuFrames % 30 == 15;
-            peer.step(menu);
-        }
-        ++menuFrames;
-    });
+            ++menuFrames;
+        });
     CHECK(std::ranges::all_of(sawShopping, [](bool seen) { return seen; }));
     CHECK(std::ranges::all_of(sawInventory, [](bool seen) { return seen; }));
     const auto towerContext = host->session.match().context();
@@ -356,17 +371,20 @@ TEST_CASE("real iroh campaign exits through tally and shop into the agreed tower
         CHECK(peer.play.hasCompletedProgress());
     }
     const u64 confirmed = std::max(host->play.confirmedTick(), guest->play.confirmedTick());
-    until("new tower epoch remains live", [&] {
-        return host->play.confirmedTick() >= confirmed + 90 &&
-               guest->play.confirmedTick() >= confirmed + 90;
-    }, [&] {
-        for (auto* peer : peers) {
-            peer->step();
-            CHECK(peer->session.match().context() == towerContext);
-            CHECK(peer->saves == 1);
-            CHECK(peer->unlocks == 0);
-            CHECK(peer->manualSaves == 0);
-            CHECK(peer->play.simulatedTick() - peer->play.confirmedTick() <= 8);
-        }
-    });
+    until(
+        "new tower epoch remains live",
+        [&] {
+            return host->play.confirmedTick() >= confirmed + 90 &&
+                   guest->play.confirmedTick() >= confirmed + 90;
+        },
+        [&] {
+            for (auto* peer : peers) {
+                peer->step();
+                CHECK(peer->session.match().context() == towerContext);
+                CHECK(peer->saves == 1);
+                CHECK(peer->unlocks == 0);
+                CHECK(peer->manualSaves == 0);
+                CHECK(peer->play.simulatedTick() - peer->play.confirmedTick() <= 8);
+            }
+        });
 }

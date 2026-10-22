@@ -109,8 +109,7 @@ struct PlacedEnemiesCheckpoint::Prepared::Data {
     PlacedEnemies::LocalSnapshot target;
 };
 
-PlacedEnemiesCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data)
-    : m_data(std::move(data)) {}
+PlacedEnemiesCheckpoint::Prepared::Prepared(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
 PlacedEnemiesCheckpoint::Prepared::Prepared(Prepared&&) noexcept = default;
 PlacedEnemiesCheckpoint::Prepared&
 PlacedEnemiesCheckpoint::Prepared::operator=(Prepared&&) noexcept = default;

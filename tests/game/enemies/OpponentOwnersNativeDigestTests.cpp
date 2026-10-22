@@ -6,10 +6,10 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "game/enemies/Bosses.h"
-#include "game/enemies/Critters.h"
-#include "game/world/HazardSurfaces.h"
-#include "game/world/NativeStateResources.h"
+#include "game/bosses/Bosses.h"
+#include "game/critters/Critters.h"
+#include "game/level/HazardSurfaces.h"
+#include "game/level/NativeStateResources.h"
 
 namespace {
 using namespace gdl;
@@ -178,8 +178,8 @@ TEST_CASE("native combatant owner fails closed without family registration",
     NativeStateDigest missing;
     CHECK_FALSE(population->owner.appendNativeDigest(missing));
     CHECK_FALSE(missing.checkedFinish());
-    CHECK_FALSE(population->resources.registerCombatantAssets(
-        *population->owner.resources().front(), ""));
+    CHECK_FALSE(
+        population->resources.registerCombatantAssets(*population->owner.resources().front(), ""));
 }
 
 TEST_CASE("empty native opponent owners include configuration for their next birth",

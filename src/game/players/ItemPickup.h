@@ -4,7 +4,7 @@
 
 #include "engine/core/Types.h"
 
-#include "game/players/CharacterSave.h"
+#include "game/characters/CharacterSave.h"
 
 namespace gdl::game {
 

@@ -8,9 +8,9 @@
 
 #include "engine/render/RenderDevice.h"
 
-#include "game/players/Party.h"
-#include "game/screens/NetplayMenu.h"
-#include "game/screens/SessionInputs.h"
+#include "game/characters/Party.h"
+#include "game/menu/NetplayMenu.h"
+#include "game/rollback/SessionInputs.h"
 
 namespace gdl::game {
 struct GameContext;

@@ -17,9 +17,9 @@
 
 #include "game/app/NativeOnlineIdentity.h"
 #include "game/netplay/HostedRoom.h"
-#include "game/netplay/RollbackInputs.h"
-#include "game/screens/NativeOnlinePlay.h"
-#include "game/screens/OnlineParty.h"
+#include "game/netplay/NativeOnlinePlay.h"
+#include "game/netplay/OnlineParty.h"
+#include "game/rollback/RollbackInputs.h"
 #endif
 
 namespace gdl::game {

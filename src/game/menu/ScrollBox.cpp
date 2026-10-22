@@ -112,8 +112,8 @@ void ScrollBox::step(s32 ticks, u32 accepted) {
 void ScrollBox::finish() {
     const bool canBurn = m_sim.device != nullptr && m_art.backdropImage != nullptr &&
                          !m_art.burnMasks.empty() && !m_art.burnRing.empty();
-    if (!canBurn || !m_fire.start(*m_sim.device, m_sim.layout.area, *m_art.backdropImage, m_art.burnMasks,
-                                  m_art.burnRing)) {
+    if (!canBurn || !m_fire.start(*m_sim.device, m_sim.layout.area, *m_art.backdropImage,
+                                  m_art.burnMasks, m_art.burnRing)) {
         close();
     }
 }

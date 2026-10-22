@@ -6,7 +6,7 @@
 #include "engine/math/PortableMath.h"
 
 #include "game/combat/BodyContact.h"
-#include "game/world/TargetAssist.h"
+#include "game/party/TargetAssist.h"
 
 namespace gdl::game {
 MissileTarget MeleeGeometry::body(const Target& target) {

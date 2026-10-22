@@ -11,8 +11,8 @@
 #include "engine/ui/SystemFont.h"
 
 #include "game/app/BuildLabel.h"
-#include "game/screens/PlayerRuntime.h"
-#include "game/world/LevelWorld.h"
+#include "game/level/LevelWorld.h"
+#include "game/party/PlayerRuntime.h"
 
 namespace gdl::game {
 namespace {

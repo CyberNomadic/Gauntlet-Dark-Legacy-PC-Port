@@ -6,7 +6,7 @@
 #include "engine/core/Types.h"
 
 #include "TestSupport.h"
-#include "game/enemies/CritterData.h"
+#include "game/critters/CritterData.h"
 #include "game/players/PlayerImpact.h"
 
 namespace {

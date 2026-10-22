@@ -6,7 +6,7 @@
 
 #include "engine/core/Types.h"
 
-#include "game/players/CharacterSave.h"
+#include "game/characters/CharacterSave.h"
 
 namespace gdl::game {
 
@@ -18,10 +18,12 @@ struct PickupVoice {
 
 /** Owns food-response variation independently of rendering and inventory mutation. */
 class PickupVoices {
-    template <class Visitor> friend void visitNativeState(Visitor& visitor, const PickupVoices& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& visitor, const PickupVoices& value) {
         const auto& [random] = value;
         visitor.value(random);
     }
+
 public:
     bool operator==(const PickupVoices&) const = default;
 

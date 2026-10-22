@@ -10,9 +10,9 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/enemies/LevelOpponents.h"
 #include "game/enemies/PlacedEnemies.h"
 #include "game/enemies/PlacedEnemiesCheckpoint.h"
-#include "game/screens/LevelOpponents.h"
 
 namespace {
 using namespace gdl;
@@ -222,7 +222,8 @@ TEST_CASE("placed enemy checkpoint rejects malformed order view and placement da
         invalid.roster[0].carried = usize{1'000'001};
     }
     SECTION("placement bounds") {
-        invalid.roster.resize(PlacedEnemiesCheckpoint::State::kMaxPlacements + 1, placement({0, 0, 10}));
+        invalid.roster.resize(PlacedEnemiesCheckpoint::State::kMaxPlacements + 1,
+                              placement({0, 0, 10}));
     }
     REQUIRE_FALSE(invalid.valid());
     CHECK_FALSE(PlacedEnemiesCheckpoint::prepareRestore(owner, invalid));
@@ -388,8 +389,7 @@ TEST_CASE("placed enemy native rewind retains resource lifetime and replacement 
         storage->reset();
         storage->emplace().bind(roster);
         break;
-    default:
-        break;
+    default: break;
     }
     const auto after = PlacedEnemiesCheckpoint::capture(storage->value());
     CHECK_FALSE(storage->value().canRestoreLocal(saved));
@@ -656,7 +656,8 @@ TEST_CASE("native placement rewind replays corrected watch branches without spaw
             CHECK(advance(predicted, tick) == advance(reference, tick));
             predicted.saveLocal(actual);
             CHECK(predicted.equalLocal(expected[static_cast<usize>(step)], actual));
-            CHECK(PlacedEnemiesCheckpoint::capture(predicted) == PlacedEnemiesCheckpoint::capture(reference));
+            CHECK(PlacedEnemiesCheckpoint::capture(predicted) ==
+                  PlacedEnemiesCheckpoint::capture(reference));
         }
         REQUIRE(predicted.canRestoreLocal(saved));
     }

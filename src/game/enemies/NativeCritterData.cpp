@@ -10,7 +10,7 @@
 #include "engine/io/File.h"
 
 #include "formats/CritterWad.h"
-#include "game/enemies/CritterData.h"
+#include "game/critters/CritterData.h"
 
 namespace gdl::game {
 namespace {

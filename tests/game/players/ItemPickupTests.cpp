@@ -5,10 +5,10 @@
 
 #include "engine/core/Types.h"
 
+#include "game/characters/Progression.h"
 #include "game/players/ItemPickup.h"
 #include "game/players/PickupVoices.h"
 #include "game/players/PowerupEffects.h"
-#include "game/players/Progression.h"
 
 namespace {
 

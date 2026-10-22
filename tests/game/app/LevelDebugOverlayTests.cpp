@@ -15,9 +15,9 @@
 #include "TestSupport.h"
 #include "game/app/LevelDebugOverlay.h"
 #include "game/config/GameConfig.h"
-#include "game/screens/PlayerRuntime.h"
-#include "game/world/LevelCatalog.h"
-#include "game/world/LevelWorld.h"
+#include "game/level/LevelCatalog.h"
+#include "game/level/LevelWorld.h"
+#include "game/party/PlayerRuntime.h"
 
 namespace {
 using namespace gdl;

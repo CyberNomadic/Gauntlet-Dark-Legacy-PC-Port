@@ -22,15 +22,15 @@
 #include "engine/world/WorldLighting.h"
 
 #include "game/combat/MeleeGeometry.h"
+#include "game/effects/BlobShadow.h"
 #include "game/enemies/DeathRules.h"
 #include "game/enemies/EnemyAnimator.h"
 #include "game/enemies/EnemyFeedback.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/enemies/EnemyMind.h"
-#include "game/world/BlobShadow.h"
-#include "game/world/HazardSurfaces.h"
-#include "game/world/ItemFigure.h"
-#include "game/world/PlayerMissiles.h"
+#include "game/level/HazardSurfaces.h"
+#include "game/level/ItemFigure.h"
+#include "game/party/PlayerMissiles.h"
 
 namespace gdl::game {
 

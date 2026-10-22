@@ -3,7 +3,7 @@
 #include "TestSupport.h"
 #include "game/app/Scenario.h"
 #include "game/netplay/OnlinePair.h"
-#include "game/screens/OnlineParty.h"
+#include "game/netplay/OnlineParty.h"
 
 namespace {
 using namespace gdl;

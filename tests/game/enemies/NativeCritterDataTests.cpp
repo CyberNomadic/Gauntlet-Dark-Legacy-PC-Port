@@ -18,9 +18,9 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "formats/CritterWad.h"
-#include "game/enemies/CombatantAssets.h"
-#include "game/enemies/CombatantFixture.h"
-#include "game/enemies/CritterData.h"
+#include "game/critters/CombatantAssets.h"
+#include "game/critters/CombatantFixture.h"
+#include "game/critters/CritterData.h"
 
 namespace {
 using namespace gdl;

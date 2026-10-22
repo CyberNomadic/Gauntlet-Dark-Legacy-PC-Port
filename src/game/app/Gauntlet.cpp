@@ -19,10 +19,10 @@
 #include "formats/TplFile.h"
 #include "game/app/GameCursor.h"
 #include "game/app/Scenario.h"
+#include "game/characters/AutoSave.h"
 #include "game/config/ControlProfiles.h"
 #include "game/enemies/Enemies.h"
 #include "game/menu/MenuInput.h"
-#include "game/players/AutoSave.h"
 #include "game/players/PlayerControls.h"
 
 namespace gdl::game {

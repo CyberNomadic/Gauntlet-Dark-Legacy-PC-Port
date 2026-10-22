@@ -5,7 +5,7 @@
 #include "engine/core/Types.h"
 #include "engine/math/RandomDistribution.h"
 
-#include "game/players/ClassData.h"
+#include "game/characters/ClassData.h"
 #include "game/players/PowerupEffects.h"
 
 namespace gdl::game {

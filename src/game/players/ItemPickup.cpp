@@ -6,9 +6,9 @@
 
 #include "engine/core/Types.h"
 
+#include "game/characters/Progression.h"
 #include "game/combat/Damage.h"
 #include "game/players/PowerupEffects.h"
-#include "game/players/Progression.h"
 
 namespace gdl::game {
 

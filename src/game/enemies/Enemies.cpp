@@ -15,8 +15,8 @@
 #include "game/combat/BodyContact.h"
 #include "game/combat/Damage.h"
 #include "game/enemies/EnemyMissiles.h"
+#include "game/level/NativeStateResources.h"
 #include "game/players/EnemyShrink.h"
-#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 

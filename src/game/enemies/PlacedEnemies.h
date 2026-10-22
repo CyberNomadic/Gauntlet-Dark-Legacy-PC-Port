@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "engine/io/NativeStateDigest.h"
+
 #include "game/enemies/Enemies.h"
 
 namespace gdl::game {

@@ -9,11 +9,11 @@
 
 #include "engine/platform/Input.h"
 
+#include "game/camera/CameraMovementLimit.h"
 #include "game/netplay/RollbackExchange.h"
-#include "game/netplay/RollbackSessionHarness.h"
-#include "game/screens/PartyMotion.h"
-#include "game/screens/SessionInputs.h"
-#include "game/world/CameraMovementLimit.h"
+#include "game/party/PartyMotion.h"
+#include "game/rollback/RollbackSessionHarness.h"
+#include "game/rollback/SessionInputs.h"
 
 namespace {
 using namespace gdl;

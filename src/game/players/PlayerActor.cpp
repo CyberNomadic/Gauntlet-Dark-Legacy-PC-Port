@@ -9,7 +9,7 @@
 #include "engine/core/Types.h"
 #include "engine/math/PortableMath.h"
 
-#include "game/players/Progression.h"
+#include "game/characters/Progression.h"
 
 namespace gdl::game {
 

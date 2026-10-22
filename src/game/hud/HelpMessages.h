@@ -1,0 +1,205 @@
+#pragma once
+
+#include <array>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "engine/assets/MessageTable.h"
+#include "engine/core/Types.h"
+#include "engine/math/Math.h"
+#include "engine/render/RenderTypes.h"
+#include "engine/ui/Canvas.h"
+#include "engine/ui/TextPainter.h"
+
+namespace gdl::game {
+
+/** How often a help message comes up. */
+enum class HelpRepeat : u8 {
+    OnceForAll,     ///< until every character playing has ever seen it
+    OncePerPlayer,  ///< until the character it is for has ever seen it
+    OncePerSession, ///< until any character playing has seen it since it was loaded
+    Always          ///< every time: news, not a lesson
+};
+
+/** One of the original's help messages: its text in the game's strings, the line spoken for
+ * it, how often it comes, and how it stands against one already up. */
+struct HelpMessageSpec {
+    s32 id = 0;
+    std::string_view text;  ///< a message of the game's strings
+    std::string_view voice; ///< from the narrator's bank, or the character's own class's
+    HelpRepeat repeat = HelpRepeat::OnceForAll;
+    s32 line = -1;     ///< the one line of the text that is shown; all of them when -1
+    s32 priority = 50; ///< one higher than what is up takes its place
+    bool classVoice = false;
+    bool commonVoice = false; ///< crystal pickup cue, not a narrator recording
+};
+
+/** Who a message names, for the messages that begin with the player's colour and class. */
+struct HelpSpeaker {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& visitor, const HelpSpeaker& value) {
+        visitor.template fields<2>(value);
+    }
+    s32 character = -1; ///< the class; none leaves the names out
+    bool pojo = false;  ///< carrying Pojo, who is named instead
+};
+
+/** Someone a message can be for: the player, and the messages their character has seen. */
+struct HelpReader {
+    s32 player = 0;
+    std::vector<s32>* seen = nullptr;  ///< ever; kept sorted; saved with the character
+    std::vector<s32>* heard = nullptr; ///< since the character was loaded; kept sorted
+};
+
+/** Read-only history for deciding whether posting could change help state. */
+struct HelpHistory {
+    s32 player = 0;
+    const std::vector<s32>* seen = nullptr;
+    const std::vector<s32>* heard = nullptr;
+};
+
+/**
+ * The help messages the original teaches the game with: a small scroll over a character's
+ * head with a line or two and the narrator saying it, each shown until every character in
+ * play has seen it (or, for a few, until that character has), one at a time, for a second a
+ * line and half a second more, and after each a growing pause before the next. The names of
+ * the classes' turbo attacks are among them, announced in the class's own bank once each
+ * session as the move comes out, over whatever lesser message is up.
+ */
+class HelpMessages {
+public:
+    struct Look {
+        s32 id = 0;
+        s32 player = -1;
+        s32 number = -1;
+        HelpSpeaker speaker;
+    };
+    static constexpr s32 kUseMagicOnDeath = 0; ///< nothing but magic harms him
+    static constexpr s32 kDoorNeedsKey = 1;
+    static constexpr s32 kChestNeedsKey = 2;
+    static constexpr s32 kPotionsFull = 3;
+    static constexpr s32 kKeysFull = 4;
+    static constexpr s32 kTrapsMove = 5;
+    static constexpr s32 kNoPotion = 6;
+    static constexpr s32 kTransporter = 9;  ///< on arriving by a transporter
+    static constexpr s32 kSecretWalls = 20; ///< a blow on a wall that breaks
+    static constexpr s32 kTrapsHurt = 21;
+    static constexpr s32 kDestroyGenerators = 22; ///< ten hits on what generators bred
+    static constexpr s32 kRandomChest = 23;
+    static constexpr s32 kEveryoneToExit = 11; ///< one waits on an exit the rest have not reached
+    static constexpr s32 kShotMagic = 14;      ///< a bottle shot does less than one drunk
+    static constexpr s32 kWastedMagic = 18;    ///< a caster's magic struck nothing
+    static constexpr s32 kBarrelsHold = 27;
+    static constexpr s32 kRedBarrels = 44;     ///< near an exploding barrel's end
+    static constexpr s32 kGreenBarrels = 45;   ///< near a poison barrel's
+    static constexpr s32 kFirstTurboName = 57; ///< three to a class: none, the lesser, the greater
+    static constexpr s32 kLastTurboName = 79;
+    static constexpr s32 kAlreadyHaveRune = 90;
+    /** The classes' two-player combos by name, one to a class in class order: the warrior's
+     * pinball to the jester's cannonball, the lines of the COMBOS text. */
+    static constexpr s32 kFirstComboName = 102;
+    static constexpr s32 kLastComboName = 109;
+    static constexpr s32 kUseTurbo = 110;
+    static constexpr s32 kUseCombo = 111; ///< with two fifths of the meter and a partner
+    /** A legend item's name is this plus the realm it is for, one to eleven. */
+    static constexpr s32 kFirstLegendName = 113;
+    static constexpr s32 kLastLegendName = 124;
+    static constexpr s32 kHealthFull = 133;
+    static constexpr s32 kBlastsDestroy = 135;
+    static constexpr s32 kGasSpoils = 136;
+    static constexpr s32 kGeneralsCarry = 134;         ///< a general slain let an item go
+    static constexpr s32 kDeathDrainsExperience = 128; ///< Death's black form, draining
+    static constexpr s32 kDeathLeavesExperience = 129;
+    static constexpr s32 kDeathDrainsHealth = 130; ///< the others; its text and 131's as shipped
+    static constexpr s32 kDeathLeavesHealth = 131;
+    static constexpr s32 kLearnBlock = 125;    ///< a heavy blow taken without a guard
+    static constexpr s32 kAllOnPlatform = 126; ///< a platform the whole party must stand on
+    static constexpr s32 kAllOnTrigger = 127;  ///< a trigger the whole party must
+    static constexpr s32 kChestsExplode = 137;
+    static constexpr s32 kGargoylesRelease = 138; ///< a gargoyle slain did
+    /** The first of the eight lessons of a class family's potion magic, in `MagicPerkDeed`'s
+     * order: junk to silver and to gold, traps stopped and destroyed, fruit and meat
+     * cleansed, secret walls revealed and destroyed. */
+    static constexpr s32 kFirstMagicPerk = 139;
+    static constexpr s32 kHealingMagic = 147; ///< from level 75 magic heals as it harms
+    static constexpr s32 kLevelUp = 34;       ///< "LEVEL %d", the number filled in
+    static constexpr s32 kNowIt = 50;         ///< "<colour> <class> IS NOW IT"
+    static constexpr s32 kShrunk = 89;        ///< "<colour> <class> HAS SHRUNK ENEMIES"
+    static constexpr s32 kNowPojo = 93;       ///< "<colour> <class> IS NOW POJO"
+
+    static constexpr s32 kTicksPerLine = 60;
+    static constexpr s32 kTicksOver = 30;
+    static constexpr std::array<s32, 5> kPauses{0, 120, 240, 420, 600}; ///< ticks, each longer
+    static constexpr s32 kAboveHead = 62;    ///< how far over the character it is centred
+    static constexpr s32 kMarginAcross = 64; ///< the scroll is this much wider than its text
+    static constexpr s32 kMarginDown = 16;
+    static constexpr s32 kLowest = 304; ///< the scroll stays over the status boxes
+    static constexpr s32 kWidest = 511;
+    static constexpr u8 kScrollAlpha = 128;
+
+    static const HelpMessageSpec* specOf(s32 id);
+    /** Native repeat policy only, without text, priority or pause suppression.
+     * False proves posting is a no-op; true need not mean a message will show.
+     * Histories have the same sorted-list contract as HelpReader. */
+    static bool wanted(s32 id, s32 player, std::span<const HelpHistory> party);
+    static bool gameplayTip(s32 id);
+    enum class VoiceLead : u8 { None, PlayerName, PlayerHas };
+    /** sounds_evt.c::fn_8009CB44 uses names on more announcements in multiplayer. */
+    static VoiceLead voiceLead(s32 id, bool multiplayer);
+    /** Seconds a message's voice may wait behind queued narration before it is dropped:
+     * half of one alone, four with "<name> has", one for a level gained, five for a name. */
+    static f32 voiceWait(s32 id, VoiceLead lead);
+    /** The ink a player's messages are written in. */
+    static Color inkOf(s32 player);
+
+    void setTexts(const MessageTable* strings) { m_strings = strings; }
+    void clear();
+
+    /** Posts message `id` for `player` unless it has been seen, another is up, or the pause
+     * since the last is not over; marks it seen. The spec when it went up, for its voice.
+     * `number` fills a "%d"; `speaker` the colour and class a message names. */
+    const HelpMessageSpec* post(s32 id, s32 player, std::span<const HelpReader> party,
+                                s32 number = -1, HelpSpeaker speaker = {});
+    void update(s32 ticks);
+
+    bool showing() const { return m_ticksLeft > 0; }
+    s32 player() const { return m_player; }
+    s32 id() const { return m_id; }
+    const std::vector<std::string>& lines() const { return m_lines; }
+    std::optional<Look> look() const;
+    /** Resolves display text only; does not post, change seen flags, or start a timer. */
+    std::vector<std::string> linesFor(const Look& look) const;
+    static void drawLines(Canvas& canvas, const TextPainter& text, const Texture* scroll,
+                          const Vec2& head, std::span<const std::string> lines, s32 player);
+
+    /** Draws it centred over `head`, a point of the virtual screen, kept on the screen. */
+    void draw(Canvas& canvas, const TextPainter& text, const Texture* scroll,
+              const Vec2& head) const;
+    /** Where its scroll lies for a character whose head is at `head`. */
+    Rect areaFor(const TextPainter& text, const Vec2& head) const;
+
+private:
+    friend void visitNativeState(NativeStateDigest& /*digest*/, const HelpMessages& /*value*/);
+    static Rect areaForLines(const TextPainter& text, const Vec2& head,
+                             std::span<const std::string> lines);
+    /** The line naming `player`: their colour and class, or Pojo when carried (message.c
+     * 767); empty when the strings lack the names. */
+    std::string speakerLine(s32 id, s32 player, HelpSpeaker speaker) const;
+    std::string_view listEntry(std::string_view list, s32 entry) const;
+
+    const MessageTable* m_strings = nullptr;
+    std::vector<std::string> m_lines;
+    s32 m_id = -1;
+    s32 m_priority = 0;
+    s32 m_player = 0;
+    s32 m_number = -1;
+    HelpSpeaker m_speaker;
+    s32 m_ticksLeft = 0;
+    s32 m_pauseLeft = 0;
+    usize m_posted = 0;
+};
+
+} // namespace gdl::game

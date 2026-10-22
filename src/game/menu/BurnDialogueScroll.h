@@ -60,8 +60,8 @@ public:
 
     /**
      * Starts burning `scroll` over `area`. `masks` are the burn frames (alpha zero is burnt),
-     * stretched over the scroll with filtering; `ring` the flame frames drawn on top. Retains immutable
-     * source pixels; the GPU copy is prepared only during rendering.
+     * stretched over the scroll with filtering; `ring` the flame frames drawn on top. Retains
+     * immutable source pixels; the GPU copy is prepared only during rendering.
      */
     bool start(RenderDevice& device, const Rect& area, const Image& scroll,
                std::vector<const Image*> masks, std::vector<const Texture*> ring);

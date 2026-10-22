@@ -6,9 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "game/netplay/NativePlaySetup.h"
 #include "game/netplay/OnlineSession.h"
-#include "game/netplay/RollbackSessionHarness.h"
-#include "game/screens/NativePlaySetup.h"
+#include "game/rollback/RollbackSessionHarness.h"
 
 namespace {
 using namespace gdl;
@@ -179,7 +179,8 @@ struct Network {
         const NativePlaySetup::Contract native{contract->rules.scene,
                                                contract->rules.autoMelee,
                                                contract->rules.autoActivateItems,
-                                               contract->rules.expandedShop, contract->rules.autoAim,
+                                               contract->rules.expandedShop,
+                                               contract->rules.autoAim,
                                                contract->identity.build,
                                                contract->identity.content,
                                                contract->identity.data};
@@ -331,7 +332,8 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
         REQUIRE(frame);
         for (const auto& row : network->room.members) {
             for (const auto seat : row.seats) {
-                CHECK(frame->commands[seat].pressedButtons == static_cast<u32>(CommandPress::UsePotion));
+                CHECK(frame->commands[seat].pressedButtons ==
+                      static_cast<u32>(CommandPress::UsePotion));
             }
         }
         REQUIRE(client->inputs.complete());

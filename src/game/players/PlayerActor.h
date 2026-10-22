@@ -10,8 +10,8 @@
 #include "engine/math/PortableMath.h"
 #include "engine/world/WorldCollision.h"
 
-#include "game/players/CharacterSave.h"
-#include "game/players/ClassData.h"
+#include "game/characters/CharacterSave.h"
+#include "game/characters/ClassData.h"
 #include "game/players/PlayerControls.h"
 
 namespace gdl {

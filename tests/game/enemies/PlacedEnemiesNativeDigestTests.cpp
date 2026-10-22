@@ -27,7 +27,7 @@ NativeStateDigest::Digest digestOf(const PlacedEnemies& owner) {
 }
 
 NativeStateDigest::Digest digestOf(const PlacedEnemies& owner,
-                                  const PlacedEnemies::LocalSnapshot& state) {
+                                   const PlacedEnemies::LocalSnapshot& state) {
     NativeStateDigest digest;
     REQUIRE(owner.appendLocalDigest(digest, state));
     REQUIRE(digest.checkedFinish());
@@ -42,8 +42,8 @@ TEST_CASE("native placement digest covers all roster fields after activation",
     a.bind({base, base});
     a.activate([](const auto&) {});
     auto changed = base;
-    const s32 field = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                              16, 17, 18, 19, 20);
+    const s32 field =
+        GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
     switch (field) {
     case 0: changed.spawn.zigZagSide = -1; break;
     case 1: changed.spawn.kind = kDeathKind; break;
@@ -66,8 +66,7 @@ TEST_CASE("native placement digest covers all roster fields after activation",
     case 18: changed.sight += 1; break;
     case 19: changed.carried = 0; break;
     case 20: changed.carried = 65536; break;
-    default:
-        break;
+    default: break;
     }
     b.bind({base, changed});
     b.activate([](const auto&) {});
@@ -87,8 +86,8 @@ TEST_CASE("native placement digest retains hidden watch axes angles and attentio
     a.observe(view, attention);
     b.observe(view, attention);
     REQUIRE(digestOf(a) == digestOf(b)); // Independently allocated owners.
-    const s32 field = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                              16, 17, 18, 19);
+    const s32 field =
+        GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
     if (field < 12) {
         std::array<Vec3*, 4> axes{&view.position, &view.right, &view.up, &view.forward};
         (*axes[static_cast<usize>(field / 3)])[field % 3] += 0.01f;

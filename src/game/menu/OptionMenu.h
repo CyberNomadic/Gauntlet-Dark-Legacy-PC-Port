@@ -19,7 +19,8 @@ namespace gdl::game {
 
 /** The virtual screen a menu lays itself out on, and the camera its 3D icon is sized for. */
 struct MenuScreen {
-    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuScreen& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& digest, const MenuScreen& value) {
         digest.template fields<3>(value);
     }
     s32 width = 512;
@@ -29,7 +30,8 @@ struct MenuScreen {
 
 /** Placement of a choice and its arrows independently of the other rows. */
 struct MenuValueColumn {
-    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuValueColumn& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& digest, const MenuValueColumn& value) {
         digest.template fields<2>(value);
     }
     s32 x = 0;
@@ -54,7 +56,8 @@ struct MenuItem {
 };
 
 struct MenuColors {
-    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuColors& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& digest, const MenuColors& value) {
         digest.template fields<3>(value);
     }
     Color off = Color::rgba(180, 50, 10);
@@ -63,7 +66,8 @@ struct MenuColors {
 };
 
 struct MenuDefinition {
-    template <class Visitor> friend void visitNativeState(Visitor& digest, const MenuDefinition& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& digest, const MenuDefinition& value) {
         digest.template fields<33>(value);
     }
     /** Shared parchment menu: red ink, purple selection glow, no instruction footer. */
@@ -138,15 +142,16 @@ struct MenuTextures {
  * per-tick rules (60 ticks per second).
  */
 class OptionMenu {
-    template <class Visitor> friend void visitNativeState(Visitor& digest, const OptionMenu& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& digest, const OptionMenu& value) {
         const auto& [definition, screen, open, backdropReleased, selection, time, finishTimer,
-                     lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale,
-                     backdrop, iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas,
-                     alternateX, lastPointer, hoverPart] = value;
+                     lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale, backdrop,
+                     iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas, alternateX,
+                     lastPointer, hoverPart] = value;
         digest.values(definition, screen, open, backdropReleased, selection, time, finishTimer,
-                      lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale,
-                      backdrop, iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas,
-                      alternateX, lastPointer, hoverPart);
+                      lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale, backdrop,
+                      iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas, alternateX,
+                      lastPointer, hoverPart);
     }
 
 public:

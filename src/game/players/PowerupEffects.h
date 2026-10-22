@@ -4,7 +4,7 @@
 
 #include "engine/core/Types.h"
 
-#include "game/players/Inventory.h"
+#include "game/characters/Inventory.h"
 
 namespace gdl::game {
 

@@ -25,8 +25,8 @@ void Enemies::drain(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView
     const f32 amount = form == DeathForm::Black
                            ? static_cast<f32>(DeathRules::experience(victim->level, true))
                            : fightOf(enemy);
-    m_simulation.deathEvents.push_back(
-        {DeathEvent::Kind::Drain, slot, victim->player, form, amount, enemy.position, enemy.instance});
+    m_simulation.deathEvents.push_back({DeathEvent::Kind::Drain, slot, victim->player, form, amount,
+                                        enemy.position, enemy.instance});
     enemy.health -= fightOf(enemy);
     if (enemy.health < 0) {
         finishDeath(slot, victim->player);
@@ -38,36 +38,37 @@ void Enemies::hurtDeath(Enemy& enemy, s32 slot, const EnemyHit& hit) {
     if ((hit.flags & EnemyHit::kMagic) != 0) {
         const f32 heal = DeathRules::magicHealing(hit.level, enemy.health);
         if (hit.player >= 0 && heal > 0) {
-            m_simulation.deathEvents.push_back(
-                {DeathEvent::Kind::MagicHeal, slot, hit.player, form, heal, enemy.position, enemy.instance});
+            m_simulation.deathEvents.push_back({DeathEvent::Kind::MagicHeal, slot, hit.player, form,
+                                                heal, enemy.position, enemy.instance});
         }
         enemy.health = 0;
     } else if (enemy.state == State::Asleep) {
         if (--enemy.endurance <= 0) {
             enemy.state = State::Active;
-            m_simulation.deathEvents.push_back(
-                {DeathEvent::Kind::Awakened, slot, hit.player, form, 0, enemy.position, enemy.instance});
+            m_simulation.deathEvents.push_back({DeathEvent::Kind::Awakened, slot, hit.player, form,
+                                                0, enemy.position, enemy.instance});
         }
         return;
     } else {
         enemy.health -= 1;
         if (hit.player >= 0 && !hit.antiDeath) {
-            m_simulation.deathEvents.push_back(
-                {DeathEvent::Kind::Unmoved, slot, hit.player, form, 0, enemy.position, enemy.instance});
+            m_simulation.deathEvents.push_back({DeathEvent::Kind::Unmoved, slot, hit.player, form,
+                                                0, enemy.position, enemy.instance});
         }
         if (hit.player >= 0 && hit.antiDeath) {
             const f32 amount = form == DeathForm::Black
                                    ? static_cast<f32>(DeathRules::experience(hit.level, false))
                                    : 1;
-            m_simulation.deathEvents.push_back(
-                {DeathEvent::Kind::Return, slot, hit.player, form, amount, enemy.position, enemy.instance});
+            m_simulation.deathEvents.push_back({DeathEvent::Kind::Return, slot, hit.player, form,
+                                                amount, enemy.position, enemy.instance});
         }
     }
     if (enemy.health <= 0) {
         m_simulation.deathEvents.push_back(
             {DeathEvent::Kind::Killed, slot, hit.player, form, 0, enemy.position, enemy.instance});
         if (hit.player >= 0) {
-            m_simulation.losses.push_back({slot, enemy.kind, enemy.tier, hit.player, 0, true, enemy.position});
+            m_simulation.losses.push_back(
+                {slot, enemy.kind, enemy.tier, hit.player, 0, true, enemy.position});
         }
         enemy.state = State::Dying;
         enemy.killed = true;
@@ -84,8 +85,9 @@ void Enemies::finishDeath(s32 id, s32 player) {
         return;
     }
     Enemy& enemy = m_simulation.enemies[static_cast<usize>(id)];
-    m_simulation.deathEvents.push_back(
-        {DeathEvent::Kind::Exhausted, id, player, DeathRules::form(enemy.tier), 0, enemy.position, enemy.instance});
+    m_simulation.deathEvents.push_back({DeathEvent::Kind::Exhausted, id, player,
+                                        DeathRules::form(enemy.tier), 0, enemy.position,
+                                        enemy.instance});
     enemy.health = 0;
     enemy.state = State::Dying;
     enemy.killed = true;

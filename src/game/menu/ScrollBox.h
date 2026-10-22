@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,7 +53,8 @@ public:
     static constexpr Color kTextColor = Color::rgba(22, 12, 3); ///< ink on the parchment
 
     struct PageLayout {
-        template <class Visitor> friend void visitNativeState(Visitor& visitor, const PageLayout& value) {
+        template <class Visitor>
+        friend void visitNativeState(Visitor& visitor, const PageLayout& value) {
             visitor.template fields<4>(value);
         }
         std::vector<std::string> lines;

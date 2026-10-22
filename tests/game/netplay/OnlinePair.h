@@ -5,10 +5,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "game/netplay/NativePlaySetup.h"
 #include "game/netplay/OnlineSession.h"
-#include "game/netplay/RollbackSessionHarness.h"
-#include "game/screens/NativePlaySetup.h"
-#include "game/screens/SessionInputs.h"
+#include "game/rollback/RollbackSessionHarness.h"
+#include "game/rollback/SessionInputs.h"
 
 namespace gdl::test {
 /** In-memory authenticated transport for native gameplay tests. The separate
@@ -185,7 +185,8 @@ struct OnlinePair {
                     const game::NativePlaySetup::Contract contract{agreed.rules.scene,
                                                                    agreed.rules.autoMelee,
                                                                    agreed.rules.autoActivateItems,
-                                                                   agreed.rules.expandedShop, agreed.rules.autoAim,
+                                                                   agreed.rules.expandedShop,
+                                                                   agreed.rules.autoAim,
                                                                    agreed.identity.build,
                                                                    agreed.identity.content,
                                                                    agreed.identity.data};

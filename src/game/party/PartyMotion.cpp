@@ -1,0 +1,628 @@
+#include "game/party/PartyMotion.h"
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+
+#include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
+
+#include "game/party/FloorRiding.h"
+#include "game/party/PartyCollision.h"
+#include "game/party/PartyCombo.h"
+#include "game/players/ComboMove.h"
+#include "game/players/CursorAim.h"
+#include "game/players/PowerupEffects.h"
+namespace gdl::game {
+namespace {
+constexpr f32 kChargeStick = 0.25f;
+/** A shoved body moving less than this a second shows no push (0.01 a 30 Hz frame,
+ * pmotion.c 2042). */
+constexpr f32 kPushedStep = 0.3f;
+} // namespace
+f32 PartyMotion::turboHeading(f32 current, f32 wanted, f32 seconds, f32 turnScale) {
+    // PlayerMotion (80085450): 900 degrees/second times the action's turn scale,
+    // clamped to the shortest remaining angle, not a fraction of that angle.
+    constexpr f32 kTurnRate = 5.0f * std::numbers::pi_v<f32>;
+    const f32 limit = kTurnRate * seconds * turnScale;
+    const f32 delta = std::remainder(wanted - current, 2.0f * std::numbers::pi_v<f32>);
+    return current + std::clamp(delta, -limit, limit);
+}
+PlayerDeed PartyMotion::turboDeed(const PlayerRuntime& runtime, const PlayInput& in) {
+    if (runtime.figure == nullptr) {
+        return PlayerDeed::None;
+    }
+    const bool pojo = in.turboAttackPressed &&
+                      (PowerupEffects::of(runtime.actor.save().progress().inventory).special &
+                       powerup::kPojo) != 0;
+    return turboDeed(runtime.figure->animator(), runtime.turbo.held(), in, pojo);
+}
+
+PlayerDeed PartyMotion::turboDeed(const PlayerAnimator& animator, f32 meter, const PlayInput& in,
+                                  bool pojo) {
+    PlayerDeed deed = PlayerDeed::None;
+    if (in.turboAttackPressed) {
+        if (pojo && meter >= TurboMeter::kStrongCost) {
+            // PlayerMotion case 21: Pojo uses ATTBREATHE at 40, even with a full bar.
+            deed = PlayerDeed::Breathe;
+        } else if (meter >= TurboMeter::kFullCost) {
+            deed = PlayerDeed::TurboFull;
+        } else if (meter >= TurboMeter::kStrongCost) {
+            deed = PlayerDeed::TurboStrong;
+        }
+    } else if (in.chargePressed && meter >= TurboMeter::kShoveFrom) {
+        deed = PlayerDeed::Shove;
+    }
+    return animator.canBegin(deed) ? deed : PlayerDeed::None;
+}
+
+MoveInput PartyMotion::chargeInput(const PlayerActor& actor, const MoveInput& stick,
+                                   f32 cameraYaw) {
+    MoveInput rush;
+    rush.magnitude = 1.0f;
+    if (stick.magnitude >= kChargeStick) {
+        rush.direction = stick.direction;
+        return rush;
+    }
+    const Vec3 facing = actor.facing();
+    const f32 ahead = portable::atan2(facing.x, facing.z) - cameraYaw;
+    rush.direction = Vec2{portable::sin(ahead), portable::cos(ahead)};
+    return rush;
+}
+
+std::optional<Vec3> PartyMotion::rescueSpot(std::span<const PlayerRuntime> players, usize lost,
+                                            const WorldCollision& collision) {
+    constexpr f32 kTurn = 6.2831853f;
+    if (lost >= players.size()) {
+        return std::nullopt;
+    }
+    const PlayerActor& body = players[lost].actor;
+    for (usize other = 0; other < players.size(); ++other) {
+        if (other == lost || players[other].life != PlayerLife::Standing) {
+            continue;
+        }
+        const PlayerActor& rescuer = players[other].actor;
+        if (rescuer.position().y <= collision.lowest() - kLostDepth) {
+            continue; // lost too
+        }
+        const f32 out = kRescueGap + rescuer.radius() + body.radius();
+        for (s32 k = 0; k < kRescueSpots; ++k) {
+            const f32 angle = kTurn * static_cast<f32>(k) / static_cast<f32>(kRescueSpots);
+            Vec3 spot =
+                rescuer.position() + Vec3{portable::sin(angle), 0.0f, portable::cos(angle)} * out;
+            const auto floor = collision.floorAt(spot, kRescueRise, kRescueRise);
+            if (!floor.has_value()) {
+                continue;
+            }
+            spot.y = floor->y;
+            const Vec3 clear =
+                collision.resolveWalls(spot, body.radius(), spot.y + PlayerActor::kFootClearance,
+                                       spot.y + body.height() - PlayerActor::kFootClearance);
+            if (glm::distance(clear, spot) < 1e-3f) {
+                return spot;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+StrafeWay PartyMotion::strafeWayOf(f32 heading, f32 facing) {
+    constexpr f32 kEighth = 0.7853982f;
+    const f32 off = std::remainder(heading - facing, 8.0f * kEighth);
+    if (std::abs(off) > 3.0f * kEighth) {
+        return StrafeWay::Back;
+    }
+    if (off > kEighth) {
+        return StrafeWay::Right; // the original's sense of a positive turn
+    }
+    return off < -kEighth ? StrafeWay::Left : StrafeWay::Forward;
+}
+
+f32 PartyMotion::actionPace(const PlayerAnimator* animator, PlayerDeed deed, bool webbed) {
+    const bool closeAttack = deed == PlayerDeed::AutoMelee || deed == PlayerDeed::AutoMeleeLow ||
+                             deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow ||
+                             deed == PlayerDeed::MeleeSlow || deed == PlayerDeed::MeleeSlowLow;
+    f32 pace = animator != nullptr ? animator->moveScale() : 1.0f;
+    const bool itemAttack = deed == PlayerDeed::SuperShot || deed == PlayerDeed::Hammer ||
+                            deed == PlayerDeed::Breathe || deed == PlayerDeed::FireLeft ||
+                            deed == PlayerDeed::FireRight;
+    const bool swingStarts = closeAttack && (animator == nullptr || !animator->meleeing());
+    if (swingStarts && (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee)) {
+        // The first input frame moves before the animation changes. Do not
+        // bypass an existing reaction/arrival lock to start a quick swing.
+        pace = std::min(pace, PlayerAnimator::kQuickMeleePace);
+    } else if (swingStarts || itemAttack) {
+        pace = 0;
+    } else if (deed == PlayerDeed::StrongAttack && animator != nullptr &&
+               animator->canBegin(deed)) {
+        // PlayerMotion consumes PWRA_THROW's A48=.25 even on its first frame.
+        // Held heavy input must not override a spin or power swing already playing.
+        pace = std::min(pace, PlayerAnimator::kStrongThrowPace);
+    }
+    return webbed ? PlayerAnimator::kWebPace : pace;
+}
+
+MoveInput PartyMotion::attackMove(const PlayerActor& actor, const PlayerAnimator* animator,
+                                  const MoveInput& move, PlayerDeed deed, f32 cameraYaw,
+                                  f32 seconds, bool mayLunge, bool steeringTurbo) {
+    MoveInput result = move;
+    // A quick swing starts without turning; a step carries along the facing
+    // even after the stick is released. Do not confuse that motion with Stand.
+    const bool quickStarts = (deed == PlayerDeed::Melee || deed == PlayerDeed::AutoMelee) &&
+                             (animator == nullptr || !animator->meleeing());
+    f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
+    if (quickStarts) {
+        turn = 0;
+    }
+    if (move.any() && (turn < 1.0f || steeringTurbo)) {
+        const f32 wanted = PlayerActor::headingOf(move, cameraYaw);
+        const f32 share = 1.0f - portable::pow(1.0f - turn, seconds * kTurnFrames);
+        const f32 heading =
+            steeringTurbo
+                ? turboHeading(actor.yaw(), wanted, seconds, turn)
+                : actor.yaw() +
+                      std::remainder(wanted - actor.yaw(), 2.0f * std::numbers::pi_v<f32>) * share;
+        result.direction =
+            Vec2{portable::sin(heading - cameraYaw), portable::cos(heading - cameraYaw)};
+    } else if (!move.any() && animator != nullptr && animator->lunging() && mayLunge) {
+        const f32 heading = actor.yaw() - cameraYaw;
+        result = MoveInput{Vec2{portable::sin(heading), portable::cos(heading)}, 1.0f};
+    }
+    return result;
+}
+
+void PartyMotion::passIt(std::span<PlayerRuntime> players, s32 ticks, const Events& events,
+                         std::span<const std::optional<usize>> contacts) {
+    for (usize i = 0; i < players.size(); ++i) {
+        PlayerRuntime& it = players[i];
+        if (it.itTicks <= 0) {
+            continue;
+        }
+        if (it.life != PlayerLife::Standing || it.departed) {
+            it.itTicks = 0;
+            continue;
+        }
+        const auto contact = i < contacts.size() ? contacts[i] : std::nullopt;
+        if (it.itTicks > kItHold && contact.has_value()) {
+            const usize j = *contact;
+            if (j < players.size() && j != i && players[j].life == PlayerLife::Standing &&
+                !players[j].departed) {
+                players[j].itTicks = 1;
+                it.itTicks = 0;
+                if (events.perform) {
+                    events.perform(j, Action::Tagged);
+                }
+            }
+        }
+        if (it.itTicks > 0) {
+            it.itTicks += ticks;
+        }
+    }
+}
+
+std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
+                                             std::span<const PlayInput> inputs, bool held,
+                                             f32 cameraYaw, s32 ticks, f32 seconds,
+                                             const WorldCollision& collision,
+                                             const Events& events) {
+    // Snapshot after movement, before fixture collision, preserving the camera's frame phase.
+    PartyCombo::cancelInvalid(players);
+    std::vector<CameraSubject> subjects;
+    subjects.reserve(players.size());
+    std::vector<std::optional<usize>> contacts(players.size());
+    for (usize i = 0; i < players.size(); ++i) {
+        players[i].hitFlashTicks = std::max(0, players[i].hitFlashTicks - ticks);
+        PlayerActor& actor = players[i].actor;
+        players[i].cursorAiming = false;
+        players[i].meleeFacing.reset();
+        players[i].attackStep.reset();
+        actor.clearWallContacts();
+        const auto player = static_cast<usize>(actor.player());
+        const bool down = players[i].life != PlayerLife::Standing;
+        if (down) {
+            players[i].capture.clear();
+            players[i].transport.clear();
+            players[i].knockback.clear();
+        } else if (players[i].capture.active()) {
+            players[i].knockback.clear();
+            PlayerCapture& capture = players[i].capture;
+            const PlayerDeed deed = capture.held() ? PlayerDeed::Grabbed : PlayerDeed::Thrown;
+            if (const auto impact = capture.update(seconds, actor, collision);
+                impact.has_value() && events.thrownImpact) {
+                events.thrownImpact(i, *impact);
+            }
+            players[i].rammed.clear();
+            if (players[i].figure != nullptr) {
+                players[i].figure->animate(
+                    0, ticks, seconds,
+                    players[i].life == PlayerLife::Standing ? deed : PlayerDeed::Die);
+            }
+            subjects.push_back({actor.position(), actor.followPoint()});
+            continue;
+        }
+        // A body its partner's combo has aside goes where the combo takes it and plays what
+        // it asks: hung on the partner, flying as a pinball or steered as a charger.
+        if (!down && PartyCombo::aside(players[i])) {
+            players[i].knockback.clear();
+            const PartyCombo::Events comboEvents{events.comboImpact, events.advanceTurbo};
+            if (ComboMove::flies(players[i].combo)) {
+                PartyCombo::fly(players, i, ticks, seconds, collision, comboEvents);
+            } else if (ComboMove::ridden(players[i].combo)) {
+                const auto dwarf = static_cast<usize>(std::max(players[i].combo.partner, 0));
+                const auto steering = dwarf < players.size()
+                                          ? static_cast<usize>(players[dwarf].actor.player())
+                                          : inputs.size();
+                PartyCombo::ride(players, i,
+                                 !held && steering < inputs.size() ? inputs[steering].move
+                                                                   : MoveInput{},
+                                 cameraYaw, ticks, seconds, collision, comboEvents);
+            }
+            PartyCombo::animate(players, i, ticks, seconds, comboEvents);
+            subjects.push_back({actor.position(), actor.followPoint()});
+            continue;
+        }
+        // Webs own the reaction animation and buttons, but allow a slow escape walk.
+        const PlayerAnimator* animator =
+            players[i].figure != nullptr ? &players[i].figure->animator() : nullptr;
+        const bool steeringTurbo =
+            animator != nullptr && (animator->action() == PlayerAnimator::Action::TurboStrong ||
+                                    animator->action() == PlayerAnimator::Action::TurboFull);
+        const bool webbed = players[i].reaction == PlayerDeed::Webbed ||
+                            (animator != nullptr && animator->webbed());
+        const bool reeling = players[i].reaction != PlayerDeed::None ||
+                             (animator != nullptr && animator->reacting());
+        const bool immobilized =
+            (players[i].reaction != PlayerDeed::None &&
+             players[i].reaction != PlayerDeed::Webbed) ||
+            (animator != nullptr && animator->reacting() && !animator->webbed());
+        const bool entering =
+            players[i].figure != nullptr && players[i].figure->animator().entering();
+        // A halo wearer holding Death stands facing him, heeding no button (PlayerMotion,
+        // pmotion.c 1621).
+        std::optional<Vec3> deathHeld;
+        const bool mayGrabDeath = !held && !down && !reeling && !entering;
+        if (mayGrabDeath && events.deathContact) {
+            deathHeld = events.deathContact(i);
+        }
+        MoveInput move =
+            !held && !down && !immobilized && !entering && !deathHeld && player < inputs.size()
+                ? inputs[player].move
+                : MoveInput{};
+        const auto aim =
+            !held && !down && !reeling && !entering && !deathHeld && player < inputs.size()
+                ? inputs[player].aimDirection
+                : std::nullopt;
+        if (aim) {
+            players[i].cursorAiming = true;
+            const Vec3 toward = *aim;
+            const Vec3 facing = portable::hypot(toward.x, toward.z) < 0.01f
+                                    ? actor.position() + Vec3{portable::sin(actor.yaw()), 0,
+                                                              portable::cos(actor.yaw())}
+                                    : actor.position() + toward;
+            // Tank steps relative to where the mouse points; Robotron walks the camera's way.
+            if (!inputs[player].freeMove) {
+                move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
+            }
+            if (animator == nullptr || !animator->shoving()) {
+                const f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
+                if (steeringTurbo) {
+                    const Vec3 offset = facing - actor.position();
+                    actor.turnTo(turboHeading(actor.yaw(), portable::atan2(offset.x, offset.z),
+                                              seconds, turn));
+                } else if (turn >= 1.0f) {
+                    actor.faceToward(facing);
+                }
+            }
+        }
+        // Movement can aim a new swing even while an existing swing holds body rotation.
+        // Explicit strafe and cursor aim retain the facing instead of the travel heading.
+        Vec3 attackFacing = actor.facing();
+        if (move.any() && !aim && player < inputs.size() && !inputs[player].strafe) {
+            const f32 heading = PlayerActor::headingOf(move, cameraYaw);
+            attackFacing = Vec3{portable::sin(heading), 0, portable::cos(heading)};
+        }
+        players[i].meleeFacing = attackFacing;
+        // What the buttons ask: a potion first, when one is carried, then the attack.
+        PlayerDeed deed = down ? PlayerDeed::Die : PlayerDeed::None;
+        players[i].pojoTurbo = false;
+        if (!down && players[i].reaction != PlayerDeed::None) {
+            deed = players[i].reaction;
+        }
+        // Still, a body retches while gas or Death's touch lasts, heeding no button
+        // (PlayerMotion's reaction 100, pmotion.c 1485).
+        players[i].gagSeconds = std::max(players[i].gagSeconds - seconds, 0.0f);
+        const bool gagging =
+            !down && deed == PlayerDeed::None && players[i].gagSeconds > 0.0f && !move.any();
+        if (gagging) {
+            deed = PlayerDeed::Gag;
+        }
+        if (deathHeld) {
+            deed = PlayerDeed::DeathGrab;
+        }
+        players[i].reaction = PlayerDeed::None;
+        if (!held && !down && !reeling && !entering && !gagging && !deathHeld &&
+            player < inputs.size()) {
+            const PlayInput& in = inputs[player];
+            const bool carrying = !actor.save().progress().inventory.potions.empty();
+            if ((in.usePotion || in.throwPotion) && !carrying) {
+                events.perform(i, Action::NoPotion);
+            }
+            if ((in.shieldPotion) && !carrying) {
+                events.perform(i, Action::NoPotion);
+            }
+            if (const PlayerDeed turbo = turboDeed(players[i], in); turbo != PlayerDeed::None) {
+                deed = turbo;
+                players[i].pojoTurbo = turbo == PlayerDeed::Breathe;
+            } else if (in.shieldPotion && carrying) {
+                deed = PlayerDeed::ShieldPotion;
+            } else if (in.usePotion && carrying) {
+                deed = PlayerDeed::UsePotion;
+            } else if (in.throwPotion && carrying) {
+                deed = PlayerDeed::ThrowPotion;
+            } else if (in.defendPressed) {
+                // fn_80088938 tests S_DEFEND's edge (0x1000), not the held
+                // turbo level. Holding the button must not renew a completed block.
+                deed = PlayerDeed::Defend;
+            } else if (in.strongAttack && players[i].figure != nullptr) {
+                deed = events.attackDeed ? events.attackDeed(i, true, move.any(), attackFacing)
+                                         : PlayerDeed::StrongAttack;
+            } else if (in.attack) {
+                deed = events.attackDeed ? events.attackDeed(i, false, move.any(), attackFacing)
+                                         : PlayerDeed::Attack;
+            }
+            // The combo button with half the meter takes hold of a partner ahead, over
+            // anything else the buttons ask (fn_80088938, pmotion.c 4656).
+            if (in.combo && players[i].turbo.held() >= ComboMove::kMeterNeeded &&
+                animator != nullptr && animator->canBegin(PlayerDeed::Combo)) {
+                if (const auto partner = PartyCombo::partnerFor(players, i)) {
+                    PartyCombo::begin(players, i, *partner);
+                    deed = PlayerDeed::Combo;
+                    events.perform(i, Action::ComboStart);
+                }
+            }
+            const bool cursorForward =
+                aim && (in.freeMove ? in.move.any()
+                                    : in.move.direction.x == 0.0f && in.move.direction.y > 0.0f);
+            if (deed == PlayerDeed::None && move.any() && !in.strafe && (!aim || cursorForward) &&
+                !in.attackPressed && !in.chargePressed && !in.turboAttackPressed &&
+                actor.save().autoAttack && animator != nullptr && animator->canAutoMelee() &&
+                events.automaticMeleeDeed) {
+                deed = events.automaticMeleeDeed(i, attackFacing);
+            }
+        }
+        // mini_inventory_update (8008033C) is a HUD input path, not an attack
+        // action. Damage reactions and a halo hold must not block item toggles.
+        if (!held && !down && !entering && player < inputs.size()) {
+            events.select(i, inputs[player].selector, ticks);
+        }
+        // A pickup's gesture, or a gag at food gone bad, is made when nothing else is asked
+        // (speak_kind, pmotion.c 1722).
+        if (down) {
+            players[i].gesture = PlayerDeed::None;
+        } else if (players[i].gesture != PlayerDeed::None &&
+                   (deed == PlayerDeed::None || deed == PlayerDeed::AutoMelee ||
+                    deed == PlayerDeed::AutoMeleeLow) &&
+                   !reeling && !held) {
+            deed = players[i].gesture;
+            players[i].gesture = PlayerDeed::None;
+        }
+        const auto powerups = PowerupEffects::of(actor.save().progress().inventory);
+        actor.setPaceBonus(powerups.paceAdd);
+        // Each attack's action controls how far the body may move.
+        const bool automatic = deed == PlayerDeed::AutoMelee || deed == PlayerDeed::AutoMeleeLow;
+        const f32 pace = actionPace(animator, deed, webbed);
+        const bool charging =
+            players[i].figure != nullptr && players[i].figure->animator().shoving();
+        // Strafing, the character steps the way the stick is pushed without turning to it.
+        const bool strafes = !held && !down && !charging && player < inputs.size() &&
+                             (inputs[player].strafe || aim.has_value()) && move.any();
+        if (players[i].figure != nullptr) {
+            // Mouse aim locks facing, but forward movement uses the ordinary full-stick
+            // gait. Backing up, sidestepping, and moving shots retain their strafe actions.
+            // Under Robotron every step is a forward one: the plain gait, or the forward
+            // moving shot.
+            const bool freeMove = aim && inputs[player].freeMove;
+            const bool cursorForward = aim && !inputs[player].strafe && !inputs[player].attack &&
+                                       (freeMove || (inputs[player].move.direction.x == 0.0f &&
+                                                     inputs[player].move.direction.y > 0.0f));
+            players[i].figure->setStrafe(
+                strafes && !cursorForward
+                    ? (freeMove ? StrafeWay::Forward
+                                : strafeWayOf(PlayerActor::headingOf(move, cameraYaw), actor.yaw()))
+                    : StrafeWay::None);
+        }
+        players[i].glow.step(seconds);
+        // Riding a moving floor, the body goes where the floor took it (PlayerCheckFloor).
+        if (!down) {
+            FloorRiding::carry(players[i], collision);
+        } else {
+            players[i].floor = {};
+        }
+        const Vec3 before = actor.position();
+        const Vec3 attackFrom = actor.followPoint();
+        // A knock slides the body on, then what hit it last frame kicks it, turning it to
+        // face along the push or against it (PlayerMotion, PlayerKnockback).
+        if (!down) {
+            actor.slide(players[i].knockback.step(seconds, actor.speed()), &collision);
+            if (const auto heading = players[i].knockback.kick(
+                    actor.yaw(), (powerups.special & powerup::kPojo) != 0)) {
+                actor.turnTo(*heading);
+            }
+        }
+        const auto plannedMove = attackMove(actor, animator, move, deed, cameraYaw, seconds,
+                                            !held && !down && !immobilized, steeringTurbo);
+        actor.update(charging ? chargeInput(actor, move, cameraYaw) : plannedMove, cameraYaw,
+                     seconds, &collision, pace, strafes);
+        if (!down) {
+            players[i].attackStep = PlayerRuntime::AttackStep{attackFrom, actor.followPoint()};
+        }
+        if (!down && events.resolveMovement) {
+            // A body/fixture push is still movement, not a teleport. Sweep the
+            // correction through the same walls and floor edges as the step.
+            actor.slide(events.resolveMovement(i, before, actor.position()) - actor.position(),
+                        &collision);
+        }
+        if (!down) {
+            contacts[i] = PartyCollision::step(players, i, before, seconds, &collision);
+            FloorRiding::land(players, i, before, collision);
+        }
+        if (!down && events.limitMovement) {
+            const Vec3 limited = events.limitMovement(i, before, actor.position());
+            if (glm::distance(limited, actor.position()) > 1.0e-5f) {
+                actor.place(before);
+                actor.slide(limited - before, &collision);
+                players[i].attackStep = PlayerRuntime::AttackStep{attackFrom, actor.followPoint()};
+                if (events.resolveMovement) {
+                    actor.slide(events.resolveMovement(i, before, actor.position()) -
+                                    actor.position(),
+                                &collision);
+                }
+                Vec3 position = actor.position();
+                PartyCollision::resolve(players, i, before, position);
+                actor.slide(position - actor.position(), &collision);
+                FloorRiding::land(players, i, before, collision);
+            }
+        }
+        // A floor gone from under it lets it sink; lost under the world, it stands again
+        // beside another, or at the start.
+        if (players[i].life != PlayerLife::InTower) {
+            actor.fall(seconds, collision);
+        }
+        if (!down && collision.loaded() && actor.position().y <= collision.lowest() - kLostDepth) {
+            std::optional<Vec3> spot = rescueSpot(players, i, collision);
+            if (!spot.has_value() && events.startPoint) {
+                spot = events.startPoint();
+            }
+            if (spot.has_value()) {
+                actor.place(*spot);
+                players[i].attackStep.reset();
+                players[i].knockback.clear();
+                players[i].floor = {};
+            }
+        }
+        // Catching a retreating Death creates contact during this step. Damage must
+        // see the resolved bodies before Death moves again, not last frame's gap.
+        // Recheck existing holds too: floor motion or a shove can separate them.
+        if (events.grabDeath) {
+            deathHeld = events.grabDeath(i, ticks, mayGrabDeath);
+            if (deathHeld) {
+                deed = PlayerDeed::DeathGrab;
+            } else if (deed == PlayerDeed::DeathGrab) {
+                deed = PlayerDeed::None;
+            }
+        }
+        // Stationary normal attacks face the assisted target. The stick, strafe,
+        // charging and authored turbo movement retain control of their heading.
+        if (!aim && !move.any() && !charging && player < inputs.size() && !inputs[player].strafe &&
+            (deed == PlayerDeed::Attack || deed == PlayerDeed::StrongAttack ||
+             deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow ||
+             deed == PlayerDeed::MeleeSlow || deed == PlayerDeed::MeleeSlowLow ||
+             deed == PlayerDeed::Hammer || deed == PlayerDeed::Breathe ||
+             deed == PlayerDeed::FireLeft || deed == PlayerDeed::FireRight) &&
+            events.aim) {
+            if (const auto target = events.aim(i)) {
+                actor.faceToward(*target);
+            }
+        }
+        if (deathHeld) {
+            actor.faceToward(*deathHeld);
+        }
+        if (charging) {
+            events.perform(i, Action::Ram);
+        } else {
+            players[i].rammed.clear();
+        }
+        if (players[i].figure != nullptr) {
+            players[i].figure->setAttackSpeed((powerups.weapon & powerup::kRapidFire) != 0,
+                                              (powerups.special & powerup::kSpeedBoost) != 0);
+            players[i].figure->setShielded((powerups.armor & powerup::kShields) != 0);
+            // Shoved and moving, it shows being pushed, facing the way it goes.
+            const Vec3 moved = actor.position() - before;
+            const bool pushed = !down && players[i].knockback.pushed() &&
+                                portable::hypot(moved.x, moved.z) > kPushedStep * seconds;
+            if (pushed) {
+                actor.turnTo(portable::atan2(moved.x, moved.z));
+            }
+            players[i].figure->setPushed(pushed);
+            // The close attack sees where the nearest thing to strike lies as it decides.
+            const bool attackHeld = !held && !down && player < inputs.size() &&
+                                    (inputs[player].attack || inputs[player].strongAttack);
+            if (events.meleeSense &&
+                (attackHeld || automatic || players[i].figure->animator().meleeing())) {
+                players[i].figure->setMelee(events.meleeSense(i, attackHeld, attackFacing));
+            }
+            players[i].figure->setCombo(players[i].combo.grabberClass, players[i].combo.rideAsked);
+            players[i].figure->animate(move.magnitude, ticks, seconds, deed);
+            players[i].figure->updateTrail(
+                PlayerFigure::bodyPlacement(players[i].capture.body().value_or(actor.transform()),
+                                            actor.save(), powerups),
+                ticks);
+            events.advanceTurbo(i, ticks, seconds);
+            // A grabber's move goes on: its partner taken up, let fly or set down.
+            if (players[i].combo.role == ComboRole::Grabber) {
+                PartyCombo::advance(players, i, ticks);
+            }
+            if (players[i].figure->familiarReleased()) {
+                events.perform(i, Action::FamiliarShot);
+            }
+            if (players[i].figure->animator().meleeStruck()) {
+                events.perform(i, Action::Melee);
+            }
+            if (players[i].life == PlayerLife::Dying && players[i].figure->animator().dead()) {
+                players[i].life = PlayerLife::InTower; // the body goes; its box says where
+                events.perform(i, Action::Fallen);
+            }
+            if (players[i].figure->animator().released()) {
+                events.perform(i, Action::ThrowWeapon);
+            }
+            if (players[i].figure->animator().strongReleased()) {
+                events.perform(i, Action::StrongThrow);
+            }
+            if (players[i].figure->animator().superReleased()) {
+                events.perform(i, Action::SuperShot);
+            }
+            if (players[i].figure->animator().itemReleased() != PlayerDeed::None) {
+                events.perform(i, Action::ItemAttack);
+            }
+            players[i].blockLeft = std::max(players[i].blockLeft - seconds, 0.0f);
+            if (players[i].figure->animator().potionShielded()) {
+                events.perform(i, Action::ShieldPotion);
+            }
+            if (players[i].figure->animator().potionUsed()) {
+                events.perform(i, Action::UsePotion);
+            } else if (players[i].figure->animator().potionThrown()) {
+                events.perform(i, Action::ThrowPotion);
+            }
+            // A levitating body's feet make no sound (pmotion.c 2931).
+            if (const PlayerAnimator::Foot foot = players[i].figure->animator().footfall();
+                foot != PlayerAnimator::Foot::None && !powerups.levitating()) {
+                events.perform(i, foot == PlayerAnimator::Foot::Second ? Action::SecondFoot
+                                                                       : Action::FirstFoot);
+            }
+        }
+        if (players[i].figure == nullptr && players[i].life == PlayerLife::Dying) {
+            players[i].life = PlayerLife::InTower; // nothing to play: gone at once
+            if (events.perform) {
+                events.perform(i, Action::Fallen);
+            }
+        }
+        subjects.push_back(
+            CameraSubject{actor.position(), actor.followPoint(), actor.height() * 0.5f});
+        players[i].attackStep.reset();
+    }
+    // Every rider hangs on its carrier's node as posed this frame; the camera sees it there.
+    PartyCombo::carry(players);
+    for (usize i = 0; i < players.size() && i < subjects.size(); ++i) {
+        if (players[i].combo.riding) {
+            const auto& actor = players[i].actor;
+            subjects[i] =
+                CameraSubject{actor.position(), actor.followPoint(), actor.height() * 0.5f};
+        }
+    }
+    for (PlayerRuntime& runtime : players) {
+        runtime.knockback.endFrame();
+    }
+    passIt(players, ticks, events, contacts);
+    return subjects;
+}
+} // namespace gdl::game
