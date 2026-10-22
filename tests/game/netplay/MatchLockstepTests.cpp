@@ -553,15 +553,20 @@ TEST_CASE("disconnect discards speculative terminal authority and a fresh bindin
     CHECK(host.nativeConfirmed() == 0);
     CHECK_FALSE(host.observeNativeTerminal(oldEpoch, 1, {}));
     CHECK_FALSE(host.completeNativeBoundary(oldEpoch, 1));
-    host.disconnected(102);
-    CHECK(host.phase() == Phase::Stopped);
-    CHECK(host.stopReason() == MatchStop::Disconnected);
-    CHECK_FALSE(host.failureDetail().empty());
+    // The lost guest is dropped and the host plays on; the speculative terminal it
+    // never agreed is no authority, and leaving afterwards reads as leaving.
+    REQUIRE(host.disconnected(102));
+    CHECK(host.phase() == Phase::Running);
+    CHECK(host.dropped(2));
+    CHECK(host.failureDetail().empty());
     CHECK_FALSE(host.nativeTerminalAgreed(oldEpoch, 1));
+    host.leave();
+    CHECK(host.phase() == Phase::Stopped);
+    CHECK(host.stopReason() == MatchStop::Left);
+    CHECK_FALSE(host.failureDetail().empty());
     CHECK_FALSE(room->inputs[1].advance());
     CHECK_FALSE(room->inputs[1].publish());
     const auto reason = host.failureDetail();
-    host.leave();
     host.update(60);
     CHECK(host.failureDetail() == reason);
 
