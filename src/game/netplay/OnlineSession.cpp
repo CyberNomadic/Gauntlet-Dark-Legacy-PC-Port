@@ -8,6 +8,8 @@
 #include "engine/io/ByteReader.h"
 #include "engine/io/Sha256.h"
 
+#include "game/netplay/RollbackExchange.h"
+
 namespace gdl::game {
 namespace {
 bool identity(const std::string& peer) {
@@ -418,12 +420,30 @@ std::vector<std::string> OnlineSession::allowed() const {
     std::vector<std::string> result;
     if (m_room) {
         for (const auto& row : m_room->members) {
+            if (row.peer != m_peer) {
+                result.push_back(row.peer);
+            }
+        }
+    }
+    return result;
+}
+std::vector<std::string> OnlineSession::required() const {
+    std::vector<std::string> result;
+    if (m_room) {
+        for (const auto& row : m_room->members) {
             if (row.peer != m_peer && (m_host || row.peer == m_room->host)) {
                 result.push_back(row.peer);
             }
         }
     }
     return result;
+}
+usize OnlineSession::directLinks() const {
+    if (m_host || !m_room) {
+        return 0;
+    }
+    return static_cast<usize>(
+        std::ranges::count_if(m_links, [&](const auto& row) { return row.first != m_room->host; }));
 }
 std::optional<PacketTransport::Statistics> OnlineSession::linkStatistics() const {
     std::optional<PacketTransport::Statistics> worst;
@@ -448,17 +468,21 @@ bool OnlineSession::connected() const {
     if (!m_room) {
         return false;
     }
-    const auto peers = allowed();
+    const auto peers = required();
     return std::ranges::all_of(peers, [&](const auto& peer) { return m_links.contains(peer); });
 }
 void OnlineSession::closeLinks() {
     for (const auto& [peer, connection] : m_links) {
         m_transport.close(connection);
     }
+    for (const auto& [peer, connection] : m_dialing) {
+        m_transport.close(connection);
+    }
     if (m_connecting) {
         m_transport.close(*m_connecting);
     }
     m_links.clear();
+    m_dialing.clear();
     m_connecting.reset();
     m_prepare.reset();
     m_earlyParty.clear();
@@ -584,6 +608,22 @@ bool OnlineSession::admit(RoomSnapshot room, const std::string& peer) {
             return false;
         }
     }
+    if (!m_host) {
+        // Direct links are a bonus: each pair links once, the member with the greater
+        // id dialling, and a dial that fails leaves that peer on the host's relay.
+        std::erase_if(m_dialing, [&](const auto& row) {
+            return std::ranges::find(peers, row.first) == peers.end();
+        });
+        for (const auto& row : m_room->members) {
+            if (row.peer == m_peer || row.peer == m_room->host || row.peer < m_peer ||
+                m_links.contains(row.peer) || m_dialing.contains(row.peer)) {
+                continue;
+            }
+            if (const auto id = m_transport.connectPeer(row.peer)) {
+                m_dialing.emplace(row.peer, *id);
+            }
+        }
+    }
     if (starting) {
         m_phase = Phase::Starting;
         m_wait = 0;
@@ -599,23 +639,44 @@ void OnlineSession::event(const PacketTransport::Event& event) {
         if (peer && m_links.contains(*peer) && m_links.at(*peer) == event.connection) {
             return;
         }
+        const bool dialed =
+            peer && m_dialing.contains(*peer) && m_dialing.at(*peer) == event.connection;
+        const bool accepted = peer && !m_host && m_room && *peer != m_room->host && *peer < m_peer;
         if (event.connection == 0 || !peer || std::ranges::find(peers, *peer) == peers.end() ||
             m_links.contains(*peer) ||
             std::ranges::any_of(m_links,
                                 [&](const auto& row) { return row.second == event.connection; }) ||
-            (!m_host && m_connecting != event.connection)) {
+            (!m_host && m_connecting != event.connection && !dialed && !accepted)) {
             m_transport.close(event.connection);
             return;
         }
         m_links.emplace(*peer, event.connection);
-        if (!m_host) {
+        if (dialed) {
+            m_dialing.erase(*peer);
+        }
+        if (!m_host && m_connecting == event.connection) {
             m_connecting.reset();
+        }
+        if (!m_host && m_room && *peer != m_room->host) {
+            log::info("Online direct link with another guest is up");
         }
         return;
     }
     const auto link = std::ranges::find_if(
         m_links, [&](const auto& row) { return row.second == event.connection; });
+    const bool direct = link != m_links.end() && !m_host && m_room && link->first != m_room->host;
     if (event.type == Type::Disconnected) {
+        if (const auto dial = std::ranges::find_if(
+                m_dialing, [&](const auto& row) { return row.second == event.connection; });
+            dial != m_dialing.end()) {
+            m_dialing.erase(dial); // the dial failed; the host relays that peer
+            return;
+        }
+        if (direct) {
+            m_match.directLost(event.connection);
+            m_links.erase(link);
+            return;
+        }
         if (link != m_links.end() || m_connecting == event.connection) {
             if (m_host && m_phase == Phase::Lobby && link != m_links.end()) {
                 m_links.erase(link);
@@ -640,6 +701,17 @@ void OnlineSession::event(const PacketTransport::Event& event) {
         return;
     }
     if (link == m_links.end()) {
+        return;
+    }
+    if (direct) {
+        // A direct link carries the other guest's inputs and nothing else; anything
+        // it gets wrong is left to the host's relay rather than failing the session.
+        if (m_match.phase() != MatchSession::Phase::Offline &&
+            RollbackExchange::recognizes(event.bytes)) {
+            const auto statistics = m_transport.statistics(event.connection);
+            m_match.receive(event.connection, event.bytes, std::nullopt,
+                            statistics ? statistics->pingMs : -1);
+        }
         return;
     }
     if (nativePacket(event.bytes)) {
@@ -714,6 +786,7 @@ void OnlineSession::openMatch() {
     }
     MatchOwners owners{};
     std::vector<MatchLink> links;
+    std::vector<MatchLink> direct;
     u8 next = 2;
     u8 local = 0;
     for (const auto& row : m_room->members) {
@@ -724,7 +797,7 @@ void OnlineSession::openMatch() {
         if (row.peer == m_peer) {
             local = peer;
         } else if (const auto link = m_links.find(row.peer); link != m_links.end()) {
-            links.push_back({peer, link->second});
+            (m_host || row.peer == m_room->host ? links : direct).push_back({peer, link->second});
         }
     }
     if (!m_party.opened()) {
@@ -748,7 +821,7 @@ void OnlineSession::openMatch() {
     if (!m_party.complete() || !m_native->committed) {
         return;
     }
-    if (!m_match.open(local, owners, links, m_native->contract->rules.startupDelay)) {
+    if (!m_match.open(local, owners, links, m_native->contract->rules.startupDelay, direct)) {
         fail(Failure::Protocol);
         return;
     }

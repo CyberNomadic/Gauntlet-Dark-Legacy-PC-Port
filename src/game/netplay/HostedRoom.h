@@ -48,6 +48,7 @@ private:
         std::vector<Event> poll() override;
         std::optional<Statistics> statistics(Connection connection) const override;
         void close(Connection connection) override;
+        bool allowed(const std::string& peer) const { return m_allowed.contains(peer); }
 
     private:
         HostedRoom& m_room;
@@ -58,11 +59,14 @@ private:
         std::deque<std::vector<u8>> pending;
         bool announced = false;
         bool rejected = false;
+        bool direct = false; ///< guest to guest, identified by a hello rather than a join
+        bool hello = false;  ///< the hello went out or came in
         std::chrono::steady_clock::time_point arrived = std::chrono::steady_clock::now();
     };
     void message(Connection id, std::span<const u8> bytes);
     void disconnect(Connection id);
     void changed(bool membership);
+    void announce(Connection id);
     bool queue(Connection id, std::vector<u8> bytes);
     void fail(Failure failure);
     PacketTransport& m_wire;
@@ -73,6 +77,8 @@ private:
     std::string m_peer;
     RoomSnapshot m_room;
     std::map<Connection, Link> m_links;
+    std::map<std::string, std::string> m_cards; ///< where each member can be dialled
+    Connection m_hostLink = 0;                  ///< a guest's link to the host
     std::vector<Event> m_events;
     bool m_dirty = false;
     bool m_closed = false;

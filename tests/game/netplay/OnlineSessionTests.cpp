@@ -77,9 +77,16 @@ struct Wire final : PeerTransport {
         }
         return working;
     }
+    Connection nextDialled = 99;
     std::optional<Connection> connectPeer(const std::string& peer) override {
-        peers[99] = peer;
-        return working ? std::optional<Connection>{99} : std::nullopt;
+        for (const auto& [connection, known] : peers) {
+            if (known == peer) {
+                return working ? std::optional<Connection>{connection} : std::nullopt;
+            }
+        }
+        const auto connection = nextDialled--;
+        peers[connection] = peer;
+        return working ? std::optional<Connection>{connection} : std::nullopt;
     }
     std::optional<std::string> peer(Connection connection) const override {
         const auto found = peers.find(connection);
@@ -1098,3 +1105,50 @@ TEST_CASE("early character messages are bounded and cannot claim unowned seats",
     CHECK(guest.session.party() == nullptr);
 }
 } // namespace
+
+TEST_CASE(
+    "a guest dials the members above it, accepts the ones below, and keeps going without them",
+    "[netplay][online-session][direct-link]") {
+    const std::string below(32, '0');
+    Client guest(false);
+    auto snapshot = room();
+    snapshot.members = {
+        {kHost, {0}, false}, {kGuest, {1}, false}, {kOther, {2}, false}, {below, {3}, false}};
+    guest.publish(snapshot);
+    CHECK(guest.wire.authorized == std::vector<std::string>{kHost, kOther, below});
+    REQUIRE(guest.wire.peers.at(99) == kHost);
+    REQUIRE(guest.wire.peers.at(98) == kOther);
+    CHECK(std::ranges::none_of(guest.wire.peers,
+                               [&](const auto& row) { return row.second == below; }));
+    guest.wire.incoming.push_back({EventType::Connected, 99, {}, {}});
+    guest.session.update(0);
+    CHECK(guest.session.connected()); // the star is all that is required
+    CHECK(guest.session.directLinks() == 0);
+    // A dial that fails changes nothing, and the next roster update tries again.
+    guest.wire.incoming.push_back({EventType::Disconnected, 98, {}, {}});
+    guest.wire.peers.erase(98); // the transport forgets a connection that failed
+    guest.session.update(0);
+    CHECK(guest.session.failure() == Failure::None);
+    CHECK(guest.session.phase() == Phase::Lobby);
+    snapshot.members[2].ready = true;
+    guest.publish(snapshot);
+    REQUIRE(guest.wire.peers.at(97) == kOther);
+    guest.wire.incoming.push_back({EventType::Connected, 97, {}, {}});
+    guest.session.update(0);
+    CHECK(guest.session.directLinks() == 1);
+    // The member below dials us; a stranger is refused.
+    guest.wire.connect(below, 50);
+    guest.session.update(0);
+    CHECK(guest.session.directLinks() == 2);
+    guest.wire.connect(std::string(32, 'z'), 51);
+    guest.session.update(0);
+    CHECK(guest.session.directLinks() == 2);
+    CHECK(std::ranges::find(guest.wire.closed, Connection{51}) != guest.wire.closed.end());
+    // Losing a direct link is no failure.
+    guest.wire.incoming.push_back({EventType::Disconnected, 50, {}, {}});
+    guest.session.update(0);
+    CHECK(guest.session.directLinks() == 1);
+    CHECK(guest.session.failure() == Failure::None);
+    CHECK(guest.session.phase() == Phase::Lobby);
+    CHECK(guest.session.connected());
+}

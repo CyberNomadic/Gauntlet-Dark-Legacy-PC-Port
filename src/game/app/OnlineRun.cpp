@@ -361,6 +361,13 @@ u64 OnlineRun::confirmedTick() const {
     return 0;
 #endif
 }
+usize OnlineRun::directLinks() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl && m_impl->session ? m_impl->session->directLinks() : 0;
+#else
+    return 0;
+#endif
+}
 void OnlineRun::resume() {
 #if GDL_ENABLE_NETPLAY
     if (m_impl) {

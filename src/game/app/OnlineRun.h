@@ -45,6 +45,8 @@ public:
     bool playing() const;
     u64 simulatedTick() const;
     u64 confirmedTick() const;
+    /** Links straight to other guests, bypassing the host for their inputs. */
+    usize directLinks() const;
     bool pause(s32 device);
     void resume();
     bool hasCompletedProgress() const;

@@ -265,6 +265,9 @@ TEST_CASE("three real iroh menu peers run four split-seat players and play on wh
             return run->lobby().connected && run->lobby().players == 4;
         });
     });
+    // The two guests link to each other directly, so their inputs need not cross the host.
+    pump([&] { return runs[1]->directLinks() == 1 && runs[2]->directLinks() == 1; });
+    CHECK(runs[0]->directLinks() == 0);
     const auto member = [](s32 device, s32 character, const char* name) {
         PartyMember result;
         result.player = device;

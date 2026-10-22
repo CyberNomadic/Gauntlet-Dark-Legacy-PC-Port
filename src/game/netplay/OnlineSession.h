@@ -100,6 +100,8 @@ public:
     const std::string& failureDetail() const { return m_failureDetail; }
     bool host() const { return m_host; }
     bool connected() const;
+    /** A guest's links straight to other guests, which carry their inputs sooner. */
+    usize directLinks() const;
     /** The host's startup input delay for the match about to start, chosen from the
      * lobby's measured links; refused once the contract carrying it exists, on a guest,
      * or beyond the rollback's longest delay. */
@@ -130,6 +132,7 @@ private:
     void fail(Failure reason);
     void closeLinks();
     std::vector<std::string> allowed() const;
+    std::vector<std::string> required() const;
 
     RoomService& m_service;
     PeerTransport& m_transport;
@@ -143,6 +146,7 @@ private:
     std::vector<u8> m_seats;
     std::map<std::string, Connection> m_links;
     std::optional<Connection> m_connecting;
+    std::map<std::string, Connection> m_dialing; ///< direct links not yet up
     std::optional<ReadyRequest> m_ready;
     std::optional<PacketTransport::Event> m_prepare;
     std::vector<PacketTransport::Event> m_earlyParty;

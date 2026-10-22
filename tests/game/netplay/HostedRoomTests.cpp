@@ -1,5 +1,11 @@
 #include <algorithm>
+#include <array>
+#include <map>
+#include <optional>
+#include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -84,7 +90,8 @@ struct Pair {
                 const NativePlaySetup::Contract contract{agreed.rules.scene,
                                                          agreed.rules.autoMelee,
                                                          agreed.rules.autoActivateItems,
-                                                         agreed.rules.expandedShop, agreed.rules.autoAim,
+                                                         agreed.rules.expandedShop,
+                                                         agreed.rules.autoAim,
                                                          agreed.identity.build,
                                                          agreed.identity.content,
                                                          agreed.identity.data};
@@ -266,4 +273,242 @@ TEST_CASE("room capacity is enforced when a guest requests multiple local seats"
     CHECK(pair.guestRoom.failure() == HostedRoom::Failure::Full);
     REQUIRE(pair.host.room());
     CHECK(pair.host.room()->members.size() == 1);
+}
+
+namespace {
+/** Wires that reach each other by address, as the real transport's cards do. */
+struct MeshWire final : PacketTransport {
+    struct Peer {
+        MeshWire* wire;
+        Connection id;
+    };
+    std::string name;
+    std::vector<MeshWire*>* mesh = nullptr;
+    std::vector<Event> incoming;
+    std::map<Connection, Peer> links;
+    std::map<Connection, usize> sentOn;
+    Connection next = 1;
+    std::string address() const override { return "card:" + name; }
+    std::optional<Connection> dial(const std::string& card) override {
+        for (auto* wire : *mesh) {
+            if (wire != this && wire->address() == card) {
+                return connect(*wire);
+            }
+        }
+        return std::nullopt;
+    }
+    Connection connect(MeshWire& other) {
+        const auto mine = next++;
+        const auto theirs = other.next++;
+        links[mine] = {&other, theirs};
+        other.links[theirs] = {this, mine};
+        incoming.push_back({EventType::Connected, mine, {}, {}});
+        other.incoming.push_back({EventType::Connected, theirs, {}, {}});
+        return mine;
+    }
+    SendResult send(Connection id, std::span<const u8> bytes, Delivery /*delivery*/) override {
+        const auto found = links.find(id);
+        if (found == links.end()) {
+            return SendResult::Disconnected;
+        }
+        ++sentOn[id];
+        found->second.wire->incoming.push_back(
+            {EventType::Message, found->second.id, {bytes.begin(), bytes.end()}, {}});
+        return SendResult::Sent;
+    }
+    std::vector<Event> poll() override { return std::exchange(incoming, {}); }
+    std::optional<Statistics> statistics(Connection /*connection*/) const override { return {}; }
+    void close(Connection id) override {
+        const auto found = links.find(id);
+        if (found == links.end()) {
+            return;
+        }
+        const auto peer = found->second;
+        links.erase(found);
+        // Both ends hear that the connection ended, as the real transport reports.
+        incoming.push_back({EventType::Disconnected, id, {}, {}});
+        if (peer.wire->links.erase(peer.id) != 0) {
+            peer.wire->incoming.push_back({EventType::Disconnected, peer.id, {}, {}});
+        }
+    }
+    std::optional<Connection> linkTo(const MeshWire& other) const {
+        for (const auto& [id, peer] : links) {
+            if (peer.wire == &other) {
+                return id;
+            }
+        }
+        return std::nullopt;
+    }
+};
+struct Trio {
+    std::vector<MeshWire*> mesh;
+    MeshWire a, b, c;
+    HostedRoom hostRoom, firstRoom, secondRoom;
+    OnlineSession host, first, second;
+    test::RollbackSessionHarness hostInputs, firstInputs, secondInputs;
+    Trio()
+        : hostRoom(a, true, 1, "test", std::string(64, 'a')),
+          firstRoom(b, false, 1, "test", std::string(64, 'a')),
+          secondRoom(c, false, 1, "test", std::string(64, 'a')),
+          host(hostRoom, hostRoom.transport(), true, 1),
+          first(firstRoom, firstRoom.transport(), false, 1),
+          second(secondRoom, secondRoom.transport(), false, 1) {
+        a.name = "host";
+        b.name = "first";
+        c.name = "second";
+        mesh = {&a, &b, &c};
+        for (auto* wire : mesh) {
+            wire->mesh = &mesh;
+        }
+        // Each guest reaches the host first, as the real transport does.
+        REQUIRE(b.dial(a.address()));
+        REQUIRE(c.dial(a.address()));
+        const OnlineSession::NativeIdentity identity{"test", "test-runtime", std::string(64, 'a'),
+                                                     std::string(64, 'b'), "en"};
+        OnlineSession::NativeRules rules;
+        rules.scene = 1;
+        REQUIRE(host.configureNative(identity, rules));
+        REQUIRE(first.configureNative(identity));
+        REQUIRE(second.configureNative(identity));
+        CharacterProfile profile;
+        profile.name = "TEST";
+        for (auto* session : {&host, &first, &second}) {
+            REQUIRE(session->select(std::vector<CharacterProfile>(1, profile)));
+        }
+    }
+    ~Trio() {
+        hostInputs.clear();
+        firstInputs.clear();
+        secondInputs.clear();
+        for (auto* session : {&host, &first, &second}) {
+            session->leave();
+        }
+        for (auto* room : {&hostRoom, &firstRoom, &secondRoom}) {
+            room->leave();
+        }
+    }
+    Trio(const Trio&) = delete;
+    Trio& operator=(const Trio&) = delete;
+    Trio(Trio&&) = delete;
+    Trio& operator=(Trio&&) = delete;
+    static std::vector<InputCommand> localCommands(OnlineSession& session,
+                                                   const test::RollbackSessionHarness& timeline) {
+        std::vector<InputCommand> result;
+        const auto& context = session.match().context();
+        for (usize seat = 0; seat < context.owners.size(); ++seat) {
+            if (context.owners[seat] != session.match().localPeer()) {
+                continue;
+            }
+            InputCommand command;
+            command.epoch = context.epoch;
+            command.tick = timeline.sampleTick();
+            command.grant = context.grants[seat];
+            command.seat = static_cast<u8>(seat);
+            result.push_back(command);
+        }
+        return result;
+    }
+    /** Everyone samples, the wires carry, everyone advances and confirms. */
+    void step() {
+        const std::array pairs{std::pair{&host, &hostInputs}, std::pair{&first, &firstInputs},
+                               std::pair{&second, &secondInputs}};
+        for (const auto& [session, inputs] : pairs) {
+            if (inputs->sampleReady()) {
+                REQUIRE(inputs->sample(localCommands(*session, *inputs)));
+            }
+        }
+        pump();
+        for (const auto& [session, inputs] : pairs) {
+            if (inputs->advance()) {
+                REQUIRE(inputs->complete());
+            }
+        }
+    }
+    void pump() {
+        for (s32 i = 0; i < 12; ++i) {
+            for (auto* session : {&host, &first, &second}) {
+                session->update(0);
+                if (!session->nativeSetupPending()) {
+                    continue;
+                }
+                const auto& agreed = *session->nativeContract();
+                const NativePlaySetup::Contract contract{agreed.rules.scene,
+                                                         agreed.rules.autoMelee,
+                                                         agreed.rules.autoActivateItems,
+                                                         agreed.rules.expandedShop,
+                                                         agreed.rules.autoAim,
+                                                         agreed.identity.build,
+                                                         agreed.identity.content,
+                                                         agreed.identity.data};
+                const auto setup = NativePlaySetup::create(GameConfig{}, session->room()->settings,
+                                                           *session->party(), {}, contract);
+                REQUIRE(setup);
+                REQUIRE(session->confirmNativeSetup(setup->digest()));
+            }
+        }
+    }
+};
+} // namespace
+
+TEST_CASE("three hosted peers link the guests directly and the match uses the link",
+          "[netplay][hosted-room][direct-link]") {
+    Trio trio;
+    trio.pump();
+    REQUIRE(trio.host.room());
+    REQUIRE(trio.host.room()->members.size() == 3);
+    CHECK(trio.host.directLinks() == 0);
+    CHECK(trio.first.directLinks() == 1);
+    CHECK(trio.second.directLinks() == 1);
+    const auto direct = trio.b.linkTo(trio.c);
+    REQUIRE(direct);
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        REQUIRE(session->ready());
+    }
+    trio.pump();
+    REQUIRE(trio.host.start());
+    trio.pump();
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        REQUIRE(session->phase() == OnlineSession::Phase::Active);
+    }
+    CHECK(trio.host.match().directLinks() == 0);
+    CHECK(trio.first.match().directLinks() == 1);
+    CHECK(trio.second.match().directLinks() == 1);
+    // A stage starts; the first guest's inputs reach the second on the direct link.
+    REQUIRE(trio.host.match().prepare(1));
+    trio.pump();
+    REQUIRE(trio.hostInputs.bind(trio.host.match()));
+    REQUIRE(trio.firstInputs.bind(trio.first.match()));
+    REQUIRE(trio.secondInputs.bind(trio.second.match()));
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        REQUIRE(session->match().loaded());
+    }
+    trio.pump();
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        CAPTURE(session->host());
+        REQUIRE(session->match().phase() == MatchSession::Phase::Running);
+    }
+    const auto before = trio.b.sentOn[*direct];
+    for (s32 step = 0; step < 4; ++step) {
+        trio.step();
+    }
+    CHECK(trio.b.sentOn[*direct] > before);
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        CHECK(session->phase() == OnlineSession::Phase::Active);
+        CHECK(session->match().phase() == MatchSession::Phase::Running);
+    }
+    // The direct link closes: nobody fails, the host's relay carries on.
+    trio.b.close(*direct);
+    trio.pump();
+    CHECK(trio.first.directLinks() == 0);
+    CHECK(trio.second.directLinks() == 0);
+    CHECK(trio.first.match().directLinks() == 0);
+    CHECK(trio.second.match().directLinks() == 0);
+    for (s32 step = 0; step < 4; ++step) {
+        trio.step();
+    }
+    for (auto* session : {&trio.host, &trio.first, &trio.second}) {
+        CHECK(session->phase() == OnlineSession::Phase::Active);
+        CHECK(session->match().phase() == MatchSession::Phase::Running);
+        CHECK(session->match().nativeConfirmed() >= 2);
+    }
 }
