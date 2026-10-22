@@ -1,6 +1,5 @@
 #include <array>
 #include <bit>
-#include <cmath>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -8,6 +7,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "engine/io/File.h"
+#include "engine/math/PortableMath.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -71,7 +71,7 @@ TEST_CASE("ordinary placement resolution keeps native tuning fields and load ord
     CHECK_FALSE(result->carried);
     const Mat4 stood = itemPlacement(instance.position, instance.rotation);
     CHECK(result->spawn.direction == Vec3{stood[2][0], 0, stood[2][2]});
-    CHECK(result->facing == std::atan2(stood[2][0], stood[2][2]));
+    CHECK(result->facing == portable::atan2(stood[2][0], stood[2][2]));
     const f32 expectedInterval = interval <= 0   ? EnemySpawn{}.throwInterval
                                  : interval == 1 ? 0
                                                  : 0.7f;
@@ -169,7 +169,7 @@ TEST_CASE("native placement loader retains missing-statue fallbacks and ordered 
         CHECK(row.spawn.placed == EnemySpawn{}.placed);
         CHECK(row.carried == std::optional<usize>{index + 31});
         const Mat4 stood = itemPlacement(instance.position, instance.rotation);
-        CHECK(row.facing == std::atan2(stood[2][0], stood[2][2]));
+        CHECK(row.facing == portable::atan2(stood[2][0], stood[2][2]));
     }
     CHECK(rows[0].viewRadius == 10);
     CHECK(rows[1].viewRadius == 6);
