@@ -8,13 +8,14 @@
 
 namespace gdl::game {
 
-/** Conservative compatibility gate for the native simulation experiment, not
- * an authentication mechanism or a proof of complete determinism. The runtime
- * identity pins the executable, OS/architecture/toolchain, numeric environment
- * and its C/C++ runtime linkage. Static MSVC builds pin the runtime inside the
- * executable; dynamic builds also pin the identified loaded runtime files.
- * Cross-platform agreement is deliberately not implied. No native asset tree
- * is read here. */
+/** Compatibility gate for online play, judged by what a build does rather than which
+ * binary it is. The runtime identity digests the sources and version the game was built
+ * from (see SourceIdentity.h) and a numeric witness of its arithmetic: the x86-64 profile,
+ * rounding and exception modes, and the results of a fixed corpus of the math the
+ * simulation uses. Two builds agree when their sources agree and their numbers agree,
+ * whatever compiler, machine or operating system made them. The witness is bounded
+ * evidence, not a proof for every input; a divergence in play is caught by the periodic
+ * digests and repaired by the journal rebuild. Not an authentication mechanism. */
 class NativeOnlineIdentity {
 public:
     struct Inputs {
@@ -28,33 +29,26 @@ public:
         std::string language;
     };
 
-    /** Compile-selected runtime provenance included in the compatibility hash.
-     * This is not inferred from DLLs incidentally loaded by graphics/audio. */
+    /** Compile-selected runtime linkage, for logs; not part of the identity. */
     static std::string_view runtimeProfile();
 
     /** Call once at process startup, before Application or any worker threads.
-     * On Windows this disables the UCRT's CPU-dependent FMA3 math path, including
-     * for offline play. It never changes rounding, denormal or exception modes.
-     * Repeated calls validate the established policy rather than repairing a
-     * later mode change. Other platforms retain their conservative CPU gate. */
+     * Checks the rounding, denormal and exception modes the witness assumes, and on
+     * Windows disables the UCRT's CPU-dependent FMA3 math path, including for offline
+     * play. Repeated calls validate the established policy rather than repairing a
+     * later mode change. */
     static bool prepareProcessNumeric(std::string* error = nullptr);
 
-    /** Call on the simulation thread before starting the background hash. The
-     * returned value owns the effective text digest and numeric-mode witness;
-     * no StringTable or other live owner is borrowed by capture(). Windows uses
-     * an exact operation corpus instead of CPU model identity, with the same
-     * executable/runtime still required. Corpus agreement is bounded evidence,
-     * not a proof for every possible input or a cross-platform guarantee. */
+    /** Call on the simulation thread. The returned value owns the effective text digest
+     * and the numeric witness; no StringTable or other live owner is borrowed by
+     * capture(). */
     static std::optional<Inputs> snapshot(const StringTable& strings, std::string* error = nullptr);
 
-    /** Load-time/background work: stream the actual executable and, for dynamic
-     * builds, known loaded runtime files. Static MSVC builds verify that their
-     * referenced math/control functions belong to the executable. Missing,
-     * unreadable or changing files fail without a version/path-only fallback. */
+    /** Combines the witness with the build's source identity. */
     static std::optional<Result> capture(Inputs inputs, std::string* error = nullptr);
 
-    /** Check on the simulation thread before using a completed background hash.
-     * Floating-point sticky exception flags are intentionally not mode state. */
+    /** Check on the simulation thread before using a completed capture: the witness is
+     * recomputed here and now. Floating-point sticky exception flags are not mode state. */
     static bool numericMatches(const Inputs& inputs);
 };
 

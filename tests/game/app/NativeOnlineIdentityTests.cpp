@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <bit>
+#include <cctype>
 #include <cerrno>
 #include <cfenv>
 #include <cmath>
@@ -13,9 +16,11 @@
 
 #include "TestSupport.h"
 #include "game/app/NativeOnlineIdentity.h"
+#include "game/app/SourceIdentity.h"
 
 #if defined(_WIN32) && defined(_MSC_VER)
 #include <cfloat>
+
 #include <windows.h>
 #endif
 #if defined(_WIN32) && defined(_M_X64)
@@ -95,7 +100,8 @@ TEST_CASE("native online identity requires effective data and complete owned inp
         } else {
             bad.language.clear();
         }
-        // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move): a fresh copy each pass
+        // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move): a fresh copy each
+        // pass
         CHECK_FALSE(NativeOnlineIdentity::capture(std::move(bad), &error));
         CHECK_FALSE(error.empty());
     }
@@ -116,8 +122,14 @@ TEST_CASE("native identity snapshots own text independently from later table cha
     CHECK(initial->data.size() == 64);
 }
 
-TEST_CASE("native runtime identity hashes the running image independently from text",
+TEST_CASE("native runtime identity is the sources and the numeric witness, independent of text",
           "[native-online-identity][determinism]") {
+    const auto sources = sourceIdentity();
+    CHECK(sources.size() == 64);
+    CHECK(std::ranges::all_of(sources, [](char c) {
+        return std::isxdigit(static_cast<unsigned char>(c)) &&
+               !std::isupper(static_cast<unsigned char>(c));
+    }));
     const auto initial = NativeOnlineIdentity::snapshot(strings());
     const auto changed = NativeOnlineIdentity::snapshot(strings("second"));
     REQUIRE(initial);
@@ -138,6 +150,28 @@ TEST_CASE("native runtime identity hashes the running image independently from t
     CHECK(second->data == changed->data);
     CHECK(first->language == "en");
     CHECK(second->language == "en");
+    // Another build's numbers would give another identity; the binary itself is not in it.
+    auto otherNumbers = *initial;
+    otherNumbers.numeric[0] = otherNumbers.numeric[0] == 'a' ? 'b' : 'a';
+    const auto other = NativeOnlineIdentity::capture(otherNumbers, &error);
+    REQUIRE(other);
+    CHECK(other->runtime != first->runtime);
+}
+
+TEST_CASE("the build keeps a multiply and the add after it as two rounded operations",
+          "[native-online-identity][determinism]") {
+    // (1 + 2^-23)(1 - 2^-23) rounds to one in single precision, so adding minus one
+    // gives zero; a fused multiply-add keeps the 2^-46 and gives a negative number.
+    const volatile f32 a = std::bit_cast<f32>(u32{0x3f800001});
+    const volatile f32 b = std::bit_cast<f32>(u32{0x3f7ffffe});
+    const volatile f32 c = std::bit_cast<f32>(u32{0xbf800000});
+    const f32 fused = a * b + c;
+    CHECK(fused == 0.0f);
+    const volatile f64 da = std::bit_cast<f64>(u64{0x3ff0000000000001ULL});
+    const volatile f64 db = std::bit_cast<f64>(u64{0x3feffffffffffffeULL});
+    const volatile f64 dc = std::bit_cast<f64>(u64{0xbff0000000000000ULL});
+    const f64 fusedWide = da * db + dc;
+    CHECK(fusedWide == 0.0);
 }
 
 TEST_CASE("numeric identity detects rounding changes but ignores sticky exceptions",
@@ -163,7 +197,7 @@ TEST_CASE("numeric identity detects rounding changes but ignores sticky exceptio
     REQUIRE(std::fesetround(FE_DOWNWARD) == 0);
     CHECK_FALSE(NativeOnlineIdentity::numericMatches(*nearest));
     const auto downward = NativeOnlineIdentity::snapshot(source);
-#if defined(_WIN32) && defined(_M_X64)
+#if defined(_M_X64) || defined(__x86_64__)
     CHECK_FALSE(downward);
     std::string error;
     CHECK_FALSE(NativeOnlineIdentity::prepareProcessNumeric(&error));
@@ -183,9 +217,10 @@ TEST_CASE("prepared numeric identity agrees on a new thread without sharing live
     const auto input = NativeOnlineIdentity::snapshot(source);
     REQUIRE(input);
     const auto& copy = *input;
-    auto worker = std::async(std::launch::async,
-                             // NOLINTNEXTLINE(bugprone-exception-escape): a throw surfaces through the future
-                             [copy] { return NativeOnlineIdentity::numericMatches(copy); });
+    auto worker =
+        std::async(std::launch::async,
+                   // NOLINTNEXTLINE(bugprone-exception-escape): a throw surfaces through the future
+                   [copy] { return NativeOnlineIdentity::numericMatches(copy); });
     CHECK(worker.get());
     CHECK(NativeOnlineIdentity::prepareProcessNumeric());
     CHECK(NativeOnlineIdentity::numericMatches(*input));
@@ -200,7 +235,8 @@ TEST_CASE("native runtime linkage agrees with actual linked math and control add
         HMODULE owner = nullptr;
         REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the Win32 call names a function by address
+                                   // Win32 names a function by its address:
+                                   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
                                    reinterpret_cast<LPCWSTR>(function), &owner) != 0);
 #if defined(_MT) && !defined(_DLL)
         CHECK(owner == executable);
@@ -226,50 +262,6 @@ TEST_CASE("native runtime linkage agrees with actual linked math and control add
     REQUIRE(identity);
 }
 
-#if defined(_MT) && !defined(_DLL)
-TEST_CASE("static runtime identity ignores an actual incidental system UCRT",
-          "[native-online-identity][determinism][native-runtime-linkage]") {
-    const auto input = NativeOnlineIdentity::snapshot(strings());
-    REQUIRE(input);
-    std::string error;
-    const auto before = NativeOnlineIdentity::capture(*input, &error);
-    INFO(error);
-    REQUIRE(before);
-    {
-        // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): aggregate scope guard
-        struct Module {
-            HMODULE handle;
-            ~Module() {
-                if (handle != nullptr) {
-                    FreeLibrary(handle);
-                }
-            }
-        } incidental{LoadLibraryExW(L"ucrtbase.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)};
-        REQUIRE(incidental.handle != nullptr);
-        const auto externalSin = GetProcAddress(incidental.handle, "sin");
-        REQUIRE(externalSin != nullptr);
-        HMODULE externalOwner = nullptr;
-        REQUIRE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the Win32 call names a function by address
-                                   reinterpret_cast<LPCWSTR>(externalSin), &externalOwner) != 0);
-        // A real alternative math implementation is present, but it is not the
-        // statically linked function whose provenance capture() verifies.
-        CHECK(externalOwner != GetModuleHandleW(nullptr));
-        const auto during = NativeOnlineIdentity::capture(*input, &error);
-        INFO(error);
-        REQUIRE(during);
-        CHECK(during->runtime == before->runtime);
-        CHECK(during->data == before->data);
-        CHECK(NativeOnlineIdentity::numericMatches(*input));
-    }
-    const auto after = NativeOnlineIdentity::capture(*input, &error);
-    INFO(error);
-    REQUIRE(after);
-    CHECK(after->runtime == before->runtime);
-    CHECK(NativeOnlineIdentity::numericMatches(*input));
-}
-#endif
 #endif
 
 #if defined(_WIN32) && defined(_M_X64)

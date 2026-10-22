@@ -1,7 +1,10 @@
-# gdl_apply_compiler_options(<target>): project-wide warnings and platform defines.
+# gdl_apply_compiler_options(<target>): project-wide warnings, platform defines and the
+# floating-point contract the online simulation relies on: IEEE operations as written,
+# never contracted into fused multiply-adds, so builds by different compilers agree.
 function(gdl_apply_compiler_options target)
     if(MSVC)
         target_compile_options(${target} PRIVATE
+            /fp:precise
             /W4
             /permissive-
             /Zc:__cplusplus
@@ -15,6 +18,7 @@ function(gdl_apply_compiler_options target)
             _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${target} PRIVATE
+            -ffp-contract=off
             -Wall
             -Wextra
             -Wpedantic

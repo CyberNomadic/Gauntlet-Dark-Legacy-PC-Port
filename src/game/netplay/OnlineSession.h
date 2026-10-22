@@ -40,8 +40,8 @@ public:
     static constexpr u32 kNativeTowerScene = 14 * 256 + 1;
     static constexpr usize kNativePacketBytes = 1024;
     struct NativeIdentity {
-        std::string build;   ///< executable compatibility identity, not a display version
-        std::string runtime; ///< exact platform/compiler/numeric runtime; cross-OS is unproven
+        std::string build;   ///< the game version; the sources themselves are in runtime
+        std::string runtime; ///< NativeOnlineIdentity: the sources built and the numeric witness
         std::string content; ///< SHA-256 of the native asset tree
         std::string data;    ///< SHA-256 of the resolved gameplay/text data tree
         std::string language;
