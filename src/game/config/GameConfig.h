@@ -172,10 +172,10 @@ struct PlayBindings {
 /** A physical device assignment and independent bindings. Empty device preserves legacy
  * keyboard/player-one plus pad-slot routing. GUID + occurrence distinguishes identical pads;
  * Controllers without a serial number are distinguished by occurrence. */
-/** How the keys walk a character the mouse aims: Tank steps forward, back and sideways
- * relative to where the mouse points; Robotron walks the camera's way (W up the screen,
- * S down, A and D across) whatever the mouse aims at, the body always walking as though
- * forward while every shot goes the mouse's way. */
+/** How the keys walk a character aimed by the mouse: Tank faces the mouse and steps
+ * forward, back and sideways relative to it; Robotron walks the camera's way (W up the
+ * screen, S down, A and D across) facing the way it walks, and stands still to attack or
+ * throw where the mouse points. */
 enum class KeyboardScheme : u8 { Tank, Robotron };
 inline constexpr std::array<std::string_view, 2> kKeyboardSchemeNames{"tank", "robotron"};
 

@@ -288,10 +288,20 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
             !held && !down && !immobilized && !entering && !deathHeld && player < inputs.size()
                 ? inputs[player].move
                 : MoveInput{};
-        const auto aim =
+        std::optional<Vec3> aim =
             !held && !down && !reeling && !entering && !deathHeld && player < inputs.size()
                 ? inputs[player].aimDirection
                 : std::nullopt;
+        // Under Robotron the keys walk the body the way it faces; the mouse aims only an
+        // attack or a throw, for which the body stands still.
+        if (aim && inputs[player].freeMove) {
+            const PlayInput& in = inputs[player];
+            if (in.attack || in.strongAttack || in.throwPotion) {
+                move = MoveInput{};
+            } else {
+                aim.reset();
+            }
+        }
         if (aim) {
             players[i].cursorAiming = true;
             const Vec3 toward = *aim;
@@ -299,10 +309,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                                     ? actor.position() + Vec3{portable::sin(actor.yaw()), 0,
                                                               portable::cos(actor.yaw())}
                                     : actor.position() + toward;
-            // Tank steps relative to where the mouse points; Robotron walks the camera's way.
-            if (!inputs[player].freeMove) {
-                move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
-            }
+            move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
             if (animator == nullptr || !animator->shoving()) {
                 const f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
                 if (steeringTurbo) {
@@ -381,8 +388,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                 }
             }
             const bool cursorForward =
-                aim && (in.freeMove ? in.move.any()
-                                    : in.move.direction.x == 0.0f && in.move.direction.y > 0.0f);
+                aim && in.move.direction.x == 0.0f && in.move.direction.y > 0.0f;
             if (deed == PlayerDeed::None && move.any() && !in.strafe && (!aim || cursorForward) &&
                 !in.attackPressed && !in.chargePressed && !in.turboAttackPressed &&
                 actor.save().autoAttack && animator != nullptr && animator->canAutoMelee() &&
@@ -419,16 +425,12 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         if (players[i].figure != nullptr) {
             // Mouse aim locks facing, but forward movement uses the ordinary full-stick
             // gait. Backing up, sidestepping, and moving shots retain their strafe actions.
-            // Under Robotron every step is a forward one: the plain gait, or the forward
-            // moving shot.
-            const bool freeMove = aim && inputs[player].freeMove;
             const bool cursorForward = aim && !inputs[player].strafe && !inputs[player].attack &&
-                                       (freeMove || (inputs[player].move.direction.x == 0.0f &&
-                                                     inputs[player].move.direction.y > 0.0f));
+                                       inputs[player].move.direction.x == 0.0f &&
+                                       inputs[player].move.direction.y > 0.0f;
             players[i].figure->setStrafe(
                 strafes && !cursorForward
-                    ? (freeMove ? StrafeWay::Forward
-                                : strafeWayOf(PlayerActor::headingOf(move, cameraYaw), actor.yaw()))
+                    ? strafeWayOf(PlayerActor::headingOf(move, cameraYaw), actor.yaw())
                     : StrafeWay::None);
         }
         players[i].glow.step(seconds);

@@ -1587,8 +1587,9 @@ TEST_CASE("the combo button with half the meter lifts a warrior's partner ahead,
 }
 } // namespace
 
-TEST_CASE("the Robotron scheme walks the camera's way, faces the mouse and keeps the forward gait",
-          "[controls][cursor][party-motion][robotron][assets]") {
+TEST_CASE(
+    "the Robotron scheme walks the camera's way facing its walk and plants to shoot at the mouse",
+    "[controls][cursor][party-motion][robotron][assets]") {
     const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
                           .parent_path()
                           .parent_path()
@@ -1620,24 +1621,36 @@ TEST_CASE("the Robotron scheme walks the camera's way, faces the mouse and keeps
     REQUIRE(input.move.magnitude == 1.0f);
     input.aimDirection = Vec3{1, 0, 0};
     input.freeMove = true;
-    bool shooting = false;
-    SECTION("walking") {}
-    SECTION("shooting while walking keeps the forward moving shot") {
+    bool firing = false;
+    SECTION("walking faces the walk, not the mouse") {}
+    SECTION("holding the quick attack plants the body facing the mouse") {
         input.attack = true;
-        shooting = true;
+        firing = true;
+    }
+    SECTION("holding the slow attack plants the body facing the mouse") {
+        input.strongAttack = true;
+        firing = true;
     }
     for (s32 frame = 0; frame < 120; ++frame) {
         f.step();
     }
     const auto& animator = player.figure->animator();
-    CHECK(animator.running() == !shooting);
-    CHECK(animator.strafing() == shooting);
-    const f32 pace = shooting ? PlayerAnimator::kStrafePace : PlayerAnimator::kRunPace;
-    CHECK(animator.moveScale() == Approx(pace));
+    CHECK_FALSE(animator.strafing());
     const Vec3 before = player.actor.position();
     f.step();
     const Vec3 step = player.actor.position() - before;
-    CHECK(glm::length(step) == Approx(player.actor.speed() * pace / 30.0f).margin(0.0001f));
-    CHECK(glm::dot(glm::normalize(step), way) == Approx(1.0f).margin(0.001f));
-    CHECK(player.actor.yaw() == Approx(std::atan2(1.0f, 0.0f)));
+    if (firing) {
+        CHECK(glm::length(step) == Approx(0.0f).margin(0.0001f));
+        CHECK_FALSE(animator.running());
+        CHECK(player.actor.yaw() == Approx(std::atan2(1.0f, 0.0f)));
+        CHECK(player.cursorAiming);
+    } else {
+        CHECK(animator.running());
+        CHECK(animator.moveScale() == Approx(PlayerAnimator::kRunPace));
+        CHECK(glm::length(step) ==
+              Approx(player.actor.speed() * PlayerAnimator::kRunPace / 30.0f).margin(0.0001f));
+        CHECK(glm::dot(glm::normalize(step), way) == Approx(1.0f).margin(0.001f));
+        CHECK(player.actor.yaw() == Approx(std::atan2(way.x, way.z)).margin(0.001f));
+        CHECK_FALSE(player.cursorAiming);
+    }
 }

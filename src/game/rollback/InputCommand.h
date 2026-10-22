@@ -23,7 +23,7 @@ enum class CommandHeld : u16 {
     MenuLeft = 1U << 8U,
     MenuRight = 1U << 9U,
     ThrowPotion = 1U << 10U, ///< held wind-up strength, including concealed input frames
-    FreeMove = 1U << 11U,    ///< the Robotron scheme: the move is the camera's under mouse aim
+    FreeMove = 1U << 11U,    ///< Robotron: the keys walk the camera's way, the mouse aims attacks
 };
 
 enum class CommandPress : u32 {
