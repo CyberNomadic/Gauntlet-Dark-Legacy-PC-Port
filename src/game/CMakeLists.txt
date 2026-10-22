@@ -384,7 +384,7 @@ add_library(gdl::game ALIAS game)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(GDL_SOURCE_IDENTITY_UNIT "${CMAKE_BINARY_DIR}/generated/game/app/SourceIdentity.cpp")
 add_custom_target(source_identity
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/source_identity.py"
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/checks/source_identity.py"
         --root "${CMAKE_SOURCE_DIR}" --write "${GDL_SOURCE_IDENTITY_UNIT}"
     BYPRODUCTS "${GDL_SOURCE_IDENTITY_UNIT}"
     COMMENT "Digesting the game sources"

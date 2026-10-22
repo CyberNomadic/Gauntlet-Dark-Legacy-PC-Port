@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "netplay"))
 from native_determinism import (MAX_LINE_BYTES, MAX_RENDER_EVERY, MAX_TICKS, METADATA_FIELDS,
                                 ReportError, compare_reports, main, run_pair, validate_transport)
 

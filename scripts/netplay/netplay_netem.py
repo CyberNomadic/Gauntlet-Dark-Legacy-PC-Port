@@ -2,9 +2,9 @@
 """Temporarily impair a dedicated Linux network namespace, never the host network.
 
 Preview (no changes):
-  python scripts/netplay_netem.py --namespace gdl-guest --interface eth0 --delay-ms 50 --jitter-ms 10 --loss 1
+  python scripts/netplay/netplay_netem.py --namespace gdl-guest --interface eth0 --delay-ms 50 --jitter-ms 10 --loss 1
 Apply while running a probe already routed through that namespace:
-  sudo python scripts/netplay_netem.py --namespace gdl-guest --interface eth0 --delay-ms 50 --seconds 120 --apply
+  sudo python scripts/netplay/netplay_netem.py --namespace gdl-guest --interface eth0 --delay-ms 50 --seconds 120 --apply
 
 This does NOT create a namespace, VPN, route, or remote server. Supply an isolated
 test namespace with working connectivity. netem delays EGRESS only; 50 ms at one

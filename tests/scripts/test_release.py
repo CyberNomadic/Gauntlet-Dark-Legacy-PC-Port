@@ -11,7 +11,7 @@ from unittest import mock
 from types import SimpleNamespace
 import zipfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "release"))
 from installer.install import retry_locked
 from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_green_ci, require_new_version, validated_assets
 from release import build_release, check_frozen_installer, dependency_notices, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files

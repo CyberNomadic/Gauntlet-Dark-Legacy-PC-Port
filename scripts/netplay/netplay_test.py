@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise iroh in separate host/guest processes without graphics or assets.
 
-    python scripts/netplay_test.py --build
+    python scripts/netplay/netplay_test.py --build
 
 Local tests never contact a relay. --internet explicitly enables public relays;
 a same-machine run still does not prove cross-router connectivity or relay use.
@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the top-level helpers
 import devenv
 
 ROOT = devenv.ROOT

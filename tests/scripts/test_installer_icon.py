@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "release"))
 from installer.icon import ICON_SIZES, decode_first_frame, embed_icon, icon_resources
 from installer.install import apply_disc_icon, install, payload_inventory
 from installer.update import apply_update, file_digest, installed_info

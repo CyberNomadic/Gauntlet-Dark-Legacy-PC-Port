@@ -36,7 +36,7 @@ jobs:
       # Manual runs produce CI artifacts only, even when a tag is selected.
       - name: Require a new version before building installers
         if: github.event_name == 'push'
-        run: python scripts/publish_release.py --check
+        run: python scripts/release/publish_release.py --check
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -59,7 +59,7 @@ jobs:
           python-version: '3.12'
       - name: Check release tag against VERSION
         if: startsWith(github.ref, 'refs/tags/')
-        run: python scripts/release.py check-tag "${{ github.ref_name }}"
+        run: python scripts/release/release.py check-tag "${{ github.ref_name }}"
       - uses: actions/cache@v4
         with:
           path: |
@@ -74,7 +74,7 @@ jobs:
       - name: Networking license tool
         run: cargo install cargo-about --version 0.9.2 --locked --features cli --jobs 2
       - name: Installer tools
-        run: python -m pip install -r scripts/installer/requirements.txt
+        run: python -m pip install -r scripts/release/installer/requirements.txt
       - name: Linux wizard runtime libraries
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-shape0 libxcb-keysyms1 libxcb-icccm4 xvfb xauth
@@ -83,13 +83,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Check installer dependency notices
-        run: python scripts/release.py check-installer-tools
+        run: python scripts/release/release.py check-installer-tools
       - name: Build, test and package Windows installer
         if: runner.os == 'Windows'
-        run: python scripts/release.py build
+        run: python scripts/release/release.py build
       - name: Build, test and package Linux installer
         if: runner.os == 'Linux'
-        run: python scripts/release.py build
+        run: python scripts/release/release.py build
         env:
           CXX: g++-14
       - uses: actions/upload-artifact@v4
@@ -115,7 +115,7 @@ jobs:
           merge-multiple: true
       # Refuse to mutate an existing release; both platform jobs must succeed first.
       - name: Publish verified installers (no game assets)
-        run: python scripts/publish_release.py
+        run: python scripts/release/publish_release.py
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}

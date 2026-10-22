@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Audit native assets without exporting or modifying them.
 
-    python scripts/asset_audit.py --verify
-    python scripts/asset_audit.py --archive MONSTERS/DEM --lender LEVELS/LEVELB4
-    python scripts/asset_audit.py --levels
-    python scripts/asset_audit.py --data
+    python scripts/checks/asset_audit.py --verify
+    python scripts/checks/asset_audit.py --archive MONSTERS/DEM --lender LEVELS/LEVELB4
+    python scripts/checks/asset_audit.py --levels
+    python scripts/checks/asset_audit.py --data
 
 Builds the selected preset. The default scan eagerly decodes the corpus but does
 not invent cross-archive load contexts. --verify additionally runs the native
@@ -20,6 +20,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the top-level helpers
 import build
 import devenv
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Launch two playable game windows connected through iroh.
 
-    python scripts/netplay_scene.py
-    python scripts/netplay_scene.py --scenario level-g1 --build
-    python scripts/netplay_scene.py --seconds 45
+    python scripts/netplay/netplay_scene.py
+    python scripts/netplay/netplay_scene.py --scenario level-g1 --build
+    python scripts/netplay/netplay_scene.py --seconds 45
 
 Both peers run the actual gameplay scene from the same agreed inputs at 60 Hz.
 The native campaign owns travel, secret returns and the post-level tally/shop.
@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the top-level helpers
 import devenv
 import netplay_test
 import scenario

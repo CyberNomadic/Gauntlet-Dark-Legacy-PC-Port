@@ -6,8 +6,8 @@ Runs clangd as a language server over the repository's compile_commands.json
 prints the diagnostics clangd publishes, clang-tidy findings included. Exit
 status is 1 when any diagnostic is found.
 
-    python scripts/clangd-check.py            # all files
-    python scripts/clangd-check.py src/game   # a subtree or single file
+    python scripts/checks/clangd-check.py            # all files
+    python scripts/checks/clangd-check.py src/game   # a subtree or single file
 """
 
 import json

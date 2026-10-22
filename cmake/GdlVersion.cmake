@@ -1,4 +1,4 @@
-# Keep the version accepted by CMake aligned with scripts/installer/versions.py.
+# Keep the version accepted by CMake aligned with scripts/release/installer/versions.py.
 # The complete SemVer string is used at runtime; project() needs its numeric core.
 function(gdl_version_core version output)
     if(NOT "${version}" MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$")

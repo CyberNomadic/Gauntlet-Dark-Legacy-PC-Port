@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stage a portable game folder with an unchanged original retail asset tree.
 
-    python scripts/package.py --output out/gauntlet --dry-run
-    python scripts/package.py --output out/gauntlet --assets /disc/Gauntlet
+    python scripts/release/package.py --output out/gauntlet --dry-run
+    python scripts/release/package.py --output out/gauntlet --assets /disc/Gauntlet
 
 Uses the existing Release build; never builds, exports, deletes or replaces files.
 The output must not exist. Gauntlet and its sibling carddemo are copied in full,
@@ -25,6 +25,7 @@ import struct
 import sys
 from typing import Optional
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the top-level helpers
 import build
 import devenv
 

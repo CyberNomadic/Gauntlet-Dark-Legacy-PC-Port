@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "netplay"))
 import native_rollback
 from native_determinism import (IMPAIRMENT_COUNTS, IMPAIRMENT_DEFAULTS, IMPAIRMENT_TIMINGS, OUTAGE_PROGRESS_COUNTS,
                                 ReportError, compare_reports)

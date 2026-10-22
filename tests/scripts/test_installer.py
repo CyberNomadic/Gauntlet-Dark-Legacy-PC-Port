@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 import zipfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "release"))
 from installer.disc import CISO_HEADER, DiscImage, safe_component
 from installer.install import Cancelled, host_platform, install, payload_inventory
 from release import freezer_environment, make_payload, validate_tag, version

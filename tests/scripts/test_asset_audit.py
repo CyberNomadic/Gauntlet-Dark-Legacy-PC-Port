@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 from subprocess import CompletedProcess
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts" / "checks"))
 import asset_audit
 
 

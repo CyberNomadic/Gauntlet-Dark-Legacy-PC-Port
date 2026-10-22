@@ -3,8 +3,8 @@
 Maintainer workflow (from a clean, committed checkout):
   python scripts/setup.py --yes --no-build
   python -m venv build/installer-venv
-  <venv-python> -m pip install -r scripts/installer/requirements.txt
-  <venv-python> scripts/release.py build
+  <venv-python> -m pip install -r scripts/release/installer/requirements.txt
+  <venv-python> scripts/release/release.py build
 
 Bump VERSION, add docs/changelog/<VERSION>.md, commit, and push v<VERSION> to
 publish a GitHub release. Changelogs start with '# <VERSION>' and contain the
@@ -37,6 +37,7 @@ import tarfile
 import urllib.request
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the top-level helpers
 import devenv
 import package
 from installer.install import payload_inventory, temporary_directory
@@ -209,8 +210,9 @@ def licenses(binary, staging):
     notice.write_text(
         "Installer: Qt/PySide6 and Shiboken are used under LGPLv3; PyInstaller uses its "
         "GPL exception for frozen applications. Corresponding notices accompany this build.\n"
-        "The installer source and build recipe are scripts/installer, scripts/install_game.py "
-        "and scripts/release.py in this release's source archive. They permit rebuilding "
+        "The installer source and build recipe are scripts/release/installer, "
+        "scripts/release/install_game.py and scripts/release/release.py in this release's "
+        "source archive. They permit rebuilding "
         "with modified Qt/PySide libraries; no signature or activation check restricts this.\n"
         "Qt sources: https://download.qt.io/official_releases/qt/\n"
         "PySide/Shiboken sources: https://download.qt.io/official_releases/QtForPython/\n"
@@ -233,7 +235,7 @@ def networking_notices(staging):
     notice = staging / "rust.txt"
     subprocess.run(["cargo-about", "generate", "--locked", "--fail", "--target", target,
                     "--manifest-path", str(ROOT / "src/engine/net/iroh/Cargo.toml"),
-                    str(ROOT / "scripts/installer/rust-licenses.hbs"),
+                    str(ROOT / "scripts/release/installer/rust-licenses.hbs"),
                     "--output-file", str(notice)], env=environment, cwd=ROOT, check=True)
     if not notice.is_file() or notice.stat().st_size < 1000:
         raise ValueError("Missing networking dependency notices")
@@ -308,10 +310,10 @@ def build_release(args):
         freezer = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--noupx",
                    "--windowed", "--name", name, "--distpath", str(staging / "dist"),
                    "--workpath", str(staging / "work"), "--specpath", str(staging),
-                   "--paths", str(ROOT / "scripts"),
+                   "--paths", str(ROOT / "scripts/release"),
                    "--add-data", f"{payload}{os.pathsep}.",
-                   "--add-data", f"{ROOT / 'scripts/installer/strings.json'}{os.pathsep}installer",
-                   str(ROOT / "scripts/install_game.py")]
+                   "--add-data", f"{ROOT / 'scripts/release/installer/strings.json'}{os.pathsep}installer",
+                   str(ROOT / "scripts/release/install_game.py")]
         subprocess.run(freezer, cwd=ROOT, env=freezer_environment(), check=True)
         frozen = staging / "dist" / (name + (".exe" if devenv.WINDOWS else ""))
         check_frozen_installer(frozen, staging)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compare bounded native PlayScene observations from two independent processes.
 
-    python scripts/native_determinism.py --ticks 600 --render-every 0 1
-    python scripts/native_determinism.py --compare first.jsonl second.jsonl
+    python scripts/netplay/native_determinism.py --ticks 600 --render-every 0 1
+    python scripts/netplay/native_determinism.py --compare first.jsonl second.jsonl
 
 Runs are sequential, headless, and use the existing nativeprobe executable;
 this script never builds it. Reports and process logs are retained. Equal hashes
@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # the top-level helpers
 import devenv
 
 

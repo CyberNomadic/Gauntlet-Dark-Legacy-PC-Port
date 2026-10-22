@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Decide whether a push or pull request touches anything the build, tests or lint read.
 
-    python scripts/ci_changes.py --base <sha> --head <sha> [--output $GITHUB_OUTPUT]
+    python scripts/checks/ci_changes.py --base <sha> --head <sha> [--output $GITHUB_OUTPUT]
 
 Prints `code=true` when any changed path can affect the compiled game, its tests or its
 tooling, and `code=false` when every change is documentation (docs/, Markdown, licences),

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the top-level helpers
 import devenv
 from native_determinism import (IMPAIRMENT_DEFAULTS, MAX_TICKS, MAX_RENDER_EVERY, ReportError,
                                 compare_reports, validate_impairment)
