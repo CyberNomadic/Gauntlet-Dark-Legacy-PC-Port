@@ -682,7 +682,7 @@ if(GDL_ENABLE_NETPLAY)
         game/screens/NativeAgreementSceneTests.cpp
         game/netplay/NativeAgreementTests.cpp
         game/netplay/OnlineNativeBootstrapTests.cpp game/netplay/NativeOnlinePlayTests.cpp
-        game/app/NativeOnlineIdentityTests.cpp
+        game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp
         game/screens/SimulationObservationTests.cpp game/screens/PlaySceneSimulationCameraTests.cpp
         game/netplay/LockstepInputsTests.cpp game/netplay/LockstepInputs.cpp game/netplay/MatchLockstepTests.cpp
         game/screens/NativeRollbackLifecycleTests.cpp game/screens/NativePlaySetupTests.cpp
@@ -803,7 +803,7 @@ if(GDL_ENABLE_NETPLAY)
         game/netplay/NativeOnlinePlayTests.cpp game/netplay/OnlineRunTests.cpp
         game/netplay/NativeCampaignTransportTests.cpp
         game/netplay/OnlinePartyTests.cpp
-        game/app/NativeOnlineIdentityTests.cpp engine/assets/StringTableTests.cpp
+        game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp engine/assets/StringTableTests.cpp
         game/screens/SimulationObservationTests.cpp game/screens/PlaySceneSimulationCameraTests.cpp
         game/netplay/LockstepInputsTests.cpp game/netplay/LockstepInputs.cpp game/netplay/MatchLockstepTests.cpp
         game/netplay/MatchSessionTests.cpp game/netplay/ShopSyncTests.cpp game/players/ShopTests.cpp
@@ -839,7 +839,7 @@ target_sources(tests PRIVATE engine/io/Sha256Tests.cpp game/netplay/AssetDigestT
     game/screens/NativeAgreementSceneTests.cpp
     game/netplay/MatchLockstepTests.cpp game/netplay/NativeAgreementTests.cpp
     game/netplay/OnlineNativeBootstrapTests.cpp game/netplay/NativeOnlinePlayTests.cpp
-    game/app/NativeOnlineIdentityTests.cpp game/world/SpeechTimingTests.cpp)
+    game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp game/world/SpeechTimingTests.cpp)
 target_link_libraries(tests PRIVATE Vulkan::Headers volk::volk GPUOpen::VulkanMemoryAllocator)
 target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(tests PRIVATE

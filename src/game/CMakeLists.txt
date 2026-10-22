@@ -39,6 +39,7 @@ add_library(game STATIC
     screens/OnlineCompletion.cpp
     app/OnlineRun.cpp
     app/NativeOnlineIdentity.cpp
+    app/NumericWitness.cpp
     screens/PlaySceneSimulation.cpp
     screens/PlayerNativeState.cpp
     screens/PlayInput.h
