@@ -222,6 +222,7 @@ add_executable(tests
     engine/core/AssertTests.cpp
     engine/core/ClockTests.cpp
     engine/math/MathTests.cpp
+    engine/math/PortableMathTests.cpp
     engine/io/ByteReaderTests.cpp
     engine/io/FileTests.cpp
     engine/io/AssetLocatorTests.cpp

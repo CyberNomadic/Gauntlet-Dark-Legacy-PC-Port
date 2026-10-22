@@ -33,6 +33,8 @@ add_library(engine STATIC
     core/Clock.h
     core/Strings.h
     math/Math.h
+    math/PortableMath.h
+    math/PortableMath.cpp
     io/ByteReader.h
     io/File.h
     io/AssetLocator.h
