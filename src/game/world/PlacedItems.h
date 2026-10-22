@@ -103,7 +103,8 @@ public:
             s32 object = -1;
             Mat4 local{1.0f}; ///< pickup placement in the supporting object's space
             bool operator==(const Floor&) const = default;
-            template <class Digest> friend void visitNativeState(Digest& digest, const Floor& value) {
+            template <class Digest>
+            friend void visitNativeState(Digest& digest, const Floor& value) {
                 digest.template fields<2>(value);
             }
         };
@@ -182,7 +183,8 @@ private:
         bool capturePending = false;
         bool burstsAdvanced = false;
         bool operator==(const Simulation&) const = default;
-        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+        template <class Digest>
+        friend void visitNativeState(Digest& digest, const Simulation& value) {
             digest.template fields<8>(value);
         }
     };
@@ -357,6 +359,7 @@ private:
         const RenderDevice* device = nullptr;
         std::shared_ptr<TreeModel> model;
         TreeParticles birthParticles;
+        TreePose::Cycle cycle; ///< the frames its first sequence shows on a loop
     };
     std::vector<FigureBinding> m_figures;
     /** An archive's texture animations, shown on every item that came from it. */

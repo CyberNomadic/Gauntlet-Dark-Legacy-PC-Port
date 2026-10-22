@@ -171,6 +171,50 @@ NodePose TreePose::sample(const TrackInfo& track, f32 frame, bool smooth) {
     return to;
 }
 
+namespace {
+/** How far the pose closing a cycle may miss the pose opening it: an angle (a turn on), a
+ * position or a scale. */
+constexpr f32 kCycleClosure = 0.02f;
+
+bool closes(const NodePose& last, const NodePose& first) {
+    for (s32 i = 0; i < 3; ++i) {
+        if (std::abs(TreePose::wrapAngle(last.rotation[i] - first.rotation[i])) > kCycleClosure ||
+            std::abs(last.position[i] - first.position[i]) > kCycleClosure ||
+            std::abs(last.scale[i] - first.scale[i]) > kCycleClosure) {
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
+TreePose::Cycle TreePose::cycle(const TreeSequenceInfo& sequence) {
+    Cycle cycle{0, std::max(sequence.frames, 0)};
+    if (sequence.frames <= 1) {
+        return cycle;
+    }
+    const auto poseAt = [](const TrackInfo& track, s32 frame) {
+        return sample(track, static_cast<f32>(frame), true);
+    };
+    const auto holds = [&](s32 frame, s32 other) {
+        return std::ranges::all_of(sequence.tracks, [&](const TrackInfo& track) {
+            return poseAt(track, frame) == poseAt(track, other);
+        });
+    };
+    while (cycle.first + 1 < sequence.frames && holds(cycle.first, cycle.first + 1)) {
+        ++cycle.first;
+    }
+    cycle.count = sequence.frames - cycle.first;
+    const bool closed =
+        cycle.count > 1 && std::ranges::all_of(sequence.tracks, [&](const TrackInfo& track) {
+            return closes(poseAt(track, sequence.frames - 1), poseAt(track, cycle.first));
+        });
+    if (closed) {
+        --cycle.count;
+    }
+    return cycle;
+}
+
 Mat4 TreePose::localMatrix(const NodePose& pose, const Vec3& restPosition) {
     // The original builds its matrices with negated sines; kept as written so every joint
     // turns the way the data expects.

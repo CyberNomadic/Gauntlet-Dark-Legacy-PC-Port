@@ -8,10 +8,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/assets/AnimationSet.h"
 #include "engine/assets/ItemArchive.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/TreePose.h"
 #include "engine/world/WorldCollision.h"
 #include "engine/world/WorldLighting.h"
 
@@ -68,7 +70,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
     // The pickup's own blended pass identifies what waits for the fixtures: every part of
     // an alpha-textured mesh, fruit shadows sharing a mesh with their opaque food included.
     item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
-                    TreeModel::Pass::Blended);
+                     TreeModel::Pass::Blended);
     std::vector<const Texture*> blendedTextures;
     blendedTextures.reserve(device.draws.size());
     for (const auto& draw : device.draws) {
@@ -108,7 +110,7 @@ TEST_CASE("native pickup gas and fruit shadows composite over an already drawn c
         }
         device.draws.clear();
         item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1,
-                        TreeModel::Pass::Blended);
+                         TreeModel::Pass::Blended);
         REQUIRE_FALSE(device.draws.empty()); // fruit's flat ground shadow is still drawn
         for (const auto& draw : device.draws) {
             CHECK_FALSE(draw.state.usesSpriteSmoothing());
@@ -153,7 +155,7 @@ TEST_CASE("the sprite filtering scenario starts beside the native G2 Fire Breath
     world.placedItems().draw(device, Mat4{1}, {});
     device.draws.clear();
     breath->model->draw(device, Mat4{1}, breath->transform, {}, breath->pose.matrices(), nullptr, 1,
-                       TreeModel::Pass::Blended);
+                        TreeModel::Pass::Blended);
     REQUIRE_FALSE(device.draws.empty());
     CHECK(std::ranges::any_of(device.draws,
                               [](const auto& draw) { return draw.state.usesSpriteSmoothing(); }));
@@ -1289,6 +1291,62 @@ TEST_CASE("bottles use authored health and armor rather than the food blast thre
     CHECK(items.blast(device, Vec3{2, 0, 0}, 1, 100).empty());
     REQUIRE(items.place(device, "BOTTLE", Vec3{0}, nullptr));
     CHECK(items.item(1).health == 3); // dropped bottles also initialize health
+}
+
+TEST_CASE("a lying reflective shield spins round without a pause",
+          "[game][world][placed-items][pickup-spin][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
+    test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
+    WorldLayout layout;
+    REQUIRE(layout.load(root / "LEVELS/LEVELA1")); // the courtyard stocks the shield and hammer
+    ItemArchive powerups;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    test::FakeRenderDevice device;
+    PlacedItems items;
+    const std::array archives{&powerups};
+    REQUIRE(items.bind(device, layout, nullptr, archives));
+    items.setPlayerCount(0);
+    // Its tree keys its spin on node two: the first frame held a frame and the last a whole
+    // turn on, which would stand it still for three frames of every turn.
+    const auto* name = GENERATE("RF_SHLD_ICON", "HAMMER_ICON", "POT_BLU", "GEMBLUE");
+    CAPTURE(name);
+    REQUIRE(items.place(device, name, Vec3{10000, 0, 10000}, nullptr));
+    const PlacedItems::Item& item = items.item(items.size() - 1);
+    REQUIRE(item.figure != nullptr);
+    REQUIRE(item.player.playing());
+    const auto& sequence = item.figure->sequences[0];
+    const TreePose::Cycle cycle = TreePose::cycle(sequence);
+    CHECK(item.player.cycleFirst() == cycle.first);
+    CHECK(item.player.cycleCount() == cycle.count);
+    usize spinning = 0;
+    for (usize n = 0; n < item.figure->nodes.size(); ++n) {
+        const TrackInfo* track = sequence.track(n);
+        if (track != nullptr && track->has(1)) {
+            spinning = n;
+        }
+    }
+    std::vector<f32> yaws;
+    f32 lastFrame = -1.0f;
+    for (s32 tick = 0; tick < 240; ++tick) {
+        items.update(1.0f / 60);
+        if (item.player.frame() != lastFrame) {
+            lastFrame = item.player.frame();
+            yaws.push_back(item.pose.poses()[spinning].rotation.y);
+        }
+    }
+    // Every frame shown turns it on by about the same step; none holds it still.
+    REQUIRE(yaws.size() > 40);
+    f32 least = 10.0f;
+    f32 most = 0.0f;
+    for (usize i = 1; i < yaws.size(); ++i) {
+        const f32 step = std::abs(TreePose::wrapAngle(yaws[i] - yaws[i - 1]));
+        least = std::min(least, step);
+        most = std::max(most, step);
+    }
+    CAPTURE(least, most);
+    CHECK(least > 0.05f);
+    CHECK(most < 0.5f);
+    CHECK(most < least * 3.0f);
 }
 
 } // namespace

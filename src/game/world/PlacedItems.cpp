@@ -605,6 +605,7 @@ bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
             birthPose.rest(figure);
         } else {
             birthPose.evaluate(figure, 0, 0);
+            binding.cycle = TreePose::cycle(figure.sequences[0]);
         }
         binding.birthParticles.bind(figure, archive, device, Mat4{1}, birthPose.matrices());
         binding.birthParticles.setLocalScales(birthPose.poses());
@@ -617,9 +618,12 @@ bool PlacedItems::makeFigure(RenderDevice& device, Item& item) {
     if (figure.sequences.empty()) {
         item.pose.rest(figure);
     } else {
-        item.player.start(figure.sequences[0], 0);
-        item.pose.evaluate(figure, 0, 0.0f);
-        item.model->setFrame(0, 0);
+        // A pickup spins round and round: its loop shows the frames that make one turn,
+        // not a repeated opening or closing pose that would hold it still for a moment.
+        item.player.start(figure.sequences[0], 0, 0.0f, static_cast<f32>(found->cycle.first));
+        item.player.setCycle(found->cycle.first, found->cycle.count);
+        item.pose.evaluate(figure, 0, item.player.frame());
+        item.model->setFrame(0, static_cast<s32>(item.player.frame()));
     }
     // AtreeNodeInit also instantiates type-4 children. QUEST_PARCH's
     // POOLFIRE is part of the pickup tree, not its collection effect.

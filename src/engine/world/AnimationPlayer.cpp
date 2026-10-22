@@ -11,10 +11,10 @@ namespace gdl {
 
 void visitNativeState(NativeStateDigest& digest, const AnimationPlayer& state) {
     const auto& [sequence, index, generation, period, time, frame, speed, transitionLength,
-                 transitionTime, finished, held, smooth] = state;
+                 transitionTime, finished, held, smooth, cycleFirst, cycleCount] = state;
     digest.resource(sequence);
     digest.values(index, generation, period, time, frame, speed, transitionLength, transitionTime,
-                  finished, held, smooth);
+                  finished, held, smooth, cycleFirst, cycleCount);
 }
 namespace {
 constexpr f32 kTimeSlack = 0.000001f;
@@ -81,6 +81,8 @@ void AnimationPlayer::start(const TreeSequenceInfo& sequence, u32 index, f32 tra
     m_transitionTime = std::clamp(transitionElapsedSeconds, 0.0f, m_transitionLength);
     m_finished = false;
     m_held = false;
+    m_cycleFirst = 0;
+    m_cycleCount = 0;
 }
 
 void AnimationPlayer::stop() {
@@ -93,6 +95,30 @@ void AnimationPlayer::stop() {
     m_transitionTime = 0.0f;
     m_finished = false;
     m_held = false;
+    m_cycleFirst = 0;
+    m_cycleCount = 0;
+}
+
+void AnimationPlayer::setCycle(s32 first, s32 count) {
+    const s32 frames = frameCount();
+    if (frames <= 0 || first < 0 || first >= frames || count < 1) {
+        m_cycleFirst = 0;
+        m_cycleCount = 0;
+        return;
+    }
+    m_cycleFirst = first;
+    m_cycleCount = std::min(count, frames - first);
+    const auto begin = static_cast<f32>(first);
+    const auto last = static_cast<f32>(first + m_cycleCount - 1);
+    if (m_frame < begin || m_frame > last) {
+        m_frame = begin;
+        m_time = static_cast<f64>(begin) * m_secondsPerFrame;
+    }
+}
+
+s32 AnimationPlayer::cycleCount() const {
+    const s32 frames = frameCount();
+    return m_cycleCount > 0 ? std::min(m_cycleCount, frames - m_cycleFirst) : frames;
 }
 
 f32 AnimationPlayer::presentationFrame() const {
@@ -102,8 +128,8 @@ f32 AnimationPlayer::presentationFrame() const {
     if (m_held) {
         return m_frame;
     }
-    return static_cast<f32>(
-        std::clamp(m_time / m_secondsPerFrame, 0.0, static_cast<f64>(m_sequence->frames - 1)));
+    return static_cast<f32>(std::clamp(m_time / m_secondsPerFrame, static_cast<f64>(m_cycleFirst),
+                                       static_cast<f64>(m_cycleFirst + cycleCount() - 1)));
 }
 
 f32 AnimationPlayer::transition() const {
@@ -139,13 +165,17 @@ bool AnimationPlayer::advance(f32 seconds, bool repeat) {
     }
     m_finished = false;
     m_time += seconds;
+    // The cycle: the whole sequence unless the owner narrowed it.
+    const s32 first = m_cycleFirst;
+    const s32 shown = cycleCount();
     if (repeat) {
         // Each authored frame owns one complete frame interval, including the last.
         // Rounding the displayed pose must not shorten that interval or discard time.
-        const f64 duration = static_cast<f64>(m_sequence->frames) * m_secondsPerFrame;
-        if (m_time + kTimeSlack >= duration) {
+        const f64 begin = static_cast<f64>(first) * m_secondsPerFrame;
+        const f64 end = static_cast<f64>(first + shown) * m_secondsPerFrame;
+        if (m_time + kTimeSlack >= end) {
             ++m_generation;
-            m_time = m_time < duration ? 0.0f : std::fmod(m_time, duration);
+            m_time = begin + (m_time < end ? 0.0 : std::fmod(m_time - begin, end - begin));
             m_finished = true;
         }
     }
@@ -154,14 +184,14 @@ bool AnimationPlayer::advance(f32 seconds, bool repeat) {
     if (!m_smooth || std::abs(t - whole) < kSnapWindow || m_secondsPerFrame < kTick) {
         t = whole;
     }
-    const auto last = static_cast<f32>(m_sequence->frames - 1);
+    const auto last = static_cast<f32>(repeat ? first + shown - 1 : m_sequence->frames - 1);
     if (!repeat && t >= last + 0.5f) {
         m_finished = true;
         m_frame = last;
         m_held = true;
         return true;
     }
-    m_frame = std::clamp(t, 0.0f, last);
+    m_frame = std::clamp(t, static_cast<f32>(repeat ? first : 0), last);
     return m_finished;
 }
 

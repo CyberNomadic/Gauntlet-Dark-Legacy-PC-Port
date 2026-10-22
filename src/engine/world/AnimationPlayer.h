@@ -80,6 +80,13 @@ public:
     /** How far the transition into this sequence has come, 1 once it is over. */
     f32 transition() const;
 
+    /** The frames a repeating sequence cycles through: `count` of them from `first`, the
+     * rest never shown; a frame outside them moves to the first. A new start plays the
+     * whole sequence again. */
+    void setCycle(s32 first, s32 count);
+    s32 cycleFirst() const { return m_cycleFirst; }
+    /** How many frames the cycle shows: the sequence's own when none was set. */
+    s32 cycleCount() const;
     /** Lets frames fall between whole numbers when a sequence is slower than the clock. */
     void setSmooth(bool smooth) { m_smooth = smooth; }
     /** Scales playback: 2 plays twice as fast. */
@@ -100,6 +107,8 @@ private:
     bool m_finished = false;
     bool m_held = false; ///< a one-shot that has ended
     bool m_smooth = false;
+    s32 m_cycleFirst = 0;
+    s32 m_cycleCount = 0; ///< 0: the whole sequence
 };
 
 } // namespace gdl

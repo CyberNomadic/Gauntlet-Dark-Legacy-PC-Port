@@ -1,5 +1,6 @@
 
 #include <limits>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -26,7 +27,8 @@ TreeSequenceInfo sequence(s32 frames, s32 rate) {
 TEST_CASE("native animation comparison preserves hidden clocks and resource binding",
           "[animation][local-rewind]") {
     const auto source = sequence(7, 24);
-    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare unequal
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare
+    // unequal
     const auto otherSource = source;
     AnimationPlayer player;
     player.start(source, 0);
@@ -330,6 +332,60 @@ TEST_CASE("fractional presentation samples never advance rounded gameplay frames
     REQUIRE(player.presentationFrame() == 11.0f);
     player.stop();
     REQUIRE(player.presentationFrame() == 0.0f);
+}
+
+TEST_CASE("a cycle shows only its frames, wraps among them and ends with a new start",
+          "[world][animation][cycle]") {
+    const TreeSequenceInfo spin = sequence(31, 30);
+    AnimationPlayer player;
+    player.start(spin, 0, 0.0f, 1.0f);
+    player.setCycle(1, 29);
+    REQUIRE(player.cycleFirst() == 1);
+    REQUIRE(player.cycleCount() == 29);
+    REQUIRE(player.frame() == 1.0f);
+    std::vector<f32> shown;
+    u64 wraps = 0;
+    for (s32 tick = 0; tick < 62; ++tick) {
+        const u64 generation = player.generation();
+        player.advance(1.0f / 60.0f, true);
+        wraps += player.generation() != generation ? 1 : 0;
+        if (shown.empty() || shown.back() != player.frame()) {
+            shown.push_back(player.frame());
+        }
+    }
+    // Frames 1 to 29 and round again: neither the opening frame nor the thirty-first.
+    REQUIRE(wraps == 1);
+    REQUIRE(shown.size() > 30);
+    for (usize i = 0; i < shown.size(); ++i) {
+        CAPTURE(i);
+        CHECK(shown[i] >= 1.0f);
+        CHECK(shown[i] <= 29.0f);
+        if (i > 0) {
+            CHECK((shown[i] == shown[i - 1] + 1.0f || (shown[i - 1] == 29.0f && shown[i] == 1.0f)));
+        }
+    }
+    CHECK(player.presentationFrame() >= 1.0f);
+    CHECK(player.presentationFrame() <= 29.0f);
+    // A frame outside the cycle moves to its first; a bad cycle is the whole sequence.
+    player.start(spin, 0);
+    player.setCycle(5, 10);
+    CHECK(player.frame() == 5.0f);
+    player.setCycle(40, 3);
+    CHECK(player.cycleFirst() == 0);
+    CHECK(player.cycleCount() == 31);
+    player.setCycle(20, 100);
+    CHECK(player.cycleCount() == 11);
+    // A new start plays the whole sequence again.
+    player.start(spin, 0);
+    CHECK(player.cycleFirst() == 0);
+    CHECK(player.cycleCount() == 31);
+    player.advance(30.0f / 30.0f, true);
+    CHECK(player.frame() == 30.0f);
+    // The cycle is value state, so a copy of the player keeps it.
+    player.setCycle(1, 29);
+    const AnimationPlayer copy = player;
+    CHECK(copy.cycleFirst() == 1);
+    CHECK(copy == player);
 }
 
 } // namespace

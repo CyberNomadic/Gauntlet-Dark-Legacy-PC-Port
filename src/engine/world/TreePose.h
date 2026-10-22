@@ -93,6 +93,16 @@ public:
 
     /** The pose a track gives at `frame`, past its last key holding that key. */
     static NodePose sample(const TrackInfo& track, f32 frame, bool smooth = false);
+    /** The frames a repeating sequence shows as one cycle: `count` of them from `first`.
+     * Opening frames that only hold the pose of the next are left out, as is a last frame
+     * that repeats the first (a whole turn on, for a rotation), so a spin comes round
+     * without a pause. */
+    struct Cycle {
+        s32 first = 0;
+        s32 count = 0;
+        bool operator==(const Cycle&) const = default;
+    };
+    static Cycle cycle(const TreeSequenceInfo& sequence);
     /** The rotation, translation (rest position plus the pose's) and scale as one matrix. */
     static Mat4 localMatrix(const NodePose& pose, const Vec3& restPosition);
     /** An angle wrapped into (-pi, pi]. */

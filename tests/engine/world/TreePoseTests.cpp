@@ -1,4 +1,5 @@
 #include <cmath>
+#include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -54,7 +55,8 @@ bool near(const Vec3& a, const Vec3& b) {
 TEST_CASE("native pose equality checks transforms and their loaded hierarchy",
           "[pose][local-rewind]") {
     const auto tree = sampleTree();
-    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare unequal
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare
+    // unequal
     const auto otherTree = tree;
     TreePose pose;
     pose.evaluate(tree, 0, 2);
@@ -325,6 +327,47 @@ TEST_CASE("the angles read off a node's rotation are those of the yaw-pitch-roll
     pitched.pitchYawRoll = true;
     REQUIRE(
         near(TreePose::readAngles(TreePose::localMatrix(pitched, Vec3{0.0f})), pitched.rotation));
+}
+
+TEST_CASE("a sequence's cycle leaves out an opening hold and a closing repeat of its first frame",
+          "[world][pose][cycle]") {
+    // The reflective shield's spin: thirty-one frames keyed on one yaw, the first held for a
+    // frame and the last a whole turn on from it, so the turn runs over twenty-nine frames.
+    TreeSequenceInfo closed;
+    closed.frames = 31;
+    closed.frameRate = 30;
+    std::vector<u16> frames;
+    std::vector<f32> yaw;
+    for (u16 f = 0; f <= 30; ++f) {
+        frames.push_back(f);
+        yaw.push_back(f == 0 ? 0.0f : static_cast<f32>(f - 1) * (6.2904f / 29.0f));
+    }
+    closed.tracks.push_back(track(2, 1, frames, yaw));
+    CHECK(TreePose::cycle(closed) == TreePose::Cycle{1, 29});
+    // A potion's spin: thirty frames, the last a step short of the turn, all shown.
+    TreeSequenceInfo open;
+    open.frames = 30;
+    open.frameRate = 30;
+    std::vector<u16> openFrames;
+    std::vector<f32> openYaw;
+    for (u16 f = 0; f < 30; ++f) {
+        openFrames.push_back(f);
+        openYaw.push_back(-static_cast<f32>(f) * (6.2832f / 30.0f));
+    }
+    open.tracks.push_back(track(2, 1, openFrames, openYaw));
+    CHECK(TreePose::cycle(open) == TreePose::Cycle{0, 30});
+    // A closing frame that also changes scale does not repeat the first.
+    TreeSequenceInfo scaled = closed;
+    scaled.tracks.push_back(track(0, 6, {0, 1, 30}, {1.0f, 1.0f, 0.5f}));
+    CHECK(TreePose::cycle(scaled) == TreePose::Cycle{1, 30});
+    // A still figure cycles its one pose; a single frame is its own cycle.
+    TreeSequenceInfo still;
+    still.frames = 4;
+    still.tracks.push_back(track(0, 1, {0, 3}, {0.5f, 0.5f}));
+    CHECK(TreePose::cycle(still) == TreePose::Cycle{3, 1});
+    TreeSequenceInfo one;
+    one.frames = 1;
+    CHECK(TreePose::cycle(one) == TreePose::Cycle{0, 1});
 }
 
 } // namespace
