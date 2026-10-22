@@ -196,9 +196,12 @@ TEST_CASE("self hosted admission starts existing online gameplay without a room 
         REQUIRE(pair.guestInputs.complete());
         CHECK(pair.host.match().nativeConfirmed() == 1);
         CHECK(pair.guest.match().nativeConfirmed() == 1);
+        // A guest leaving mid-match is dropped; the host plays on alone.
         pair.guest.leave();
         pair.pump();
-        REQUIRE(pair.host.phase() == OnlineSession::Phase::Failed);
+        CHECK(pair.host.phase() == OnlineSession::Phase::Active);
+        CHECK(pair.host.match().phase() == MatchSession::Phase::Running);
+        CHECK(pair.host.match().dropped(2));
     }
 }
 TEST_CASE("hosted room admission rejects mismatched builds assets and full parties",

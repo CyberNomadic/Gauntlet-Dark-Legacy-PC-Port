@@ -839,6 +839,32 @@ TEST_CASE("a started member's departure reported by the room drops it as its los
     CHECK(pair.hostSession.phase() == Phase::Active);
 }
 
+TEST_CASE("a guest that leaves on its own is dropped, its link closing afterwards changing nothing",
+          "[netplay][online-session][drop]") {
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    REQUIRE(pair.hostInputs.advance());
+    REQUIRE(pair.hostInputs.complete());
+    // The guest's Stop reaches the host over the still-open link.
+    pair.guestSession.leave();
+    pair.hostSession.update(0);
+    CHECK(pair.hostSession.failure() == Failure::None);
+    CHECK(pair.hostSession.phase() == Phase::Active);
+    REQUIRE(pair.host.phase() == MatchSession::Phase::Running);
+    CHECK(pair.host.dropped(2));
+    // Then the link goes, as the leaving guest closes it.
+    pair.hostWire.events.push_back({EventType::Disconnected, 1, {}, {}});
+    pair.hostSession.update(0);
+    CHECK(pair.hostSession.failure() == Failure::None);
+    CHECK(pair.hostSession.phase() == Phase::Active);
+    CHECK(pair.host.phase() == MatchSession::Phase::Running);
+    const auto drops = pair.host.takeDrops();
+    REQUIRE(drops.size() == 1);
+    CHECK(drops.front().peer == 2);
+    CHECK(pair.hostSession.flush());
+}
+
 TEST_CASE("online state fails closed after a started room changes or its service fails",
           "[netplay][online-session]") {
     Client host;

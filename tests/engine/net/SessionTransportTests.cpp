@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <source_location>
 #include <thread>
 
 #include <catch2/catch_test_macros.hpp>
@@ -14,9 +15,12 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
-template <class Predicate, class Step> void until(Predicate done, Step step) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+template <class Predicate, class Step>
+void until(Predicate done, Step step, std::chrono::seconds patience = std::chrono::seconds(10),
+           std::source_location where = std::source_location::current()) {
+    const auto deadline = std::chrono::steady_clock::now() + patience;
     while (!done()) {
+        INFO("waiting since line " << where.line());
         REQUIRE(std::chrono::steady_clock::now() < deadline);
         step();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -187,13 +191,16 @@ TEST_CASE(
     exchangeFrames(sessions, inputs, pump);
     CHECK(host.match().phase() == MatchSession::Phase::Running);
     CHECK(guest.match().phase() == MatchSession::Phase::Running);
-    // A guest that leaves mid-match is dropped; the host and its match carry on.
+    // A guest that leaves mid-match is dropped; the host and its match carry on. Its
+    // Stop may be lost with its connection, in which case the drop waits on the
+    // transport noticing the closed link.
     guest.leave();
     until([&] { return host.match().dropped(2); },
           [&] {
               host.update(0.002);
               guest.update(0.002);
-          });
+          },
+          std::chrono::seconds(45));
     CHECK(host.phase() == OnlineSession::Phase::Active);
     CHECK(host.match().phase() == MatchSession::Phase::Running);
 }

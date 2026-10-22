@@ -248,6 +248,7 @@ private:
     u8 m_local = 0;
     MatchOwners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};
+    std::array<PacketTransport::Connection, 5> m_droppedLinks{}; ///< what a drop took down
     std::array<PacketTransport::Connection, 5> m_direct{};
     std::array<bool, 5> m_loaded{};
     u8 m_movieSkipVotes = 0;

@@ -834,6 +834,7 @@ bool MatchSession::drop(u8 peer) {
         return false;
     }
     applyDrop(drop);
+    m_droppedLinks[peer] = m_links[peer];
     m_links[peer] = 0;
     if (m_phase == Phase::Loading) {
         tryCommit();
@@ -872,7 +873,10 @@ std::vector<u8> MatchSession::quietPeers() const {
 bool MatchSession::disconnected(PacketTransport::Connection connection) {
     const auto peer = peerOf(connection);
     if (peer == 0) {
-        return false;
+        // A dropped guest's link closing after the drop, as it does when the guest left
+        // on its own and its Stop arrived first, is nothing new.
+        return connection != 0 &&
+               std::ranges::find(m_droppedLinks, connection) != m_droppedLinks.end();
     }
     if (m_dropped[peer].peer != 0 || (host() && peer != 1 && drop(peer))) {
         m_links[peer] = 0;

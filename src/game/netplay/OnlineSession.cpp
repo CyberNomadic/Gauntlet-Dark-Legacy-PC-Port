@@ -557,6 +557,7 @@ void OnlineSession::fail(Failure reason) {
         case Failure::Match: m_failureDetail = "The online game stopped."; break;
         }
     }
+    log::warn("Online session failed: {}", m_failureDetail);
     m_match.leave();
     m_match.flush(m_transport);
     closeLinks();
