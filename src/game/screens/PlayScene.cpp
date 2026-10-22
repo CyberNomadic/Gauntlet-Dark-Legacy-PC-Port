@@ -1543,6 +1543,11 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
                               m_opponents.bosses().legend().darkens() ? m_world->fullLighting()
                                                                       : m_world->lighting(),
                               m_bossSequence.frozenTexture(), opponentBlend);
+    // A generator is an item: its alpha-textured body (the vermin's skull pile, the war
+    // dogs' tent) composites by its texture's alpha after the solids, as the sorted
+    // pickups do, and before the veils that hang over it.
+    m_opponents.generators().draw(device, clip, m_world->lighting(), opponentBlend,
+                                  TreeModel::Pass::Blended);
     if (config.display.ambientOcclusion) {
         AmbientOcclusion occlusion;
         occlusion.clipToView = camera.view() * glm::inverse(clip);
@@ -1552,10 +1557,6 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // authored materials write depth. Otherwise a nearer cloud rejects the shadow.
     drawShadows(device, clip, camera.position, frameBlend, opponentBlend);
     m_world->drawDeferred(device, clip, camera, effectBlend);
-    // A generator is an item: its alpha-textured body (the vermin's skull pile) composites
-    // by its texture's alpha after the solids, as the sorted pickups do.
-    m_opponents.generators().draw(device, clip, m_world->lighting(), opponentBlend,
-                                  TreeModel::Pass::Blended);
     // GHO's native 0xC01880 sorts its additive, non-depth-writing body after scenery.
     // A fence blended over it instead makes even a nearer ghost appear behind the fence.
     m_opponents.enemies().draw(device, clip, m_world->lighting(), m_figures.hitFlash(), &m_weapons,

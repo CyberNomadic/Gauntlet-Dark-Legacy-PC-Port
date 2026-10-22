@@ -33,6 +33,9 @@ class NativeStateDigest;
  * compare (the Armory's weapon-rack overlay) is tested after all, lifted a little toward
  * the eye so it still lies over the face it was cut from, because the original paints it
  * through the walls in front of it; the camera-facing glows flagged so keep their word.
+ * Nor is the order: a solid wearing a translucent texture (the Trenches' haze) is a veil,
+ * drawn after the figures that stand under it so it blends over them, where the original,
+ * drawing its world before its items, cut them off behind the haze.
  */
 class WorldScene {
 public:
@@ -124,6 +127,10 @@ public:
     void drawOpaque(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
                     f32 presentationAlpha = -1.0f,
                     std::optional<f32> textureFrameOffset = {}) const;
+    /** The veils: solids wearing a translucent texture, drawn with the solids' depth rules
+     * once the figures standing under them have drawn, so they blend over those figures. */
+    void drawVeils(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
+                   f32 presentationAlpha = -1.0f, std::optional<f32> textureFrameOffset = {}) const;
     void drawDeferred(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
                       f32 presentationAlpha = -1.0f,
                       std::optional<f32> textureFrameOffset = {}) const;
@@ -149,7 +156,8 @@ private:
         Vec2 scrollPhase{0.0f};
         Vec2 scrollVelocity{0.0f};
         bool operator==(const SlotMotion&) const = default;
-        template <class Digest> friend void visitNativeState(Digest& digest, const SlotMotion& value) {
+        template <class Digest>
+        friend void visitNativeState(Digest& digest, const SlotMotion& value) {
             const auto& [frame, cycle, cyclePosition, cycleSpeed, offset, scrollPhase,
                          scrollVelocity] = value;
             digest.resource(frame);
@@ -180,6 +188,7 @@ private:
         bool additive = false;
         bool depthWrite = true;
         bool depthTest = true;
+        bool veil = false; ///< wears a translucent texture: drawn after the figures
     };
     struct UnitPart {
         u32 slot = 0;
@@ -193,7 +202,8 @@ private:
         f32 alpha = 1.0f;
         bool visible = true;
         bool operator==(const UnitState&) const = default;
-        template <class Digest> friend void visitNativeState(Digest& digest, const UnitState& value) {
+        template <class Digest>
+        friend void visitNativeState(Digest& digest, const UnitState& value) {
             digest.template fields<2>(value);
         }
     };
@@ -212,6 +222,7 @@ private:
         bool depthWrite = true;
         bool depthTest = true;
         bool lifted = false; ///< authored without a depth compare: tested, moved toward the eye
+        bool veil = false;   ///< a solid wearing a translucent texture: drawn after the figures
 
         /** Drawn after the solids, farthest first, as the original's MBSetupObject decides. */
         bool deferred() const { return sorted && (alpha < 1.0f || deferAlways || meshAlpha); }
@@ -221,7 +232,8 @@ private:
         Mat4 previous{1.0f};
         u32 continuity = 1;
         bool operator==(const PlacementState&) const = default;
-        template <class Digest> friend void visitNativeState(Digest& digest, const PlacementState& value) {
+        template <class Digest>
+        friend void visitNativeState(Digest& digest, const PlacementState& value) {
             digest.template fields<3>(value);
         }
     };

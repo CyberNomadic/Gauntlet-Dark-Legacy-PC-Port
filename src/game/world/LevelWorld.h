@@ -61,7 +61,8 @@ class LevelWorld {
         WorldLighting litNow;
         f32 ambientOffset = 0;
         bool operator==(const Simulation&) const = default;
-        template <class Digest> friend void visitNativeState(Digest& digest, const Simulation& value) {
+        template <class Digest>
+        friend void visitNativeState(Digest& digest, const Simulation& value) {
             digest.template fields<9>(value);
         }
     };
@@ -319,13 +320,18 @@ public:
         m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::Opaque,
                            presentationAlpha);
     }
+    /** The pickups' alpha-textured bodies composite over the solids first; the veils
+     * (the Trenches' haze) then blend over everything standing under them; the sorted
+     * objects and the particles follow. */
     void drawDeferred(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
                       f32 presentationAlpha = -1.0f) const {
         const CameraFrame frame = CameraFrame::of(camera);
-        m_scene.drawDeferred(device, clip, frame, presentationAlpha,
-                             presentedTextureFrameOffset(presentationAlpha));
         m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::Blended,
                            presentationAlpha);
+        m_scene.drawVeils(device, clip, frame, presentationAlpha,
+                          presentedTextureFrameOffset(presentationAlpha));
+        m_scene.drawDeferred(device, clip, frame, presentationAlpha,
+                             presentedTextureFrameOffset(presentationAlpha));
         m_sim.particles.draw(device, clip, frame.right, frame.up,
                              m_sim.particlesAdvanced ? presentationAlpha : -1.0f);
     }

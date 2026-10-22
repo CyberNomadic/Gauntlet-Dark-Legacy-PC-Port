@@ -24,6 +24,7 @@ constexpr u32 kLightmapShift = 20U;
 constexpr u64 kAdditiveKey = u64{1} << 40U;
 constexpr u64 kNoDepthKey = u64{1} << 41U;
 constexpr u64 kNoDepthTestKey = u64{1} << 42U;
+constexpr u64 kVeilKey = u64{1} << 43U;
 
 /** Local TRS interpolation preserves a child's arc about its moving parent. */
 Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 alpha) {
@@ -163,11 +164,16 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
     // Still geometry is keyed by texture and lightmap, the glows and the objects that keep
     // depth unwritten apart from the rest.
     std::unordered_map<u64, usize> batchByKey;
+    // A veil is a solid seen through: its texture blends by its alpha instead of cutting
+    // out, so it is drawn after the figures standing under it (the Trenches' haze).
+    const auto veilOf = [&](u32 slot, bool additive) {
+        return !additive && slot < textures.size() && textures.entry(slot).translucent();
+    };
     const auto batchFor = [&](u32 slot, u32 lightmap, bool additive, bool depthWrite,
-                              bool depthTest) -> Batch& {
+                              bool depthTest, bool veil) -> Batch& {
         const u64 key = u64{slot} | (u64{lightmap} << kLightmapShift) |
                         (additive ? kAdditiveKey : 0) | (depthWrite ? 0 : kNoDepthKey) |
-                        (depthTest ? 0 : kNoDepthTestKey);
+                        (depthTest ? 0 : kNoDepthTestKey) | (veil ? kVeilKey : 0);
         if (const auto found = batchByKey.find(key); found != batchByKey.end()) {
             return m_batches[found->second];
         }
@@ -182,6 +188,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         batch.additive = additive;
         batch.depthWrite = depthWrite;
         batch.depthTest = depthTest;
+        batch.veil = veil;
         batch.geometry.begin(PrimitiveTopology::TriangleList);
         m_batches.push_back(std::move(batch));
         batchByKey[key] = m_batches.size() - 1;
@@ -258,10 +265,11 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                                  1.0f / static_cast<f32>(std::max(map.height, 1U))};
                     }
                     unitPart.additive = additive;
+                    placedUnit.veil = placedUnit.veil || veilOf(part.texture, additive);
                     placedUnit.parts.push_back(unitPart);
                 } else {
-                    Batch& batch =
-                        batchFor(part.texture, part.lightmap, additive, depthWrite, depthTest);
+                    Batch& batch = batchFor(part.texture, part.lightmap, additive, depthWrite,
+                                            depthTest, veilOf(part.texture, additive));
                     for (const u32 index : part.indices) {
                         const MeshVertex& v = mesh->vertices[index];
                         const Vec3 at = v.position + offset;
@@ -371,7 +379,7 @@ const CanonicalDigestSink::Digest& WorldScene::rosterDigest() const {
     for (const auto& unit : m_units) {
         digest.values(unit.object, unit.sortBias, unit.facing, unit.prelit, unit.chrome,
                       unit.sorted, unit.deferAlways, unit.meshAlpha, unit.background,
-                      unit.depthWrite, unit.depthTest, unit.lifted);
+                      unit.depthWrite, unit.depthTest, unit.lifted, unit.veil);
     }
     m_rosterDigest = digest.finish();
     return *m_rosterDigest;
@@ -937,6 +945,7 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
 void WorldScene::draw(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
                       f32 presentationAlpha, std::optional<f32> textureFrameOffset) const {
     drawOpaque(device, clip, camera, presentationAlpha, textureFrameOffset);
+    drawVeils(device, clip, camera, presentationAlpha, textureFrameOffset);
     drawDeferred(device, clip, camera, presentationAlpha, textureFrameOffset);
 }
 
@@ -954,12 +963,33 @@ void WorldScene::drawOpaque(RenderDevice& device, const Mat4& clip, const Camera
     }
     usize next = 0;
     while (next < m_batches.size() && !m_batches[next].additive) {
-        drawBatch(device, m_batches[next++], clip, textureFrameOffset);
+        if (!m_batches[next].veil) {
+            drawBatch(device, m_batches[next], clip, textureFrameOffset);
+        }
+        ++next;
     }
     // Whatever the original draws at once joins the solids, cutouts included; only the
-    // units it defers wait, and the glows add themselves after everything.
+    // units it defers wait, the veils for the figures, and the glows add themselves after
+    // everything.
     for (const Unit& unit : m_units) {
-        if (!unit.background && !unit.deferred()) {
+        if (!unit.background && !unit.deferred() && !unit.veil) {
+            drawUnit(device, unit, clip, camera, true, false, presentationAlpha,
+                     textureFrameOffset);
+        }
+    }
+}
+
+void WorldScene::drawVeils(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
+                           f32 presentationAlpha, std::optional<f32> textureFrameOffset) const {
+    usize next = 0;
+    while (next < m_batches.size() && !m_batches[next].additive) {
+        if (m_batches[next].veil) {
+            drawBatch(device, m_batches[next], clip, textureFrameOffset);
+        }
+        ++next;
+    }
+    for (const Unit& unit : m_units) {
+        if (!unit.background && !unit.deferred() && unit.veil) {
             drawUnit(device, unit, clip, camera, true, false, presentationAlpha,
                      textureFrameOffset);
         }
