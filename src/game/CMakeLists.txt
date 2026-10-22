@@ -375,6 +375,19 @@ add_library(game STATIC
 
 add_library(gdl::game ALIAS game)
 
+# The online compatibility identity digests the sources rather than the executable. The
+# digest is taken on every build; the unit is rewritten only when it changes.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(GDL_SOURCE_IDENTITY_UNIT "${CMAKE_BINARY_DIR}/generated/game/app/SourceIdentity.cpp")
+add_custom_target(source_identity
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/source_identity.py"
+        --root "${CMAKE_SOURCE_DIR}" --write "${GDL_SOURCE_IDENTITY_UNIT}"
+    BYPRODUCTS "${GDL_SOURCE_IDENTITY_UNIT}"
+    COMMENT "Digesting the game sources"
+    VERBATIM)
+target_sources(game PRIVATE "${GDL_SOURCE_IDENTITY_UNIT}" app/SourceIdentity.h)
+add_dependencies(game source_identity)
+
 find_package(nlohmann_json CONFIG REQUIRED)
 
 target_link_libraries(game PUBLIC gdl::engine PRIVATE gdl::formats nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
