@@ -289,12 +289,14 @@ TEST_CASE("fixture native digests include hidden contact clocks supports and cho
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
         const_cast<Chests::Chest&>(f.chests.chest(0)) = chest;
     });
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
-    changed(f.barrels,
-            [&] { const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).breakingSeconds = 0.02f; });
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
-    changed(f.barrels,
-            [&] { const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).collisionOffset.z = 0.5f; });
+    changed(f.barrels, [&] {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).breakingSeconds = 0.02f;
+    });
+    changed(f.barrels, [&] {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        const_cast<Breakables::Barrel&>(f.barrels.barrel(0)).collisionOffset.z = 0.5f;
+    });
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
     changed(f.gates, [&] { const_cast<LockedGates::Gate&>(f.gates.gate(0)).openingTicks = 1; });
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture

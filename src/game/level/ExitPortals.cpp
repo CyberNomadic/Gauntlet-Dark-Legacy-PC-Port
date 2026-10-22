@@ -225,8 +225,8 @@ bool ExitPortals::bind(RenderDevice& device, const WorldLayout& layout, const As
     ItemArchive* art = scope.archiveForTree(kFigure);
     const auto tree = art != nullptr ? art->trees.find(kFigure) : std::nullopt;
     if (tree.has_value()) {
-        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the
-        // index it guards is set
+        // the pointer is bound whenever the index it guards is set
+        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
         m_tree = &art->trees.tree(*tree);
         for (usize i = 0; i < kSequences.size(); ++i) {
             const auto sequence = m_tree->findSequence(kSequences[i]);

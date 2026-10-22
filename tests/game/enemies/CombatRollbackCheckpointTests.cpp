@@ -310,15 +310,15 @@ TEST_CASE("combat prepared values are single use owner bound and invalidate sibl
 
     alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage{};
     auto* temporary = std::construct_at(
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         reinterpret_cast<Boundary*>(storage.data()), fixture.ordered, fixture.health,
         fixture.levels, fixture.attacks, fixture.arsenal, fixture.effects, Boundary::Resources{});
     auto old = temporary->prepareRestore(baseline);
     REQUIRE(old);
     std::destroy_at(temporary);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     temporary = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                                   fixture.health, fixture.levels, fixture.attacks, fixture.arsenal,
                                   fixture.effects, Boundary::Resources{});
@@ -436,16 +436,16 @@ TEST_CASE("combat rewind retains owner resource and sibling invalidation checks"
     CHECK(fixture.state() == current);
 
     alignas(Boundary) std::array<std::byte, sizeof(Boundary)> storage{};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     auto* owner = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                                     fixture.health, fixture.levels, fixture.attacks,
                                     fixture.arsenal, fixture.effects, Boundary::Resources{});
     auto stale = owner->prepareRewind();
     REQUIRE(stale);
     std::destroy_at(owner);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     owner = std::construct_at(reinterpret_cast<Boundary*>(storage.data()), fixture.ordered,
                               fixture.health, fixture.levels, fixture.attacks, fixture.arsenal,
                               fixture.effects, Boundary::Resources{});

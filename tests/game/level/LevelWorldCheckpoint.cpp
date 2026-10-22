@@ -208,8 +208,8 @@ LevelWorldCheckpoint::checkpoint(CaptureTimings* timings) const {
     return capture(nullptr, timings);
 }
 std::optional<LevelWorldCheckpoint::State>
-// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the state's storage is reused
-// in place
+// the state's storage is reused in place
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 LevelWorldCheckpoint::checkpoint(State&& reusable, CaptureTimings* timings) const {
     return capture(&reusable, timings);
 }

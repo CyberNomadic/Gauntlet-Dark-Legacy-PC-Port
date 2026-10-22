@@ -61,8 +61,8 @@ std::vector<u8> pack(const std::vector<u8>& bytes, bool planar = false) {
     // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
     const s32 written =
         LZ4_compress_default(reinterpret_cast<const char*>(payload.data()),
-                             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the
-                             // end pointer of a contiguous buffer
+                             // the end pointer of a contiguous buffer
+                             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
                              reinterpret_cast<char*>(result.data() + Packet::kHeaderBytes), size,
                              static_cast<s32>(result.size() - Packet::kHeaderBytes));
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)

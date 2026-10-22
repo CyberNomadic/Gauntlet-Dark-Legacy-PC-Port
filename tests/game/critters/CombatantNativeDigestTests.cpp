@@ -321,14 +321,14 @@ TEST_CASE("combatant native digest refuses missing bindings foreign owners and s
 TEST_CASE("combatant native saved digest rejects a destroyed owner at the same address",
           "[native-state-digest][combatant-native-digest]") {
     alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage{};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     auto* actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     Combatant::LocalSnapshot saved;
     REQUIRE(actor->saveLocal(saved));
     std::destroy_at(actor);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     NativeStateDigest stale;
     CHECK_FALSE(actor->appendLocalDigest(stale, saved));

@@ -363,8 +363,8 @@ bool PlayerRuntimeCheckpoint::canCommit(const Prepared& prepared) const {
            m_runtime.figure->canCommitGameplay(*prepared.m_data->figureState);
 }
 
-// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts
-// are taken in place
+// the prepared state's parts are taken in place
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 bool PlayerRuntimeCheckpoint::commitRestore(Prepared&& prepared) {
     if (!canCommit(prepared)) {
         return false;

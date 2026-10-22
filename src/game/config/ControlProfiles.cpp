@@ -72,11 +72,13 @@ void readControlProfiles(const nlohmann::json& json, GameConfig& config) {
             throw FormatError("invalid controller occurrence");
         }
         const std::string scheme = value.value("scheme", std::string{"tank"});
-        const auto named = std::ranges::find(kKeyboardSchemeNames, std::string_view{scheme});
-        if (named == kKeyboardSchemeNames.end()) {
+        const auto index = static_cast<usize>(std::ranges::distance(
+            kKeyboardSchemeNames.begin(),
+            std::ranges::find(kKeyboardSchemeNames, std::string_view{scheme})));
+        if (index == kKeyboardSchemeNames.size()) {
             throw FormatError("unknown keyboard scheme");
         }
-        profile.scheme = static_cast<KeyboardScheme>(named - kKeyboardSchemeNames.begin());
+        profile.scheme = static_cast<KeyboardScheme>(index);
         profile.customized = value.contains("bindings");
         profile.play = config.play;
         profile.menu = config.menu;

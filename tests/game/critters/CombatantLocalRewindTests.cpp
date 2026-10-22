@@ -295,14 +295,14 @@ TEST_CASE("local combatant rewind has no portable-packet scalar admission limits
 TEST_CASE("destroyed combatant owners cannot restore into reused addresses",
           "[local-rewind][combatant-local-rewind][native-equality]") {
     alignas(Combatant) std::array<std::byte, sizeof(Combatant)> storage{};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     auto* actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     Combatant::LocalSnapshot saved;
     REQUIRE(actor->saveLocal(saved));
     std::destroy_at(actor);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     actor = std::construct_at(reinterpret_cast<Combatant*>(storage.data()));
     CHECK_FALSE(actor->restoreLocal(saved));
     CHECK_FALSE(actor->equalLocal(saved, saved));

@@ -166,7 +166,7 @@ TEST_CASE("journal packets reject malformed bytes and impossible chunks", "[netp
     zeroRun[JournalPacket::kHeaderBytes + JournalPacket::kRunBytes - 2] = 0;
     zeroRun[JournalPacket::kHeaderBytes + JournalPacket::kRunBytes - 1] = 0;
     CHECK_FALSE(JournalPacket::decode(zeroRun));
-    JournalPacket::Chunk empty;
+    const JournalPacket::Chunk empty;
     CHECK_FALSE(JournalPacket::encode(empty));
     auto mismatched = chunks.front();
     mismatched.commands.pop_back();

@@ -199,11 +199,11 @@ std::optional<u32> randomWord(const std::minstd_rand& random) {
     stream << random;
     const auto text = stream.str();
     u32 value = 0;
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a
-    // contiguous buffer
+    // the end pointer of a contiguous buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a
-    // contiguous buffer
+    // the end pointer of a contiguous buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     return result.ec == std::errc{} && result.ptr == text.data() + text.size() && value > 0 &&
                    value < 2147483647U
                ? std::optional{value}

@@ -66,11 +66,11 @@ u32 randomState(const std::minstd_rand& random) {
     out << random;
     const auto text = out.str();
     u32 state = 0;
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a
-    // contiguous buffer
+    // the end pointer of a contiguous buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     const auto result = std::from_chars(text.data(), text.data() + text.size(), state);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): the end pointer of a
-    // contiguous buffer
+    // the end pointer of a contiguous buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     return result.ec == std::errc{} && result.ptr == text.data() + text.size() ? state : 0;
 }
 } // namespace

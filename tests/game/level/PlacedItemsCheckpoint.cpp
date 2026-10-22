@@ -397,8 +397,8 @@ bool PlacedItemsCheckpoint::bindResources(RenderDevice& device) {
             auto* archive = catalog->archives[archiveIndex];
             const auto tree =
                 archive && archive->loaded() ? archive->trees.find(resourceName) : std::nullopt;
-            // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the
-            // index it guards is set
+            // the pointer is bound whenever the index it guards is set
+            // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
             if (tree && &archive->trees.tree(*tree) == effect.figure) {
                 break;
             }

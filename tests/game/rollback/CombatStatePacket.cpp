@@ -57,8 +57,8 @@ public:
         if (value.size() > remaining()) {
             throw FormatError("combat checkpoint byte limit");
         }
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     template <class T> void number(T value) {
@@ -386,8 +386,9 @@ template <class A, class T> void field(A& a, T& v) {
         leaf<RandomCheckpoint>(a, v, RandomCheckpoint::kBytes);
     } else if constexpr (std::is_same_v<V, CombatStatePacket::State>) {
         fields(a, v.combat, v.adapter);
-        bool present =
-            v.stage.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
+        // the archive reads it back
+        // NOLINTNEXTLINE(misc-const-correctness)
+        bool present = v.stage.has_value();
         a.number(present);
         if (present) {
             u32 length = 0;

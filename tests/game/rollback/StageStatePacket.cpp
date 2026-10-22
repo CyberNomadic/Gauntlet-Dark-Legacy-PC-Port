@@ -85,8 +85,8 @@ public:
         raw(data);
     }
     void text(const std::string& value) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     template <class T> void number(T value) {
@@ -130,8 +130,9 @@ public:
             number(decoded);
             value = static_cast<T>(decoded);
         } else if constexpr (std::is_same_v<T, bool>) {
-            u32 bits =
-                m_reader.readU32(); // NOLINT(misc-const-correctness): the archive reads it back
+            // the archive reads it back
+            // NOLINTNEXTLINE(misc-const-correctness)
+            u32 bits = m_reader.readU32();
             if (bits > 1) {
                 throw FormatError("noncanonical stage boolean");
             }
@@ -829,8 +830,8 @@ void hashRows(Sha256& hash, const auto& rows) {
     hash.update(count.bytes);
     for (const auto& row : rows) {
         const auto key = geometryKey(row);
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         hash.update({reinterpret_cast<const u8*>(key.data()), key.size()});
     }
 }

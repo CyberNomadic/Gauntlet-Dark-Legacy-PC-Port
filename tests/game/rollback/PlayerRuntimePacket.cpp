@@ -153,12 +153,12 @@ template <class A, class T> void text(A& archive, T& value, usize limit) {
     }
     if constexpr (A::reading) {
         const auto bytes = archive.raw(count);
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         value.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     } else {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         archive.raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
 }

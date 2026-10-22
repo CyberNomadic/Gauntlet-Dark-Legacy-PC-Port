@@ -333,15 +333,15 @@ TEST_CASE("runtime prepared values cannot survive owner address reuse",
     REQUIRE(baseline);
     alignas(PlayerRuntimeCheckpoint) std::array<std::byte, sizeof(PlayerRuntimeCheckpoint)>
         storage{};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     auto* owner = std::construct_at(reinterpret_cast<PlayerRuntimeCheckpoint*>(storage.data()),
                                     fixture.player(), &fixture.stats);
     auto prepared = owner->prepareRestore(*baseline);
     REQUIRE(prepared);
     std::destroy_at(owner);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     owner = std::construct_at(reinterpret_cast<PlayerRuntimeCheckpoint*>(storage.data()),
                               fixture.player(), &fixture.stats);
     CHECK_FALSE(owner->canCommit(*prepared));

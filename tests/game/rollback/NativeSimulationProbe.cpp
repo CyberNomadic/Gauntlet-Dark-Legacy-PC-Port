@@ -376,8 +376,8 @@ void run(const Options& options) {
     const std::string dataDigest = assetDigest(options.data);
     const std::string configuration = config.toJson();
     const auto configBytes =
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         std::span{reinterpret_cast<const u8*>(configuration.data()), configuration.size()};
     test::FakeRenderDevice device;
     device.recordDraws = false;
@@ -437,8 +437,8 @@ void run(const Options& options) {
             {"protocol",
              "native-rollback-probe-v4"}}.dump();
         const auto contractBytes =
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-            // copyable buffer
+            // byte view of a trivially copyable buffer
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
             std::span{reinterpret_cast<const u8*>(contract.data()), contract.size()};
         auto network = std::make_unique<test::NativeProbeLink>(
             options.networkRole == "host", options.ticket, digest(contractBytes),

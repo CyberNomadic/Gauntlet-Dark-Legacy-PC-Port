@@ -170,8 +170,8 @@ LockstepInputs::Admission LockstepInputs::receive(PacketTransport::Connection co
     if (!m_open || m_failed || connection == 0) {
         return Admission::WrongPeer;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
-    // libraries
+    // an array iterator is a pointer only on some libraries
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto source = std::ranges::find(m_links, connection);
     if (source == m_links.end()) {
         return Admission::WrongPeer;

@@ -567,8 +567,8 @@ TEST_CASE("transported full native enemy pools restore and continue without load
 
     // Names are value syntax, never permission to bind an untrusted skeleton.
     auto tampered = *decoded;
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
-    // libraries
+    // an array iterator is a pointer only on some libraries
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto animated = std::ranges::find_if(
         tampered.enemies, [](const auto& enemy) { return enemy.animator && enemy.animator->pose; });
     REQUIRE(animated != tampered.enemies.end());

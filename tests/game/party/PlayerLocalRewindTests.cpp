@@ -732,15 +732,15 @@ TEST_CASE("local action state cannot outlive its figure even when its address is
     alignas(PlayerFigure) std::array<std::byte, sizeof(PlayerFigure)> storage{};
     const auto destroy = [](PlayerFigure* figure) { std::destroy_at(figure); };
     using Owner = std::unique_ptr<PlayerFigure, decltype(destroy)>;
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     Owner figure{std::construct_at(reinterpret_cast<PlayerFigure*>(storage.data())), destroy};
     PlayerFigure::LocalSnapshot saved;
     figure->saveLocal(saved);
     REQUIRE(figure->restoreLocal(saved));
     figure.reset();
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-    // copyable buffer
+    // byte view of a trivially copyable buffer
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     figure.reset(std::construct_at(reinterpret_cast<PlayerFigure*>(storage.data())));
     CHECK_FALSE(figure->restoreLocal(saved));
     PlayerFigure::LocalSnapshot replacement;

@@ -66,8 +66,8 @@ struct Writer {
             !word(static_cast<u32>(value.size()))) {
             return false;
         }
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte view of a trivially
-        // copyable buffer
+        // byte view of a trivially copyable buffer
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         return raw({reinterpret_cast<const u8*>(value.data()), value.size()});
     }
     bool count(usize& value, usize maximum, usize /*unused*/, usize* budget = nullptr) {
@@ -239,8 +239,9 @@ template <class IO, class T> bool animator(IO& io, T& value, usize& nodesLeft) {
         !io(value.frameBefore, value.generationBefore)) {
         return false;
     }
-    bool hasPose =
-        value.pose.has_value(); // NOLINT(misc-const-correctness): the archive reads it back
+    // the archive reads it back
+    // NOLINTNEXTLINE(misc-const-correctness)
+    bool hasPose = value.pose.has_value();
     if (!io(hasPose)) {
         return false;
     }
@@ -347,9 +348,11 @@ template <class IO, class T> bool event(IO& io, T& value) {
 }
 
 template <class IO, class T> bool pool(IO& io, T& state) {
-    u32 version =
-        EnemyPoolCheckpoint::kVersion; // NOLINT(misc-const-correctness): the archive reads it back
-    u32 slots = Enemies::kMost;        // NOLINT(misc-const-correctness): the archive reads it back
+    // the archive reads them back
+    // NOLINTNEXTLINE(misc-const-correctness)
+    u32 version = EnemyPoolCheckpoint::kVersion;
+    // NOLINTNEXTLINE(misc-const-correctness)
+    u32 slots = Enemies::kMost;
     if (!io(version, slots) || version != EnemyPoolCheckpoint::kVersion ||
         slots != Enemies::kMost || !block<RandomCheckpoint>(io, state.random) ||
         !io(state.nextInstance, state.most, state.scales.health, state.scales.speed,
