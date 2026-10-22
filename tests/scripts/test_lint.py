@@ -6,6 +6,8 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -70,7 +72,7 @@ class ShardTests(unittest.TestCase):
 class ToolResultTests(unittest.TestCase):
     def run_result(self, code=0, stdout="", stderr=""):
         result = subprocess.CompletedProcess([], code, stdout, stderr)
-        with mock.patch.object(lint.subprocess, "run", return_value=result):
+        with mock.patch.object(lint, "execute", return_value=result):
             return lint.run_one("clang-tidy", lint.ROOT / "src/test.cpp")
 
     def test_clean_run(self):
@@ -92,6 +94,26 @@ class ToolResultTests(unittest.TestCase):
                 self.assertIn("fatal failure", findings[0])
 
 
+class WorkerTests(unittest.TestCase):
+    SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
+
+    def test_stop_ends_the_running_workers_and_refuses_new_ones(self):
+        workers = lint.Workers()
+        results = []
+        thread = threading.Thread(target=lambda: results.append(workers.run(self.SLEEPER)))
+        thread.start()
+        deadline = time.monotonic() + 5
+        while workers.running() == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(workers.running(), 1)
+        workers.stop()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertNotEqual(results[0].returncode, 0)
+        with self.assertRaises(InterruptedError):
+            workers.run(self.SLEEPER)
+
+
 class DriverTests(unittest.TestCase):
     def setUp(self):
         self.units = [lint.ROOT / "src" / f"{i}.cpp" for i in range(8)]
@@ -104,6 +126,20 @@ class DriverTests(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()),
         ):
             self.contexts.enter_context(patcher)
+
+    def test_an_interrupt_stops_the_units_still_waiting(self):
+        calls = []
+
+        def run_one(_clang_tidy, unit, _profile="full"):
+            calls.append(unit)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+            time.sleep(0.2)
+            return []
+
+        with mock.patch.object(lint, "run_one", side_effect=run_one):
+            self.assertEqual(lint.main(["--jobs", "1"]), 130)
+        self.assertLess(len(calls), len(self.units))
 
     def test_default_still_lints_every_unit(self):
         with mock.patch.object(lint, "run_one", return_value=[]) as run:
@@ -262,7 +298,7 @@ class ChangedTests(unittest.TestCase):
         self.assertEqual(lint.PROFILES["full"], [])
         self.assertEqual(lint.PROFILES["fast"], ["--checks=-clang-analyzer-*"])
         completed = subprocess.CompletedProcess([], 0, "", "")
-        with mock.patch.object(lint.subprocess, "run", return_value=completed) as run:
+        with mock.patch.object(lint, "execute", return_value=completed) as run:
             lint.run_one("clang-tidy", self.root / "src/game/app/App.cpp", "fast")
             self.assertIn("--checks=-clang-analyzer-*", run.call_args.args[0])
             lint.run_one("clang-tidy", self.root / "src/game/app/App.cpp")

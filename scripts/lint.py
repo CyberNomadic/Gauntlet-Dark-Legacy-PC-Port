@@ -2,7 +2,8 @@
 """Run clang-tidy over every translation unit in compile_commands.json.
 
 Findings in headers are reported once. Exit status is 1 when anything is
-reported. Configure and build first so compile_commands.json exists. CI can
+reported. Configure and build first so compile_commands.json exists. A lint that is
+interrupted, told to stop, or whose caller is gone ends its clang-tidy workers. CI can
 instead configure with CMAKE_CXX_SCAN_FOR_MODULES=OFF (no C++ modules are used)
 and build only compile_commands, avoiding build-only module mapper files.
 
@@ -28,11 +29,14 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 from lint_cache import CleanCache
+import process_tree
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DIAGNOSTIC = re.compile(r"^(.+?):(\d+):(\d+): (warning|error): (.*)$")
@@ -150,6 +154,52 @@ def select_shard(units: list[pathlib.Path], index: int, count: int) -> list[path
 PROFILES = {"full": [], "fast": ["--checks=-clang-analyzer-*"]}
 
 
+class Workers:
+    """The clang-tidy processes under way, so a stopped lint ends them instead of
+    leaving them to finish for nobody."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running: set[subprocess.Popen] = set()
+        self.stopped = False
+
+    def run(self, command: list[str]) -> subprocess.CompletedProcess:
+        with self._lock:
+            if self.stopped:
+                raise InterruptedError("the lint was stopped")
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, cwd=ROOT)
+            self._running.add(process)
+        try:
+            stdout, stderr = process.communicate()
+        finally:
+            with self._lock:
+                self._running.discard(process)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+    def running(self) -> int:
+        with self._lock:
+            return len(self._running)
+
+    def stop(self) -> None:
+        with self._lock:
+            self.stopped = True
+            running = list(self._running)
+        for process in running:
+            try:
+                process.kill()
+            except OSError:
+                pass  # already gone
+
+
+WORKERS = Workers()
+
+
+def execute(command: list[str]) -> subprocess.CompletedProcess:
+    """One clang-tidy run under the worker registry."""
+    return WORKERS.run(command)
+
+
 def run_one(clang_tidy: str, unit: pathlib.Path, profile: str = "full") -> list[str]:
     command = [clang_tidy, "-p", str(ROOT), "--quiet", *PROFILES[profile],
                "--extra-arg=-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
@@ -158,7 +208,7 @@ def run_one(clang_tidy: str, unit: pathlib.Path, profile: str = "full") -> list[
                "--extra-arg=-Xclang", "--extra-arg=-analyzer-config",
                "--extra-arg=-Xclang", "--extra-arg=c++-stdlib-inlining=false",
                str(unit)]
-    completed = subprocess.run(command, capture_output=True, text=True, cwd=ROOT, check=False)
+    completed = execute(command)
     findings = []
     current = None
     for line in (completed.stdout + "\n" + completed.stderr).splitlines():
@@ -172,6 +222,20 @@ def run_one(clang_tidy: str, unit: pathlib.Path, profile: str = "full") -> list[
         findings.append(f"{unit}: clang-tidy failed (exit {completed.returncode}):\n"
                         f"{completed.stdout.strip()}\n{completed.stderr.strip()}")
     return findings
+
+
+_parent_watch: threading.Thread | None = None
+
+
+def watch_parent() -> None:
+    """Stop the workers once the process this lint answers to is gone."""
+    global _parent_watch
+    if _parent_watch is None:
+        _parent_watch = process_tree.stop_when_gone(os.getppid(), lambda: WORKERS.stop())
+
+
+def _raise_interrupt() -> None:
+    raise KeyboardInterrupt
 
 
 def main(argv=None) -> int:
@@ -198,6 +262,10 @@ def main(argv=None) -> int:
         select_shard([], args.shard_index, args.shard_count)
     except ValueError as error:
         parser.error(str(error))
+    global WORKERS
+    WORKERS = Workers()
+    watch_parent()
+    signal.signal(signal.SIGTERM, lambda _signal, _frame: _raise_interrupt())
     clang_tidy = find_clang_tidy()
     roster = translation_units(args.paths)
     if not roster:
@@ -235,23 +303,43 @@ def main(argv=None) -> int:
     seen: set[str] = set()
     ordered: list[str] = []
     hits = 0
+    interrupted = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         pending = {pool.submit(check, unit): unit for unit in units}
-        for done, future in enumerate(concurrent.futures.as_completed(pending), 1):
-            unit = pending[future]
-            try:
-                findings, reused = future.result()
-                hits += int(reused)
-            except Exception as error:
-                findings = [f"{unit}: clang-tidy could not complete: {error}"]
-            label = unit.relative_to(ROOT) if unit.is_relative_to(ROOT) else unit
-            print(f"[{done}/{len(units)}] {label} "
-                  f"({time.monotonic() - started:.1f}s elapsed)", flush=True)
-            for finding in findings:
-                key = finding.split("\n", 1)[0]
-                if key not in seen:
-                    seen.add(key)
-                    ordered.append(finding)
+        remaining = set(pending)
+        done = 0
+        try:
+            while remaining:
+                if WORKERS.stopped:
+                    raise KeyboardInterrupt
+                # A short wait keeps an interrupt prompt on Windows, where a bare wait
+                # cannot be interrupted.
+                finished, remaining = concurrent.futures.wait(
+                    remaining, timeout=0.5, return_when=concurrent.futures.FIRST_COMPLETED)
+                for future in finished:
+                    done += 1
+                    unit = pending[future]
+                    try:
+                        findings, reused = future.result()
+                        hits += int(reused)
+                    except Exception as error:
+                        findings = [f"{unit}: clang-tidy could not complete: {error}"]
+                    label = unit.relative_to(ROOT) if unit.is_relative_to(ROOT) else unit
+                    print(f"[{done}/{len(units)}] {label} "
+                          f"({time.monotonic() - started:.1f}s elapsed)", flush=True)
+                    for finding in findings:
+                        key = finding.split("\n", 1)[0]
+                        if key not in seen:
+                            seen.add(key)
+                            ordered.append(finding)
+        except KeyboardInterrupt:
+            interrupted = True
+            WORKERS.stop()
+            pool.shutdown(wait=False, cancel_futures=True)
+    if interrupted:
+        print(f"Lint stopped after {done} of {len(units)} translation units; "
+              "its clang-tidy workers were ended", file=sys.stderr, flush=True)
+        return 130
     for finding in sorted(ordered):
         print(finding)
         print()
