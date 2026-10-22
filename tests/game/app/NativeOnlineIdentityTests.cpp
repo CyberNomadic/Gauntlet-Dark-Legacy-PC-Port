@@ -100,8 +100,8 @@ TEST_CASE("native online identity requires effective data and complete owned inp
         } else {
             bad.language.clear();
         }
-        // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move): a fresh copy each
-        // pass
+        // A fresh copy each pass:
+        // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move)
         CHECK_FALSE(NativeOnlineIdentity::capture(std::move(bad), &error));
         CHECK_FALSE(error.empty());
     }

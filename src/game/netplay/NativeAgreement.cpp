@@ -198,8 +198,8 @@ bool NativeAgreement::update(Time now) {
             return false;
         }
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
-    // libraries
+    // An array iterator is a pointer only on some libraries:
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto overdue = std::ranges::find_if(m_outgoing, [&](const auto& queue) {
         return !queue.empty() && expired(queue.front().started, m_now);
     });
@@ -325,8 +325,8 @@ NativeAgreement::Admission NativeAgreement::receive(PacketTransport::Connection 
     if (!m_open) {
         return Admission::Invalid;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
-    // libraries
+    // An array iterator is a pointer only on some libraries:
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto link = std::ranges::find(m_links, connection);
     if (connection == 0 || link == m_links.end()) {
         return Admission::WrongPeer;
@@ -414,8 +414,8 @@ void NativeAgreement::disconnected(PacketTransport::Connection connection) {
     if (!m_open || connection == 0) {
         return;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some
-    // libraries
+    // An array iterator is a pointer only on some libraries:
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto link = std::ranges::find(m_links, connection);
     if (link != m_links.end()) {
         m_outgoing[static_cast<usize>(link - m_links.begin())].clear();
