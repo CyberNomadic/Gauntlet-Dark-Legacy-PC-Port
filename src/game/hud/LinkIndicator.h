@@ -6,15 +6,16 @@
 
 namespace gdl::game {
 /** How a link feels to play on, judged from its round trip. */
-enum class LinkQuality : u8 { Unknown, Poor, Fair, Good };
+enum class LinkQuality : u8 { Unknown, Poor, Weak, Fair, Good };
 
 /** The signal-strength mark above the ping: four rising bars, all lit green for a good
- * link, three lit yellow for a fair one, one lit red for a poor one and none while the
- * ping is unknown; unlit bars stay grey. */
+ * link, three lit yellow for a fair one, two lit orange for a weak one, one lit red for
+ * a poor one and none while the ping is unknown; unlit bars stay grey. */
 class LinkIndicator {
 public:
     static constexpr s32 kGoodPingMs = 60; ///< an input delay of at most one tick
-    static constexpr s32 kFairPingMs = 150;
+    static constexpr s32 kFairPingMs = 120;
+    static constexpr s32 kWeakPingMs = 200;
     static constexpr u32 kBars = 4;
     static constexpr f32 kBarWidth = 4;
     static constexpr f32 kBarGap = 2;

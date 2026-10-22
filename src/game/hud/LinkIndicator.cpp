@@ -8,13 +8,17 @@ LinkQuality LinkIndicator::quality(s32 pingMs) {
     if (pingMs < kGoodPingMs) {
         return LinkQuality::Good;
     }
-    return pingMs < kFairPingMs ? LinkQuality::Fair : LinkQuality::Poor;
+    if (pingMs < kFairPingMs) {
+        return LinkQuality::Fair;
+    }
+    return pingMs < kWeakPingMs ? LinkQuality::Weak : LinkQuality::Poor;
 }
 
 Color LinkIndicator::color(LinkQuality quality) {
     switch (quality) {
     case LinkQuality::Good: return Color::rgba(72, 208, 72);
     case LinkQuality::Fair: return Color::rgba(232, 200, 48);
+    case LinkQuality::Weak: return Color::rgba(240, 140, 40);
     case LinkQuality::Poor: return Color::rgba(224, 64, 56);
     case LinkQuality::Unknown: break;
     }
@@ -27,8 +31,9 @@ Color LinkIndicator::unlit() {
 
 u32 LinkIndicator::lit(LinkQuality quality) {
     switch (quality) {
-    case LinkQuality::Good: return kBars;
-    case LinkQuality::Fair: return kBars - 1;
+    case LinkQuality::Good: return 4;
+    case LinkQuality::Fair: return 3;
+    case LinkQuality::Weak: return 2;
     case LinkQuality::Poor: return 1;
     case LinkQuality::Unknown: break;
     }
