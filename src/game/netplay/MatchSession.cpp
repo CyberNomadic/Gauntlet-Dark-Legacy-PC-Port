@@ -163,7 +163,7 @@ std::optional<MatchControl> MatchControlPacket::decode(std::span<const u8> bytes
 }
 
 bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links,
-                        u8 startupDelay) {
+                        u8 startupDelay, std::span<const MatchLink> direct) {
     if (m_phase != Phase::Offline || !validOwners(owners) || !belongs(owners, localPeer) ||
         startupDelay > RollbackInputs::kMaxDelay) {
         return false;
@@ -183,15 +183,51 @@ bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const
             return false;
         }
     }
+    std::array<PacketTransport::Connection, 5> directConnections{};
+    for (const auto& link : direct) {
+        if (localPeer == 1 || !belongs(owners, link.peer) || link.peer == localPeer ||
+            link.peer == 1 || link.connection == 0 || directConnections[link.peer] != 0 ||
+            std::ranges::find(connections, link.connection) != connections.end() ||
+            std::ranges::find(directConnections, link.connection) != directConnections.end()) {
+            return false;
+        }
+        directConnections[link.peer] = link.connection;
+    }
     m_local = localPeer;
     m_owners = owners;
     m_links = connections;
+    m_direct = directConnections;
     m_startupDelay = startupDelay;
     m_phase = Phase::Lobby;
     return true;
 }
 void MatchSession::clear() {
     *this = MatchSession{};
+}
+u8 MatchSession::directPeerOf(PacketTransport::Connection connection) const {
+    if (connection != 0) {
+        for (u8 peer = 2; peer <= 4; ++peer) {
+            if (m_direct[peer] == connection) {
+                return peer;
+            }
+        }
+    }
+    return 0;
+}
+usize MatchSession::directLinks() const {
+    return static_cast<usize>(std::ranges::count_if(m_direct, [](auto link) { return link != 0; }));
+}
+void MatchSession::directLost(PacketTransport::Connection connection) {
+    for (u8 peer = 2; peer <= 4; ++peer) {
+        if (connection != 0 && m_direct[peer] == connection) {
+            m_direct[peer] = 0;
+        }
+    }
+    for (auto* exchange : {m_exchange.get(), m_drainingInputs.get()}) {
+        if (exchange) {
+            exchange->detach(connection);
+        }
+    }
 }
 u8 MatchSession::peerOf(PacketTransport::Connection connection) const {
     if (connection != 0) {
@@ -260,6 +296,8 @@ bool MatchSession::beginNativeInputs() {
     for (u8 peer = 1; peer <= 4; ++peer) {
         if (m_links[peer] != 0) {
             links.push_back({peer, m_links[peer]});
+        } else if (m_direct[peer] != 0) {
+            links.push_back({peer, m_direct[peer]});
         }
     }
     if (!inputs->open(m_local, m_context.epoch, m_owners, m_context.grants, m_context.inputLead,
@@ -1097,7 +1135,14 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     const auto inputAt = now.value_or(Clock::now());
     const auto peer = peerOf(connection);
     if (peer == 0) {
-        return Admission::WrongPeer;
+        // A direct link carries another guest's own inputs and nothing else.
+        if (directPeerOf(connection) == 0 || !RollbackExchange::recognizes(bytes)) {
+            return Admission::WrongPeer;
+        }
+        if (m_phase == Phase::Stopped || m_phase == Phase::Offline) {
+            return Admission::WrongPhase;
+        }
+        return nativeInputs(connection, bytes, pingMs);
     }
     if (m_phase == Phase::Stopped || m_phase == Phase::Offline) {
         return Admission::WrongPhase;
@@ -1230,44 +1275,48 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
         }
     }
     if (RollbackExchange::recognizes(bytes)) {
-        const auto message = RollbackExchange::decode(bytes);
-        if (!message) {
-            return Admission::Invalid;
-        }
-        auto* inputs = m_exchange.get();
-        bool draining = false;
-        if (m_drainingInputs && m_drainingContext && message->epoch == m_drainingContext->epoch) {
-            inputs = m_drainingInputs.get();
-            draining = true;
-        } else if (message->epoch != m_context.epoch || !inputs || !m_nativeConsumer ||
-                   m_context.transition == MatchTransition::Shop ||
-                   (m_phase != Phase::Running &&
-                    (m_phase != Phase::Loading || !m_loaded[m_local]))) {
-            return Admission::Stale;
-        }
-        // A redundant packet can contain the missing terminal frame and later
-        // sampled frames together. Validate the whole authenticated journal;
-        // the scene's confirmed fence, not packet filtering, prevents execution.
-        const auto result =
-            inputs->receive(connection, bytes, pingMs,
-                            [&](const RollbackExchange::Message& value, std::optional<u8> transit) {
-                                return draining || m_nativeConsumer(value, transit);
-                            });
-        switch (result) {
-        case RollbackExchange::Admission::Accepted: return Admission::Accepted;
-        case RollbackExchange::Admission::WrongEpoch: return Admission::Stale;
-        case RollbackExchange::Admission::WrongPeer: return Admission::WrongPeer;
-        case RollbackExchange::Admission::Full:
-        case RollbackExchange::Admission::Conflict:
-        case RollbackExchange::Admission::Rejected:
-            // A callback may have admitted a prefix before another native guard
-            // refused. Stop rather than retrying an ambiguous partially consumed batch.
-            stop(MatchStop::TransportFailure, true);
-            return Admission::Invalid;
-        case RollbackExchange::Admission::Invalid: return Admission::Invalid;
-        }
+        return nativeInputs(connection, bytes, pingMs);
     }
     return Admission::Invalid; // Legacy bare input packets cannot enter this protocol.
+}
+MatchSession::Admission MatchSession::nativeInputs(PacketTransport::Connection connection,
+                                                   std::span<const u8> bytes, s32 pingMs) {
+    const auto message = RollbackExchange::decode(bytes);
+    if (!message) {
+        return Admission::Invalid;
+    }
+    auto* inputs = m_exchange.get();
+    bool draining = false;
+    if (m_drainingInputs && m_drainingContext && message->epoch == m_drainingContext->epoch) {
+        inputs = m_drainingInputs.get();
+        draining = true;
+    } else if (message->epoch != m_context.epoch || !inputs || !m_nativeConsumer ||
+               m_context.transition == MatchTransition::Shop ||
+               (m_phase != Phase::Running && (m_phase != Phase::Loading || !m_loaded[m_local]))) {
+        return Admission::Stale;
+    }
+    // A redundant packet can contain the missing terminal frame and later
+    // sampled frames together. Validate the whole authenticated journal;
+    // the scene's confirmed fence, not packet filtering, prevents execution.
+    const auto result =
+        inputs->receive(connection, bytes, pingMs,
+                        [&](const RollbackExchange::Message& value, std::optional<u8> transit) {
+                            return draining || m_nativeConsumer(value, transit);
+                        });
+    switch (result) {
+    case RollbackExchange::Admission::Accepted: return Admission::Accepted;
+    case RollbackExchange::Admission::WrongEpoch: return Admission::Stale;
+    case RollbackExchange::Admission::WrongPeer: return Admission::WrongPeer;
+    case RollbackExchange::Admission::Full:
+    case RollbackExchange::Admission::Conflict:
+    case RollbackExchange::Admission::Rejected:
+        // A callback may have admitted a prefix before another native guard
+        // refused. Stop rather than retrying an ambiguous partially consumed batch.
+        stop(MatchStop::TransportFailure, true);
+        return Admission::Invalid;
+    case RollbackExchange::Admission::Invalid: return Admission::Invalid;
+    }
+    return Admission::Invalid;
 }
 bool MatchSession::attachNativeInputs(u64 epoch, NativeInputConsumer consumer) {
     // A rebuilt scene attaches again while running; nothing else does after loading.

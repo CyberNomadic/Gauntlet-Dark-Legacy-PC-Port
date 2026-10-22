@@ -24,7 +24,7 @@ public:
     using Owners = RollbackInputs::Owners;
     using Grants = RollbackInputs::Grants;
     using Watermarks = std::array<u64, 5>; // peer IDs 1..4; index zero is reserved
-    using Clock = std::function<u64()>; // local monotonic microseconds, never sent
+    using Clock = std::function<u64()>;    // local monotonic microseconds, never sent
     struct Link {
         u8 peer = 0;
         PacketTransport::Connection connection = 0;
@@ -60,6 +60,8 @@ public:
     static std::optional<Message> decode(std::span<const u8> bytes);
     static bool recognizes(std::span<const u8> bytes);
 
+    /** Links: the host's to every guest, a guest's to the host, and optionally a guest's
+     * direct links to other guests, which carry their own inputs sooner than the relay. */
     bool open(u8 localPeer, u64 epoch, const Owners& owners, const Grants& grants, u8 delay,
               std::span<const Link> links, Clock clock = {});
     /** After successful device sampling, pass retained local inputs and current
@@ -72,11 +74,13 @@ public:
      * Negative/unknown RTT uses the conservative eight-tick pacing allowance.
      * The optional callback age is present only for fresh origin progress;
      * duplicate/reordered reports may still contain useful inputs and ACKs. */
-    Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
-                      s32 pingMs,
+    Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes, s32 pingMs,
                       const std::function<bool(const Message&, std::optional<u8>)>& consume);
     bool flush(PacketTransport& transport);
     void disconnected(PacketTransport::Connection connection);
+    /** Forgets a direct link that closed without failing the stream: the host's relay
+     * still carries that peer's inputs. */
+    void detach(PacketTransport::Connection connection);
     /** Stops sending to a dropped peer and waiting on its acknowledgements; its own
      * earlier inputs are still resent to the others. */
     void suspend(u8 peer);

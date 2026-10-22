@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <array>
-#include <map>
 #include <limits>
+#include <map>
 #include <set>
 
 #include <catch2/catch_test_macros.hpp>
@@ -125,9 +125,9 @@ struct Room {
                 ++dropped;
                 continue;
             }
-            const auto result = peers[receiver].receive(
-                connection, packet.bytes, 0,
-                [&](const auto& m, auto) { return consume(receiver, m); });
+            const auto result =
+                peers[receiver].receive(connection, packet.bytes, 0,
+                                        [&](const auto& m, auto) { return consume(receiver, m); });
             REQUIRE(result ==
                     (reject ? Exchange::Admission::Rejected : Exchange::Admission::Accepted));
         }
@@ -193,8 +193,10 @@ TEST_CASE("rollback exchange rejects unadmitted origins and does not ACK refused
         ++calls;
         return false;
     };
-    CHECK(room.peers[1].receive(103, encode(message), 0, consume) == Exchange::Admission::WrongPeer);
-    CHECK(room.peers[3].receive(999, encode(message), 0, consume) == Exchange::Admission::WrongPeer);
+    CHECK(room.peers[1].receive(103, encode(message), 0, consume) ==
+          Exchange::Admission::WrongPeer);
+    CHECK(room.peers[3].receive(999, encode(message), 0, consume) ==
+          Exchange::Admission::WrongPeer);
     CHECK(calls == 0);
     CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::Rejected);
     CHECK(calls == 1);
@@ -204,17 +206,18 @@ TEST_CASE("rollback exchange rejects unadmitted origins and does not ACK refused
     CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::Invalid);
     CHECK(calls == 1);
     message.received[1] = 0;
-    message.received[3] = 1; // nor a third party's never-received input at the relay
-    CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::Invalid);
-    CHECK(calls == 1);
+    message.received[3] = 1; // a third party's input may have come on a direct link first
+    CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::Rejected);
+    CHECK(calls == 2);
     message.received[3] = 0;
     message.commands[0].grant++;
     CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::Invalid);
-    CHECK(calls == 1);
+    CHECK(calls == 2);
     message.commands[0].grant--;
     message.epoch++;
     message.commands[0].epoch++;
-    CHECK(room.peers[1].receive(102, encode(message), 0, consume) == Exchange::Admission::WrongEpoch);
+    CHECK(room.peers[1].receive(102, encode(message), 0, consume) ==
+          Exchange::Admission::WrongEpoch);
 }
 
 TEST_CASE("eight frames of three local seats split into complete bounded datagrams",
@@ -240,8 +243,9 @@ TEST_CASE("eight frames of three local seats split into complete bounded datagra
     }
     Exchange::Message incomplete{kEpoch, 2, 9, {}, room.frame(2, 9)};
     incomplete.commands.pop_back();
-    CHECK(room.peers[1].receive(102, encode(incomplete), 0, [](const auto&, auto) { return true; }) ==
-          Exchange::Admission::Invalid);
+    CHECK(room.peers[1].receive(102, encode(incomplete), 0, [](const auto&, auto) {
+        return true;
+    }) == Exchange::Admission::Invalid);
     CHECK(room.peers[1].receivedThrough(2) == 8);
 }
 
@@ -361,7 +365,8 @@ TEST_CASE("a one datagram budget cannot starve later routed origins", "[rollback
     for (u8 receiver = 1; receiver <= 4; ++receiver) {
         for (u8 origin = 1; origin <= 4; ++origin) {
             CHECK(room.peers[receiver].receivedThrough(origin) == 1);
-            // NOLINTNEXTLINE(readability-suspicious-call-argument): what the origin acknowledged of this peer
+            // What the origin acknowledged of this peer:
+            // NOLINTNEXTLINE(readability-suspicious-call-argument)
             CHECK(room.peers[receiver].acknowledgedThrough(origin, receiver) == 1);
         }
     }
@@ -430,8 +435,7 @@ TEST_CASE("relayed progress carries upstream age and residence without refreshin
     CHECK(age == 5);
     const auto heartbeat = forwarded(2);
     room.nowUs += 10'000;
-    REQUIRE(room.peers[3].receive(kHost, heartbeat, 20, accept) ==
-            Exchange::Admission::Accepted);
+    REQUIRE(room.peers[3].receive(kHost, heartbeat, 20, accept) == Exchange::Admission::Accepted);
     CHECK(age == 6); // fresh same-head report, measured path is 90 ms again
 
     REQUIRE(room.peers[1].publish({}, 10));
@@ -480,12 +484,10 @@ TEST_CASE("progress admission is transactional and older reports still recover a
     CHECK_FALSE(last);
     CHECK(room.peers[1].receivedThrough(2) == 2);
     source.progressSerial = 21; // a new serial cannot move the head backwards
-    CHECK(room.peers[1].receive(102, encode(source), 20, accept) ==
-          Exchange::Admission::Invalid);
+    CHECK(room.peers[1].receive(102, encode(source), 20, accept) == Exchange::Admission::Invalid);
     CHECK(fresh == 2);
     source.progressSerial = 20; // the old serial cannot describe a different head
-    CHECK(room.peers[1].receive(102, encode(source), 20, accept) ==
-          Exchange::Admission::Conflict);
+    CHECK(room.peers[1].receive(102, encode(source), 20, accept) == Exchange::Admission::Conflict);
     CHECK(room.peers[1].failure() == Exchange::Failure::Conflict);
 }
 
@@ -494,11 +496,11 @@ TEST_CASE("progress ages saturate and unknown RTT remains a bounded pacing estim
     const s32 ping = GENERATE(s32{-1}, std::numeric_limits<s32>::max());
     Room room({1, 2, 0, 0});
     const Exchange::Message message{kEpoch, 2, 1, {}, {}, 1, 0};
-    REQUIRE(room.peers[1].receive(102, encode(message), ping,
-                                  [](const auto&, std::optional<u8> age) {
-                                      REQUIRE(age == RollbackInputs::kPredictionTicks);
-                                      return true;
-                                  }) == Exchange::Admission::Accepted);
+    REQUIRE(
+        room.peers[1].receive(102, encode(message), ping, [](const auto&, std::optional<u8> age) {
+            REQUIRE(age == RollbackInputs::kPredictionTicks);
+            return true;
+        }) == Exchange::Admission::Accepted);
     room.nowUs = std::numeric_limits<u64>::max() - 500'000'000;
     REQUIRE(room.peers[1].flush(room.wires[1]));
     REQUIRE_FALSE(room.wires[1].packets.empty());
@@ -603,5 +605,69 @@ TEST_CASE("asymmetric star progress paces an actually faster peer without slowin
     for (u8 peer = 1; peer <= count; ++peer) {
         CHECK(inputs[peer].tick() > 220);
         CHECK(room.peers[peer].failure() == Exchange::Failure::None);
+    }
+}
+
+TEST_CASE("a guest's direct link carries that guest's own inputs sooner and may go away",
+          "[rollback-exchange][direct-link]") {
+    const Exchange::Owners owners{1, 2, 3, 0};
+    Exchange::Grants grants{};
+    for (usize seat = 0; seat < owners.size(); ++seat) {
+        grants[seat] = owners[seat] != 0 ? static_cast<u32>(20 + seat) : 0;
+    }
+    const auto clock = [] { return u64{1'000'000}; };
+    // The host has nothing to add; a guest's extra link names another guest, once, on
+    // its own connection.
+    const std::array hostExtra{Exchange::Link{2, 102}, Exchange::Link{3, 103},
+                               Exchange::Link{4, 104}};
+    CHECK_FALSE(Exchange{}.open(1, kEpoch, owners, grants, 0, hostExtra, clock));
+    const std::array absent{Exchange::Link{1, kHost}, Exchange::Link{4, 304}};
+    CHECK_FALSE(Exchange{}.open(3, kEpoch, owners, grants, 0, absent, clock));
+    const std::array shared{Exchange::Link{1, kHost}, Exchange::Link{2, kHost}};
+    CHECK_FALSE(Exchange{}.open(3, kEpoch, owners, grants, 0, shared, clock));
+    Exchange second;
+    Exchange third;
+    const std::array secondLinks{Exchange::Link{1, kHost}, Exchange::Link{3, 203}};
+    const std::array thirdLinks{Exchange::Link{1, kHost}, Exchange::Link{2, 302}};
+    REQUIRE(second.open(2, kEpoch, owners, grants, 0, secondLinks, clock));
+    REQUIRE(third.open(3, kEpoch, owners, grants, 0, thirdLinks, clock));
+    // The second guest's own frame goes out on both of its links.
+    InputCommand command;
+    command.epoch = kEpoch;
+    command.tick = 1;
+    command.seat = 1;
+    command.grant = grants[1];
+    command.pressedButtons = static_cast<u32>(CommandPress::Attack);
+    REQUIRE(second.publish(std::span{&command, 1}, 2));
+    Wire wire;
+    REQUIRE(second.flush(wire));
+    std::set<PacketTransport::Connection> destinations;
+    for (const auto& packet : wire.packets) {
+        destinations.insert(packet.connection);
+    }
+    CHECK(destinations == std::set<PacketTransport::Connection>{kHost, 203});
+    const auto direct = std::ranges::find(wire.packets, 203, &Wire::Packet::connection);
+    REQUIRE(direct != wire.packets.end());
+    // The third guest takes it straight from the second.
+    usize consumed = 0;
+    const auto consume = [&](const Exchange::Message& message, auto) {
+        CHECK(message.origin == 2);
+        consumed += message.commands.size();
+        return true;
+    };
+    CHECK(third.receive(302, direct->bytes, 0, consume) == Exchange::Admission::Accepted);
+    CHECK(consumed == 1);
+    CHECK(third.receivedThrough(2) == 1);
+    // A direct peer cannot speak for the host or for anyone else.
+    const auto forged = encode({kEpoch, 1, 2, {}, {}, 1});
+    CHECK(third.receive(302, forged, 0, consume) == Exchange::Admission::WrongPeer);
+    // When the direct link goes, the stream lives on through the host.
+    third.detach(302);
+    CHECK(third.failure() == Exchange::Failure::None);
+    CHECK(third.receive(302, direct->bytes, 0, consume) == Exchange::Admission::WrongPeer);
+    Wire thirdWire;
+    REQUIRE(third.flush(thirdWire));
+    for (const auto& packet : thirdWire.packets) {
+        CHECK(packet.connection == kHost);
     }
 }

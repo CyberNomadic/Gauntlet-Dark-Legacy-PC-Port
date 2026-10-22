@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <memory>
@@ -8,6 +9,7 @@
 
 #include "engine/platform/Input.h"
 
+#include "game/netplay/RollbackExchange.h"
 #include "game/netplay/RollbackSessionHarness.h"
 #include "game/screens/PartyMotion.h"
 #include "game/screens/SessionInputs.h"
@@ -855,3 +857,32 @@ TEST_CASE("match lifecycle drives real four player movement events and one share
     }
 }
 } // namespace
+
+TEST_CASE("a guest's direct links feed the input exchange and nothing else",
+          "[netplay][match-session][direct-link]") {
+    const MatchOwners owners{1, 2, 3, 0};
+    const std::array star{MatchLink{1, 99}};
+    const std::array hostStar{MatchLink{2, 1}, MatchLink{3, 2}};
+    // The host has none; the host is never a direct peer; owners only, one link each,
+    // on a connection of its own.
+    CHECK_FALSE(MatchSession{}.open(1, owners, hostStar, 1, std::array{MatchLink{3, 5}}));
+    CHECK_FALSE(MatchSession{}.open(2, owners, star, 1, std::array{MatchLink{1, 5}}));
+    CHECK_FALSE(MatchSession{}.open(2, owners, star, 1, std::array{MatchLink{4, 5}}));
+    CHECK_FALSE(MatchSession{}.open(2, owners, star, 1, std::array{MatchLink{3, 99}}));
+    CHECK_FALSE(
+        MatchSession{}.open(2, owners, star, 1, std::array{MatchLink{3, 5}, MatchLink{3, 6}}));
+    MatchSession guest;
+    REQUIRE(guest.open(2, owners, star, 1, std::array{MatchLink{3, 5}}));
+    CHECK(guest.directLinks() == 1);
+    // Only input packets are taken from a direct link; the host still says everything else.
+    const std::vector<u8> stray{1, 2, 3, 4};
+    CHECK(guest.receive(5, stray) == MatchSession::Admission::WrongPeer);
+    const auto inputs = RollbackExchange::encode({1, 3, 1, {}, {}, 1});
+    REQUIRE(inputs);
+    CHECK(guest.receive(5, *inputs) == MatchSession::Admission::Stale); // routed; no stream yet
+    CHECK(guest.receive(6, *inputs) == MatchSession::Admission::WrongPeer);
+    guest.directLost(5);
+    CHECK(guest.directLinks() == 0);
+    CHECK(guest.receive(5, *inputs) == MatchSession::Admission::WrongPeer);
+    CHECK(guest.phase() == MatchSession::Phase::Lobby);
+}

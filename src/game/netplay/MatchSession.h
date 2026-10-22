@@ -92,8 +92,10 @@ public:
     static constexpr usize kControlBudget = 16;
     static constexpr u32 kNativeAgreementPeriod = 30;
 
+    /** `direct` are a guest's links to other guests: their inputs arrive on them sooner
+     * than through the host, which still relays everything and decides everything. */
     bool open(u8 localPeer, const MatchOwners& owners, std::span<const MatchLink> links,
-              u8 startupDelay = 1);
+              u8 startupDelay = 1, std::span<const MatchLink> direct = {});
     /** A new transport/room lifetime is required before opening again after clear(). */
     void clear();
     /** Checkpointed transitions require a complete host party; Shop also its setup.
@@ -202,6 +204,9 @@ public:
     std::vector<u8> quietPeers() const;
     /** False when the lost link ends the match; true when the peer was dropped instead. */
     bool disconnected(PacketTransport::Connection connection);
+    /** A direct link closed; the host's relay carries that peer from here. */
+    void directLost(PacketTransport::Connection connection);
+    usize directLinks() const;
     usize queuedControls() const { return m_controls.size(); }
 
 private:
@@ -219,6 +224,9 @@ private:
     bool agreementFailed(Time now);
     /** The roster without dropped peers, for streams opened after a drop. */
     MatchOwners activeOwners() const;
+    u8 directPeerOf(PacketTransport::Connection connection) const;
+    Admission nativeInputs(PacketTransport::Connection connection, std::span<const u8> bytes,
+                           s32 pingMs);
     void applyDrop(const Drop& drop);
     Admission journal(u8 peer, const JournalPacket::Chunk& chunk);
     void tryCommit();
@@ -240,6 +248,7 @@ private:
     u8 m_local = 0;
     MatchOwners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};
+    std::array<PacketTransport::Connection, 5> m_direct{};
     std::array<bool, 5> m_loaded{};
     u8 m_movieSkipVotes = 0;
     u8 m_movieSkipRequests = 0;

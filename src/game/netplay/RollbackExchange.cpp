@@ -42,7 +42,7 @@ u32 linkAge(s32 pingMs) {
 }
 u8 ageTicks(u32 age) {
     return static_cast<u8>(std::min<u64>(RollbackInputs::kPredictionTicks,
-                                        (static_cast<u64>(age) * 60 + 999'999) / 1'000'000));
+                                         (static_cast<u64>(age) * 60 + 999'999) / 1'000'000));
 }
 } // namespace
 
@@ -129,8 +129,7 @@ bool RollbackExchange::open(u8 localPeer, u64 epoch, const Owners& owners, const
     for (const auto& link : links) {
         if (link.peer == 0 || link.peer > 4 || link.peer == localPeer || link.connection == 0 ||
             connections[link.peer] != 0 || !seen.insert(link.connection).second ||
-            std::ranges::find(owners, link.peer) == owners.end() ||
-            (localPeer != 1 && link.peer != 1)) {
+            std::ranges::find(owners, link.peer) == owners.end()) {
             return false;
         }
         connections[link.peer] = link.connection;
@@ -138,7 +137,9 @@ bool RollbackExchange::open(u8 localPeer, u64 epoch, const Owners& owners, const
     for (u8 peer = 1; peer <= 4; ++peer) {
         const bool needed = peer != localPeer && std::ranges::find(owners, peer) != owners.end() &&
                             (localPeer == 1 || peer == 1);
-        if ((connections[peer] != 0) != needed) {
+        // The star is required; a guest may add direct links, the host has nothing to add.
+        if ((needed && connections[peer] == 0) ||
+            (!needed && connections[peer] != 0 && localPeer == 1)) {
             return false;
         }
     }
@@ -193,11 +194,7 @@ RollbackExchange::Admission RollbackExchange::validate(const Message& message,
     for (u8 origin = 1; origin <= 4; ++origin) {
         if ((!occupied(origin) && message.received[origin] != 0) ||
             tooFar(message.received[origin], m_next[m_local]) ||
-            (origin == m_local && message.received[origin] > m_received[m_local][m_local]) ||
-            // Every third-party frame passes through this relay first. A guest
-            // cannot have received a contiguous prefix the relay never received.
-            (m_local == 1 && origin != message.origin &&
-             message.received[origin] > m_received[m_local][origin])) {
+            (origin == m_local && message.received[origin] > m_received[m_local][m_local])) {
             return Admission::Invalid;
         }
     }
@@ -321,7 +318,8 @@ RollbackExchange::receive(PacketTransport::Connection connection, std::span<cons
     if (!m_open || m_failure != Failure::None || connection == 0) {
         return Admission::WrongPeer;
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    // An array iterator is a pointer only on some libraries:
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto source = std::ranges::find(m_links, connection);
     if (source == m_links.end()) {
         return Admission::WrongPeer;
@@ -331,7 +329,8 @@ RollbackExchange::receive(PacketTransport::Connection connection, std::span<cons
         return Admission::Invalid;
     }
     const auto sender = static_cast<u8>(source - m_links.begin());
-    if (message->origin == m_local || (m_local == 1 && message->origin != sender)) {
+    // Only the host relays other origins; a guest, direct or not, sends its own.
+    if (message->origin == m_local || (sender != 1 && message->origin != sender)) {
         return Admission::WrongPeer;
     }
     History incoming;
@@ -396,8 +395,13 @@ bool RollbackExchange::flush(PacketTransport& transport) {
                 selected.insert(frame->first);
             }
             const auto& progress = m_progress[origin];
-            Message message{m_epoch, origin, m_next[origin], m_received[origin], {},
-                            progress.serial, addAge(progress.ageUs, *time - progress.observedAt)};
+            Message message{m_epoch,
+                            origin,
+                            m_next[origin],
+                            m_received[origin],
+                            {},
+                            progress.serial,
+                            addAge(progress.ageUs, *time - progress.observedAt)};
             usize frames = 0;
             const auto send = [&] {
                 const auto encoded = encode(message);
@@ -413,8 +417,15 @@ bool RollbackExchange::flush(PacketTransport& transport) {
                 if (result == PacketTransport::SendResult::Sent) {
                     // A one-datagram send budget must not always go to origin 1.
                     m_sendOrigin[destination] = static_cast<u8>(origin % 4 + 1);
+                    return true;
                 }
-                return result == PacketTransport::SendResult::Sent || fail(Failure::Transport);
+                if (m_local != 1 && destination != 1) {
+                    // A direct link that will not carry is let go; the host relays.
+                    m_links[destination] = 0;
+                    congested = true;
+                    return true;
+                }
+                return fail(Failure::Transport);
             };
             for (const u64 tick : selected) {
                 const auto& frame = history.at(tick);
@@ -452,6 +463,13 @@ void RollbackExchange::suspend(u8 peer) {
     }
     m_suspended[peer] = true;
     m_links[peer] = 0;
+}
+void RollbackExchange::detach(PacketTransport::Connection connection) {
+    for (u8 peer = 1; peer <= 4; ++peer) {
+        if (connection != 0 && m_links[peer] == connection) {
+            m_links[peer] = 0;
+        }
+    }
 }
 void RollbackExchange::disconnected(PacketTransport::Connection connection) {
     if (connection != 0 && std::ranges::find(m_links, connection) != m_links.end()) {
