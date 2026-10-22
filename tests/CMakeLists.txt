@@ -210,6 +210,7 @@ add_executable(tests
     game/hud/AutoSaveIconTests.cpp
     game/scenes/PostShopReturnTests.cpp
     game/hud/InventoryPanelTests.cpp
+    game/hud/LinkIndicatorTests.cpp
     TestSupport.h
     fixtures/ReferenceObj.cpp
     fixtures/ReferenceObjTests.cpp

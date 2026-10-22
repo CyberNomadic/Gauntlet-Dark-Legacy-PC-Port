@@ -71,6 +71,7 @@ add_library(game STATIC
     characters/LevelResults.cpp
     hud/InventoryPanel.h
     hud/InventoryPanel.cpp
+    hud/LinkIndicator.cpp
     shop/ShopSession.h
     shop/ShopSession.cpp
     scenes/AfterLevelScene.h

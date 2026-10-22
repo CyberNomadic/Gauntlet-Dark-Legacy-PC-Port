@@ -9,6 +9,7 @@
 #include "engine/render/RenderDevice.h"
 
 #include "game/characters/Party.h"
+#include "game/hud/LinkIndicator.h"
 #include "game/menu/NetplayMenu.h"
 #include "game/rollback/SessionInputs.h"
 
@@ -73,12 +74,14 @@ private:
                  const std::string& invitation, const std::string& build,
                  const std::string& content, u8 localPlayers);
     void status(RenderDevice& device, std::string message);
-    void network(RenderDevice& device, std::string line);
+    void network(RenderDevice& device, std::string line, s32 pingMs);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
     std::unique_ptr<Texture> m_statusTexture;
     std::string m_status;
     std::unique_ptr<Texture> m_networkTexture;
     std::string m_network;
+    LinkIndicator m_link;
+    s32 m_pingMs = -1;
 };
 } // namespace gdl::game

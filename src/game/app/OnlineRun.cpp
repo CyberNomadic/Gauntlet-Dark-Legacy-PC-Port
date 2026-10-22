@@ -82,6 +82,8 @@ void OnlineRun::close() {
     m_status.clear();
     m_networkTexture.reset();
     m_network.clear();
+    m_link.release();
+    m_pingMs = -1;
 }
 std::optional<std::string> OnlineRun::stallNotice(f64 stalledSeconds) {
     if (stalledSeconds < kStallNoticeSeconds) {
@@ -94,7 +96,8 @@ std::optional<std::string> OnlineRun::stallNotice(f64 stalledSeconds) {
 std::string OnlineRun::networkSummary(s32 pingMs) {
     return pingMs >= 0 ? std::format("{} ms", pingMs) : std::string("ping ?");
 }
-void OnlineRun::network(RenderDevice& device, std::string line) {
+void OnlineRun::network(RenderDevice& device, std::string line, s32 pingMs) {
+    m_pingMs = pingMs;
     if (line == m_network) {
         return;
     }
@@ -557,10 +560,11 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
             completed / kNetworkLineTicks != run.networkTick / kNetworkLineTicks) {
             run.networkTick = completed;
             const auto link = session.linkStatistics();
-            network(*run.device, networkSummary(link ? link->pingMs : -1));
+            const s32 ping = link ? link->pingMs : -1;
+            network(*run.device, networkSummary(ping), ping);
         } else if (phase != NativeOnlinePlay::Phase::Playing &&
                    phase != NativeOnlinePlay::Phase::Paused) {
-            network(*run.device, "");
+            network(*run.device, "", -1);
         }
         // Inputs that stop arriving starve the simulation. Say so after a moment and end
         // the session at a deadline rather than freezing until the transport gives up.
@@ -710,9 +714,17 @@ void OnlineRun::render(RenderDevice& device, const Mat4& projection, f32 width, 
         canvas.begin(device, projection, {.depthWrite = false, .depthTest = false});
         const auto textWidth = static_cast<f32>(m_networkTexture->width()) / 2;
         const auto textHeight = static_cast<f32>(m_networkTexture->height()) / 2;
-        canvas.fill({width - textWidth - 12, 4, textWidth + 8, textHeight + 4},
+        // The connection mark sits above the ping, as wide as the text or as the icon
+        // with a bar of its own width, whichever is wider.
+        const auto icon = LinkIndicator::iconSize();
+        const f32 inner = std::max(textWidth, icon.x * 2 + LinkIndicator::kGap);
+        const f32 markHeight = std::max(icon.y, LinkIndicator::kBarHeight);
+        canvas.fill({width - inner - 12, 4, inner + 8, markHeight + textHeight + 6},
                     Color::rgba(0, 0, 0, 160));
-        canvas.draw(*m_networkTexture, {width - textWidth - 8, 6, textWidth, textHeight});
+        m_link.draw(canvas, device, {width - inner - 8, 6, inner, markHeight},
+                    LinkIndicator::quality(m_pingMs));
+        canvas.draw(*m_networkTexture,
+                    {width - textWidth - 8, 6 + markHeight + 2, textWidth, textHeight});
         canvas.end();
     }
     if (m_statusTexture != nullptr) {
