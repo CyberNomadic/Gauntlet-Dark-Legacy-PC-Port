@@ -124,6 +124,10 @@ private:
         bool value;
     };
     bool admit(RoomSnapshot room, const std::string& peer);
+    /** Accepts a started room that only lost members, handling each as its lost link
+     * would be: the host drops it, a guest forgets its direct link. False for any other
+     * change to a started room, which stays a conflict. */
+    bool departed(const RoomSnapshot& next);
     void event(const PacketTransport::Event& event);
     void openMatch();
     bool nativeMessage(Connection connection, std::span<const u8> bytes);

@@ -416,6 +416,41 @@ bool OnlineSession::flushNativeBootstrap() {
     return true;
 }
 
+bool OnlineSession::departed(const RoomSnapshot& next) {
+    if (!next.started || next.settings != m_room->settings ||
+        next.members.size() >= m_room->members.size()) {
+        return false;
+    }
+    const bool unchanged = std::ranges::all_of(next.members, [&](const RoomMember& row) {
+        const auto* before = member(*m_room, row.peer);
+        return before != nullptr && before->seats == row.seats;
+    });
+    if (!unchanged) {
+        return false;
+    }
+    // Every member gone is handled as its lost link would be.
+    return std::ranges::all_of(m_room->members, [&](const RoomMember& row) {
+        if (member(next, row.peer) != nullptr) {
+            return true;
+        }
+        if (row.peer == m_peer || row.peer == m_room->host) {
+            return false;
+        }
+        const auto link = m_links.find(row.peer);
+        if (link == m_links.end()) {
+            return true; // its link closed first and was handled then
+        }
+        if (m_host) {
+            if (!m_match.disconnected(link->second)) {
+                return false;
+            }
+        } else {
+            m_match.directLost(link->second);
+        }
+        m_links.erase(link);
+        return true;
+    });
+}
 std::vector<std::string> OnlineSession::allowed() const {
     std::vector<std::string> result;
     if (m_room) {
@@ -559,10 +594,12 @@ bool OnlineSession::admit(RoomSnapshot room, const std::string& peer) {
         const bool changed = !sameRoster(room, *m_room) || room.settings != m_room->settings;
         if ((changed && room.revision == m_room->revision) ||
             (m_room->started && (changed || room.revision != m_room->revision))) {
-            fail(Failure::RosterChanged);
-            return false;
-        }
-        if (room.revision != m_room->revision) {
+            // The room may report a member's departure before its link closes, or after.
+            if (!m_room->started || !departed(room)) {
+                fail(Failure::RosterChanged);
+                return false;
+            }
+        } else if (room.revision != m_room->revision) {
             m_ready.reset();
             if (!room.started) {
                 m_prepare.reset();

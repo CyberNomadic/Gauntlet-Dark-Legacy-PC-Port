@@ -63,8 +63,10 @@ struct OnlinePair {
             return true;
         }
         bool authorizePeers(std::span<const std::string> peers) override {
-            REQUIRE(peers.size() == 1);
-            remoteIdentity = peers.front();
+            REQUIRE(peers.size() <= 1); // the other machine, or nobody once it is dropped
+            if (!peers.empty()) {
+                remoteIdentity = peers.front();
+            }
             return true;
         }
         std::optional<Connection> connectPeer(const std::string& peer) override {

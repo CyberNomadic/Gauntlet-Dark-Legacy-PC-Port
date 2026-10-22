@@ -808,7 +808,38 @@ TEST_CASE("a started guest's lost link drops it and the host session carries on"
     CHECK(pair.hostSession.phase() == Phase::Active);
 }
 
-TEST_CASE("online state fails closed after a started member departs or changes",
+TEST_CASE("a started member's departure reported by the room drops it as its lost link would",
+          "[netplay][online-session][drop]") {
+    test::OnlinePair pair;
+    pair.prepare();
+    pair.ready();
+    REQUIRE(pair.hostInputs.advance());
+    REQUIRE(pair.hostInputs.complete());
+    // The room's word comes first, while the guest's link is still up.
+    pair.room.members.pop_back();
+    ++pair.room.revision;
+    pair.hostSession.update(0);
+    CHECK(pair.hostSession.failure() == Failure::None);
+    CHECK(pair.hostSession.phase() == Phase::Active);
+    REQUIRE(pair.host.phase() == MatchSession::Phase::Running);
+    CHECK(pair.host.dropped(2));
+    REQUIRE(pair.hostSession.room());
+    CHECK(pair.hostSession.room()->members.size() == 1);
+    // The link closing after that changes nothing.
+    pair.hostWire.events.push_back({EventType::Disconnected, 1, {}, {}});
+    pair.hostSession.update(0);
+    CHECK(pair.hostSession.failure() == Failure::None);
+    CHECK(pair.hostSession.phase() == Phase::Active);
+    CHECK(pair.host.phase() == MatchSession::Phase::Running);
+    const auto drops = pair.host.takeDrops();
+    REQUIRE(drops.size() == 1);
+    CHECK(drops.front().peer == 2);
+    REQUIRE(pair.hostInputs.inputs().suspend(2, drops.front().tick));
+    CHECK(pair.hostSession.flush());
+    CHECK(pair.hostSession.phase() == Phase::Active);
+}
+
+TEST_CASE("online state fails closed after a started room changes or its service fails",
           "[netplay][online-session]") {
     Client host;
     host.publish(room());
@@ -817,8 +848,14 @@ TEST_CASE("online state fails closed after a started member departs or changes",
     snapshot.started = true;
     host.publish(snapshot);
     REQUIRE(host.session.match().prepare(7));
-    SECTION("service removal") {
+    SECTION("service removal before the first stage begins") {
         snapshot.members.pop_back();
+        ++snapshot.revision;
+        host.publish(snapshot);
+        CHECK(host.session.failure() == Failure::RosterChanged);
+    }
+    SECTION("service seat change") {
+        snapshot.members.back().seats = {2};
         ++snapshot.revision;
         host.publish(snapshot);
         CHECK(host.session.failure() == Failure::RosterChanged);
