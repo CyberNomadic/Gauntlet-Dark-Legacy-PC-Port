@@ -1,4 +1,7 @@
 #include <array>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "engine/net/SessionTransport.h"
 #include "engine/net/iroh/Bridge.h"
@@ -14,8 +17,8 @@ public:
     IrohTransport(IrohTransport&&) = delete;
     IrohTransport& operator=(IrohTransport&&) = delete;
     Phase phase() const override { return static_cast<Phase>(gdl_iroh_state(m_handle)); }
-    std::string invitation() const override { return text(true); }
-    std::string error() const override { return text(false); }
+    std::string invitation() const override { return text(1); }
+    std::string error() const override { return text(0); }
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
         return static_cast<SendResult>(gdl_iroh_send(m_handle, connection, bytes.data(),
                                                      bytes.size(),
@@ -45,11 +48,17 @@ public:
         return Statistics{stats.pingMs, stats.pendingBytes, 0, stats.relayed != 0};
     }
     void close(Connection connection) override { gdl_iroh_close(m_handle, connection); }
+    std::string address() const override { return text(2); }
+    std::optional<Connection> dial(const std::string& address) override {
+        const std::vector<u8> card(address.begin(), address.end());
+        const auto id = gdl_iroh_connect(m_handle, card.data(), card.size());
+        return id == 0 ? std::nullopt : std::optional<Connection>{id};
+    }
 
 private:
-    std::string text(bool invite) const {
+    std::string text(u32 kind) const {
         std::array<u8, 2048> buffer{};
-        const auto count = gdl_iroh_text(m_handle, invite ? 1 : 0, buffer.data(), buffer.size());
+        const auto count = gdl_iroh_text(m_handle, kind, buffer.data(), buffer.size());
         return {buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(count)};
     }
     GdlIroh* m_handle;

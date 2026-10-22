@@ -49,6 +49,15 @@ public:
     virtual std::vector<Event> poll() = 0;
     virtual std::optional<Statistics> statistics(Connection connection) const = 0;
     virtual void close(Connection connection) = 0;
+    /** Where another peer of the same session can reach this endpoint; empty where the
+     * transport cannot say. Not a credential: it admits nobody by itself. */
+    virtual std::string address() const { return {}; }
+    /** Starts a connection to a peer's address. The id comes back at once and a Connected
+     * or Disconnected event follows; nullopt where the transport cannot dial. */
+    virtual std::optional<Connection> dial(const std::string& address) {
+        (void)address;
+        return std::nullopt;
+    }
 
 protected:
     PacketTransport() = default;

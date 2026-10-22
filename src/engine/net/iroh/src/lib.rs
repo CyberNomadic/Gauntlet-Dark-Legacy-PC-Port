@@ -25,6 +25,7 @@ const MAX_PACKET: usize = 1201; // One room-envelope byte plus PacketTransport's
 const FRAGMENT: usize = 1000; // Fits QUIC even on its minimum supported path MTU.
 const SEND_BYTES: usize = 65536;
 const INVITE_LIMIT: usize = 2048;
+const CARD_LIMIT: usize = 2048;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -78,12 +79,51 @@ impl Ticket {
     }
 }
 
+/// Where this endpoint can be reached, for a peer that holds the same invitation:
+/// no token, so a card alone admits nobody.
+#[derive(Serialize, Deserialize)]
+struct Card {
+    version: u8,
+    address: EndpointAddr,
+}
+impl Card {
+    fn encode(&self) -> Option<String> {
+        let text = format!(
+            "gdlp1-{}",
+            URL_SAFE_NO_PAD.encode(postcard::to_allocvec(self).ok()?)
+        );
+        (text.len() <= CARD_LIMIT).then_some(text)
+    }
+    fn decode(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.len() > CARD_LIMIT {
+            return None;
+        }
+        let bytes = URL_SAFE_NO_PAD.decode(text.strip_prefix("gdlp1-")?).ok()?;
+        let (card, rest): (Self, _) = postcard::take_from_bytes(&bytes).ok()?;
+        if !rest.is_empty()
+            || card.version != 1
+            || card.address.addrs.is_empty()
+            || card.address.addrs.len() > 16
+        {
+            return None;
+        }
+        Some(card)
+    }
+}
+
+enum Command {
+    Dial { id: u64, address: EndpointAddr },
+}
+
 #[derive(Default)]
 struct Shared {
     state: u32,
     invite: String,
     error: String,
     links: BTreeMap<u64, Arc<Link>>,
+    endpoint: Option<Endpoint>,
+    next_id: u64,
 }
 struct Link {
     connection: Connection,
@@ -124,6 +164,7 @@ impl Event {
 pub struct Handle {
     shared: Arc<Mutex<Shared>>,
     events: mpsc::Receiver<Event>,
+    commands: mpsc::Sender<Command>,
     stop: Option<oneshot::Sender<()>>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -158,8 +199,13 @@ impl Handle {
         {
             return None;
         }
-        let shared = Arc::new(Mutex::new(Shared::default()));
+        let shared = Arc::new(Mutex::new(Shared {
+            // A guest's host link is 1; everything accepted or dialled comes after.
+            next_id: if ticket.is_some() { 2 } else { 1 },
+            ..Shared::default()
+        }));
         let (events_tx, events) = mpsc::channel(512);
+        let (commands, commands_rx) = mpsc::channel(16);
         let (stop, stopped) = oneshot::channel();
         let state = shared.clone();
         let worker = thread::Builder::new()
@@ -170,7 +216,14 @@ impl Handle {
                         .enable_all()
                         .build()
                         .map_err(|_| "Unable to start network worker")?;
-                    runtime.block_on(run(state.clone(), events_tx, stopped, ticket, mode))
+                    runtime.block_on(run(
+                        state.clone(),
+                        events_tx,
+                        stopped,
+                        commands_rx,
+                        ticket,
+                        mode,
+                    ))
                 }));
                 let error = match result {
                     Ok(Ok(())) => None,
@@ -188,9 +241,49 @@ impl Handle {
         Some(Self {
             shared,
             events,
+            commands,
             stop: Some(stop),
             worker: Some(worker),
         })
+    }
+    /// This endpoint's card once it is bound; empty before that.
+    fn card(&self) -> String {
+        let state = self.shared.lock().unwrap();
+        state
+            .endpoint
+            .as_ref()
+            .and_then(|endpoint| {
+                Card {
+                    version: 1,
+                    address: endpoint.addr(),
+                }
+                .encode()
+            })
+            .unwrap_or_default()
+    }
+    /// Starts a connection to the peer the card names; its id comes back now and a
+    /// connected or disconnected event follows. Zero means the card was refused.
+    fn dial(&self, card: &str) -> u64 {
+        let Some(card) = Card::decode(card) else {
+            return 0;
+        };
+        let id = {
+            let mut state = self.shared.lock().unwrap();
+            if state.state != 1 {
+                return 0;
+            }
+            let id = state.next_id;
+            state.next_id += 1;
+            id
+        };
+        let command = Command::Dial {
+            id,
+            address: card.address,
+        };
+        if self.commands.try_send(command).is_err() {
+            return 0;
+        }
+        id
     }
     fn send(&self, id: u64, bytes: &[u8], reliable: bool) -> u32 {
         if bytes.is_empty() || bytes.len() > MAX_PACKET {
@@ -243,6 +336,7 @@ async fn run(
     shared: Arc<Mutex<Shared>>,
     events: mpsc::Sender<Event>,
     mut stop: oneshot::Receiver<()>,
+    mut commands: mpsc::Receiver<Command>,
     ticket: Option<Ticket>,
     mode: TransportMode,
 ) -> Result<(), &'static str> {
@@ -279,7 +373,11 @@ async fn run(
         result = binding => result.map_err(|_| "Unable to open network endpoint")?,
     };
     let work = async {
-        if let Some(ticket) = ticket {
+        // A guest reaches the host first; every endpoint then accepts peers that
+        // hold the invitation's token and dials the cards it is handed, so guests
+        // can link to each other directly instead of through the host.
+        let mut host_link = None;
+        let token = if let Some(ticket) = ticket {
             let connection =
                 tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(ticket.address, ALPN))
                     .await
@@ -289,8 +387,19 @@ async fn run(
                 tokio::time::timeout(AUTH_TIMEOUT, authenticate(&connection, ticket.token, false))
                     .await
                     .map_err(|_| "Invitation check timed out")??;
-            shared.lock().unwrap().state = 1;
-            serve(shared.clone(), events.clone(), connection, streams, 1).await;
+            {
+                let mut state = shared.lock().unwrap();
+                state.endpoint = Some(endpoint.clone());
+                state.state = 1;
+            }
+            host_link = Some(tokio::spawn(serve(
+                shared.clone(),
+                events.clone(),
+                connection,
+                streams,
+                1,
+            )));
+            ticket.token
         } else {
             if mode != TransportMode::Local {
                 tokio::time::timeout(CONNECT_TIMEOUT, endpoint.online())
@@ -309,28 +418,41 @@ async fn run(
             {
                 let mut state = shared.lock().unwrap();
                 state.invite = invite;
+                state.endpoint = Some(endpoint.clone());
                 state.state = 1;
             }
-            let limit = Arc::new(Semaphore::new(4));
-            let mut tasks = tokio::task::JoinSet::new();
-            let mut next_id = 1;
-            loop {
-                tokio::select! {
-                    incoming = endpoint.accept() => {
-                        let Some(incoming) = incoming else { break; };
-                        let Ok(permit) = limit.clone().try_acquire_owned() else { incoming.refuse(); continue; };
-                        let id = next_id; next_id += 1;
-                        let state = shared.clone(); let sink = events.clone();
-                        tasks.spawn(async move {
-                            let _permit = permit;
-                            let Ok(Ok(connection)) = tokio::time::timeout(AUTH_TIMEOUT, incoming).await else { return; };
-                            let Ok(Ok(streams)) = tokio::time::timeout(AUTH_TIMEOUT, authenticate(&connection, token, true)).await
-                                else { connection.close(1u32.into(), b"Invitation rejected"); return; };
-                            serve(state, sink, connection, streams, id).await;
-                        });
-                    },
-                    _ = tasks.join_next(), if !tasks.is_empty() => {},
-                }
+            token
+        };
+        let limit = Arc::new(Semaphore::new(4));
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                incoming = endpoint.accept() => {
+                    let Some(incoming) = incoming else { break; };
+                    let Ok(permit) = limit.clone().try_acquire_owned() else { incoming.refuse(); continue; };
+                    let id = { let mut state = shared.lock().unwrap(); let id = state.next_id; state.next_id += 1; id };
+                    let state = shared.clone(); let sink = events.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        let Ok(Ok(connection)) = tokio::time::timeout(AUTH_TIMEOUT, incoming).await else { return; };
+                        let Ok(Ok(streams)) = tokio::time::timeout(AUTH_TIMEOUT, authenticate(&connection, token, true)).await
+                            else { connection.close(1u32.into(), b"Invitation rejected"); return; };
+                        serve(state, sink, connection, streams, id).await;
+                    });
+                },
+                command = commands.recv() => {
+                    let Some(Command::Dial { id, address }) = command else { break; };
+                    let state = shared.clone(); let sink = events.clone(); let endpoint = endpoint.clone();
+                    tasks.spawn(async move {
+                        let connected = tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(address, ALPN)).await;
+                        let Ok(Ok(connection)) = connected else { let _ = sink.send(Event::disconnected(id)).await; return; };
+                        let Ok(Ok(streams)) = tokio::time::timeout(AUTH_TIMEOUT, authenticate(&connection, token, false)).await
+                            else { connection.close(1u32.into(), b"Invitation rejected"); let _ = sink.send(Event::disconnected(id)).await; return; };
+                        serve(state, sink, connection, streams, id).await;
+                    });
+                },
+                _ = tasks.join_next(), if !tasks.is_empty() => {},
+                _ = async { match host_link.as_mut() { Some(link) => { let _ = link.await; } None => std::future::pending().await } }, if host_link.is_some() => { break; },
             }
         }
         Ok(())
@@ -571,11 +693,10 @@ pub unsafe extern "C" fn gdl_iroh_text(
         let Some(handle) = (unsafe { handle.as_ref() }) else {
             return 0;
         };
-        let state = handle.shared.lock().unwrap();
-        let text = if ticket != 0 {
-            &state.invite
-        } else {
-            &state.error
+        let text = match ticket {
+            1 => handle.shared.lock().unwrap().invite.clone(),
+            2 => handle.card(),
+            _ => handle.shared.lock().unwrap().error.clone(),
         };
         if output.is_null() || text.len() > capacity {
             return 0;
@@ -605,6 +726,30 @@ pub unsafe extern "C" fn gdl_iroh_poll(handle: *mut Handle, event: *mut WireEven
         event.size = next.bytes.len() as u32;
         event.bytes[..next.bytes.len()].copy_from_slice(&next.bytes);
         1
+    }))
+    .unwrap_or(0)
+}
+/// # Safety
+/// `handle` must be null or live on the caller thread. Nonnull `card` must
+/// reference `length` readable bytes for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gdl_iroh_connect(
+    handle: *const Handle,
+    card: *const u8,
+    length: usize,
+) -> u64 {
+    catch_unwind(AssertUnwindSafe(|| {
+        if card.is_null() || length == 0 || length > CARD_LIMIT {
+            return 0;
+        }
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return 0;
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(card, length) };
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return 0;
+        };
+        handle.dial(text)
     }))
     .unwrap_or(0)
 }
@@ -754,6 +899,63 @@ mod tests {
             host.events
                 .try_recv()
                 .is_ok_and(|event| event.kind == 1 && event.id == id)
+        });
+    }
+    #[test]
+    fn guests_dial_each_other_by_card() {
+        let (mut host, mut first, _) = pair();
+        let ticket = host.shared.lock().unwrap().invite.clone();
+        let mut second = Handle::new(&ticket, TransportMode::Local).unwrap();
+        let mut second_ready = false;
+        until(|| {
+            while let Ok(event) = host.events.try_recv() {
+                assert_eq!(event.kind, 0);
+            }
+            while let Ok(event) = second.events.try_recv() {
+                second_ready |= event.kind == 0 && event.id == 1;
+            }
+            second_ready
+        });
+        let card = first.card();
+        assert!(card.starts_with("gdlp1-"));
+        assert_eq!(second.dial("gdlp1-!"), 0);
+        assert_eq!(second.dial(&ticket), 0);
+        let id = second.dial(&card);
+        assert!(id >= 2);
+        let mut accepted = 0;
+        let mut connected = false;
+        until(|| {
+            while let Ok(event) = first.events.try_recv() {
+                if event.kind == 0 {
+                    accepted = event.id;
+                }
+            }
+            while let Ok(event) = second.events.try_recv() {
+                connected |= event.kind == 0 && event.id == id;
+            }
+            accepted != 0 && connected
+        });
+        assert!(accepted >= 2);
+        assert_eq!(second.send(id, &[7, 8, 9], true), 0);
+        until(|| {
+            first.events.try_recv().is_ok_and(|event| {
+                event.kind == 2 && event.id == accepted && event.bytes == [7, 8, 9]
+            })
+        });
+        assert_eq!(first.send(accepted, &[1], false), 0);
+        until(|| {
+            second
+                .events
+                .try_recv()
+                .is_ok_and(|event| event.kind == 2 && event.id == id && event.bytes == [1])
+        });
+        assert!(host.events.try_recv().is_err());
+        drop(second);
+        until(|| {
+            first
+                .events
+                .try_recv()
+                .is_ok_and(|event| event.kind == 1 && event.id == accepted)
         });
     }
     #[test]

@@ -20,6 +20,7 @@ struct GdlIrohStats {
 };
 // NOLINTBEGIN(readability-identifier-naming) -- C ABI symbols match the Rust bridge.
 // Mode: 0 automatic, 1 local-only, 2 relay-only. Other values are rejected.
+// Text: 0 the error, 1 the invitation, 2 this endpoint's address card.
 GdlIroh* gdl_iroh_create(const std::uint8_t* invite, std::size_t length, std::uint32_t mode);
 void gdl_iroh_destroy(GdlIroh* handle);
 std::uint32_t gdl_iroh_state(const GdlIroh* handle);
@@ -29,6 +30,10 @@ std::uint32_t gdl_iroh_poll(GdlIroh* handle, GdlIrohEvent* event);
 std::uint32_t gdl_iroh_send(const GdlIroh* handle, std::uint64_t id, const std::uint8_t* bytes,
                             std::size_t length, std::uint32_t reliable);
 void gdl_iroh_close(const GdlIroh* handle, std::uint64_t id);
+// Starts a connection to the peer a card names; its id is returned at once and a
+// connected or disconnected event follows. Zero refuses the card.
+std::uint64_t gdl_iroh_connect(const GdlIroh* handle, const std::uint8_t* card,
+                               std::size_t length);
 std::uint32_t gdl_iroh_stats(const GdlIroh* handle, std::uint64_t id, GdlIrohStats* output);
 // NOLINTEND(readability-identifier-naming)
 }
