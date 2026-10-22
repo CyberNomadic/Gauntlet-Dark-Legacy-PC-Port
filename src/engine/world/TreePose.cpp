@@ -172,13 +172,37 @@ NodePose TreePose::sample(const TrackInfo& track, f32 frame, bool smooth) {
 }
 
 namespace {
-/** How far the pose closing a cycle may miss the pose opening it: an angle (a turn on), a
- * position or a scale. */
+/** How far a closing position or scale may miss the opening one, and the least an angle
+ * may. */
 constexpr f32 kCycleClosure = 0.02f;
 
-bool closes(const NodePose& last, const NodePose& first) {
+NodePose poseAt(const TrackInfo& track, s32 frame) {
+    return TreePose::sample(track, static_cast<f32>(frame), true);
+}
+
+/** How far a track turns from one frame to the next on average, from `first` on: the largest
+ * of its angles' steps. */
+f32 typicalTurn(const TrackInfo& track, s32 first, s32 frames) {
+    f32 total = 0.0f;
+    for (s32 frame = first + 1; frame < frames; ++frame) {
+        const NodePose before = poseAt(track, frame - 1);
+        const NodePose after = poseAt(track, frame);
+        f32 largest = 0.0f;
+        for (s32 i = 0; i < 3; ++i) {
+            largest = std::max(
+                largest, std::abs(TreePose::wrapAngle(after.rotation[i] - before.rotation[i])));
+        }
+        total += largest;
+    }
+    return frames - first > 1 ? total / static_cast<f32>(frames - first - 1) : 0.0f;
+}
+
+/** Whether the last frame's pose repeats the first's: each angle a turn on within half a
+ * frame's turn, each position and scale within the closure. */
+bool closes(const NodePose& last, const NodePose& first, f32 turn) {
+    const f32 slack = std::max(kCycleClosure, 0.5f * turn);
     for (s32 i = 0; i < 3; ++i) {
-        if (std::abs(TreePose::wrapAngle(last.rotation[i] - first.rotation[i])) > kCycleClosure ||
+        if (std::abs(TreePose::wrapAngle(last.rotation[i] - first.rotation[i])) > slack ||
             std::abs(last.position[i] - first.position[i]) > kCycleClosure ||
             std::abs(last.scale[i] - first.scale[i]) > kCycleClosure) {
             return false;
@@ -189,25 +213,38 @@ bool closes(const NodePose& last, const NodePose& first) {
 } // namespace
 
 TreePose::Cycle TreePose::cycle(const TreeSequenceInfo& sequence) {
-    Cycle cycle{0, std::max(sequence.frames, 0)};
+    const Cycle whole{0, std::max(sequence.frames, 0)};
     if (sequence.frames <= 1) {
-        return cycle;
+        return whole;
     }
-    const auto poseAt = [](const TrackInfo& track, s32 frame) {
-        return sample(track, static_cast<f32>(frame), true);
+    // Only a sequence that moves a node has holds to leave out; a still one, or one that
+    // only turns flip-book pages, shows every frame.
+    const auto moves = [&](const TrackInfo& track) {
+        const NodePose start = poseAt(track, 0);
+        for (s32 frame = 1; frame < sequence.frames; ++frame) {
+            if (poseAt(track, frame) != start) {
+                return true;
+            }
+        }
+        return false;
     };
+    if (std::ranges::none_of(sequence.tracks, moves)) {
+        return whole;
+    }
     const auto holds = [&](s32 frame, s32 other) {
         return std::ranges::all_of(sequence.tracks, [&](const TrackInfo& track) {
             return poseAt(track, frame) == poseAt(track, other);
         });
     };
+    Cycle cycle = whole;
     while (cycle.first + 1 < sequence.frames && holds(cycle.first, cycle.first + 1)) {
         ++cycle.first;
     }
     cycle.count = sequence.frames - cycle.first;
     const bool closed =
         cycle.count > 1 && std::ranges::all_of(sequence.tracks, [&](const TrackInfo& track) {
-            return closes(poseAt(track, sequence.frames - 1), poseAt(track, cycle.first));
+            return closes(poseAt(track, sequence.frames - 1), poseAt(track, cycle.first),
+                          typicalTurn(track, cycle.first, sequence.frames));
         });
     if (closed) {
         --cycle.count;

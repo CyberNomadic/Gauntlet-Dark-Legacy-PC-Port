@@ -55,8 +55,8 @@ bool near(const Vec3& a, const Vec3& b) {
 TEST_CASE("native pose equality checks transforms and their loaded hierarchy",
           "[pose][local-rewind]") {
     const auto tree = sampleTree();
-    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): a distinct copy must compare
-    // unequal
+    // A distinct copy must compare unequal.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     const auto otherTree = tree;
     TreePose pose;
     pose.evaluate(tree, 0, 2);
@@ -360,14 +360,34 @@ TEST_CASE("a sequence's cycle leaves out an opening hold and a closing repeat of
     TreeSequenceInfo scaled = closed;
     scaled.tracks.push_back(track(0, 6, {0, 1, 30}, {1.0f, 1.0f, 0.5f}));
     CHECK(TreePose::cycle(scaled) == TreePose::Cycle{1, 30});
-    // A still figure cycles its one pose; a single frame is its own cycle.
+    // A still figure, and a sequence of flip-book pages with no track at all, show every
+    // frame; a single frame is its own cycle.
     TreeSequenceInfo still;
     still.frames = 4;
     still.tracks.push_back(track(0, 1, {0, 3}, {0.5f, 0.5f}));
-    CHECK(TreePose::cycle(still) == TreePose::Cycle{3, 1});
+    CHECK(TreePose::cycle(still) == TreePose::Cycle{0, 4});
+    TreeSequenceInfo pages;
+    pages.frames = 30;
+    CHECK(TreePose::cycle(pages) == TreePose::Cycle{0, 30});
     TreeSequenceInfo one;
     one.frames = 1;
     CHECK(TreePose::cycle(one) == TreePose::Cycle{0, 1});
+    // The boss key's turn: thirty-nine frames whose last stops two degrees short of the
+    // turn, nearer the first frame than the next step of nine degrees, so it closes; a
+    // turn whose last frame is a whole step short stays open.
+    TreeSequenceInfo key;
+    key.frames = 39;
+    std::vector<u16> keyFrames;
+    std::vector<f32> keyYaw;
+    for (u16 f = 0; f < 39; ++f) {
+        keyFrames.push_back(f);
+        keyYaw.push_back(static_cast<f32>(f) * 0.164f);
+    }
+    key.tracks.push_back(track(0, 1, keyFrames, keyYaw));
+    CHECK(TreePose::cycle(key) == TreePose::Cycle{0, 38});
+    TreeSequenceInfo rune = key;
+    rune.tracks[0].values.back() = 38.0f * 0.164f - 0.1f;
+    CHECK(TreePose::cycle(rune) == TreePose::Cycle{0, 39});
 }
 
 } // namespace

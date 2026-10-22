@@ -1,6 +1,8 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <optional>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -1293,7 +1295,7 @@ TEST_CASE("bottles use authored health and armor rather than the food blast thre
     CHECK(items.item(1).health == 3); // dropped bottles also initialize health
 }
 
-TEST_CASE("a lying reflective shield spins round without a pause",
+TEST_CASE("lying pickups spin round without a pause and flip-books turn every page",
           "[game][world][placed-items][pickup-spin][assets]") {
     const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
     test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
@@ -1306,9 +1308,11 @@ TEST_CASE("a lying reflective shield spins round without a pause",
     const std::array archives{&powerups};
     REQUIRE(items.bind(device, layout, nullptr, archives));
     items.setPlayerCount(0);
-    // Its tree keys its spin on node two: the first frame held a frame and the last a whole
-    // turn on, which would stand it still for three frames of every turn.
-    const auto* name = GENERATE("RF_SHLD_ICON", "HAMMER_ICON", "POT_BLU", "GEMBLUE");
+    // The shield and hammer key their spin with the first frame held a frame and the last a
+    // whole turn on, which would stand them still for three frames of every turn; the potion,
+    // gem, key and apple turn plainly; the fire icon is a flip-book without a track.
+    const auto* name =
+        GENERATE("RF_SHLD_ICON", "HAMMER_ICON", "POT_BLU", "GEMBLUE", "KEY", "APPLE", "FIREICON");
     CAPTURE(name);
     REQUIRE(items.place(device, name, Vec3{10000, 0, 10000}, nullptr));
     const PlacedItems::Item& item = items.item(items.size() - 1);
@@ -1318,21 +1322,31 @@ TEST_CASE("a lying reflective shield spins round without a pause",
     const TreePose::Cycle cycle = TreePose::cycle(sequence);
     CHECK(item.player.cycleFirst() == cycle.first);
     CHECK(item.player.cycleCount() == cycle.count);
-    usize spinning = 0;
+    std::optional<usize> spinning;
     for (usize n = 0; n < item.figure->nodes.size(); ++n) {
         const TrackInfo* track = sequence.track(n);
-        if (track != nullptr && track->has(1)) {
+        if (track != nullptr && track->has(1) && track->frames.size() > 1) {
             spinning = n;
         }
     }
+    std::set<f32> shown;
     std::vector<f32> yaws;
     f32 lastFrame = -1.0f;
     for (s32 tick = 0; tick < 240; ++tick) {
         items.update(1.0f / 60);
         if (item.player.frame() != lastFrame) {
             lastFrame = item.player.frame();
-            yaws.push_back(item.pose.poses()[spinning].rotation.y);
+            shown.insert(lastFrame);
+            if (spinning) {
+                yaws.push_back(item.pose.poses()[*spinning].rotation.y);
+            }
         }
+    }
+    // Every frame of the cycle is shown; a flip-book's cycle is its whole sequence.
+    CHECK(shown.size() == static_cast<usize>(item.player.cycleCount()));
+    if (!spinning) {
+        CHECK(item.player.cycleCount() == sequence.frames);
+        return;
     }
     // Every frame shown turns it on by about the same step; none holds it still.
     REQUIRE(yaws.size() > 40);
