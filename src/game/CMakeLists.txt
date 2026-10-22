@@ -56,6 +56,7 @@ add_library(game STATIC
     world/DestructibleWalls.cpp
     world/MissileTarget.cpp
     menu/SettingsMenu.cpp
+    menu/SettingsRows.cpp
     menu/ControlSettings.cpp
     menu/ControlPrompts.cpp
     menu/VideoSettings.cpp

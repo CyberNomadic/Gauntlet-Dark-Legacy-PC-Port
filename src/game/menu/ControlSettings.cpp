@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "game/config/ControlProfiles.h"
+#include "game/menu/SettingsRows.h"
 
 namespace gdl::game {
 namespace {
@@ -18,8 +19,20 @@ constexpr s32 kActionY = 268;
 constexpr s32 kActionGap = 24;
 constexpr s32 kCanvasWidth = 512;
 constexpr s32 kCaptureTicks = 600;
+// A player's bindings are many rows with values; they share the parchment with the page's
+// actions by staying small.
+constexpr s32 kEditorX = 78;
+constexpr s32 kEditorY = 94;
+constexpr s32 kEditorRowStep = 18;
+constexpr f32 kEditorScale = 0.45f;
+constexpr f32 kEditorCursorScale = 0.6f;
+constexpr s32 kEditorValueX = 282;
+constexpr s32 kEditorValueWidth = 148;
 s32 pageCount() {
     return (static_cast<s32>(controlActions().size()) + kPageSize - 1) / kPageSize;
+}
+MenuEvent moved() {
+    return {MenuAction::Moved, 0};
 }
 } // namespace
 void ControlSettings::begin(const GameConfig& config) {
@@ -69,128 +82,116 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
     definition.titleScale = 0.75f;
     definition.playerLabel.clear();
     definition.fades = false;
-    definition.x = 78;
-    definition.y = 94;
-    definition.scale = 0.45f;
-    definition.cursorScale = 0.6f;
-    definition.valueX = 282;
-    definition.valueWidth = 148;
     definition.items.clear();
     definition.body.clear();
     definition.itemPositions.clear();
-    const auto& config = m_draft;
+    SettingsRows rows(definition, painter, text);
     if (m_player < 0) {
+        // The players read as the other choice pages do.
+        rows.column();
         for (s32 player = 0; player < 4; ++player) {
-            definition.items.push_back(
-                {text("controls.player") + " " + std::to_string(player + 1), player});
+            rows.choice(text("controls.player") + " " + std::to_string(player + 1), player);
         }
-        definition.items.push_back({text("settings.back"), kBack});
+        rows.choice(text("settings.back"), kBack);
+        return;
+    }
+    rows.column(kEditorX, kEditorY, kEditorScale);
+    definition.cursorScale = kEditorCursorScale;
+    definition.valueX = kEditorValueX;
+    definition.valueWidth = kEditorValueWidth;
+    const auto& config = m_draft;
+    auto profile = config.controls[static_cast<usize>(m_player)];
+    if (!profile.customized) {
+        profile.play = config.play;
+        profile.menu = config.menu;
+    }
+    definition.title += " - " + text("controls.player") + " " + std::to_string(m_player + 1);
+    std::string device = profile.name;
+    if (profile.device.empty()) {
+        device = text("controls.auto");
+    } else if (profile.device == "keyboard") {
+        device = text("controls.keyboard");
+    } else if (profile.device == "none") {
+        device = text("controls.none");
+    } else if (controlDevices(config, m_devices)[static_cast<usize>(m_player)].pad < 0) {
+        device = text("controls.disconnected");
     } else {
-        auto profile = config.controls[static_cast<usize>(m_player)];
-        if (!profile.customized) {
-            profile.play = config.play;
-            profile.menu = config.menu;
+        device += " " + std::to_string(profile.occurrence + 1);
+    }
+    // The complete name remains in the selected device's profile; keep the row on parchment.
+    if (device.size() > 25) {
+        device = device.substr(0, 22) + "...";
+    }
+    rows.value(text("controls.device"), kDevice, device);
+    const auto actions = controlActions();
+    const auto assigned = controlDevices(config, m_devices)[static_cast<usize>(m_player)];
+    const bool canBind = assigned.keyboard || m_devices.isPadConnected(assigned.pad);
+    const auto buttonLabel = [&](PadButton button) {
+        switch (button) {
+        case PadButton::LeftStickUp: return text("controls.stickUp");
+        case PadButton::LeftStickDown: return text("controls.stickDown");
+        case PadButton::LeftStickLeft: return text("controls.stickLeft");
+        case PadButton::LeftStickRight: return text("controls.stickRight");
+        default: return std::string(padButtonName(button));
         }
-        definition.title += " - " + text("controls.player") + " " + std::to_string(m_player + 1);
-        std::string device = profile.name;
-        if (profile.device.empty()) {
-            device = text("controls.auto");
-        } else if (profile.device == "keyboard") {
-            device = text("controls.keyboard");
-        } else if (profile.device == "none") {
-            device = text("controls.none");
-        } else if (controlDevices(config, m_devices)[static_cast<usize>(m_player)].pad < 0) {
-            device = text("controls.disconnected");
+    };
+    for (s32 row = 0; row < kPageSize; ++row) {
+        const s32 index = m_page * kPageSize + row;
+        if (index >= static_cast<s32>(actions.size())) {
+            break;
+        }
+        const auto& action = actions[static_cast<usize>(index)];
+        const std::string_view actionId = action.id;
+        std::string value;
+        if (m_capture == index) {
+            value = text("controls.press");
+        } else if (assigned.keyboard) {
+            for (const auto key : action.keyboard(profile)) {
+                if (!value.empty()) {
+                    value += "/";
+                }
+                value += keyName(key);
+            }
+            if (profile.device.empty() && !action.controller(profile).empty()) {
+                value += " / ";
+                value += buttonLabel(action.controller(profile).front());
+            }
         } else {
-            device += " " + std::to_string(profile.occurrence + 1);
-        }
-        // The complete name remains in the selected device's profile; keep the row on parchment.
-        if (device.size() > 25) {
-            device = device.substr(0, 22) + "...";
-        }
-        definition.items.push_back({text("controls.device"), kDevice, 0, true, {}, 0, device});
-        const auto actions = controlActions();
-        const auto assigned = controlDevices(config, m_devices)[static_cast<usize>(m_player)];
-        const bool canBind = assigned.keyboard || m_devices.isPadConnected(assigned.pad);
-        const auto buttonLabel = [&](PadButton button) {
-            switch (button) {
-            case PadButton::LeftStickUp: return text("controls.stickUp");
-            case PadButton::LeftStickDown: return text("controls.stickDown");
-            case PadButton::LeftStickLeft: return text("controls.stickLeft");
-            case PadButton::LeftStickRight: return text("controls.stickRight");
-            default: return std::string(padButtonName(button));
+            for (const auto button : action.controller(profile)) {
+                if (!value.empty()) {
+                    value += "/";
+                }
+                value += buttonLabel(button);
             }
-        };
-        for (s32 row = 0; row < kPageSize; ++row) {
-            const s32 index = m_page * kPageSize + row;
-            if (index >= static_cast<s32>(actions.size())) {
-                break;
-            }
-            const auto& action = actions[static_cast<usize>(index)];
-            const std::string_view actionId = action.id;
-            std::string value;
-            if (m_capture == index) {
-                value = text("controls.press");
-            } else if (assigned.keyboard) {
-                for (const auto key : action.keyboard(profile)) {
-                    if (!value.empty()) {
-                        value += "/";
-                    }
-                    value += keyName(key);
-                }
-                if (profile.device.empty() && !action.controller(profile).empty()) {
-                    value += " / ";
-                    value += buttonLabel(action.controller(profile).front());
-                }
-            } else {
-                for (const auto button : action.controller(profile)) {
-                    if (!value.empty()) {
-                        value += "/";
-                    }
-                    value += buttonLabel(button);
-                }
-                if (value.empty() && profile.play.padMagicGestures &&
-                    !profile.play.padUsePotion.empty() &&
-                    (actionId == "throwPotion" || actionId == "shieldPotion")) {
-                    value =
-                        buttonLabel(profile.play.padUsePotion.front()) + " (" +
+            if (value.empty() && profile.play.padMagicGestures &&
+                !profile.play.padUsePotion.empty() &&
+                (actionId == "throwPotion" || actionId == "shieldPotion")) {
+                value = buttonLabel(profile.play.padUsePotion.front()) + " (" +
                         text(actionId == "throwPotion" ? "controls.hold" : "controls.doubleTap") +
                         ")";
-                }
             }
-            if (value.empty()) {
-                value = text("controls.unbound");
-            }
-            if (value.size() > 25) {
-                value = value.substr(0, 22) + "...";
-            }
-            definition.items.push_back(
-                {text("controls." + std::string(action.id)), index, 0, canBind, {}, 0, value});
         }
-        if (const auto* pad = m_devices.padDevice(assigned.pad);
-            pad != nullptr && pad->rumbleSupported) {
-            definition.items.push_back({text("controls.rumble"),
-                                        kRumble,
-                                        0,
-                                        true,
-                                        {},
-                                        0,
-                                        text(profile.rumble ? "settings.on" : "settings.off")});
+        if (value.empty()) {
+            value = text("controls.unbound");
         }
-        definition.items.push_back({"",
-                                    kNext,
-                                    0,
-                                    true,
-                                    {},
-                                    0,
-                                    text("controls.page") + " " + std::to_string(m_page + 1) + "/" +
-                                        std::to_string(pageCount())});
-        definition.items.push_back({text("settings.apply"), kApply});
-        definition.items.push_back({text("settings.defaults"), kDefaults});
-        definition.items.push_back({text("settings.back"), kBack});
+        if (value.size() > 25) {
+            value = value.substr(0, 22) + "...";
+        }
+        rows.value(text("controls." + std::string(action.id)), index, value, canBind);
     }
+    if (const auto* pad = m_devices.padDevice(assigned.pad);
+        pad != nullptr && pad->rumbleSupported) {
+        rows.toggle(text("controls.rumble"), kRumble, profile.rumble);
+    }
+    rows.value("", kNext,
+               text("controls.page") + " " + std::to_string(m_page + 1) + "/" +
+                   std::to_string(pageCount()));
+    rows.choice(text("settings.apply"), kApply);
+    rows.choice(text("settings.defaults"), kDefaults);
+    rows.choice(text("settings.back"), kBack);
     for (usize i = 0; i < definition.items.size(); ++i) {
-        definition.itemPositions.emplace_back(78, 94 + static_cast<s32>(i) * 18);
+        definition.itemPositions.emplace_back(kEditorX,
+                                              kEditorY + static_cast<s32>(i) * kEditorRowStep);
         auto& value = definition.items[i].value;
         if (painter.measure(value, definition.scale) > definition.valueWidth) {
             while (!value.empty() &&
@@ -204,22 +205,20 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
             value += "...";
         }
     }
-    if (m_player >= 0) {
-        const auto firstAction = definition.items.size() - kActionCount;
-        auto& page = definition.items[firstAction - 1];
-        const auto pageWidth = painter.measure(page.value, definition.scale);
-        const auto pageX = (kCanvasWidth - pageWidth) / 2;
-        page.valueColumn = MenuValueColumn{pageX, pageWidth};
-        definition.itemPositions[firstAction - 1].x = static_cast<f32>(pageX);
-        s32 width = kActionGap * (kActionCount - 1);
-        for (usize i = firstAction; i < definition.items.size(); ++i) {
-            width += painter.measure(definition.items[i].text, definition.scale);
-        }
-        s32 x = (kCanvasWidth - width) / 2;
-        for (usize i = firstAction; i < definition.items.size(); ++i) {
-            definition.itemPositions[i] = Vec2{static_cast<f32>(x), kActionY};
-            x += painter.measure(definition.items[i].text, definition.scale) + kActionGap;
-        }
+    const auto firstAction = definition.items.size() - kActionCount;
+    auto& page = definition.items[firstAction - 1];
+    const auto pageWidth = painter.measure(page.value, definition.scale);
+    const auto pageX = (kCanvasWidth - pageWidth) / 2;
+    page.valueColumn = MenuValueColumn{pageX, pageWidth};
+    definition.itemPositions[firstAction - 1].x = static_cast<f32>(pageX);
+    s32 width = kActionGap * (kActionCount - 1);
+    for (usize i = firstAction; i < definition.items.size(); ++i) {
+        width += painter.measure(definition.items[i].text, definition.scale);
+    }
+    s32 x = (kCanvasWidth - width) / 2;
+    for (usize i = firstAction; i < definition.items.size(); ++i) {
+        definition.itemPositions[i] = Vec2{static_cast<f32>(x), kActionY};
+        x += painter.measure(definition.items[i].text, definition.scale) + kActionGap;
     }
     if (m_failed || m_capture >= 0) {
         definition.body = {text(m_failed ? "settings.failed" : "controls.cancel")};
@@ -227,10 +226,10 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
         definition.bodyScale = 0.4f;
     }
 }
-bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu,
-                             GameConfig& config,
-                             const std::function<bool(const GameConfig&)>& persist,
-                             const std::function<void(s32)>& rebuild) {
+ControlSettings::Result
+ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, GameConfig& config,
+                        const std::function<bool(const GameConfig&)>& persist,
+                        const std::function<void(s32)>& rebuild) {
     bool devicesChanged = false;
     if (input.devices != nullptr) {
         for (s32 pad = 0; pad < Input::kMaxPads; ++pad) {
@@ -260,7 +259,7 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
         if (m_timeout <= 0 || m_devices.wasKeyPressed(Key::Escape)) {
             m_capture = -1;
             rebuild(menu.selection());
-            return false;
+            return {};
         }
         bool held = false;
         std::optional<Key> key;
@@ -285,7 +284,7 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
         held |= m_devices.pointer().down || m_devices.isKeyDown(Key::Enter);
         if (!m_released) {
             m_released = !held;
-            return false;
+            return {};
         }
         if (key || button) {
             auto& profile = m_draft.controls[static_cast<usize>(m_player)];
@@ -294,7 +293,8 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
                 profile.menu = config.menu;
             }
             profile.customized = true;
-            const auto& action = controlActions()[static_cast<usize>(m_capture)];
+            const s32 bound = m_capture;
+            const auto& action = controlActions()[static_cast<usize>(bound)];
             if (key) {
                 action.keyboard(profile) = {*key};
             }
@@ -303,8 +303,9 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
             }
             m_capture = -1;
             rebuild(menu.selection());
+            return {{MenuAction::Choice, bound}};
         }
-        return false;
+        return {};
     }
     auto mapped = input;
     // Keep the session's original controls alive even after Apply changes its owner.
@@ -330,15 +331,17 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
             rebuild(firstAction +
                     (menu.selection() - firstAction + (mapped.left ? -1 : 1) + kActionCount) %
                         kActionCount);
-            return false;
+            return {moved()};
         }
         if (mapped.up || mapped.down) {
             rebuild(mapped.up ? firstAction - 1 : 0);
-            return false;
+            return {moved()};
         }
     }
     auto event = menu.update(mapped, ticks);
-    if ((mapped.left || mapped.right) && !mapped.back && !mapped.select && m_player >= 0) {
+    const bool turned =
+        (mapped.left || mapped.right) && !mapped.back && !mapped.select && m_player >= 0;
+    if (turned) {
         const auto code = menu.definition().items[static_cast<usize>(menu.selection())].code;
         if (code == kDevice || code == kNext || code == kRumble) {
             event = {MenuAction::Choice, code, 0, mapped.left ? -1 : 1};
@@ -347,17 +350,17 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
     if (event.action == MenuAction::Back ||
         (event.action == MenuAction::Choice && event.code == kBack)) {
         if (m_player < 0) {
-            return true;
+            return {{MenuAction::Back, kBack}, true};
         }
         const s32 player = m_player;
         m_player = -1;
         m_draft = config;
         m_failed = false;
         rebuild(player);
-        return false;
+        return {{MenuAction::Back, kBack}};
     }
     if (event.action != MenuAction::Choice) {
-        return false;
+        return {event};
     }
     if (m_player < 0) {
         m_player = event.code;
@@ -365,8 +368,10 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
         m_draft = config;
         m_failed = false;
         rebuild(0);
-        return false;
+        return {event};
     }
+    // A value turned with an arrow is heard as a move, like the other pages' values.
+    const MenuEvent heard = turned ? moved() : event;
     if (event.code == kNext) {
         m_page = (m_page + (event.direction < 0 ? -1 : 1) + pageCount()) % pageCount();
         rebuild(firstAction - 1);
@@ -419,6 +424,6 @@ bool ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu
         m_timeout = kCaptureTicks;
         rebuild(menu.selection());
     }
-    return false;
+    return {heard};
 }
 } // namespace gdl::game

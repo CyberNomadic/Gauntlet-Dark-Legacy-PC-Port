@@ -12,6 +12,7 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/menu/SettingsMenu.h"
+#include "game/menu/SettingsRows.h"
 
 namespace {
 using namespace gdl;
@@ -1526,4 +1527,61 @@ TEST_CASE("rumble hardware changes preserve draft preferences and action bar foc
     f.applyControls();
     CHECK_FALSE(f.config.controls[static_cast<usize>(player)].rumble);
     CHECK(f.writes == 1);
+}
+
+TEST_CASE("the list of players in Controls reads at the choice pages' size",
+          "[settings][controls]") {
+    Fixture f;
+    f.menu.menu().focus(4);
+    f.select();
+    REQUIRE(f.menu.page() == SettingsMenu::Page::Controls);
+    const auto& definition = f.menu.menu().definition();
+    CHECK(definition.scale == SettingsRows::kChoiceScale);
+    CHECK(definition.cursorScale == SettingsRows::kChoiceScale);
+    CHECK(definition.x == SettingsRows::kColumnX);
+    CHECK(definition.y == SettingsRows::kColumnY);
+    CHECK(definition.itemPositions.empty());
+    CHECK(definition.items.front().text == "Player 1");
+    CHECK(definition.items.back().text == "Back");
+    f.select();
+    // A player's bindings keep their small rows and their own value column.
+    CHECK(definition.scale < SettingsRows::kChoiceScale);
+    CHECK(definition.itemPositions.size() == definition.items.size());
+    CHECK(definition.items.front().value == "Automatic");
+}
+
+TEST_CASE("Controls is heard: moves, choices and the depth of a step back",
+          "[settings][controls]") {
+    Fixture f;
+    CHECK(f.menu.depth() == 0);
+    f.menu.menu().focus(4);
+    MenuInput select;
+    select.select = true;
+    CHECK(f.menu.update(select, 1).action == MenuAction::Choice);
+    CHECK(f.menu.depth() == 1);
+    MenuInput down;
+    down.down = true;
+    CHECK(f.menu.update(down, 1).action == MenuAction::Moved);
+    f.release();
+    f.menu.menu().focus(0);
+    CHECK(f.menu.update(select, 1).action == MenuAction::Choice);
+    CHECK(f.menu.depth() == 2);
+    CHECK(f.menu.update(down, 1).action == MenuAction::Moved);
+    f.release();
+    MenuInput right;
+    right.right = true;
+    f.menu.menu().focus(0);
+    CHECK(f.menu.update(right, 1).action == MenuAction::Moved); // the device turns like a value
+    f.release();
+    MenuInput back;
+    back.back = true;
+    CHECK(f.menu.update(back, 1).action == MenuAction::None);
+    CHECK(f.menu.page() == SettingsMenu::Page::Controls);
+    CHECK(f.menu.depth() == 1);
+    f.release();
+    CHECK(f.menu.update(back, 1).action == MenuAction::None);
+    CHECK(f.menu.page() == SettingsMenu::Page::Root);
+    CHECK(f.menu.depth() == 0);
+    f.release();
+    CHECK(f.menu.update(back, 1).action == MenuAction::Back);
 }

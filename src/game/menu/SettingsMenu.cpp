@@ -7,6 +7,8 @@
 
 #include "engine/core/Types.h"
 
+#include "game/menu/SettingsRows.h"
+
 namespace gdl::game {
 namespace {
 constexpr s32 kGraphicsCode = 4;
@@ -93,9 +95,8 @@ void SettingsMenu::rebuild(s32 selection) {
     definition.title = text(m_scope == Scope::Title ? "menu.options" : "pause.settings");
     definition.scale = 1.0f;
     definition.fades = m_backdrop.fades && m_page == Page::Root;
-    const auto add = [&](std::string label, s32 code) {
-        definition.items.push_back({std::move(label), code});
-    };
+    SettingsRows rows(definition, *m_painter, [this](std::string_view id) { return text(id); });
+    const auto add = [&](std::string label, s32 code) { rows.choice(std::move(label), code); };
     switch (m_page) {
     case Page::Controls:
         m_controls.define(definition, *m_painter, [this](std::string_view id) { return text(id); });
@@ -107,17 +108,8 @@ void SettingsMenu::rebuild(s32 selection) {
             add(text("menu.compass"), 2);
         }
         add(text("menu.graphics"), kGraphicsCode);
-        definition.items.push_back({text("menu.controls"), 3});
-        constexpr s32 kMargin = 64;
-        const s32 left = definition.x < 0 ? kMargin : definition.x;
-        s32 longest = 1;
-        for (const auto& item : definition.items) {
-            longest = std::max(longest, m_painter->measure(item.text, 1));
-        }
-        definition.scale =
-            std::min(1.0f, static_cast<f32>(std::max(1, m_screen.width - left - kMargin)) /
-                               static_cast<f32>(longest));
-        definition.cursorScale = definition.scale;
+        add(text("menu.controls"), 3);
+        rows.fit(1.0f, m_screen.width);
         break;
     }
     case Page::Graphics: {
@@ -145,8 +137,7 @@ void SettingsMenu::rebuild(s32 selection) {
             definition.scale = 0.7f;
         } else {
             const auto choice = [&](std::string label, std::string value, s32 code) {
-                add(std::move(label), code);
-                definition.items.back().value = std::move(value);
+                rows.value(std::move(label), code, std::move(value));
             };
             choice(text("settings.vsync"),
                    text(m_config.display.vsync ? "settings.on" : "settings.off"), 0);
@@ -280,79 +271,46 @@ void SettingsMenu::rebuild(s32 selection) {
     }
     case Page::Game:
         definition.title = text("menu.gameOptions");
-        definition.x = 96;
-        definition.y = 128;
-        definition.scale = 0.7f;
-        definition.cursorScale = definition.scale;
-        definition.valueX = 344;
-        definition.valueWidth =
-            std::max(m_painter->measure(text("settings.on"), definition.scale),
-                     m_painter->measure(text("settings.off"), definition.scale));
+        rows.column();
+        rows.switches();
         add(text("settings.difficulty"), 0);
         add(text("settings.multiplayer"), 1);
         add(text("settings.combat"), 2);
-        add(text("settings.expandedShop"), 3);
-        definition.items.back().value =
-            text(m_config.game.expandedShop ? "settings.on" : "settings.off");
-        add(text("settings.autoSave"), 4);
-        definition.items.back().value =
-            text(m_config.game.autoSave ? "settings.on" : "settings.off");
+        rows.toggle(text("settings.expandedShop"), 3, m_config.game.expandedShop);
+        rows.toggle(text("settings.autoSave"), 4, m_config.game.autoSave);
         break;
     case Page::Combat:
         definition.title = text("settings.combat");
-        definition.x = 96;
-        definition.y = 160;
-        definition.scale = 0.7f;
-        definition.cursorScale = definition.scale;
-        definition.valueX = 344;
-        definition.valueWidth =
-            std::max(m_painter->measure(text("settings.on"), definition.scale),
-                     m_painter->measure(text("settings.off"), definition.scale));
-        add(text("settings.autoMelee"), 0);
-        definition.items.back().value =
-            text(m_config.combat.autoMelee ? "settings.on" : "settings.off");
-        add(text("settings.enemyHealthBars"), 1);
-        definition.items.back().value =
-            text(m_config.combat.enemyHealthBars ? "settings.on" : "settings.off");
-        add(text("settings.autoActivateItems"), 2);
-        definition.items.back().value =
-            text(m_config.combat.autoActivateItems ? "settings.on" : "settings.off");
-        add(text("settings.autoAim"), 3);
-        definition.items.back().value =
-            text(m_config.combat.autoAim ? "settings.on" : "settings.off");
+        rows.column(SettingsRows::kColumnX, 160);
+        rows.switches();
+        rows.toggle(text("settings.autoMelee"), 0, m_config.combat.autoMelee);
+        rows.toggle(text("settings.enemyHealthBars"), 1, m_config.combat.enemyHealthBars);
+        rows.toggle(text("settings.autoActivateItems"), 2, m_config.combat.autoActivateItems);
+        rows.toggle(text("settings.autoAim"), 3, m_config.combat.autoAim);
         break;
     case Page::Difficulty:
         definition.title = text("settings.difficulty");
         for (usize i = 0; i < DifficultyConfig::kNames.size(); ++i) {
-            add(text("settings." + std::string(DifficultyConfig::kNames[i])), static_cast<s32>(i));
-            definition.items.back().markedPart =
-                m_config.difficulty.level == DifficultyConfig::kNames[i] ? 1 : 0;
+            rows.marked(text("settings." + std::string(DifficultyConfig::kNames[i])),
+                        static_cast<s32>(i),
+                        m_config.difficulty.level == DifficultyConfig::kNames[i]);
         }
         break;
     case Page::Multiplayer: {
         definition.title = text("settings.multiplayer");
-        s32 longest = 0;
         for (usize i = 0; i < MultiplayerConfig::kNames.size(); ++i) {
-            add(text("settings.multiplayer." + std::string(MultiplayerConfig::kNames[i])),
-                static_cast<s32>(i));
-            definition.items.back().markedPart =
-                static_cast<usize>(m_config.multiplayer.mode) == i ? 1 : 0;
-            longest = std::max(longest, m_painter->measure(definition.items.back().text + " ~", 1));
+            rows.marked(text("settings.multiplayer." + std::string(MultiplayerConfig::kNames[i])),
+                        static_cast<s32>(i), static_cast<usize>(m_config.multiplayer.mode) == i);
         }
+        // The mark beside a choice takes the room of a tilde.
         constexpr f32 kMultiplayerScale = 0.65f;
-        constexpr s32 kTextMargin = 64;
-        const s32 left = definition.x < 0 ? kTextMargin : definition.x;
-        const auto available = static_cast<f32>(std::max(1, m_screen.width - left - kTextMargin));
-        definition.scale =
-            std::min(kMultiplayerScale, available / static_cast<f32>(std::max(1, longest)));
-        definition.cursorScale = definition.scale;
+        rows.fit(kMultiplayerScale, m_screen.width, " ~");
         break;
     }
     case Page::Compass:
         definition.title = text("menu.compass");
-        add(text("settings.hide"), 0);
-        add(text("settings.show"), 1);
-        definition.items[m_config.camera.compass ? 1 : 0].markedPart = 1;
+        rows.marked(text("settings.hide"), 0, !m_config.camera.compass);
+        rows.marked(text("settings.show"), 1, m_config.camera.compass);
         break;
     }
     m_menu.open(definition, *m_painter, m_screen, selection);
@@ -498,12 +456,16 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
         return {};
     }
     if (m_page == Page::Controls) {
-        if (m_controls.update(input, ticks, m_menu, m_config, m_persist,
-                              [this](s32 selected) { rebuild(selected); })) {
+        const auto result = m_controls.update(input, ticks, m_menu, m_config, m_persist,
+                                              [this](s32 selected) { rebuild(selected); });
+        if (result.closed) {
             m_page = Page::Root;
             rebuild();
+            return {};
         }
-        return {};
+        // A step back to the list of players is heard as the depth falls; a Back event
+        // would close the settings.
+        return result.event.action == MenuAction::Back ? MenuEvent{} : result.event;
     }
     if (m_confirmVideo) {
         if (m_video.update()) {
@@ -662,7 +624,7 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
                 m_page = Page::Controls;
                 m_controls.begin(m_config);
                 rebuild();
-                return {};
+                return event;
             }
             m_page =
                 event.code == kGraphicsCode ? Page::Graphics : static_cast<Page>(event.code + 1);
@@ -714,6 +676,12 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
         m_audioSampleTicks = 0;
     }
     return event;
+}
+s32 SettingsMenu::depth() const {
+    if (m_page == Page::Root) {
+        return 0;
+    }
+    return m_page == Page::Controls && m_controls.editing() ? 2 : 1;
 }
 void SettingsMenu::draw(Canvas& canvas, const TextPainter& painter,
                         const MenuTextures& textures) const {

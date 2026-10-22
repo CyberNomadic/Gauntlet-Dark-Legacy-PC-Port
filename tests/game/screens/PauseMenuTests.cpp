@@ -234,6 +234,47 @@ TEST_CASE("resuming plays only the scroll dismissal without a navigation ding",
     CHECK(sounds.voiceCount() == 2);
 }
 
+TEST_CASE("the Controls page is heard like the other settings pages",
+          "[pause][settings][controls][assets]") {
+    test::assetOrSkip("audio/COMMON.vbk");
+    test::FakeRenderDevice device;
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.sounds = &sounds;
+    context.unpackedRoot = test::assetOrSkip("STATIC/textures.ngc").parent_path().parent_path();
+    const std::array party{PartyMember{}};
+    PauseMenu menu;
+    REQUIRE(menu.open(device, context, party, 0));
+    MenuInput select;
+    select.select = true;
+    MenuInput down;
+    down.down = true;
+    MenuInput back;
+    back.back = true;
+    const auto step = [&](const MenuInput& input) {
+        const auto before = sounds.voiceCount();
+        REQUIRE(menu.update(1.0 / 60, input) == PauseOutcome::Running);
+        REQUIRE(menu.update(1.0 / 60, {}) == PauseOutcome::Running);
+        return static_cast<s32>(sounds.voiceCount() - before);
+    };
+    CHECK(step(select) == 1); // Settings
+    // Audio, Game Options, Compass, Graphics, Controls.
+    CHECK(step(down) == 1);
+    CHECK(step(down) == 1);
+    CHECK(step(down) == 1);
+    CHECK(step(down) == 1);
+    CHECK(step(select) == 1); // Controls: the list of players
+    CHECK(step(down) == 1);   // Player 2
+    CHECK(step(select) == 1); // Player 2's bindings
+    CHECK(step(down) == 1);
+    CHECK(step(back) == 1); // back to the list of players
+    CHECK(step(back) == 1); // back to the settings
+    CHECK(step(back) == 1); // back to the pause menu
+}
+
 TEST_CASE("pause acid dismissal retains fractional ticks at different update rates",
           "[pause][pause-dismiss][assets]") {
     const s32 rate = GENERATE(30, 60, 144, 240);

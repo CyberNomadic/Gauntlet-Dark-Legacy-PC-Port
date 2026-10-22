@@ -254,14 +254,14 @@ PauseOutcome PauseMenu::update(f64 seconds, const MenuInput& rawInput) {
         return m_fire.active() ? PauseOutcome::Running : m_pendingOutcome;
     }
     if (m_page == Page::Options) {
-        const auto previous = m_settings.page();
+        const auto depth = m_settings.depth();
         const auto event = m_settings.update(input, ticks);
         playMenuSound(event, input.left || input.right);
         if (!m_settings.audioSample().empty()) {
             playSound(m_settings.audioSample());
         }
-        if (event.action == MenuAction::None && previous != m_settings.page() &&
-            (input.back || input.escape || input.pointerBack)) {
+        // A step back within the settings, by Back or by choosing a Back row.
+        if (event.action == MenuAction::None && m_settings.depth() < depth) {
             playSound("S_OPTMENUEXIT");
         }
         if (event.action == MenuAction::Back) {

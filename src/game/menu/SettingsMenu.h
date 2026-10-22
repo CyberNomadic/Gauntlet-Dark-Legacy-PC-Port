@@ -40,6 +40,9 @@ public:
     void close();
     bool isOpen() const { return m_menu.isOpen(); }
     Page page() const { return m_page; }
+    /** How far in the menu is: the root, a page, or a player's controls within Controls.
+     * A scene hears a step back as the depth falls. */
+    s32 depth() const;
     const GameConfig& config() const { return m_config; }
     const OptionMenu& menu() const { return m_menu; }
     OptionMenu& menu() { return m_menu; }
