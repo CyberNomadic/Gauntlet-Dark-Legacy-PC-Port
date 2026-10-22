@@ -82,7 +82,6 @@ void OnlineRun::close() {
     m_status.clear();
     m_networkTexture.reset();
     m_network.clear();
-    m_link.release();
     m_pingMs = -1;
 }
 std::optional<std::string> OnlineRun::stallNotice(f64 stalledSeconds) {
@@ -714,17 +713,14 @@ void OnlineRun::render(RenderDevice& device, const Mat4& projection, f32 width, 
         canvas.begin(device, projection, {.depthWrite = false, .depthTest = false});
         const auto textWidth = static_cast<f32>(m_networkTexture->width()) / 2;
         const auto textHeight = static_cast<f32>(m_networkTexture->height()) / 2;
-        // The connection mark sits above the ping, as wide as the text or as the icon
-        // with a bar of its own width, whichever is wider.
-        const auto icon = LinkIndicator::iconSize();
-        const f32 inner = std::max(textWidth, icon.x * 2 + LinkIndicator::kGap);
-        const f32 markHeight = std::max(icon.y, LinkIndicator::kBarHeight);
-        canvas.fill({width - inner - 12, 4, inner + 8, markHeight + textHeight + 6},
+        // The signal mark sits above the ping, both against the panel's right edge.
+        const auto mark = LinkIndicator::size();
+        const f32 inner = std::max(textWidth, mark.x);
+        canvas.fill({width - inner - 12, 4, inner + 8, mark.y + textHeight + 6},
                     Color::rgba(0, 0, 0, 160));
-        m_link.draw(canvas, device, {width - inner - 8, 6, inner, markHeight},
-                    LinkIndicator::quality(m_pingMs));
+        LinkIndicator::draw(canvas, {width - mark.x - 8, 6}, LinkIndicator::quality(m_pingMs));
         canvas.draw(*m_networkTexture,
-                    {width - textWidth - 8, 6 + markHeight + 2, textWidth, textHeight});
+                    {width - textWidth - 8, 6 + mark.y + 2, textWidth, textHeight});
         canvas.end();
     }
     if (m_statusTexture != nullptr) {

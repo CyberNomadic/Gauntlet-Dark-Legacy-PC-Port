@@ -81,7 +81,6 @@ private:
     std::string m_status;
     std::unique_ptr<Texture> m_networkTexture;
     std::string m_network;
-    LinkIndicator m_link;
     s32 m_pingMs = -1;
 };
 } // namespace gdl::game

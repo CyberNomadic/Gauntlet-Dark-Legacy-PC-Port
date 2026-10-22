@@ -1,6 +1,7 @@
 #include <algorithm>
+#include <functional>
+#include <vector>
 
-#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/ui/Canvas.h"
@@ -10,14 +11,23 @@
 
 using namespace gdl;
 using namespace gdl::game;
-using Catch::Approx;
 
 namespace {
-bool anyVertex(const test::FakeRenderDevice& device, Color color) {
-    return std::ranges::any_of(device.draws, [&](const test::RecordedDraw& draw) {
-        return std::ranges::any_of(draw.vertices,
-                                   [&](const ImmediateVertex& v) { return v.color == color; });
-    });
+usize quadsOf(const test::FakeRenderDevice& device, Color color) {
+    usize vertices = 0;
+    for (const auto& draw : device.draws) {
+        vertices += static_cast<usize>(std::ranges::count_if(
+            draw.vertices, [&](const ImmediateVertex& v) { return v.color == color; }));
+    }
+    return vertices / 6; // a bar is two triangles
+}
+
+void drawOnce(test::FakeRenderDevice& device, LinkQuality quality) {
+    device.draws.clear();
+    Canvas canvas;
+    canvas.begin(device, Mat4{1});
+    LinkIndicator::draw(canvas, {100, 6}, quality);
+    canvas.end();
 }
 } // namespace
 
@@ -32,11 +42,11 @@ TEST_CASE("a link reads good under 60 ms, fair under 150 and poor beyond",
     CHECK(LinkIndicator::quality(900) == LinkQuality::Poor);
 }
 
-TEST_CASE("each quality has its own colour and share of the bar", "[hud][link-indicator]") {
-    CHECK(LinkIndicator::fill(LinkQuality::Good) == 1.0f);
-    CHECK(LinkIndicator::fill(LinkQuality::Fair) == Approx(2.0f / 3.0f));
-    CHECK(LinkIndicator::fill(LinkQuality::Poor) == Approx(1.0f / 3.0f));
-    CHECK(LinkIndicator::fill(LinkQuality::Unknown) == 0.0f);
+TEST_CASE("each quality lights its own number of bars in its own colour", "[hud][link-indicator]") {
+    CHECK(LinkIndicator::lit(LinkQuality::Good) == 4);
+    CHECK(LinkIndicator::lit(LinkQuality::Fair) == 3);
+    CHECK(LinkIndicator::lit(LinkQuality::Poor) == 1);
+    CHECK(LinkIndicator::lit(LinkQuality::Unknown) == 0);
     const auto good = LinkIndicator::color(LinkQuality::Good);
     const auto fair = LinkIndicator::color(LinkQuality::Fair);
     const auto poor = LinkIndicator::color(LinkQuality::Poor);
@@ -46,54 +56,44 @@ TEST_CASE("each quality has its own colour and share of the bar", "[hud][link-in
     CHECK(poor.r > poor.g);
     CHECK_FALSE(good == fair);
     CHECK_FALSE(fair == poor);
+    CHECK(LinkIndicator::color(LinkQuality::Unknown) == LinkIndicator::unlit());
+    CHECK(LinkIndicator::size() == Vec2{22, 14});
 }
 
-TEST_CASE("the icon is a symmetric broadcast glyph with a clear corner", "[hud][link-indicator]") {
-    const auto image = LinkIndicator::icon();
-    REQUIRE(image.width == 11);
-    REQUIRE(image.height == 7);
-    REQUIRE(image.pixels.size() == usize{11} * 7 * 4);
-    CHECK(image.pixels[3] == 0); // the top-left corner is clear
-    const auto alphaAt = [&](u32 x, u32 y) { return image.pixels[(y * image.width + x) * 4 + 3]; };
-    CHECK(alphaAt(5, 3) == 255); // the dot
-    for (u32 y = 0; y < image.height; ++y) {
-        for (u32 x = 0; x < image.width; ++x) {
-            CHECK(alphaAt(x, y) == alphaAt(image.width - 1 - x, y));
+TEST_CASE("the mark is four rising bars, lit from the shortest up", "[hud][link-indicator]") {
+    test::FakeRenderDevice device;
+    drawOnce(device, LinkQuality::Good);
+    CHECK(device.texturesCreated == 0);
+    CHECK(quadsOf(device, LinkIndicator::color(LinkQuality::Good)) == 4);
+    CHECK(quadsOf(device, LinkIndicator::unlit()) == 0);
+    std::vector<f32> tops;
+    std::vector<f32> bottoms;
+    for (const auto& draw : device.draws) {
+        for (usize i = 0; i + 5 < draw.vertices.size(); i += 6) {
+            f32 top = draw.vertices[i].position.y;
+            f32 bottom = top;
+            for (usize j = i; j < i + 6; ++j) {
+                top = std::min(top, draw.vertices[j].position.y);
+                bottom = std::max(bottom, draw.vertices[j].position.y);
+            }
+            tops.push_back(top);
+            bottoms.push_back(bottom);
         }
     }
-    CHECK(LinkIndicator::iconSize() == Vec2{22, 14});
-}
+    REQUIRE(tops.size() == 4);
+    CHECK(std::ranges::is_sorted(tops, std::greater<>{})); // each bar rises over the last
+    CHECK(std::ranges::all_of(bottoms, [&](f32 b) { return b == bottoms.front(); }));
+    CHECK(bottoms.front() == 6 + LinkIndicator::size().y);
 
-TEST_CASE("drawing shows the icon once and fills the bar by quality", "[hud][link-indicator]") {
-    test::FakeRenderDevice device;
-    LinkIndicator indicator;
-    const Rect area{100, 6, 70, 14};
-    Canvas canvas;
-    canvas.begin(device, Mat4{1});
-    indicator.draw(canvas, device, area, LinkQuality::Good);
-    canvas.end();
-    CHECK(device.texturesCreated == 1);
-    const auto icon = std::ranges::find_if(device.draws, [&](const test::RecordedDraw& draw) {
-        return draw.texture != &device.whiteTexture();
-    });
-    REQUIRE(icon != device.draws.end());
-    CHECK(icon->texture->width() == 11);
-    CHECK(icon->texture->height() == 7);
-    CHECK(anyVertex(device, LinkIndicator::color(LinkQuality::Good)));
-    CHECK_FALSE(anyVertex(device, LinkIndicator::color(LinkQuality::Poor)));
+    drawOnce(device, LinkQuality::Fair);
+    CHECK(quadsOf(device, LinkIndicator::color(LinkQuality::Fair)) == 3);
+    CHECK(quadsOf(device, LinkIndicator::unlit()) == 1);
 
-    device.draws.clear();
-    canvas.begin(device, Mat4{1});
-    indicator.draw(canvas, device, area, LinkQuality::Unknown);
-    canvas.end();
-    CHECK(device.texturesCreated == 1); // the icon is kept between frames
-    CHECK_FALSE(anyVertex(device, LinkIndicator::color(LinkQuality::Unknown)));
-    CHECK(anyVertex(device, LinkIndicator::color(LinkQuality::Good)) == false);
+    drawOnce(device, LinkQuality::Poor);
+    CHECK(quadsOf(device, LinkIndicator::color(LinkQuality::Poor)) == 1);
+    CHECK(quadsOf(device, LinkIndicator::unlit()) == 3);
 
-    indicator.release();
-    canvas.begin(device, Mat4{1});
-    indicator.draw(canvas, device, area, LinkQuality::Poor);
-    canvas.end();
-    CHECK(device.texturesCreated == 2);
-    CHECK(anyVertex(device, LinkIndicator::color(LinkQuality::Poor)));
+    drawOnce(device, LinkQuality::Unknown);
+    CHECK(quadsOf(device, LinkIndicator::unlit()) == 4);
+    CHECK(quadsOf(device, LinkIndicator::color(LinkQuality::Good)) == 0);
 }
