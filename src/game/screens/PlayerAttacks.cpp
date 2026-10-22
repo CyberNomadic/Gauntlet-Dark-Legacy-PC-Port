@@ -2151,12 +2151,16 @@ void PlayerAttacks::stepProjectileFlights(f32 seconds, std::span<PlayerRuntime> 
     }
     glowWeapons(players, targets.occupiedHand);
     std::vector<MissileTarget> missileTargets = strikeTargets(targets);
+    // A bottle is authored two units tall, but a thrown weapon leaves the hand up to four
+    // and a third units up and flies level, so the shot counts along the column a throw
+    // passes through; its footprint stays the bottle's own.
+    constexpr f32 kBottleShotHeight = 5.0f;
     const PlacedItems& lying = m_resources->world.placedItems();
     for (const usize bottle : lying.shootablePotions()) {
         const PlacedItems::Item& item = lying.item(bottle);
         missileTargets.push_back(MissileTarget{kPotionTargetBase + static_cast<s32>(bottle),
                                                item.position, std::max(item.radius, 0.5f),
-                                               std::max(item.height, 1.0f)});
+                                               std::max(item.height, kBottleShotHeight)});
         missileTargets.back().potionBottle = true;
     }
     // Chests, shut gates and raised tent walls stop it and take nothing (SfxSkipItem).

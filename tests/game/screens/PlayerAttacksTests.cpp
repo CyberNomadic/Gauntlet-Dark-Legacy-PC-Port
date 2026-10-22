@@ -5426,3 +5426,38 @@ TEST_CASE("carried shields and shattered bottles share the party's unspecified p
 }
 
 } // namespace
+
+TEST_CASE("a weapon leaving the hand four units up still breaks a lying bottle",
+          "[game][screens][player-attacks][shot-potion][assets]") {
+    // The archer's arrow leaves 1.5 above the body's centre, four units off the floor,
+    // and flies level: a bottle only two units tall must still take the hit.
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("WEAPONS/ANIM.PS2");
+    Fixture f;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    REQUIRE(f.world.load(f.device, root, *catalog.byName("G1")));
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    REQUIRE(f.classes.load(root / "PDATA"));
+    f.fixtures.bind({f.device, f.world, f.weapons, f.effects, f.audio, 1});
+    auto& player = f.players[0];
+    CharacterSave save;
+    save.character = 3;
+    const Vec3 origin{10000, 0, 10000};
+    player.actor.spawn(0, save, f.classes.stats(3), origin, 0);
+    player.figure = PlayerFigure::load(f.device, root, player.actor.save(), false);
+    REQUIRE(player.figure);
+    const usize bottle = f.world.placedItems().size();
+    REQUIRE(f.world.placeItem(f.device, "POT_BLU", origin + player.actor.facing() * 6.0f));
+    f.arsenal.launchWeapon(player.actor, player.figure.get(), player.actor.facing(), 1, false);
+    REQUIRE(f.arsenal.missiles().count() == 1);
+    CHECK(f.arsenal.missiles().missile(0).position.y >= 3.5f);
+    for (int tick = 0; tick < 90 && !f.world.placedItems().item(bottle).taken; ++tick) {
+        f.attacks.updateProjectiles(1.0f / 60, f.players, f.targets);
+    }
+    CHECK(f.world.placedItems().item(bottle).taken);
+    CHECK(f.world.placedItems().shootablePotions().empty());
+    f.attacks.clear();
+    f.fixtures.clear();
+}
