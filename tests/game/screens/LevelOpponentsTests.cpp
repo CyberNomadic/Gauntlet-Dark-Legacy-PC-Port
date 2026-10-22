@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <map>
+#include <numbers>
 #include <span>
 #include <string>
 #include <string_view>
@@ -223,6 +225,82 @@ TEST_CASE("live level rosters select the gargoyle form for statues actors and de
         CHECK(killed);
         opponents.close();
     }
+}
+
+TEST_CASE("a level gargoyle's fireball never lands on a reflective shield's wearer",
+          "[level-opponents][gargoyle][reflective-shield][assets]") {
+    // The courtyard, a gargoyle stood twenty-five ahead and turned to face the entrance
+    // player: its breath lands for five as always, its fireball (twenty) turns back at the
+    // shield the whole way through the level's update, with its collision and stops.
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("CRITTER/GAR_EAGL.WAD");
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("A1")));
+    REQUIRE(world.startPoint(0));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    const Vec3 start = world.startPoint(0)->position;
+    players[0].actor.spawn(0, {}, nullptr, start, 0.0f);
+    players[0].actor.save().progress().inventory.addPowerup(powerup::kArmor,
+                                                            powerup::kReflectShield, 0, 1);
+    LevelFixtures fixtures;
+    fixtures.bind({device, world, weapons, effects, audio, 1});
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1, true}, players);
+    const Vec3 spot = start + players[0].actor.facing() * 25.0f;
+    const auto floor = world.collision().floorAt(spot + Vec3{0, 2, 0}, 4, 6);
+    REQUIRE(floor.has_value());
+    const auto id = opponents.critters().spawnGargoyle(Vec3{spot.x, floor->y, spot.z},
+                                                       std::numbers::pi_v<f32>);
+    REQUIRE(id.has_value());
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.blast = [](const Vec3&, f32, f32) {};
+    events.fallen = [](const Vec3&) {};
+    events.spew = [](const CombatSpew&) {};
+    events.legend = [](const LegendEvent&) {};
+    events.shake = [] {};
+    events.help = [](s32, usize) { return false; };
+    events.destroyedGenerator = [](s32) {};
+    std::map<f32, s32> hurts;
+    events.hurt = [&](usize, f32 amount, HurtKind, bool, const PlayerImpact&) {
+        ++hurts[amount];
+    };
+    s32 throws = 0;
+    std::string last;
+    for (s32 frame = 0; frame < 900 && throws < 2; ++frame) {
+        opponents.update(1, 1.0f / 60, players, fixtures.obstacles(), events,
+                         fixtures.missileStops(), fixtures.critterObstacles());
+        const std::string move{opponents.critters().moveOf(*id)};
+        if (last != move) {
+            throws += move == "FBALL" ? 1 : 0;
+            last = move;
+        }
+    }
+    // The second throw's flight and return.
+    for (s32 frame = 0; frame < 240; ++frame) {
+        opponents.update(1, 1.0f / 60, players, fixtures.obstacles(), events,
+                         fixtures.missileStops(), fixtures.critterObstacles());
+    }
+    REQUIRE(throws == 2);
+    bool breathed = false;
+    for (const auto& [amount, count] : hurts) {
+        CAPTURE(amount, count);
+        CHECK(amount < 10.0f);
+        breathed = breathed || (amount > 4.0f && amount <= 5.0f);
+    }
+    CHECK(breathed);
+    opponents.close();
 }
 
 TEST_CASE("courtyard grunts approach the entrance player", "[courtyard-grunt][assets]") {
