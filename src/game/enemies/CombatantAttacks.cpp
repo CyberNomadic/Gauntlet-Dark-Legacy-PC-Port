@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 #include "game/enemies/CombatantBreath.h"
@@ -92,8 +93,9 @@ void Combatant::strikeWith(Actor& critter, s32 id, const MoveDefinition& move, s
         blow.origin = centre;
         const Vec3 away = feet - critter.position;
         const f32 length = flatDistance(feet, critter.position);
-        blow.direction = length > 0.001f ? Vec3{away.x / length, 0.0f, away.z / length}
-                                         : Vec3{std::sin(critter.yaw), 0.0f, std::cos(critter.yaw)};
+        blow.direction = length > 0.001f
+                             ? Vec3{away.x / length, 0.0f, away.z / length}
+                             : Vec3{portable::sin(critter.yaw), 0.0f, portable::cos(critter.yaw)};
         if (breath.has_value()) {
             const Vec3 direction = breath->end - breath->origin;
             const f32 size = glm::length(direction);
@@ -119,7 +121,7 @@ void Combatant::shoot(const Actor& critter, s32 id, const MoveDefinition& move, 
     const Mat4 body = modelTransform(critter);
     shot.origin = Vec3{attachmentTransform(critter, move.colnode)[3]} +
                   Vec3{body * Vec4{damage->offset, 0.0f}};
-    shot.forward = Vec3{std::sin(critter.yaw), 0.0f, std::cos(critter.yaw)};
+    shot.forward = Vec3{portable::sin(critter.yaw), 0.0f, portable::cos(critter.yaw)};
     if (const EnemyView* target = viewOf(players, critter.moveTarget); target != nullptr) {
         shot.target = target->position + Vec3{0.0f, 0.5f * target->height, 0.0f};
     }
@@ -150,7 +152,7 @@ void Combatant::plant(const Actor& critter, s32 id, s32 damageIndex) {
     shot.damageIndex = damageIndex;
     shot.origin =
         *critter.attackTarget + Vec3{modelTransform(critter) * Vec4{damage->offset, 0.0f}};
-    shot.forward = Vec3{std::sin(critter.yaw), 0.0f, std::cos(critter.yaw)};
+    shot.forward = Vec3{portable::sin(critter.yaw), 0.0f, portable::cos(critter.yaw)};
     shot.rate = attackRate(critter);
     shot.scale = critter.scale;
     shot.damageScale = m_sim.scales.damage;

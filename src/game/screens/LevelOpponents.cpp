@@ -11,6 +11,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/EnemyShrink.h"
 #include "game/players/ItemPickup.h"
@@ -125,13 +126,15 @@ bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const
 bool LevelOpponents::appendNativeDigest(NativeStateDigest& digest) const {
     digest.string("LevelOpponents.native.1");
     return m_generators.appendNativeDigest(digest) && m_enemyMissiles.appendNativeDigest(digest) &&
-           m_combatantProjectiles.appendNativeDigest(digest) && m_enemies.appendNativeDigest(digest) &&
-           m_placements.appendNativeDigest(digest) && m_statues.appendNativeDigest(digest) &&
-           m_critters.appendNativeDigest(digest) && m_bosses.appendNativeDigest(digest) &&
-           m_bossMeter.appendNativeDigest(digest) && appendNativeFollowupDigest(digest);
+           m_combatantProjectiles.appendNativeDigest(digest) &&
+           m_enemies.appendNativeDigest(digest) && m_placements.appendNativeDigest(digest) &&
+           m_statues.appendNativeDigest(digest) && m_critters.appendNativeDigest(digest) &&
+           m_bosses.appendNativeDigest(digest) && m_bossMeter.appendNativeDigest(digest) &&
+           appendNativeFollowupDigest(digest);
 }
 
-bool LevelOpponents::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+bool LevelOpponents::appendLocalDigest(NativeStateDigest& digest,
+                                       const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -303,7 +306,7 @@ bool LevelOpponents::dispatchEnemyMissileHit(const EnemyMissileHit& hit,
     // shot's distinct victims also keep separate identities if contacts reorder.
     const u64 target = hit.target >= 0 ? static_cast<u64>(hit.target) + 1 : 0;
     const u8 seat = hit.player >= 0 && hit.player < 4 ? static_cast<u8>(hit.player)
-                                                    : FrameEventEmitter::kNoSeat;
+                                                      : FrameEventEmitter::kNoSeat;
     const u32 cue = hit.ricochet ? 1 : hit.fromBurst ? 2 : hit.liquid ? 3 : 4;
     auto soundScope = m_resources->audio.soundScope({22, target, hit.instance, seat}, cue);
     if (hit.worldObject >= 0) {
@@ -459,7 +462,7 @@ void LevelOpponents::fireDeathShot(const EnemyDeathShot& shot) {
     ItemArchive* archive = m_enemies.archive(shot.kind);
     if (archive != nullptr && archive->trees.find(kDeathBurst).has_value()) {
         EffectTrees::Setting setting;
-        setting.yaw = std::atan2(shot.direction.x, shot.direction.z);
+        setting.yaw = portable::atan2(shot.direction.x, shot.direction.z);
         pending.burst = m_resources->effects.startSet(m_resources->device, *archive, kDeathBurst,
                                                       shot.position, setting);
         if (pending.burst != 0) {
@@ -490,7 +493,7 @@ void LevelOpponents::advanceDeathShots() {
         setting.velocity = shot.velocity;
         // StartEnemyDeathFX turns the burst toward its launch velocity; the
         // morph retains that orientation instead of returning to world +z.
-        setting.yaw = std::atan2(shot.velocity.x, shot.velocity.z);
+        setting.yaw = portable::atan2(shot.velocity.x, shot.velocity.z);
         setting.seconds = EnemyMissiles::kLife;
         setting.loop = false;
         const u32 id = m_resources->effects.startSet(m_resources->device, *archive, kDeathShot,
@@ -830,7 +833,7 @@ void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRunti
         const Mat4 stood = itemPlacement(risen.instance.position, risen.instance.rotation);
         Placement placement;
         placement.kind = risen.kind == CombatantKind::Golem ? kGolemEnemyKind : kGargoyleEnemyKind;
-        placement.facing = std::atan2(stood[2][0], stood[2][2]);
+        placement.facing = portable::atan2(stood[2][0], stood[2][2]);
         placement.viewRadius = risen.viewRadius;
         placement.sight = risen.sight;
         placement.carried = risen.carried;
@@ -1116,8 +1119,8 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
             (burst.enemy < 0 || burst.enemy >= Enemies::kMost || burst.instance == 0)) {
             audio.recorder()->unsupported("bomber burst without its source lifetime");
         }
-        auto scope = audio.soundScope(
-            {20, static_cast<u64>(std::max(burst.enemy, 0)), burst.instance}, 48);
+        auto scope =
+            audio.soundScope({20, static_cast<u64>(std::max(burst.enemy, 0)), burst.instance}, 48);
         if (burst.silencesYell) {
             if (!m_resources->audio.recordingSounds()) {
                 for (const SoundHandle yell : m_yells) {
@@ -1175,8 +1178,8 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         if (audio.recordingSounds() && (cue.instance == 0 || cue.effect < 0)) {
             audio.recorder()->unsupported("combatant projectile cue without its source lifetime");
         }
-        auto scope = audio.soundScope(
-            {23, static_cast<u64>(cue.effect) + 1, cue.instance}, static_cast<u32>(cue.phase));
+        auto scope = audio.soundScope({23, static_cast<u64>(cue.effect) + 1, cue.instance},
+                                      static_cast<u32>(cue.phase));
         audio.playNamed(cue.name);
     };
     for (const CombatShot& shot : m_bosses.takeShots()) {
@@ -1259,7 +1262,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         auto scope = m_resources->audio.soundScope(
             {23, 0, hit.instance},
             static_cast<u32>(hit.ricochet ? CombatantProjectiles::SoundPhase::Ricochet
-                                        : CombatantProjectiles::SoundPhase::Impact));
+                                          : CombatantProjectiles::SoundPhase::Impact));
         if (hit.ricochet) {
             playAt(kRicochetSound, kQuietSound, hit.position);
             continue;
@@ -1391,9 +1394,9 @@ bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublis
         }
         // Hurt and death are different semantic cues, including when a corrected
         // hit becomes lethal. Other enemies never renumber this source's events.
-        auto scope = audio.soundScope(
-            {20, static_cast<u64>(std::max(feedback.enemy, 0)), feedback.instance},
-            feedback.killed ? 17 : 16);
+        auto scope =
+            audio.soundScope({20, static_cast<u64>(std::max(feedback.enemy, 0)), feedback.instance},
+                             feedback.killed ? 17 : 16);
         const auto emission =
             EnemyFeedbackEmission::resolve(feedback, m_enemies.archive(feedback.kind),
                                            m_resources->weapons, m_resources->world.level());
@@ -1704,7 +1707,8 @@ void LevelOpponents::finishSummons(std::span<const EnemyView> players) {
                 EnemySpawn spawn;
                 spawn.kind = kGarmMinion;
                 spawn.tier = 3;
-                spawn.direction = Vec3{glm::rotate(Mat4{1}, yaw, Vec3{0, 1, 0}) * Vec4{forward, 0}};
+                spawn.direction =
+                    Vec3{portable::rotate(Mat4{1}, yaw, Vec3{0, 1, 0}) * Vec4{forward, 0}};
                 spawn.position = origin + kOffset * spawn.direction;
                 spawn.clearance = 1;
                 spawn.placed = true;

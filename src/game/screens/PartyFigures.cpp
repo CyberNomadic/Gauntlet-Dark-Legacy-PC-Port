@@ -5,6 +5,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/DynamicLights.h"
 #include "game/world/PlayerFigure.h"
@@ -82,7 +83,7 @@ Mat4 PartyFigures::presentationBody(const PlayerRuntime& runtime, f32 frameBlend
     const Vec3 position = glm::mix(runtime.previous.position, actor.position(), t);
     const f32 yaw =
         runtime.previous.yaw + std::remainder(actor.yaw() - runtime.previous.yaw, kTwoPi) * t;
-    return glm::rotate(glm::translate(Mat4{1}, position), yaw, Vec3{0, 1, 0});
+    return portable::rotate(glm::translate(Mat4{1}, position), yaw, Vec3{0, 1, 0});
 }
 
 void PartyFigures::loadSkins(RenderDevice& device, ItemArchive& powerups, ItemArchive& weapons) {

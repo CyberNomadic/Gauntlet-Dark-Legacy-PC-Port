@@ -7,6 +7,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 namespace {
@@ -19,7 +20,7 @@ constexpr f32 kTitleSlideEnd = 2.0f;
 } // namespace
 
 void LevelArrivalPresentation::appendState(NativeStateDigest& digest, const Simulation& state,
-                                            const TextureAnimator::Clock& textures) const {
+                                           const TextureAnimator::Clock& textures) const {
     digest.string("LevelArrivalPresentation.native.1");
     digest.resource(m_archive);
     m_textures.appendBindingDigest(digest);
@@ -211,8 +212,8 @@ void LevelArrivalPresentation::drawEffects(RenderDevice& device, const Mat4& cli
         f32 frame = spawn.player.frame();
         if (blend >= 0 && spawn.player.playing()) {
             frame = spawn.previousGeneration == spawn.player.generation()
-                        ? std::lerp(spawn.previousFrame, spawn.player.presentationFrame(),
-                                    std::clamp(blend, 0.0f, 1.0f))
+                        ? portable::lerp(spawn.previousFrame, spawn.player.presentationFrame(),
+                                         std::clamp(blend, 0.0f, 1.0f))
                         : spawn.player.presentationFrame();
             visualPose.evaluate(*spawn.tree, spawn.player.sequence(), frame, false, true);
             pose = &visualPose;

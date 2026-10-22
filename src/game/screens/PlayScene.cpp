@@ -10,6 +10,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 #include "engine/render/AmbientOcclusion.h"
 #include "engine/render/DepthOfField.h"
 #include "engine/world/WorldCamera.h"
@@ -326,7 +327,7 @@ void PlayScene::spawnParty(std::span<const PartyMember> party, const PlayOptions
     }
     origin = options.position.value_or(origin);
     yaw = options.yaw.value_or(yaw);
-    const Vec3 sideways{std::cos(yaw), 0.0f, -std::sin(yaw)};
+    const Vec3 sideways{portable::cos(yaw), 0.0f, -portable::sin(yaw)};
     const f32 first = -0.5f * static_cast<f32>(party.size() - 1) * kSpawnSpacing;
     m_players.reserve(party.size());
     for (usize i = 0; i < party.size(); ++i) {
@@ -1463,8 +1464,7 @@ std::vector<TriggerVisitor> PlayScene::visitors() const {
         // beneath the feet finds.
         if (m_players[i].floor.object >= 0) {
             visitor.floorObject = m_players[i].floor.object;
-        } else if (const auto floor =
-                       m_world->collision().floorAt(visitor.position, 0.5f, 1.0f)) {
+        } else if (const auto floor = m_world->collision().floorAt(visitor.position, 0.5f, 1.0f)) {
             visitor.floorObject = floor->object;
         }
         out.push_back(visitor);

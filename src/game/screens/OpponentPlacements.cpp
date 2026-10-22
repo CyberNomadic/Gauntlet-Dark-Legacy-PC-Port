@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "engine/math/PortableMath.h"
+
 #include "game/enemies/CritterStatues.h"
 #include "game/enemies/Critters.h"
 #include "game/enemies/Generators.h"
@@ -48,7 +50,7 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
         const Mat4 stood = itemPlacement(instance.position, instance.rotation);
         PlacedEnemies::Placement placement;
         placement.kind = kind;
-        placement.facing = std::atan2(stood[2][0], stood[2][2]);
+        placement.facing = portable::atan2(stood[2][0], stood[2][2]);
         placement.viewRadius = 2 * std::max(info.radius, info.height);
         placement.sight = sightParamOf(instance);
         placement.spawn.position = instance.position;
@@ -140,7 +142,7 @@ OpponentPlacements::ordinary(const ItemInstance& instance, const ItemInfo& info,
     const Mat4 stood = itemPlacement(instance.position, instance.rotation);
     PlacedEnemies::Placement placement;
     placement.kind = kind;
-    placement.facing = std::atan2(stood[2][0], stood[2][2]);
+    placement.facing = portable::atan2(stood[2][0], stood[2][2]);
     placement.viewRadius = 2 * std::max(info.radius, info.height);
     placement.sight = sightParamOf(instance);
     auto& spawn = placement.spawn;

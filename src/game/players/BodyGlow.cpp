@@ -4,6 +4,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -16,7 +17,7 @@ void BodyGlow::step(f32 seconds) {
     if (m_level == 0.0f || seconds <= 0.0f) {
         return;
     }
-    m_level *= std::pow(kFade, seconds * kFrameRate);
+    m_level *= portable::pow(kFade, seconds * kFrameRate);
     if (std::abs(m_level) < kGone) {
         m_level = 0.0f;
     }

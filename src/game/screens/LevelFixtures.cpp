@@ -15,6 +15,7 @@
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/TreeModel.h"
 
 #include "game/combat/DamageTypes.h"
@@ -137,7 +138,7 @@ constexpr u32 kExplosionDamage = 0x400;
 
 } // namespace
 bool LevelFixtures::appendSimulationDigest(NativeStateDigest& digest,
-                                            const Simulation& state) const {
+                                           const Simulation& state) const {
     digest.string("LevelFixtures.native.1");
     digest.flag(m_resources.has_value());
     if (m_resources) {
@@ -167,8 +168,7 @@ bool LevelFixtures::appendNativeDigest(NativeStateDigest& digest) const {
            m_scenery.appendNativeDigest(digest) && m_rubble.appendNativeDigest(digest);
 }
 
-bool LevelFixtures::appendLocalDigest(NativeStateDigest& digest,
-                                      const LocalSnapshot& saved) const {
+bool LevelFixtures::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -189,7 +189,8 @@ bool LevelFixtures::registerNativeResources(NativeStateResources& resources) con
            m_traps.registerNativeResources(resources) &&
            m_barrels.registerNativeResources(resources) &&
            m_safeRocks.registerNativeResources(resources) &&
-           m_scenery.registerNativeResources(resources) && m_rubble.registerNativeResources(resources);
+           m_scenery.registerNativeResources(resources) &&
+           m_rubble.registerNativeResources(resources);
 }
 
 void LevelFixtures::saveLocal(LocalSnapshot& saved) const {
@@ -493,7 +494,7 @@ void LevelFixtures::blastFixtures(const Vec3& position, f32 reach, f32 damage, c
         const Vec3 away = trigger.spot - position;
         const s32 id = kTriggerReached + static_cast<s32>(i);
         if (trigger.enabled && trigger.shootable &&
-            std::hypot(away.x, away.z) <= reach + trigger.radius &&
+            portable::hypot(away.x, away.z) <= reach + trigger.radius &&
             std::ranges::find(reached, id) == reached.end()) {
             reached.push_back(id);
             m_resources->world.shootTrigger(i);
@@ -892,7 +893,7 @@ void LevelFixtures::bless(const Vec3& position, f32 radius, MagicPerk perk, usiz
     };
     const auto within = [&](const Vec3& centre, f32 across, f32 height) {
         const Vec3 offset = centre - position;
-        return std::hypot(offset.x, offset.z) <= radius + across &&
+        return portable::hypot(offset.x, offset.z) <= radius + across &&
                std::abs(offset.y) <= radius + height;
     };
     std::vector<PlacedItems::PerkChange> changes =
@@ -1291,7 +1292,7 @@ void LevelFixtures::feel(Blast& ring, std::span<PlayerRuntime> players, const Ev
         }
         const PlayerActor& actor = players[i].actor;
         const Vec3 offset = actor.followPoint() - felt.position;
-        const f32 across = std::hypot(offset.x, offset.z);
+        const f32 across = portable::hypot(offset.x, offset.z);
         if (across <= felt.radius + actor.radius() &&
             std::abs(offset.y) <= actor.height() * 0.5f + felt.radius) {
             // Far enough out, a wall between shelters them from it.
@@ -1318,7 +1319,7 @@ void LevelFixtures::feel(Blast& ring, std::span<PlayerRuntime> players, const Ev
                 !PowerupEffects::of(actor.save().progress().inventory).preventsKnockback() &&
                 !guarding && !m_resources->world.isTower()) {
                 const Vec3 push = actor.position() - felt.position;
-                f32 round = std::atan2(push.x, push.z) - actor.yaw();
+                f32 round = portable::atan2(push.x, push.z) - actor.yaw();
                 round = std::remainder(round, 2.0f * kBehind * 2.0f);
                 players[i].reaction =
                     std::abs(round) > kBehind ? PlayerDeed::FallBack : PlayerDeed::FallForward;
@@ -1486,7 +1487,7 @@ void LevelFixtures::updateClouds(f32 seconds, std::span<PlayerRuntime> players,
                 continue;
             }
             const Vec3 offset = players[i].actor.followPoint() - cloud.position;
-            if (std::hypot(offset.x, offset.z) <= kGasRadius + players[i].actor.radius() &&
+            if (portable::hypot(offset.x, offset.z) <= kGasRadius + players[i].actor.radius() &&
                 std::abs(offset.y) <= players[i].actor.height() * 0.5f + kGasRadius) {
                 players[i].cloudGap = kGasGapSeconds;
                 events.hurt(i, cloud.damage, HurtKind::Gas, true, {});

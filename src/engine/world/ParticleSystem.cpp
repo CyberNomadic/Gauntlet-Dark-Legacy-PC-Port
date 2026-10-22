@@ -6,6 +6,7 @@
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl {
 
@@ -423,8 +424,9 @@ Vec3 ParticleEmitter::newVelocity() {
     orthogonalPair(glm::normalize(forward), a, b);
     const f32 tilt = d.angle * random01();
     const f32 turn = kPi * random01();
-    const f32 side = (randomInteger() & 4U) != 0 ? -std::cos(turn) : std::cos(turn);
-    return forward * std::cos(tilt) + (a * std::sin(turn) + b * side) * (std::sin(tilt) * d.speed);
+    const f32 side = (randomInteger() & 4U) != 0 ? -portable::cos(turn) : portable::cos(turn);
+    return forward * portable::cos(tilt) +
+           (a * portable::sin(turn) + b * side) * (portable::sin(tilt) * d.speed);
 }
 
 bool ParticleEmitter::Checkpoint::valid() const {

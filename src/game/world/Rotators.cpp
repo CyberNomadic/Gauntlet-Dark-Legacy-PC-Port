@@ -1,13 +1,14 @@
 #include "game/world/Rotators.h"
 
-#include "engine/io/NativeStateDigest.h"
-#include "game/world/NativeStateResources.h"
-
 #include <cmath>
 #include <cstring>
 #include <limits>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
+
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 
@@ -45,7 +46,10 @@ bool Rotators::appendNativeDigest(NativeStateDigest& digest) const {
 bool Rotators::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
     [[maybe_unused]] const auto& [state, binding, owner, epoch] = saved;
-    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
     return appendDigest(digest, saved.m_state);
 }
 
@@ -265,8 +269,8 @@ void Rotators::place(const Rotator& rotator, WorldScene& scene) {
     // YawMat3 (800be4f4) leaves translation intact. Ice Camp's gears also have
     // height switches; rotating must not put them back at their authored height.
     const Vec3 position = scene.localTransform(object)[3];
-    scene.setObjectTransform(object, glm::rotate(glm::translate(Mat4{1.0f}, position),
-                                                 rotator.turned, Vec3{0.0f, 1.0f, 0.0f}));
+    scene.setObjectTransform(object, portable::rotate(glm::translate(Mat4{1.0f}, position),
+                                                      rotator.turned, Vec3{0.0f, 1.0f, 0.0f}));
 }
 
 void Rotators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting) const {

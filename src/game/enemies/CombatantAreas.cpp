@@ -4,6 +4,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 #include "game/enemies/CombatantProjectile.h"
@@ -83,7 +84,8 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
         const Vec3 position = Vec3{attachmentTransform(critter, node) * Vec4{sound->offset, 1}} +
                               Vec3{modelTransform(critter) * Vec4{damage.offset, 0}};
         // SfxSetMat copies the body's orientation, not the animated hand's.
-        worldParent = glm::rotate(glm::translate(Mat4{1}, position), critter.yaw, Vec3{0, 1, 0});
+        worldParent =
+            portable::rotate(glm::translate(Mat4{1}, position), critter.yaw, Vec3{0, 1, 0});
         offset = Vec3{0};
     }
     if ((sound->flags & 0x10U) != 0 && damage.hitSound < 0 && m_sim.collision != nullptr) {
@@ -93,11 +95,12 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
         if (const auto floor =
                 m_sim.collision->floorAt(position, 1 + radius * 0.5f, 5 + radius * 0.5f)) {
             Mat4 placement = glm::translate(Mat4{1}, Vec3{position.x, floor->y + 0.1f, position.z});
-            placement =
-                glm::rotate(placement, std::atan2(floor->normal.z, floor->normal.y), Vec3{1, 0, 0});
-            placement = glm::rotate(
+            placement = portable::rotate(
+                placement, portable::atan2(floor->normal.z, floor->normal.y), Vec3{1, 0, 0});
+            placement = portable::rotate(
                 placement,
-                -std::atan2(floor->normal.x, std::hypot(floor->normal.y, floor->normal.z)),
+                -portable::atan2(floor->normal.x,
+                                 portable::hypot(floor->normal.y, floor->normal.z)),
                 Vec3{0, 0, 1});
             worldParent = placement;
             offset = Vec3{0};
@@ -120,15 +123,15 @@ std::optional<f32> Combatant::startArea(Actor& critter, s32 id, const AttackDefi
     area.local = CritterArea::placement(Mat4{1}, offset, angles);
     if (damage.speed > 0) {
         CombatShot motion;
-        motion.forward = Vec3{std::sin(critter.yaw), 0, std::cos(critter.yaw)};
+        motion.forward = Vec3{portable::sin(critter.yaw), 0, portable::cos(critter.yaw)};
         motion.rate = attackRate(critter);
         AttackDefinition physics = damage;
         // DAMG pitch/yaw rotate the area basis, not its non-projectile velocity.
         physics.pitch = physics.yaw = physics.yawSpread = 0;
         area.velocity = CombatantProjectile::velocity(physics, motion, 0);
         // SfxSetPhysics applies launch yaw to the effect's local basis.
-        area.local =
-            glm::rotate(area.local, std::atan2(area.velocity.x, area.velocity.z), Vec3{0, 1, 0});
+        area.local = portable::rotate(area.local, portable::atan2(area.velocity.x, area.velocity.z),
+                                      Vec3{0, 1, 0});
     }
     area.radius = damage.maxDistance * critter.scale;
     area.minDot = damage.minDot;

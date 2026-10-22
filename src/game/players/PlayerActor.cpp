@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/Progression.h"
 
@@ -25,9 +26,8 @@ bool PlayerActor::Checkpoint::valid() const {
         !bounded(speed, kMinSpeed, kMaxSpeed) ||
         !bounded(paceBonus, -kMaxCoordinate, kMaxCoordinate) || !bounded(radius, 0.01f, 50) ||
         !bounded(height, 0.01f, 100) || !bounded(followHeight, 0, 100) ||
-        !bounded(attentionHeight, 0, 100) ||
-        !bounded(floorBase, -kMaxCoordinate, kMaxCoordinate) || floorObject < -1 ||
-        floorObject > kMaxObject || contacts.size() > kMaxContacts) {
+        !bounded(attentionHeight, 0, 100) || !bounded(floorBase, -kMaxCoordinate, kMaxCoordinate) ||
+        floorObject < -1 || floorObject > kMaxObject || contacts.size() > kMaxContacts) {
         return false;
     }
     for (usize index = 0; index < contacts.size(); ++index) {
@@ -46,9 +46,10 @@ bool PlayerActor::Checkpoint::valid() const {
 }
 
 PlayerActor::Checkpoint PlayerActor::checkpoint() const {
-    Checkpoint state{m_position,  m_yaw,         m_speed,       m_paceBonus,   m_radius,
-                     m_height,    m_followHeight, m_attentionHeight, m_moving,  m_floorBase,
-                     m_floorObject, m_floorFlags, {}};
+    Checkpoint state{m_position, m_yaw,       m_speed,        m_paceBonus,
+                     m_radius,   m_height,    m_followHeight, m_attentionHeight,
+                     m_moving,   m_floorBase, m_floorObject,  m_floorFlags,
+                     {}};
     state.contacts.reserve(m_wallContacts.size());
     for (const auto& contact : m_wallContacts) {
         state.contacts.push_back({contact.object, contact.point});
@@ -132,13 +133,13 @@ void PlayerActor::restoreMotion(const Vec3& position, f32 yaw, f32 speed, f32 ra
 }
 
 f32 PlayerActor::headingOf(const MoveInput& input, f32 cameraYaw) {
-    return std::atan2(input.direction.x, input.direction.y) + cameraYaw;
+    return portable::atan2(input.direction.x, input.direction.y) + cameraYaw;
 }
 
 void PlayerActor::faceToward(const Vec3& point) {
     const Vec3 offset = point - m_position;
-    if (std::hypot(offset.x, offset.z) > 1e-5f) {
-        m_yaw = std::atan2(offset.x, offset.z);
+    if (portable::hypot(offset.x, offset.z) > 1e-5f) {
+        m_yaw = portable::atan2(offset.x, offset.z);
     }
 }
 
@@ -159,7 +160,7 @@ void PlayerActor::update(const MoveInput& input, f32 cameraYaw, f32 seconds,
         m_moving = false;
         return;
     }
-    const Vec3 direction{std::sin(heading), 0.0f, std::cos(heading)};
+    const Vec3 direction{portable::sin(heading), 0.0f, portable::cos(heading)};
     travel(direction * distance, collision);
 }
 
@@ -251,8 +252,8 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
     const auto bridged = [&](const Vec3& from, const FloorHit& contact) {
         const auto beyond = floorAt(from + look);
         return beyond && std::abs(beyond->y - contact.y) <= limit &&
-               std::hypot(beyond->point.x - (from.x + look.x),
-                          beyond->point.z - (from.z + look.z)) < kContactEpsilon;
+               portable::hypot(beyond->point.x - (from.x + look.x),
+                               beyond->point.z - (from.z + look.z)) < kContactEpsilon;
     };
     Vec2 away{end.x - floor->point.x, end.z - floor->point.z};
     f32 distance = glm::length(away);
@@ -288,7 +289,7 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
         f32 taken = distance;
         const Vec2 out = away / distance;
         if (lookedAhead) {
-            const f32 length = std::hypot(dpos.x, dpos.z);
+            const f32 length = portable::hypot(dpos.x, dpos.z);
             const f32 against = (out.x * dpos.x + out.y * dpos.z) / length;
             if (against > kContactEpsilon) {
                 taken = std::min(taken, length / against);
@@ -313,9 +314,9 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
     // to by fall() at the native pace.
     const f32 rise = m_floorBase - m_position.y;
     if (rise > 0.0f) {
-        const f32 horizontal = std::hypot(dpos.x, dpos.z);
+        const f32 horizontal = portable::hypot(dpos.x, dpos.z);
         if (horizontal > kSlopeScaleFrom && rise > kClimbFraction * horizontal) {
-            dpos *= horizontal / std::hypot(horizontal, rise);
+            dpos *= horizontal / portable::hypot(horizontal, rise);
         }
         m_position = Vec3{m_position.x + dpos.x, m_floorBase, m_position.z + dpos.z};
         return;
@@ -324,8 +325,7 @@ void PlayerActor::travel(const Vec3& offset, const WorldCollision* collision) {
     m_position.z += dpos.z;
 }
 
-void PlayerActor::slideAlongWall(Vec3& dpos, const Vec3& centre, const SphereHit& wall,
-                                 f32 width) {
+void PlayerActor::slideAlongWall(Vec3& dpos, const Vec3& centre, const SphereHit& wall, f32 width) {
     // SlideAlongWall: what of the step's end is within the width of the wall's plane is
     // taken off along the normal, an axis at a time; a correction out of all proportion
     // (over one and three quarter widths and the step) stops that axis instead.
@@ -402,7 +402,7 @@ void PlayerActor::settle(const WorldCollision& collision) {
 }
 
 Mat4 PlayerActor::transform() const {
-    return glm::rotate(glm::translate(Mat4{1.0f}, m_position), m_yaw, Vec3{0.0f, 1.0f, 0.0f});
+    return portable::rotate(glm::translate(Mat4{1.0f}, m_position), m_yaw, Vec3{0.0f, 1.0f, 0.0f});
 }
 
 } // namespace gdl::game

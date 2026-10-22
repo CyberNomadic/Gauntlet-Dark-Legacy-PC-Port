@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/PowerupEffects.h"
 #include "game/screens/FloorRiding.h"
@@ -32,7 +33,7 @@ bool free(const PlayerRuntime& runtime) {
 
 /** Heading `wanted` taken part of the way from `yaw` at `turn` a 30 Hz frame. */
 f32 turnToward(f32 yaw, f32 wanted, f32 turn, f32 seconds) {
-    const f32 share = 1.0f - std::pow(1.0f - turn, seconds * PartyCombo::kTurnFrames);
+    const f32 share = 1.0f - portable::pow(1.0f - turn, seconds * PartyCombo::kTurnFrames);
     return yaw + std::remainder(wanted - yaw, 2.0f * std::numbers::pi_v<f32>) * share;
 }
 
@@ -173,7 +174,7 @@ void PartyCombo::advance(std::span<PlayerRuntime> players, usize grabber, s32 ti
     if (orders.turnPartnerAway) {
         // The partner turns its back to the grabber (pmotion.c 3005).
         const Vec3 gap = g.actor.position() - p.actor.position();
-        p.actor.turnTo(std::atan2(gap.x, gap.z) + std::numbers::pi_v<f32>);
+        p.actor.turnTo(portable::atan2(gap.x, gap.z) + std::numbers::pi_v<f32>);
     }
     if (orders.restorePartner && wasRiding) {
         p.actor.place(partnerSaved);
@@ -207,10 +208,10 @@ void PartyCombo::fly(std::span<PlayerRuntime> players, usize flier, s32 ticks, f
     const Vec3 meant = before + actor.facing() * (ComboMove::kFlightSpeed * seconds);
     const Vec3 lift{0.0f, actor.followPoint().y - actor.position().y + PlayerActor::kWallSphereLift,
                     0.0f};
-    Vec3 to = collision.loaded() ? collision.resolveSphere(meant + lift, actor.reach()) - lift
-                                 : meant;
+    Vec3 to =
+        collision.loaded() ? collision.resolveSphere(meant + lift, actor.reach()) - lift : meant;
     const Vec3 pushed{to.x - meant.x, 0.0f, to.z - meant.z};
-    const bool wall = std::hypot(pushed.x, pushed.z) > PartyCollision::kCoincident;
+    const bool wall = portable::hypot(pushed.x, pushed.z) > PartyCollision::kCoincident;
     const Vec3 worldResolved = to;
     std::optional<usize> other = PartyCollision::resolve(players, flier, before, to);
     const auto thrower = static_cast<usize>(std::max(state.partner, 0));
@@ -258,7 +259,8 @@ void PartyCombo::ride(std::span<PlayerRuntime> players, usize charger, const Mov
     if (stick.any()) {
         const f32 heading = turnToward(actor.yaw(), PlayerActor::headingOf(stick, cameraYaw),
                                        ComboMove::kRideTurn, seconds);
-        steer.direction = Vec2{std::sin(heading - cameraYaw), std::cos(heading - cameraYaw)};
+        steer.direction =
+            Vec2{portable::sin(heading - cameraYaw), portable::cos(heading - cameraYaw)};
     }
     actor.update(steer, cameraYaw, seconds, collision.loaded() ? &collision : nullptr,
                  ComboMove::kRidePace);
@@ -293,7 +295,7 @@ void PartyCombo::carry(std::span<PlayerRuntime> players) {
         }
         const Mat4 seat = seatOf(players[static_cast<usize>(rider.combo.partner)]);
         rider.actor.place(Vec3{seat[3]});
-        rider.actor.turnTo(std::atan2(seat[2].x, seat[2].z));
+        rider.actor.turnTo(portable::atan2(seat[2].x, seat[2].z));
     }
 }
 

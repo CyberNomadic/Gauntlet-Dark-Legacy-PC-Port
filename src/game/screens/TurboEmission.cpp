@@ -4,6 +4,8 @@
 #include <cmath>
 #include <utility>
 
+#include "engine/math/PortableMath.h"
+
 #include "game/world/DynamicLights.h"
 
 namespace gdl::game {
@@ -107,14 +109,14 @@ std::optional<TurboEmission::Strike> TurboEmission::prepare(const ClassStats& st
             const Vec3 offset = effect.offset + (attachment.bodyParent ? Vec3{0} : strike.offset);
             attachment.local = glm::translate(Mat4{1}, offset);
             if (emission.primary) {
-                attachment.local = glm::rotate(attachment.local, strike.angle, Vec3{0, 1, 0});
+                attachment.local = portable::rotate(attachment.local, strike.angle, Vec3{0, 1, 0});
             }
             emission.attachment = attachment;
         }
         auto& setting = emission.setting;
         setting.scale = effect.scale;
         setting.tint = effect.tint();
-        setting.yaw = std::atan2(context.facing.x, context.facing.z) + strike.angle;
+        setting.yaw = portable::atan2(context.facing.x, context.facing.z) + strike.angle;
         setting.seconds = effect.lifetime;
         setting.shrinks = (effect.flags & 0x10000U) != 0 && strike.hitEffect < 0;
         emission.carriesFlight = emission.primary && carrier != nullptr && carrier->flies;

@@ -10,6 +10,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/AnimationPlayer.h"
 
 #include "game/combat/Damage.h"
@@ -741,7 +742,7 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
                 continue;
             }
             const Vec3 toward = player.actor.position() - hit.centre;
-            const f32 across = std::hypot(toward.x, toward.z);
+            const f32 across = portable::hypot(toward.x, toward.z);
             StrikeHit contact = hit;
             constexpr f32 kNearShare = 0.3f;
             constexpr f32 kNearCone = 0.85f;
@@ -950,12 +951,12 @@ std::optional<s32> PlayerAttacks::deathContactSlot(usize index,
         return std::nullopt;
     }
     const Vec3 facing = actor.facing();
-    const f32 facingLength = std::hypot(facing.x, facing.z);
+    const f32 facingLength = portable::hypot(facing.x, facing.z);
     std::optional<MissileTarget> nearest;
     f32 best = kGrabReach;
     for (const MissileTarget& target : projectileTargets(targets)) {
         const Vec3 toward = target.base - actor.position();
-        const f32 flat = std::hypot(toward.x, toward.z);
+        const f32 flat = portable::hypot(toward.x, toward.z);
         if (flat < 1e-4f || facingLength < 1e-4f) {
             continue;
         }
@@ -988,7 +989,7 @@ std::optional<s32> PlayerAttacks::deathContactSlot(usize index,
     }
     const Vec3 separation = nearest->base - actor.position();
     constexpr f32 kContactTolerance = 0.001f;
-    if (std::hypot(separation.x, separation.z) >
+    if (portable::hypot(separation.x, separation.z) >
             actor.radius() + nearest->radius + kContactTolerance ||
         nearest->base.y > actor.position().y + actor.height() ||
         nearest->base.y + nearest->height < actor.position().y) {
@@ -1102,8 +1103,8 @@ std::optional<Vec3> PlayerAttacks::grabDeath(usize index, s32 ticks, bool allowe
         // StartDeathFX hangs the arc on the player's node: it goes where they go and turns
         // as they turn, toward Death, the way Death's own arc turns toward its victim.
         m_resources->effects.placeAt(runtime.deathHeldEffect,
-                                     glm::rotate(glm::translate(Mat4{1.0f}, actor.position()),
-                                                 actor.yaw(), Vec3{0.0f, 1.0f, 0.0f}));
+                                     portable::rotate(glm::translate(Mat4{1.0f}, actor.position()),
+                                                      actor.yaw(), Vec3{0.0f, 1.0f, 0.0f}));
     }
     return at;
 }
@@ -1872,7 +1873,7 @@ PlayerAttacks::meleeGeometry(const PlayerActor& actor, const Targets& targets, f
     // movement query as LevelOpponents when excluding an unsupported contact.
     for (const auto& body : targets.opponents.critters().targets(true)) {
         const Vec3 offset = body.base - actor.position();
-        if (std::hypot(offset.x, offset.z) <= movementRadius + actor.radius() + body.radius) {
+        if (portable::hypot(offset.x, offset.z) <= movementRadius + actor.radius() + body.radius) {
             return std::nullopt;
         }
     }
@@ -2398,7 +2399,7 @@ void PlayerAttacks::enchantChests(PotionBurst& burst, f32 radius, f32 power,
         }
         const Vec3 offset = chest.box.centre - burst.impact.position;
         const f32 reach = radius + std::max(chest.box.halfAcross, chest.box.halfAlong);
-        if (std::hypot(offset.x, offset.z) > reach ||
+        if (portable::hypot(offset.x, offset.z) > reach ||
             std::abs(offset.y) > radius + chest.box.height) {
             continue;
         }
@@ -2448,7 +2449,7 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                 burst.impact.position;
             const bool outside =
                 target.surface.empty()
-                    ? std::hypot(direction.x, direction.z) > radius + target.radius ||
+                    ? portable::hypot(direction.x, direction.z) > radius + target.radius ||
                           std::abs(target.base.y - burst.impact.position.y) > radius + target.height
                     : !target.touches(burst.impact.position, radius);
             if (outside || std::ranges::find(burst.hit, target.id) != burst.hit.end()) {
@@ -2561,7 +2562,7 @@ void PlayerAttacks::healFrom(s32 owner, f32 harm, const Vec3& at, std::span<Play
     for (PlayerRuntime& other : players) {
         const Vec3 apart = other.actor.position() - caster->actor.position();
         if (&other != &*caster && other.life == PlayerLife::Standing && !other.departed &&
-            std::hypot(apart.x, apart.z) < reach) {
+            portable::hypot(apart.x, apart.z) < reach) {
             heal(other, given * kHealingOthers);
         }
     }

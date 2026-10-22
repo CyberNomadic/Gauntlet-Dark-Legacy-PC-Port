@@ -3,13 +3,15 @@
 #include <cmath>
 #include <numbers>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 bool MeleeSelection::accepts(const Target& target, const Vec3& facing, f32 range, f32 facingDot) {
-    const f32 facingLength = std::hypot(facing.x, facing.z);
+    const f32 facingLength = portable::hypot(facing.x, facing.z);
     if (facingLength < 1e-5f || range <= 0) {
         return false;
     }
-    const f32 flat = std::hypot(target.offset.x, target.offset.z);
+    const f32 flat = portable::hypot(target.offset.x, target.offset.z);
     const f32 threshold = facingDot + target.score * (1 - facingDot) / range;
     const f32 dot = (target.offset.x * facing.x + target.offset.z * facing.z) / facingLength;
     return dot >= flat * threshold;
@@ -53,9 +55,9 @@ MeleeSense MeleeSelection::senseOf(const Target& target, const Vec3& feet, f32 r
         target.distance < reach + kSwingReach + bias ? MeleeRange::Swing : MeleeRange::Step;
     sense.low = target.distance < reach + kStepReach && target.low;
     const Vec3 toward = target.base - feet;
-    if (std::hypot(toward.x, toward.z) > 1e-5f) {
-        sense.yaw =
-            std::remainder(std::atan2(toward.x, toward.z) - yaw, 2.0f * std::numbers::pi_v<f32>);
+    if (portable::hypot(toward.x, toward.z) > 1e-5f) {
+        sense.yaw = std::remainder(portable::atan2(toward.x, toward.z) - yaw,
+                                   2.0f * std::numbers::pi_v<f32>);
     }
     return sense;
 }

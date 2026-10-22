@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 f32 CombatantProjectile::speed(const AttackDefinition& damage, f32 rate) {
@@ -12,7 +13,7 @@ f32 CombatantProjectile::speed(const AttackDefinition& damage, f32 rate) {
 }
 
 Vec3 CombatantProjectile::velocity(const AttackDefinition& damage, const CombatShot& shot,
-                                 f32 spreadSample) {
+                                   f32 spreadSample) {
     const f32 pace = speed(damage, shot.rate);
     if (damage.speed <= 0.0f || pace <= 0.0f) {
         return Vec3{0.0f};
@@ -36,13 +37,13 @@ Vec3 CombatantProjectile::velocity(const AttackDefinition& damage, const CombatS
         direction.y = direction.y * inverse + 0.5f * damage.gravity * distance / (pace * pace);
     }
     const f32 yaw = damage.yaw + 0.5f * std::clamp(spreadSample, -1.0f, 1.0f) * damage.yawSpread;
-    const f32 cy = std::cos(yaw);
-    const f32 sy = std::sin(yaw);
+    const f32 cy = portable::cos(yaw);
+    const f32 sy = portable::sin(yaw);
     direction = {direction.x * cy - direction.z * sy, direction.y,
                  direction.z * cy + direction.x * sy};
     if ((damage.behaviorFlags & kStraight) != 0) {
-        const f32 cp = std::cos(damage.pitch);
-        const f32 sp = std::sin(damage.pitch);
+        const f32 cp = portable::cos(damage.pitch);
+        const f32 sp = portable::sin(damage.pitch);
         direction = {sp * direction.x * direction.y + direction.x * cp,
                      direction.y * cp -
                          sp * (direction.x * direction.x + direction.z * direction.z),
@@ -52,7 +53,7 @@ Vec3 CombatantProjectile::velocity(const AttackDefinition& damage, const CombatS
 }
 
 std::optional<f32> CombatantProjectile::contact(const Vec3& from, const Vec3& to, f32 radius,
-                                              const Vec3& feet, f32 playerRadius, f32 height) {
+                                                const Vec3& feet, f32 playerRadius, f32 height) {
     const Vec3 relative = from - feet;
     const Vec3 step = to - from;
     const f32 reach = std::max(0.0f, radius) + std::max(0.0f, playerRadius);

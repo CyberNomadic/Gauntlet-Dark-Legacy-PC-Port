@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 void CameraShake::start(Target target, s32 lead, s32 ticks, f32 radius, s32 priority) {
@@ -33,7 +34,7 @@ Vec3 CameraShake::offset() const {
     }
     // DoShake: 38 degrees per remaining game-clock tick.
     const f32 angle = static_cast<f32>(0.6632251158444444 * m_ticks);
-    return Vec3{m_radius * std::cos(angle), 0, m_radius * std::sin(angle)};
+    return Vec3{m_radius * portable::cos(angle), 0, m_radius * portable::sin(angle)};
 }
 WorldCamera CameraShake::apply(const WorldCamera& camera, const Vec3& attention) const {
     WorldCamera shaken = camera;
@@ -48,8 +49,8 @@ WorldCamera CameraShake::apply(const WorldCamera& camera, const Vec3& attention)
         const Vec3 direction = aim - shaken.position;
         const f32 horizontal = glm::length(Vec2{direction.x, direction.z});
         if (glm::length(direction) > 0.0001f) {
-            shaken.yaw = std::atan2(direction.x, direction.z);
-            shaken.pitch = -std::atan2(direction.y, horizontal);
+            shaken.yaw = portable::atan2(direction.x, direction.z);
+            shaken.pitch = -portable::atan2(direction.y, horizontal);
         }
     }
     return shaken;

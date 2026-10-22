@@ -7,6 +7,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/WorldCollision.h"
 
 #include "game/players/CharacterSave.h"
@@ -161,7 +162,7 @@ public:
     void clearWallContacts() { m_wallContacts.clear(); }
 
     /** The way the character faces, along the ground. */
-    Vec3 facing() const { return Vec3{std::sin(m_yaw), 0.0f, std::cos(m_yaw)}; }
+    Vec3 facing() const { return Vec3{portable::sin(m_yaw), 0.0f, portable::cos(m_yaw)}; }
 
     /** The point the camera follows: the body's centre above the feet. */
     Vec3 followPoint() const { return m_position + Vec3{0.0f, m_followHeight, 0.0f}; }

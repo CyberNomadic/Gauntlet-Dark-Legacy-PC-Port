@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/LevelTriggers.h"
 
@@ -153,9 +154,9 @@ InventoryPanel::Placement InventoryPanel::place(s32 x, s32 y, s32 laneX) const {
                           static_cast<f32>(kSpiralSteps);
         const f32 factor = 1.0f - progress;
         placement.x = static_cast<s32>(static_cast<f32>(x + laneX) +
-                                       factor * (kSpiralRadius * std::cos(angle)));
+                                       factor * (kSpiralRadius * portable::cos(angle)));
         placement.y =
-            static_cast<s32>(static_cast<f32>(y) + factor * (kSpiralRadius * std::sin(angle)));
+            static_cast<s32>(static_cast<f32>(y) + factor * (kSpiralRadius * portable::sin(angle)));
         placement.size = kEnterSize - squared;
         placement.opacity = opaque(static_cast<s32>(kFull * (1.0f - squared)));
         break;

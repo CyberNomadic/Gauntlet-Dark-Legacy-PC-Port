@@ -5,6 +5,7 @@
 #include "engine/assets/AnimationSet.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 bool CompassHud::bind(RenderDevice& device, ItemArchive& powerups) {
@@ -27,7 +28,7 @@ void CompassHud::clear() {
 }
 
 Mat4 CompassHud::placement(const WorldCamera& camera, f32 horizontalFov, f32 aspect) {
-    const f32 halfWidth = kDepth * std::tan(horizontalFov / 2.0f);
+    const f32 halfWidth = kDepth * portable::tan(horizontalFov / 2.0f);
     const f32 halfHeight = halfWidth / aspect;
     const Vec2 anchor = frameAnchor() / kReferenceFrame;
     const Vec3 position = camera.position + camera.forward() * kDepth +

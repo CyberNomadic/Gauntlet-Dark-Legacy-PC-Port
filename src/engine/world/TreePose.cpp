@@ -8,6 +8,7 @@
 #include "engine/core/Assert.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/WorldCamera.h"
 
 namespace gdl {
@@ -173,12 +174,12 @@ NodePose TreePose::sample(const TrackInfo& track, f32 frame, bool smooth) {
 Mat4 TreePose::localMatrix(const NodePose& pose, const Vec3& restPosition) {
     // The original builds its matrices with negated sines; kept as written so every joint
     // turns the way the data expects.
-    const f32 c0 = std::cos(pose.rotation.x);
-    const f32 s0 = -std::sin(pose.rotation.x);
-    const f32 c1 = std::cos(pose.rotation.y);
-    const f32 s1 = -std::sin(pose.rotation.y);
-    const f32 c2 = std::cos(pose.rotation.z);
-    const f32 s2 = -std::sin(pose.rotation.z);
+    const f32 c0 = portable::cos(pose.rotation.x);
+    const f32 s0 = -portable::sin(pose.rotation.x);
+    const f32 c1 = portable::cos(pose.rotation.y);
+    const f32 s1 = -portable::sin(pose.rotation.y);
+    const f32 c2 = portable::cos(pose.rotation.z);
+    const f32 s2 = -portable::sin(pose.rotation.z);
     Mat4 matrix{1.0f};
     const std::span<f32, 16> m(glm::value_ptr(matrix), 16);
     if (pose.pitchYawRoll) {
@@ -300,16 +301,18 @@ Vec3 TreePose::readAngles(const Mat4& rotation) {
     const std::span<const f32, 16> m(glm::value_ptr(rotation), 16);
     if (std::abs(1.0f - std::abs(m[2])) < kLockedYaw) {
         // Looking straight along the side: pitch and roll fold together, roll left at nought.
-        return Vec3{std::atan2(m[9], m[5]), m[2] > 0.0f ? -kHalfPi : kHalfPi, 0.0f};
+        return Vec3{portable::atan2(m[9], m[5]), m[2] > 0.0f ? -kHalfPi : kHalfPi, 0.0f};
     }
-    const f32 pitch = std::atan2(-m[6], m[10]);
-    const f32 magnitude = std::cos(pitch);
+    const f32 pitch = portable::atan2(-m[6], m[10]);
+    const f32 magnitude = portable::cos(pitch);
     if (magnitude == 0.0f) {
-        return pitch > 0.0f ? Vec3{pitch, std::atan2(-m[2], -m[6]), std::atan2(-m[8], -m[9])}
-                            : Vec3{pitch, std::atan2(-m[2], m[6]), std::atan2(m[8], m[9])};
+        return pitch > 0.0f
+                   ? Vec3{pitch, portable::atan2(-m[2], -m[6]), portable::atan2(-m[8], -m[9])}
+                   : Vec3{pitch, portable::atan2(-m[2], m[6]), portable::atan2(m[8], m[9])};
     }
     const f32 scaled = m[10] / magnitude;
-    return Vec3{pitch, std::atan2(-m[2], scaled), std::atan2(-m[1] / scaled, m[0] / scaled)};
+    return Vec3{pitch, portable::atan2(-m[2], scaled),
+                portable::atan2(-m[1] / scaled, m[0] / scaled)};
 }
 
 void TreePose::setNodePose(usize node, const NodePose& pose) {

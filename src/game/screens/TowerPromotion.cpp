@@ -8,14 +8,15 @@
 
 #include "engine/core/Log.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/menu/ScrollBox.h"
 
 namespace gdl::game {
 void TowerPromotion::appendState(NativeStateDigest& digest, const Simulation& state,
-                                  const TextureAnimator::Clock& clock) const {
-    const auto& [entries, current, elapsed, spoken, awarded, gem, camera, transform,
-                 tree, pose, player, previousFrame, previousGeneration, advanced] = state;
+                                 const TextureAnimator::Clock& clock) const {
+    const auto& [entries, current, elapsed, spoken, awarded, gem, camera, transform, tree, pose,
+                 player, previousFrame, previousGeneration, advanced] = state;
     digest.string("TowerPromotion.native.1");
     digest.values(entries, current, elapsed, spoken, awarded, gem, camera, transform);
     digest.resource(tree);
@@ -29,7 +30,8 @@ bool TowerPromotion::appendNativeDigest(NativeStateDigest& digest) const {
     return digest.good();
 }
 
-bool TowerPromotion::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+bool TowerPromotion::appendLocalDigest(NativeStateDigest& digest,
+                                       const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -150,8 +152,8 @@ void TowerPromotion::bind(RenderDevice& device, ItemArchive& items, const WorldL
     }
     // Event headings, like Sumner's lookout and player starts, point the way
     // the figure came from. Turn back toward the party, not away from it.
-    m_sim.transform = glm::rotate(glm::translate(Mat4{1}, nearest->position),
-                                  nearest->rotation.y + kPi, Vec3{0, 1, 0});
+    m_sim.transform = portable::rotate(glm::translate(Mat4{1}, nearest->position),
+                                       nearest->rotation.y + kPi, Vec3{0, 1, 0});
     constexpr u32 kPromotionCameraBase = 240;
     if (const auto* camera =
             layout.findLocator(LocatorKind::TriggerCamera, kPromotionCameraBase + nearest->delay)) {
@@ -227,10 +229,11 @@ void TowerPromotion::draw(RenderDevice& device, const Mat4& clip, const WorldLig
         TreePose visualPose;
         const TreePose* pose = &m_sim.pose;
         if (blend >= 0) {
-            visualFrame = m_sim.previousGeneration == m_sim.player.generation()
-                              ? std::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
-                                          std::clamp(blend, 0.0f, 1.0f))
-                              : m_sim.player.presentationFrame();
+            visualFrame =
+                m_sim.previousGeneration == m_sim.player.generation()
+                    ? portable::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
+                                     std::clamp(blend, 0.0f, 1.0f))
+                    : m_sim.player.presentationFrame();
             visualPose.evaluate(*m_sim.tree, m_sim.player.sequence(), visualFrame, false, true);
             pose = &visualPose;
         }

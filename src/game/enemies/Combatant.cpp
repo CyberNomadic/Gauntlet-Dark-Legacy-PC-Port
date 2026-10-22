@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 #include "engine/math/RandomDistribution.h"
 
 #include "game/combat/Damage.h"
@@ -181,9 +182,9 @@ void Combatant::appendSimulationDigest(NativeStateDigest& digest, const Simulati
     digest.resource(skin);
     digest.values(skinAge, hitNodes, modelReplacements, alpha, tint, scale, shrink, frozenTicks,
                   blindTicks, curbSeconds, held, roarWanted, moveEffect, moveDone, soundsGiven,
-                  arenaCollected, shotFrame, attackTarget, stepTarget, patrolAim, grabbed,
-                  grabMove, grabNode, grabOffset, player, pose, smooth, presentation, attachments,
-                  gaze, incarnation, childCount, id);
+                  arenaCollected, shotFrame, attackTarget, stepTarget, patrolAim, grabbed, grabMove,
+                  grabNode, grabOffset, player, pose, smooth, presentation, attachments, gaze,
+                  incarnation, childCount, id);
     digest.resource(collision);
     digest.resource(hazards);
     digest.values(scales, realm, fullHarm, arenaRandom, cues, grabs, spews, shots, arenaActivations,
@@ -211,8 +212,7 @@ bool Combatant::appendNativeDigest(NativeStateDigest& digest,
     return digest.good();
 }
 
-bool Combatant::appendLocalDigest(NativeStateDigest& digest,
-                                  const LocalSnapshot& snapshot) const {
+bool Combatant::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& snapshot) const {
     if (!canRestoreLocal(snapshot)) {
         digest.invalidate();
         return false;
@@ -372,8 +372,8 @@ bool Combatant::spawnActor(CombatantAssets& stock, const CritterData& definition
         critter.attachments.resize(stock.attachments.size());
         for (usize j = 0; j < stock.attachments.size(); ++j) {
             critter.attachments[j].world =
-                glm::rotate(glm::translate(Mat4{1}, stock.attachments[j].definition.offset), yaw,
-                            Vec3{0, 1, 0});
+                portable::rotate(glm::translate(Mat4{1}, stock.attachments[j].definition.offset),
+                                 yaw, Vec3{0, 1, 0});
         }
     }
     // It comes in by its entrance, or its stance when it has none.
@@ -674,7 +674,7 @@ void Combatant::updateActor(s32 ticks, f32 seconds, std::span<const EnemyView> p
     }
     carryGrab(critter, players);
     updateAreas(critter, i, players);
-    critter.push *= std::pow(kPushDecay, seconds * kPushFrameRate);
+    critter.push *= portable::pow(kPushDecay, seconds * kPushFrameRate);
     critter.push.y = std::max(critter.push.y - kGravity * seconds, 0.0f);
     if (glm::length(critter.push) < 0.01f) {
         critter.push = Vec3{0.0f, 0.0f, 0.0f};

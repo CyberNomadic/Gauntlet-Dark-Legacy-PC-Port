@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 namespace {
@@ -96,7 +97,7 @@ bool ItemAttack::reaches(const Mat4& parent, const MissileTarget& target, f32 el
     const bool swarm = kind == TargetKind::Swarm;
     const Vec3 point = swarm ? target.base : target.pointNear(Vec3{parent[3]});
     const Vec3 delta = point - Vec3{parent[3]};
-    const f32 distance = std::hypot(delta.x, delta.z);
+    const f32 distance = portable::hypot(delta.x, delta.z);
     const f32 reach = activeRadius + (target.surface.empty() ? target.radius : 0.0f);
     if (!swarm && !target.surface.empty() && !target.touches(Vec3{parent[3]}, activeRadius)) {
         return false;

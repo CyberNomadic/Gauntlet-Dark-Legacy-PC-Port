@@ -6,6 +6,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -85,7 +86,7 @@ bool SumnerFigure::load(RenderDevice& device, ItemArchive& items, const WorldLay
     m_position = lookout->position;
     m_yaw = lookout->rotation.y + kPi;
     m_transform =
-        glm::rotate(glm::translate(Mat4{1.0f}, m_position), m_yaw, Vec3{0.0f, 1.0f, 0.0f});
+        portable::rotate(glm::translate(Mat4{1.0f}, m_position), m_yaw, Vec3{0.0f, 1.0f, 0.0f});
     m_sim.index = 0;
     m_sim.cutIn = false;
     const u32 first = sequenceFor(0);
@@ -166,8 +167,8 @@ void SumnerFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLight
     const f32 blend = frameBlend < 0 || m_sim.presentationAdvanced ? frameBlend : 1.0f;
     if (blend >= 0 && m_sim.player.playing()) {
         frame = m_sim.previousGeneration == m_sim.player.generation()
-                    ? std::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
-                                std::clamp(blend, 0.0f, 1.0f))
+                    ? portable::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
+                                     std::clamp(blend, 0.0f, 1.0f))
                     : m_sim.player.presentationFrame();
         visualPose.evaluate(*m_tree, m_sim.player.sequence(), frame, false, true);
         pose = &visualPose;

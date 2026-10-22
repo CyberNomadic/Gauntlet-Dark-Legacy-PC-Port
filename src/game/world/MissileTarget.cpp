@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/MoveStrikes.h"
 #include "game/world/PlayerMissiles.h"
@@ -59,7 +60,7 @@ bool MissileTarget::touches(const Vec3& point, f32 reach) const {
     if (!surface.empty()) {
         return glm::distance(pointNear(point), point) <= reach;
     }
-    return std::hypot(point.x - base.x, point.z - base.z) <= radius + reach &&
+    return portable::hypot(point.x - base.x, point.z - base.z) <= radius + reach &&
            point.y + reach >= base.y && point.y - reach <= base.y + height;
 }
 

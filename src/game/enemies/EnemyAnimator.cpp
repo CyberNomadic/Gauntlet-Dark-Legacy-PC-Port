@@ -7,6 +7,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -23,11 +24,11 @@ constexpr bool isHit(EnemyAction action) {
 } // namespace
 
 auto EnemyAnimator::nativeValues(const EnemyAnimator& value) {
-    const auto& [tree, sequences, current, requested, walksIn, struck, powerStruck, threw,
-                 dead, idleSeconds, throwInterval, idleFraction, player, pose, previous,
+    const auto& [tree, sequences, current, requested, walksIn, struck, powerStruck, threw, dead,
+                 idleSeconds, throwInterval, idleFraction, player, pose, previous,
                  presentationBefore, frameBefore, generationBefore] = value;
-    return std::tie(tree, sequences, current, requested, walksIn, struck, powerStruck, threw,
-                    dead, idleSeconds, throwInterval, idleFraction, player, pose, previous,
+    return std::tie(tree, sequences, current, requested, walksIn, struck, powerStruck, threw, dead,
+                    idleSeconds, throwInterval, idleFraction, player, pose, previous,
                     presentationBefore, frameBefore, generationBefore);
 }
 
@@ -243,7 +244,7 @@ void EnemyAnimator::holdPresentation() {
 f32 EnemyAnimator::presentationFrame(f32 blend) const {
     const f32 frame = m_player.presentationFrame();
     return m_generationBefore == m_player.generation()
-               ? std::lerp(m_frameBefore, frame, std::clamp(blend, 0.0f, 1.0f))
+               ? portable::lerp(m_frameBefore, frame, std::clamp(blend, 0.0f, 1.0f))
                : frame;
 }
 
@@ -280,7 +281,7 @@ TreePose EnemyAnimator::Presentation::pose(f32 blend) const {
 }
 
 f32 EnemyAnimator::Presentation::frame(f32 blend) const {
-    return continuous ? std::lerp(previousFrame, currentFrame, std::clamp(blend, 0.0f, 1.0f))
+    return continuous ? portable::lerp(previousFrame, currentFrame, std::clamp(blend, 0.0f, 1.0f))
                       : currentFrame;
 }
 

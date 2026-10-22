@@ -10,6 +10,8 @@
 #include "engine/assets/AssetScope.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
+
 #include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
@@ -59,7 +61,7 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
     };
     Mat4 result = current;
     if (orthogonal(from) && orthogonal(to)) {
-        result = glm::mat4_cast(glm::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
+        result = glm::mat4_cast(portable::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
         result = glm::scale(result, glm::mix(fromScale, toScale, blend));
     }
     result[3] = glm::mix(previous[3], current[3], blend);
@@ -70,8 +72,8 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
 Vec2 localOf(const Obstacle& box, const Vec3& position) {
     const f32 dx = position.x - box.centre.x;
     const f32 dz = position.z - box.centre.z;
-    const f32 c = std::cos(box.yaw);
-    const f32 s = std::sin(box.yaw);
+    const f32 c = portable::cos(box.yaw);
+    const f32 s = portable::sin(box.yaw);
     return Vec2{dx * c - dz * s, dx * s + dz * c};
 }
 
@@ -124,8 +126,7 @@ bool ItemFigure::registerNativeResources(NativeStateResources& registry) const {
     if (!refresh(m_sim.archive)) {
         return false;
     }
-    const auto registerStatic = [&](const TreeInfo& tree, const ItemArchive& archive,
-                                     u32 flags) {
+    const auto registerStatic = [&](const TreeInfo& tree, const ItemArchive& archive, u32 flags) {
         if (tree.nodes.size() != 1) {
             return false;
         }
@@ -137,7 +138,7 @@ bool ItemFigure::registerNativeResources(NativeStateResources& registry) const {
     if (m_sim.resources && m_sim.resources->staticTree &&
         (!m_sim.archive || m_sim.resources->staticTree->nodes.size() != 1 ||
          !registerStatic(*m_sim.resources->staticTree, *m_sim.archive,
-                           m_sim.resources->staticTree->nodes.front().objectFlags))) {
+                         m_sim.resources->staticTree->nodes.front().objectFlags))) {
         return false;
     }
     for (const auto& binding : *m_bindings) {
@@ -346,8 +347,8 @@ Vec3 Obstacle::pushOut(const Vec3& position, f32 radius) const {
         away /= distance;
     }
     const Vec2 moved = local + away * (radius - distance);
-    const f32 c = std::cos(yaw);
-    const f32 s = std::sin(yaw);
+    const f32 c = portable::cos(yaw);
+    const f32 s = portable::sin(yaw);
     return Vec3{centre.x + moved.x * c + moved.y * s, position.y,
                 centre.z - moved.x * s + moved.y * c};
 }
@@ -427,7 +428,7 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
         }
     }
     m_sim.transform = itemPlacement(m_sim.position, instance.rotation);
-    m_sim.yaw = std::atan2(m_sim.transform[2].x, m_sim.transform[2].z);
+    m_sim.yaw = portable::atan2(m_sim.transform[2].x, m_sim.transform[2].z);
     m_sim.placement = m_sim.transform;
     m_sim.tree = nullptr;
     m_sim.archive = &items;
@@ -568,7 +569,7 @@ void ItemFigure::placeAt(const Mat4& placement) {
     m_sim.transform = placement;
     m_sim.placement = placement;
     m_sim.position = Vec3{placement[3]};
-    m_sim.yaw = std::atan2(placement[2].x, placement[2].z);
+    m_sim.yaw = portable::atan2(placement[2].x, placement[2].z);
 }
 
 void ItemFigure::play(s32 index, bool loop) {
@@ -756,9 +757,9 @@ Mat4 itemPlacement(const Vec3& position, const Vec3& rotation) {
     // Item angles are world-axis pitch, yaw, roll. GLM post-multiplies, so compose
     // them in reverse order; the authored yaw has the opposite sign to GLM's Y turn.
     Mat4 transform = glm::translate(Mat4{1.0f}, position);
-    transform = glm::rotate(transform, rotation.z, Vec3{0.0f, 0.0f, 1.0f});
-    transform = glm::rotate(transform, -rotation.y, Vec3{0.0f, 1.0f, 0.0f});
-    return glm::rotate(transform, rotation.x, Vec3{1.0f, 0.0f, 0.0f});
+    transform = portable::rotate(transform, rotation.z, Vec3{0.0f, 0.0f, 1.0f});
+    transform = portable::rotate(transform, -rotation.y, Vec3{0.0f, 1.0f, 0.0f});
+    return portable::rotate(transform, rotation.x, Vec3{1.0f, 0.0f, 0.0f});
 }
 
 Obstacle ItemFigure::obstacle(const ItemInfo& info) const {

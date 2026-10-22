@@ -8,18 +8,19 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/AnimationPlayer.h"
 
 #include "game/world/DynamicLights.h"
 
 namespace gdl::game {
 void LegendPresentation::appendState(NativeStateDigest& digest, const Simulation& state) {
-    const auto& [ownedEffects, player, kind, realm, held, flying, attached, gestureOwed,
-                 released, brandished, flightLeft, flightPosition, frozenTexture,
-                 flightCue, flightSound] = state;
+    const auto& [ownedEffects, player, kind, realm, held, flying, attached, gestureOwed, released,
+                 brandished, flightLeft, flightPosition, frozenTexture, flightCue, flightSound] =
+        state;
     digest.string("LegendPresentation.native.1");
-    digest.values(ownedEffects, player, kind, realm, held, flying, attached, gestureOwed,
-                  released, brandished, flightLeft, flightPosition);
+    digest.values(ownedEffects, player, kind, realm, held, flying, attached, gestureOwed, released,
+                  brandished, flightLeft, flightPosition);
     digest.resource(frozenTexture);
     digest.values(flightCue, flightSound);
 }
@@ -30,7 +31,7 @@ bool LegendPresentation::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool LegendPresentation::appendLocalDigest(NativeStateDigest& digest,
-                                          const LocalSnapshot& saved) const {
+                                           const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -286,8 +287,8 @@ LegendPresentation::Update LegendPresentation::update(f32 seconds,
     } else if (m_sim.flying != 0 && hasBearer &&
                LegendShow::flightOf(m_sim.kind) == LegendShow::Flight::WithBearer) {
         const Mat4 root =
-            glm::rotate(glm::translate(Mat4{1}, bearer->position),
-                        std::atan2(bearer->facing.x, bearer->facing.z), Vec3{0, 1, 0});
+            portable::rotate(glm::translate(Mat4{1}, bearer->position),
+                             portable::atan2(bearer->facing.x, bearer->facing.z), Vec3{0, 1, 0});
         m_effects.placeAt(m_sim.flying, glm::translate(root, Vec3{0, 0, LegendShow::kAhead}));
     }
     return result;
@@ -406,7 +407,7 @@ void LegendPresentation::playSound(LegendShow::Sound sound, bool looping) {
         }
         if (m_audio.record) {
             if (const auto recorded = m_audio.record(name, looping, m_sim.player, m_sim.kind,
-                                                    static_cast<u32>(sound) + 1)) {
+                                                     static_cast<u32>(sound) + 1)) {
                 if (looping) {
                     m_sim.flightCue = *recorded;
                     m_sim.flightSound = name;

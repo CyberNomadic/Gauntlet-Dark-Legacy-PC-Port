@@ -33,7 +33,8 @@ if(GDL_ENABLE_NETPLAY)
     # Deliberately independent of gdl::game/engine: no window, renderer or assets.
     add_executable(netplaycheck netplaycheck/main.cpp
         ${CMAKE_SOURCE_DIR}/src/game/netplay/InputCommand.cpp
-        ${CMAKE_SOURCE_DIR}/src/game/netplay/InputTimeline.cpp)
+        ${CMAKE_SOURCE_DIR}/src/game/netplay/InputTimeline.cpp
+        ${CMAKE_SOURCE_DIR}/src/engine/math/PortableMath.cpp)
     target_link_libraries(netplaycheck PRIVATE gdl::engine_net nlohmann_json::nlohmann_json
         Threads::Threads)
     gdl_apply_compiler_options(netplaycheck)

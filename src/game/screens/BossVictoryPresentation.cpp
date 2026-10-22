@@ -8,18 +8,20 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/menu/ScrollBox.h"
 
 namespace gdl::game {
 void BossVictoryPresentation::appendState(NativeStateDigest& digest, const Simulation& state,
-                                           const TextureAnimator::Clock& clock) const {
-    const auto& [visit, tree, player, pose, previousFrame, previousGeneration, advanced,
-                 position, yaw, sparkled] = state;
+                                          const TextureAnimator::Clock& clock) const {
+    const auto& [visit, tree, player, pose, previousFrame, previousGeneration, advanced, position,
+                 yaw, sparkled] = state;
     digest.string("BossVictoryPresentation.native.1");
     digest.value(visit);
     digest.resource(tree);
-    digest.values(player, pose, previousFrame, previousGeneration, advanced, position, yaw, sparkled);
+    digest.values(player, pose, previousFrame, previousGeneration, advanced, position, yaw,
+                  sparkled);
     // The first speculative boss fall may warm this retained draw bank. A
     // pre-fall snapshot has no wizard and must not hash a later cache birth.
     if (tree) {
@@ -34,7 +36,7 @@ bool BossVictoryPresentation::appendNativeDigest(NativeStateDigest& digest) cons
 }
 
 bool BossVictoryPresentation::appendLocalDigest(NativeStateDigest& digest,
-                                               const LocalSnapshot& saved) const {
+                                                const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -161,7 +163,7 @@ void BossVictoryPresentation::bindWizard(RenderDevice& device, ItemArchive& item
         m_sim.position = Vec3{0, -12, 6};
     }
     const Vec3 toParty = partyCentre / std::max(count - 1.0f, 1.0f) - m_sim.position;
-    m_sim.yaw = std::atan2(toParty.x, toParty.z);
+    m_sim.yaw = portable::atan2(toParty.x, toParty.z);
 }
 
 BossVictoryPresentation::Update BossVictoryPresentation::update(s32 ticks, f32 seconds,
@@ -217,16 +219,16 @@ void BossVictoryPresentation::drawWizard(RenderDevice& device, const Mat4& clip,
     if (m_sim.tree == nullptr || !m_sim.visit.wizardShown() || m_sim.visit.wizardAlpha() <= 0.0f) {
         return;
     }
-    const Mat4 model =
-        glm::rotate(glm::translate(Mat4{1.0f}, m_sim.position), m_sim.yaw, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 model = portable::rotate(glm::translate(Mat4{1.0f}, m_sim.position), m_sim.yaw,
+                                        Vec3{0.0f, 1.0f, 0.0f});
     TreePose visualPose;
     const TreePose* pose = &m_sim.pose;
     const f32 blend = frameBlend < 0 || m_sim.presentationAdvanced ? frameBlend : 1.0f;
     f32 frame = m_sim.player.frame();
     if (blend >= 0 && m_sim.player.playing()) {
         frame = m_sim.previousGeneration == m_sim.player.generation()
-                    ? std::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
-                                std::clamp(blend, 0.0f, 1.0f))
+                    ? portable::lerp(m_sim.previousFrame, m_sim.player.presentationFrame(),
+                                     std::clamp(blend, 0.0f, 1.0f))
                     : m_sim.player.presentationFrame();
         visualPose.evaluate(*m_sim.tree, m_sim.player.sequence(), frame, false, true);
         pose = &visualPose;

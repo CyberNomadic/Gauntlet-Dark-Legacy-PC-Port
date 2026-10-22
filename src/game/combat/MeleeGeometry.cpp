@@ -3,6 +3,8 @@
 #include <cmath>
 #include <vector>
 
+#include "engine/math/PortableMath.h"
+
 #include "game/combat/BodyContact.h"
 #include "game/world/TargetAssist.h"
 
@@ -47,7 +49,7 @@ std::optional<MeleeGeometry::Contact> MeleeGeometry::contact(std::span<const Tar
             !movementTouchesBody(from, to, centre, radius, halfHeight + enemyHalfHeight, &touch)) {
             continue;
         }
-        const f32 distance = std::hypot(touch.x - to.x, touch.z - to.z);
+        const f32 distance = portable::hypot(touch.x - to.x, touch.z - to.z);
         if (!best || distance < best->endpointDistance ||
             (distance == best->endpointDistance && target.contactCell < bestCell)) {
             best = Contact{index, distance};

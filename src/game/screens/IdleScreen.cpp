@@ -6,6 +6,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/WorldCamera.h"
 
 namespace gdl::game {
@@ -113,7 +114,7 @@ void SaverMotion::step(f32 horizontalFov, f32 aspect) {
         weapon.position += weapon.velocity * (kSpeed / 60.0f);
         weapon.angle =
             std::remainder(weapon.angle - glm::two_pi<f32>() / 60.0f, glm::two_pi<f32>());
-        const f32 halfWidth = weapon.position.z * std::tan(horizontalFov * 0.5f);
+        const f32 halfWidth = weapon.position.z * portable::tan(horizontalFov * 0.5f);
         const f32 halfHeight = halfWidth / std::max(0.1f, aspect);
         s32 collision = 0;
         if (weapon.position.z > kFar) {
@@ -201,15 +202,15 @@ void IdleScreen::update(f64 seconds, f32 horizontalFov, f32 aspect) {
                 m_effects.startSet(*m_device, m_archive, kNames[i], weapon.position, setting);
         }
         WorldCamera facing;
-        facing.yaw = std::atan2(weapon.velocity.x, weapon.velocity.z);
-        facing.pitch =
-            std::atan2(-weapon.velocity.y, glm::length(Vec2{weapon.velocity.x, weapon.velocity.z}));
+        facing.yaw = portable::atan2(weapon.velocity.x, weapon.velocity.z);
+        facing.pitch = portable::atan2(-weapon.velocity.y,
+                                       glm::length(Vec2{weapon.velocity.x, weapon.velocity.z}));
         Mat4 placement{1.0f};
         placement[0] = Vec4{facing.right(), 0};
         placement[1] = Vec4{facing.up(), 0};
         placement[2] = Vec4{facing.forward(), 0};
         placement[3] = Vec4{weapon.position, 1};
-        placement = glm::rotate(placement, weapon.angle, Vec3{1, 0, 0});
+        placement = portable::rotate(placement, weapon.angle, Vec3{1, 0, 0});
         m_effects.placeAt(m_handles[i], placement);
         // A wall bounce redirects the flight; do not round its sharp contact turn.
         if (weapon.velocity != previous[i].velocity || !previous[i].visible) {

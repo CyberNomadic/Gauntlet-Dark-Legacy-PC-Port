@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -39,8 +40,8 @@ f32 BossCamera::wrapAngle(f32 angle) {
     return angle;
 }
 
-f32 BossCamera::limit(f32 value, f32 target, f32 least, f32 most, f32 acceleration,
-                      f32 stopScale, f32& velocity, bool wrap, f32 seconds) {
+f32 BossCamera::limit(f32 value, f32 target, f32 least, f32 most, f32 acceleration, f32 stopScale,
+                      f32& velocity, bool wrap, f32 seconds) {
     f32 delta = target - value;
     if (wrap) {
         delta = wrapAngle(delta);
@@ -57,8 +58,8 @@ f32 BossCamera::limit(f32 value, f32 target, f32 least, f32 most, f32 accelerati
         f32 next = 0.0f;
         if (speed > 0.0f && speed / acceleration >= distance / speed) {
             // Brake without reversing when there is less than a stopping distance left.
-            next = velocity > 0.0f ? std::max(velocity - gain, 0.0f)
-                                   : std::min(velocity + gain, 0.0f);
+            next =
+                velocity > 0.0f ? std::max(velocity - gain, 0.0f) : std::min(velocity + gain, 0.0f);
         } else {
             next = velocity + (delta > 0.0f ? gain : -gain);
         }
@@ -106,11 +107,11 @@ f32 BossCamera::wantedYaw(const BossCameraSubject& boss, std::span<const CameraS
         return m_camera.yaw;
     }
     Vec3 side{toParty.x / flatLength(toParty), 0.0f, toParty.z / flatLength(toParty)};
-    const Vec3 facing{std::sin(boss.facing), 0.0f, std::cos(boss.facing)};
+    const Vec3 facing{portable::sin(boss.facing), 0.0f, portable::cos(boss.facing)};
     // BossCameraStart recomputes this cache. The Dragon's file contains cos(45 degrees),
     // although its authored maxYaw is 18 degrees.
     const bool bounded = boss.focus == BossCameraSubject::Focus::Combat && record.maxYaw < kPi;
-    const f32 cosMost = bounded ? std::cos(record.maxYaw) : -2.0f;
+    const f32 cosMost = bounded ? portable::cos(record.maxYaw) : -2.0f;
     f32 dot = side.x * facing.x + side.z * facing.z;
     if ((record.flags & 2) == 0) {
         // Without BCAM bit 1 the camera may also look from the boss's far side, and keeps
@@ -136,7 +137,7 @@ f32 BossCamera::wantedYaw(const BossCameraSubject& boss, std::span<const CameraS
         const f32 swung = boss.facing + (cross >= 0.0f ? record.maxYaw : -record.maxYaw);
         return wrapAngle(swung + kPi);
     }
-    return wrapAngle(std::atan2(side.x, side.z) + kPi);
+    return wrapAngle(portable::atan2(side.x, side.z) + kPi);
 }
 
 /** How far inside the view's edges the boss (to its radius) and every player stand: the
@@ -146,7 +147,7 @@ f32 BossCamera::viewMargin(const BossCameraSubject& boss, std::span<const Camera
     const Vec3 forward = m_camera.forward();
     const Vec3 right = m_camera.right();
     const Vec3 up = m_camera.up();
-    const f32 tanX = std::tan(view.horizontalFov * 0.5f);
+    const f32 tanX = portable::tan(view.horizontalFov * 0.5f);
     const f32 tanY = tanX / view.aspect;
     const f32 normX = std::sqrt(1.0f + tanX * tanX);
     const f32 normY = std::sqrt(1.0f + tanY * tanY);
@@ -184,7 +185,7 @@ f32 BossCamera::wantedDistance(f32 nearest, f32 farthest) {
     if (m_margin < 0.0f) {
         band = kBackingOff;
         wanted += kOutStep;
-    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
+        // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
     } else if (m_margin < kTightMargin && m_distance < farthest) {
         band = kBackingOff;
         wanted += 2.0f * (kWantedMargin - m_margin);
@@ -192,7 +193,7 @@ f32 BossCamera::wantedDistance(f32 nearest, f32 farthest) {
                (m_band & kBackingOff) != 0) {
         band = kBackingOff;
         wanted += 2.0f * (kWantedMargin - m_margin);
-    // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
+        // NOLINTNEXTLINE(bugprone-branch-clone): one branch per retail camera band
     } else if (m_margin > kLooseMargin) {
         band = kComingIn;
         wanted -= m_margin - kWantedMargin;
@@ -221,8 +222,8 @@ void BossCamera::followLook(const Vec3& target, f32 seconds) {
     }
     way /= length;
     if (m_lookLength <= 0.0f) {
-        m_lookLength = limit(m_lookLength, length, -kLookSpeed, kLookSpeed, kLookAcceleration,
-                             0.0f, m_lookVelocity, false, seconds);
+        m_lookLength = limit(m_lookLength, length, -kLookSpeed, kLookSpeed, kLookAcceleration, 0.0f,
+                             m_lookVelocity, false, seconds);
         m_lookDirection = way;
         m_lookTurnVelocity = Vec3{0.0f};
         m_attention = m_lookBase + m_lookDirection * m_lookLength;
@@ -232,8 +233,8 @@ void BossCamera::followLook(const Vec3& target, f32 seconds) {
         m_lookLength = 0.0f;
         m_lookBase = m_attention;
     } else {
-        m_lookLength = limit(m_lookLength, length, -kLookSpeed, kLookSpeed, kLookAcceleration,
-                             0.0f, m_lookVelocity, false, seconds);
+        m_lookLength = limit(m_lookLength, length, -kLookSpeed, kLookSpeed, kLookAcceleration, 0.0f,
+                             m_lookVelocity, false, seconds);
     }
     for (s32 axis = 0; axis < 3; ++axis) {
         m_lookDirection[axis] =
@@ -287,8 +288,9 @@ void BossCamera::reset(const BossCameraSubject& boss, std::span<const CameraSubj
     m_distance = boss.awake ? record.minDistance : record.minPlayerDistance;
     // With no approach markers, fall back to the line from the boss to the party.
     const Vec3 toParty = middleOf(party) - boss.position;
-    m_camera.yaw = flatLength(toParty) > 0.5f ? wrapAngle(std::atan2(toParty.x, toParty.z) + kPi)
-                                              : boss.facing;
+    m_camera.yaw = flatLength(toParty) > 0.5f
+                       ? wrapAngle(portable::atan2(toParty.x, toParty.z) + kPi)
+                       : boss.facing;
     m_camera.pitch = record.minPitch;
     if (!boss.awake) {
         if (const auto* marker = approachMarker(markers, middleOf(party)); marker != nullptr) {
@@ -327,8 +329,8 @@ void BossCamera::update(const BossCameraSubject& boss, std::span<const CameraSub
         const Vec3 fromCamera = m_attention - m_camera.position;
         const f32 length = glm::length(fromCamera);
         if (length > 0.0f) {
-            m_camera.yaw = wrapAngle(std::atan2(fromCamera.x, fromCamera.z));
-            m_camera.pitch = std::atan2(-fromCamera.y, flatLength(fromCamera));
+            m_camera.yaw = wrapAngle(portable::atan2(fromCamera.x, fromCamera.z));
+            m_camera.pitch = portable::atan2(-fromCamera.y, flatLength(fromCamera));
             m_distance = std::max(m_distance, length);
         }
         m_margin = viewMargin(boss, party, view);
@@ -348,8 +350,8 @@ void BossCamera::update(const BossCameraSubject& boss, std::span<const CameraSub
     m_margin = viewMargin(boss, party, view);
     const f32 wanted = wantedDistance(nearest, farthest);
     const f32 settled = m_distance;
-    m_distance = limit(m_distance, wanted, -kInSpeed, kOutSpeed, kDistanceAcceleration,
-                       kStopScale, m_distanceVelocity, false, seconds);
+    m_distance = limit(m_distance, wanted, -kInSpeed, kOutSpeed, kDistanceAcceleration, kStopScale,
+                       m_distanceVelocity, false, seconds);
     // Steeper the closer it stands; the pitch waits while the distance is far from where
     // it is going, so the two do not chase each other.
     const f32 range = farthest - nearest;
@@ -360,9 +362,9 @@ void BossCamera::update(const BossCameraSubject& boss, std::span<const CameraSub
     } else if (std::abs(settled - wanted) < kPitchHold) {
         pitch = record.minPitch + (record.maxPitch - record.minPitch) * t;
     }
-    m_camera.pitch = wrapAngle(limit(m_camera.pitch, pitch, -kPitchSpeed, kPitchSpeed,
-                                     kPitchAcceleration, kPitchStopScale, m_pitchVelocity, true,
-                                     seconds));
+    m_camera.pitch =
+        wrapAngle(limit(m_camera.pitch, pitch, -kPitchSpeed, kPitchSpeed, kPitchAcceleration,
+                        kPitchStopScale, m_pitchVelocity, true, seconds));
     place();
 }
 

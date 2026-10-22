@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 MissileTarget::Acquisition TargetAssist::itemAcquisition(const Mat4& placement,
                                                          const Vec3& collisionOffset, f32 radius,
@@ -22,7 +24,7 @@ MissileTarget::Acquisition TargetAssist::itemAcquisition(const Mat4& placement,
 f32 TargetAssist::distanceTo(const Vec3& feet, f32 height, const MissileTarget& target) {
     const Vec3 middle = feet + Vec3{0, height * 0.5f, 0};
     return target.surface.empty()
-               ? std::hypot(target.base.x - feet.x, target.base.z - feet.z) - target.radius
+               ? portable::hypot(target.base.x - feet.x, target.base.z - feet.z) - target.radius
                : glm::distance(target.pointNear(middle), middle);
 }
 
@@ -46,7 +48,7 @@ std::optional<MissileTarget> TargetAssist::around(const Vec3& feet, f32 height,
             feet.z};
         // Facing it, the line to it must be clear of walls.
         const Vec3 toward = target.pointNear(origin) - origin;
-        const bool coincident = std::hypot(toward.x, toward.z) < 1e-5f;
+        const bool coincident = portable::hypot(toward.x, toward.z) < 1e-5f;
         // A melee contact only asks about visibility, not NODE aim preference.
         // Untargetable parts remain hittable at close range.
         MissileTarget sight = target;
@@ -67,7 +69,7 @@ std::optional<MissileTarget> TargetAssist::ahead(const Vec3& feet, f32 height, c
                                                  std::span<const MissileTarget> targets, f32 reach,
                                                  f32 range, const WorldCollision* collision,
                                                  f32 facingDot) {
-    const f32 facingLength = std::hypot(facing.x, facing.z);
+    const f32 facingLength = portable::hypot(facing.x, facing.z);
     if (facingLength < 1e-5f || range <= 0 || reach <= 0) {
         return std::nullopt;
     }
@@ -81,7 +83,7 @@ std::optional<MissileTarget> TargetAssist::ahead(const Vec3& feet, f32 height, c
         const Vec3 point =
             target.acquisition ? target.acquisition->point : target.pointNear(origin);
         const Vec3 offset = point - origin;
-        const f32 flat = std::hypot(offset.x, offset.z);
+        const f32 flat = portable::hypot(offset.x, offset.z);
         const f32 distance = target.acquisition
                                  ? glm::length(offset) * target.acquisition->distanceScale -
                                        target.acquisition->radius
@@ -103,7 +105,7 @@ std::optional<MissileTarget> TargetAssist::ahead(const Vec3& feet, f32 height, c
 std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
                                          std::span<const MissileTarget> targets, f32 range,
                                          const WorldCollision* collision, f32 facingDot) {
-    const f32 facingLength = std::hypot(facing.x, facing.z);
+    const f32 facingLength = portable::hypot(facing.x, facing.z);
     if (facingLength < 1e-5f || range <= 0.0f) {
         return std::nullopt;
     }
@@ -123,7 +125,7 @@ std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
         const Vec3 point =
             target.acquisition ? target.acquisition->point : target.pointNear(origin);
         const Vec3 offset = point - origin;
-        const f32 flat = std::hypot(offset.x, offset.z);
+        const f32 flat = portable::hypot(offset.x, offset.z);
         const f32 targetRadius = target.surface.empty() ? target.radius : 0.0f;
         const f32 distance = target.acquisition
                                  ? glm::length(offset) * target.acquisition->distanceScale -
@@ -190,7 +192,7 @@ std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
 
 Vec3 TargetAssist::velocity(const Vec3& origin, const Vec3& target, f32 speed, f32 gravity) {
     const Vec3 offset = target - origin;
-    const f32 flight = std::hypot(offset.x, offset.z) / std::max(speed, 1e-5f);
+    const f32 flight = portable::hypot(offset.x, offset.z) / std::max(speed, 1e-5f);
     if (flight < 1e-5f) {
         return Vec3{0};
     }

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/CombatantProjectile.h"
 #include "game/players/EnemyShrink.h"
@@ -337,8 +338,7 @@ bool EnemyMissiles::appendNativeDigest(NativeStateDigest& digest) const {
     digest.value(m_sim);
     return digest.good();
 }
-bool EnemyMissiles::appendLocalDigest(NativeStateDigest& digest,
-                                      const LocalSnapshot& saved) const {
+bool EnemyMissiles::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         return false;
     }
@@ -562,7 +562,7 @@ Vec3 EnemyMissiles::heading(const EnemyMissileKind& kind, const Vec3& from, cons
         // A fixed pace along the ground, rising so as to fall on the aim (taken under the
         // target's middle, and off by the error) under the missile's own weight.
         const f32 drop = kind.slot == EnemyMissileKind::kBomb ? kBombDrop : kArrowDrop;
-        const f32 across = std::hypot(way.x, way.z);
+        const f32 across = portable::hypot(way.x, way.z);
         const f32 inverse = across > kFlatEnough ? 1.0f / across : 1.0f;
         const f32 perSpeed = 1.0f / std::max(speed, kFlatEnough);
         const f32 rise = way.y;
@@ -596,7 +596,7 @@ bool EnemyMissiles::launch(const EnemyMissileKind& kind, const EnemyMissileLaunc
     const f32 error = launch.aimError * (-0.5f * kAimSpread + spread);
     const Vec3 way = heading(kind, launch.body, launch.target, speed, error);
     const Vec2 flat{way.x, way.z};
-    const Vec2 facing{std::sin(launch.facing), std::cos(launch.facing)};
+    const Vec2 facing{portable::sin(launch.facing), portable::cos(launch.facing)};
     if (glm::length(flat) <= 0.0f || glm::dot(glm::normalize(flat), facing) < kFacing) {
         return false;
     }
@@ -734,7 +734,7 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
             }
             const Vec3 middle = view.position + Vec3{0.0f, 0.5f * view.height, 0.0f};
             const Vec3 away = middle - blast.position;
-            const f32 across = std::hypot(away.x, away.z);
+            const f32 across = portable::hypot(away.x, away.z);
             if (std::abs(away.y) > 0.5f * view.height + radius || across > radius + view.radius) {
                 continue;
             }
@@ -764,7 +764,7 @@ void EnemyMissiles::stepBursts(f32 seconds, const WorldCollision* collision,
         for (const MissileTarget& body : swarm) {
             const Vec3 away = body.base - blast.position;
             if (held(burst.swarm, body.id) ||
-                std::hypot(away.x, away.z) > radius + std::max(body.radius, 0.0f)) {
+                portable::hypot(away.x, away.z) > radius + std::max(body.radius, 0.0f)) {
                 continue;
             }
             burst.swarm.push_back({body.id, std::max(kSwarmGap, remaining + kBlastSlack)});
@@ -1005,14 +1005,14 @@ std::vector<EnemyMissileHit> EnemyMissiles::takeHits() {
 
 Mat4 EnemyMissiles::transformOf(const EnemyMissile& missile) {
     // Pointed the way it flies, spinning as its kind does.
-    const f32 yaw = std::atan2(missile.velocity.x, missile.velocity.z);
-    const f32 pitch =
-        -std::atan2(missile.velocity.y, flatDistance(Vec3{0.0f, 0.0f, 0.0f}, missile.velocity));
+    const f32 yaw = portable::atan2(missile.velocity.x, missile.velocity.z);
+    const f32 pitch = -portable::atan2(missile.velocity.y,
+                                       flatDistance(Vec3{0.0f, 0.0f, 0.0f}, missile.velocity));
     Mat4 model = glm::translate(Mat4{1.0f}, missile.position);
-    model = glm::rotate(model, yaw, Vec3{0.0f, 1.0f, 0.0f});
-    model = glm::rotate(model, pitch, Vec3{1.0f, 0.0f, 0.0f});
-    model = glm::rotate(model, missile.turned.y, Vec3{0.0f, 1.0f, 0.0f});
-    model = glm::rotate(model, missile.turned.x, Vec3{1.0f, 0.0f, 0.0f});
+    model = portable::rotate(model, yaw, Vec3{0.0f, 1.0f, 0.0f});
+    model = portable::rotate(model, pitch, Vec3{1.0f, 0.0f, 0.0f});
+    model = portable::rotate(model, missile.turned.y, Vec3{0.0f, 1.0f, 0.0f});
+    model = portable::rotate(model, missile.turned.x, Vec3{1.0f, 0.0f, 0.0f});
     if (missile.kind.pierces() && missile.lived < kGrowth) {
         const f32 grown = kSmallest + (1.0f - kSmallest) * missile.lived / kGrowth;
         model = glm::scale(model, Vec3{grown});

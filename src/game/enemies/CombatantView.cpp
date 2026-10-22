@@ -3,6 +3,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 namespace gdl::game {
@@ -86,8 +87,8 @@ TreePose Combatant::presentationPose(const Actor& actor, f32 alpha) {
 }
 
 f32 Combatant::presentationFrame(const Actor& actor, f32 alpha) {
-    return std::lerp(actor.presentation.frame, actor.player.presentationFrame(),
-                     presentationBlend(actor, alpha));
+    return portable::lerp(actor.presentation.frame, actor.player.presentationFrame(),
+                          presentationBlend(actor, alpha));
 }
 
 Mat4 Combatant::presentationModel(const Actor& actor, f32 alpha) {
@@ -99,7 +100,7 @@ Mat4 Combatant::presentationModel(const Actor& actor, f32 alpha) {
     const f32 yaw =
         actor.presentation.yaw + TreePose::wrapAngle(actor.yaw - actor.presentation.yaw) * blend;
     const Vec3 root = position + Vec3{0, actor.definition->floorOffset(), 0};
-    return glm::scale(glm::rotate(glm::translate(Mat4{1}, root), yaw, Vec3{0, 1, 0}),
+    return glm::scale(portable::rotate(glm::translate(Mat4{1}, root), yaw, Vec3{0, 1, 0}),
                       Vec3{actor.scale * actor.shrink});
 }
 
@@ -109,7 +110,7 @@ Mat4 Combatant::modelTransform(const Actor& critter) {
     // the Dragon's root is 18.5 units above it, outside the probe's vertical search range.
     const Vec3 root = critter.position + Vec3{0.0f, critter.definition->floorOffset(), 0.0f};
     const Mat4 model =
-        glm::rotate(glm::translate(Mat4{1.0f}, root), critter.yaw, Vec3{0.0f, 1.0f, 0.0f});
+        portable::rotate(glm::translate(Mat4{1.0f}, root), critter.yaw, Vec3{0.0f, 1.0f, 0.0f});
     return glm::scale(model, Vec3{critter.scale * critter.shrink});
 }
 
@@ -337,10 +338,11 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
         TreePose visualPose;
         const TreePose* attachmentPose = &instance.pose;
         if (presentationAlpha >= 0 && critter.presentation.valid) {
-            frame = instance.previousGeneration == instance.player.generation()
-                        ? std::lerp(instance.previousFrame, instance.player.presentationFrame(),
-                                    presentationBlend(critter, presentationAlpha))
-                        : instance.player.presentationFrame();
+            frame =
+                instance.previousGeneration == instance.player.generation()
+                    ? portable::lerp(instance.previousFrame, instance.player.presentationFrame(),
+                                     presentationBlend(critter, presentationAlpha))
+                    : instance.player.presentationFrame();
             visualPose.evaluate(*auxiliary.tree, instance.player.sequence(), frame, false, true);
             attachmentPose = &visualPose;
         }
@@ -366,8 +368,8 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
             : nullptr;
     drawBrokenModels(critter, device, clip, lighting, brokenFrozen, hitFlash, shownModel, pose);
     for (const auto& part : children()) {
-        drawBrokenModels(part->m_sim.actor, device, clip, lighting, brokenFrozen, hitFlash, shownModel,
-                         pose);
+        drawBrokenModels(part->m_sim.actor, device, clip, lighting, brokenFrozen, hitFlash,
+                         shownModel, pose);
     }
     if (const auto meter = healthBars ? meterPose(camera, presentationAlpha) : std::nullopt) {
         critter.stock->meter.draw(device, clip, meter->first, lighting, meter->second, nullptr,
@@ -411,7 +413,7 @@ bool Combatant::reachedBy(const Vec3& centre, f32 radius, f32 arc, const Vec3& f
     }
     if (arc < kPi && distance > 0.001f) {
         const Vec3 toward = position() - centre;
-        const f32 angle = std::acos(
+        const f32 angle = portable::acos(
             std::clamp((toward.x * facing.x + toward.z * facing.z) / distance, -1.0f, 1.0f));
         if (angle > arc) {
             return false;

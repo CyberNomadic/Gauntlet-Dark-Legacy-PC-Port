@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl {
 
@@ -20,12 +21,12 @@ struct Axes {
 };
 
 Axes axesOf(f32 pitch, f32 yaw, f32 roll) {
-    const f32 cp = std::cos(pitch);
-    const f32 sp = std::sin(pitch);
-    const f32 cy = std::cos(yaw);
-    const f32 sy = std::sin(yaw);
-    const f32 cr = std::cos(roll);
-    const f32 sr = std::sin(roll);
+    const f32 cp = portable::cos(pitch);
+    const f32 sp = portable::sin(pitch);
+    const f32 cy = portable::cos(yaw);
+    const f32 sy = portable::sin(yaw);
+    const f32 cr = portable::cos(roll);
+    const f32 sr = portable::sin(roll);
     Axes axes{};
     axes.forward = Vec3{sy * cp, -sp, cy * cp};
     const Vec3 up{sy * sp, cp, cy * sp};
@@ -72,7 +73,7 @@ Mat4 WorldCamera::view() const {
 }
 
 Mat4 WorldCamera::projection(f32 horizontalFov, f32 aspect) {
-    const f32 verticalFov = 2.0f * std::atan(std::tan(horizontalFov / 2.0f) / aspect);
+    const f32 verticalFov = 2.0f * portable::atan(portable::tan(horizontalFov / 2.0f) / aspect);
     // Swapping the planes reverses depth so that nearer is larger; then it is squeezed under
     // the 2D layers.
     const f32 reversedNear = kFar;
@@ -88,11 +89,11 @@ ViewVolume ViewVolume::of(const WorldCamera& camera, f32 horizontalFov, f32 aspe
     volume.up = camera.up();
     volume.forward = camera.forward();
     const f32 halfX = horizontalFov / 2.0f;
-    const f32 halfY = std::atan(std::tan(halfX) / aspect);
-    volume.sinX = std::sin(halfX);
-    volume.cosX = std::cos(halfX);
-    volume.sinY = std::sin(halfY);
-    volume.cosY = std::cos(halfY);
+    const f32 halfY = portable::atan(portable::tan(halfX) / aspect);
+    volume.sinX = portable::sin(halfX);
+    volume.cosX = portable::cos(halfX);
+    volume.sinY = portable::sin(halfY);
+    volume.cosY = portable::cos(halfY);
     return volume;
 }
 
@@ -199,9 +200,9 @@ Mat4 CameraFrame::face(const Mat4& placement, u32 mode) const {
     if (toCamera.x * toCamera.x + toCamera.z * toCamera.z < 1e-8f) {
         return placement;
     }
-    const f32 yaw = std::atan2(toCamera.x, toCamera.z);
-    const f32 c = std::cos(yaw);
-    const f32 s = std::sin(yaw);
+    const f32 yaw = portable::atan2(toCamera.x, toCamera.z);
+    const f32 c = portable::cos(yaw);
+    const f32 s = portable::sin(yaw);
     faced[0] = Vec4{c * scale.x, 0.0f, -s * scale.x, 0.0f};
     faced[1] = Vec4{0.0f, scale.y, 0.0f, 0.0f};
     faced[2] = Vec4{s * scale.z, 0.0f, c * scale.z, 0.0f};

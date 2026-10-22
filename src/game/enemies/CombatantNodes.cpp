@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 
@@ -107,7 +108,7 @@ f32 Combatant::damageNode(s32 index, f32 amount, u32 flags) {
                 shot.critter = id();
                 shot.damageIndex = part.damageEffect;
                 shot.origin = origin + Vec3{modelTransform(actor) * Vec4{damage->offset, 0}};
-                shot.forward = {std::sin(actor.yaw), 0, std::cos(actor.yaw)};
+                shot.forward = {portable::sin(actor.yaw), 0, portable::cos(actor.yaw)};
                 shot.rate = attackRate(actor);
                 shot.scale = actor.scale;
                 shot.damageScale = m_sim.scales.damage;
@@ -177,7 +178,7 @@ void Combatant::drawBrokenModels(const Actor& actor, RenderDevice& device, const
         const Texture* mask = flashing ? flash : nullptr;
         replacement.resource->setMaskedTexture(frozen != nullptr ? frozen : mask);
         replacement.resource->draw(device, clip, placement * pose.matrices()[replacement.node],
-                               lighting, {}, nullptr, actor.alpha);
+                                   lighting, {}, nullptr, actor.alpha);
     }
     for (usize i = 0; i < actor.hitNodes.size(); ++i) {
         const auto& part = actor.definition->parts()[i];

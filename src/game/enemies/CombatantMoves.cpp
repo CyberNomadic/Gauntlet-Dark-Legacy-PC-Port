@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 #include "game/enemies/EnemyMind.h"
@@ -17,7 +18,7 @@ f32 flatDistance(const Vec3& a, const Vec3& b) {
     return std::sqrt(dx * dx + dz * dz);
 }
 f32 yawBetween(const Vec3& from, const Vec3& to) {
-    return std::atan2(to.x - from.x, to.z - from.z);
+    return portable::atan2(to.x - from.x, to.z - from.z);
 }
 } // namespace
 
@@ -241,7 +242,7 @@ f32 Combatant::targetScore(const Actor& critter, const Vec3& position) {
     constexpr f32 kSquarelyAhead = 0.5f;
     const Vec3 origin = targetingOrigin(critter);
     const f32 distance = flatDistance(position, origin);
-    const f32 dot = std::cos(
+    const f32 dot = portable::cos(
         wrapAngle(yawBetween(origin, position) - critter.yaw - critter.definition->sight().yaw));
     return dot > kSquarelyAhead ? distance / dot : 2.0f * distance;
 }
@@ -311,7 +312,7 @@ std::optional<usize> Combatant::bestMove(const Actor& critter, std::span<const E
             continue;
         }
         constexpr f32 kSquarelyAhead = 0.5f;
-        const f32 dot = std::cos(bearing - move.target.yaw);
+        const f32 dot = portable::cos(bearing - move.target.yaw);
         const f32 score = dot > kSquarelyAhead ? distance / dot : 2.0f * distance;
         if (score < bestScore) {
             bestScore = score;

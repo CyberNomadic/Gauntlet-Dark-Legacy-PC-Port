@@ -4,6 +4,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 
@@ -41,7 +42,7 @@ s32 Combatant::attackTarget(const Actor& critter, const TargetCriteria& criteria
             const f32 distance = candidate.distance;
             const f32 heading = source.targetYaw + criteria.yaw;
             const f32 dot =
-                glm::dot(candidate.direction, Vec2{std::sin(heading), std::cos(heading)});
+                glm::dot(candidate.direction, Vec2{portable::sin(heading), portable::cos(heading)});
             const bool eligible = phase && distance >= criteria.minDistance &&
                                   (criteria.maxDistance <= 0 || distance <= criteria.maxDistance) &&
                                   dot >= criteria.minDot;

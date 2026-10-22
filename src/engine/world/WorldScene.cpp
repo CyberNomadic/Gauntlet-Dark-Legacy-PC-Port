@@ -1,7 +1,5 @@
 #include "engine/world/WorldScene.h"
 
-#include "engine/io/NativeStateDigest.h"
-
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -13,6 +11,8 @@
 #include "engine/assets/TextureBindings.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 #include "engine/render/HeatDistortion.h"
 #include "engine/world/ThermalMaterial.h"
 
@@ -57,8 +57,8 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 alpha) {
     if (orthogonal(from) && orthogonal(to)) {
         const Quat first = glm::quat_cast(from);
         const Quat second = glm::quat_cast(to);
-        if (std::abs(glm::dot(first, second)) > std::cos(kHalfPi * 0.5f)) {
-            result = glm::mat4_cast(glm::slerp(first, second, alpha));
+        if (std::abs(glm::dot(first, second)) > portable::cos(kHalfPi * 0.5f)) {
+            result = glm::mat4_cast(portable::slerp(first, second, alpha));
             result = glm::scale(result, glm::mix(fromScale, toScale, alpha));
         }
     }
@@ -411,7 +411,10 @@ bool WorldScene::appendDigest(NativeStateDigest& digest, const LocalSnapshot* sa
     digest.wide(slots.size());
     for (const auto& [key, motion] : slots) {
         const auto found = m_slots.find(key);
-        if (found == m_slots.end()) { digest.invalidate(); return false; }
+        if (found == m_slots.end()) {
+            digest.invalidate();
+            return false;
+        }
         digest.value(key);
         digest.resource(found->second.texture);
         digest.values(found->second.usable, found->second.thermal, *motion);
@@ -429,8 +432,12 @@ bool WorldScene::appendNativeDigest(NativeStateDigest& digest) const {
 
 bool WorldScene::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
-    [[maybe_unused]] const auto& [placements, staticPlacements, staticPreviousPending, units, slots, lighting, darken, textureFrame, owner, binding] = saved;
-    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    [[maybe_unused]] const auto& [placements, staticPlacements, staticPreviousPending, units, slots,
+                                  lighting, darken, textureFrame, owner, binding] = saved;
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
     return appendDigest(digest, &saved);
 }
 

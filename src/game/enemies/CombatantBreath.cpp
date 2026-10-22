@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 CombatantBreath CombatantBreath::fromNode(const Mat4& node, const AttackDefinition& damage) {
@@ -12,11 +13,11 @@ CombatantBreath CombatantBreath::fromNode(const Mat4& node, const AttackDefiniti
     if (length > 0.0f) {
         forward /= length;
     }
-    const f32 cy = std::cos(damage.yaw);
-    const f32 sy = std::sin(damage.yaw);
+    const f32 cy = portable::cos(damage.yaw);
+    const f32 sy = portable::sin(damage.yaw);
     forward = {forward.x * cy - forward.z * sy, forward.y, forward.z * cy + forward.x * sy};
-    const f32 cp = std::cos(damage.pitch);
-    const f32 sp = std::sin(damage.pitch);
+    const f32 cp = portable::cos(damage.pitch);
+    const f32 sp = portable::sin(damage.pitch);
     // Pitch about the horizontal perpendicular of the yawed direction, as authored.
     // Do not substitute a world-X rotation or renormalize its horizontal axis.
     const Vec3 direction{sp * forward.x * forward.y + forward.x * cp,
@@ -27,7 +28,7 @@ CombatantBreath CombatantBreath::fromNode(const Mat4& node, const AttackDefiniti
 }
 
 bool CombatantBreath::touches(const AttackDefinition& damage, const Vec3& centre, f32 radius,
-                            f32 halfHeight) const {
+                              f32 halfHeight) const {
     const Vec3 fromOrigin = centre - origin;
     const f32 distance = glm::length(Vec2{fromOrigin.x, fromOrigin.z});
     if (distance < damage.minDistance || distance > damage.maxDistance) {

@@ -1,17 +1,17 @@
 #include "game/world/PlacedItems.h"
 
-#include "engine/io/NativeStateDigest.h"
-#include "game/world/NativeStateResources.h"
-
 #include <algorithm>
 #include <cmath>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/ItemPickup.h"
 #include "game/world/ItemFigure.h"
 #include "game/world/ItemSupport.h"
+#include "game/world/NativeStateResources.h"
 
 namespace gdl::game {
 namespace {
@@ -41,7 +41,7 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
     // A sheared or reflected socket keeps its authored basis, not an unrelated rotation.
     Mat4 result = current;
     if (orthogonal(from) && orthogonal(to)) {
-        result = glm::mat4_cast(glm::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
+        result = glm::mat4_cast(portable::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
         result = glm::scale(result, glm::mix(fromScale, toScale, blend));
     }
     result[3] = glm::mix(previous[3], current[3], blend);
@@ -50,13 +50,13 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
 } // namespace
 
 void visitNativeState(NativeStateDigest& digest, const PlacedItems::Item& value) {
-    const auto& [floor, name, instance, info, subtype, amount, health, flags, strength,
-                 minPlayers, radius, height, position, transform, model, particles, pose,
-                 figure, archive, player, alpha, visible, taken, contained, velocity, thrown,
-                 carried, opener, noGrabSeconds, previousTransform, previousFrame,
-                 previousAlpha, previousGeneration, presentationCaptured, continuity] = value;
-    digest.values(floor, name, instance, info, subtype, amount, health, flags, strength,
-                  minPlayers, radius, height, position, transform);
+    const auto& [floor, name, instance, info, subtype, amount, health, flags, strength, minPlayers,
+                 radius, height, position, transform, model, particles, pose, figure, archive,
+                 player, alpha, visible, taken, contained, velocity, thrown, carried, opener,
+                 noGrabSeconds, previousTransform, previousFrame, previousAlpha, previousGeneration,
+                 presentationCaptured, continuity] = value;
+    digest.values(floor, name, instance, info, subtype, amount, health, flags, strength, minPlayers,
+                  radius, height, position, transform);
     digest.resource(model.get());
     digest.values(particles, pose);
     digest.resource(figure);
@@ -110,7 +110,10 @@ bool PlacedItems::appendNativeDigest(NativeStateDigest& digest) const {
 bool PlacedItems::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
     [[maybe_unused]] const auto& [state, clocks, owner, collision, binding] = saved;
-    if (!canRestoreLocal(saved)) { digest.invalidate(); return false; }
+    if (!canRestoreLocal(saved)) {
+        digest.invalidate();
+        return false;
+    }
     return appendDigest(digest, &saved);
 }
 
@@ -461,7 +464,7 @@ bool PlacedItems::exposedWithin(const Item& item, const Vec3& position, f32 radi
     const ItemInfo& info = m_infos[static_cast<usize>(item.info)];
     const Vec3 centre = Vec3{item.transform * Vec4{info.collisionOffset, 1}};
     const Vec3 delta = centre - position;
-    return info.collisionType == 1 && std::hypot(delta.x, delta.z) <= radius + item.radius &&
+    return info.collisionType == 1 && portable::hypot(delta.x, delta.z) <= radius + item.radius &&
            std::abs(delta.y) <= radius + item.height;
 }
 
@@ -723,7 +726,8 @@ std::optional<usize> PlacedItems::claim(const Vec3& position, f32 reach, f32 ris
             std::abs(item.position.y - position.y) >= rise) {
             continue;
         }
-        const f32 along = std::hypot(item.position.x - position.x, item.position.z - position.z);
+        const f32 along =
+            portable::hypot(item.position.x - position.x, item.position.z - position.z);
         if (along < best) {
             best = along;
             nearest = i;

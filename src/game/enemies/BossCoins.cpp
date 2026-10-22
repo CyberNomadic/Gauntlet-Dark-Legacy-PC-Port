@@ -4,6 +4,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/math/Mt19937.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -15,8 +16,8 @@ std::array<s32, BossCoins::kKinds> BossCoins::countsOf(s32 realm) {
 }
 
 Vec3 BossCoins::yawed(const Vec3& v, f32 angle) {
-    const f32 s = std::sin(angle);
-    const f32 c = std::cos(angle);
+    const f32 s = portable::sin(angle);
+    const f32 c = portable::cos(angle);
     return Vec3{v.x * c + v.z * s, v.y, v.z * c - v.x * s};
 }
 

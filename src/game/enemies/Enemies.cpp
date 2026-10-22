@@ -1,15 +1,16 @@
 #include "game/enemies/Enemies.h"
 
 #include <algorithm>
-#include <initializer_list>
 #include <cmath>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <numbers>
 #include <tuple>
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/combat/BodyContact.h"
 #include "game/combat/Damage.h"
@@ -76,8 +77,7 @@ namespace {
 // A derived record with data in its base cannot be decomposed by C++. Its real
 // base is visited separately; this guard detects an unvisited derived member.
 template <class T>
-constexpr bool kHasExtraEnemyMember =
-    requires { T{Enemies::BodyState{}, EnemyAnimator{}, {}}; };
+constexpr bool kHasExtraEnemyMember = requires { T{Enemies::BodyState{}, EnemyAnimator{}, {}}; };
 
 template <class T> bool sameNativeField(const T& left, const T& right) {
     return left == right;
@@ -238,8 +238,8 @@ bool separatingFromItem(const Obstacle& box, const Vec3& from, const Vec3& to, f
     if (box.enemyItem->cylindrical) {
         return true;
     }
-    const f32 c = std::cos(box.yaw);
-    const f32 s = std::sin(box.yaw);
+    const f32 c = portable::cos(box.yaw);
+    const f32 s = portable::sin(box.yaw);
     const Vec2 local{start.x * c - start.y * s, start.x * s + start.y * c};
     const Vec2 delta{step.x * c - step.y * s, step.x * s + step.y * c};
     return std::abs(local.x) <= box.halfAcross + radius &&
@@ -408,10 +408,10 @@ bool Enemies::BodyState::valid() const {
             return false;
         }
     }
-    return std::ranges::all_of(
-        std::initializer_list<s32>{pushes, attackCount, stunTicks, drainTicks, endurance,
-                                   otherSide, hitCount, veilClock, deathSkinFrames},
-        [](s32 value) { return checkpointCounter(value); });
+    return std::ranges::all_of(std::initializer_list<s32>{pushes, attackCount, stunTicks,
+                                                          drainTicks, endurance, otherSide,
+                                                          hitCount, veilClock, deathSkinFrames},
+                               [](s32 value) { return checkpointCounter(value); });
 }
 
 bool Enemies::Checkpoint::valid() const {
@@ -487,8 +487,8 @@ bool Enemies::Checkpoint::valid() const {
     const auto sourceValid = [&](const auto& event, s32 kind) {
         return event.instance < nextInstance &&
                (event.instance == 0 ||
-                enemies[static_cast<usize>(event.enemy)].instance != event.instance ||
-                kind < 0 || enemies[static_cast<usize>(event.enemy)].kind == kind);
+                enemies[static_cast<usize>(event.enemy)].instance != event.instance || kind < 0 ||
+                enemies[static_cast<usize>(event.enemy)].kind == kind);
     };
     for (const auto& event : feedback) {
         if (!sourceValid(event, event.kind)) {
@@ -500,8 +500,8 @@ bool Enemies::Checkpoint::valid() const {
             return false;
         }
     }
-    return std::ranges::all_of(
-        bursts, [&](const auto& event) { return sourceValid(event, event.kind); });
+    return std::ranges::all_of(bursts,
+                               [&](const auto& event) { return sourceValid(event, event.kind); });
 }
 
 bool Enemies::Checkpoint::operator==(const Checkpoint& other) const {
@@ -1056,7 +1056,7 @@ ItemArchive* Enemies::archive(s32 kind) {
 }
 
 bool Enemies::registerNativeResources(NativeStateResources& resources,
-                                     std::string_view stablePrefix) const {
+                                      std::string_view stablePrefix) const {
     if (stablePrefix.empty()) {
         return false;
     }
@@ -1074,7 +1074,7 @@ bool Enemies::registerNativeResources(NativeStateResources& resources,
             continue;
         }
         if (!resources.registerArchive(stock->archive,
-                                         std::format("{}/{}", stablePrefix, stock->kind))) {
+                                       std::format("{}/{}", stablePrefix, stock->kind))) {
             return false;
         }
         if (!resources.registerTextureAnimator(stock->textures, stock->archive, "swarm/textures")) {
@@ -1082,9 +1082,8 @@ bool Enemies::registerNativeResources(NativeStateResources& resources,
         }
         const std::array models{&stock->arrow, &stock->bomb, &stock->fireball};
         for (usize slot = 0; slot < models.size(); ++slot) {
-            if (models[slot]->bound() &&
-                !resources.registerModel(*models[slot], stock->archive,
-                                            std::format("shot/{}", slot))) {
+            if (models[slot]->bound() && !resources.registerModel(*models[slot], stock->archive,
+                                                                  std::format("shot/{}", slot))) {
                 return false;
             }
         }
@@ -1311,7 +1310,7 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
         return std::nullopt;
     }
     enemy.animator.setThrowInterval(spawn.throwInterval * m_simulation.scales.missileRate);
-    const f32 facing = std::atan2(spawn.direction.x, spawn.direction.z);
+    const f32 facing = portable::atan2(spawn.direction.x, spawn.direction.z);
     const auto settle = [this](Vec3 at, Vec3& out) {
         if (m_collision == nullptr) {
             out = at;
@@ -1702,7 +1701,7 @@ void Enemies::veil(Enemy& enemy, s32 ticks) {
 
 /** Knock-back dies away, and what was thrown up comes down. */
 void Enemies::decayPush(Enemy& enemy, f32 seconds) {
-    enemy.push *= std::pow(kPushDecay, seconds * kPushFrameRate);
+    enemy.push *= portable::pow(kPushDecay, seconds * kPushFrameRate);
     if (std::abs(enemy.push.x) < kPushFloor) {
         enemy.push.x = 0.0f;
     }
@@ -1873,8 +1872,9 @@ void Enemies::resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
         }
         const Vec3 toward = victim->position - enemy.position;
         const f32 length = flatDistance(victim->position, enemy.position);
-        blow.direction = length > 0.001f ? Vec3{toward.x / length, 0.0f, toward.z / length}
-                                         : Vec3{std::sin(enemy.yaw), 0.0f, std::cos(enemy.yaw)};
+        blow.direction = length > 0.001f
+                             ? Vec3{toward.x / length, 0.0f, toward.z / length}
+                             : Vec3{portable::sin(enemy.yaw), 0.0f, portable::cos(enemy.yaw)};
         blow.ward = victim->meleeWard;
         if (blow.ward != EnemyMeleeWard::None) {
             EnemyHit returned;
@@ -2035,19 +2035,19 @@ MindSense Enemies::sense(const Enemy& enemy, s32 slot, s32 ticks,
     const f32 reach = paceOf(enemy.kind) * static_cast<f32>(ticks);
     sense.clear = [this, &enemy, obstacles, slot, reach](f32 heading) {
         Vec3 probe = enemy.position;
-        probe.x += reach * std::sin(heading);
-        probe.z += reach * std::cos(heading);
+        probe.x += reach * portable::sin(heading);
+        probe.z += reach * portable::cos(heading);
         return probeClear(enemy, probe, obstacles, slot);
     };
     sense.open = [this, &enemy, obstacles, slot, reach](f32 heading) {
         Vec3 probe = enemy.position;
-        probe.x += reach * std::sin(heading);
-        probe.z += reach * std::cos(heading);
+        probe.x += reach * portable::sin(heading);
+        probe.z += reach * portable::cos(heading);
         // Route selection must see the same floor, item and body obstructions as movement.
         return probeClear(enemy, probe, obstacles, slot);
     };
     sense.wanderClear = [this, &enemy, obstacles, slot, reach](f32 heading) {
-        const Vec3 direction{std::sin(heading), 0, std::cos(heading)};
+        const Vec3 direction{portable::sin(heading), 0, portable::cos(heading)};
         // move_logic05/06 look radius + 0.5 ahead at radius + 0.1 above the feet,
         // then check the tick- and level-scaled step from do_enemies' speed table.
         if (m_collision != nullptr) {
@@ -2114,7 +2114,7 @@ void Enemies::think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView
                         static_cast<f32>(pair) * (kPi / 36) * (attempt % 2 == 0 ? 1.0f : -1.0f);
                 }
                 const Vec3 toward = threat->decoy.value_or(threat->position) - enemy.position;
-                retreat = wrapAngle(std::atan2(toward.x, toward.z) + kPi + offset);
+                retreat = wrapAngle(portable::atan2(toward.x, toward.z) + kPi + offset);
             }
         }
     }
@@ -2165,7 +2165,7 @@ void Enemies::think(Enemy& enemy, s32 slot, s32 ticks, std::span<const EnemyView
     if (intent.facing.has_value() || intent.turn) {
         enemy.yaw = turnToward(enemy, intent.facing.value_or(intent.heading), ticks);
     }
-    const Vec3 step = Vec3{std::sin(intent.heading), 0.0f, std::cos(intent.heading)} *
+    const Vec3 step = Vec3{portable::sin(intent.heading), 0.0f, portable::cos(intent.heading)} *
                       (paceOf(enemy.kind) * intent.pace * static_cast<f32>(ticks));
     move(enemy, slot, ticks, static_cast<f32>(ticks) / static_cast<f32>(kTicksPerSecond), step,
          players, obstacles, !retreat.has_value() && enemy.mind.effectiveWay == kSeekWay);
@@ -2575,8 +2575,9 @@ void Enemies::aimDeathShot(const Enemy& enemy, s32 slot, std::span<const EnemyVi
     shot.position = enemy.position;
     const Vec3 way = at->position - enemy.position;
     const f32 length = glm::length(way);
-    shot.direction =
-        length > 0.001f ? way / length : Vec3{std::sin(enemy.yaw), 0.0f, std::cos(enemy.yaw)};
+    shot.direction = length > 0.001f
+                         ? way / length
+                         : Vec3{portable::sin(enemy.yaw), 0.0f, portable::cos(enemy.yaw)};
     m_simulation.deathShots.push_back(shot);
 }
 
@@ -2615,7 +2616,7 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
         return;
     }
     const Vec3 from = bodyCentre(enemy);
-    Vec3 aim = from + Vec3{std::sin(enemy.yaw), 0.0f, std::cos(enemy.yaw)} * kBlindReach;
+    Vec3 aim = from + Vec3{portable::sin(enemy.yaw), 0.0f, portable::cos(enemy.yaw)} * kBlindReach;
     if (const EnemyView* view = viewOf(players, enemy.target); view != nullptr) {
         aim = view->position + Vec3{0.0f, 0.5f * view->height, 0.0f};
     }
@@ -2889,7 +2890,7 @@ std::vector<s32> Enemies::reachedBy(const Vec3& centre, f32 radius, f32 arc,
             continue;
         }
         if (arc < kPi && distance > 0.001f) {
-            const f32 angle = std::acos(
+            const f32 angle = portable::acos(
                 std::clamp((toward.x * facing.x + toward.z * facing.z) / distance, -1.0f, 1.0f));
             if (angle > arc) {
                 continue;
@@ -3057,7 +3058,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
             body.setFrame(player.sequence(), static_cast<s32>(std::lround(player.frame())));
         }
         const Mat4 model = glm::scale(
-            glm::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f}),
+            portable::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f}),
             Vec3{m_simulation.shrink});
         f32 alpha = enemy.kind == kDeathKind && enemy.killed
                         ? std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds)
@@ -3139,7 +3140,8 @@ std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
     } else if (enemy.killed && enemy.kind == kDeathKind) {
         result.alpha *= std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds);
     }
-    // NOLINTNEXTLINE(readability-qualified-auto): an array iterator is a pointer only on some libraries
+    // An array iterator is a pointer only on some libraries:
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto skin = std::ranges::find(kDeathSkins, enemy.deathSkin);
     const auto frame = static_cast<u32>(enemy.deathSeconds * kDeathSkinRate);
     if (enemy.killed && skin != kDeathSkins.end() &&

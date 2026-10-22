@@ -7,6 +7,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/ItemFigure.h"
 #include "game/world/ItemSupport.h"
@@ -57,7 +58,7 @@ bool LevelTransporters::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool LevelTransporters::appendLocalDigest(NativeStateDigest& digest,
-                                         const LocalSnapshot& saved) const {
+                                          const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -168,7 +169,8 @@ void LevelTransporters::bind(RenderDevice& device, const WorldLayout& layout,
     const auto tree = art != nullptr ? art->trees.find("TRANS") : std::nullopt;
     if (tree) {
         m_archive = art;
-        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
+        // The pointer is bound whenever the index it guards is set:
+        // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
         m_tree = &art->trees.tree(*tree);
         m_textures.bind(art->trees.textureAnimations(), art->textures, device);
     }
@@ -249,8 +251,8 @@ void LevelTransporters::draw(RenderDevice& device, const Mat4& clip, const World
             const TreePose* pose = &pad.pose;
             if (blend >= 0 && pad.animation.playing()) {
                 frame = pad.previousGeneration == pad.animation.generation()
-                            ? std::lerp(pad.previousFrame, pad.animation.presentationFrame(),
-                                        std::clamp(blend, 0.0f, 1.0f))
+                            ? portable::lerp(pad.previousFrame, pad.animation.presentationFrame(),
+                                             std::clamp(blend, 0.0f, 1.0f))
                             : pad.animation.presentationFrame();
                 visualPose.evaluate(*m_tree, pad.animation.sequence(), frame, false, true);
                 pose = &visualPose;
@@ -312,13 +314,13 @@ bool LevelTransporters::visible(const Vec3& position, f32 radius, const WorldCam
     const Vec3 relative = position - camera.position;
     const f32 z = glm::dot(relative, camera.forward());
     const f32 horizontal = view.horizontalFov * 0.5f;
-    const f32 vertical = std::atan(std::tan(horizontal) / view.aspect);
+    const f32 vertical = portable::atan(portable::tan(horizontal) / view.aspect);
     // The entire destination sphere must fit, not just its centre.
     return z >= WorldCamera::kNear + radius && z <= WorldCamera::kFar - radius &&
-           std::abs(glm::dot(relative, camera.right())) * std::cos(horizontal) <=
-               z * std::sin(horizontal) - radius &&
-           std::abs(glm::dot(relative, camera.up())) * std::cos(vertical) <=
-               z * std::sin(vertical) - radius;
+           std::abs(glm::dot(relative, camera.right())) * portable::cos(horizontal) <=
+               z * portable::sin(horizontal) - radius &&
+           std::abs(glm::dot(relative, camera.up())) * portable::cos(vertical) <=
+               z * portable::sin(vertical) - radius;
 }
 
 std::optional<Vec3> LevelTransporters::landing(usize source, f32 radius,

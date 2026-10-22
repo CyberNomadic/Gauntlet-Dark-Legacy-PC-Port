@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "engine/io/ByteReader.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 namespace {
@@ -53,7 +54,7 @@ Vec2 steppedTurn(f32 radians) {
         return kAxes[static_cast<usize>(wrapped / quarter)];
     }
     const f32 turn = static_cast<f32>(wrapped) * kTau / kTurnSteps;
-    return Vec2{std::cos(turn), std::sin(turn)};
+    return Vec2{portable::cos(turn), portable::sin(turn)};
 }
 } // namespace
 
@@ -64,11 +65,11 @@ InputCommand InputCommand::steadied() const {
     if (result.magnitude == 0 || !std::isfinite(direction.x) || !std::isfinite(direction.y)) {
         result.direction = Vec2{0};
     } else {
-        result.direction = steppedTurn(std::atan2(direction.y, direction.x));
+        result.direction = steppedTurn(portable::atan2(direction.y, direction.x));
     }
     if (aimDirection && std::isfinite(aimDirection->x) && std::isfinite(aimDirection->z) &&
         glm::dot(*aimDirection, *aimDirection) > 0) {
-        const Vec2 turned = steppedTurn(std::atan2(aimDirection->x, aimDirection->z));
+        const Vec2 turned = steppedTurn(portable::atan2(aimDirection->x, aimDirection->z));
         result.aimDirection = Vec3{turned.y, 0, turned.x};
     }
     return result;

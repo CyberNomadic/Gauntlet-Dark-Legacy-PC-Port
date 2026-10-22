@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -90,7 +91,7 @@ f32 OptionMenu::iconPixelsPerUnit(const MenuScreen& screen) {
     // The original projects the arrow through its camera: the focal length in pixels times the
     // model scale, over the arrow's distance.
     const f32 focal =
-        (static_cast<f32>(screen.width) / 2.0f) / std::tan(screen.horizontalFov / 2.0f);
+        (static_cast<f32>(screen.width) / 2.0f) / portable::tan(screen.horizontalFov / 2.0f);
     return kIconWorldScale * focal / kIconDepth;
 }
 

@@ -7,6 +7,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -75,7 +76,7 @@ constexpr std::array<f32, 8> kCornerOffsets{
     kPi / 2.0f, 5.0f * kPi / 8.0f, 3.0f * kPi / 4.0f, 7.0f * kPi / 8.0f};
 
 f32 yawBetween(const Vec3& from, const Vec3& to) {
-    return std::atan2(to.x - from.x, to.z - from.z);
+    return portable::atan2(to.x - from.x, to.z - from.z);
 }
 
 f32 flatDistance(const Vec3& a, const Vec3& b) {
@@ -1009,10 +1010,10 @@ s32 MindSense::nearerSide() const {
     const f32 dz = position.z - targetPosition.z;
     const f32 left = wrapAngle(yaw + kPi / 6.0f);
     const f32 right = wrapAngle(yaw - kPi / 6.0f);
-    const f32 x1 = dx + std::sin(left);
-    const f32 z1 = dz + std::cos(left);
-    const f32 x2 = dx + std::sin(right);
-    const f32 z2 = dz + std::cos(right);
+    const f32 x1 = dx + portable::sin(left);
+    const f32 z1 = dz + portable::cos(left);
+    const f32 x2 = dx + portable::sin(right);
+    const f32 z2 = dz + portable::cos(right);
     return x2 * x2 + z2 * z2 <= x1 * x1 + z1 * z1 ? -1 : 1;
 }
 

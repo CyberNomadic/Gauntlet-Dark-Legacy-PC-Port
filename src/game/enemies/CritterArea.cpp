@@ -4,11 +4,12 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 Mat4 CritterArea::placement(const Mat4& parent, const Vec3& offset, const Vec2& pitchYaw) {
-    Mat4 local = glm::rotate(Mat4{1}, pitchYaw.x, Vec3{1, 0, 0});
-    local = glm::rotate(local, pitchYaw.y, Vec3{0, 1, 0});
+    Mat4 local = portable::rotate(Mat4{1}, pitchYaw.x, Vec3{1, 0, 0});
+    local = portable::rotate(local, pitchYaw.y, Vec3{0, 1, 0});
     local[3] = Vec4{offset, 1};
     return parent * local;
 }

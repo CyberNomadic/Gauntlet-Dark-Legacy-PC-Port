@@ -1,5 +1,7 @@
 #include <algorithm>
 
+#include "engine/math/PortableMath.h"
+
 #include "game/screens/LevelOpponents.h"
 
 namespace gdl::game {
@@ -46,9 +48,9 @@ void LevelOpponents::updateBags(f32 seconds) {
                 }
             }
             if (!bag.landed) {
-                resources.effects.placeAt(
-                    bag.effect,
-                    glm::rotate(glm::translate(Mat4{1}, bag.position), bag.pitch, Vec3{1, 0, 0}));
+                resources.effects.placeAt(bag.effect,
+                                          portable::rotate(glm::translate(Mat4{1}, bag.position),
+                                                           bag.pitch, Vec3{1, 0, 0}));
             }
         }
         if (!resources.effects.playing(bag.effect) || bag.age >= kBagLifetime) {

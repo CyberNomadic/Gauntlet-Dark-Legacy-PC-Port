@@ -5,6 +5,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 #include "engine/render/DebugTextures.h"
 
 namespace gdl::game {
@@ -48,8 +49,8 @@ void SmokeTestScene::render(RenderDevice& device, const Mat4& projection, f32 ti
     m_batch.begin(PrimitiveTopology::TriangleList);
     for (usize i = 0; i < kCorners.size(); ++i) {
         const f32 angle = timeSeconds + static_cast<f32>(i) * (kTwoPi / 3.0f);
-        m_batch.vertex(Vec3{centre.x + kRadius * std::cos(angle),
-                            centre.y + kRadius * std::sin(angle), kTriangleDepth},
+        m_batch.vertex(Vec3{centre.x + kRadius * portable::cos(angle),
+                            centre.y + kRadius * portable::sin(angle), kTriangleDepth},
                        kCorners[i], Vec2{0.0f, 0.0f});
     }
     m_batch.end();

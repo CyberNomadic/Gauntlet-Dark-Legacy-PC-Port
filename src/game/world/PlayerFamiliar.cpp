@@ -5,11 +5,12 @@
 #include <format>
 
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 bool PlayerFamiliar::appendState(NativeStateDigest& digest, const State& state) const {
-    const auto& [pose, previousPose, player, textures, offset, previousGeneration,
-                 previousFrame, presentationAdvanced, tier] = state;
+    const auto& [pose, previousPose, player, textures, offset, previousGeneration, previousFrame,
+                 presentationAdvanced, tier] = state;
     digest.string("PlayerFamiliar.native.1");
     digest.resource(m_tree);
     // The resolved frame bank is immutable. Its mutable render clock is replaced
@@ -26,7 +27,7 @@ bool PlayerFamiliar::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool PlayerFamiliar::appendLocalDigest(NativeStateDigest& digest,
-                                      const LocalSnapshot& saved) const {
+                                       const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -55,8 +56,9 @@ bool PlayerFamiliar::restoreLocal(const LocalSnapshot& state) {
 bool PlayerFamiliar::bind(RenderDevice& device, ItemArchive& archive, s32 level, const Vec3& offset,
                           std::span<TextureSet* const> lenders) {
     m_state.tier = tierFor(level);
-    return bindTree(device, archive, m_state.tier > 0 ? std::format("FAMILIAR{}", m_state.tier) : "",
-                    offset, lenders);
+    return bindTree(device, archive,
+                    m_state.tier > 0 ? std::format("FAMILIAR{}", m_state.tier) : "", offset,
+                    lenders);
 }
 bool PlayerFamiliar::bindTree(RenderDevice& device, ItemArchive& archive, std::string_view name,
                               const Vec3& offset, std::span<TextureSet* const> lenders) {
@@ -115,8 +117,8 @@ std::optional<PlayerFamiliar::Checkpoint> PlayerFamiliar::checkpoint() const {
                      m_state.previousGeneration,
                      m_state.previousFrame,
                      m_state.presentationAdvanced};
-    if ((m_state.pose.posed() && !state.pose) || (m_state.previousPose.posed() && !state.previousPose) ||
-        !state.valid()) {
+    if ((m_state.pose.posed() && !state.pose) ||
+        (m_state.previousPose.posed() && !state.previousPose) || !state.valid()) {
         return std::nullopt;
     }
     return state;
@@ -205,7 +207,7 @@ void PlayerFamiliar::draw(RenderDevice& device, const Mat4& clip, const Mat4& bo
             m_state.previousGeneration == m_state.player.generation()) {
             const f32 amount = std::clamp(blend, 0.0f, 1.0f);
             m_drawPose.blend(m_state.previousPose, amount, true);
-            frame = std::lerp(m_state.previousFrame, frame, amount);
+            frame = portable::lerp(m_state.previousFrame, frame, amount);
         }
         m_model.setPresentationFrame(m_state.player.sequence(), frame);
         m_textures.restoreClock(m_state.textures);

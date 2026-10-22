@@ -6,6 +6,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 bool MoveStrikes::appendNativeDigest(NativeStateDigest& digest) const {
@@ -92,7 +93,8 @@ bool MoveStrikes::canCommit(const Prepared& state) const noexcept {
            state.m_lifetime.lock() == m_restoreOwner && m_restoreGeneration != 0 &&
            state.m_generation == m_restoreGeneration;
 }
-// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved): the prepared state's parts are taken in place
+// The prepared state's parts are taken in place:
+// NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 bool MoveStrikes::commitRestore(Prepared&& state) noexcept {
     if (!canCommit(state)) {
         return false;
@@ -124,7 +126,7 @@ bool StrikeHit::reaches(const Vec3& position, f32 targetRadius, f32 targetHeight
         }
     }
     const Vec3 offset = position - nearest;
-    const f32 across = std::hypot(offset.x, offset.z);
+    const f32 across = portable::hypot(offset.x, offset.z);
     if (across > radius + targetRadius || offset.y > radius || offset.y + targetHeight < -radius) {
         return false;
     }
@@ -155,8 +157,8 @@ u32 MoveStrikes::start(const MoveStrike& strike, s32 owner, const Vec3& position
     constexpr s32 kIgnoresWorld = 0x40;
     started.collidesWorld = (strike.flags & kIgnoresWorld) == 0;
     started.position = originOf(strike, position, facing);
-    const f32 heading = std::atan2(facing.x, facing.z) + strike.angle;
-    started.facing = Vec3{std::sin(heading), 0, std::cos(heading)};
+    const f32 heading = portable::atan2(facing.x, facing.z) + strike.angle;
+    started.facing = Vec3{portable::sin(heading), 0, portable::cos(heading)};
     started.speed = strike.speed;
     started.radius = started.flies ? strike.hitRadius : strike.radius;
     started.arc = started.flies ? -1.0f : strike.arc;

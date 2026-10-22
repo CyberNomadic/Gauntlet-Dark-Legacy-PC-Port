@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 std::optional<Vec3> cursorAimDirection(Vec2 cursor, const Mat4& clip, const Vec3& position) {
     constexpr f32 kCursorDeadZone = 0.004f; // NDC: two thousandths of the window extent
@@ -39,13 +41,13 @@ std::optional<Vec3> cursorAimDirection(Vec2 cursor, const Mat4& clip, const Vec3
 }
 MoveInput cursorRelativeMove(MoveInput move, const Vec3& position, const Vec3& aim, f32 cameraYaw) {
     const Vec3 toward = aim - position;
-    if (std::hypot(toward.x, toward.z) < 0.01f) {
+    if (portable::hypot(toward.x, toward.z) < 0.01f) {
         return move;
     }
-    const f32 heading = std::atan2(toward.x, toward.z) - cameraYaw;
-    move.direction =
-        Vec2{std::cos(heading) * move.direction.x + std::sin(heading) * move.direction.y,
-             -std::sin(heading) * move.direction.x + std::cos(heading) * move.direction.y};
+    const f32 heading = portable::atan2(toward.x, toward.z) - cameraYaw;
+    move.direction = Vec2{
+        portable::cos(heading) * move.direction.x + portable::sin(heading) * move.direction.y,
+        -portable::sin(heading) * move.direction.x + portable::cos(heading) * move.direction.y};
     return move;
 }
 bool CursorInput::update(const Input& input, const PlayBindings& bindings, bool keyboard, s32 pad) {

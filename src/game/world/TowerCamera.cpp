@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -141,8 +142,8 @@ Vec3 TowerCamera::projectedMiddleOf(std::span<const CameraSubject> subjects,
         high = glm::max(high, projected);
     }
     const Vec3 centre = (low + high) * 0.5f;
-    Vec3 middle = m_state.camera.position + right * (centre.x * centre.z) + up * (centre.y * centre.z) +
-                  forward * centre.z;
+    Vec3 middle = m_state.camera.position + right * (centre.x * centre.z) +
+                  up * (centre.y * centre.z) + forward * centre.z;
     for (s32 k = 0; k < 3; ++k) {
         if (range.boundsMin[k] < range.boundsMax[k]) {
             middle[k] = std::clamp(middle[k], range.boundsMin[k], range.boundsMax[k]);
@@ -159,7 +160,8 @@ bool TowerCamera::update(std::span<const CameraSubject> subjects,
     }
     const Vec3 middle = middleOf(subjects, range);
     m_state.ringIndex = (m_state.ringIndex + 1) % kRing;
-    m_state.ringPositions[static_cast<usize>(m_state.ringIndex)] = projectedMiddleOf(subjects, range);
+    m_state.ringPositions[static_cast<usize>(m_state.ringIndex)] =
+        projectedMiddleOf(subjects, range);
 
     chooseMarker(markers, middle);
     aim(markers, subjects.size(), range, false);
@@ -177,8 +179,9 @@ bool TowerCamera::update(std::span<const CameraSubject> subjects,
             current = range.radiusMax * kPartyDistance;
         }
     }
-    m_state.ringDistances[static_cast<usize>(m_state.ringIndex)] = fitDistance(
-        m_state.ringPositions[static_cast<usize>(m_state.ringIndex)], subjects, view, range, current);
+    m_state.ringDistances[static_cast<usize>(m_state.ringIndex)] =
+        fitDistance(m_state.ringPositions[static_cast<usize>(m_state.ringIndex)], subjects, view,
+                    range, current);
     f32 slack = 0.0f;
     for (const f32 wanted : m_state.ringDistances) {
         slack += wanted - m_state.distance;
@@ -244,7 +247,8 @@ void TowerCamera::aim(std::span<const WorldLocator> markers, usize count, const 
     }
     m_state.aimedMarker = m_state.marker;
     m_state.yawRate = wrapAngle(yawTarget - m_state.camera.yaw) / static_cast<f32>(kTurnSteps);
-    m_state.pitchRate = wrapAngle(pitchTarget - m_state.camera.pitch) / static_cast<f32>(kTurnSteps);
+    m_state.pitchRate =
+        wrapAngle(pitchTarget - m_state.camera.pitch) / static_cast<f32>(kTurnSteps);
     m_state.turnStep = 0.0f;
 }
 
@@ -282,7 +286,7 @@ f32 TowerCamera::fitDistance(const Vec3& point, std::span<const CameraSubject> s
     const Vec3 forward = m_state.camera.forward();
     const Vec3 right = m_state.camera.right();
     const Vec3 up = m_state.camera.up();
-    const f32 tanX = std::tan(view.horizontalFov * 0.5f);
+    const f32 tanX = portable::tan(view.horizontalFov * 0.5f);
     const f32 tanY = tanX / view.aspect;
     f32 required = 0.0f;
     for (const CameraSubject& subject : subjects) {

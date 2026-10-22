@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/CritterData.h"
 #include "game/enemies/EnemyMind.h"
@@ -35,7 +36,7 @@ f32 CritterMovement::facing(f32 wanted, f32 initialYaw) const {
 }
 
 Vec3 CritterMovement::direction(s32 moveType, f32 yaw) {
-    const Vec3 forward{std::sin(yaw), 0.0f, std::cos(yaw)};
+    const Vec3 forward{portable::sin(yaw), 0.0f, portable::cos(yaw)};
     switch (moveType) {
     case MoveDefinition::kStepLeft: return Vec3{-forward.z, 0.0f, forward.x};
     case MoveDefinition::kStepRight: return Vec3{forward.z, 0.0f, -forward.x};

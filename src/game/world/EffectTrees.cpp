@@ -8,6 +8,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/DynamicLights.h"
 #include "game/world/NativeStateResources.h"
@@ -98,7 +99,7 @@ Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 blend) {
     };
     Mat4 out = current;
     if (orthogonal(from) && orthogonal(to)) {
-        out = glm::mat4_cast(glm::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
+        out = glm::mat4_cast(portable::slerp(glm::quat_cast(from), glm::quat_cast(to), blend));
         out = glm::scale(out, glm::mix(fromScale, toScale, blend));
     }
     out[3] = glm::mix(previous[3], current[3], blend);
@@ -130,7 +131,7 @@ EffectTrees& EffectTrees::operator=(EffectTrees&& other) noexcept {
 }
 
 Mat4 EffectTrees::EffectState::transform() const {
-    Mat4 basis = attachment.value_or(glm::rotate(Mat4{1.0f}, yaw, Vec3{0, 1, 0}));
+    Mat4 basis = attachment.value_or(portable::rotate(Mat4{1.0f}, yaw, Vec3{0, 1, 0}));
     basis[3] = Vec4{position, 1.0f};
     const f32 remaining = secondsLeftOf(*this);
     const f32 shrink = shrinks && remaining < 0.2f ? std::max(5 * remaining + 0.001f, 0.0f) : 1;
@@ -408,7 +409,7 @@ void EffectTrees::redirect(u32 id, const Vec3& position, const Vec3& velocity) {
         if (effect->id == id) {
             effect->position = position;
             effect->velocity = velocity;
-            effect->yaw = std::atan2(velocity.x, velocity.z);
+            effect->yaw = portable::atan2(velocity.x, velocity.z);
             effect->presentationCaptured = false; // contact redirects are cuts, not curves
             ++effect->continuity;
             if (effect->flightDirection) {
@@ -568,7 +569,7 @@ bool EffectTrees::restoreLocal(const LocalSnapshot& state) {
 }
 
 void EffectTrees::appendMotionDigest(NativeStateDigest& digest, const Motion& motion,
-                                      const TextureAnimator::Clock& clock) {
+                                     const TextureAnimator::Clock& clock) {
     const auto& [archive, lenders, animator] = motion;
     digest.resource(archive);
     appendLenders(digest, lenders);
@@ -615,8 +616,8 @@ bool EffectTrees::appendLocalDigest(NativeStateDigest& digest, const LocalSnapsh
         digest.invalidate();
         return false;
     }
-    const auto& [effects, motions, clocks, lenders, advanced, nextId, nextInstance, owner,
-                 epoch] = state;
+    const auto& [effects, motions, clocks, lenders, advanced, nextId, nextInstance, owner, epoch] =
+        state;
     digest.string("EffectTrees.1");
     digest.wide(effects.size());
     std::vector<const EffectState*> ancestors;

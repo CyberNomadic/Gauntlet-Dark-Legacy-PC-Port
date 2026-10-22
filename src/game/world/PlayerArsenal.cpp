@@ -7,14 +7,15 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/combat/DamageTypes.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/Progression.h"
 #include "game/players/TurboMove.h"
 #include "game/world/DynamicLights.h"
-#include "game/world/WeaponGlow.h"
 #include "game/world/NativeStateResources.h"
+#include "game/world/WeaponGlow.h"
 namespace gdl::game {
 namespace {
 constexpr f32 kPhoenixDamage = 10.0f;
@@ -67,19 +68,23 @@ bool PlayerArsenal::registerNativeResources(NativeStateResources& resources) con
             return false;
         }
         for (usize i = 0; i < m_potionModels.size(); ++i) {
-            if (m_potionModels[i].bound() && !resources.registerModel(
-                    m_potionModels[i], archive, "arsenal/potion/" + std::to_string(i))) {
+            if (m_potionModels[i].bound() &&
+                !resources.registerModel(m_potionModels[i], archive,
+                                         "arsenal/potion/" + std::to_string(i))) {
                 return false;
             }
         }
         for (usize i = 0; i < m_gauntlets.size(); ++i) {
-            if (m_gauntlets[i].bound() && !resources.registerModel(
-                    m_gauntlets[i], archive, "arsenal/gauntlet/" + std::to_string(i))) {
+            if (m_gauntlets[i].bound() &&
+                !resources.registerModel(m_gauntlets[i], archive,
+                                         "arsenal/gauntlet/" + std::to_string(i))) {
                 return false;
             }
         }
-        if ((m_superShot.bound() && !resources.registerModel(m_superShot, archive, "arsenal/super")) ||
-            (m_phoenixShot.bound() && !resources.registerModel(m_phoenixShot, archive, "arsenal/phoenix"))) {
+        if ((m_superShot.bound() &&
+             !resources.registerModel(m_superShot, archive, "arsenal/super")) ||
+            (m_phoenixShot.bound() &&
+             !resources.registerModel(m_phoenixShot, archive, "arsenal/phoenix"))) {
             return false;
         }
     }
@@ -308,7 +313,8 @@ std::optional<PlayerArsenal::WeaponRider> PlayerArsenal::weaponRider(const Playe
     }
     WeaponRider rider;
     rider.archive = archive;
-    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): the pointer is bound whenever the index it guards is set
+    // The pointer is bound whenever the index it guards is set:
+    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
     rider.tree = &archive->trees.tree(*tree);
     rider.lenders.push_back(&m_resources->weapons.textures);
     rider.textureFrame = m_missiles.visuals().textureFrame(*archive, rider.lenders);
@@ -418,8 +424,8 @@ void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
         }
     }
     const auto cue = weaponCue(prepared->soundFlags, figure);
-    const auto soundScope = m_resources->audio.soundScope(
-        {15, 0, 1, static_cast<u8>(actor.player())}, 1);
+    const auto soundScope =
+        m_resources->audio.soundScope({15, 0, 1, static_cast<u8>(actor.player())}, 1);
     SoundHandle handle = kNoSound;
     if (!cue.name.empty()) {
         handle = m_resources->audio.playNamed(cue.name, LevelSoundscape::kStepVolume);
@@ -521,7 +527,7 @@ PlayerArsenal::prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
     const auto launchShot = [&] {
         const Vec3 aim = target.value_or(launch.position + actor.facing() * 21.0f);
         const Vec3 delta = aim - launch.position;
-        const f32 distance = std::hypot(delta.x, delta.z);
+        const f32 distance = portable::hypot(delta.x, delta.z);
         const f32 inverse = distance > 0.001f ? 1.0f / distance : 1.0f;
         const f32 drop = m_resources->bossEncounter ? 0.0f : -0.5f;
         launch.velocity = Vec3{delta.x * inverse,

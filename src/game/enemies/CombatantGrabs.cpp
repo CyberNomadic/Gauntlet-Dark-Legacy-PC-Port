@@ -2,6 +2,7 @@
 #include <limits>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/enemies/Combatant.h"
 
@@ -15,10 +16,10 @@ void Combatant::grab(Actor& actor, const MoveDefinition& move, const AttackDefin
                 return;
             }
             // CritterReleasePlayer uses the body's forward, with Y replaced by -0.1.
-            const Vec3 direction{std::sin(actor.yaw), -0.1f, std::cos(actor.yaw)};
+            const Vec3 direction{portable::sin(actor.yaw), -0.1f, portable::cos(actor.yaw)};
             m_sim.grabs.push_back({actor.grabbed, m_sim.id, std::nullopt,
-                               glm::normalize(direction) * damage.speed,
-                               damage.damage * m_sim.scales.damage});
+                                   glm::normalize(direction) * damage.speed,
+                                   damage.damage * m_sim.scales.damage});
             actor.grabbed = -1;
         }
         return;
@@ -68,8 +69,8 @@ void Combatant::carryGrab(Actor& actor, std::span<const EnemyView> players) {
         actor.grabbed = -1;
         return;
     }
-    m_sim.grabs.push_back({actor.grabbed, m_sim.id,
-                       glm::translate(attachmentTransform(actor, actor.grabNode), actor.grabOffset),
-                       Vec3{0}, 0});
+    m_sim.grabs.push_back(
+        {actor.grabbed, m_sim.id,
+         glm::translate(attachmentTransform(actor, actor.grabNode), actor.grabOffset), Vec3{0}, 0});
 }
 } // namespace gdl::game

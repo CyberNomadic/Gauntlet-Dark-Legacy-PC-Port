@@ -3,6 +3,8 @@
 #include <cmath>
 #include <numbers>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 u32 PlayerImpact::effective(f32 damage, bool braced) const {
     u32 kept = flags;
@@ -25,7 +27,7 @@ PlayerDeed PlayerImpact::reaction(f32 damage, f32 facing, bool braced) const {
         return PlayerDeed::Whirled;
     }
     if ((effective & (kKnockDown | kBlownAway | kKnockOver)) != 0) {
-        const f32 away = std::atan2(direction.x, direction.z);
+        const f32 away = portable::atan2(direction.x, direction.z);
         const f32 delta = std::remainder(away - facing, 2.0f * std::numbers::pi_v<f32>);
         return std::abs(delta) > std::numbers::pi_v<f32> / 2.0f ? PlayerDeed::FallBack
                                                                 : PlayerDeed::FallForward;

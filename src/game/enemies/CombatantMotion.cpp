@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/combat/BodyContact.h"
 #include "game/enemies/Combatant.h"
@@ -9,7 +10,7 @@
 namespace gdl::game {
 namespace {
 f32 yawBetween(const Vec3& from, const Vec3& to) {
-    return std::atan2(to.x - from.x, to.z - from.z);
+    return portable::atan2(to.x - from.x, to.z - from.z);
 }
 } // namespace
 
@@ -272,11 +273,11 @@ bool Combatant::translate(Actor& critter, f32 seconds, const MoveDefinition* mov
     // and knocks at five and the felling kinds at fifteen (CritterWorldDamage). The port
     // deliberately limits burning-floor hits to once per quarter second.
     if (m_sim.hazards != nullptr && m_sim.collision != nullptr && critter.state != State::Dying) {
-        const auto touch = m_sim.hazards->touching(*m_sim.collision, to, critter.definition->wallRadius(),
-                                               kWallProbeHeight);
-        if (const auto harm = touch.has_value()
-                                  ? HazardSurfaces::enemyHarmOf(m_sim.hazards->flagsOf(touch->object))
-                                  : std::nullopt) {
+        const auto touch = m_sim.hazards->touching(
+            *m_sim.collision, to, critter.definition->wallRadius(), kWallProbeHeight);
+        if (const auto harm = touch.has_value() ? HazardSurfaces::enemyHarmOf(
+                                                      m_sim.hazards->flagsOf(touch->object))
+                                                : std::nullopt) {
             EnemyHit hit;
             if (HazardSurfaces::burning(m_sim.hazards->flagsOf(touch->object))) {
                 if (critter.burnGap > 0) {

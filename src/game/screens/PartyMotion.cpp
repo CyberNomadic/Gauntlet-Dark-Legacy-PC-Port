@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/ComboMove.h"
 #include "game/players/CursorAim.h"
@@ -64,8 +65,8 @@ MoveInput PartyMotion::chargeInput(const PlayerActor& actor, const MoveInput& st
         return rush;
     }
     const Vec3 facing = actor.facing();
-    const f32 ahead = std::atan2(facing.x, facing.z) - cameraYaw;
-    rush.direction = Vec2{std::sin(ahead), std::cos(ahead)};
+    const f32 ahead = portable::atan2(facing.x, facing.z) - cameraYaw;
+    rush.direction = Vec2{portable::sin(ahead), portable::cos(ahead)};
     return rush;
 }
 
@@ -87,7 +88,8 @@ std::optional<Vec3> PartyMotion::rescueSpot(std::span<const PlayerRuntime> playe
         const f32 out = kRescueGap + rescuer.radius() + body.radius();
         for (s32 k = 0; k < kRescueSpots; ++k) {
             const f32 angle = kTurn * static_cast<f32>(k) / static_cast<f32>(kRescueSpots);
-            Vec3 spot = rescuer.position() + Vec3{std::sin(angle), 0.0f, std::cos(angle)} * out;
+            Vec3 spot =
+                rescuer.position() + Vec3{portable::sin(angle), 0.0f, portable::cos(angle)} * out;
             const auto floor = collision.floorAt(spot, kRescueRise, kRescueRise);
             if (!floor.has_value()) {
                 continue;
@@ -154,16 +156,17 @@ MoveInput PartyMotion::attackMove(const PlayerActor& actor, const PlayerAnimator
     }
     if (move.any() && (turn < 1.0f || steeringTurbo)) {
         const f32 wanted = PlayerActor::headingOf(move, cameraYaw);
-        const f32 share = 1.0f - std::pow(1.0f - turn, seconds * kTurnFrames);
+        const f32 share = 1.0f - portable::pow(1.0f - turn, seconds * kTurnFrames);
         const f32 heading =
             steeringTurbo
                 ? turboHeading(actor.yaw(), wanted, seconds, turn)
                 : actor.yaw() +
                       std::remainder(wanted - actor.yaw(), 2.0f * std::numbers::pi_v<f32>) * share;
-        result.direction = Vec2{std::sin(heading - cameraYaw), std::cos(heading - cameraYaw)};
+        result.direction =
+            Vec2{portable::sin(heading - cameraYaw), portable::cos(heading - cameraYaw)};
     } else if (!move.any() && animator != nullptr && animator->lunging() && mayLunge) {
         const f32 heading = actor.yaw() - cameraYaw;
-        result = MoveInput{Vec2{std::sin(heading), std::cos(heading)}, 1.0f};
+        result = MoveInput{Vec2{portable::sin(heading), portable::cos(heading)}, 1.0f};
     }
     return result;
 }
@@ -292,17 +295,17 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         if (aim) {
             players[i].cursorAiming = true;
             const Vec3 toward = *aim;
-            const Vec3 facing =
-                std::hypot(toward.x, toward.z) < 0.01f
-                    ? actor.position() + Vec3{std::sin(actor.yaw()), 0, std::cos(actor.yaw())}
-                    : actor.position() + toward;
+            const Vec3 facing = portable::hypot(toward.x, toward.z) < 0.01f
+                                    ? actor.position() + Vec3{portable::sin(actor.yaw()), 0,
+                                                              portable::cos(actor.yaw())}
+                                    : actor.position() + toward;
             move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
             if (animator == nullptr || !animator->shoving()) {
                 const f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
                 if (steeringTurbo) {
                     const Vec3 offset = facing - actor.position();
-                    actor.turnTo(
-                        turboHeading(actor.yaw(), std::atan2(offset.x, offset.z), seconds, turn));
+                    actor.turnTo(turboHeading(actor.yaw(), portable::atan2(offset.x, offset.z),
+                                              seconds, turn));
                 } else if (turn >= 1.0f) {
                     actor.faceToward(facing);
                 }
@@ -313,7 +316,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         Vec3 attackFacing = actor.facing();
         if (move.any() && !aim && player < inputs.size() && !inputs[player].strafe) {
             const f32 heading = PlayerActor::headingOf(move, cameraYaw);
-            attackFacing = Vec3{std::sin(heading), 0, std::cos(heading)};
+            attackFacing = Vec3{portable::sin(heading), 0, portable::cos(heading)};
         }
         players[i].meleeFacing = attackFacing;
         // What the buttons ask: a potion first, when one is carried, then the attack.
@@ -528,9 +531,9 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
             // Shoved and moving, it shows being pushed, facing the way it goes.
             const Vec3 moved = actor.position() - before;
             const bool pushed = !down && players[i].knockback.pushed() &&
-                                std::hypot(moved.x, moved.z) > kPushedStep * seconds;
+                                portable::hypot(moved.x, moved.z) > kPushedStep * seconds;
             if (pushed) {
-                actor.turnTo(std::atan2(moved.x, moved.z));
+                actor.turnTo(portable::atan2(moved.x, moved.z));
             }
             players[i].figure->setPushed(pushed);
             // The close attack sees where the nearest thing to strike lies as it decides.

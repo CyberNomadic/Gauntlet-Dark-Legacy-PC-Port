@@ -4,6 +4,8 @@
 #include <cmath>
 #include <numbers>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 
 Knockback::Checkpoint Knockback::checkpoint() const {
@@ -81,7 +83,7 @@ std::optional<f32> Knockback::kick(f32 facing, bool pojo) {
     }
     // Facing along the push, or against it: whichever is the nearer turn.
     constexpr f32 kHalfTurn = std::numbers::pi_v<f32>;
-    f32 heading = std::atan2(force.x, force.z);
+    f32 heading = portable::atan2(force.x, force.z);
     if (std::abs(std::remainder(heading - facing, 2.0f * kHalfTurn)) > 0.5f * kHalfTurn) {
         heading = std::remainder(heading + kHalfTurn, 2.0f * kHalfTurn);
     }

@@ -4,13 +4,14 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 namespace {
 /** Yaw about the upright and pitch of a direction (GetYawPitch). */
 Vec2 bearingOf(const Vec3& direction) {
-    return Vec2{std::atan2(direction.x, direction.z),
-                std::atan2(direction.y, std::hypot(direction.x, direction.z))};
+    return Vec2{portable::atan2(direction.x, direction.z),
+                portable::atan2(direction.y, portable::hypot(direction.x, direction.z))};
 }
 /** `current` moved toward `wanted` by the shortest way, no further than `most`. */
 f32 approach(f32 current, f32 wanted, f32 most) {

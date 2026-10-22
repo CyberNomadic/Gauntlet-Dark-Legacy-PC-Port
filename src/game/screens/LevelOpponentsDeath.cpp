@@ -3,6 +3,8 @@
 #include <cmath>
 #include <string_view>
 
+#include "engine/math/PortableMath.h"
+
 #include "game/players/PickupVoices.h"
 #include "game/players/Progression.h"
 #include "game/screens/HelpMessages.h"
@@ -93,9 +95,9 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
             (cue.enemy < 0 || cue.enemy >= Enemies::kMost || cue.instance == 0)) {
             resources.audio.recorder()->unsupported("Death event without its source lifetime");
         }
-        auto scope = resources.audio.soundScope(
-            {20, static_cast<u64>(std::max(cue.enemy, 0)), cue.instance},
-            32 + static_cast<u32>(cue.kind));
+        auto scope =
+            resources.audio.soundScope({20, static_cast<u64>(std::max(cue.enemy, 0)), cue.instance},
+                                       32 + static_cast<u32>(cue.kind));
         switch (cue.kind) {
         case DeathEvent::Kind::Killed: resources.audio.playNamed("S_DEATHDIE"); return;
         case DeathEvent::Kind::Exhausted:
@@ -177,8 +179,8 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
                     m_enemies.positionOf(i), settings);
             }
         }
-        const Mat4 transform = glm::rotate(glm::translate(Mat4{1}, m_enemies.positionOf(i)),
-                                           m_enemies.yawOf(i), Vec3{0, 1, 0});
+        const Mat4 transform = portable::rotate(glm::translate(Mat4{1}, m_enemies.positionOf(i)),
+                                                m_enemies.yawOf(i), Vec3{0, 1, 0});
         resources.effects.placeAt(effect, transform);
     }
     if (resources.audio.recordingSounds()) {

@@ -13,6 +13,7 @@
 #include "engine/assets/ObjectFlags.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/ItemSupport.h"
 #include "game/world/NativeStateResources.h"
@@ -113,7 +114,7 @@ bool Generators::registerNativeResources(NativeStateResources& resources) const 
             }
         }
         if (!resources.registerTextureAnimator(body->textures, *body->archive,
-                                                std::format("generator/{}/textures", body->kind))) {
+                                               std::format("generator/{}/textures", body->kind))) {
             return false;
         }
     }
@@ -672,7 +673,7 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
                 generator.position.y = floor->y + ItemFigure::kFloorLift;
             }
         }
-        generator.yaw = std::atan2(placement[2][0], placement[2][2]);
+        generator.yaw = portable::atan2(placement[2][0], placement[2][2]);
         generator.placement = placement;
         generator.placement[3] = Vec4{generator.position, 1};
         generator.direction = Vec3{placement[2][0], 0.0f, placement[2][2]};
@@ -755,8 +756,8 @@ void Generators::syncFloors() {
         // Disabling a floor's collision does not detach its scenery children.
         generator.placement = *transform * generator.supportLocal;
         generator.position = Vec3{generator.placement[3]};
-        generator.yaw = std::atan2(generator.placement[2].x, generator.placement[2].z);
-        generator.direction = Vec3{std::sin(generator.yaw), 0, std::cos(generator.yaw)};
+        generator.yaw = portable::atan2(generator.placement[2].x, generator.placement[2].z);
+        generator.direction = Vec3{portable::sin(generator.yaw), 0, portable::cos(generator.yaw)};
         generator.box.centre = Vec3{generator.placement * Vec4{generator.boxOffset, 1}};
         generator.box.yaw = generator.yaw + generator.boxYaw;
         if (generator.bossFigure.has_value()) {
@@ -791,7 +792,7 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.armor = static_cast<f32>(info.armor);
     ItemInstance instance;
     instance.position = Vec3{placement[3]};
-    const f32 yaw = std::atan2(placement[2].x, placement[2].z);
+    const f32 yaw = portable::atan2(placement[2].x, placement[2].z);
     instance.rotation.y = -yaw;
     // AtreeMatchAnyHeader also searches the summoned species' loaded archive.
     // The Genie's BOSSGEN tree lives with WIND, not with DJINN or the level items.
@@ -822,7 +823,7 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.placement = placement;
     generator.placement[3] = Vec4{generator.position, 1};
     generator.yaw = yaw;
-    generator.direction = Vec3{std::sin(generator.yaw), 0, std::cos(generator.yaw)};
+    generator.direction = Vec3{portable::sin(generator.yaw), 0, portable::cos(generator.yaw)};
     generator.collisionOffset = info.collisionOffset;
     generator.targetRadius = info.radius;
     generator.targetHeight = info.height;

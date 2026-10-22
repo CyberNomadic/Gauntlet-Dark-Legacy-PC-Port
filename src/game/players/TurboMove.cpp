@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/players/ComboMove.h"
 namespace gdl::game {
@@ -269,8 +270,8 @@ void TurboMove::volley(usize slot, const MoveStrike& strike, f32 frame, const Ve
             }
             angle *= through;
         }
-        const f32 heading = std::atan2(facing.x, facing.z) + angle;
-        const Vec3 direction{std::sin(heading), 0.0f, std::cos(heading)};
+        const f32 heading = portable::atan2(facing.x, facing.z) + angle;
+        const Vec3 direction{portable::sin(heading), 0.0f, portable::cos(heading)};
         if (events.identifiedVolley) {
             events.identifiedVolley({direction, slot, m_volleysShot[slot]});
         } else {

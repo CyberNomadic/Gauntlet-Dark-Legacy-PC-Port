@@ -8,6 +8,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/combat/DamageTypes.h"
 #include "game/players/PowerupEffects.h"
@@ -124,7 +125,7 @@ std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& wea
     Vec3 facing = weapon.direction;
     if (weapon.target) {
         const Vec3 offset = *weapon.target - weapon.position;
-        const f32 distance = std::hypot(offset.x, offset.z);
+        const f32 distance = portable::hypot(offset.x, offset.z);
         if (distance > 1e-5f) {
             facing = Vec3{offset.x / distance, 0, offset.z / distance};
         }
@@ -153,9 +154,9 @@ std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& wea
             const Vec3 aim = TargetAssist::velocity(launch.position, *weapon.target, launch.speed,
                                                     launch.spec->weight);
             // Each spread keeps its authored bearing instead of converging on the target.
-            const f32 turn = std::atan2(way.x, way.z) - std::atan2(facing.x, facing.z);
-            launch.velocity = Vec3{aim.x * std::cos(turn) + aim.z * std::sin(turn), aim.y,
-                                   aim.z * std::cos(turn) - aim.x * std::sin(turn)};
+            const f32 turn = portable::atan2(way.x, way.z) - portable::atan2(facing.x, facing.z);
+            launch.velocity = Vec3{aim.x * portable::cos(turn) + aim.z * portable::sin(turn), aim.y,
+                                   aim.z * portable::cos(turn) - aim.x * portable::sin(turn)};
         }
         launches.push_back(launch);
         launch.wallSound = MissileWallSound::Silent;
@@ -210,9 +211,9 @@ bool PlayerMissiles::restoreFlight(u64 instance, const FlightCheckpoint& checkpo
         return false;
     }
     const auto shot = std::ranges::find(m_sim.missiles, instance, &Missile::instance);
-    if (shot == m_sim.missiles.end() || shot->potion != 0 || shot->potionRelease || shot->flags != 0 ||
-        shot->multiplayer != MultiplayerMode::Normal || !shot->pierced.empty() ||
-        !shot->playerContacts.empty()) {
+    if (shot == m_sim.missiles.end() || shot->potion != 0 || shot->potionRelease ||
+        shot->flags != 0 || shot->multiplayer != MultiplayerMode::Normal ||
+        !shot->pierced.empty() || !shot->playerContacts.empty()) {
         return false;
     }
     restoreMotion(*shot, checkpoint);
@@ -360,9 +361,9 @@ bool PlayerMissiles::launchWithVisuals(const MissileLaunch& launch,
         flight.birth = flightCheckpoint(missile);
         if (flight.valid()) {
             m_sim.visualHistory.push_back({missile.instance, missile.owner, character.value_or(0),
-                                       launch.release, missile.effect, missile.rider, flight,
-                                       transformOf(missile), missile.velocity,
-                                       potion ? launch.potion : 0, launch.potionRelease});
+                                           launch.release, missile.effect, missile.rider, flight,
+                                           transformOf(missile), missile.velocity,
+                                           potion ? launch.potion : 0, launch.potionRelease});
         }
     }
     m_sim.missiles.push_back(missile);
@@ -451,7 +452,7 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                         impact.owner = missile.owner;
                         impact.effect = {};
                         impact.wallSound = m_sim.ricochetIn <= 0 ? MissileWallSound::Ricochet
-                                                             : MissileWallSound::Silent;
+                                                                 : MissileWallSound::Silent;
                         m_sim.impacts.push_back(impact);
                         if (m_sim.ricochetIn <= 0) {
                             m_sim.ricochetIn = kReflectionTime;
@@ -515,10 +516,10 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                 if (!contact) {
                     continue;
                 }
-                m_sim.impacts.push_back(MissileImpact{missile.position, missile.owner, missile.potion,
-                                                  missile.potency, missile.damage, target.id,
-                                                  missile.spec->impactTree, missile.wallSound,
-                                                  missile.flags, target.node});
+                m_sim.impacts.push_back(
+                    MissileImpact{missile.position, missile.owner, missile.potion, missile.potency,
+                                  missile.damage, target.id, missile.spec->impactTree,
+                                  missile.wallSound, missile.flags, target.node});
                 missile.pierced.push_back(target.id);
                 if (!penetrates) {
                     missile.age = kLifeSeconds;
@@ -561,17 +562,17 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                         }
                         missile.age += 1.0f;
                         m_sim.impacts.push_back({missile.position,
-                                             missile.owner,
-                                             0,
-                                             0,
-                                             0,
-                                             -1,
-                                             {},
-                                             m_sim.ricochetIn <= 0 ? MissileWallSound::Ricochet
-                                                               : MissileWallSound::Silent,
-                                             missile.flags,
-                                             -1,
-                                             object});
+                                                 missile.owner,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 -1,
+                                                 {},
+                                                 m_sim.ricochetIn <= 0 ? MissileWallSound::Ricochet
+                                                                       : MissileWallSound::Silent,
+                                                 missile.flags,
+                                                 -1,
+                                                 object});
                         if (m_sim.ricochetIn <= 0) {
                             m_sim.ricochetIn = 1.0f;
                         }
@@ -626,14 +627,15 @@ Mat4 PlayerMissiles::transformOf(const Missile& missile, f32 frameBlend) {
     const Vec3 velocity = glm::mix(missile.previousVelocity, missile.velocity, blend);
     const Vec3 position = glm::mix(missile.previousPosition, missile.position, blend);
     const f32 tumble = glm::mix(missile.previousTumble, missile.tumble, blend);
-    const f32 yaw = std::atan2(velocity.x, velocity.z);
-    const f32 level = std::hypot(velocity.x, velocity.z);
+    const f32 yaw = portable::atan2(velocity.x, velocity.z);
+    const f32 level = portable::hypot(velocity.x, velocity.z);
     // About x, a positive turn tips the nose down: a climbing missile noses up by its climb,
     // and a tumbling one goes on over forwards.
-    const f32 pitch = -std::atan2(velocity.y, level);
+    const f32 pitch = -portable::atan2(velocity.y, level);
     Mat4 out = glm::translate(Mat4{1.0f}, position);
-    out = glm::rotate(out, yaw, Vec3{0.0f, 1.0f, 0.0f});
-    out = glm::rotate(out, missile.spec->spin != 0.0f ? tumble : pitch, Vec3{1.0f, 0.0f, 0.0f});
+    out = portable::rotate(out, yaw, Vec3{0.0f, 1.0f, 0.0f});
+    out =
+        portable::rotate(out, missile.spec->spin != 0.0f ? tumble : pitch, Vec3{1.0f, 0.0f, 0.0f});
     return glm::scale(out, Vec3{missile.scale, missile.scale, missile.scale});
 }
 
@@ -704,7 +706,8 @@ bool PlayerMissiles::appendNativeDigest(NativeStateDigest& digest) const {
     return m_visuals.appendNativeDigest(digest) && digest.good();
 }
 
-bool PlayerMissiles::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& state) const {
+bool PlayerMissiles::appendLocalDigest(NativeStateDigest& digest,
+                                       const LocalSnapshot& state) const {
     if (!canRestoreLocal(state)) {
         digest.invalidate();
         return false;
@@ -741,8 +744,8 @@ std::vector<Vec3> PlayerMissiles::spread(const Vec3& direction, s32 shots) {
     std::vector<Vec3> out;
     for (s32 i = 0; i < std::clamp(shots, 1, static_cast<s32>(kTurns.size())); ++i) {
         const f32 angle = kTurns[static_cast<usize>(i)] * kSpreadStep;
-        const f32 c = std::cos(angle);
-        const f32 s = std::sin(angle);
+        const f32 c = portable::cos(angle);
+        const f32 s = portable::sin(angle);
         out.emplace_back(direction.x * c + direction.z * s, direction.y,
                          -direction.x * s + direction.z * c);
     }

@@ -6,6 +6,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -180,7 +181,7 @@ f32 PowerupEffects::bodyAlpha() const {
         return 1.0f;
     }
     return kInvisibleAlpha -
-           kInvisibleWaver * std::sin(2.0f * std::numbers::pi_v<f32> * invisibleLeft);
+           kInvisibleWaver * portable::sin(2.0f * std::numbers::pi_v<f32> * invisibleLeft);
 }
 
 PowerupEffects::Chrome PowerupEffects::chrome() const {

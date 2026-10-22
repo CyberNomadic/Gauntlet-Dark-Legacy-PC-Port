@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+
+#include "engine/math/PortableMath.h"
 namespace gdl::game {
 bool TargetCriteria::allows(f32 distance, f32 bearing, f32 vertical) const {
     if (distance < minDistance) {
@@ -10,7 +12,7 @@ bool TargetCriteria::allows(f32 distance, f32 bearing, f32 vertical) const {
     if (maxDistance > 0.0f && distance > maxDistance) {
         return false;
     }
-    if (std::cos(bearing - yaw) < minDot) {
+    if (portable::cos(bearing - yaw) < minDot) {
         return false;
     }
     return maxVertical <= 0.0f || std::abs(vertical) <= maxVertical;
@@ -41,12 +43,14 @@ bool MoveDefinition::interrupts(const MoveDefinition& current) const {
  * at its speed. */
 Vec3 AttackDefinition::spewVelocity(f32 bodyYaw) const {
     const f32 heading = bodyYaw + yaw;
-    const f32 level = std::cos(-pitch);
-    return Vec3{std::sin(heading) * level, std::sin(-pitch), std::cos(heading) * level} * speed;
+    const f32 level = portable::cos(-pitch);
+    return Vec3{portable::sin(heading) * level, portable::sin(-pitch),
+                portable::cos(heading) * level} *
+           speed;
 }
 
 f32 AttackDefinition::spewHalfAngle() const {
-    return std::acos(std::clamp(minDot, -1.0f, 1.0f));
+    return portable::acos(std::clamp(minDot, -1.0f, 1.0f));
 }
 
 s32 MoveDefinition::projectileTriggers(s32 previous, s32 current, bool second) const {

@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -11,7 +12,7 @@ namespace {
 
 /** The horizontal length of a vector. */
 f32 groundLength(const Vec3& v) {
-    return std::hypot(v.x, v.z);
+    return portable::hypot(v.x, v.z);
 }
 
 /** The two are no longer tied: neither holds, rides or flies. */
@@ -170,7 +171,7 @@ f32 ComboMove::bounceYaw(f32 yaw) {
 }
 
 f32 ComboMove::reflectedYaw(f32 yaw, const Vec3& normal) {
-    const Vec3 facing{std::sin(yaw), 0.0f, std::cos(yaw)};
+    const Vec3 facing{portable::sin(yaw), 0.0f, portable::cos(yaw)};
     const f32 length = groundLength(normal);
     if (length <= 0.0f) {
         return bounceYaw(yaw);
@@ -178,7 +179,7 @@ f32 ComboMove::reflectedYaw(f32 yaw, const Vec3& normal) {
     const Vec3 n{normal.x / length, 0.0f, normal.z / length};
     const f32 along = facing.x * n.x + facing.z * n.z;
     const Vec3 reflected = facing - n * (2.0f * along);
-    return std::atan2(reflected.x, reflected.z);
+    return portable::atan2(reflected.x, reflected.z);
 }
 
 bool ComboMove::takeTurn(ComboState& flier) {

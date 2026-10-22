@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -85,9 +86,10 @@ bool StartCamera::standard(s32 ticks, const Vec3& position, const Vec3& attentio
         m_fromDistance = glm::distance(m_camera.position, m_attention);
         const Vec3 ahead = attention - position;
         m_toDistance = glm::length(ahead);
-        const f32 yaw = m_toDistance > 0 ? std::atan2(ahead.x, ahead.z) : m_camera.yaw;
-        const f32 pitch =
-            m_toDistance > 0 ? std::atan2(-ahead.y, std::hypot(ahead.x, ahead.z)) : m_camera.pitch;
+        const f32 yaw = m_toDistance > 0 ? portable::atan2(ahead.x, ahead.z) : m_camera.yaw;
+        const f32 pitch = m_toDistance > 0
+                              ? portable::atan2(-ahead.y, portable::hypot(ahead.x, ahead.z))
+                              : m_camera.pitch;
         m_yawDelta = wrap(yaw - m_camera.yaw);
         m_pitchDelta = wrap(pitch - m_camera.pitch);
     }
@@ -122,8 +124,8 @@ void StartCamera::look() {
     if (flat < 1.0e-6f && std::abs(ahead.y) < 1.0e-6f) {
         return;
     }
-    m_camera.pitch = std::atan2(-ahead.y, flat);
-    m_camera.yaw = std::atan2(ahead.x, ahead.z);
+    m_camera.pitch = portable::atan2(-ahead.y, flat);
+    m_camera.yaw = portable::atan2(ahead.x, ahead.z);
     m_camera.roll = 0.0f;
 }
 

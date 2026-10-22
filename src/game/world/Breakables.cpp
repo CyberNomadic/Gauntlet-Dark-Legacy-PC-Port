@@ -7,9 +7,10 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
-#include "game/world/NativeStateResources.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/Chests.h"
+#include "game/world/NativeStateResources.h"
 #include "game/world/TargetAssist.h"
 
 namespace gdl::game {
@@ -222,7 +223,7 @@ std::vector<usize> Breakables::within(const Vec3& centre, f32 radius) const {
         }
         const Barrel& barrel = m_sim.barrels[index];
         const Vec3 offset = barrel.figure.position() - centre;
-        if (std::hypot(offset.x, offset.z) <= radius + barrel.radius &&
+        if (portable::hypot(offset.x, offset.z) <= radius + barrel.radius &&
             std::abs(offset.y) <= radius + barrel.height) {
             found.push_back(index);
         }

@@ -7,6 +7,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 bool PortalDeparture::appendNativeDigest(NativeStateDigest& digest) const {
@@ -16,7 +17,7 @@ bool PortalDeparture::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool PortalDeparture::appendLocalDigest(NativeStateDigest& digest,
-                                       const LocalSnapshot& saved) const {
+                                        const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -100,7 +101,7 @@ Mat4 PortalDeparture::transform(const Mat4& body) const {
 
 Mat4 PortalDeparture::transformAt(const Mat4& body, f32 phase) {
     const f32 elapsed = std::clamp(phase, 0.0f, 1.0f) * kTicks;
-    Mat4 result = glm::rotate(body, kSpinPerSecond * elapsed / 60.0f, Vec3{0, 1, 0});
+    Mat4 result = portable::rotate(body, kSpinPerSecond * elapsed / 60.0f, Vec3{0, 1, 0});
     result[3] += Vec4{0, -elapsed * kSinkPerTick, 0, 0};
     return result;
 }

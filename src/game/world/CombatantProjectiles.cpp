@@ -7,6 +7,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 #include "engine/world/ParticleSystem.h"
 
 namespace gdl::game {
@@ -82,7 +83,7 @@ u32 CombatantProjectiles::show(Flying& flying, s32 index, SoundPhase phase, Rend
     }
     EffectTrees::Setting setting;
     setting.scale = cue->scale * flying.shot.scale;
-    setting.yaw = std::atan2(flying.velocity.x, flying.velocity.z);
+    setting.yaw = portable::atan2(flying.velocity.x, flying.velocity.z);
     setting.seconds = life > 0.0f ? life : cue->life;
     const u32 effect =
         effects.startSet(device, *flying.archive, cue->tree, flying.position, setting);
@@ -129,9 +130,9 @@ u32 CombatantProjectiles::show(Flying& flying, s32 index, SoundPhase phase, Rend
 
 void CombatantProjectiles::place(const Flying& flying, EffectTrees& effects) {
     Mat4 transform = glm::translate(Mat4{1.0f}, flying.position);
-    transform = glm::rotate(transform, flying.rotation.y, Vec3{0, 1, 0});
-    transform = glm::rotate(transform, flying.rotation.x, Vec3{1, 0, 0});
-    transform = glm::rotate(transform, flying.rotation.z, Vec3{0, 0, 1});
+    transform = portable::rotate(transform, flying.rotation.y, Vec3{0, 1, 0});
+    transform = portable::rotate(transform, flying.rotation.x, Vec3{1, 0, 0});
+    transform = portable::rotate(transform, flying.rotation.z, Vec3{0, 0, 1});
     const auto* damage = flying.shot.data->damage(flying.shot.damageIndex);
     constexpr u32 kArrow = 0x20000;
     // ProcessEffects aligns arrow effects with velocity every frame, including
@@ -184,9 +185,9 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
             if (const auto floor =
                     collision->floorAt(flying.position, 1 + radius * 0.5f, 5 + radius * 0.5f)) {
                 flying.position.y = floor->y + kFloorClearance;
-                flying.rotation.x = std::atan2(floor->normal.z, floor->normal.y);
-                flying.rotation.z =
-                    -std::atan2(floor->normal.x, std::hypot(floor->normal.y, floor->normal.z));
+                flying.rotation.x = portable::atan2(floor->normal.z, floor->normal.y);
+                flying.rotation.z = -portable::atan2(
+                    floor->normal.x, portable::hypot(floor->normal.y, floor->normal.z));
             }
         }
         flying.effect =
@@ -202,7 +203,7 @@ void CombatantProjectiles::launch(const CombatShot& shot, ItemArchive& archive,
     // rather than depending on the host standard library's distribution.
     const f32 spread = m_sim.random.unitFloat24() * 2.0f - 1.0f;
     flying.velocity = CombatantProjectile::velocity(*damage, flying.shot, spread);
-    flying.rotation.y = std::atan2(flying.velocity.x, flying.velocity.z);
+    flying.rotation.y = portable::atan2(flying.velocity.x, flying.velocity.z);
     if ((cue->flags & kSpin) != 0) {
         constexpr f32 kSpinRate = std::numbers::pi_v<f32> / 2.0f;
         flying.spin = Vec3{m_sim.random.unitFloat24() * kSpinRate, 0.0f,
@@ -284,7 +285,7 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 }
                 if (flying.leavesGenerator) {
                     Mat4 placement = glm::translate(Mat4{1}, flying.position);
-                    placement = glm::rotate(placement, flying.rotation.y, Vec3{0, 1, 0});
+                    placement = portable::rotate(placement, flying.rotation.y, Vec3{0, 1, 0});
                     m_sim.generators.push_back(placement);
                 }
                 summon(flying);
@@ -331,10 +332,10 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 // WeaponWallCollide uses half the player-contact radius.
                 const f32 worldRadius = 0.5f * radius;
                 std::vector<WallContact> contacts;
-                const Vec3 pushed = collision->resolveWalls(
-                    to, worldRadius, to.y - worldRadius, to.y + worldRadius, &contacts,
-                    std::nullopt, WorldCollision::WallPush::All,
-                    WorldCollision::kMissileQueryFlags);
+                const Vec3 pushed =
+                    collision->resolveWalls(to, worldRadius, to.y - worldRadius, to.y + worldRadius,
+                                            &contacts, std::nullopt, WorldCollision::WallPush::All,
+                                            WorldCollision::kMissileQueryFlags);
                 wall = glm::length(pushed - to) > kWallTolerance;
                 if (wall) {
                     normal = glm::normalize(pushed - to);
@@ -404,7 +405,7 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                 flying.velocity = -flying.velocity;
                 flying.position = from;
                 flying.reflected = true;
-                flying.rotation.y = std::atan2(flying.velocity.x, flying.velocity.z);
+                flying.rotation.y = portable::atan2(flying.velocity.x, flying.velocity.z);
                 const f32 amount = damage.damage * flying.shot.damageScale;
                 if (amount > 15) {
                     flying.shot.damageScale *= 15 / amount;
@@ -519,9 +520,9 @@ void CombatantProjectiles::update(f32 seconds, const WorldCollision* collision,
                         if (const auto floor = collision->floorAt(
                                 flying.position, 1 + radius * 0.5f, 5 + radius * 0.5f)) {
                             flying.position.y = floor->y + kFloorClearance;
-                            flying.rotation.x = std::atan2(floor->normal.z, floor->normal.y);
-                            flying.rotation.z = -std::atan2(
-                                floor->normal.x, std::hypot(floor->normal.y, floor->normal.z));
+                            flying.rotation.x = portable::atan2(floor->normal.z, floor->normal.y);
+                            flying.rotation.z = -portable::atan2(
+                                floor->normal.x, portable::hypot(floor->normal.y, floor->normal.z));
                         }
                     }
                     flying.effect = show(flying, damage.hitSound, SoundPhase::Impact, device,
@@ -572,16 +573,16 @@ bool CombatantProjectiles::settleImpact(Flying& flying, u32 effect, EffectTrees&
         const f32 radius = damage.radius * flying.shot.scale * 0.5f;
         if (const auto floor = collision->floorAt(flying.position, 1 + radius, 5 + radius)) {
             flying.position.y = floor->y + kFloorClearance;
-            flying.rotation.x = std::atan2(floor->normal.z, floor->normal.y);
-            flying.rotation.z =
-                -std::atan2(floor->normal.x, std::hypot(floor->normal.y, floor->normal.z));
+            flying.rotation.x = portable::atan2(floor->normal.z, floor->normal.y);
+            flying.rotation.z = -portable::atan2(floor->normal.x,
+                                                 portable::hypot(floor->normal.y, floor->normal.z));
         }
     }
     // Floor alignment belongs to the impact's SFXX, even after the flight's
     // blast radius has been cleared. It must not inherit arrow-facing either.
     Mat4 placement = glm::translate(Mat4{1}, flying.position);
-    placement = glm::rotate(placement, flying.rotation.x, Vec3{1, 0, 0});
-    placement = glm::rotate(placement, flying.rotation.z, Vec3{0, 0, 1});
+    placement = portable::rotate(placement, flying.rotation.x, Vec3{1, 0, 0});
+    placement = portable::rotate(placement, flying.rotation.z, Vec3{0, 0, 1});
     effects.placeAt(effect, placement);
     if (flying.impactRadius <= 0) {
         return false;
@@ -611,14 +612,14 @@ void CombatantProjectiles::impactContacts(Flying& flying, f32 seconds,
         return;
     }
     Mat4 parent = glm::translate(Mat4{1}, flying.position);
-    parent = glm::rotate(parent, flying.rotation.x, Vec3{1, 0, 0});
-    parent = glm::rotate(parent, flying.rotation.z, Vec3{0, 0, 1});
+    parent = portable::rotate(parent, flying.rotation.x, Vec3{1, 0, 0});
+    parent = portable::rotate(parent, flying.rotation.z, Vec3{0, 0, 1});
     for (const EnemyView& player : players) {
         if (!area.touches(parent, player)) {
             continue;
         }
         const Vec3 away = player.position - flying.position;
-        const f32 length = std::hypot(away.x, away.z);
+        const f32 length = portable::hypot(away.x, away.z);
         const Vec3 push = length > 0 ? Vec3{away.x, 0, away.z} * (0.25f / length) : Vec3{0};
         u32 flags = area.flags;
         if (area.currentDamage() < 5) {
@@ -738,8 +739,8 @@ CombatantProjectiles::hitItems(const Flying& flying, const Vec3& from, const Vec
 
 void CombatantProjectiles::summon(Flying& flying) {
     if (flying.summonsEnemies) {
-        m_sim.summons.push_back(glm::rotate(glm::translate(Mat4{1}, flying.position),
-                                            flying.rotation.y, Vec3{0, 1, 0}));
+        m_sim.summons.push_back(portable::rotate(glm::translate(Mat4{1}, flying.position),
+                                                 flying.rotation.y, Vec3{0, 1, 0}));
         flying.summonsEnemies = false;
     }
 }
@@ -785,7 +786,7 @@ bool CombatantProjectiles::appendNativeDigest(NativeStateDigest& digest) const {
     return digest.good();
 }
 bool CombatantProjectiles::appendLocalDigest(NativeStateDigest& digest,
-                                            const LocalSnapshot& state) const {
+                                             const LocalSnapshot& state) const {
     if (!canRestoreLocal(state)) {
         return false;
     }

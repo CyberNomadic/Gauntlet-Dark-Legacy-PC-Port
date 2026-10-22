@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 namespace {
@@ -18,7 +19,7 @@ constexpr f32 kNearDepth = 0.01f;
 Vec2 project(const Vec3& point, const WorldCamera& camera, const CameraView& projection) {
     const Vec3 relative = point - camera.position;
     const f32 depth = glm::dot(relative, camera.forward());
-    const f32 tanX = std::tan(projection.horizontalFov * 0.5f);
+    const f32 tanX = portable::tan(projection.horizontalFov * 0.5f);
     const f32 tanY = tanX / projection.aspect;
     return {0.5f + glm::dot(relative, camera.right()) / (2 * depth * tanX),
             0.5f - glm::dot(relative, camera.up()) / (2 * depth * tanY)};
@@ -38,7 +39,7 @@ Vec3 CameraMovementLimit::constrain(const Vec3& before, const Vec3& after, const
                    ? after
                    : Vec3{before.x, after.y, before.z};
     }
-    const f32 tanX = std::tan(projection.horizontalFov * 0.5f);
+    const f32 tanX = portable::tan(projection.horizontalFov * 0.5f);
     const f32 tanY = tanX / projection.aspect;
     const std::array planes{-camera.right() + (2 * kLeft - 1) * tanX * forward,
                             camera.right() - (2 * kRight - 1) * tanX * forward,

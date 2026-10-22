@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 namespace gdl::game {
 
@@ -20,9 +21,9 @@ void FloorRiding::carry(PlayerRuntime& runtime, const WorldCollision& collision)
     PlayerActor& actor = runtime.actor;
     actor.carry(Vec3{moved * Vec4{actor.position(), 1.0f}});
     const f32 yaw = actor.yaw();
-    const Vec3 facing = Mat3{moved} * Vec3{std::sin(yaw), 0.0f, std::cos(yaw)};
+    const Vec3 facing = Mat3{moved} * Vec3{portable::sin(yaw), 0.0f, portable::cos(yaw)};
     if (facing.x != 0.0f || facing.z != 0.0f) {
-        actor.turnTo(std::atan2(facing.x, facing.z));
+        actor.turnTo(portable::atan2(facing.x, facing.z));
     }
     floor.placement = now;
 }

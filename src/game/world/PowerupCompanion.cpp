@@ -5,6 +5,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/world/NativeStateResources.h"
 
@@ -42,7 +43,7 @@ bool PowerupCompanion::appendNativeDigest(NativeStateDigest& digest) const {
 }
 
 bool PowerupCompanion::appendLocalDigest(NativeStateDigest& digest,
-                                        const LocalSnapshot& saved) const {
+                                         const LocalSnapshot& saved) const {
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -55,8 +56,7 @@ bool PowerupCompanion::registerNativeResources(NativeStateResources& registry) c
     // A discarded kind change keeps these banks for saved poses and replay.
     // Cache population itself does not enter the native state digest.
     for (const auto& resource : m_resources->entries) {
-        if (!resource || !resource->archive ||
-            !registry.refreshArchive(*resource->archive)) {
+        if (!resource || !resource->archive || !registry.refreshArchive(*resource->archive)) {
             return false;
         }
     }
@@ -336,8 +336,8 @@ void PowerupCompanion::draw(RenderDevice& device, const Mat4& clip, const Mat4& 
         const TreePose* pose = &m_state.pose;
         if (blend >= 0) {
             frame = m_state.previousGeneration == player.generation()
-                        ? std::lerp(m_state.previousFrame, player.presentationFrame(),
-                                    std::clamp(blend, 0.0f, 1.0f))
+                        ? portable::lerp(m_state.previousFrame, player.presentationFrame(),
+                                         std::clamp(blend, 0.0f, 1.0f))
                         : player.presentationFrame();
             visualPose.evaluate(*currentTree, player.sequence(), frame, false, true);
             pose = &visualPose;
