@@ -75,6 +75,9 @@ constexpr f32 kFloorAbove = 4.0f;
 constexpr f32 kFloorBelow = 10.0f;
 constexpr f32 kFloorRadius = 1.0f;
 constexpr f32 kFloorLift = 0.1f;
+/** The authored pose's floor must lie this much nearer a marker's height than the
+ * initialized world's to be taken for the floor the marker was set on. */
+constexpr f32 kRestPosePreference = 1.0f;
 constexpr s32 kPlayerSlots = 4;
 
 void placeHeight(WorldScene& scene, s32 object, f32 height) {
@@ -522,13 +525,23 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
             support =
                 initialFloors->restingFloorAt(trigger.spot, kFloorAbove, kFloorBelow, kFloorRadius);
-            if (restCollision &&
-                (!support || ((params & LevelTrigger::kOnTarget) != 0 && !onTarget(*support)))) {
+            if (restCollision) {
                 const auto rest = restCollision->restingFloorAt(trigger.spot, kFloorAbove,
                                                                 kFloorBelow, kFloorRadius);
-                // An explicitly floor-bound pad must not attach to a nearby still
-                // deck just because its own lift is currently at the other endpoint.
-                if (rest && (!support || onTarget(*rest))) {
+                // An explicitly floor-bound pad must not attach to a nearby still deck just
+                // because its own lift is currently at the other endpoint. Any other marker
+                // keeps the initialized world's floor unless the authored pose's lies a
+                // unit nearer its height, the floor it was set on: the Nightmare's swinging
+                // platform carries a lever authored on its deck at rest, which its first
+                // frame holds ten units down and on end.
+                const bool wantsTarget = (params & LevelTrigger::kOnTarget) != 0;
+                const bool preferRest =
+                    rest.has_value() &&
+                    (!support ||
+                     (wantsTarget ? !onTarget(*support) && onTarget(*rest)
+                                  : std::abs(rest->y - trigger.spot.y) + kRestPosePreference <
+                                        std::abs(support->y - trigger.spot.y)));
+                if (preferRest) {
                     supportCollision = &*restCollision;
                     support = rest;
                 }

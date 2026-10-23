@@ -6,6 +6,10 @@
 #include "engine/core/Types.h"
 
 namespace gdl::game {
+/** The authored pose's floor must lie this much nearer an item's height than the
+ * initialized world's to be taken for the floor the item was set on. */
+constexpr f32 kRestPosePreference = 1.0f;
+
 std::optional<WorldCollision> itemSupportWorld(const WorldLayout& layout,
                                                const WorldCollision* collision) {
     if (collision == nullptr || collision->movingObjectCount() == 0) {
@@ -34,7 +38,7 @@ const WorldCollision* itemSupportAt(const Vec3& position, const WorldCollision* 
     };
     const auto here = nearest(current);
     const auto rest = nearest(authored);
-    if (here && (!rest || *here <= *rest)) {
+    if (here && (!rest || *here <= *rest + kRestPosePreference)) {
         return current;
     }
     return authored;

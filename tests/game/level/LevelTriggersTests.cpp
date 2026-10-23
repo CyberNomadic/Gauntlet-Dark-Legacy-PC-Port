@@ -2068,4 +2068,58 @@ TEST_CASE("the Fissure's trap-wall lever is pulled from the rock its handle stan
     triggers.clear();
 }
 
+TEST_CASE("the Nightmare's swinging platform brings its lever and the gargoyle piece up on deck",
+          "[triggers][placed-items][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELJ6/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto ref = catalog.byName("J6");
+    REQUIRE(ref);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *ref));
+    // J6ROTELE02's track starts ten units down and on end in a wall slot, rises, swings flat
+    // and settles at its authored height. The lever (instance 592) and the gargoyle piece
+    // (GARGLION) are authored on the deck at rest; attached in the first frame's pose they
+    // would swing out five units beside the deck and end on their sides.
+    const PlacedItems& items = world.placedItems();
+    usize claw = items.size();
+    for (usize i = 0; i < items.size(); ++i) {
+        if (items.item(i).name == "GARGLION") {
+            claw = i;
+        }
+    }
+    REQUIRE(claw < items.size());
+    const auto indexOf = [&](s32 instance) {
+        for (usize i = 0; i < world.triggers().size(); ++i) {
+            if (world.triggers().trigger(i).instance == instance) {
+                return i;
+            }
+        }
+        return world.triggers().size();
+    };
+    const usize call = indexOf(590);
+    const usize onDeck = indexOf(592);
+    REQUIRE(call < world.triggers().size());
+    REQUIRE(onDeck < world.triggers().size());
+    REQUIRE(items.item(claw).floor);
+    CHECK(world.triggers().trigger(onDeck).floor == 189); // J6ELEWALK#1, the deck's walk
+    const Vec3 spot = world.triggers().trigger(call).spot;
+    std::vector<TriggerVisitor> party{TriggerVisitor{.position = spot, .party = 0}};
+    for (s32 tick = 0; tick < 240; ++tick) {
+        world.update(kStep, false);
+        world.updateTriggers(kStep, party);
+        if (tick == 0) {
+            party[0].position = spot + Vec3{1000, 0, 0};
+        }
+    }
+    const auto& piece = items.item(claw);
+    CHECK(glm::distance(piece.position, Vec3{152.69f, 64.1f, 51.82f}) < 0.25f);
+    CHECK(piece.transform[1].y == Approx(1.0f).margin(0.01f));
+    const LevelTrigger& lever = world.triggers().trigger(onDeck);
+    CHECK(glm::distance(lever.spot, Vec3{154.98f, 64.1f, 51.76f}) < 0.25f);
+    CHECK(lever.placement[1].y == Approx(1.0f).margin(0.01f));
+}
+
 } // namespace
