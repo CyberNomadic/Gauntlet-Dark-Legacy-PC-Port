@@ -82,6 +82,22 @@ struct Fixture {
     }
 };
 
+TEST_CASE("a revealed chest's preview plays the pickup's cycle instead of holding its first frame",
+          "[chests][xray]") {
+    Fixture pool("chest-preview-cycle");
+    pool.reveal();
+    const auto placed = pool.chests.chest(0).preview.checkpoint();
+    REQUIRE(placed);
+    CHECK(placed->poseFrame == 0);
+    for (s32 frame = 0; frame < 6; ++frame) {
+        (void)pool.chests.update(1.0f / 60, {});
+    }
+    const auto later = pool.chests.chest(0).preview.checkpoint();
+    REQUIRE(later);
+    CHECK(later->poseFrame > 0);
+    CHECK(pool.chests.chest(0).revealed);
+}
+
 TEST_CASE("native chest history cancels opening rewards transmutation and first preview births",
           "[local-rewind][chest-local-rewind]") {
     Fixture pool("chest-local-history");

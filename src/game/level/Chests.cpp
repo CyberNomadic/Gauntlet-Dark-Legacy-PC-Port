@@ -231,6 +231,9 @@ std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor
             continue;
         }
         chest.figure.update(seconds);
+        if (chest.revealed) {
+            chest.preview.update(seconds); // the X-ray overlay plays the pickup's own cycle
+        }
         chest.refusalLeft = std::max(chest.refusalLeft - seconds, 0.0f);
         if (chest.wobble > 0.0f && chest.state == kShut) {
             rock(chest, seconds);
@@ -426,7 +429,9 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
                 ItemInstance instance;
                 instance.position = chest.figure.position();
                 instance.rotation.y = -chest.figure.yaw();
-                // do_see_thru's overlay tree is never animated: it holds its first pose.
+                // The overlay plays the pickup's own cycle from here: held at its first
+                // frame, the growth potion shows at a tenth of its size and a breath icon
+                // before its fade-in.
                 chest.preview.place(device, previewArt, name, instance, nullptr);
             }
         }
@@ -480,9 +485,13 @@ void Chests::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& l
     for (const auto& chest : m_sim.chests) {
         if (chest.shown && !chest.gone) {
             if (chest.revealed) {
-                // Retail MBTreeSetAlpha(0xC0) is transparency, not opacity.
-                chest.preview.draw(device, clip, lighting, 1.0f, 0.65f, camera,
-                                   TreeModel::Pass::All, presentationAlpha);
+                // Retail MBTreeSetAlpha(0xC0) is transparency, not opacity. The overlay is
+                // drawn as a pickup is: its solids, then its alpha-textured and facing parts
+                // composited smoothly rather than by coverage.
+                for (const auto pass : {TreeModel::Pass::Opaque, TreeModel::Pass::Blended}) {
+                    chest.preview.draw(device, clip, lighting, 1.0f, 0.65f, camera, pass,
+                                       presentationAlpha);
+                }
             }
             chest.figure.draw(device, clip, lighting, chest.revealed ? 63.0f / 255.0f : 1.0f, 1.0f,
                               camera, TreeModel::Pass::All, presentationAlpha);
