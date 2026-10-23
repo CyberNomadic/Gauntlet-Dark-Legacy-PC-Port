@@ -3196,9 +3196,25 @@ TEST_CASE("the fields' zombies are bred from their generators, chase the party, 
         REQUIRE(scene.generators().livingOf(nearest) <= scene.generators().mostOf(nearest));
         if (bitten < 0 && scene.actor(0)->save().health() < health) {
             bitten = i;
-            // The blow puts the white damage skin on for the next frames.
+            // The blow puts the white damage skin on for the next frames, and a figure
+            // drawn now wears it (AAAWHITE of POWERUPS).
             REQUIRE(scene.runtime(0) != nullptr);
             CHECK(scene.runtime(0)->hitFlashTicks > 0);
+            ItemArchive weapons;
+            REQUIRE(weapons.load(root / "WEAPONS"));
+            PartyFigures figures;
+            figures.loadSkins(device, world.powerups(), weapons);
+            REQUIRE(figures.hitFlash() != nullptr);
+            const PortalDeparture departure;
+            const PartyFigures::Scene figureScene{
+                .world = world, .weapons = weapons, .departure = departure};
+            device.draws.clear();
+            figures.draw(device, std::span<const PlayerRuntime>(scene.runtime(0), 1),
+                         figureScene, Mat4{1.0f}, CameraFrame{});
+            REQUIRE_FALSE(device.draws.empty());
+            CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
+                return draw.state.maskedTexture == figures.hitFlash();
+            }));
         }
     }
     REQUIRE(scene.generators().bredOf(nearest) >= 1);
