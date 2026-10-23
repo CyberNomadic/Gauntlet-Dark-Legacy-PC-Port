@@ -112,11 +112,13 @@ public:
     /** Moves the character to `position`, as something solid in its way pushes it. */
     void place(const Vec3& position) {
         m_position = position;
+        m_stepAim = position;
         m_floorBase = position.y;
     }
     /** Carried to `position` by the floor it rides, which it keeps standing on. */
     void carry(const Vec3& position) {
         m_floorBase += position.y - m_position.y;
+        m_stepAim += position - m_position;
         m_position = position;
     }
     /** Turn in place toward an assisted attack target without moving the feet. */
@@ -138,10 +140,11 @@ public:
     const CharacterSave& save() const { return m_save; }
     CharacterSave& save() { return m_save; }
     const Vec3& position() const { return m_position; }
-    /** Where the last step meant to go before walls and floors clipped it. PlayerMotion
-     * sweeps items at that destination, so a lever whose handle stands in a wall is still
-     * pulled from a width out. Every update() writes it, so it is never checkpointed. */
-    Vec3 stepAim() const { return m_position + m_stepOffset; }
+    /** Where the last step meant to go before walls and floors clipped it, carried along
+     * with whatever moves the body afterwards. PlayerMotion sweeps items at that destination,
+     * so a lever whose handle stands in a wall is still pulled from a width out. Every
+     * update() writes it, so it is never checkpointed. */
+    const Vec3& stepAim() const { return m_stepAim; }
     /** The floor it stands on or sinks to (floor_base), that floor's object (PlayerNewFloor's
      * floor_name2; none before it has stood anywhere) and the object's level flags. */
     f32 floorBase() const { return m_floorBase; }
@@ -194,7 +197,7 @@ private:
     f32 m_followHeight = kDefaultFollowHeight;
     f32 m_attentionHeight = kDefaultFollowHeight;
     bool m_moving = false;
-    Vec3 m_stepOffset{0.0f, 0.0f, 0.0f}; ///< the last update's step, before anything clipped it
+    Vec3 m_stepAim{0.0f, 0.0f, 0.0f}; ///< the last update's destination, before anything clipped it
     f32 m_floorBase = 0.0f;
     s32 m_floorObject = -1;
     u32 m_floorFlags = 0;

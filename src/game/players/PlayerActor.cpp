@@ -75,7 +75,7 @@ bool PlayerActor::restore(const Checkpoint& state) {
     m_followHeight = state.followHeight;
     m_attentionHeight = state.attentionHeight;
     m_moving = state.moving;
-    m_stepOffset = Vec3{0.0f};
+    m_stepAim = m_position;
     m_floorBase = state.floorBase;
     m_floorObject = state.floorObject;
     m_floorFlags = state.floorFlags;
@@ -90,7 +90,7 @@ void PlayerActor::spawn(s32 player, const CharacterSave& save, const ClassStats*
     m_position = position;
     m_yaw = yaw;
     m_moving = false;
-    m_stepOffset = Vec3{0.0f};
+    m_stepAim = position;
     m_floorBase = position.y;
     m_floorObject = -1;
     m_floorFlags = 0;
@@ -128,7 +128,7 @@ void PlayerActor::restoreMotion(const Vec3& position, f32 yaw, f32 speed, f32 ra
     m_height = height;
     m_followHeight = followHeight;
     m_moving = false;
-    m_stepOffset = Vec3{0.0f};
+    m_stepAim = position;
     m_floorBase = position.y;
     m_floorObject = -1;
     m_floorFlags = 0;
@@ -149,7 +149,7 @@ void PlayerActor::faceToward(const Vec3& point) {
 void PlayerActor::update(const MoveInput& input, f32 cameraYaw, f32 seconds,
                          const WorldCollision* collision, f32 moveScale, bool keepFacing) {
     m_moving = input.any() && seconds > 0.0f;
-    m_stepOffset = Vec3{0.0f};
+    m_stepAim = m_position;
     if (!m_moving) {
         return;
     }
@@ -165,12 +165,14 @@ void PlayerActor::update(const MoveInput& input, f32 cameraYaw, f32 seconds,
         return;
     }
     const Vec3 direction{portable::sin(heading), 0.0f, portable::cos(heading)};
-    m_stepOffset = direction * distance;
-    travel(m_stepOffset, collision);
+    m_stepAim = m_position + direction * distance;
+    travel(direction * distance, collision);
 }
 
 void PlayerActor::slide(const Vec3& offset, const WorldCollision* collision) {
+    const Vec3 before = m_position;
     travel(Vec3{offset.x, 0.0f, offset.z}, collision);
+    m_stepAim += m_position - before;
 }
 
 f32 PlayerActor::minimumWallY(f32 footHeight) const {

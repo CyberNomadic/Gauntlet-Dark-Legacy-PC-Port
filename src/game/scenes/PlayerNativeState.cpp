@@ -67,10 +67,10 @@ void visitNativeState(NativeStateDigest& digest, const ComboState& value) {
 
 void visitNativeState(NativeStateDigest& digest, const PlayerActor& value) {
     const auto& [player, save, position, yaw, speed, paceBonus, radius, height, followHeight,
-                 attentionHeight, moving, stepOffset, floorBase, floorObject, floorFlags,
+                 attentionHeight, moving, stepAim, floorBase, floorObject, floorFlags,
                  contacts] = value;
     // Every tick's update rewrites the step's aim before anything reads it: not body state.
-    (void)stepOffset;
+    (void)stepAim;
     digest.values(player, save, position, yaw, speed, paceBonus, radius, height, followHeight,
                   attentionHeight, moving, floorBase, floorObject, floorFlags, contacts);
 }

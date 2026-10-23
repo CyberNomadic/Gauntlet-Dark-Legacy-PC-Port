@@ -196,8 +196,16 @@ TEST_CASE("a step into a wall still aims a step past where the wall holds the bo
     REQUIRE(actor.position().x == Approx(5.0f - actor.reach()).margin(0.01f));
     REQUIRE(actor.stepAim().x == Approx(actor.position().x + actor.speed() / 30.0f).margin(1e-4f));
     REQUIRE(actor.stepAim().z == Approx(0.0f).margin(1e-4f));
-    // Standing still, it aims at its own feet.
+    // Standing still, it aims at its own feet; a free step lands where it aimed.
     actor.update(MoveInput{}, 0.0f, 1.0f / 30.0f, &collision);
+    REQUIRE(actor.stepAim() == actor.position());
+    actor.update(push(-1.0f, 0.0f), 0.0f, 1.0f / 30.0f, &collision);
+    REQUIRE(actor.stepAim().x == Approx(actor.position().x).margin(1e-4f));
+    // What carries or shoves the body afterwards carries its aim with it.
+    const Vec3 aim = actor.stepAim();
+    actor.carry(actor.position() + Vec3{0.0f, 2.0f, 1.0f});
+    REQUIRE(actor.stepAim() == aim + Vec3{0.0f, 2.0f, 1.0f});
+    actor.place(Vec3{1.0f, 0.0f, 1.0f});
     REQUIRE(actor.stepAim() == actor.position());
 }
 
