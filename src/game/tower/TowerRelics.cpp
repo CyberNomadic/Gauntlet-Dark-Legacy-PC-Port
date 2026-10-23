@@ -67,7 +67,11 @@ constexpr s32 kPageHoldTicks = 60;
 constexpr f32 kPlacementHold = 2;
 /** The window camera's forty ticks and then its count from 300 down to 250, after which
  * TowerCheckMessages sounds the pane struck (S_STNDGLASS): 91 ticks after the shard sets out. */
-constexpr f32 kShardStrikeSeconds = 91.0f / 60.0f;
+// SumnerSpeechEnd starts the fall and activates the rune or window camera: forty ticks of
+// transition, then its count from 300; the tower sounds the landing (S_RUNEHIT) or the
+// pane's strike (S_STNDGLASS) as that count drops under 250, 91 ticks in, whatever the
+// effect's own length (tower.c, AudioTowerFX; both cameras' variants read 300 in the DOL).
+constexpr f32 kStrikeSeconds = 91.0f / 60.0f;
 std::optional<WorldCamera> cameraAt(const WorldLayout& layout, u32 id) {
     if (const auto* marker = layout.findLocator(LocatorKind::TriggerCamera, id)) {
         WorldCamera camera;
@@ -362,11 +366,7 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
             m_sim.phase = Phase::Placement;
             m_wizard.reset();
             m_sim.placementLeft = place(*current(), false) + kPlacementHold;
-            // A shard strikes its pane 91 ticks into the flight; a stone lands as its fall
-            // ends and is looked at for the hold, so the landing must not wait for that.
-            m_sim.hitIn = current()->kind == Kind::Shard
-                              ? kShardStrikeSeconds
-                              : std::max(m_sim.placementLeft - kPlacementHold, 1.0f / 60);
+            m_sim.hitIn = kStrikeSeconds;
             cue.placement = true;
             cue.sound = "S_RUNEFALL";
             if (current()->kind == Kind::Shard) {
@@ -380,7 +380,7 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
         if (m_sim.hitIn > 0) {
             m_sim.hitIn -= std::max(seconds, 0.0f);
             if (m_sim.hitIn <= 0) {
-                cue.sound = landing; // the pane struck while the shard still flies; the stone down
+                cue.sound = landing; // the pane struck, the stone down, each still in flight
             }
         }
         if (m_sim.placementLeft <= 0) {

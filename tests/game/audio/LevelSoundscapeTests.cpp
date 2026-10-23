@@ -157,16 +157,38 @@ TEST_CASE("the runestone's fall and landing are playable from the tower sound ba
     SoundPlayer player(mixer);
     LevelSoundscape sounds;
     sounds.open(root, &player, nullptr);
+    std::vector<f32> output(1600);
+    const auto loudness = [&](usize sixtieths) {
+        f64 energy = 0;
+        for (usize i = 0; i < sixtieths; ++i) {
+            mixer.mix(output);
+            for (const f32 sample : output) {
+                energy += static_cast<f64>(sample) * sample;
+            }
+        }
+        return std::sqrt(energy / static_cast<f64>(sixtieths * output.size()));
+    };
     for (const auto* name : {"S_RUNEFALL", "S_RUNEHIT"}) {
         INFO(name);
         const auto voice = sounds.playPromotion(name);
         REQUIRE(voice != kNoSound);
         CHECK(player.isPlaying(voice));
-        std::array<f32, 4096> output{};
-        mixer.mix(output);
-        CHECK(std::ranges::any_of(output, [](f32 sample) { return sample != 0; }));
+        CHECK(loudness(24) > 0.02); // its first two fifths of a second, well above silence
         player.stop(voice);
     }
+    // The landing, cued 91 ticks into the fall's rumble, must stand out over it.
+    const auto fall = sounds.playPromotion("S_RUNEFALL");
+    REQUIRE(fall != kNoSound);
+    loudness(91);
+    const f64 rumbleAlone = loudness(25);
+    player.stop(fall);
+    const auto again = sounds.playPromotion("S_RUNEFALL");
+    REQUIRE(again != kNoSound);
+    loudness(91);
+    REQUIRE(sounds.playPromotion("S_RUNEHIT") != kNoSound);
+    const f64 withLanding = loudness(25);
+    CAPTURE(rumbleAlone, withLanding);
+    CHECK(withLanding > rumbleAlone * 1.1);
 }
 
 /** A bank of one-second lines that play once, so the narrator's queue can be timed. */

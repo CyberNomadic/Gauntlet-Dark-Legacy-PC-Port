@@ -114,8 +114,9 @@ TEST_CASE("tower ceremonies hold for speech then placement and complete once in 
     const auto fall = display.update(2000, 0, false);
     REQUIRE(fall.placement);
     REQUIRE(fall.sound == "S_RUNEFALL");
-    // With no world to animate, the stone is down at once: it sounds its landing on the next
-    // update, and the two seconds of looking at it follow before the ceremony moves on.
+    // The stone lands 91 ticks into its fall, on the rune camera's count as the shard's pane
+    // strikes on the window's, however long the effect itself runs.
+    REQUIRE(display.update(90, 90.0f / 60, false).sound.empty());
     const auto landed = display.update(1, 1.0f / 60, false);
     REQUIRE(landed.sound == "S_RUNEHIT");
     REQUIRE_FALSE(landed.completed);
