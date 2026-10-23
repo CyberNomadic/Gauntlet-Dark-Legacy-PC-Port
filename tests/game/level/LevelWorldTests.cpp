@@ -86,6 +86,33 @@ TEST_CASE("gameplay camera bounds respect native CAMS limits on reopen",
     }
 }
 
+TEST_CASE("the Roots' runestone rides the platform set to drop onto it",
+          "[game][world][placed-items][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("D2");
+    REQUIRE(level);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    // The rune is authored at the lift's little platform's rest height, under which the pit
+    // floor lies seven deeper; the lift starts raised thirty, so the rune rides up with it
+    // and comes down on top of it when the lever drops it, instead of waiting in the pit.
+    const PlacedItems& items = world.placedItems();
+    usize rune = items.size();
+    for (usize i = 0; i < items.size(); ++i) {
+        if (items.item(i).name == "RUNED1") {
+            rune = i;
+        }
+    }
+    REQUIRE(rune < items.size());
+    REQUIRE(items.item(rune).floor);
+    CHECK(items.item(rune).floor->object == 1253); // D2LILELLE
+    CHECK(items.item(rune).position.y == Approx(45.9f).margin(0.2f));
+}
+
 TEST_CASE("G2 bats swoop and submit their bodies and parented wings for drawing",
           "[game][world][g2-bats][assets]") {
     const auto directory = test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path();

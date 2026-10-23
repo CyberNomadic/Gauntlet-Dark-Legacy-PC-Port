@@ -557,7 +557,11 @@ TEST_CASE("pickups bind to authored floors and ride the current platform pose",
     REQUIRE(archive.load(dir));
     WorldCollision collision;
     const std::array<Vec3, 3> face{Vec3{-4, 0, -4}, Vec3{4, 0, -4}, Vec3{0, 0, 4}};
-    collision.build({{{0, 1, 0}, face, 1, 4100}, {{0, 1, 0}, face, 2, 4}});
+    // Ground eight under the authored pickup: the lift's deck at rest is the floor it was
+    // set on, though the initialized world has carried that deck away (the Roots' rune).
+    const std::array<Vec3, 3> ground{Vec3{97, 2, 46}, Vec3{105, 2, 46}, Vec3{101, 2, 54}};
+    collision.build(
+        {{{0, 1, 0}, face, 1, 4100}, {{0, 1, 0}, face, 2, 4}, {{0, 1, 0}, ground, 2, 4}});
     collision.setMovingObjects(std::array<s32, 1>{1});
     const Mat4 initial = glm::translate(Mat4{1}, Vec3{120, -10, 50});
     collision.setObjectTransform(1, initial);

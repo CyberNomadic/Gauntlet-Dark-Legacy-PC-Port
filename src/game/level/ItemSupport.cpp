@@ -1,5 +1,6 @@
 #include "game/level/ItemSupport.h"
 
+#include <cmath>
 #include <optional>
 
 #include "engine/core/Types.h"
@@ -20,7 +21,23 @@ std::optional<WorldCollision> itemSupportWorld(const WorldLayout& layout,
 
 const WorldCollision* itemSupportAt(const Vec3& position, const WorldCollision* current,
                                     const WorldCollision* authored) {
-    return current != nullptr && current->floorAt(position, 4, 10, 1) ? current : authored;
+    // FloorPos rests an item on the floor at its authored height: a chest set on a lift's
+    // lowered deck finds it in the initialized world, a runestone set on a platform at rest
+    // (the Roots' lift starts raised thirty over it) finds it in the authored one. Of the
+    // two, the floor nearer the authored height is the one the item was set on.
+    const auto nearest = [&](const WorldCollision* world) -> std::optional<f32> {
+        if (world == nullptr) {
+            return std::nullopt;
+        }
+        const auto floor = world->floorAt(position, 4, 10, 1);
+        return floor ? std::optional{std::abs(floor->y - position.y)} : std::nullopt;
+    };
+    const auto here = nearest(current);
+    const auto rest = nearest(authored);
+    if (here && (!rest || *here <= *rest)) {
+        return current;
+    }
+    return authored;
 }
 
 void ItemSupport::bind(const ItemInstance& instance, const ItemInfo& info,
