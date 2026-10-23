@@ -742,7 +742,9 @@ void ItemFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
         }
         m_sim.resources->model.draw(device, clip, glm::scale(placement, Vec3{scale}), lighting,
                                     pose->matrices(), camera, alpha, pass);
-        if (pass != TreeModel::Pass::DepthWriting) {
+        // Particles composite with the blended parts: once, after the solids, so a figure
+        // drawn in both pickup passes does not double them.
+        if (pass != TreeModel::Pass::DepthWriting && pass != TreeModel::Pass::Opaque) {
             const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
             textures().applyPresentation(m_sim.particles, *m_sim.tree, m_sim.textureSequence,
                                          visualFrame,

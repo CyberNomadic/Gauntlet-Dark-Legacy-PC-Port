@@ -24,6 +24,7 @@
 #include "fixtures/NativeModelFixture.h"
 #include "game/app/Scenario.h"
 #include "game/level/Chests.h"
+#include "game/level/ItemFigure.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/LevelWorld.h"
 #include "game/level/PlacedItems.h"
@@ -300,6 +301,39 @@ std::filesystem::path pickupPresentationFixture() {
       "itemInstances":[]})");
     test::convertModelFixture(root);
     return root;
+}
+
+TEST_CASE("an item figure drawn in both pickup passes composites its particles once",
+          "[placed-items][pickup-particles]") {
+    const auto root = pickupPresentationFixture();
+    writeTextFile(root / "textures.json", R"({"bitmaps":[
+      {"name":"WHITE","file":"white.png","width":2,"height":2},
+      {"name":"FLAME0","file":"white.png","width":2,"height":2}]})");
+    test::convertModelFixture(root);
+    writeTextFile(root / "animations.json", R"({
+      "particles":[{"preset":2,"enables":16929,"texture":"FLAME0",
+                    "particleLife":[0.1,0],"rate":[30,30,30,30]}],
+      "trees":[{"name":"COIN","nodes":[
+        {"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+        {"name":"FIRE","particle":0,"parent":0,"position":[0,1,0]}]}]})");
+    ItemArchive archive;
+    REQUIRE(archive.load(root));
+    test::FakeRenderDevice device;
+    ItemFigure figure;
+    ItemInstance instance;
+    instance.position = Vec3{7, 0, 0};
+    REQUIRE(figure.place(device, archive, "COIN", instance, nullptr));
+    figure.update(1.0f / 30);
+    const auto drawn = [&](TreeModel::Pass pass) {
+        device.draws.clear();
+        figure.draw(device, Mat4{1}, {}, 1.0f, 1.0f, nullptr, pass, -1.0f);
+        return device.draws.size();
+    };
+    const auto solids = drawn(TreeModel::Pass::Opaque);
+    const auto blended = drawn(TreeModel::Pass::Blended);
+    CHECK(solids == 1);  // the mesh alone
+    CHECK(blended == 1); // the emitter's quads alone
+    CHECK(drawn(TreeModel::Pass::All) == solids + blended);
 }
 
 TEST_CASE("pickup emitters follow attachments textures and visibility independently of animation",
