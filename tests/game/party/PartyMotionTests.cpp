@@ -1588,7 +1588,7 @@ TEST_CASE("the combo button with half the meter lifts a warrior's partner ahead,
 } // namespace
 
 TEST_CASE(
-    "the Robotron scheme walks the camera's way facing its walk and plants to shoot at the mouse",
+    "the Robotron scheme walks the camera's way facing its walk and faces the mouse to shoot",
     "[controls][cursor][party-motion][robotron][assets]") {
     const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
                           .parent_path()
@@ -1622,29 +1622,39 @@ TEST_CASE(
     input.aimDirection = Vec3{1, 0, 0};
     input.freeMove = true;
     bool firing = false;
+    bool planted = false;
     SECTION("walking faces the walk, not the mouse") {}
-    SECTION("holding the quick attack plants the body facing the mouse") {
+    SECTION("holding the quick attack turns the body to the mouse and keeps it walking") {
         input.attack = true;
         firing = true;
     }
-    SECTION("holding the slow attack plants the body facing the mouse") {
+    SECTION("holding the slow attack turns the body to the mouse and all but plants it") {
         input.strongAttack = true;
         firing = true;
+        planted = true;
     }
     for (s32 frame = 0; frame < 120; ++frame) {
         f.step();
     }
     const auto& animator = player.figure->animator();
-    CHECK_FALSE(animator.strafing());
     const Vec3 before = player.actor.position();
     f.step();
     const Vec3 step = player.actor.position() - before;
     if (firing) {
-        CHECK(glm::length(step) == Approx(0.0f).margin(0.0001f));
-        CHECK_FALSE(animator.running());
         CHECK(player.actor.yaw() == Approx(std::atan2(1.0f, 0.0f)));
         CHECK(player.cursorAiming);
+        if (planted) {
+            // The slow swing keeps the body to its creep, as it does under any scheme.
+            CHECK(glm::length(step) < 0.05f);
+        } else {
+            // The keys still walk the camera's way in the strafe gait a moving shot takes,
+            // the body sidestepping or backing when the walk is not the mouse's way.
+            REQUIRE(glm::length(step) > 0.0001f);
+            CHECK(glm::dot(glm::normalize(step), way) == Approx(1.0f).margin(0.001f));
+            CHECK(animator.strafing());
+        }
     } else {
+        CHECK_FALSE(animator.strafing());
         CHECK(animator.running());
         CHECK(animator.moveScale() == Approx(PlayerAnimator::kRunPace));
         CHECK(glm::length(step) ==

@@ -292,13 +292,14 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
             !held && !down && !reeling && !entering && !deathHeld && player < inputs.size()
                 ? inputs[player].aimDirection
                 : std::nullopt;
-        // Under Robotron the keys walk the body the way it faces; the mouse aims only an
-        // attack or a throw, for which the body stands still.
-        if (aim && inputs[player].freeMove) {
+        // Under Robotron the keys walk the camera's way and the mouse aims only an attack or
+        // a throw; while one is held the body turns to the mouse and keeps walking the keys'
+        // way, sidestepping and backing as a pad's strafe does, so a shot can be aimed on
+        // the move.
+        const bool freeAim = aim.has_value() && inputs[player].freeMove;
+        if (freeAim) {
             const PlayInput& in = inputs[player];
-            if (in.attack || in.strongAttack || in.throwPotion) {
-                move = MoveInput{};
-            } else {
+            if (!(in.attack || in.strongAttack || in.throwPotion)) {
                 aim.reset();
             }
         }
@@ -309,7 +310,9 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                                     ? actor.position() + Vec3{portable::sin(actor.yaw()), 0,
                                                               portable::cos(actor.yaw())}
                                     : actor.position() + toward;
-            move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
+            if (!freeAim) {
+                move = cursorRelativeMove(move, actor.position(), facing, cameraYaw);
+            }
             if (animator == nullptr || !animator->shoving()) {
                 const f32 turn = animator != nullptr ? animator->turnScale() : 1.0f;
                 if (steeringTurbo) {
