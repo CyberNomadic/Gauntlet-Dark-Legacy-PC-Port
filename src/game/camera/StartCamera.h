@@ -22,10 +22,7 @@ public:
     static constexpr s32 kRideTicks = 20;  ///< ten 30 Hz camera updates
     static constexpr s32 kWarmSteps = 9;   ///< follow-history convergence at handoff
     static constexpr s32 kLegacyHoldTicks = 91;
-    static constexpr s32 kSkipBelow = 45;         ///< a button ends the hold from here down
-    static constexpr f32 kUnitsPerTick = 0.25f;   ///< the ride's pace: a glide, not a snap
-    static constexpr f32 kPositionReach = 200.0f; ///< beyond these the pace grows with the gap
-    static constexpr f32 kAttentionReach = 20.0f;
+    static constexpr s32 kSkipBelow = 45; ///< a button ends the hold from here down
     static constexpr f32 kArrival = 0.3f; ///< within this of the follow camera is there
 
     enum class Phase : u8 { Off, Hold, Ride };
@@ -47,9 +44,9 @@ public:
     const Vec3& attention() const { return m_attention; }
 
 private:
-    /** Moves `point` at the pace toward `target`, or by the gap's share of `reach` when it is
-     * farther than that; true when it was already within kArrival. */
-    static bool approach(Vec3& point, const Vec3& target, f32 reach, s32 ticks);
+    /** Moves `point` the ride's remaining share of the way to `target`; true once it is
+     * within kArrival. */
+    bool approach(Vec3& point, const Vec3& target, s32 ticks) const;
     /** Turns the camera to look at its attention. */
     void look();
     bool standard(s32 ticks, const Vec3& position, const Vec3& attention);

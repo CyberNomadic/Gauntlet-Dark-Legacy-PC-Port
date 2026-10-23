@@ -52,11 +52,15 @@ bool StartCamera::update(s32 ticks, bool skip, const Vec3& position, const Vec3&
         }
         if (m_ticks == 0) {
             m_phase = Phase::Ride;
+            m_rideTicks = 0;
         }
         return true;
     case Phase::Ride: {
-        const bool there = approach(m_camera.position, position, kPositionReach, ticks);
-        const bool looking = approach(m_attention, attention, kAttentionReach, ticks);
+        // The boss camera's shot is far from the marker (the Spider's a hundred units):
+        // the hand-over takes the ride every entrance takes, not a glide across the level.
+        const bool there = approach(m_camera.position, position, ticks);
+        const bool looking = approach(m_attention, attention, ticks);
+        m_rideTicks = std::min(m_rideTicks + ticks, kRideTicks);
         look();
         if (there && looking) {
             m_phase = Phase::Off;
@@ -106,15 +110,13 @@ bool StartCamera::standard(s32 ticks, const Vec3& position, const Vec3& attentio
     return active();
 }
 
-bool StartCamera::approach(Vec3& point, const Vec3& target, f32 reach, s32 ticks) {
+bool StartCamera::approach(Vec3& point, const Vec3& target, s32 ticks) const {
     const Vec3 gap = target - point;
-    const f32 distance = glm::length(gap);
-    if (distance < kArrival) {
+    if (glm::length(gap) < kArrival) {
         return true;
     }
-    const f32 share =
-        std::min(static_cast<f32>(ticks) * kUnitsPerTick / std::min(distance, reach), 1.0f);
-    point += gap * share;
+    const s32 left = std::max(kRideTicks - m_rideTicks, 1);
+    point += gap * std::min(static_cast<f32>(ticks) / static_cast<f32>(left), 1.0f);
     return false;
 }
 

@@ -31,7 +31,7 @@ void requireNear(const Vec3& actual, const Vec3& expected, f32 margin = 1e-3f) {
     REQUIRE(actual.z == Approx(expected.z).margin(margin));
 }
 
-TEST_CASE("the legacy start camera holds at the marker, then rides at its pace",
+TEST_CASE("the legacy start camera holds at the marker, then rides over in twenty ticks",
           "[game][world][camera]") {
     const WorldCamera marker = markerAbove();
     const Vec3 party{0.0f, 0.0f, -30.0f};
@@ -67,36 +67,33 @@ TEST_CASE("the legacy start camera holds at the marker, then rides at its pace",
     REQUIRE(camera.ticksLeft() == 0);
     REQUIRE(camera.phase() == StartCamera::Phase::Ride);
 
-    // The ride moves it straight at the follow camera a pace a tick, looking at a point that
-    // slides to the follow camera's the same way.
+    // The ride moves it straight at the follow camera, a tick's share of the ride each tick,
+    // looking at a point that slides to the follow camera's the same way.
     const Vec3 before = camera.camera().position;
     const Vec3 lookedAt = camera.attention();
     REQUIRE(camera.update(1, false, followPosition, followAttention));
-    REQUIRE(glm::distance(camera.camera().position, before) ==
-            Approx(StartCamera::kUnitsPerTick).margin(1e-3f));
     requireNear(camera.camera().position,
-                before + glm::normalize(followPosition - before) * StartCamera::kUnitsPerTick);
-    requireNear(camera.attention(),
-                lookedAt + glm::normalize(followAttention - lookedAt) * StartCamera::kUnitsPerTick);
+                before + (followPosition - before) / static_cast<f32>(StartCamera::kRideTicks));
+    requireNear(camera.attention(), lookedAt + (followAttention - lookedAt) /
+                                                   static_cast<f32>(StartCamera::kRideTicks));
     requireNear(camera.camera().forward(),
                 glm::normalize(camera.attention() - camera.camera().position), 1e-4f);
     REQUIRE(camera.camera().pitch > 0.0f); // still looking down
 
-    // Within a fraction of a unit of both it hands over, the twelve units of the gap covered
-    // at its pace.
+    // Within a fraction of a unit of both it hands over, the whole gap covered in the ride.
     s32 ticks = 1;
     while (camera.active() && ticks < 400) {
         camera.update(1, false, followPosition, followAttention);
         ++ticks;
     }
     REQUIRE_FALSE(camera.active());
-    REQUIRE(ticks <= static_cast<s32>(12.0f / StartCamera::kUnitsPerTick) + 2);
+    REQUIRE(ticks <= StartCamera::kRideTicks + 1);
     REQUIRE(glm::distance(camera.camera().position, followPosition) < StartCamera::kArrival);
     REQUIRE(glm::distance(camera.attention(), followAttention) < StartCamera::kArrival);
     REQUIRE_FALSE(camera.update(1, false, followPosition, followAttention));
 }
 
-TEST_CASE("the legacy camera's hold runs its course and it rides faster from far off",
+TEST_CASE("the legacy camera's hold runs its course and a far shot still lands in the ride",
           "[game][world][camera]") {
     const WorldCamera marker = markerAbove();
     const Vec3 followPosition{0.0f, 14.0f, -300.0f};
@@ -110,27 +107,25 @@ TEST_CASE("the legacy camera's hold runs its course and it rides faster from far
     REQUIRE(camera.update(1, false, followPosition, followAttention));
     REQUIRE(camera.phase() == StartCamera::Phase::Ride);
 
-    // Farther than the reach, a tick covers the gap's share of it: the position's over two
-    // hundred units, the look-at point's over twenty.
+    // Three hundred units off, the shot is still reached within the ride: each tick covers
+    // its share of what is left, so the pace grows with the gap.
     const Vec3 before = camera.camera().position;
-    const Vec3 lookedAt = camera.attention();
-    const f32 positionGap = glm::distance(before, followPosition);
-    const f32 attentionGap = glm::distance(lookedAt, followAttention);
-    REQUIRE(positionGap > StartCamera::kPositionReach);
-    REQUIRE(attentionGap > StartCamera::kAttentionReach);
     REQUIRE(camera.update(1, false, followPosition, followAttention));
     REQUIRE(glm::distance(camera.camera().position, before) ==
-            Approx(positionGap / StartCamera::kPositionReach * StartCamera::kUnitsPerTick)
-                .margin(1e-3f));
-    REQUIRE(glm::distance(camera.attention(), lookedAt) ==
-            Approx(attentionGap / StartCamera::kAttentionReach * StartCamera::kUnitsPerTick)
-                .margin(1e-3f));
-    // A late frame's ticks cover that many paces, never past the target.
+            Approx(glm::distance(before, followPosition) / StartCamera::kRideTicks).margin(1e-2f));
+    s32 ticks = 1;
+    while (camera.active() && ticks < 400) {
+        camera.update(1, false, followPosition, followAttention);
+        ++ticks;
+    }
+    REQUIRE(ticks <= StartCamera::kRideTicks + 1);
+    REQUIRE(glm::distance(camera.camera().position, followPosition) < StartCamera::kArrival);
+    // A late frame's ticks cover that much of the ride, never past the target.
     camera.stop();
     camera.start(marker, Vec3{0.0f, 0.0f, -30.0f}, StartCamera::Mode::Legacy);
     camera.update(StartCamera::kLegacyHoldTicks, false, followPosition, followAttention);
     const Vec3 near{0.0f, 20.0f, -0.5f};
-    camera.update(4, false, near, camera.attention());
+    camera.update(StartCamera::kRideTicks + 4, false, near, camera.attention());
     requireNear(camera.camera().position, near);
 }
 
