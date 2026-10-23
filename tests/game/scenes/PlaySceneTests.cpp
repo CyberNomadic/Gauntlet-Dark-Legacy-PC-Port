@@ -3196,6 +3196,9 @@ TEST_CASE("the fields' zombies are bred from their generators, chase the party, 
         REQUIRE(scene.generators().livingOf(nearest) <= scene.generators().mostOf(nearest));
         if (bitten < 0 && scene.actor(0)->save().health() < health) {
             bitten = i;
+            // The blow puts the white damage skin on for the next frames.
+            REQUIRE(scene.runtime(0) != nullptr);
+            CHECK(scene.runtime(0)->hitFlashTicks > 0);
         }
     }
     REQUIRE(scene.generators().bredOf(nearest) >= 1);
