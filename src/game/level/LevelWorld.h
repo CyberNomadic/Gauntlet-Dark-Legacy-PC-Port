@@ -229,13 +229,14 @@ public:
                                      m_collision.loaded() ? &m_collision : nullptr, noGrabSeconds);
     }
     /** Throws one of the level's items by its record's name from `position`, as a boss
-     * spews its coins; it lands on the floor and cannot be taken for `noGrabSeconds`. */
+     * spews its coins; it lands on the floor and cannot be taken for `noGrabSeconds`, and
+     * holds `amount` when that is over none. */
     bool throwItem(RenderDevice& device, std::string_view name, const Vec3& position,
                    const Vec3& velocity, f32 noGrabSeconds,
-                   std::optional<f32> strength = std::nullopt) {
+                   std::optional<f32> strength = std::nullopt, s32 amount = 0) {
         return m_placedItems.throwItem(device, name, position, velocity,
                                        m_collision.loaded() ? &m_collision : nullptr, noGrabSeconds,
-                                       strength);
+                                       strength, amount);
     }
     /** Whether any gold lies untaken. */
     bool goldLeft() const { return m_placedItems.goldLeft(); }

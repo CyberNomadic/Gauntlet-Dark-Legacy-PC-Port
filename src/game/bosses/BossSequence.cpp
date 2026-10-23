@@ -390,8 +390,10 @@ void BossSequence::spewCoins(const CombatSpew& spew, LevelOpponents& opponents,
         players, [](const PlayerRuntime& runtime) { return !runtime.departed; }));
     for (const SpewedCoin& coin : BossCoins::spray(r.world.ref().realmId, count, spew.velocity,
                                                    spew.halfAngle, m_sim.coinRandom)) {
+        // BossSpewCoins writes each coin's worth over its record's (the level tables keep
+        // a tenth of it), so the Fiend's four silver and one gold are 9000, not 900.
         r.world.throwItem(r.device, coin.name, spew.origin, coin.velocity,
-                          BossCoins::kNoGrabSeconds);
+                          BossCoins::kNoGrabSeconds, std::nullopt, coin.value);
     }
 }
 

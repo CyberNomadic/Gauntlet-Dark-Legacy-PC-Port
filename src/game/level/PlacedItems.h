@@ -290,11 +290,12 @@ public:
                      const WorldCollision* collision, s32 amount = 0);
     /** Throws a pickup of the record named `name` from `position` at `velocity`: it sails
      * out, falls, bounces and rolls to a stop on the floor the collision finds (or is lost,
-     * falling where there is none), and cannot be taken for `noGrabSeconds`. False as for
-     * `place`. */
+     * falling where there is none), and cannot be taken for `noGrabSeconds`. It holds
+     * `amount` when that is over none (BossSpewCoins writes a coin's worth over its record's,
+     * which the level's table keeps at a tenth). False as for `place`. */
     bool throwItem(RenderDevice& device, std::string_view name, const Vec3& position,
                    const Vec3& velocity, const WorldCollision* collision, f32 noGrabSeconds,
-                   std::optional<f32> strength = std::nullopt);
+                   std::optional<f32> strength = std::nullopt, s32 amount = 0);
     /** The pickup nearest `position` within `reach` along the ground and `rise` up or down
      * that nothing yet holds, now held and unseen (fn_8005D0C4: a great one's to carry). */
     std::optional<usize> claim(const Vec3& position, f32 reach, f32 rise);

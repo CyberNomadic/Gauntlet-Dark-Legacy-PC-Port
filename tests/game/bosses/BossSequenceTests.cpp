@@ -228,6 +228,8 @@ TEST_CASE("boss coins count waiting party members but not departed controller sl
         const auto& item = f.world.placedItems().item(i);
         bronze += static_cast<usize>(item.name == "COIN_BRONZE");
         silver += static_cast<usize>(item.name == "COIN_SILVER");
+        // BossSpewCoins writes each coin's worth over its record's tenth of it.
+        CHECK(item.value == (item.name == "COIN_BRONZE" ? 500 : 1000));
     }
     CHECK(bronze == 12);
     CHECK(silver == 3);

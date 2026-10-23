@@ -694,8 +694,13 @@ bool PlacedItems::placeRecord(RenderDevice& device, s32 record, const Vec3& posi
  * stays where it is thrown. */
 bool PlacedItems::throwItem(RenderDevice& device, std::string_view name, const Vec3& position,
                             const Vec3& velocity, const WorldCollision* collision,
-                            f32 noGrabSeconds, std::optional<f32> strength) {
-    if (!place(device, name, position, collision)) {
+                            f32 noGrabSeconds, std::optional<f32> strength, s32 amount) {
+    const auto info = recordOf(name);
+    if (!info) {
+        log::warn("Placed items: the level has no item record named {}", name);
+        return false;
+    }
+    if (!placeRecord(device, *info, position, collision, amount)) {
         return false;
     }
     throwFrom(m_sim.items.back(), position, velocity, collision, noGrabSeconds, strength);

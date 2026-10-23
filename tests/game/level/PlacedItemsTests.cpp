@@ -399,6 +399,29 @@ TEST_CASE("pickup emitters follow attachments textures and visibility independen
     CHECK(items.item(0).particles.field().size() == 0); // no stale fire on a replacement
 }
 
+TEST_CASE("a thrown item holds the worth its thrower names", "[placed-items]") {
+    const auto root = pickupPresentationFixture();
+    WorldLayout layout;
+    ItemArchive archive;
+    REQUIRE(layout.load(root));
+    REQUIRE(archive.load(root));
+    WorldCollision collision;
+    const std::array<Vec3, 3> floor{Vec3{-100, 0, -100}, Vec3{100, 0, -100}, Vec3{0, 0, 100}};
+    collision.build({{{0, 1, 0}, floor, 0, 4}});
+    test::FakeRenderDevice device;
+    PlacedItems items;
+    const std::array archives{&archive};
+    items.bind(device, layout, &collision, archives);
+    const usize first = items.size();
+    // BossSpewCoins writes a coin's worth over its record's, which the level keeps at a tenth.
+    REQUIRE(items.throwItem(device, "COIN", {7, 5, 0}, {60, 0, 0}, &collision, 2, std::nullopt,
+                            5000));
+    REQUIRE(items.throwItem(device, "COIN", {7, 5, 0}, {60, 0, 0}, &collision, 2));
+    CHECK(items.item(first).value == 5000);
+    CHECK(items.item(first + 1).value ==
+          layout.itemInfos()[static_cast<usize>(items.item(first + 1).info)].value);
+}
+
 TEST_CASE("pickup presentation samples flight and fractional poses without changing collection",
           "[placed-items][presentation]") {
     const auto root = pickupPresentationFixture();
