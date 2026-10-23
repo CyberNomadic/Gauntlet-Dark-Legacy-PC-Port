@@ -111,6 +111,12 @@ public:
      * point on a face within that horizontal distance, for a body's small contact margin. */
     std::optional<FloorHit> floorAt(const Vec3& position, f32 above, f32 below,
                                     f32 edgeReach = 0.0f) const;
+    /** The floor an item was set on (FloorPos): of the faces under the point and the edges
+     * within reach, the one nearest the point's height. A ledge's edge a hand's breadth away
+     * does not lift an item off the floor under it, and a landing's edge keeps a switch
+     * authored at its height off a lift deck eight units down. */
+    std::optional<FloorHit> restingFloorAt(const Vec3& position, f32 above, f32 below,
+                                           f32 edgeReach) const;
     /** Support within a body's footprint in its direction of travel. Used when the
      * centre is over a seam; a ledge behind the body cannot support walking away. */
     std::optional<FloorHit> floorAhead(const Vec3& position, const Vec3& step, f32 above, f32 below,
@@ -204,7 +210,8 @@ private:
     const CanonicalDigestSink::Digest& geometryDigest() const;
     friend class WorldStateCheckpoint;
     std::optional<FloorHit> surfaceAt(const Vec3& position, f32 above, f32 below, bool liquid,
-                                      f32 edgeReach = 0.0f, const Vec2* direction = nullptr) const;
+                                      f32 edgeReach = 0.0f, const Vec2* direction = nullptr,
+                                      bool nearestToHeight = false) const;
     /** An object whose triangles move with it. */
     struct MovingObject {
         s32 object = -1;

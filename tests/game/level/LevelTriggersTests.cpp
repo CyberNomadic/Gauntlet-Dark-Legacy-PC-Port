@@ -2010,6 +2010,30 @@ bool walkToPull(PlayerActor& actor, LevelTriggers& triggers, const LevelTrigger&
     return trigger.fired;
 }
 
+TEST_CASE("the Branches' lever rests on the bridge under it, not the ledge beside it",
+          "[triggers][assets]") {
+    const auto level = test::assetOrSkip("LEVELS/LEVELD4/WORLDS.PS2").parent_path();
+    WorldLayout layout;
+    REQUIRE(layout.load(level));
+    WorldCollision collision;
+    REQUIRE(collision.load(level, layout));
+    WorldAnimator animator;
+    animator.bind(layout);
+    LevelTriggers triggers;
+    triggers.bind(layout, animator, &collision);
+    usize lever = triggers.size();
+    for (usize i = 0; i < triggers.size(); ++i) {
+        if (triggers.trigger(i).instance == 352) {
+            lever = i;
+        }
+    }
+    REQUIRE(lever < triggers.size());
+    // Instance 352 is authored on the bridge at -13.80; a ledge's edge within a unit stands
+    // at -10, and the lever was lifted onto it, floating beside the torch.
+    CHECK(triggers.trigger(lever).spot.y == Approx(-13.8f + 0.1f).margin(0.05f));
+    triggers.clear();
+}
+
 TEST_CASE("the Fissure's trap-wall lever is pulled from the rock its handle stands in",
           "[triggers][assets]") {
     const auto level = test::assetOrSkip("LEVELS/LEVELI4/WORLDS.PS2").parent_path();

@@ -300,7 +300,8 @@ void PlacedItems::restOnFloor(Item& item, const WorldCollision* collision, f32 l
     if (collision == nullptr) {
         return;
     }
-    const auto floor = collision->floorAt(item.position, kFloorReachAbove, kFloorReachBelow, 1);
+    const auto floor =
+        collision->restingFloorAt(item.position, kFloorReachAbove, kFloorReachBelow, 1);
     if (!floor) {
         return;
     }

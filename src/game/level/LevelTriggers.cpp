@@ -520,11 +520,12 @@ void LevelTriggers::bind(const WorldLayout& layout, WorldAnimator& animator,
         std::optional<FloorHit> support;
         const WorldCollision* supportCollision = initialFloors;
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
-            support = initialFloors->floorAt(trigger.spot, kFloorAbove, kFloorBelow, kFloorRadius);
+            support =
+                initialFloors->restingFloorAt(trigger.spot, kFloorAbove, kFloorBelow, kFloorRadius);
             if (restCollision &&
                 (!support || ((params & LevelTrigger::kOnTarget) != 0 && !onTarget(*support)))) {
-                const auto rest =
-                    restCollision->floorAt(trigger.spot, kFloorAbove, kFloorBelow, kFloorRadius);
+                const auto rest = restCollision->restingFloorAt(trigger.spot, kFloorAbove,
+                                                                kFloorBelow, kFloorRadius);
                 // An explicitly floor-bound pad must not attach to a nearby still
                 // deck just because its own lift is currently at the other endpoint.
                 if (rest && (!support || onTarget(*rest))) {

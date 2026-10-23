@@ -29,7 +29,7 @@ const WorldCollision* itemSupportAt(const Vec3& position, const WorldCollision* 
         if (world == nullptr) {
             return std::nullopt;
         }
-        const auto floor = world->floorAt(position, 4, 10, 1);
+        const auto floor = world->restingFloorAt(position, 4, 10, 1);
         return floor ? std::optional{std::abs(floor->y - position.y)} : std::nullopt;
     };
     const auto here = nearest(current);
@@ -48,7 +48,7 @@ void ItemSupport::bind(const ItemInstance& instance, const ItemInfo& info,
     if (authored == nullptr || (info.collisionFlags & 1U) != 0) {
         return;
     }
-    const auto floor = authored->floorAt(instance.position, 4, 10, 1);
+    const auto floor = authored->restingFloorAt(instance.position, 4, 10, 1);
     if (!floor) {
         return;
     }

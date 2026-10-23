@@ -161,7 +161,7 @@ bool Chests::bind(RenderDevice& device, const WorldLayout& layout, const AssetSc
         if (support != nullptr && (info.collisionFlags & 1U) == 0) {
             constexpr f32 kAbove = 4.0f;
             constexpr f32 kBelow = 10.0f;
-            if (const auto floor = support->floorAt(instance.position, kAbove, kBelow, 1)) {
+            if (const auto floor = support->restingFloorAt(instance.position, kAbove, kBelow, 1)) {
                 if (const auto placement = support->objectTransform(floor->object)) {
                     Vec3 position = instance.position;
                     position.y = floor->y + ItemFigure::kFloorLift;

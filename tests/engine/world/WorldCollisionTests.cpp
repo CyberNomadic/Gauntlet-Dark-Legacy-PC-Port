@@ -243,6 +243,23 @@ TEST_CASE("the floor under a point is found within the probe range", "[world][co
     REQUIRE(hit->object == 0);
     // A footprint touching the edge can approach it, never walk away from it.
     const auto edge = collision.floorAt({10.4f, 1, 0}, 2, 3, 0.75f);
+    // An item rests on the floor nearest its authored height: a ledge's edge within reach
+    // three units up does not lift it off the face under it (the Branches' lever), while a
+    // landing's edge at its height keeps a switch off a lift deck eight units down (the
+    // Fields' call switch). floorAt itself still takes the highest.
+    WorldCollision ledged;
+    const std::array<Vec3, 3> ground{Vec3{-5, 0, -5}, Vec3{5, 0, -5}, Vec3{5, 0, 5}};
+    const std::array<Vec3, 3> ledge{Vec3{5.5f, 3, -5}, Vec3{9, 3, -5}, Vec3{5.5f, 3, 5}};
+    ledged.build({{{0, 1, 0}, ground, 0, 4}, {{0, 1, 0}, ledge, 1, 4}});
+    REQUIRE(ledged.restingFloorAt({4.9f, 0.2f, -4}, 4, 10, 1.0f));
+    CHECK(ledged.restingFloorAt({4.9f, 0.2f, -4}, 4, 10, 1.0f)->object == 0);
+    CHECK(ledged.floorAt({4.9f, 0.2f, -4}, 4, 10, 1.0f)->object == 1);
+    REQUIRE(ledged.restingFloorAt({4.9f, 2.9f, -4}, 4, 10, 1.0f));
+    CHECK(ledged.restingFloorAt({4.9f, 2.9f, -4}, 4, 10, 1.0f)->object == 1);
+    REQUIRE(ledged.restingFloorAt({5.2f, 0.2f, -4}, 4, 10, 1.0f));
+    CHECK(ledged.restingFloorAt({5.2f, 0.2f, -4}, 4, 10, 1.0f)->object == 0); // edges alike
+    CHECK(ledged.restingFloorAt({6.1f, 0.2f, -4}, 4, 10, 1.0f)->object == 1); // under the ledge
+    CHECK_FALSE(ledged.restingFloorAt({10.5f, 0.2f, -4}, 4, 10, 1.0f));      // beyond reach
     REQUIRE(edge);
     CHECK(edge->point.x == Approx(10));
     CHECK(edge->point.y == Approx(edge->y));

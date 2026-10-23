@@ -421,8 +421,8 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
                        const ItemInstance& instance, const WorldCollision* collision) {
     m_sim.position = instance.position;
     if (collision != nullptr) {
-        if (const auto floor = collision->floorAt(instance.position, kFloorReachAbove,
-                                                  kFloorReachBelow, kFloorReachRadius);
+        if (const auto floor = collision->restingFloorAt(instance.position, kFloorReachAbove,
+                                                         kFloorReachBelow, kFloorReachRadius);
             floor.has_value()) {
             m_sim.position.y = floor->y + kFloorLift;
         }

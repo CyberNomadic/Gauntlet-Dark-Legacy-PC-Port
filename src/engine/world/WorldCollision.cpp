@@ -676,6 +676,11 @@ std::optional<FloorHit> WorldCollision::floorAt(const Vec3& position, f32 above,
     return surfaceAt(position, above, below, false, std::max(0.0f, edgeReach));
 }
 
+std::optional<FloorHit> WorldCollision::restingFloorAt(const Vec3& position, f32 above, f32 below,
+                                                       f32 edgeReach) const {
+    return surfaceAt(position, above, below, false, std::max(0.0f, edgeReach), nullptr, true);
+}
+
 std::optional<FloorHit> WorldCollision::liquidAt(const Vec3& position, f32 above, f32 below) const {
     return surfaceAt(position, above, below, true);
 }
@@ -757,7 +762,8 @@ std::optional<FloorHit> WorldCollision::projectileFloorAt(const Vec3& position, 
 
 std::optional<FloorHit> WorldCollision::surfaceAt(const Vec3& position, f32 above, f32 below,
                                                   bool liquid, f32 edgeReach,
-                                                  const Vec2* direction) const {
+                                                  const Vec2* direction,
+                                                  bool nearestToHeight) const {
     std::optional<FloorHit> best;
     const f32 highest = position.y + above;
     const f32 lowest = position.y - below;
@@ -803,7 +809,11 @@ std::optional<FloorHit> WorldCollision::surfaceAt(const Vec3& position, f32 abov
                      if (y > highest || y < lowest) {
                          return;
                      }
-                     if (!best.has_value() || y > best->y) {
+                     const bool better =
+                         !best.has_value() ||
+                         (nearestToHeight ? std::abs(y - position.y) < std::abs(best->y - position.y)
+                                          : y > best->y);
+                     if (better) {
                          best = FloorHit{y,
                                          triangle.normal,
                                          triangle.object,
