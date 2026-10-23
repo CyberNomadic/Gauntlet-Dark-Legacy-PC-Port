@@ -60,8 +60,12 @@ public:
      * lightning, as PlayerProcessPowerups tries them. */
     static std::string_view shieldObjectOf(u32 armor);
 
+    /** Solid bodies write depth among the actors; translucent ones (invisible, in
+     * transport) are drawn later, over the generators and enemies they stand before,
+     * since their faded bodies write no depth to hold those back. */
+    enum class Bodies : u8 { Solid, Translucent };
     void draw(RenderDevice& device, std::span<const PlayerRuntime> players, const Scene& scene,
-              const Mat4& clip, const CameraFrame& camera) const;
+              const Mat4& clip, const CameraFrame& camera, Bodies which = Bodies::Solid) const;
     /** Non-depth-writing companion parts, after gates and deferred world scenery. */
     static void drawEffects(RenderDevice& device, std::span<const PlayerRuntime> players,
                             const Scene& scene, const Mat4& clip, const CameraFrame& camera);

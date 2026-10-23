@@ -137,10 +137,11 @@ f32 PartyFigures::alphaOf(const PlayerRuntime& runtime, const PowerupEffects& wo
 }
 
 void PartyFigures::draw(RenderDevice& device, std::span<const PlayerRuntime> players,
-                        const Scene& scene, const Mat4& clip, const CameraFrame& camera) const {
+                        const Scene& scene, const Mat4& clip, const CameraFrame& camera,
+                        Bodies which) const {
     LevelWorld& world = scene.world;
     for (const PlayerRuntime& runtime : players) {
-        if (runtime.mikeyFigure != nullptr) {
+        if (runtime.mikeyFigure != nullptr && which == Bodies::Solid) {
             runtime.mikeyFigure->draw(device, clip, world.lighting(), &camera);
         }
         if (!shown(runtime, scene)) {
@@ -148,6 +149,10 @@ void PartyFigures::draw(RenderDevice& device, std::span<const PlayerRuntime> pla
         }
         PlayerFigure& figure = *runtime.figure;
         const PowerupEffects worn = PowerupEffects::of(runtime.actor.save().progress().inventory);
+        const f32 alpha = alphaOf(runtime, worn);
+        if ((alpha < 1.0f) != (which == Bodies::Translucent)) {
+            continue;
+        }
         const Mat4 body = PlayerFigure::bodyPlacement(
             departurePlacement(runtime, scene.departure, scene.frameBlend), runtime.actor.save(),
             worn);
@@ -159,7 +164,6 @@ void PartyFigures::draw(RenderDevice& device, std::span<const PlayerRuntime> pla
         } else {
             figure.holdOnArm(device, &scene.weapons, shieldObjectOf(worn.armor));
         }
-        const f32 alpha = alphaOf(runtime, worn);
         const WorldLighting lighting = runtime.glow.apply(world.lighting());
         figure.draw(device, clip, body, lighting, alpha, runtime.move.weaponHidden(), &camera,
                     presentationBlend(runtime, scene.frameBlend),

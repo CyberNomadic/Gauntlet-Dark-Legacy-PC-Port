@@ -1548,6 +1548,10 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // pickups do, and before the veils that hang over it.
     m_opponents.generators().draw(device, clip, m_world->lighting(), opponentBlend,
                                   TreeModel::Pass::Blended);
+    // An invisible or teleporting body writes no depth, so it goes down after the
+    // generators and enemies it may stand before, blending over them.
+    m_figures.draw(device, m_players, figureScene(frameBlend), clip, companionCamera,
+                   PartyFigures::Bodies::Translucent);
     if (config.display.ambientOcclusion) {
         AmbientOcclusion occlusion;
         occlusion.clipToView = camera.view() * glm::inverse(clip);

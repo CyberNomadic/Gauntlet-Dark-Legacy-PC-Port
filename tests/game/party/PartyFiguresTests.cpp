@@ -84,6 +84,42 @@ TEST_CASE("in a dark level each standing player carries a lantern", "[game][scre
     CHECK(lights[0].intensity == DynamicLights::kLanternIntensity);
 }
 
+TEST_CASE("an invisible player is drawn among the translucent bodies, after the solids",
+          "[game][screens][figures][assets]") {
+    const auto root = test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2")
+                          .parent_path()
+                          .parent_path()
+                          .parent_path()
+                          .parent_path();
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    ItemArchive weapons;
+    const PortalDeparture departure;
+    std::array<PlayerRuntime, 1> players;
+    auto& runtime = players[0];
+    runtime.actor.spawn(0, CharacterSave{}, nullptr, Vec3{0.0f}, 0.0f);
+    runtime.figure = PlayerFigure::load(device, root, runtime.actor.save(), false);
+    REQUIRE(runtime.figure);
+    const PartyFigures::Scene scene{.world = world, .weapons = weapons, .departure = departure};
+    const PartyFigures figures;
+    figures.draw(device, players, scene, Mat4{1.0f}, CameraFrame{});
+    const auto solid = device.draws.size();
+    CHECK(solid > 0);
+    figures.draw(device, players, scene, Mat4{1.0f}, CameraFrame{},
+                 PartyFigures::Bodies::Translucent);
+    CHECK(device.draws.size() == solid); // a solid body is never drawn twice
+
+    device.draws.clear();
+    runtime.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kInvisible,
+                                                         0.0f, 10.0f);
+    REQUIRE(PowerupEffects::of(runtime.actor.save().progress().inventory).bodyAlpha() < 1);
+    figures.draw(device, players, scene, Mat4{1.0f}, CameraFrame{});
+    CHECK(device.draws.empty());
+    figures.draw(device, players, scene, Mat4{1.0f}, CameraFrame{},
+                 PartyFigures::Bodies::Translucent);
+    CHECK_FALSE(device.draws.empty());
+}
+
 TEST_CASE("a party without figures draws nothing", "[game][screens][figures]") {
     test::FakeRenderDevice device;
     LevelWorld world;
