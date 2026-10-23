@@ -1,0 +1,11 @@
+{
+  "screen": "tower",
+  "level": "J3",
+  "party": [
+    {"player": 0, "class": "ARC", "color": "BLU", "name": "TEST", "level": 90, "keys": 9,
+     "potions": [1, 1, 1, 1, 1, 1, 1, 1, 1]}
+  ],
+  "position": [102.05, 21.0, 106.9],
+  "yaw": 3.14159265,
+  "welcome": false
+}
