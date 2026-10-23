@@ -182,6 +182,25 @@ TEST_CASE("walls stop an actor and missing floors keep it where it stands",
     REQUIRE(actor.position().x == Approx(edge - 5.0f));
 }
 
+TEST_CASE("a step into a wall still aims a step past where the wall holds the body",
+          "[game][players][actor]") {
+    PlayerActor actor;
+    actor.spawn(0, {}, nullptr, Vec3{0.0f, 0.0f, 0.0f}, 0.0f);
+    const WorldCollision collision = room();
+    REQUIRE(actor.stepAim() == actor.position());
+    for (s32 i = 0; i < 90; ++i) {
+        actor.update(push(1.0f, 0.0f), 0.0f, 1.0f / 30.0f, &collision);
+    }
+    // PlayerMotion sweeps items at oldpos + dpos, before the wall clips dpos: the body
+    // waits a width out, its aim a step beyond.
+    REQUIRE(actor.position().x == Approx(5.0f - actor.reach()).margin(0.01f));
+    REQUIRE(actor.stepAim().x == Approx(actor.position().x + actor.speed() / 30.0f).margin(1e-4f));
+    REQUIRE(actor.stepAim().z == Approx(0.0f).margin(1e-4f));
+    // Standing still, it aims at its own feet.
+    actor.update(MoveInput{}, 0.0f, 1.0f / 30.0f, &collision);
+    REQUIRE(actor.stepAim() == actor.position());
+}
+
 TEST_CASE("a player slides along a cliff without stepping down it or stopping its tangent",
           "[game][players][actor][cliff]") {
     f32 angle = 0;

@@ -39,7 +39,6 @@ constexpr std::string_view kTempleLight = "L1XPLIGHTRAY01";
 constexpr std::string_view kClassDataDirectory = "pdata";
 constexpr std::string_view kScrollBurnSound = "S_OPTMENUSCROLL"; ///< the options menu's, too
 constexpr f32 kLevelUpEffectSeconds = 3.0f; ///< the fanfare's ring about the character
-const Vec3 kNowhere{0.0f, -1.0e6f, 0.0f};
 
 constexpr std::string_view kMenuMoveSound = "S_OPTMENUMOVVRT";
 constexpr std::string_view kMenuSelectSound = "S_OPTMENUSEL";
@@ -436,11 +435,6 @@ PartyPickups::Services PlayScene::pickupServices() {
             .challengeCoin = [this](usize item) { collectChallengeCoin(item); },
             .autoActivateItems =
                 m_context.config == nullptr || m_context.config->combat.autoActivateItems};
-}
-
-Vec3 PlayScene::presenceOf(usize index) const {
-    return index < m_players.size() && !isDown(index) ? m_players[index].actor.position()
-                                                      : kNowhere;
 }
 
 bool PlayScene::fallen(s32 player) const {
@@ -1450,7 +1444,10 @@ std::vector<TriggerVisitor> PlayScene::visitors() const {
         }
         const PlayerActor& actor = m_players[i].actor;
         TriggerVisitor visitor;
-        visitor.position = presenceOf(i);
+        // PlayerMotion sweeps items at the step's destination before the walls clip it, so
+        // a lever whose handle stands in a wall (the Fissure's trap-wall lever is a hand's
+        // breadth inside its rock line) is pulled from a width out.
+        visitor.position = actor.stepAim();
         // Pressure pads share fn_8005F0F4's item-contact radius: PDAT.width,
         // not the smaller footprint used by the remake's movement collision.
         visitor.radius = actor.reach();

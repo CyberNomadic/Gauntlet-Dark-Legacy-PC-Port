@@ -524,8 +524,6 @@ private:
     bool isDown(usize index) const {
         return index < m_players.size() && m_players[index].life != PlayerLife::Standing;
     }
-    /** Where the level finds a character: nowhere once it has fallen. */
-    Vec3 presenceOf(usize index) const;
     void updateAmbience();
     void gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome);
     void beginSpawn(RenderDevice& device, const std::optional<WorldCamera>& marker);

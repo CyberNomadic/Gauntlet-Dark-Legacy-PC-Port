@@ -1980,4 +1980,68 @@ TEST_CASE("what the party already qualifies for opens at once when the level sta
     REQUIRE(f.triggers.size() == 0);
 }
 
+/** A Knight's record: the class width every class shares. */
+ClassStats knightStats() {
+    ClassStats stats;
+    stats.speedMin = 350.0f;
+    stats.speedMax = 750.0f;
+    stats.height = 5.0f;
+    stats.width = 1.5f;
+    stats.collisionY = 2.5f;
+    return stats;
+}
+
+/** Walks `actor` at a trigger's spot for up to `ticks`, the trigger seeing the body as
+ * PlayScene shows it: at the step's aim. True once the trigger fires. */
+bool walkToPull(PlayerActor& actor, LevelTriggers& triggers, const LevelTrigger& trigger,
+                WorldAnimator& animator, WorldScene& scene, WorldCollision& collision,
+                s32 ticks) {
+    for (s32 tick = 0; tick < ticks && !trigger.fired; ++tick) {
+        const Vec3 away = trigger.spot - actor.position();
+        actor.update(MoveInput{glm::normalize(Vec2{away.x, away.z}), 1.0f}, 0.0f, kStep,
+                     &collision);
+        std::array party{TriggerVisitor{.position = actor.stepAim(),
+                                        .radius = actor.reach(),
+                                        .floorObject = actor.floorObject(),
+                                        .party = 0,
+                                        .height = actor.height()}};
+        triggers.update(kStep, party, animator, scene, &collision);
+    }
+    return trigger.fired;
+}
+
+TEST_CASE("the Fissure's trap-wall lever is pulled from the rock its handle stands in",
+          "[triggers][assets]") {
+    const auto level = test::assetOrSkip("LEVELS/LEVELI4/WORLDS.PS2").parent_path();
+    WorldLayout layout;
+    REQUIRE(layout.load(level));
+    WorldCollision collision;
+    REQUIRE(collision.load(level, layout));
+    WorldAnimator animator;
+    animator.bind(layout);
+    LevelTriggers triggers;
+    triggers.bind(layout, animator, &collision);
+    usize lever = triggers.size();
+    for (usize i = 0; i < triggers.size(); ++i) {
+        if (triggers.trigger(i).instance == 534) {
+            lever = i;
+        }
+    }
+    REQUIRE(lever < triggers.size());
+    const LevelTrigger& trigger = triggers.trigger(lever);
+    REQUIRE(trigger.target == 1261); // I4TRAPW8
+    // The spot lies 0.7 inside rock line 2644, whose face holds the wall sphere a width
+    // out: 2.22 from the spot, past the 2.2 its pad and the class width reach together.
+    const ClassStats stats = knightStats();
+    PlayerActor actor;
+    actor.spawn(0, {}, &stats, Vec3{-11.6f, -41.8f, 189.6f}, 0.0f);
+    actor.settle(collision);
+    WorldScene scene;
+    CHECK(walkToPull(actor, triggers, trigger, animator, scene, collision, 90));
+    const Vec3 at = actor.position();
+    CHECK(std::hypot(trigger.spot.x - at.x, trigger.spot.z - at.z) >
+          trigger.radius + actor.reach());
+    triggers.clear();
+}
+
 } // namespace

@@ -138,6 +138,10 @@ public:
     const CharacterSave& save() const { return m_save; }
     CharacterSave& save() { return m_save; }
     const Vec3& position() const { return m_position; }
+    /** Where the last step meant to go before walls and floors clipped it. PlayerMotion
+     * sweeps items at that destination, so a lever whose handle stands in a wall is still
+     * pulled from a width out. Every update() writes it, so it is never checkpointed. */
+    Vec3 stepAim() const { return m_position + m_stepOffset; }
     /** The floor it stands on or sinks to (floor_base), that floor's object (PlayerNewFloor's
      * floor_name2; none before it has stood anywhere) and the object's level flags. */
     f32 floorBase() const { return m_floorBase; }
@@ -190,6 +194,7 @@ private:
     f32 m_followHeight = kDefaultFollowHeight;
     f32 m_attentionHeight = kDefaultFollowHeight;
     bool m_moving = false;
+    Vec3 m_stepOffset{0.0f, 0.0f, 0.0f}; ///< the last update's step, before anything clipped it
     f32 m_floorBase = 0.0f;
     s32 m_floorObject = -1;
     u32 m_floorFlags = 0;
