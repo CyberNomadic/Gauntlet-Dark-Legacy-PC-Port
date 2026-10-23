@@ -4703,6 +4703,67 @@ TEST_CASE("the tower scene refuses to open without the level", "[game][screens]"
     REQUIRE_FALSE(scene.isOpen());
 }
 
+TEST_CASE("the runestone ceremony sounds the stone's fall and its landing",
+          "[game][screens][tower-relics][assets]") {
+    const auto root = unpackedRoot();
+    test::assetOrSkip("PLAYERS/WAR/SFXYEL/ANIM.PS2");
+    test::assetOrSkip("AUDIO/WIZTOWER.VBK");
+    const GameConfig config;
+    StringTable strings;
+    REQUIRE(strings.load(test::dataDirectory() / "text", "en"));
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("L1")));
+    AudioMixer mixer(48000);
+    SoundPlayer sounds(mixer);
+    GameContext context;
+    context.config = &config;
+    context.strings = &strings;
+    context.sounds = &sounds;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.progress().experience = levelExperience(30);
+    save.progress().promotedLevel = 30;
+    save.progress().relics.addRune(0);
+    const std::vector<PartyMember> party{PartyMember{3, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    REQUIRE(scene.towerRelics().active());
+    const PlayScene::Inputs still{};
+    std::array<f32, 1600> frame{}; // one sixtieth of stereo output, so the lines run
+    for (s32 tick = 0; tick < 500 && awaitingEntrance(scene); ++tick) {
+        scene.update(1.0 / 60.0, still);
+        mixer.mix(frame);
+    }
+    REQUIRE_FALSE(awaitingEntrance(scene));
+    std::optional<usize> atFall;
+    bool landingHeard = false; // one more one-shot starting while the stone is placed
+    usize previous = 0;
+    for (s32 tick = 0; tick < 60 * 90 && scene.towerRelics().active(); ++tick) {
+        const auto before = scene.towerRelics().phase();
+        scene.update(1.0 / 60.0, still);
+        mixer.mix(frame);
+        const auto after = scene.towerRelics().phase();
+        const usize voices = scene.audio().voicesPlaying();
+        if (before == TowerRelics::Phase::Speech && after == TowerRelics::Phase::Placement) {
+            atFall = voices; // S_RUNEFALL sets out with the stone
+        } else if (before == TowerRelics::Phase::Placement &&
+                   after == TowerRelics::Phase::Placement && voices > previous) {
+            landingHeard = true; // S_RUNEHIT as it comes down, before the hold ends
+        }
+        previous = voices;
+    }
+    REQUIRE(atFall.has_value());
+    CHECK(*atFall > 0);
+    CHECK(landingHeard);
+}
+
 TEST_CASE("tower ceremony ghosts draw after Dream World scenery and retain depth testing",
           "[game][screens][promotion][tower-relics][assets]") {
     const auto root = unpackedRoot();

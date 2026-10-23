@@ -91,7 +91,8 @@ private:
         bool revealStarted = false;
         Phase phase = Phase::Speech;
         f32 placementLeft = 0;
-        f32 hitIn = 0; ///< seconds until a shard's pane sounds its strike; nought once sounded
+        f32 hitIn = 0; ///< seconds until a shard's pane sounds its strike or a stone its
+                       ///< landing; nought once sounded
         Vec3 wizardPosition{0};
         f32 wizardYaw = 0;
         u32 wizardMarker = 0;

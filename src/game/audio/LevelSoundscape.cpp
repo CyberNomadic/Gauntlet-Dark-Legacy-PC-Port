@@ -689,6 +689,14 @@ void LevelSoundscape::close() {
     recordTo(nullptr);
 }
 
+usize LevelSoundscape::voicesPlaying() const {
+    if (m_output == nullptr) {
+        return 0;
+    }
+    return static_cast<usize>(std::ranges::count_if(
+        m_voices, [this](SoundHandle voice) { return m_output->isPlaying(voice); }));
+}
+
 SoundHandle LevelSoundscape::track(SoundHandle handle) {
     if (m_output != nullptr && handle != kNoSound) {
         std::erase_if(m_voices, [this](SoundHandle voice) { return !m_output->isPlaying(voice); });

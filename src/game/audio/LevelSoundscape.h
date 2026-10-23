@@ -277,6 +277,8 @@ public:
 
     SoundHandle music() const { return m_music; }
     SoundHandle voice() const { return m_voice; }
+    /** How many of the one-shot sounds started here are still sounding. */
+    usize voicesPlaying() const;
     SoundHandle fieldSound() const {
         return m_openings.empty() ? kNoSound : m_openings.back().handle;
     }

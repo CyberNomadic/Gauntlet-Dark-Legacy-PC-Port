@@ -209,6 +209,7 @@ public:
      * Ending recording invalidates snapshots from its audio epoch. */
     void endRecordedAudio();
     u64 recordedAudioEpoch() const { return m_recordedAudio.epoch(); }
+    const LevelSoundscape& audio() const { return m_audio; }
     SceneSoundEvents::Result reconcileRecordedAudio(u64 firstTick,
                                                     std::span<const SceneSoundEvents::Frame> frames,
                                                     std::optional<u64> newHead = std::nullopt);

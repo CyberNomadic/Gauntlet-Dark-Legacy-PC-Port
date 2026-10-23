@@ -362,7 +362,11 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
             m_sim.phase = Phase::Placement;
             m_wizard.reset();
             m_sim.placementLeft = place(*current(), false) + kPlacementHold;
-            m_sim.hitIn = current()->kind == Kind::Shard ? kShardStrikeSeconds : 0.0f;
+            // A shard strikes its pane 91 ticks into the flight; a stone lands as its fall
+            // ends and is looked at for the hold, so the landing must not wait for that.
+            m_sim.hitIn = current()->kind == Kind::Shard
+                              ? kShardStrikeSeconds
+                              : std::max(m_sim.placementLeft - kPlacementHold, 1.0f / 60);
             cue.placement = true;
             cue.sound = "S_RUNEFALL";
             if (current()->kind == Kind::Shard) {
@@ -372,17 +376,16 @@ TowerRelics::Cue TowerRelics::update(s32 ticks, f32 seconds, bool voicePlaying) 
         }
     } else {
         m_sim.placementLeft -= std::max(seconds, 0.0f);
+        const char* const landing = current()->kind == Kind::Shard ? "S_STNDGLASS" : "S_RUNEHIT";
         if (m_sim.hitIn > 0) {
             m_sim.hitIn -= std::max(seconds, 0.0f);
             if (m_sim.hitIn <= 0) {
-                cue.sound = "S_STNDGLASS"; // the pane struck, while the shard still flies
+                cue.sound = landing; // the pane struck while the shard still flies; the stone down
             }
         }
         if (m_sim.placementLeft <= 0) {
-            if (current()->kind == Kind::Rune) {
-                cue.sound = "S_RUNEHIT";
-            } else if (m_sim.hitIn > 0) {
-                cue.sound = "S_STNDGLASS";
+            if (m_sim.hitIn > 0) {
+                cue.sound = landing;
                 m_sim.hitIn = 0;
             }
             finish(cue);

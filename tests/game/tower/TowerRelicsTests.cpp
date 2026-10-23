@@ -111,8 +111,17 @@ TEST_CASE("tower ceremonies hold for speech then placement and complete once in 
     REQUIRE(display.update(2000, 0, false).completed.has_value());
     REQUIRE(display.current()->tree() == "RUNE1");
     REQUIRE(display.update(120, 2, false).voice == "S_FNDRUNEYOU");
-    REQUIRE(display.update(2000, 0, false).placement);
-    REQUIRE(display.update(120, 2, false).completed.has_value());
+    const auto fall = display.update(2000, 0, false);
+    REQUIRE(fall.placement);
+    REQUIRE(fall.sound == "S_RUNEFALL");
+    // With no world to animate, the stone is down at once: it sounds its landing on the next
+    // update, and the two seconds of looking at it follow before the ceremony moves on.
+    const auto landed = display.update(1, 1.0f / 60, false);
+    REQUIRE(landed.sound == "S_RUNEHIT");
+    REQUIRE_FALSE(landed.completed);
+    const auto done = display.update(120, 2, false);
+    REQUIRE(done.sound.empty());
+    REQUIRE(done.completed.has_value());
     REQUIRE_FALSE(display.active());
     REQUIRE_FALSE(display.update(120, 2, false).completed);
     REQUIRE(display.displayedRunes() == 1);

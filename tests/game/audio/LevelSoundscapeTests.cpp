@@ -150,6 +150,25 @@ TEST_CASE("native crystal announcement is playable from the tower sound bank",
     CHECK(player.isPlaying(sounds.voice()));
 }
 
+TEST_CASE("the runestone's fall and landing are playable from the tower sound bank",
+          "[tower-relics][soundscape][assets]") {
+    const auto root = test::assetOrSkip("AUDIO/WIZTOWER.VBK").parent_path().parent_path();
+    AudioMixer mixer(48000);
+    SoundPlayer player(mixer);
+    LevelSoundscape sounds;
+    sounds.open(root, &player, nullptr);
+    for (const auto* name : {"S_RUNEFALL", "S_RUNEHIT"}) {
+        INFO(name);
+        const auto voice = sounds.playPromotion(name);
+        REQUIRE(voice != kNoSound);
+        CHECK(player.isPlaying(voice));
+        std::array<f32, 4096> output{};
+        mixer.mix(output);
+        CHECK(std::ranges::any_of(output, [](f32 sample) { return sample != 0; }));
+        player.stop(voice);
+    }
+}
+
 /** A bank of one-second lines that play once, so the narrator's queue can be timed. */
 void writeSecondBank(const std::filesystem::path& root, std::string_view bank,
                      std::initializer_list<std::string_view> names) {
