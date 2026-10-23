@@ -487,7 +487,8 @@ TEST_CASE("chests follow descending and rotating platforms with their obstacle a
     chests.syncFloors();
     const Mat4 expected = moved * local;
     CHECK(chests.chest(0).figure.transform() == expected);
-    CHECK(chests.chest(0).preview.transform() == expected);
+    // The preview follows at the overlay's 0.65 scale, which its placement carries.
+    CHECK(chests.chest(0).preview.transform() == glm::scale(expected, Vec3{0.65f}));
     CHECK(chests.obstacles()[0].centre == Vec3{expected[3]});
     CHECK(chests.obstacles()[0].yaw == Approx(0.5f));
     // Opening remains possible at the new position, never at the abandoned one.
@@ -1290,6 +1291,59 @@ TEST_CASE("chests pass the camera to their authored bomb sprites", "[fixtures][v
         const Vec3 toward = glm::normalize(Vec3{eye.x, 0, eye.z});
         CHECK(std::abs(glm::dot(normal, toward)) == Approx(1).margin(0.0001));
     }
+}
+
+TEST_CASE("an X-ray preview rides the shrunken item, flame and all",
+          "[fixtures][visual-parity][xray]") {
+    const auto dir = test::scratchDirectory("chest-preview-flame");
+    writeTextFile(dir / "world.json", R"({"objects":[{"name":"ROOT","position":[0,0,0]}],
+        "itemInfos":[{"type":2,"subtype":46,"name":"CHEST","radius":1,"height":2,"activeType":16},
+                     {"type":1,"subtype":4,"name":"POT_RED","radius":1}],
+        "itemInstances":[{"info":0,"position":[0,0,0],"minPlayers":1,
+                          "params":[1,0,0,0,1,0,0,0,0,0,0,0]}]})");
+    writeTextFile(dir / "body.obj",
+                  "v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nusemtl tex0\nf 1//1 2//1 3//1\n");
+    writeTextFile(dir / "objects.json", R"({"objects":[
+      {"index":0,"name":"TRI","file":"body.obj","meshTriangles":1}]})");
+    writeFile(dir / "skin.png", test::kTinyPng);
+    writeTextFile(dir / "textures.json", R"({"bitmaps":[
+      {"index":0,"name":"SKIN","file":"skin.png","width":2,"height":2},
+      {"index":1,"name":"FLAME0","file":"skin.png","width":2,"height":2}]})");
+    writeTextFile(dir / "animations.json", R"({
+      "particles":[{"preset":2,"enables":16929,"texture":"FLAME0",
+                    "particleLife":[0.1,0],"rate":[30,30,30,30]}],
+      "trees":[{"name":"CHEST",
+                "nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]}],
+                "sequences":[{"name":"CLOSED","frames":0}]},
+               {"name":"POT_RED",
+                "nodes":[{"name":"ROOT","object":"TRI","parent":-1,"position":[0,0,0]},
+                         {"name":"FIRE","particle":0,"parent":0,"position":[0,1,0]}]}]})");
+    test::convertModelFixture(dir);
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    ItemArchive items;
+    REQUIRE(items.load(dir));
+    test::FakeRenderDevice device;
+    Chests chests;
+    REQUIRE(chests.bind(device, layout, AssetScope(items), nullptr));
+    chests.setPlayerCount(1);
+    const std::array party{ChestVisitor{Vec3{0}, 1, 0, true}};
+    REQUIRE(chests.updateXray(device, AssetScope(items), items, party) == 1);
+    REQUIRE(chests.chest(0).revealed);
+    REQUIRE(chests.chest(0).preview.hasFigure());
+    // The overlay's own placement carries do_see_thru's scale, so its flame rides the
+    // shrunken bottle rather than hovering where the full-size neck would be.
+    CHECK(glm::length(Vec3{chests.chest(0).preview.transform()[0]}) == Approx(0.65f));
+    const auto camera = CameraFrame::at(Vec3{0, 10, -20});
+    device.draws.clear();
+    chests.draw(device, Mat4{1}, {}, &camera);
+    const auto still = device.draws.size(); // the chest and the bottle, no flame yet
+    for (s32 tick = 0; tick < 3; ++tick) {
+        (void)chests.update(1.0f / 30, {});
+    }
+    device.draws.clear();
+    chests.draw(device, Mat4{1}, {}, &camera);
+    CHECK(device.draws.size() == still + 1); // the flame's quads, born as the preview plays
 }
 
 TEST_CASE("light walls retain transparent shutdown textures through the safe rest",

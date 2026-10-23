@@ -12,6 +12,11 @@
 #include "game/level/NativeStateResources.h"
 
 namespace gdl::game {
+namespace {
+/** do_see_thru sets the overlay node's scale to 0.65, so everything under it, its particles
+ * and facing parts included, rides the shrunken item. */
+constexpr f32 kPreviewScale = 0.65f;
+} // namespace
 
 namespace {
 
@@ -190,7 +195,7 @@ void Chests::syncFloors() {
         }
         const Mat4 transform = *placement * chest.floor->local;
         chest.figure.placeAt(transform);
-        chest.preview.placeAt(transform);
+        chest.preview.placeAt(glm::scale(transform, Vec3{kPreviewScale}));
         chest.box = chest.figure.obstacle(m_infos[static_cast<usize>(chest.info)]);
     }
 }
@@ -433,6 +438,7 @@ usize Chests::updateXray(RenderDevice& device, const AssetScope& scope, ItemArch
                 // frame, the growth potion shows at a tenth of its size and a breath icon
                 // before its fade-in.
                 chest.preview.place(device, previewArt, name, instance, nullptr);
+                chest.preview.placeAt(glm::scale(chest.preview.transform(), Vec3{kPreviewScale}));
             }
         }
         chest.revealed = selected[i];
@@ -489,7 +495,7 @@ void Chests::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& l
                 // drawn as a pickup is: its solids, then its alpha-textured and facing parts
                 // composited smoothly rather than by coverage.
                 for (const auto pass : {TreeModel::Pass::Opaque, TreeModel::Pass::Blended}) {
-                    chest.preview.draw(device, clip, lighting, 1.0f, 0.65f, camera, pass,
+                    chest.preview.draw(device, clip, lighting, 1.0f, 1.0f, camera, pass,
                                        presentationAlpha);
                 }
             }
