@@ -347,7 +347,9 @@ TEST_CASE("unbound container art and previews retain exact moving-floor presenta
     REQUIRE(before);
     REQUIRE_FALSE(before->chests[0].figure.bound);
     REQUIRE_FALSE(before->chests[0].preview.bound);
-    CHECK(before->chests[0].preview.state.transform == before->chests[0].figure.state.transform);
+    // The preview rides the chest at the overlay's 0.65 scale, which its placement carries.
+    CHECK(before->chests[0].preview.state.transform ==
+          glm::scale(before->chests[0].figure.state.transform, Vec3{0.65f}));
     auto rewind = owner.prepareRestore(*before);
     REQUIRE(rewind);
     const Mat4 moved =
