@@ -1150,9 +1150,18 @@ void PlayerAttacks::updateArmour(f32 seconds, std::span<PlayerRuntime> players,
             continue;
         }
         const f32 grown = worn.grown() ? 2.0f : 1.0f;
+        // The port's melee pulse marks a creature the shield kills as well: the blow is the
+        // bearer's, however it lands, and nothing else tells the hand.
+        const bool stood = creatureStanding(targets, target->id);
+        const auto pulseKill = [&] {
+            if (stood && !creatureStanding(targets, target->id) && targets.meleeHit) {
+                targets.meleeHit(actor.player());
+            }
+        };
         if (fire) {
             strikeTarget(*target, kFireShieldDamage * seconds * kFramesPerSecond * grown,
                          kFireElement, actor, players, targets);
+            pulseKill();
             continue;
         }
         if (std::ranges::any_of(runtime.shockGaps, [&](const PlayerRuntime::ShockGap& gap) {
@@ -1161,6 +1170,7 @@ void PlayerAttacks::updateArmour(f32 seconds, std::span<PlayerRuntime> players,
             continue;
         }
         strikeTarget(*target, kLightningShieldDamage * grown, kShockFlags, actor, players, targets);
+        pulseKill();
         runtime.shockGaps.push_back({target->id, kShockGap});
         // The spark leaves the shield on the arm and points at what it struck.
         const Mat4 placed = actor.transform();
@@ -1579,6 +1589,18 @@ std::optional<Vec3> PlayerAttacks::aim(const PlayerActor& actor, const Vec3& fac
 bool PlayerAttacks::isCreature(s32 id) {
     return id >= kEnemyTargetBase && id < kSafeRockTargetBase &&
            (id < kGeneratorTargetBase || id >= kCritterTargetBase);
+}
+
+bool PlayerAttacks::creatureStanding(const Targets& targets, s32 id) {
+    if (id >= kBossTargetBase) {
+        return targets.opponents.bosses().view().alive;
+    }
+    if (id >= kCritterTargetBase) {
+        const Critters& critters = targets.opponents.critters();
+        const s32 critter = id - kCritterTargetBase;
+        return critters.alive(critter) && !critters.dying(critter);
+    }
+    return id >= kEnemyTargetBase && targets.opponents.enemies().alive(id - kEnemyTargetBase);
 }
 
 PlayerDeed PlayerAttacks::attackDeed(const PlayerActor& actor, bool strong, const Targets& targets,

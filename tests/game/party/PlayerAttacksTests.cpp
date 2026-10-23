@@ -4039,6 +4039,14 @@ TEST_CASE("fire and lightning shields harm the creature their bearer stands agai
             f.attacks.updateArmour(1.0f / 30, f.players, f.targets);
         }
         CHECK(enemies.healthOf(*id) == away);
+        // Its blows never pulse the hand; the kill does, once, as a melee kill would.
+        f.players[0].actor.place({0, 0, 0});
+        CHECK(f.meleeHits.empty());
+        for (s32 frame = 0; frame < 4000 && enemies.alive(*id); ++frame) {
+            f.attacks.updateArmour(1.0f / 30, f.players, f.targets);
+        }
+        CHECK_FALSE(enemies.alive(*id));
+        CHECK(f.meleeHits == std::vector<s32>{f.players[0].actor.player()});
         f.attacks.clear();
         f.opponents.close();
     }

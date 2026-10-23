@@ -314,6 +314,8 @@ private:
     void presentStrikeHit(usize index, const MoveStrike& row, const Vec3& at,
                           std::span<PlayerRuntime> players, bool sound = true);
     static bool isCreature(s32 id);
+    /** Whether a creature target is still up: a shield's kill is told by it going down. */
+    static bool creatureStanding(const Targets& targets, s32 id);
     static constexpr s32 kEnemyTargetBase = 1000;
     static constexpr s32 kGeneratorTargetBase = 2000;
     static constexpr s32 kCritterTargetBase = 3000;
