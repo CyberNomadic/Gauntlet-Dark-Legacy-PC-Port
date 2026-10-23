@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -117,7 +118,10 @@ TEST_CASE("an invisible player is drawn among the translucent bodies, after the 
     CHECK(device.draws.empty());
     figures.draw(device, players, scene, Mat4{1.0f}, CameraFrame{},
                  PartyFigures::Bodies::Translucent);
-    CHECK_FALSE(device.draws.empty());
+    REQUIRE_FALSE(device.draws.empty());
+    // Faded, it still writes depth, so the level's sorted scenery stays behind it.
+    CHECK(device.draws.front().state.depthWrite);
+    CHECK(std::ranges::all_of(device.draws, [](const auto& draw) { return draw.state.depthWrite; }));
 }
 
 TEST_CASE("a party without figures draws nothing", "[game][screens][figures]") {

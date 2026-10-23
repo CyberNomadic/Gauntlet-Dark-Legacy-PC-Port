@@ -257,6 +257,14 @@ public:
     /** Read-only access for post-step capture; never loads an archive. */
     const ItemArchive* loadedEffects() const { return m_effects.loaded() ? &m_effects : nullptr; }
     ItemArchive* loadedEffects() { return m_effects.loaded() ? &m_effects : nullptr; }
+    /** Whether a faded body (unseen, or carried off) still writes depth, as the original's
+     * does, so the sorted scenery drawn after it cannot paint over it. */
+    void setFadedDepthWrite(bool keep) {
+        for (TreeModel* model :
+             {&m_model, &m_weapon, &m_handItem, &m_headwear, &m_gem, &m_marker, &m_arm}) {
+            model->setFadedDepthWrite(keep);
+        }
+    }
     /** A temporary full-bright skin; null restores the costume's normal appearance. */
     void setSkinTexture(const Texture* texture) {
         m_model.setMaskedTexture(texture);

@@ -165,6 +165,9 @@ void PartyFigures::draw(RenderDevice& device, std::span<const PlayerRuntime> pla
             figure.holdOnArm(device, &scene.weapons, shieldObjectOf(worn.armor));
         }
         const WorldLighting lighting = runtime.glow.apply(world.lighting());
+        // An unseen body is drawn after the generators' glows but before the level's sorted
+        // scenery; writing depth keeps that scenery behind it (the Spider's floorboards).
+        figure.setFadedDepthWrite(which == Bodies::Translucent);
         figure.draw(device, clip, body, lighting, alpha, runtime.move.weaponHidden(), &camera,
                     presentationBlend(runtime, scene.frameBlend),
                     runtime.actor.player() == scene.occupiedHand, TreeModel::Pass::DepthWriting);

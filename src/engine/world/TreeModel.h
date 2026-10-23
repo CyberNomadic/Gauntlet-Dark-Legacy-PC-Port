@@ -87,6 +87,10 @@ public:
         m_depthWrite = depthWrite;
         m_additive = additive;
     }
+    /** Keeps writing depth while faded by the draw's alpha, as the original's unseen body
+     * does with Z update left on, so sorted scenery drawn after it stays behind it. A
+     * dissolving skin still defers. */
+    void setFadedDepthWrite(bool keep) { m_fadedDepthWrite = keep; }
     /** Draws both faces of every part: a flat decal seen from either side. */
     void setDoubleSided(bool doubleSided) { m_cullBack = !doubleSided; }
     Vec2 textureOffset(u32 slot) const;
@@ -202,6 +206,7 @@ private:
     bool m_unlit = false;
     bool m_additive = false;
     bool m_depthWrite = true;
+    bool m_fadedDepthWrite = false;
     bool m_cullBack = true;
     Color m_tint = Color::white();
     std::vector<TextureFrame> m_frames;

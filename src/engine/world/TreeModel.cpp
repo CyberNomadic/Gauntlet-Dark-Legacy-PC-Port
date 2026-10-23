@@ -470,7 +470,8 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         // Retail -4 alternate skins preserve the authored Z-write flag. This
         // renderer splits solid/effects passes: defer dissolves like opacity
         // fades so their partial alpha cannot mask solids drawn later.
-        const bool depthWrite = node.depthWrite && m_depthWrite && !fading && !dissolving;
+        const bool depthWrite =
+            node.depthWrite && m_depthWrite && (!fading || m_fadedDepthWrite) && !dissolving;
         if ((pass == Pass::DepthWriting && !depthWrite) || (pass == Pass::Effects && depthWrite)) {
             continue;
         }
