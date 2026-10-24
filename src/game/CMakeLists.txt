@@ -86,6 +86,7 @@ add_library(game STATIC
     app/GameCursor.cpp
     app/BuildLabel.cpp
     app/LevelDebugOverlay.cpp
+    app/DevConsole.cpp
     app/LevelCompletion.h
     audio/MusicDuck.h
     audio/MusicDuck.cpp

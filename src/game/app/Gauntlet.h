@@ -20,6 +20,7 @@
 #include "game/app/AttractSequencer.h"
 #include "game/app/BuildLabel.h"
 #include "game/app/CommandLine.h"
+#include "game/app/DevConsole.h"
 #include "game/app/LevelCompletion.h"
 #include "game/app/LevelDebugOverlay.h"
 #include "game/app/OnlineRun.h"
@@ -101,6 +102,7 @@ private:
     GameConfig m_config;
     BuildLabel m_buildLabel;
     LevelDebugOverlay m_levelDebug;
+    DevConsole m_console;
     std::string m_version;
     std::unique_ptr<OnlineRun> m_online;
     struct NetplayNavigation {

@@ -78,6 +78,22 @@ void Gauntlet::onInit() {
         }
     }
     m_buildLabel.load(renderDevice());
+    if (!m_console.load(renderDevice(), m_options.unpackedDirectory)) {
+        log::warn("Developer console: the 8x8 font is missing; its screen will be blank");
+    }
+    m_console.print(std::format("Gauntlet Dark Legacy {}", m_buildLabel.text()));
+    m_console.print("Type help for the commands.");
+    m_console.addCommand("debug_info", "shows or hides the level debug overlay",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             m_levelDebug.toggle();
+                             console.print(m_levelDebug.visible() ? "Level debug overlay on"
+                                                                  : "Level debug overlay off");
+                             if (m_levelDebug.visible() && m_play->scene.isOpen()) {
+                                 for (const std::string& line : levelDebugLines()) {
+                                     log::info("Level debug: {}", line);
+                                 }
+                             }
+                         });
     m_autoSaveIcon.load(renderDevice(), m_options.unpackedDirectory);
     if (!m_strings.load(m_options.dataDirectory / kTextDirectory, m_config.text.language)) {
         log::warn("No text tables under {}; identifiers will show instead of text",
@@ -545,12 +561,21 @@ void Gauntlet::resetPlayInput() {
 }
 
 void Gauntlet::updateTower(f64 deltaSeconds) {
+    // The developer console holds every control while it is down: nothing typed at it
+    // joins, pauses or moves anyone, and the party stands until it goes back up. The keys
+    // of the frame that sends it up are still its: the Escape that closes it opens no menu.
+    const bool consoleWasOpen = m_console.open();
+    m_console.update(deltaSeconds, input(), m_config.menu.console);
+    const bool consoleOpen = m_console.open() || consoleWasOpen;
+    if (m_console.open() && !consoleWasOpen) {
+        resetPlayInput();
+    }
     // Start on a controller the party does not hold, in the tower, brings everyone to the
     // select screen with that player, and the tower back with the party grown
     // (check_active_players, init_player_select(1)).
     PlayerSelectScene::Inputs joining{};
     bool anyJoining = false;
-    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+    for (s32 player = 0; player < PlayScene::kPlayerCount && !consoleOpen; ++player) {
         if (!m_play->scene.canJoin(player)) {
             continue;
         }
@@ -561,16 +586,7 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     if (anyJoining && joinTower(joining)) {
         return;
     }
-    if (std::ranges::any_of(m_config.menu.debug,
-                            [this](Key key) { return input().wasKeyPressed(key); })) {
-        m_levelDebug.toggle();
-        if (m_levelDebug.visible()) {
-            for (const std::string& line : levelDebugLines()) {
-                log::info("Level debug: {}", line);
-            }
-        }
-    }
-    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+    for (s32 player = 0; player < PlayScene::kPlayerCount && !consoleOpen; ++player) {
         if (!m_play->scene.canPause(player)) {
             continue;
         }
@@ -584,7 +600,8 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
             return;
         }
     }
-    const auto inputs = readPlayInputs(deltaSeconds);
+    const PlayScene::Inputs inputs =
+        consoleOpen ? PlayScene::Inputs{} : readPlayInputs(deltaSeconds);
     const bool wasLeaving = m_play->scene.leaving();
     const PlayOutcome outcome = m_play->scene.update(deltaSeconds, m_sessionInputs.advance(inputs));
     // Exit speech begins with the sinking spin, once for the party, and must
@@ -1104,6 +1121,15 @@ void Gauntlet::renderScene(RenderDevice& device) {
         if (m_pause.isOpen()) {
             m_pause.render(device, projection, frameWidth, frameHeight);
         }
+        if (m_console.visible()) {
+            // Over everything, in the status boxes' own pixel space so it spans their strip.
+            m_canvas.begin(device, makeVirtualScreenTransform(
+                                       projection, static_cast<f32>(m_config.display.virtualWidth),
+                                       static_cast<f32>(m_config.display.virtualHeight), frameWidth,
+                                       frameHeight));
+            m_console.draw(m_canvas);
+            m_canvas.end();
+        }
         return;
     }
     m_smokeTest.render(device, projection, static_cast<f32>(clock().totalSeconds()));
@@ -1136,6 +1162,7 @@ void Gauntlet::onShutdown() {
     m_online.reset();
     m_buildLabel.release();
     m_levelDebug.release();
+    m_console.release();
     m_autoSaveIcon.release();
     m_idleScreen.close();
     m_demo.close();

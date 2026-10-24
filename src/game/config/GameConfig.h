@@ -108,7 +108,7 @@ struct MenuBindings {
     std::vector<Key> escape{Key::Escape};      ///< leaves a name being typed; quits elsewhere
     std::vector<Key> shopSell{Key::Backspace}; ///< sells the selected row only in the shop
     std::vector<Key> shopExit{Key::Escape};    ///< jumps to the shop's Exit row
-    std::vector<Key> debug{Key::Grave};        ///< shows or hides the level debug overlay
+    std::vector<Key> console{Key::Grave};      ///< slides the developer console down or up
     std::vector<PadButton> padUp{PadButton::DpadUp, PadButton::LeftStickUp};
     std::vector<PadButton> padDown{PadButton::DpadDown, PadButton::LeftStickDown};
     std::vector<PadButton> padLeft{PadButton::DpadLeft, PadButton::LeftStickLeft};

@@ -233,7 +233,8 @@ void GameConfig::mergeJson(std::string_view json) {
             menu.escape = {Key::Escape}; // fixed safety control, not a configurable action
             readKeys(k, "shopSell", menu.shopSell);
             readKeys(k, "shopExit", menu.shopExit);
-            readKeys(k, "debug", menu.debug);
+            readKeys(k, "debug", menu.console); // the console key's former name
+            readKeys(k, "console", menu.console);
         }
         if (c.contains("pad")) {
             const Json& p = c.at("pad");
@@ -392,7 +393,7 @@ std::string GameConfig::toJson() const {
                           {"escape", keyNames(menu.escape)},
                           {"shopSell", keyNames(menu.shopSell)},
                           {"shopExit", keyNames(menu.shopExit)},
-                          {"debug", keyNames(menu.debug)}}},
+                          {"console", keyNames(menu.console)}}},
                         {"pad",
                          {{"up", buttonNames(menu.padUp)},
                           {"down", buttonNames(menu.padDown)},

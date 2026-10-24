@@ -182,6 +182,7 @@ add_executable(tests
     game/rollback/SessionInputsTests.cpp
     game/app/BuildLabelTests.cpp
     game/app/LevelDebugOverlayTests.cpp
+    game/app/DevConsoleTests.cpp
     game/app/GameCursorTests.cpp
     game/scenes/PlaySceneRumbleTests.cpp
     game/level/StaticSceneryTests.cpp

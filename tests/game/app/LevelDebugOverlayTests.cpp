@@ -9,12 +9,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Types.h"
-#include "engine/platform/Input.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/app/LevelDebugOverlay.h"
-#include "game/config/GameConfig.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/LevelWorld.h"
 #include "game/party/PlayerRuntime.h"
@@ -25,19 +23,6 @@ using namespace gdl::game;
 
 bool mentions(std::span<const std::string> lines, std::string_view text) {
     return std::ranges::any_of(lines, [&](const std::string& line) { return line.contains(text); });
-}
-
-TEST_CASE("the level debug overlay is bound to the grave key and may be rebound",
-          "[game][config][level-debug]") {
-    CHECK(keyFromName("Grave") == Key::Grave);
-    CHECK(keyName(Key::Grave) == "Grave");
-    GameConfig config;
-    CHECK(config.menu.debug == std::vector{Key::Grave});
-    config.mergeJson(R"({"controls":{"keyboard":{"debug":["F3","Grave"]}}})");
-    CHECK(config.menu.debug == std::vector{Key::F3, Key::Grave});
-    GameConfig saved;
-    saved.mergeJson(config.toJson());
-    CHECK(saved.menu.debug == std::vector{Key::F3, Key::Grave});
 }
 
 TEST_CASE("the level debug overlay names the level, the players, the camera and the "
