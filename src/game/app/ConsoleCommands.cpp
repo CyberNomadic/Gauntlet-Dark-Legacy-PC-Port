@@ -137,11 +137,15 @@ std::optional<Vec3> point(ConsoleCommands::Arguments arguments) {
 }
 
 const Powerup* powerupNamed(std::string_view name) {
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto found = std::ranges::find(kPowerups, name, &Powerup::name);
     return found != kPowerups.end() ? &*found : nullptr;
 }
 
 const Potion* potionNamed(std::string_view name) {
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto found = std::ranges::find(kPotions, name, &Potion::name);
     return found != kPotions.end() ? &*found : nullptr;
 }
@@ -560,6 +564,8 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
         }
     }
     if (category == Category::Any || category == Category::Critter) {
+        // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+        // NOLINTNEXTLINE(readability-qualified-auto)
         if (const auto critter = std::ranges::find(kCritters, first, &Critter::name);
             critter != kCritters.end()) {
             spawn.kind = Spawn::Kind::Critter;
@@ -820,6 +826,8 @@ bool ConsoleCommands::hasPickup(const WorldLayout& layout, std::string_view name
 }
 
 std::string_view ConsoleCommands::potionName(s32 kind) {
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto found = std::ranges::find(kPotions, kind, &Potion::kind);
     return found != kPotions.end() ? found->name : kPotions.front().name;
 }

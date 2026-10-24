@@ -24,8 +24,9 @@ std::filesystem::path unpackedRoot() {
 
 TEST_CASE("an object's tree is the object at the root with its descendants at their offsets",
           "[level][spawned-objects][dev-console][assets]") {
+    const auto root = unpackedRoot(); // before any assertion: a skip inside one fails it
     WorldLayout layout;
-    REQUIRE(layout.load(unpackedRoot() / "LEVELS/LEVELA1"));
+    REQUIRE(layout.load(root / "LEVELS/LEVELA1"));
     const auto& objects = layout.objects();
     const auto parent = std::ranges::find_if(objects, [&](const WorldObject& object) {
         return object.child >= 0 && static_cast<usize>(object.child) < objects.size();
