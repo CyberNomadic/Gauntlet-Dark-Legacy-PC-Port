@@ -43,7 +43,7 @@ bool PauseMenu::open(RenderDevice& device, const GameContext& context,
     m_screen = {static_cast<s32>(config.display.virtualWidth),
                 static_cast<s32>(config.display.virtualHeight), config.horizontalFovRadians()};
     try {
-        if (!m_textures.load(context.unpackedRoot / "STATIC") ||
+        if (!m_textures.load(context.unpackedRoot / "STATIC", TextureWrapPolicy::Flagged) ||
             !m_font.load(context.unpackedRoot / "fonts/font32.json", 16)) {
             return false;
         }

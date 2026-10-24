@@ -17,7 +17,7 @@ constexpr f32 kFullAlpha = 255.0f;
 
 bool TransitionScreen::load(RenderDevice& device, const std::filesystem::path& unpackedRoot) {
     release();
-    if (!m_textures.load(unpackedRoot / kStaticDirectory)) {
+    if (!m_textures.load(unpackedRoot / kStaticDirectory, TextureWrapPolicy::Flagged)) {
         log::warn("Transition screen: the static archive is not unpacked; it shows black");
         return false;
     }

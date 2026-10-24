@@ -203,8 +203,8 @@ void PlayerSelectScene::close() {
 
 bool PlayerSelectScene::loadResources(RenderDevice& device,
                                       const std::filesystem::path& unpackedRoot) {
-    if (!m_selectTextures.load(unpackedRoot / kSelectDirectory) ||
-        !m_staticTextures.load(unpackedRoot / kStaticDirectory)) {
+    if (!m_selectTextures.load(unpackedRoot / kSelectDirectory, TextureWrapPolicy::Flagged) ||
+        !m_staticTextures.load(unpackedRoot / kStaticDirectory, TextureWrapPolicy::Flagged)) {
         log::warn("Player select: unpacked textures not found under {} (run gdlunpack)",
                   unpackedRoot.string());
         return false;

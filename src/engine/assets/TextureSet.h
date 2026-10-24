@@ -39,6 +39,11 @@ struct TextureSetEntry {
     bool external() const { return (flags & kExternal) != 0; }
 };
 
+/** How a set's textures wrap: the GameCube initialises every model texture to repeat both
+ * ways (pb_texture.c) whatever its record's clamp flags say, while the 2D layer's tiles are
+ * clamped as their flags say, which keeps a seam from showing between them. */
+enum class TextureWrapPolicy : u8 { Repeat, Flagged };
+
 /**
  * One texture archive: its named images, decoded and uploaded on
  * first use. Names match ignoring case; an animation's frames follow its first entry.
@@ -46,7 +51,9 @@ struct TextureSetEntry {
 class TextureSet {
 public:
     /** Prefers objects.ngc/textures.ngc; accepts textures.json for inspection exports. */
-    bool load(const std::filesystem::path& directory);
+    bool load(const std::filesystem::path& directory,
+              TextureWrapPolicy wrap = TextureWrapPolicy::Repeat);
+    TextureWrapPolicy wrapPolicy() const { return m_wrap; }
 
     bool loaded() const { return !m_entries.empty(); }
     usize size() const { return m_entries.size(); }
@@ -71,7 +78,8 @@ public:
     }
     /** Already-decoded pixels only; native binding inspection must not decode. */
     const Image* cachedImage(u32 index) const {
-        return index < m_images.size() && !m_images[index].pixels.empty() ? &m_images[index] : nullptr;
+        return index < m_images.size() && !m_images[index].pixels.empty() ? &m_images[index]
+                                                                          : nullptr;
     }
 
     /** Drops the GPU textures; call before the device goes away. */
@@ -82,6 +90,7 @@ private:
     std::vector<formats::ArchiveBitmap> m_nativeBitmaps;
     std::vector<u8> m_nativePixels;
     std::filesystem::path m_directory;
+    TextureWrapPolicy m_wrap = TextureWrapPolicy::Repeat;
     std::vector<TextureSetEntry> m_entries;
     std::unordered_map<std::string, u32> m_byName;
     std::vector<Image> m_images;

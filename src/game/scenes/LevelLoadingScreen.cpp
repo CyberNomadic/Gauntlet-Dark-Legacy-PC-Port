@@ -64,7 +64,8 @@ void LevelLoadingScreen::open(RenderDevice& device, const GameContext& context,
     }
     m_name = level.name;
     m_sounds = context.sounds;
-    m_textures.load(context.unpackedRoot / "MAPS" / ("LEVEL" + level.name));
+    m_textures.load(context.unpackedRoot / "MAPS" / ("LEVEL" + level.name),
+                    TextureWrapPolicy::Flagged);
     WorldData data;
     if (data.load(context.unpackedRoot / level.worldDataFile())) {
         if (const auto* info = data.level(level.name)) {

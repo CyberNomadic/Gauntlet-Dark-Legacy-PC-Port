@@ -136,7 +136,7 @@ bool AttractScene::openNext(RenderDevice& device, const GameContext& context) {
             // init_attract_mode clears sAudioOverride for flybys; sndFxPaused then
             // silences both the level music and effects. Do not change shared mixer
             // volumes: title music and movies resume normally on the next screen.
-            m_textures.load(context.unpackedRoot / "STATIC");
+            m_textures.load(context.unpackedRoot / "STATIC", TextureWrapPolicy::Flagged);
             if (m_font.load(context.unpackedRoot / "fonts/font32.json", 16)) {
                 if (const auto font = m_textures.find("FONT32"); font.has_value()) {
                     m_text.setFont(&m_font, &m_textures.texture(device, *font));

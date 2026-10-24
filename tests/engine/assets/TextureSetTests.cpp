@@ -11,8 +11,8 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "formats/GcTexture.h"
 #include "fixtures/NativeModelFixture.h"
+#include "formats/GcTexture.h"
 #include "formats/ModelArchive.h"
 
 namespace {
@@ -81,9 +81,11 @@ TEST_CASE("GPU textures are created once and released on demand", "[assets][text
     REQUIRE(device.texturesCreated == 3);
 }
 
-TEST_CASE("clamped tiles are created with edge clamping", "[assets][textures]") {
+TEST_CASE("clamped tiles are created with edge clamping for the 2D layer alone",
+          "[assets][textures]") {
     TextureSet set;
-    REQUIRE(set.load(sampleSet("texture-set-clamp")));
+    REQUIRE(set.load(sampleSet("texture-set-clamp"), TextureWrapPolicy::Flagged));
+    CHECK(set.wrapPolicy() == TextureWrapPolicy::Flagged);
     // Each way on its own: the first tile is held at its edge across yet still tiles down.
     REQUIRE(set.entry(0).clampU);
     REQUIRE_FALSE(set.entry(0).clampV);
@@ -93,6 +95,14 @@ TEST_CASE("clamped tiles are created with edge clamping", "[assets][textures]") 
     REQUIRE(device.lastTextureDesc.wrap == TextureWrap::ClampToEdge);
     REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
     set.texture(device, 1);
+    REQUIRE(device.lastTextureDesc.wrap == TextureWrap::Repeat);
+    REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
+    // A model's set repeats both ways whatever its flags say, as the GameCube's do.
+    TextureSet model;
+    REQUIRE(model.load(sampleSet("texture-set-clamp")));
+    CHECK(model.wrapPolicy() == TextureWrapPolicy::Repeat);
+    REQUIRE(model.entry(0).clampU);
+    model.texture(device, 0);
     REQUIRE(device.lastTextureDesc.wrap == TextureWrap::Repeat);
     REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
     // A description that names one way wraps the same both ways.

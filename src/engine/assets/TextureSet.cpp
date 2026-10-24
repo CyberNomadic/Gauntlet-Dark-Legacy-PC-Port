@@ -28,7 +28,8 @@ constexpr std::string_view kManifestName = "textures.json";
 
 } // namespace
 
-bool TextureSet::load(const std::filesystem::path& directory) {
+bool TextureSet::load(const std::filesystem::path& directory, TextureWrapPolicy wrap) {
+    m_wrap = wrap;
     releaseTextures();
     m_entries.clear();
     m_byName.clear();
@@ -138,9 +139,12 @@ const Texture& TextureSet::texture(RenderDevice& device, u32 index) {
     std::unique_ptr<Texture>& texture = m_textures[index];
     if (!texture) {
         const Image& pixels = image(index);
-        // Each way wraps or clamps on its own: ground may tile across and not down.
-        const auto wrapOf = [](bool clamp) {
-            return clamp ? TextureWrap::ClampToEdge : TextureWrap::Repeat;
+        // Under the flagged policy each way wraps or clamps on its own: ground may tile
+        // across and not down. Models repeat both ways as the GameCube's do: the sky ships'
+        // side pieces are flagged to clamp and tile across many repeats regardless.
+        const auto wrapOf = [this](bool clamp) {
+            return clamp && m_wrap == TextureWrapPolicy::Flagged ? TextureWrap::ClampToEdge
+                                                                 : TextureWrap::Repeat;
         };
         TextureDesc desc{pixels.width, pixels.height, TextureFilter::Linear,
                          wrapOf(m_entries[index].clampU), wrapOf(m_entries[index].clampV)};

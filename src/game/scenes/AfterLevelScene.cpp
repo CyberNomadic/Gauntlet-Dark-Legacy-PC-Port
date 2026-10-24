@@ -71,9 +71,9 @@ bool AfterLevelScene::open(RenderDevice& device, const GameContext& context,
         ClassDataSet classes;
         if (!catalog.loadRoot(context.unpackedRoot) ||
             !classes.load(context.unpackedRoot / "pdata") ||
-            !m_select.load(context.unpackedRoot / "SELECT") ||
-            !m_inventory.load(context.unpackedRoot / "INVENTORY") ||
-            !m_static.load(context.unpackedRoot / "STATIC") ||
+            !m_select.load(context.unpackedRoot / "SELECT", TextureWrapPolicy::Flagged) ||
+            !m_inventory.load(context.unpackedRoot / "INVENTORY", TextureWrapPolicy::Flagged) ||
+            !m_static.load(context.unpackedRoot / "STATIC", TextureWrapPolicy::Flagged) ||
             !m_font.load(context.unpackedRoot / "fonts/font32.json", 16) ||
             !m_titles.load(context.unpackedRoot / "text/english.json")) {
             close();
