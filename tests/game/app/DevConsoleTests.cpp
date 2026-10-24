@@ -37,7 +37,7 @@ struct Poll {
 void poll(Input& input, const Poll& keys) {
     input.beginPoll();
     for (const Key key : {Key::Grave, Key::Enter, Key::Backspace, Key::Escape, Key::A, Key::Up,
-                          Key::Down, Key::PageUp, Key::PageDown}) {
+                          Key::Down, Key::Left, Key::Right, Key::PageUp, Key::PageDown}) {
         input.setKey(key, std::ranges::find(keys.down, key) != keys.down.end());
     }
     for (const char c : keys.typed) {
@@ -336,6 +336,51 @@ TEST_CASE("held backspace repeats after the typematic delay and the line keeps a
     CHECK(console.line().size() == room - 1 - 3);
 }
 
+TEST_CASE("left and right move the caret along the line, and typing goes in where it stands",
+          "[dev-console]") {
+    DevConsole console;
+    Input input;
+    console.toggle();
+    type(console, input, "abc");
+    CHECK(console.cursor() == 3);
+    press(console, input, Key::Left);
+    press(console, input, Key::Left);
+    CHECK(console.cursor() == 1);
+    type(console, input, "X");
+    CHECK(console.line() == "aXbc");
+    CHECK(console.cursor() == 2);
+    press(console, input, Key::Right);
+    CHECK(console.cursor() == 3);
+    press(console, input, Key::Backspace);
+    CHECK(console.line() == "aXc");
+    CHECK(console.cursor() == 2);
+    press(console, input, Key::Right);
+    press(console, input, Key::Right); // no further than the end
+    CHECK(console.cursor() == 3);
+    // Held, Left repeats at the typematic rate after the delay.
+    poll(input, {.down = {Key::Left}});
+    console.update(kTick, input, kToggle);
+    CHECK(console.cursor() == 2);
+    for (s32 tick = 0; tick < 24; ++tick) { // 0.4 s held: short of the delay
+        poll(input, {.down = {Key::Left}});
+        console.update(kTick, input, kToggle);
+    }
+    CHECK(console.cursor() == 2);
+    poll(input, {.down = {Key::Left}});
+    console.update(0.1 + DevConsole::kRepeatInterval * 1.5, input, kToggle);
+    CHECK(console.cursor() == 0);
+    press(console, input, Key::Left); // no further than the start
+    CHECK(console.cursor() == 0);
+    // Backspace at the start erases nothing; a recalled line puts the caret at its end.
+    press(console, input, Key::Backspace);
+    CHECK(console.line() == "aXc");
+    press(console, input, Key::Enter);
+    CHECK(console.cursor() == 0);
+    press(console, input, Key::Up);
+    CHECK(console.line() == "aXc");
+    CHECK(console.cursor() == 3);
+}
+
 TEST_CASE("the caret blinks at the VGA text cursor's rate from the moment the console opens",
           "[dev-console]") {
     DevConsole console;
@@ -447,6 +492,14 @@ TEST_CASE("the console writes its lines in half-size 8x8 cells behind an undersc
     CHECK(caret.right == Approx(caret.left + DevConsole::kCellWidth));
     CHECK(caret.bottom == Approx(DevConsole::kMargin + 2 * DevConsole::kRowHeight));
     CHECK(caret.top == Approx(caret.bottom - DevConsole::kCaretHeight));
+    // Moved back a cell, the caret is drawn there.
+    press(console, input, Key::Left);
+    while (!console.caretShown()) {
+        console.update(kTick, input, kToggle);
+    }
+    drawOnce(device, console);
+    const Quad moved = fillsOf(device, DevConsole::kInk);
+    CHECK(moved.left == Approx(caret.left - DevConsole::kCellWidth));
     // Scrolled up a page with more output than rows, the prompt row stays and the newest
     // lines leave the screen.
     for (s32 i = 0; i < DevConsole::kRows * 2; ++i) {

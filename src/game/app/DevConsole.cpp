@@ -146,7 +146,28 @@ void DevConsole::toggle() {
     if (m_open) {
         m_caretTime = 0.0;
     }
-    m_backspaceHeld = 0.0;
+    for (HeldKey* key : {&m_backspace, &m_left, &m_right}) {
+        key->held = 0.0;
+    }
+}
+
+s32 DevConsole::strokes(HeldKey& key, const Input& input, f64 deltaSeconds) {
+    if (input.wasKeyPressed(key.key)) {
+        key.held = 0.0;
+        key.due = kRepeatDelay;
+        return 1;
+    }
+    if (!input.isKeyDown(key.key)) {
+        key.held = 0.0;
+        return 0;
+    }
+    key.held += deltaSeconds;
+    s32 count = 0;
+    while (key.held >= key.due) {
+        ++count;
+        key.due += kRepeatInterval;
+    }
+    return count;
 }
 
 bool DevConsole::caretShown() const {
@@ -176,22 +197,19 @@ void DevConsole::readKeys(f64 deltaSeconds, const Input& input, bool toggled) {
     if (!toggled) {
         for (const u32 code : input.typedText()) {
             if (code >= kFirstTypable && code <= kLastTypable && m_line.size() < room) {
-                m_line.push_back(static_cast<char>(code));
+                m_line.insert(m_cursor, 1, static_cast<char>(code));
+                ++m_cursor;
             }
         }
     }
-    if (input.wasKeyPressed(Key::Backspace)) {
-        erase(1);
-        m_backspaceHeld = 0.0;
-        m_repeatDue = kRepeatDelay;
-    } else if (input.isKeyDown(Key::Backspace)) {
-        m_backspaceHeld += deltaSeconds;
-        while (m_backspaceHeld >= m_repeatDue) {
-            erase(1);
-            m_repeatDue += kRepeatInterval;
-        }
-    } else {
-        m_backspaceHeld = 0.0;
+    for (s32 i = strokes(m_backspace, input, deltaSeconds); i > 0; --i) {
+        eraseBeforeCursor();
+    }
+    for (s32 i = strokes(m_left, input, deltaSeconds); i > 0 && m_cursor > 0; --i) {
+        --m_cursor;
+    }
+    for (s32 i = strokes(m_right, input, deltaSeconds); i > 0 && m_cursor < m_line.size(); --i) {
+        ++m_cursor;
     }
     if (input.wasKeyPressed(Key::Up)) {
         recall(-1);
@@ -211,6 +229,7 @@ void DevConsole::readKeys(f64 deltaSeconds, const Input& input, bool toggled) {
     if (input.wasKeyPressed(Key::Enter)) {
         const std::string line = std::move(m_line);
         m_line.clear();
+        m_cursor = 0;
         if (!line.empty() && (m_history.empty() || m_history.back() != line)) {
             m_history.push_back(line);
             if (m_history.size() > kHistory) {
@@ -222,8 +241,11 @@ void DevConsole::readKeys(f64 deltaSeconds, const Input& input, bool toggled) {
     }
 }
 
-void DevConsole::erase(usize count) {
-    m_line.resize(m_line.size() - std::min(count, m_line.size()));
+void DevConsole::eraseBeforeCursor() {
+    if (m_cursor > 0) {
+        --m_cursor;
+        m_line.erase(m_cursor, 1);
+    }
 }
 
 void DevConsole::recall(s32 step) {
@@ -237,6 +259,7 @@ void DevConsole::recall(s32 step) {
     }
     m_recalled = static_cast<usize>(at);
     m_line = m_recalled == m_history.size() ? m_pending : m_history[m_recalled];
+    m_cursor = m_line.size();
 }
 
 usize DevConsole::shownLines() const {
@@ -264,10 +287,12 @@ void DevConsole::draw(Canvas& canvas) const {
         m_text.draw(canvas, kMargin, rowY(row), m_output[first + row], style);
     }
     const s32 y = rowY(shown);
-    s32 x = m_text.draw(canvas, kMargin, y, m_prompt, style);
-    x = m_text.draw(canvas, x, y, m_line, style);
+    const s32 x = m_text.draw(canvas, kMargin, y, m_prompt, style);
+    m_text.draw(canvas, x, y, m_line, style);
     if (caretShown()) {
-        canvas.fill(Rect{static_cast<f32>(x), static_cast<f32>(y + kRowHeight - kCaretHeight),
+        const s32 caretX =
+            x + m_text.measure(std::string_view(m_line).substr(0, m_cursor), kTextScale);
+        canvas.fill(Rect{static_cast<f32>(caretX), static_cast<f32>(y + kRowHeight - kCaretHeight),
                          static_cast<f32>(kCellWidth), static_cast<f32>(kCaretHeight)},
                     kInk);
     }

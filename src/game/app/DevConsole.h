@@ -25,8 +25,9 @@ namespace gdl::game {
  * The developer console: a black DOS-style screen that slides down from the top edge, as wide
  * as the party's four status boxes, and takes the keyboard while it is down. Lines typed at
  * its prompt in the game's 8x8 font, behind a blinking underscore caret, run the commands
- * registered with it; `help` lists them. Up and Down walk the lines typed before, Page Up
- * and Page Down (or the wheel) the output. The console key slides it down and back up.
+ * registered with it; `help` lists them. Left and Right move the caret along the line,
+ * Up and Down walk the lines typed before, Page Up and Page Down (or the wheel) the
+ * output. The console key slides it down and back up.
  */
 class DevConsole {
 public:
@@ -90,6 +91,8 @@ public:
     f32 slide() const { return static_cast<f32>(m_slide); }
     bool caretShown() const;
     const std::string& line() const { return m_line; }
+    /** Where the caret stands in the line: how many characters are before it. */
+    usize cursor() const { return m_cursor; }
     std::span<const std::string> output() const { return m_output; }
     std::span<const std::string> history() const { return m_history; }
     /** How many lines above the newest the output is scrolled to. */
@@ -97,7 +100,7 @@ public:
 
     /** Advances the slide and the caret and, while open, takes the frame's keys and text. A
      * press of one of `toggleKeys` slides the console the other way, the character it types
-     * dropped; Escape slides it up. Backspace repeats while held. */
+     * dropped; Escape slides it up. Backspace, Left and Right repeat while held. */
     void update(f64 deltaSeconds, const Input& input, std::span<const Key> toggleKeys);
     /** Draws the screen, the output above the prompt line and the caret, in virtual pixels. */
     void draw(Canvas& canvas) const;
@@ -108,8 +111,16 @@ private:
         std::string summary;
         Handler handler;
     };
+    /** A key that repeats while held, at the typematic rate. */
+    struct HeldKey {
+        Key key = Key::Unknown;
+        f64 held = 0.0; ///< how long it has been down
+        f64 due = 0.0;  ///< when, on that clock, it next repeats
+    };
     void readKeys(f64 deltaSeconds, const Input& input, bool toggled);
-    void erase(usize count);
+    /** How many times `key` acts this poll: once pressed, then by the typematic rate. */
+    static s32 strokes(HeldKey& key, const Input& input, f64 deltaSeconds);
+    void eraseBeforeCursor();
     void printLine(std::string_view line);
     void recall(s32 step);
     void scrollBy(s32 lines);
@@ -127,13 +138,15 @@ private:
     usize m_recalled = 0;  ///< the history line shown; the count when typing a new one
     std::string m_pending; ///< the new line set aside while an older one is shown
     std::string m_line;
+    usize m_cursor = 0; ///< the caret's place in the line
     std::string m_prompt{kDefaultPrompt};
     usize m_scroll = 0;
     bool m_open = false;
     f64 m_slide = 0.0;
     f64 m_caretTime = 0.0;
-    f64 m_backspaceHeld = 0.0; ///< how long Backspace has been down
-    f64 m_repeatDue = 0.0;     ///< when, on that clock, it next erases
+    HeldKey m_backspace{Key::Backspace};
+    HeldKey m_left{Key::Left};
+    HeldKey m_right{Key::Right};
 };
 
 } // namespace gdl::game
