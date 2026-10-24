@@ -182,4 +182,38 @@ TEST_CASE("move effect tint decodes RGB without treating its high byte as opacit
     CHECK(effect.tint() == Color::rgba(0, 0, 0, 255));
 }
 
+TEST_CASE("a beast plays on its own record, fifty over its base class on every base stat",
+          "[game][players][assets]") {
+    const auto pdata = test::unpackedOrSkip("PDATA/MIN.json").parent_path();
+    ClassDataSet classes;
+    REQUIRE(classes.load(pdata));
+    for (s32 base = 0; base < kStartingClassCount; ++base) {
+        const s32 beast = base + kStartingClassCount;
+        CAPTURE(base, beast);
+        const ClassStats* baseStats = classes.stats(base);
+        const ClassStats* beastStats = classes.stats(beast);
+        REQUIRE(baseStats != nullptr);
+        REQUIRE(beastStats != nullptr);
+        CHECK(beastStats != baseStats);
+        CHECK(beastStats->fightMin == baseStats->fightMin + 50.0f);
+        CHECK(beastStats->speedMin == baseStats->speedMin + 50.0f);
+        CHECK(beastStats->armorMin == baseStats->armorMin + 50.0f);
+        CHECK(beastStats->magicMin == baseStats->magicMin + 50.0f);
+    }
+    // Sumner is the wizard's record still.
+    CHECK(classes.stats(kSumnerClass) == classes.stats(kWizardClass));
+}
+
+TEST_CASE("a beast whose record is missing plays on its base class's", "[game][players]") {
+    const auto directory = test::scratchDirectory("class-data-beast-fallback");
+    writeTextFile(directory / "WAR.json", R"({"code":"WAR","fight":[600,999],"speed":[350,750],
+        "armor":[300,700],"magic":[100,500],"height":5,"width":1.5,"attachY":4,"collisionY":2.5,
+        "powerupTime":1})");
+    ClassDataSet classes;
+    REQUIRE(classes.load(directory));
+    REQUIRE(classes.stats(0) != nullptr);
+    CHECK(classes.stats(kStartingClassCount) == classes.stats(0)); // the minotaur, the warrior's
+    CHECK(classes.stats(kStartingClassCount + 1) == nullptr);      // the falconess has no valkyrie
+}
+
 } // namespace

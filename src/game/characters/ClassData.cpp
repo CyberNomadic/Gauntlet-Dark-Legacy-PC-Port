@@ -263,13 +263,19 @@ bool ClassDataSet::load(const std::filesystem::path& directory) {
 }
 
 const ClassStats* ClassDataSet::stats(s32 classIndex) const {
-    // A hidden costume plays on its base class's record: there is no seventeenth PDATA
-    // file, and the original keeps Sumner as the wizard with a costume tag.
-    classIndex = baseClassOf(classIndex);
     if (classIndex < 0 || classIndex >= kClassCount) {
         return nullptr;
     }
-    const auto& entry = m_classes[static_cast<usize>(classIndex)];
+    // A character plays on its own record (PlayerUpdateAtts loads the character's PDATA):
+    // a beast's has fifty more on every base stat than its base class's. Sumner plays on the
+    // wizard's, there being no seventeenth file, and a beast whose file is missing on its
+    // base class's.
+    const auto& own = m_classes[static_cast<usize>(classIndex)];
+    if (own.has_value() && classIndex != kSumnerClass) {
+        return &*own;
+    }
+    const s32 base = baseClassOf(classIndex);
+    const auto& entry = m_classes[static_cast<usize>(base)];
     return entry.has_value() ? &*entry : nullptr;
 }
 
