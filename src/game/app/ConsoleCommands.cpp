@@ -6,6 +6,8 @@
 #include <cctype>
 #include <charconv>
 #include <format>
+#include <map>
+#include <set>
 #include <system_error>
 
 #include "game/characters/ClassData.h"
@@ -13,6 +15,7 @@
 #include "game/characters/Progression.h"
 #include "game/characters/Relics.h"
 #include "game/enemies/DeathRules.h"
+#include "game/enemies/EnemyKinds.h"
 #include "game/level/LevelTriggers.h"
 #include "game/level/TowerAccess.h"
 #include "game/players/PowerupEffects.h"
@@ -22,6 +25,8 @@ namespace gdl::game {
 namespace {
 constexpr s32 kDefaultCharges = 10;
 constexpr f32 kForGood = -1.0f; ///< a powerup's strength under none lasts
+constexpr s32 kMostTier = 3;
+constexpr std::string_view kGargoylePrefix = "GAR_";
 
 struct Potion {
     std::string_view name;
@@ -76,6 +81,15 @@ constexpr std::array<Powerup, 28> kPowerups{{
      0},
     {"pojo", "Pojo speaks for the character", powerup::kSpecial, powerup::kPojo, false, 0},
 }};
+
+struct Critter {
+    std::string_view name;
+    CombatantKind kind;
+};
+constexpr std::array<Critter, 3> kCritters{{{"golem", CombatantKind::Golem},
+                                            {"general", CombatantKind::General},
+                                            {"gargoyle", CombatantKind::Gargoyle}}};
+constexpr std::array<std::string_view, 3> kGargoyleForms{"EAGL", "LION", "SERP"};
 
 std::string lower(std::string_view text) {
     std::string result(text);
@@ -150,6 +164,54 @@ std::string counted(const ConsoleCommands::Gift& gift, s32 count) {
     }
     return gift.name;
 }
+
+/** `name x3` for a count over one, else the name alone. */
+std::string tallied(std::string_view name, s32 count) {
+    return count > 1 ? std::format("{} x{}", name, count) : std::string(name);
+}
+
+/** The names of a map joined ", ", each with its count. */
+std::string joined(const std::map<std::string, s32>& counts) {
+    std::string line;
+    for (const auto& [name, count] : counts) {
+        line += line.empty() ? "" : ", ";
+        line += tallied(name, count);
+    }
+    return line;
+}
+
+/** The layout's record of an instance, or null for one with none. */
+const ItemInfo* recordOf(const WorldLayout& layout, const ItemInstance& instance) {
+    const auto& infos = layout.itemInfos();
+    return instance.info >= 0 && static_cast<usize>(instance.info) < infos.size()
+               ? &infos[static_cast<usize>(instance.info)]
+               : nullptr;
+}
+
+bool critterName(std::string_view name) {
+    return name == "GOLEM" || name == "GENERAL" || name.starts_with(kGargoylePrefix) ||
+           name == "GAR";
+}
+
+bool sameIgnoringCase(std::string_view a, std::string_view b) {
+    return std::ranges::equal(a, b, [](char x, char y) {
+        return std::tolower(static_cast<unsigned char>(x)) ==
+               std::tolower(static_cast<unsigned char>(y));
+    });
+}
+
+/** A tier from an optional argument, else one; nothing when it is no tier. */
+std::optional<s32> tierOf(std::optional<std::string_view> argument, std::string& error) {
+    if (!argument.has_value()) {
+        return 1;
+    }
+    const auto tier = integer(*argument);
+    if (!tier.has_value() || *tier < 1 || *tier > kMostTier) {
+        error = std::format("A tier is 1 to {}", kMostTier);
+        return std::nullopt;
+    }
+    return tier;
+}
 } // namespace
 
 ConsoleCommands::Listing ConsoleCommands::listingOf(Arguments arguments) {
@@ -166,7 +228,23 @@ ConsoleCommands::Listing ConsoleCommands::listingOf(Arguments arguments) {
     if (what == "inventory") {
         return Listing::Inventory;
     }
+    if (what == "enemies") {
+        return Listing::Enemies;
+    }
+    if (what == "critters") {
+        return Listing::Critters;
+    }
+    if (what == "generators") {
+        return Listing::Generators;
+    }
+    if (what == "objects") {
+        return Listing::Objects;
+    }
     return Listing::Unknown;
+}
+
+std::optional<std::string> ConsoleCommands::listedMap(Arguments arguments) {
+    return arguments.size() >= 2 ? std::optional{upper(arguments[1])} : std::nullopt;
 }
 
 std::optional<ConsoleCommands::Destination> ConsoleCommands::parseGoto(Arguments arguments,
@@ -322,6 +400,90 @@ std::string ConsoleCommands::report(const Gift& gift, const ItemTaking& taking) 
     return std::format("Cannot carry {}", gift.name);
 }
 
+bool ConsoleCommands::spawnableEnemy(s32 kind) {
+    return (kind >= 0 && kind < kSwarmKindCount) || kind == kDeathKind || kind == kItKind;
+}
+
+std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments arguments,
+                                                                  std::string& error) {
+    if (arguments.empty()) {
+        error = std::string(kSpawnUsage);
+        return std::nullopt;
+    }
+    const std::string name = upper(arguments[0]);
+    const Arguments rest = arguments.subspan(1);
+    const auto argument = [&](usize index) {
+        return index < rest.size() ? std::optional<std::string_view>{rest[index]} : std::nullopt;
+    };
+    Spawn spawn;
+    if (const auto kind = enemyKindOf(name); kind.has_value() && spawnableEnemy(*kind)) {
+        spawn.kind = Spawn::Kind::Enemy;
+        spawn.enemyKind = *kind;
+        spawn.name = name;
+        const auto tier = tierOf(argument(0), error);
+        if (!tier.has_value()) {
+            return std::nullopt;
+        }
+        spawn.tier = *tier;
+        if (const auto count = argument(1)) {
+            const auto value = integer(*count);
+            if (!value.has_value() || *value < 1 || *value > kMostSpawned) {
+                error = std::format("A count is 1 to {}", kMostSpawned);
+                return std::nullopt;
+            }
+            spawn.count = *value;
+        }
+        if (rest.size() > 2) {
+            error = std::string(kSpawnUsage);
+            return std::nullopt;
+        }
+        return spawn;
+    }
+    const std::string lowered = lower(arguments[0]);
+    if (const auto critter = std::ranges::find(kCritters, lowered, &Critter::name);
+        critter != kCritters.end()) {
+        spawn.kind = Spawn::Kind::Critter;
+        spawn.critter = critter->kind;
+        spawn.name = std::string(critter->name);
+        if (critter->kind == CombatantKind::Gargoyle) {
+            const std::string form = upper(argument(0).value_or(kGargoyleForms.front()));
+            if (std::ranges::find(kGargoyleForms, form) == kGargoyleForms.end()) {
+                error = "A gargoyle is an eagl, a lion or a serp";
+                return std::nullopt;
+            }
+            spawn.form = std::string(kGargoylePrefix) + form;
+        } else if (!rest.empty()) {
+            error = std::string(kSpawnUsage);
+            return std::nullopt;
+        }
+        return spawn;
+    }
+    if (lowered == "generator") {
+        const auto bred = argument(0);
+        const auto kind = bred.has_value() ? enemyKindOf(upper(*bred)) : std::nullopt;
+        if (!kind.has_value() || !spawnableEnemy(*kind)) {
+            error = "spawn generator <enemy> [tier]; list enemies names the kinds";
+            return std::nullopt;
+        }
+        spawn.kind = Spawn::Kind::Generator;
+        spawn.enemyKind = *kind;
+        spawn.name = upper(*bred);
+        const auto tier = tierOf(argument(1), error);
+        if (!tier.has_value()) {
+            return std::nullopt;
+        }
+        spawn.tier = *tier;
+        return spawn;
+    }
+    if (!rest.empty()) {
+        error = std::string(kSpawnUsage);
+        return std::nullopt;
+    }
+    spawn.kind = Spawn::Kind::Thing;
+    spawn.name = name;
+    return spawn;
+}
+
 std::vector<std::string> ConsoleCommands::itemLines() {
     constexpr s32 kNameColumn = 18;
     std::vector<std::string> lines;
@@ -364,6 +526,151 @@ std::vector<std::string> ConsoleCommands::mapLines(const LevelCatalog& catalog) 
         lines.push_back(std::move(line));
     }
     return lines;
+}
+
+std::vector<std::string> ConsoleCommands::enemyKindLines() {
+    std::string names;
+    for (s32 kind = 0; kind < kEnemyKindCount; ++kind) {
+        if (spawnableEnemy(kind)) {
+            names += names.empty() ? "" : ", ";
+            names += enemyKind(kind).name;
+        }
+    }
+    return {std::format("Enemies (spawn <enemy> [tier 1-{}] [count]): {}", kMostTier, names)};
+}
+
+std::vector<std::string> ConsoleCommands::critterLines() {
+    std::string forms;
+    for (const std::string_view form : kGargoyleForms) {
+        forms += forms.empty() ? "" : "|";
+        forms += lower(form);
+    }
+    return {std::format("Critters (spawn <critter>): golem, general, gargoyle [{}]", forms)};
+}
+
+std::vector<std::string> ConsoleCommands::rosterLines(std::span<const LevelEnemy> roster) {
+    constexpr std::array<std::string_view, 5> kClasses{"", "small", "medium", "large",
+                                                       "medium other"};
+    std::string line;
+    for (const LevelEnemy& enemy : roster) {
+        if (enemy.kind < 0 || enemy.kind >= kEnemyKindCount) {
+            continue;
+        }
+        const std::string_view label =
+            enemy.subtype >= 0 && static_cast<usize>(enemy.subtype) < kClasses.size()
+                ? kClasses[static_cast<usize>(enemy.subtype)]
+                : std::string_view{};
+        line += line.empty() ? "" : ", ";
+        line += label.empty() ? std::string(enemyKind(enemy.kind).name)
+                              : std::format("{} {}", label, enemyKind(enemy.kind).name);
+    }
+    return {line.empty() ? std::string("Roster: none") : std::format("Roster: {}", line)};
+}
+
+std::vector<std::string> ConsoleCommands::generatorLines(const WorldLayout& layout) {
+    std::map<std::string, std::pair<s32, std::set<s32>>> kinds; // count and tiers by name
+    for (const ItemInstance& instance : layout.itemInstances()) {
+        const ItemInfo* info = recordOf(layout, instance);
+        if (info == nullptr || info->type != ItemInfo::kGenerator) {
+            continue;
+        }
+        auto& [count, tiers] = kinds[info->name];
+        ++count;
+        tiers.insert(std::max(static_cast<s32>(instance.params[0]), 1));
+    }
+    std::string line;
+    for (const auto& [name, record] : kinds) {
+        std::string tiers;
+        for (const s32 tier : record.second) {
+            tiers += tiers.empty() ? "" : ", ";
+            tiers += std::to_string(tier);
+        }
+        line += line.empty() ? "" : "; ";
+        line += std::format("{} (tier {})", tallied(name, record.first), tiers);
+    }
+    return {line.empty() ? std::string("Generators: none") : std::format("Generators: {}", line)};
+}
+
+std::vector<std::string> ConsoleCommands::placedEnemyLines(const WorldLayout& layout) {
+    std::map<std::string, s32> counts;
+    for (const ItemInstance& instance : layout.itemInstances()) {
+        const ItemInfo* info = recordOf(layout, instance);
+        if (info != nullptr && info->type == ItemInfo::kPlacedEnemy && !critterName(info->name)) {
+            ++counts[info->name];
+        }
+    }
+    return {counts.empty() ? std::string("Placed enemies: none")
+                           : std::format("Placed enemies: {}", joined(counts))};
+}
+
+std::vector<std::string> ConsoleCommands::placedCritterLines(const WorldLayout& layout) {
+    std::map<std::string, s32> counts;
+    for (const ItemInstance& instance : layout.itemInstances()) {
+        const ItemInfo* info = recordOf(layout, instance);
+        if (info != nullptr && info->type == ItemInfo::kPlacedEnemy && critterName(info->name)) {
+            ++counts[info->name];
+        }
+    }
+    return {counts.empty() ? std::string("Critters placed: none")
+                           : std::format("Critters placed: {}", joined(counts))};
+}
+
+std::string_view ConsoleCommands::pickupKindName(s32 subtype) {
+    switch (static_cast<ItemKind>(subtype)) {
+    case ItemKind::Gold: return "gold";
+    case ItemKind::Keys: return "keys";
+    case ItemKind::Food: return "food";
+    case ItemKind::Potion: return "potion";
+    case ItemKind::WeaponPowerup: return "weapon powerup";
+    case ItemKind::ArmorPowerup: return "armor powerup";
+    case ItemKind::SpeedPowerup: return "speed powerup";
+    case ItemKind::MagicPowerup: return "magic powerup";
+    case ItemKind::SpecialPowerup: return "special powerup";
+    case ItemKind::Runestone: return "runestone";
+    case ItemKind::Legend: return "legend item";
+    case ItemKind::Scroll: return "scroll";
+    case ItemKind::Crystal: return "crystal";
+    case ItemKind::GargoyleKey: return "gargoyle piece";
+    }
+    return "pickup";
+}
+
+std::vector<std::string> ConsoleCommands::pickupLines(const WorldLayout& layout) {
+    std::string line;
+    std::set<std::string> seen;
+    for (const ItemInfo& info : layout.itemInfos()) {
+        if (info.type != ItemInfo::kPowerup || !seen.insert(info.name).second) {
+            continue;
+        }
+        line += line.empty() ? "" : ", ";
+        line += std::format("{} ({})", info.name, pickupKindName(info.subtype));
+    }
+    return {line.empty() ? std::string("Pickups: none")
+                         : std::format("Pickups (spawn <name>): {}", line)};
+}
+
+std::vector<std::string> ConsoleCommands::objectLines(const WorldLayout& layout) {
+    std::map<std::string, s32> counts;
+    for (const WorldObject& object : layout.objects()) {
+        ++counts[object.name];
+    }
+    if (counts.empty()) {
+        return {"Objects: none"};
+    }
+    return {std::format("Objects ({}, {} distinct): {}", layout.objects().size(), counts.size(),
+                        joined(counts))};
+}
+
+bool ConsoleCommands::hasObject(const WorldLayout& layout, std::string_view name) {
+    return std::ranges::any_of(layout.objects(), [&](const WorldObject& object) {
+        return sameIgnoringCase(object.name, name);
+    });
+}
+
+bool ConsoleCommands::hasPickup(const WorldLayout& layout, std::string_view name) {
+    return std::ranges::any_of(layout.itemInfos(), [&](const ItemInfo& info) {
+        return info.type == ItemInfo::kPowerup && sameIgnoringCase(info.name, name);
+    });
 }
 
 std::string_view ConsoleCommands::potionName(s32 kind) {

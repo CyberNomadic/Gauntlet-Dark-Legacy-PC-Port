@@ -2,12 +2,18 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "engine/assets/WorldData.h"
+#include "engine/assets/WorldLayout.h"
 #include "engine/core/Log.h"
+#include "engine/math/Math.h"
 
 #include "game/app/ConsoleCommands.h"
 #include "game/app/Gauntlet.h"
 #include "game/characters/Progression.h"
+#include "game/critters/CombatantKind.h"
+#include "game/enemies/Enemies.h"
 #include "game/menu/MenuInput.h"
 #include "game/players/ItemPickup.h"
 
@@ -45,6 +51,16 @@ void Gauntlet::setUpConsole() {
     m_console.addCommand("get", "<item> [amount], exp <points> or level <level>: for you",
                          [this](DevConsole& console, DevConsole::Arguments arguments) {
                              consoleGet(console, arguments);
+                         });
+    m_console.addCommand("spawn",
+                         "<enemy> [tier] [count], golem|general|gargoyle, generator <enemy> or "
+                         "<item>: before you",
+                         [this](DevConsole& console, DevConsole::Arguments arguments) {
+                             consoleSpawn(console, arguments);
+                         });
+    m_console.addCommand("suicide", "fells everyone standing",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleSuicide(console);
                          });
     m_console.addCommand("notarget", "the enemies stop seeing you, or see you again",
                          [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
@@ -123,24 +139,196 @@ s32 Gauntlet::consolePlayer() {
     return first;
 }
 
+bool Gauntlet::consoleLevel(DevConsole& console, const std::optional<std::string>& map,
+                            ConsoleLevel& level) {
+    if (!map.has_value()) {
+        level.name = m_play->world.ref().name;
+        level.layout = &m_play->world.layout();
+        if (const LevelInfo* info = m_play->world.level()) {
+            level.roster = info->enemies;
+        }
+        return true;
+    }
+    const std::optional<LevelRef> ref =
+        *map == "TOWER" ? std::optional{LevelRef::tower()} : m_levels.byName(*map);
+    if (!ref.has_value()) {
+        console.print(std::format("No map named {}; list maps names them", *map));
+        return false;
+    }
+    if (!level.loaded.load(m_options.unpackedDirectory / ref->directory)) {
+        console.print(std::format("{} is not unpacked", ref->name));
+        return false;
+    }
+    level.name = ref->name;
+    level.layout = &level.loaded;
+    if (level.data.load(m_options.unpackedDirectory / ref->worldDataFile())) {
+        if (const LevelInfo* info = level.data.level(ref->name)) {
+            level.roster = info->enemies;
+        }
+    }
+    return true;
+}
+
 void Gauntlet::consoleList(DevConsole& console, DevConsole::Arguments arguments) {
+    using Listing = ConsoleCommands::Listing;
     const auto say = [&](const std::vector<std::string>& lines) {
         for (const std::string& line : lines) {
             console.print(line);
         }
     };
-    switch (ConsoleCommands::listingOf(arguments)) {
-    case ConsoleCommands::Listing::Maps: say(ConsoleCommands::mapLines(m_levels)); break;
-    case ConsoleCommands::Listing::Items: say(ConsoleCommands::itemLines()); break;
-    case ConsoleCommands::Listing::Inventory:
+    const Listing listing = ConsoleCommands::listingOf(arguments);
+    const std::optional<std::string> map = ConsoleCommands::listedMap(arguments);
+    switch (listing) {
+    case Listing::Maps: say(ConsoleCommands::mapLines(m_levels)); return;
+    case Listing::Inventory:
         if (const CharacterSave* save = m_play->scene.liveSave(consolePlayer())) {
             say(ConsoleCommands::inventoryLines(*save));
         } else {
             console.print("Nobody is in.");
         }
+        return;
+    case Listing::Unknown: console.print(ConsoleCommands::kListUsage); return;
+    case Listing::Items:
+        if (!map.has_value()) {
+            say(ConsoleCommands::itemLines());
+        }
         break;
-    case ConsoleCommands::Listing::Unknown: console.print(ConsoleCommands::kListUsage); break;
+    case Listing::Enemies:
+        if (!map.has_value()) {
+            say(ConsoleCommands::enemyKindLines());
+        }
+        break;
+    case Listing::Critters: say(ConsoleCommands::critterLines()); break;
+    case Listing::Generators:
+    case Listing::Objects: break;
     }
+    ConsoleLevel level;
+    if (!consoleLevel(console, map, level)) {
+        return;
+    }
+    console.print(std::format("In {}:", level.name));
+    switch (listing) {
+    case Listing::Items: say(ConsoleCommands::pickupLines(*level.layout)); break;
+    case Listing::Enemies:
+        say(ConsoleCommands::rosterLines(level.roster));
+        say(ConsoleCommands::generatorLines(*level.layout));
+        say(ConsoleCommands::placedEnemyLines(*level.layout));
+        break;
+    case Listing::Critters: say(ConsoleCommands::placedCritterLines(*level.layout)); break;
+    case Listing::Generators:
+        say(ConsoleCommands::generatorLines(*level.layout));
+        console.print("spawn generator <enemy> [tier] stands another");
+        break;
+    case Listing::Objects: say(ConsoleCommands::objectLines(*level.layout)); break;
+    case Listing::Maps:
+    case Listing::Inventory:
+    case Listing::Unknown: break;
+    }
+}
+
+void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments) {
+    constexpr f32 kAhead = 6.0f; ///< units before the character
+    constexpr f32 kApart = 3.0f; ///< between several
+    constexpr f32 kProbeAbove = 3.0f;
+    constexpr f32 kProbeBelow = 10.0f;
+    const PlayerActor* actor = m_play->scene.actor(consolePlayer());
+    if (actor == nullptr) {
+        console.print("Nobody is in to spawn before.");
+        return;
+    }
+    std::string error;
+    const auto spawn = ConsoleCommands::parseSpawn(arguments, error);
+    if (!spawn.has_value()) {
+        console.print(error);
+        return;
+    }
+    const Vec3 facing = actor->facing();
+    const f32 yawToPlayer = actor->yaw() + kPi;
+    const auto spotAt = [&](s32 index) {
+        Vec3 spot = actor->position() + facing * (kAhead + kApart * static_cast<f32>(index));
+        if (const auto floor = m_play->world.collision().floorAt(
+                spot + Vec3{0.0f, kProbeAbove, 0.0f}, kProbeAbove, kProbeBelow)) {
+            spot.y = floor->y;
+        }
+        return spot;
+    };
+    PlayScene& scene = m_play->scene;
+    switch (spawn->kind) {
+    case ConsoleCommands::Spawn::Kind::Enemy: {
+        s32 stood = 0;
+        const std::vector<EnemyView> views = scene.opponents().views(scene.participants());
+        for (s32 i = 0; i < spawn->count; ++i) {
+            if (scene.enemies().loadKind(spawn->enemyKind) &&
+                scene.enemies()
+                    .spawn(EnemySpawn{.kind = spawn->enemyKind,
+                                      .tier = spawn->tier,
+                                      .position = spotAt(i),
+                                      .direction = -facing,
+                                      .placed = true},
+                           views)
+                    .has_value()) {
+                ++stood;
+            }
+        }
+        console.print(
+            stood > 0 ? std::format("Spawned {} {} at tier {}", stood, spawn->name, spawn->tier)
+                      : std::format("No room for {} here, or its kind is missing", spawn->name));
+        break;
+    }
+    case ConsoleCommands::Spawn::Kind::Critter: {
+        std::optional<s32> id;
+        switch (spawn->critter) {
+        case CombatantKind::Golem: id = scene.critters().spawnGolem(spotAt(0), yawToPlayer); break;
+        case CombatantKind::General:
+            id = scene.critters().spawnGeneral(spotAt(0), yawToPlayer);
+            break;
+        case CombatantKind::Gargoyle:
+            id = scene.critters().spawnGargoyle(spotAt(0), yawToPlayer, spawn->form);
+            break;
+        case CombatantKind::Unknown:
+        case CombatantKind::Boss: break;
+        }
+        const std::string& what = spawn->form.empty() ? spawn->name : spawn->form;
+        console.print(id.has_value()
+                          ? std::format("Spawned a {}", what)
+                          : std::format("No room for a {} here, or its kind is missing", what));
+        break;
+    }
+    case ConsoleCommands::Spawn::Kind::Generator: {
+        const auto id = scene.generators().spawn(renderDevice(), scene.enemies(), spawn->enemyKind,
+                                                 spawn->tier, spotAt(0), yawToPlayer);
+        console.print(id.has_value()
+                          ? std::format("Stood a tier {} {} generator", spawn->tier, spawn->name)
+                          : std::format("No {} generator could stand here", spawn->name));
+        break;
+    }
+    case ConsoleCommands::Spawn::Kind::Thing:
+        if (m_play->world.placeItem(renderDevice(), spawn->name, spotAt(0))) {
+            console.print(std::format("Dropped {}", spawn->name));
+        } else if (ConsoleCommands::hasObject(m_play->world.layout(), spawn->name)) {
+            console.print(
+                std::format("{}; {} is one of them", ConsoleCommands::kObjectsStay, spawn->name));
+        } else {
+            console.print(std::format("Nothing named {} here; list items, objects, enemies or "
+                                      "critters name what there is",
+                                      spawn->name));
+        }
+        break;
+    }
+}
+
+void Gauntlet::consoleSuicide(DevConsole& console) {
+    if (m_play->world.isTower()) {
+        console.print("Nobody falls in the tower.");
+        return;
+    }
+    s32 fallen = 0;
+    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+        if (m_play->scene.kill(player)) {
+            ++fallen;
+        }
+    }
+    console.print(fallen > 0 ? std::format("{} fallen", fallen) : "Nobody was standing.");
 }
 
 void Gauntlet::consoleGoto(DevConsole& console, DevConsole::Arguments arguments) {

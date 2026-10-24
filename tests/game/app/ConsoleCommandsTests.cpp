@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cctype>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
@@ -12,6 +14,7 @@
 #include "TestSupport.h"
 #include "game/app/ConsoleCommands.h"
 #include "game/characters/Progression.h"
+#include "game/enemies/EnemyKinds.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/TowerAccess.h"
 #include "game/players/ItemPickup.h"
@@ -253,6 +256,122 @@ TEST_CASE("the map list names every level of every realm", "[dev-console][comman
             CHECK(mentions(lines, name));
         }
     }
+}
+
+TEST_CASE("list knows what a level holds and the map named after it", "[dev-console][commands]") {
+    CHECK(ConsoleCommands::listingOf(Args{"enemies"}) == ConsoleCommands::Listing::Enemies);
+    CHECK(ConsoleCommands::listingOf(Args{"Critters"}) == ConsoleCommands::Listing::Critters);
+    CHECK(ConsoleCommands::listingOf(Args{"generators"}) == ConsoleCommands::Listing::Generators);
+    CHECK(ConsoleCommands::listingOf(Args{"OBJECTS", "g1"}) == ConsoleCommands::Listing::Objects);
+    CHECK(ConsoleCommands::listedMap(Args{"objects", "g1"}) == "G1");
+    CHECK_FALSE(ConsoleCommands::listedMap(Args{"objects"}).has_value());
+}
+
+TEST_CASE("spawn reads an enemy with its tier and count, a critter, a generator or a thing",
+          "[dev-console][commands]") {
+    using Kind = ConsoleCommands::Spawn::Kind;
+    std::string error;
+    const auto spawn = [&](Args args) {
+        const auto request = ConsoleCommands::parseSpawn(args, error);
+        REQUIRE(request.has_value());
+        return *request;
+    };
+    auto grunt = spawn({"gru"});
+    CHECK(grunt.kind == Kind::Enemy);
+    CHECK(grunt.enemyKind == kGruntKind);
+    CHECK(grunt.tier == 1);
+    CHECK(grunt.count == 1);
+    CHECK(grunt.name == "GRU");
+    auto crowd = spawn({"GRU", "3", "5"});
+    CHECK(crowd.tier == 3);
+    CHECK(crowd.count == 5);
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "4"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "1", "0"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "1", "2", "x"}, error).has_value());
+    auto golem = spawn({"golem"});
+    CHECK(golem.kind == Kind::Critter);
+    CHECK(golem.critter == CombatantKind::Golem);
+    CHECK(golem.form.empty());
+    CHECK(spawn({"gargoyle"}).form == "GAR_EAGL");
+    CHECK(spawn({"Gargoyle", "lion"}).form == "GAR_LION");
+    CHECK(spawn({"general"}).critter == CombatantKind::General);
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gargoyle", "dog"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"general", "x"}, error).has_value());
+    auto generator = spawn({"generator", "rat", "2"});
+    CHECK(generator.kind == Kind::Generator);
+    CHECK(generator.enemyKind == kRatKind);
+    CHECK(generator.tier == 2);
+    CHECK(generator.name == "RAT");
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"generator"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"generator", "golem"}, error).has_value());
+    auto key = spawn({"key"});
+    CHECK(key.kind == Kind::Thing);
+    CHECK(key.name == "KEY");
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"key", "x"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{}, error).has_value());
+    CHECK(error == ConsoleCommands::kSpawnUsage);
+    CHECK(ConsoleCommands::spawnableEnemy(kGruntKind));
+    CHECK(ConsoleCommands::spawnableEnemy(kDeathKind));
+    CHECK(ConsoleCommands::spawnableEnemy(kItKind));
+    CHECK_FALSE(ConsoleCommands::spawnableEnemy(kGolemEnemyKind));
+    CHECK_FALSE(ConsoleCommands::spawnableEnemy(kGargoyleEnemyKind));
+    CHECK_FALSE(ConsoleCommands::spawnableEnemy(kGeneralEnemyKind));
+    CHECK_FALSE(ConsoleCommands::spawnableEnemy(kEnemyKindCount));
+}
+
+TEST_CASE("the enemy, critter and roster lines name what spawn takes", "[dev-console][commands]") {
+    const auto enemies = ConsoleCommands::enemyKindLines();
+    REQUIRE(enemies.size() == 1);
+    CHECK(enemies[0].contains("GRU"));
+    CHECK(enemies[0].contains("DEATH"));
+    CHECK_FALSE(enemies[0].contains("GOLEM"));
+    CHECK_FALSE(enemies[0].contains("NONE"));
+    const auto critters = ConsoleCommands::critterLines();
+    REQUIRE(critters.size() == 1);
+    CHECK(critters[0].contains("golem"));
+    CHECK(critters[0].contains("eagl|lion|serp"));
+    const std::vector<LevelEnemy> roster{LevelEnemy{.kind = kGruntKind, .subtype = 2},
+                                         LevelEnemy{.kind = kRatKind, .subtype = 1}};
+    const auto lines = ConsoleCommands::rosterLines(roster);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].contains("medium GRU"));
+    CHECK(lines[0].contains("small RAT"));
+    CHECK(ConsoleCommands::rosterLines({})[0] == "Roster: none");
+    CHECK(ConsoleCommands::pickupKindName(2) == "keys");
+    CHECK(ConsoleCommands::pickupKindName(99) == "pickup");
+}
+
+TEST_CASE("the layout lines count a level's generators, placed enemies, pickups and objects",
+          "[dev-console][commands][assets]") {
+    const auto level = test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2").parent_path();
+    WorldLayout layout;
+    REQUIRE(layout.load(level));
+    const auto generators = ConsoleCommands::generatorLines(layout);
+    REQUIRE(generators.size() == 1);
+    CHECK(generators[0].contains("GRU"));
+    CHECK(generators[0].contains("tier"));
+    CHECK(ConsoleCommands::placedEnemyLines(layout)[0].starts_with("Placed enemies: "));
+    CHECK(ConsoleCommands::placedCritterLines(layout)[0].starts_with("Critters placed: "));
+    const auto pickups = ConsoleCommands::pickupLines(layout);
+    REQUIRE(pickups.size() == 1);
+    CHECK(pickups[0].starts_with("Pickups (spawn <name>): "));
+    CHECK(pickups[0].contains("(keys)"));
+    const auto objects = ConsoleCommands::objectLines(layout);
+    REQUIRE(objects.size() == 1);
+    CHECK(objects[0].starts_with(std::format("Objects ({}, ", layout.objects().size())));
+    CHECK(objects[0].contains(" distinct): "));
+    REQUIRE_FALSE(layout.objects().empty());
+    std::string lowered = layout.objects().front().name;
+    for (char& c : lowered) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    CHECK(ConsoleCommands::hasObject(layout, lowered));
+    CHECK_FALSE(ConsoleCommands::hasObject(layout, "NOTHING_OF_THE_KIND"));
+    const auto pickup = std::ranges::find_if(
+        layout.itemInfos(), [](const ItemInfo& info) { return info.type == ItemInfo::kPowerup; });
+    REQUIRE(pickup != layout.itemInfos().end());
+    CHECK(ConsoleCommands::hasPickup(layout, pickup->name));
+    CHECK_FALSE(ConsoleCommands::hasPickup(layout, "NOTHING_OF_THE_KIND"));
 }
 
 } // namespace

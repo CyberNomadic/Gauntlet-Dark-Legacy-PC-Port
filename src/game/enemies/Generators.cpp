@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -184,6 +186,10 @@ constexpr std::array<s32, 4> kHellAlgorithms{30, 30, 7, 7};
 constexpr s32 kGeneratorKindStrength = 0;
 constexpr std::array<s32, 3> kCasterAlgorithms{28, 29, 30}; ///< dropped once a state crumbles
 constexpr f32 kGeneratorViewScale = 8.0f;
+/** What a generator the level has no record for measures, for the developer console. */
+constexpr f32 kStockGeneratorRadius = 3.0f;
+constexpr f32 kStockGeneratorHeight = 6.0f;
+constexpr s32 kStockGeneratorHitPoints = 100;
 constexpr f32 kAttentionRangeSquared = 2500.0f; ///< do_items, lbl_80343C50 (50 world units)
 
 f32 flatDistance(const Vec3& a, const Vec3& b) {
@@ -593,6 +599,14 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
     const auto authored = itemSupportWorld(layout, collision);
     m_sim.scales = scales;
     m_sim.players = players;
+    m_realmItems = realmItems;
+    m_lenders.assign(lenders.begin(), lenders.end());
+    m_records.clear();
+    for (const ItemInfo& record : layout.itemInfos()) {
+        if (record.type == ItemInfo::kGenerator) {
+            m_records.push_back(record);
+        }
+    }
     const std::vector<ItemInfo>& infos = layout.itemInfos();
     for (const ItemInstance& instance : layout.itemInstances()) {
         if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
@@ -629,86 +643,24 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
                 enemies.loadKind(species);
             }
         }
-        if (!loadBodies(device, enemies, kind, realmItems, lenders)) {
-            continue;
-        }
-        Generator generator;
-        generator.minPlayers = instance.minPlayers;
-        generator.presence = shownToParty(instance.minPlayers, players)
-                                 ? Generator::Presence::Shown
-                                 : Generator::Presence::Hidden;
-        generator.kind = kind;
-        // The strength is also the state it stands in: a strength-one generator is one state
-        // from gone and looks it.
-        generator.tier = strength;
-        generator.state = std::min(strength, kStates);
-        generator.algorithm = paramOf(instance, 1);
-        if (generator.algorithm < 0) {
-            generator.algorithm = enemyKind(kind).algorithm;
-        }
-        const auto tierIndex = static_cast<usize>(std::clamp(authoredStrength, 1, kStates) - 1);
-        s32 most = paramOf(instance, 2);
-        s32 interval = paramOf(instance, 3);
-        if (most == 0) {
-            most = kDefaultMost[tierIndex];
-        }
-        if (interval == 0) {
-            interval = kDefaultInterval[tierIndex];
-        }
-        // Scaled the way the original truncates them: to a whole count and interval.
-        generator.most = static_cast<s32>(static_cast<f32>(most) * scales.most);
-        generator.interval = static_cast<s32>(static_cast<f32>(interval) * scales.rate);
-        generator.threshold = std::trunc(static_cast<f32>(body->hitPoints) * scales.health);
-        // Durability and defaults use the authored strength before a special brood
-        // replaces its troop tier. Damage and initial health are whole hit points.
-        generator.health =
-            std::trunc(static_cast<f32>(info.hitPoints * authoredStrength) * scales.health);
-        generator.armor = static_cast<f32>(info.armor);
-        const Mat4 placement = itemPlacement(instance.position, instance.rotation);
-        generator.position = instance.position;
-        if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
-            if (const auto floor = collision->floorAt(instance.position, 3.0f, 6.0f)) {
-                // AddItemSub uses the same floor lift as other placed items.
-                // Ground portals otherwise share the floor's depth exactly.
-                generator.position.y = floor->y + ItemFigure::kFloorLift;
-            }
-        }
-        generator.yaw = portable::atan2(placement[2][0], placement[2][2]);
-        generator.placement = placement;
-        generator.placement[3] = Vec4{generator.position, 1};
-        generator.direction = Vec3{placement[2][0], 0.0f, placement[2][2]};
-        if (glm::length(generator.direction) > 0.001f) {
-            generator.direction = glm::normalize(generator.direction);
-        } else {
-            generator.direction = Vec3{0.0f, 0.0f, 1.0f};
-        }
-        // SetItem copies the original offset before replacing a rat's info by LOW.
-        generator.collisionOffset = info.collisionOffset;
-        generator.targetRadius = body->radius;
-        generator.targetHeight = body->height;
-        generator.clearance = body->height;
-        generator.patrolClearance = body->radius;
-        generator.viewRadius = kGeneratorViewScale * std::max(info.radius, info.height);
-        generator.alwaysActive = (info.activeType & 0x40U) != 0 || (instance.flags & 1U) != 0;
-        generator.box.centre = generator.position;
-        generator.box.yaw = generator.yaw;
-        generator.box.halfAcross = body->xSize > 0.0f ? body->xSize : body->radius;
-        generator.box.halfAlong = body->zSize > 0.0f ? body->zSize : body->radius;
-        generator.box.height = body->height;
-        generator.box.cylinderRadius = body->collisionType == 1 ? body->radius : 0.0f;
-        if (body->collisionType == 1 || body->collisionType == 3) {
-            generator.box.enemyItem = Obstacle::ItemQuery{body->collisionType == 1, body->radius};
-        }
-        generator.box.solid = generator.presence == Generator::Presence::Shown;
-        bindSupport(generator, info, instance.position,
-                    itemSupportAt(instance.position, collision, authored ? &*authored : nullptr));
-        generator.countdown = 0;
-        if (m_sim.nextInstance == 0) {
+        Placement placement;
+        placement.info = &info;
+        placement.body = body;
+        placement.kind = kind;
+        placement.strength = strength;
+        placement.authoredStrength = authoredStrength;
+        placement.algorithm = paramOf(instance, 1);
+        placement.most = paramOf(instance, 2);
+        placement.interval = paramOf(instance, 3);
+        placement.minPlayers = instance.minPlayers;
+        placement.alwaysActive = (info.activeType & 0x40U) != 0 || (instance.flags & 1U) != 0;
+        placement.position = instance.position;
+        placement.rotation = instance.rotation;
+        if (!stand(device, enemies, placement, authored ? &*authored : nullptr, realmItems,
+                   lenders) &&
+            m_sim.nextInstance == 0) {
             return false;
         }
-        generator.instance = m_sim.nextInstance;
-        m_sim.generators.push_back(std::move(generator));
-        ++m_sim.nextInstance;
     }
     syncFloors();
     m_roster.reserve(m_sim.generators.size());
@@ -717,6 +669,128 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
     }
     m_sim.bound = true;
     return true;
+}
+
+bool Generators::stand(RenderDevice& device, Enemies& enemies, const Placement& placement,
+                       const WorldCollision* authored, ItemArchive* realmItems,
+                       std::span<TextureSet* const> lenders) {
+    const ItemInfo& info = *placement.info;
+    const ItemInfo& body = *placement.body;
+    const s32 kind = placement.kind;
+    if (!loadBodies(device, enemies, kind, realmItems, lenders) || m_sim.nextInstance == 0) {
+        return false;
+    }
+    const GeneratorScales& scales = m_sim.scales;
+    const WorldCollision* collision = m_sim.collision;
+    Generator generator;
+    generator.minPlayers = placement.minPlayers;
+    generator.presence = shownToParty(placement.minPlayers, m_sim.players)
+                             ? Generator::Presence::Shown
+                             : Generator::Presence::Hidden;
+    generator.kind = kind;
+    // The strength is also the state it stands in: a strength-one generator is one state
+    // from gone and looks it.
+    generator.tier = placement.strength;
+    generator.state = std::min(placement.strength, kStates);
+    generator.algorithm = placement.algorithm;
+    if (generator.algorithm < 0) {
+        generator.algorithm = enemyKind(kind).algorithm;
+    }
+    const auto tierIndex =
+        static_cast<usize>(std::clamp(placement.authoredStrength, 1, kStates) - 1);
+    s32 most = placement.most;
+    s32 interval = placement.interval;
+    if (most == 0) {
+        most = kDefaultMost[tierIndex];
+    }
+    if (interval == 0) {
+        interval = kDefaultInterval[tierIndex];
+    }
+    // Scaled the way the original truncates them: to a whole count and interval.
+    generator.most = static_cast<s32>(static_cast<f32>(most) * scales.most);
+    generator.interval = static_cast<s32>(static_cast<f32>(interval) * scales.rate);
+    generator.threshold = std::trunc(static_cast<f32>(body.hitPoints) * scales.health);
+    // Durability and defaults use the authored strength before a special brood
+    // replaces its troop tier. Damage and initial health are whole hit points.
+    generator.health =
+        std::trunc(static_cast<f32>(info.hitPoints * placement.authoredStrength) * scales.health);
+    generator.armor = static_cast<f32>(info.armor);
+    const Mat4 placed = itemPlacement(placement.position, placement.rotation);
+    generator.position = placement.position;
+    if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
+        if (const auto floor = collision->floorAt(placement.position, 3.0f, 6.0f)) {
+            // AddItemSub uses the same floor lift as other placed items.
+            // Ground portals otherwise share the floor's depth exactly.
+            generator.position.y = floor->y + ItemFigure::kFloorLift;
+        }
+    }
+    generator.yaw = portable::atan2(placed[2][0], placed[2][2]);
+    generator.placement = placed;
+    generator.placement[3] = Vec4{generator.position, 1};
+    generator.direction = Vec3{placed[2][0], 0.0f, placed[2][2]};
+    if (glm::length(generator.direction) > 0.001f) {
+        generator.direction = glm::normalize(generator.direction);
+    } else {
+        generator.direction = Vec3{0.0f, 0.0f, 1.0f};
+    }
+    // SetItem copies the original offset before replacing a rat's info by LOW.
+    generator.collisionOffset = info.collisionOffset;
+    generator.targetRadius = body.radius;
+    generator.targetHeight = body.height;
+    generator.clearance = body.height;
+    generator.patrolClearance = body.radius;
+    generator.viewRadius = kGeneratorViewScale * std::max(info.radius, info.height);
+    generator.alwaysActive = placement.alwaysActive;
+    generator.box.centre = generator.position;
+    generator.box.yaw = generator.yaw;
+    generator.box.halfAcross = body.xSize > 0.0f ? body.xSize : body.radius;
+    generator.box.halfAlong = body.zSize > 0.0f ? body.zSize : body.radius;
+    generator.box.height = body.height;
+    generator.box.cylinderRadius = body.collisionType == 1 ? body.radius : 0.0f;
+    if (body.collisionType == 1 || body.collisionType == 3) {
+        generator.box.enemyItem = Obstacle::ItemQuery{body.collisionType == 1, body.radius};
+    }
+    generator.box.solid = generator.presence == Generator::Presence::Shown;
+    bindSupport(generator, info, placement.position,
+                itemSupportAt(placement.position, collision, authored));
+    generator.countdown = 0;
+    generator.instance = m_sim.nextInstance;
+    m_sim.generators.push_back(std::move(generator));
+    ++m_sim.nextInstance;
+    return true;
+}
+
+std::optional<s32> Generators::spawn(RenderDevice& device, Enemies& enemies, s32 kind, s32 tier,
+                                     const Vec3& position, f32 yaw) {
+    if (!m_sim.bound || kind < 0 || kind >= kEnemyKindCount) {
+        return std::nullopt;
+    }
+    // The level's record for the kind, any of its generator records failing that, else stock
+    // measures: the figure is the kind's own either way.
+    const std::string_view name = enemyKind(kind).name;
+    const auto named = std::ranges::find(m_records, name, &ItemInfo::name);
+    ItemInfo stock;
+    stock.type = ItemInfo::kGenerator;
+    stock.name = std::string(name);
+    stock.radius = kStockGeneratorRadius;
+    stock.height = kStockGeneratorHeight;
+    stock.hitPoints = kStockGeneratorHitPoints;
+    const ItemInfo& info = named != m_records.end() ? *named
+                           : !m_records.empty()     ? m_records.front()
+                                                    : stock;
+    Placement placement;
+    placement.info = &info;
+    placement.body = &info;
+    placement.kind = kind;
+    placement.strength = std::clamp(tier, 1, kStates);
+    placement.authoredStrength = placement.strength;
+    placement.position = position;
+    placement.rotation = Vec3{0.0f, yaw, 0.0f};
+    if (!stand(device, enemies, placement, nullptr, m_realmItems, m_lenders)) {
+        return std::nullopt;
+    }
+    syncFloors();
+    return static_cast<s32>(m_sim.generators.size()) - 1;
 }
 
 void Generators::bindSupport(Generator& generator, const ItemInfo& info, const Vec3& authored,
@@ -847,6 +921,9 @@ void Generators::clear() {
     ++m_restoreGeneration;
     m_sim.bound = false;
     m_roster.clear();
+    m_records.clear();
+    m_realmItems = nullptr;
+    m_lenders.clear();
     m_sim.collision = nullptr;
     m_sim.view.reset();
     m_sim.attention.reset();

@@ -66,6 +66,20 @@ void PlayerHealth::advanceSurfaceGap(PlayerRuntime& runtime, f32 seconds) {
     runtime.surfaceGap = std::max(runtime.surfaceGap - seconds, 0.0f);
 }
 
+void PlayerHealth::fall(PlayerRuntime& runtime, const Events& events) {
+    // Health of nought would read as a class never played: the fallen keep a point that the
+    // status box does not show.
+    runtime.actor.save().progress().health = 1;
+    runtime.healthFraction = 0;
+    runtime.life = PlayerLife::Dying;
+    runtime.turbo.reset();
+    events.sound(kDeathSound);
+    events.cry("DIE2");
+    if (events.logDeaths) {
+        log::info("Player {} has fallen", runtime.actor.player() + 1);
+    }
+}
+
 void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool directed,
                         bool inTower, f32 damageScale, const Events& events,
                         const PlayerImpact& impact, bool bossEncounter, const ClassStats* stats) {
@@ -143,20 +157,10 @@ void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool 
     if ((received.flags & kDrainFlag) != 0) {
         runtime.gagSeconds = kDrainGagSeconds;
     }
-    CharacterSave& save = runtime.actor.save();
+    const CharacterSave& save = runtime.actor.save();
     const f32 remaining = liveHealth(runtime) - damage;
     if (remaining < 1.0f) {
-        // Health of nought would read as a class never played: the fallen keep a point that
-        // the status box does not show.
-        save.progress().health = 1;
-        runtime.healthFraction = 0;
-        runtime.life = PlayerLife::Dying;
-        runtime.turbo.reset();
-        events.sound(kDeathSound);
-        events.cry("DIE2");
-        if (events.logDeaths) {
-            log::info("Player {} has fallen", runtime.actor.player() + 1);
-        }
+        fall(runtime, events);
         return;
     }
     const s32 before = save.health();

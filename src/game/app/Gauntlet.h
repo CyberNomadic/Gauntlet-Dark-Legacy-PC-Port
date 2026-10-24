@@ -10,6 +10,8 @@
 
 #include "engine/app/Application.h"
 #include "engine/assets/StringTable.h"
+#include "engine/assets/WorldData.h"
+#include "engine/assets/WorldLayout.h"
 #include "engine/audio/AudioDevice.h"
 #include "engine/audio/SoundPlayer.h"
 #include "engine/core/Types.h"
@@ -84,6 +86,20 @@ private:
     void consoleGoto(DevConsole& console, DevConsole::Arguments arguments);
     void consoleUnlockTower(DevConsole& console);
     void consoleGet(DevConsole& console, DevConsole::Arguments arguments);
+    void consoleSpawn(DevConsole& console, DevConsole::Arguments arguments);
+    void consoleSuicide(DevConsole& console);
+    /** What `list` reads of a level: the one in play's, or a named map's loaded for it. */
+    struct ConsoleLevel {
+        std::string name;
+        const WorldLayout* layout = nullptr;
+        std::span<const LevelEnemy> roster;
+        WorldLayout loaded; ///< a named map's, when it is not the one in play
+        WorldData data;
+    };
+    /** Fills `level` for `map`, or for the level in play without one; false, having said
+     * why, for a map unknown or not unpacked. */
+    bool consoleLevel(DevConsole& console, const std::optional<std::string>& map,
+                      ConsoleLevel& level);
     void consoleToggleCheat(DevConsole& console, bool PlayScene::ConsoleCheats::*flag,
                             std::string_view on, std::string_view off);
     void consoleHideHud(DevConsole& console);

@@ -678,3 +678,13 @@ TEST_CASE("harmless contacts healing tower damage and invulnerability do not vib
     f.hit(50);
     CHECK(f.vibrations.empty());
 }
+
+TEST_CASE("felled outright, the character keeps a hidden point of health and is heard to die",
+          "[game][health][dev-console]") {
+    Fixture fixture;
+    PlayerHealth::fall(fixture.player, fixture.events);
+    CHECK(fixture.player.life == PlayerLife::Dying);
+    CHECK(fixture.player.actor.save().progress().health == 1);
+    CHECK(fixture.sounds.size() == 1);
+    CHECK(fixture.cries == std::vector<std::string>{"DIE2"});
+}

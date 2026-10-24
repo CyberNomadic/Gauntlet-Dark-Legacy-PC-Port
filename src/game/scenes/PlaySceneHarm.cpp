@@ -70,20 +70,40 @@ void PlayScene::hurt(usize index, f32 damage, HurtKind kind, bool directed,
             m_context.levels != nullptr && m_context.levels->isLastLevel(m_world->ref()),
         .realm = m_world->ref().realmId,
         .playSeconds = m_sim.playSeconds};
-    PartyDamage::hurt(
-        m_sim.health, runtime, damage, kind, directed, context,
-        {.block = [this, index](f32 taken,
-                                f32 left) { m_attacks.showBlock(index, taken, left, m_players); },
-         .sound = [this](std::string_view sound) { m_audio.playNamed(sound); },
-         .cry = [this, index](std::string_view voice) { m_attacks.cry(index, voice, m_players); },
-         .named = [this, index](std::string_view line,
-                                f32 wait) { sayWithName(index, line, wait); },
-         .learnBlock = [this, index] { postHelp(HelpMessages::kLearnBlock, index); },
-         .vibrate =
-             [this, &runtime](s32 frames) {
-                 emitOutput(RumbleOutput{runtime.actor.player(), frames, ControlFeedback::Damage});
-             }},
-        impact, m_classes.stats(runtime.actor.save().character));
+    PartyDamage::hurt(m_sim.health, runtime, damage, kind, directed, context,
+                      healthEvents(index, runtime), impact,
+                      m_classes.stats(runtime.actor.save().character));
+}
+
+PlayerHealth::Events PlayScene::healthEvents(usize index, PlayerRuntime& runtime) {
+    return {
+        .block = [this, index](f32 taken,
+                               f32 left) { m_attacks.showBlock(index, taken, left, m_players); },
+        .sound = [this](std::string_view sound) { m_audio.playNamed(sound); },
+        .cry = [this, index](std::string_view voice) { m_attacks.cry(index, voice, m_players); },
+        .named = [this, index](std::string_view line, f32 wait) { sayWithName(index, line, wait); },
+        .learnBlock = [this, index] { postHelp(HelpMessages::kLearnBlock, index); },
+        .vibrate =
+            [this, &runtime](s32 frames) {
+                emitOutput(RumbleOutput{runtime.actor.player(), frames, ControlFeedback::Damage});
+            }};
+}
+
+bool PlayScene::kill(s32 player) {
+    if (m_world == nullptr || m_world->isTower()) {
+        return false;
+    }
+    for (usize i = 0; i < m_players.size(); ++i) {
+        PlayerRuntime& runtime = m_players[i];
+        if (runtime.actor.player() != player || runtime.life != PlayerLife::Standing) {
+            continue;
+        }
+        const auto audioScope = m_audio.soundScope({31, 0, 1, static_cast<u8>(player)},
+                                                   static_cast<u32>(HurtKind::Burn) + 1);
+        PlayerHealth::fall(runtime, healthEvents(i, runtime));
+        return true;
+    }
+    return false;
 }
 
 /** Burning floors, rollers and carts hurt whoever is against or on them, at most once a

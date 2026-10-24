@@ -66,6 +66,9 @@ public:
               f32 damageScale, const Events& events, const PlayerImpact& impact = {},
               bool bossEncounter = false, const ClassStats* stats = nullptr);
     static f32 guarded(const PlayerRuntime& runtime, f32 damage, bool directed);
+    /** Fells the character outright, as the last point of health going does: a point is kept
+     * that the status box does not show, the turbo meter empties, and the death is heard. */
+    static void fall(PlayerRuntime& runtime, const Events& events);
 
     static constexpr s32 kHeartbeatHealth = 200; ///< at or under this the heart is heard
     static constexpr std::string_view kHeartbeatSound = "S_WARN";

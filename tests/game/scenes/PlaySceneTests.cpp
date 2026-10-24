@@ -34,9 +34,11 @@
 #include "game/characters/Progression.h"
 #include "game/combat/DamageTypes.h"
 #include "game/config/GameConfig.h"
+#include "game/critters/Critters.h"
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyAnimator.h"
 #include "game/enemies/EnemyKinds.h"
+#include "game/enemies/Generators.h"
 #include "game/hud/ChallengeHud.h"
 #include "game/level/ItemFigure.h"
 #include "game/level/LevelTriggers.h"
@@ -5683,5 +5685,69 @@ TEST_CASE(
     device.draws.clear();
     scene.render(device, projection, 640, 448);
     CHECK(device.draws.size() < shown);
+    scene.close();
+}
+
+TEST_CASE("the console stands the swarm, the great ones, generators and pickups before the party "
+          "and fells it",
+          "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
+    test::unpackedOrSkip("MONSTERS/GOLEM/LEVELA/objects.json");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("A1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.actor(0) != nullptr);
+    const PlayerActor& actor = *scene.actor(0);
+    const Vec3 spot = actor.position() + actor.facing() * 6.0f;
+    // A generator of a kind the level breeds, at the tier asked for.
+    const usize generators = scene.generators().count();
+    const auto stood = scene.generators().spawn(device, scene.enemies(), kGruntKind, 2, spot, 0.0f);
+    REQUIRE(stood.has_value());
+    CHECK(scene.generators().count() == generators + 1);
+    CHECK(scene.generators().kindOf(*stood) == kGruntKind);
+    // One of the swarm, exactly where asked.
+    REQUIRE(scene.enemies().loadKind(kGruntKind));
+    const auto grunt = scene.enemies().spawn(EnemySpawn{.kind = kGruntKind,
+                                                        .tier = 1,
+                                                        .position = spot,
+                                                        .direction = -actor.facing(),
+                                                        .placed = true},
+                                             scene.opponents().views(scene.participants()));
+    REQUIRE(grunt.has_value());
+    CHECK(scene.enemies().alive(*grunt));
+    // A great one, its archive loaded for it.
+    CHECK(scene.critters().spawnGolem(spot, 0.0f).has_value());
+    // A pickup by one of the level's records.
+    const auto& infos = world.layout().itemInfos();
+    const auto pickup = std::ranges::find_if(
+        infos, [](const ItemInfo& info) { return info.type == ItemInfo::kPowerup; });
+    REQUIRE(pickup != infos.end());
+    const usize items = world.placedItems().size();
+    CHECK(world.placeItem(device, pickup->name, spot));
+    CHECK(world.placedItems().size() == items + 1);
+    // Felled where it stands, once.
+    REQUIRE(scene.kill(0));
+    CHECK(scene.fallen(0));
+    CHECK_FALSE(scene.kill(0));
     scene.close();
 }

@@ -84,6 +84,11 @@ public:
     void clear();
     /** Carries bodies, contact boxes and birth origins with their supporting world nodes. */
     void syncFloors();
+    /** Stands a generator of `kind` at `position` facing `yaw`, breeding at `tier`, on the
+     * level's record for the kind (any of its generator records failing that, else stock
+     * measures), for the developer console: its id, or nothing without bodies or a slot. */
+    std::optional<s32> spawn(RenderDevice& device, Enemies& enemies, s32 kind, s32 tier,
+                             const Vec3& position, f32 yaw);
     /** A boss effect leaves a tier-one generator. Its optional BOSSGEN art is borrowed. */
     bool placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchive& items, Enemies& enemies,
                    s32 kind, const Mat4& placement, const WorldCollision* collision,
@@ -281,6 +286,25 @@ private:
     void applyBroodEvents(Enemies& enemies);
     static void bindSupport(Generator& generator, const ItemInfo& info, const Vec3& authored,
                             const WorldCollision* collision);
+    /** One generator's standing, authored or asked for. */
+    struct Placement {
+        const ItemInfo* info = nullptr; ///< the generator's record
+        const ItemInfo* body = nullptr; ///< the record its figure's size comes from
+        s32 kind = kGruntKind;
+        s32 strength = 1;         ///< the tier it breeds at and the state it stands in
+        s32 authoredStrength = 1; ///< what its durability and defaults go by
+        s32 algorithm = -1;
+        s32 most = 0;
+        s32 interval = 0;
+        s32 minPlayers = 0;
+        bool alwaysActive = false;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        Vec3 rotation{0.0f, 0.0f, 0.0f};
+    };
+    /** Loads the kind's bodies and stands the generator; false without them or a slot. */
+    bool stand(RenderDevice& device, Enemies& enemies, const Placement& placement,
+               const WorldCollision* authored, ItemArchive* realmItems,
+               std::span<TextureSet* const> lenders);
 
     struct Simulation {
         const WorldCollision* collision = nullptr;
@@ -295,6 +319,9 @@ private:
         bool bound = false;
     } m_sim;
     std::vector<std::unique_ptr<Bodies>> m_bodyCache;
+    std::vector<ItemInfo> m_records;     ///< the level's generator records, for the console
+    ItemArchive* m_realmItems = nullptr; ///< what bind was given, for standings after it
+    std::vector<TextureSet*> m_lenders;
     struct BossPrototype {
         const ItemArchive* archive = nullptr;
         RenderDevice* device = nullptr;

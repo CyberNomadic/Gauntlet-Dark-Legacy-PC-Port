@@ -385,6 +385,9 @@ public:
     /** Looks through `camera` instead of the level's own, for the developer console's free
      * camera; nothing gives the level's back. Either change cuts rather than glides. */
     void setViewOverride(const std::optional<WorldCamera>& camera);
+    /** Fells `player`'s character where it stands, for the developer console; false in the
+     * tower, where nobody falls, or for one not standing. */
+    bool kill(s32 player);
     /** Harms `player`'s character as a blow, a burn, a piercing or gas would, for tests. */
     void harm(s32 player, f32 damage, HurtKind kind);
     /** What `player`'s status box shows. */
@@ -516,6 +519,8 @@ private:
     void answerTowerPrompts(const Inputs& inputs);
     void hurt(usize index, f32 damage, HurtKind kind, bool directed = false,
               const PlayerImpact& impact = {});
+    /** What a blow to `runtime` (the player at `index`) sounds, shows and teaches. */
+    PlayerHealth::Events healthEvents(usize index, PlayerRuntime& runtime);
     void updateEnemies(s32 ticks, f32 seconds);
     void strikeEnemy(s32 id, f32 power, u32 flags, const Vec3& direction, s32 byPlayer);
     void strikeGenerator(s32 id, f32 power, s32 byPlayer);
