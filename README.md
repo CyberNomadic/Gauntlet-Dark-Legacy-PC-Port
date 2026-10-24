@@ -3,8 +3,7 @@
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/vyZM7jwGg)
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/641-gauntlet-dark-legacy/)
 
-A PC port of the GameCube version of *Gauntlet Dark Legacy* for Windows and
-Linux. Currently in alpha.
+PC port of *Gauntlet Dark Legacy* for Windows and Linux.
 
 Requires your own USA GameCube disc image (`GUNE5D`). Game assets are not included.
 
@@ -23,8 +22,6 @@ settings are preserved; no disc image is needed. Close the installer afterward
 to finish updating the installer itself.
 
 ## Build from source
-
-Requires Python 3.9+ and Git.
 
 ```sh
 git clone https://github.com/sabishii-bit/Gauntlet-Dark-Legacy-PC-Port.git
