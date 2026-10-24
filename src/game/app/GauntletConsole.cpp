@@ -54,8 +54,8 @@ void Gauntlet::setUpConsole() {
                              consoleGet(console, arguments);
                          });
     m_console.addCommand("spawn",
-                         "<enemy> [tier] [count], golem|general|gargoyle, generator <enemy> or "
-                         "<item>: before you",
+                         "stands enemies, great ones, generators, pickups or objects before you; "
+                         "spawn alone says how",
                          [this](DevConsole& console, DevConsole::Arguments arguments) {
                              consoleSpawn(console, arguments);
                          });
@@ -188,7 +188,7 @@ void Gauntlet::consoleList(DevConsole& console, DevConsole::Arguments arguments)
             console.print("Nobody is in.");
         }
         return;
-    case Listing::Unknown: console.print(ConsoleCommands::kListUsage); return;
+    case Listing::Unknown: console.print(ConsoleCommands::listUsage()); return;
     case Listing::Items:
         if (!map.has_value()) {
             say(ConsoleCommands::itemLines());
@@ -334,6 +334,26 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
         console.print(id.has_value()
                           ? std::format("Stood a tier {} {} generator", spawn->tier, spawn->name)
                           : std::format("No {} generator could stand here", spawn->name));
+        break;
+    }
+    case ConsoleCommands::Spawn::Kind::Item:
+        if (from.has_value()) {
+            console.print("Pickups come from the level in play alone; name one without a map");
+        } else if (m_play->world.placeItem(renderDevice(), spawn->name, spotAt(0))) {
+            console.print(std::format("Dropped {}", spawn->name));
+        } else {
+            console.print(
+                std::format("No pickup record named {} here; list items names them", spawn->name));
+        }
+        break;
+    case ConsoleCommands::Spawn::Kind::Object: {
+        const LevelRef source = from.has_value() ? *from : m_play->world.ref();
+        if (scene.spawnObject(source, spawn->name, spotAt(0), yawToPlayer)) {
+            console.print(std::format("Stood {} of {}", spawn->name, source.name));
+        } else {
+            console.print(std::format("Nothing named {} in {}; list objects {} names what there is",
+                                      spawn->name, source.name, source.name));
+        }
         break;
     }
     case ConsoleCommands::Spawn::Kind::Thing: {

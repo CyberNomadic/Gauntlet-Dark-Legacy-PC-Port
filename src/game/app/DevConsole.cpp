@@ -86,19 +86,29 @@ void DevConsole::addCommand(std::string name, std::string summary, Handler handl
 }
 
 void DevConsole::print(std::string_view text) {
+    usize start = 0;
     do {
-        const usize length = breakAt(text, static_cast<usize>(kColumns));
-        m_output.emplace_back(text.substr(0, length));
-        text.remove_prefix(length);
-        if (!text.empty() && text.front() == ' ') {
-            text.remove_prefix(1); // the break's own space
-        }
-    } while (!text.empty());
+        const usize newline = text.find('\n', start);
+        printLine(text.substr(start, newline == std::string_view::npos ? std::string_view::npos
+                                                                       : newline - start));
+        start = newline == std::string_view::npos ? text.size() : newline + 1;
+    } while (start < text.size());
     if (m_output.size() > kScrollback) {
         m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(
                                                                 m_output.size() - kScrollback));
     }
     m_scroll = 0; // new output brings the view back to the bottom
+}
+
+void DevConsole::printLine(std::string_view line) {
+    do {
+        const usize length = breakAt(line, static_cast<usize>(kColumns));
+        m_output.emplace_back(line.substr(0, length));
+        line.remove_prefix(length);
+        if (!line.empty() && line.front() == ' ') {
+            line.remove_prefix(1); // the break's own space
+        }
+    } while (!line.empty());
 }
 
 void DevConsole::run(std::string_view line) {

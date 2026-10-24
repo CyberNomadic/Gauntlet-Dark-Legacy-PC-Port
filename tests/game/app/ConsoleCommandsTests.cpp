@@ -60,7 +60,7 @@ TEST_CASE("goto takes a map, a point, or a point in a map", "[dev-console][comma
     REQUIRE(tower.has_value());
     CHECK(tower->level == "TOWER");
     CHECK_FALSE(ConsoleCommands::parseGoto(Args{}, error).has_value());
-    CHECK(error == ConsoleCommands::kGotoUsage);
+    CHECK(error == ConsoleCommands::gotoUsage());
     CHECK_FALSE(ConsoleCommands::parseGoto(Args{"a", "b"}, error).has_value());
     CHECK_FALSE(ConsoleCommands::parseGoto(Args{"1", "2"}, error).has_value());
     CHECK_FALSE(ConsoleCommands::parseGoto(Args{"G1", "1", "x", "3"}, error).has_value());
@@ -118,7 +118,7 @@ TEST_CASE("get reads the item, its amount and a potion's kind", "[dev-console][c
     CHECK(level.kind == Kind::Level);
     CHECK(level.amount == 42);
     CHECK_FALSE(ConsoleCommands::parseGet(Args{}, error).has_value());
-    CHECK(error == ConsoleCommands::kGetUsage);
+    CHECK(error == ConsoleCommands::getUsage());
     CHECK_FALSE(ConsoleCommands::parseGet(Args{"sword"}, error).has_value());
     CHECK(error.contains("sword"));
     CHECK_FALSE(ConsoleCommands::parseGet(Args{"exp"}, error).has_value());
@@ -309,7 +309,7 @@ TEST_CASE("spawn reads an enemy with its tier and count, a critter, a generator 
     CHECK(key.name == "KEY");
     CHECK(spawn({"key", "x"}).map == "X");
     CHECK_FALSE(ConsoleCommands::parseSpawn(Args{}, error).has_value());
-    CHECK(error == ConsoleCommands::kSpawnUsage);
+    CHECK(error == ConsoleCommands::spawnUsage());
     CHECK(ConsoleCommands::spawnableEnemy(kGruntKind));
     CHECK(ConsoleCommands::spawnableEnemy(kDeathKind));
     CHECK(ConsoleCommands::spawnableEnemy(kItKind));
@@ -411,6 +411,87 @@ TEST_CASE("spawn takes the map a visitor comes from after everything else",
     CHECK(lamp.name == "L1XS_LAMPHO#12");
     CHECK(lamp.map == "L1");
     CHECK_FALSE(spawn({"key"}).map.has_value());
+}
+
+TEST_CASE("spawn takes a category word first and a map before an object",
+          "[dev-console][commands]") {
+    using Kind = ConsoleCommands::Spawn::Kind;
+    std::string error;
+    const auto spawn = [&](Args args) {
+        const auto request = ConsoleCommands::parseSpawn(args, error);
+        REQUIRE(request.has_value());
+        return *request;
+    };
+    auto candle = spawn({"object", "E1XLNSNC_CNDL01", "e1"});
+    CHECK(candle.kind == Kind::Object);
+    CHECK(candle.name == "E1XLNSNC_CNDL01");
+    CHECK(candle.map == "E1");
+    auto mapFirst = spawn({"object", "e1", "E1XLNSNC_CNDL01"});
+    CHECK(mapFirst.kind == Kind::Object);
+    CHECK(mapFirst.name == "E1XLNSNC_CNDL01");
+    CHECK(mapFirst.map == "E1");
+    auto here = spawn({"object", "E1XLNSNC_CNDL01"});
+    CHECK(here.kind == Kind::Object);
+    CHECK_FALSE(here.map.has_value());
+    auto key = spawn({"item", "key"});
+    CHECK(key.kind == Kind::Item);
+    CHECK(key.name == "KEY");
+    CHECK(spawn({"pickup", "key"}).kind == Kind::Item);
+    auto grunts = spawn({"enemy", "gru", "2", "4", "a1"});
+    CHECK(grunts.kind == Kind::Enemy);
+    CHECK(grunts.enemyKind == kGruntKind);
+    CHECK(grunts.tier == 2);
+    CHECK(grunts.count == 4);
+    CHECK(grunts.map == "A1");
+    auto serpent = spawn({"critter", "gargoyle", "serp", "d1"});
+    CHECK(serpent.kind == Kind::Critter);
+    CHECK(serpent.form == "GAR_SERP");
+    CHECK(serpent.map == "D1");
+    CHECK(spawn({"generator", "rat"}).kind == Kind::Generator);
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"enemy", "golem"}, error).has_value());
+    CHECK(error.contains("No enemy kind named GOLEM"));
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"critter", "gru"}, error).has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"object"}, error).has_value());
+    CHECK(error == ConsoleCommands::spawnUsage());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"object", "a", "b", "c"}, error).has_value());
+    CHECK(ConsoleCommands::looksLikeMap("e2"));
+    CHECK(ConsoleCommands::looksLikeMap("S10"));
+    CHECK(ConsoleCommands::looksLikeMap("tower"));
+    CHECK_FALSE(ConsoleCommands::looksLikeMap("E1XLNSNC_CNDL01"));
+    CHECK_FALSE(ConsoleCommands::looksLikeMap("gru"));
+    CHECK_FALSE(ConsoleCommands::looksLikeMap("1"));
+}
+
+TEST_CASE("usage lines put the forms in a column with what each does beside them",
+          "[dev-console][commands]") {
+    for (const std::string& text : {ConsoleCommands::spawnUsage(), ConsoleCommands::getUsage(),
+                                    ConsoleCommands::listUsage(), ConsoleCommands::gotoUsage()}) {
+        CAPTURE(text);
+        std::vector<std::string> lines;
+        for (usize start = 0; start <= text.size();) {
+            const usize end = std::min(text.find('\n', start), text.size());
+            lines.push_back(text.substr(start, end - start));
+            start = end + 1;
+        }
+        REQUIRE(lines.size() >= 2);
+        // Every form line's description starts at the same column, past the padding.
+        const auto descriptionColumn = [](const std::string& line) {
+            const usize gap = line.find("  ");
+            return gap == std::string::npos ? std::string::npos : line.find_first_not_of(' ', gap);
+        };
+        const usize column = descriptionColumn(lines[0]);
+        REQUIRE(column != std::string::npos);
+        const std::string command = lines[0].substr(0, lines[0].find(' '));
+        for (const std::string& line : lines) {
+            if (line.starts_with(command)) {
+                CHECK(descriptionColumn(line) == column);
+                CHECK(line.size() > column);
+            }
+        }
+    }
+    CHECK(ConsoleCommands::spawnUsage().contains("spawn object <name> [map]"));
+    CHECK(ConsoleCommands::spawnUsage().contains("spawn item <name>"));
+    CHECK(ConsoleCommands::listUsage().contains("list objects [map]"));
 }
 
 } // namespace

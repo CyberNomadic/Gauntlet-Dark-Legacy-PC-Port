@@ -352,6 +352,19 @@ TEST_CASE("the caret blinks at the VGA text cursor's rate from the moment the co
     CHECK(console.caretShown());
 }
 
+TEST_CASE("a line break in printed text ends the line", "[dev-console]") {
+    DevConsole console;
+    console.print("one\ntwo\n\nfour");
+    REQUIRE(console.output().size() == 4);
+    CHECK(console.output()[0] == "one");
+    CHECK(console.output()[1] == "two");
+    CHECK(console.output()[2].empty());
+    CHECK(console.output()[3] == "four");
+    console.print("five\n");
+    CHECK(console.output().size() == 5);
+    CHECK(console.output().back() == "five");
+}
+
 TEST_CASE("printed text wraps at spaces within the screen's columns and the scrollback is bounded",
           "[dev-console]") {
     DevConsole console;

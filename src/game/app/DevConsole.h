@@ -70,7 +70,8 @@ public:
 
     /** Registers `name`, matched ignoring case; `summary` is what `help` says of it. */
     void addCommand(std::string name, std::string summary, Handler handler);
-    /** Appends output, wrapped to the screen's columns at spaces where it can be. */
+    /** Appends output, a line per line break, each wrapped to the screen's columns at
+     * spaces where it can be. */
     void print(std::string_view text);
     /** Echoes `line` under the prompt and runs it: the first word names the command, the
      * rest are its arguments. An unknown name is refused the way DOS refused one. */
@@ -109,6 +110,7 @@ private:
     };
     void readKeys(f64 deltaSeconds, const Input& input, bool toggled);
     void erase(usize count);
+    void printLine(std::string_view line);
     void recall(s32 step);
     void scrollBy(s32 lines);
     /** How many output lines show above the prompt. */

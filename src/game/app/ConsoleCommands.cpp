@@ -6,9 +6,11 @@
 #include <cctype>
 #include <charconv>
 #include <format>
+#include <initializer_list>
 #include <map>
 #include <set>
 #include <system_error>
+#include <utility>
 
 #include "game/characters/ClassData.h"
 #include "game/characters/LevelRecord.h"
@@ -151,7 +153,7 @@ std::optional<s32> countOf(ConsoleCommands::Arguments rest, s32 fallback, std::s
     }
     const auto value = rest.size() == 1 ? integer(rest[0]) : std::nullopt;
     if (!value.has_value() || *value <= 0) {
-        error = std::string(ConsoleCommands::kGetUsage);
+        error = ConsoleCommands::getUsage();
         return std::nullopt;
     }
     return value;
@@ -191,6 +193,27 @@ const ItemInfo* recordOf(const WorldLayout& layout, const ItemInstance& instance
 bool critterName(std::string_view name) {
     return name == "GOLEM" || name == "GENERAL" || name.starts_with(kGargoylePrefix) ||
            name == "GAR";
+}
+
+/** Forms in a column with what each does beside them, a line each, then any notes. */
+std::string usage(std::initializer_list<std::pair<std::string_view, std::string_view>> forms,
+                  std::initializer_list<std::string_view> notes = {}) {
+    usize widest = 0;
+    for (const auto& [form, what] : forms) {
+        widest = std::max(widest, form.size());
+    }
+    std::string text;
+    for (const auto& [form, what] : forms) {
+        if (!text.empty()) {
+            text += '\n';
+        }
+        text += std::format("{:<{}}  {}", form, widest, what);
+    }
+    for (const std::string_view note : notes) {
+        text += '\n';
+        text += note;
+    }
+    return text;
 }
 
 bool sameIgnoringCase(std::string_view a, std::string_view b) {
@@ -243,13 +266,58 @@ ConsoleCommands::Listing ConsoleCommands::listingOf(Arguments arguments) {
     return Listing::Unknown;
 }
 
+std::string ConsoleCommands::listUsage() {
+    return usage({{"list maps", "every level, by realm"},
+                  {"list items [map]", "what get knows, then a level's pickups"},
+                  {"list inventory", "what your character is and carries"},
+                  {"list enemies [map]", "the swarm's kinds, then a level's roster and generators"},
+                  {"list critters [map]", "the great ones, then those a level places"},
+                  {"list generators [map]", "a level's generators"},
+                  {"list objects [map]", "a level's objects"}});
+}
+
+std::string ConsoleCommands::gotoUsage() {
+    return usage({{"goto <map> [x y z]", "travels to a level, standing at a point when given"},
+                  {"goto x y z", "moves the party to that point here"}});
+}
+
+std::string ConsoleCommands::getUsage() {
+    return usage({{"get <item> [amount]", "keys, potions, gold, health or a powerup"},
+                  {"get exp <points>", "experience to add"},
+                  {"get level <level>", std::format("the level to be, 1 to {}", kMaxLevel)}},
+                 {"list items names the items."});
+}
+
+std::string ConsoleCommands::spawnUsage() {
+    return usage(
+        {{"spawn <enemy> [tier] [count] [map]", "so many of the swarm's kind, at a tier"},
+         {"spawn generator <enemy> [tier] [map]", "a generator breeding that kind"},
+         {"spawn golem|general|gargoyle [form] [map]",
+          "a great one; a gargoyle's form is eagl, lion or serp"},
+         {"spawn item <name>", "a pickup of this level, by its record"},
+         {"spawn object <name> [map]", "a copy of a level's object"}},
+        {"A map (E2) brings the kind's voices, a great one's costume or the object from that "
+         "level; list enemies, critters, items and objects name what there is."});
+}
+
+bool ConsoleCommands::looksLikeMap(std::string_view word) {
+    const std::string name = upper(word);
+    if (name == "TOWER") {
+        return true;
+    }
+    if (name.size() < 2 || name.size() > 3 || name.front() < 'A' || name.front() > 'Z') {
+        return false;
+    }
+    return std::ranges::all_of(name.substr(1), [](char c) { return c >= '0' && c <= '9'; });
+}
+
 std::optional<std::string> ConsoleCommands::listedMap(Arguments arguments) {
     return arguments.size() >= 2 ? std::optional{upper(arguments[1])} : std::nullopt;
 }
 
 std::optional<ConsoleCommands::Destination> ConsoleCommands::parseGoto(Arguments arguments,
                                                                        std::string& error) {
-    error = std::string(kGotoUsage);
+    error = gotoUsage();
     if (arguments.size() == 1) {
         return Destination{.level = upper(arguments[0])};
     }
@@ -270,7 +338,7 @@ std::optional<ConsoleCommands::Destination> ConsoleCommands::parseGoto(Arguments
 std::optional<ConsoleCommands::Gift> ConsoleCommands::parseGet(Arguments arguments,
                                                                std::string& error) {
     if (arguments.empty()) {
-        error = std::string(kGetUsage);
+        error = getUsage();
         return std::nullopt;
     }
     const std::string name = lower(arguments[0]);
@@ -407,16 +475,39 @@ bool ConsoleCommands::spawnableEnemy(s32 kind) {
 std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments arguments,
                                                                   std::string& error) {
     if (arguments.empty()) {
-        error = std::string(kSpawnUsage);
+        error = spawnUsage();
         return std::nullopt;
     }
-    const std::string name = upper(arguments[0]);
+    // A category word first says which reading is meant; without one the name decides.
+    enum class Category : u8 { Any, Enemy, Critter, Generator, Item, Object };
+    Category category = Category::Any;
+    std::string first = lower(arguments[0]);
     Arguments rest = arguments.subspan(1);
+    if (first == "enemy") {
+        category = Category::Enemy;
+    } else if (first == "critter") {
+        category = Category::Critter;
+    } else if (first == "generator") {
+        category = Category::Generator;
+    } else if (first == "item" || first == "pickup") {
+        category = Category::Item;
+    } else if (first == "object") {
+        category = Category::Object;
+    }
+    if (category != Category::Any) {
+        if (rest.empty()) {
+            error = spawnUsage();
+            return std::nullopt;
+        }
+        first = lower(rest[0]);
+        rest = rest.subspan(1);
+    }
+    std::string name = upper(first);
     Spawn spawn;
     // A map comes last; it is whatever is left that is no number or form.
     const auto takeMap = [&](usize numbers) -> bool {
         if (rest.size() > numbers + 1) {
-            error = std::string(kSpawnUsage);
+            error = spawnUsage();
             return false;
         }
         if (rest.size() == numbers + 1) {
@@ -432,72 +523,85 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
         }
         return count;
     };
-    if (const auto kind = enemyKindOf(name); kind.has_value() && spawnableEnemy(*kind)) {
-        spawn.kind = Spawn::Kind::Enemy;
-        spawn.enemyKind = *kind;
-        spawn.name = name;
-        const usize numbers = numbersAhead();
-        if (numbers > 2 || !takeMap(numbers)) {
-            error = std::string(kSpawnUsage);
-            return std::nullopt;
-        }
-        const auto tier =
+    const auto tierAhead = [&](std::optional<s32>& tier) {
+        tier =
             tierOf(rest.empty() ? std::nullopt : std::optional<std::string_view>{rest[0]}, error);
-        if (!tier.has_value()) {
-            return std::nullopt;
-        }
-        spawn.tier = *tier;
-        if (rest.size() > 1) {
-            const auto value = integer(rest[1]);
-            if (!value.has_value() || *value < 1 || *value > kMostSpawned) {
-                error = std::format("A count is 1 to {}", kMostSpawned);
+        return tier.has_value();
+    };
+    if (category == Category::Any || category == Category::Enemy) {
+        if (const auto kind = enemyKindOf(name); kind.has_value() && spawnableEnemy(*kind)) {
+            spawn.kind = Spawn::Kind::Enemy;
+            spawn.enemyKind = *kind;
+            spawn.name = name;
+            const usize numbers = numbersAhead();
+            if (numbers > 2 || !takeMap(numbers)) {
+                error = spawnUsage();
                 return std::nullopt;
             }
-            spawn.count = *value;
-        }
-        return spawn;
-    }
-    const std::string lowered = lower(arguments[0]);
-    if (const auto critter = std::ranges::find(kCritters, lowered, &Critter::name);
-        critter != kCritters.end()) {
-        spawn.kind = Spawn::Kind::Critter;
-        spawn.critter = critter->kind;
-        spawn.name = std::string(critter->name);
-        if (critter->kind == CombatantKind::Gargoyle) {
-            spawn.form = std::string(kGargoylePrefix) + std::string(kGargoyleForms.front());
-            if (!rest.empty() &&
-                std::ranges::find(kGargoyleForms, upper(rest[0])) != kGargoyleForms.end()) {
-                spawn.form = std::string(kGargoylePrefix) + upper(rest[0]);
-                rest = rest.subspan(1);
+            std::optional<s32> tier;
+            if (!tierAhead(tier)) {
+                return std::nullopt;
             }
+            spawn.tier = *tier;
+            if (rest.size() > 1) {
+                const auto value = integer(rest[1]);
+                if (!value.has_value() || *value < 1 || *value > kMostSpawned) {
+                    error = std::format("A count is 1 to {}", kMostSpawned);
+                    return std::nullopt;
+                }
+                spawn.count = *value;
+            }
+            return spawn;
         }
-        if (!takeMap(0)) {
-            error = critter->kind == CombatantKind::Gargoyle
-                        ? "A gargoyle is an eagl, a lion or a serp, then a map at most"
-                        : std::string(kSpawnUsage);
+        if (category == Category::Enemy) {
+            error = std::format("No enemy kind named {}; list enemies names them", name);
             return std::nullopt;
         }
-        return spawn;
     }
-    if (lowered == "generator") {
-        const auto bred = rest.empty() ? std::nullopt : std::optional<std::string>{upper(rest[0])};
-        const auto kind = bred.has_value() ? enemyKindOf(*bred) : std::nullopt;
+    if (category == Category::Any || category == Category::Critter) {
+        if (const auto critter = std::ranges::find(kCritters, first, &Critter::name);
+            critter != kCritters.end()) {
+            spawn.kind = Spawn::Kind::Critter;
+            spawn.critter = critter->kind;
+            spawn.name = std::string(critter->name);
+            if (critter->kind == CombatantKind::Gargoyle) {
+                spawn.form = std::string(kGargoylePrefix) + std::string(kGargoyleForms.front());
+                if (!rest.empty() &&
+                    std::ranges::find(kGargoyleForms, upper(rest[0])) != kGargoyleForms.end()) {
+                    spawn.form = std::string(kGargoylePrefix) + upper(rest[0]);
+                    rest = rest.subspan(1);
+                }
+            }
+            if (!takeMap(0)) {
+                error = critter->kind == CombatantKind::Gargoyle
+                            ? "A gargoyle is an eagl, a lion or a serp, then a map at most"
+                            : spawnUsage();
+                return std::nullopt;
+            }
+            return spawn;
+        }
+        if (category == Category::Critter) {
+            error = "A critter is a golem, a general or a gargoyle";
+            return std::nullopt;
+        }
+    }
+    if (category == Category::Generator) {
+        const auto kind = enemyKindOf(name);
         if (!kind.has_value() || !spawnableEnemy(*kind)) {
-            error = "spawn generator <enemy> [tier] [map]; list enemies names the kinds";
+            error = std::format("No enemy kind named {} for a generator; list enemies names them",
+                                name);
             return std::nullopt;
         }
         spawn.kind = Spawn::Kind::Generator;
         spawn.enemyKind = *kind;
-        spawn.name = *bred;
-        rest = rest.subspan(1);
+        spawn.name = name;
         const usize numbers = numbersAhead();
         if (numbers > 1 || !takeMap(numbers)) {
-            error = std::string(kSpawnUsage);
+            error = spawnUsage();
             return std::nullopt;
         }
-        const auto tier =
-            tierOf(rest.empty() ? std::nullopt : std::optional<std::string_view>{rest[0]}, error);
-        if (!tier.has_value()) {
+        std::optional<s32> tier;
+        if (!tierAhead(tier)) {
             return std::nullopt;
         }
         spawn.tier = *tier;
@@ -506,7 +610,13 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
     if (!takeMap(0)) {
         return std::nullopt;
     }
-    spawn.kind = Spawn::Kind::Thing;
+    // An object may be named after its map: spawn object E1 E1XLNSNC_CNDL01.
+    if (spawn.map.has_value() && looksLikeMap(name) && !looksLikeMap(*spawn.map)) {
+        std::swap(name, *spawn.map);
+    }
+    spawn.kind = category == Category::Item     ? Spawn::Kind::Item
+                 : category == Category::Object ? Spawn::Kind::Object
+                                                : Spawn::Kind::Thing;
     spawn.name = name;
     return spawn;
 }

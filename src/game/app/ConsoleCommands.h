@@ -22,7 +22,8 @@ namespace gdl::game {
  * The developer console's commands as far as they need no scene: reading their arguments,
  * listing the maps, the items, a character's inventory and what a level's layout holds, and
  * opening the tower in a character's record. The application wires them to the party and the
- * level in play.
+ * level in play. Each command's usage is a few lines, its forms in a column with what each
+ * does beside them.
  */
 class ConsoleCommands {
 public:
@@ -42,9 +43,9 @@ public:
     static Listing listingOf(Arguments arguments);
     /** The map named after the listing ("G1"), when one is. */
     static std::optional<std::string> listedMap(Arguments arguments);
-    static constexpr std::string_view kListUsage =
-        "list maps, items [map], inventory, enemies [map], critters [map], generators [map] or "
-        "objects [map]";
+    static std::string listUsage();
+    /** Whether a word names a level the way the catalogue does ("E2", "TOWER"). */
+    static bool looksLikeMap(std::string_view word);
 
     /** Where `goto` sends the party: a level by name, a point, or a point in a level. */
     struct Destination {
@@ -52,7 +53,7 @@ public:
         std::optional<Vec3> position;
         bool operator==(const Destination&) const = default;
     };
-    static constexpr std::string_view kGotoUsage = "goto <map> [x y z], or goto x y z";
+    static std::string gotoUsage();
     /** Reads `goto`'s arguments; nothing, with `error` set, when they make no sense. */
     static std::optional<Destination> parseGoto(Arguments arguments, std::string& error);
 
@@ -64,8 +65,7 @@ public:
         s32 amount = 0;  ///< the experience to add or the level to reach
         std::string name;
     };
-    static constexpr std::string_view kGetUsage =
-        "get <item> [amount], get exp <points> or get level <level>; list items names the items";
+    static std::string getUsage();
     static constexpr s32 kDefaultKeys = 1;
     static constexpr s32 kDefaultPotions = 1;
     static constexpr s32 kDefaultPotionKind = 1; ///< fire
@@ -83,7 +83,9 @@ public:
             Enemy,     ///< `count` of the swarm's `enemyKind` at `tier`
             Critter,   ///< one `critter`, a gargoyle in `form`
             Generator, ///< one breeding `enemyKind` at `tier`
-            Thing      ///< a level's pickup record, or an object, by `name`
+            Item,      ///< a pickup of the level in play, by its record's `name`
+            Object,    ///< a copy of a level's object, by `name`
+            Thing      ///< `name` as a pickup, failing that an object
         };
         Kind kind = Kind::Thing;
         s32 enemyKind = -1;
@@ -94,14 +96,11 @@ public:
         std::string name;               ///< a thing's, as the level's records spell it
         std::optional<std::string> map; ///< the level it comes from, else the one in play
     };
-    static constexpr std::string_view kSpawnUsage =
-        "spawn <enemy> [tier] [count] [map], spawn golem|general|gargoyle [eagl|lion|serp] "
-        "[map], spawn generator <enemy> [tier] [map], or spawn <item or object> [map]; list "
-        "names them";
+    static std::string spawnUsage();
     static constexpr s32 kMostSpawned = 20;
-    static constexpr std::string_view kObjectsStay =
-        "The level's objects are built into its drawing batches and cannot be spawned";
-    /** Reads `spawn`'s arguments; nothing, with `error` set, when they make no sense. */
+    /** Reads `spawn`'s arguments: a category word (enemy, critter, generator, item, object)
+     * may come first, else the name says which it is; a map may come last, or first with an
+     * object. Nothing, with `error` set, when they make no sense. */
     static std::optional<Spawn> parseSpawn(Arguments arguments, std::string& error);
     /** Whether the swarm can be asked for `kind`: its tiers, Death and IT; the great ones are
      * critters. */
