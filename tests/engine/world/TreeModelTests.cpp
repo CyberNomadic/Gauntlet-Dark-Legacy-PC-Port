@@ -55,6 +55,71 @@ std::filesystem::path sampleFigure(std::string_view name) {
     return dir;
 }
 
+/** A figure whose body is pinned to the clamped edge of its skin and whose banner is not. */
+std::filesystem::path pinnedFigure(std::string_view name) {
+    const auto dir = test::scratchDirectory(name);
+    std::filesystem::create_directories(dir / "models");
+    std::filesystem::create_directories(dir / "textures");
+    writeTextFile(dir / "models/000_BODY.obj",
+                  "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 1 1\nvt 1 0.5\nvt 1 0\nvn 0 1 0\n"
+                  "usemtl tex0\nf 1/1/1 2/2/1 3/3/1\n");
+    writeTextFile(dir / "models/001_BANNER.obj",
+                  "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 1\nvt 1 1\nvt 0 0\nvn 0 0 1\n"
+                  "usemtl tex1\nf 1/1/1 2/2/1 3/3/1\n");
+    writeTextFile(dir / "objects.json", R"({"objects": [
+  {"index": 0, "name": "BODY", "file": "models/000_BODY.obj", "meshTriangles": 1},
+  {"index": 1, "name": "BANNER", "file": "models/001_BANNER.obj", "meshTriangles": 1}]})");
+    writeFile(dir / "textures/000_SKIN.png", test::kTinyPng);
+    writeFile(dir / "textures/001_CLOTH.png", test::kTinyPng);
+    writeTextFile(dir / "textures.json", R"({"defs": [], "bitmaps": [
+  {"index": 0, "name": "SKIN", "file": "textures/000_SKIN.png", "width": 2, "height": 2,
+   "flags": 4, "clampU": true},
+  {"index": 1, "name": "CLOTH", "file": "textures/001_CLOTH.png", "width": 2, "height": 2,
+   "flags": 4, "clampU": true}]})");
+    writeTextFile(dir / "animations.json", R"({"trees": [
+  {"name": "FIGURE", "prefix": "", "sequences": [], "nodes": [
+    {"name": "ROOT", "object": "", "type": 0, "flags": 1, "objectFlags": 0, "parent": -1,
+     "position": [0.0, 0.0, 0.0]},
+    {"name": "BODY", "object": "BODY", "type": 0, "flags": 0, "objectFlags": 0, "parent": 0,
+     "position": [0.0, 0.0, 0.0]},
+    {"name": "BANNER", "object": "BANNER", "type": 0, "flags": 0, "objectFlags": 0, "parent": 1,
+     "position": [0.0, 2.0, 0.0]}]}]})");
+    test::convertModelFixture(dir);
+    return dir;
+}
+
+TEST_CASE("a part pinned to a clamped edge of its texture is drawn at the base level",
+          "[world][model][textures]") {
+    const auto dir = pinnedFigure("pinned-figure");
+    ModelSet models;
+    TextureSet textures;
+    AnimationSet trees;
+    REQUIRE(models.load(dir));
+    REQUIRE(textures.load(dir));
+    REQUIRE(trees.load(dir));
+    REQUIRE(textures.entry(0).clampU);
+    test::FakeRenderDevice device;
+    TreeModel model;
+    REQUIRE(model.bind(trees.tree(0), models, textures, device));
+    model.draw(device, Mat4{1}, Mat4{1}, {});
+    REQUIRE(device.draws.size() == 2);
+    const Texture* skin = &textures.texture(device, 0);
+    const Texture* cloth = &textures.texture(device, 1);
+    usize bodyDraws = 0;
+    usize bannerDraws = 0;
+    for (const auto& draw : device.draws) {
+        if (draw.texture == skin) {
+            ++bodyDraws;
+            CHECK_FALSE(draw.state.mipmaps); // held at the skin's edge: that column alone
+        } else if (draw.texture == cloth) {
+            ++bannerDraws;
+            CHECK(draw.state.mipmaps);
+        }
+    }
+    CHECK(bodyDraws == 1);
+    CHECK(bannerDraws == 1);
+}
+
 TEST_CASE("static model textures use free clocks without sequence overrides",
           "[world][model][animation][static-texture-clock]") {
     const auto dir = sampleFigure("static-model-texture-clock");

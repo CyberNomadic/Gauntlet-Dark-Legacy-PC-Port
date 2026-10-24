@@ -60,7 +60,7 @@ DevConsole::DevConsole() {
 bool DevConsole::load(RenderDevice& device, const std::filesystem::path& unpackedRoot) {
     release();
     if (!m_font.load(unpackedRoot / kFontFile, kSpaceWidth) ||
-        !m_textures.load(unpackedRoot / kTextureDirectory, TextureWrapPolicy::Flagged)) {
+        !m_textures.load(unpackedRoot / kTextureDirectory)) {
         return false;
     }
     const auto index = m_textures.find(kTextureName);

@@ -81,11 +81,9 @@ TEST_CASE("GPU textures are created once and released on demand", "[assets][text
     REQUIRE(device.texturesCreated == 3);
 }
 
-TEST_CASE("clamped tiles are created with edge clamping for the 2D layer alone",
-          "[assets][textures]") {
+TEST_CASE("clamped tiles are created with edge clamping", "[assets][textures]") {
     TextureSet set;
-    REQUIRE(set.load(sampleSet("texture-set-clamp"), TextureWrapPolicy::Flagged));
-    CHECK(set.wrapPolicy() == TextureWrapPolicy::Flagged);
+    REQUIRE(set.load(sampleSet("texture-set-clamp")));
     // Each way on its own: the first tile is held at its edge across yet still tiles down.
     REQUIRE(set.entry(0).clampU);
     REQUIRE_FALSE(set.entry(0).clampV);
@@ -97,14 +95,10 @@ TEST_CASE("clamped tiles are created with edge clamping for the 2D layer alone",
     set.texture(device, 1);
     REQUIRE(device.lastTextureDesc.wrap == TextureWrap::Repeat);
     REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
-    // A model's set repeats both ways whatever its flags say, as the GameCube's do.
-    TextureSet model;
-    REQUIRE(model.load(sampleSet("texture-set-clamp")));
-    CHECK(model.wrapPolicy() == TextureWrapPolicy::Repeat);
-    REQUIRE(model.entry(0).clampU);
-    model.texture(device, 0);
-    REQUIRE(device.lastTextureDesc.wrap == TextureWrap::Repeat);
-    REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
+    // A part pinned to the edge a tile is held at samples that edge alone.
+    CHECK(set.entry(0).holdsEdge(EdgePin{.across = true}));
+    CHECK_FALSE(set.entry(0).holdsEdge(EdgePin{.down = true}));
+    CHECK_FALSE(set.entry(1).holdsEdge(EdgePin{.across = true, .down = true}));
     // A description that names one way wraps the same both ways.
     REQUIRE(TextureDesc{2, 2, TextureFilter::Linear, TextureWrap::ClampToEdge}.wrapDown() ==
             TextureWrap::ClampToEdge);

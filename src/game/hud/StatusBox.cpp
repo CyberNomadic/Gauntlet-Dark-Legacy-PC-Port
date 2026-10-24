@@ -45,8 +45,8 @@ constexpr f32 kCountScale = 1.5f;
 bool StatusBoxPainter::load(RenderDevice& device, const std::filesystem::path& unpackedRoot,
                             const StringTable* strings) {
     release();
-    if (!m_select.load(unpackedRoot / kSelectDirectory, TextureWrapPolicy::Flagged) ||
-        !m_static.load(unpackedRoot / kStaticDirectory, TextureWrapPolicy::Flagged) ||
+    if (!m_select.load(unpackedRoot / kSelectDirectory) ||
+        !m_static.load(unpackedRoot / kStaticDirectory) ||
         !m_fontInitials.load(unpackedRoot / kInitialsFile, kInitialsSpaceWidth)) {
         log::warn("Status boxes: unpacked panels or fonts not found under {}",
                   unpackedRoot.string());

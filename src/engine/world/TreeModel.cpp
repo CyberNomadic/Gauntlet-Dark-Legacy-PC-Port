@@ -94,6 +94,7 @@ TreeModel::Shape TreeModel::makeShape(const Mesh& mesh, TextureSet& textures, Re
         shape.textures.push_back(&source->texture(device, index));
         shape.translucent.push_back(entry.translucent() || source->entry(index).translucent());
         shape.slots.push_back(part.texture);
+        shape.baseLevel.push_back(entry.holdsEdge(edgePinOf(mesh, part)));
     }
     cutBySilhouettes(shape, textures, device, lenders);
     return shape;
@@ -562,6 +563,10 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
             if (sampling != m_textureSampling.end()) {
                 state.clampTexture = sampling->clamp;
                 state.mipmaps = sampling->mipmaps;
+            }
+            // Pinned to a clamped edge, the part shows that edge alone: no mip level.
+            if (!node.chrome && p < shape.baseLevel.size() && shape.baseLevel[p]) {
+                state.mipmaps = false;
             }
             // This pass explicitly requests colour compositing, not coverage. Native
             // pickup shadows and gas can write depth while still requiring smooth alpha.

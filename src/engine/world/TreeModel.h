@@ -138,6 +138,7 @@ private:
         std::vector<const Texture*> textures; ///< one per mesh part
         std::vector<bool> translucent;        ///< one per mesh part
         std::vector<u32> slots;               ///< the set's texture index, one per part
+        std::vector<bool> baseLevel; ///< pinned to a clamped edge: sampled at the base level
         /** An authored silhouette (an indexed mask whose palette shows nothing, see
          * TextureSet::silhouette) cuts the flat part it lies over instead of drawing: the
          * cut per part, the parts that are masks, and every vertex's place in the mask. */

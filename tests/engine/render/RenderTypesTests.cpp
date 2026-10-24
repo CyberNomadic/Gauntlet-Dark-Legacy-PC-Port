@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Types.h"
+#include "engine/render/Mesh.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/render/RenderTypes.h"
 
@@ -19,6 +20,32 @@ TEST_CASE("Extent2D reports zero when either side is zero", "[render][types]") {
     STATIC_REQUIRE(!Extent2D{1, 1}.isZero());
     REQUIRE(Extent2D{3, 4} == Extent2D{3, 4});
     REQUIRE(Extent2D{3, 4} != Extent2D{4, 3});
+}
+
+TEST_CASE("a part is pinned to a texture edge when its coordinates hold there",
+          "[render][types][mesh]") {
+    Mesh mesh;
+    mesh.vertices = {
+        {.uv = {1.0f, 0.0f}}, {.uv = {1.0f, 0.5f}}, {.uv = {1.0f, 1.0f}}, // pinned across
+        {.uv = {0.0f, 0.0f}}, {.uv = {0.5f, 0.0f}}, {.uv = {1.0f, 0.0f}}, // pinned down
+        {.uv = {0.5f, 0.5f}}, {.uv = {0.5f, 0.5f}}, {.uv = {0.5f, 0.5f}}, // inside
+        {.uv = {2.0f, 0.0f}}, {.uv = {2.0f, 0.5f}}, {.uv = {2.0f, 1.0f}}, // past the edge
+    };
+    const auto part = [](u32 first) { return MeshPart{.indices = {first, first + 1, first + 2}}; };
+    const EdgePin across = edgePinOf(mesh, part(0));
+    CHECK(across.across);
+    CHECK_FALSE(across.down);
+    const EdgePin down = edgePinOf(mesh, part(3));
+    CHECK_FALSE(down.across);
+    CHECK(down.down);
+    // One value alone is not an edge; past the edge a clamped texture shows the edge.
+    const EdgePin inside = edgePinOf(mesh, part(6));
+    CHECK_FALSE(inside.across);
+    CHECK_FALSE(inside.down);
+    CHECK(edgePinOf(mesh, part(9)).across);
+    const EdgePin none = edgePinOf(mesh, MeshPart{});
+    CHECK_FALSE(none.across);
+    CHECK_FALSE(none.down);
 }
 
 TEST_CASE("ImmediateVertex matches the GPU vertex layout", "[render][types]") {

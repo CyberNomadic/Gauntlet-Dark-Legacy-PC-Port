@@ -10,6 +10,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/render/Image.h"
+#include "engine/render/Mesh.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/render/RenderTypes.h"
 
@@ -37,12 +38,13 @@ struct TextureSetEntry {
     bool translucent() const { return (flags & kHasAlpha) != 0; }
     /** Whether the image is another archive's, found there by name. */
     bool external() const { return (flags & kExternal) != 0; }
+    /** Whether a part pinned this way (edgePinOf) samples a clamped edge alone: held
+     * there it shows that edge's own texels, which every mip level blends the
+     * neighbouring texels into. */
+    bool holdsEdge(const EdgePin& pin) const {
+        return (pin.across && clampU) || (pin.down && clampV);
+    }
 };
-
-/** How a set's textures wrap: the GameCube initialises every model texture to repeat both
- * ways (pb_texture.c) whatever its record's clamp flags say, while the 2D layer's tiles are
- * clamped as their flags say, which keeps a seam from showing between them. */
-enum class TextureWrapPolicy : u8 { Repeat, Flagged };
 
 /**
  * One texture archive: its named images, decoded and uploaded on
@@ -51,9 +53,7 @@ enum class TextureWrapPolicy : u8 { Repeat, Flagged };
 class TextureSet {
 public:
     /** Prefers objects.ngc/textures.ngc; accepts textures.json for inspection exports. */
-    bool load(const std::filesystem::path& directory,
-              TextureWrapPolicy wrap = TextureWrapPolicy::Repeat);
-    TextureWrapPolicy wrapPolicy() const { return m_wrap; }
+    bool load(const std::filesystem::path& directory);
 
     bool loaded() const { return !m_entries.empty(); }
     usize size() const { return m_entries.size(); }
@@ -90,7 +90,6 @@ private:
     std::vector<formats::ArchiveBitmap> m_nativeBitmaps;
     std::vector<u8> m_nativePixels;
     std::filesystem::path m_directory;
-    TextureWrapPolicy m_wrap = TextureWrapPolicy::Repeat;
     std::vector<TextureSetEntry> m_entries;
     std::unordered_map<std::string, u32> m_byName;
     std::vector<Image> m_images;

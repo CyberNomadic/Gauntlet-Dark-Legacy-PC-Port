@@ -123,8 +123,8 @@ void TitleScene::close() {
 }
 
 bool TitleScene::loadResources(RenderDevice& device, const std::filesystem::path& unpackedRoot) {
-    if (!m_titleTextures.load(unpackedRoot / kTitleDirectory, TextureWrapPolicy::Flagged) ||
-        !m_staticTextures.load(unpackedRoot / kStaticDirectory, TextureWrapPolicy::Flagged)) {
+    if (!m_titleTextures.load(unpackedRoot / kTitleDirectory) ||
+        !m_staticTextures.load(unpackedRoot / kStaticDirectory)) {
         log::warn("Title screen: unpacked textures not found under {} (run gdlunpack)",
                   unpackedRoot.string());
         return false;
