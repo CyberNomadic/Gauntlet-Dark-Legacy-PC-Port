@@ -2797,7 +2797,10 @@ MeleeGeometry::Target Enemies::meleeBody(s32 id) const {
         coordinate(enemy.position.x, m_simulation.contactGridOrigin.x);
     target.contact = true;
     target.requireFacing = enemy.kind == kDeathKind;
-    target.low = enemy.height <= kLowEnemyHeight;
+    // A low target takes the low swing: one whose hit height is two or under, or any of the
+    // swarm while the shrinker has them under full size (PlayerMotion, pmotion.c 1603: the
+    // enemy scale under one sets coll_flags' low bit for every swarm target).
+    target.low = enemy.height <= kLowEnemyHeight || EnemyShrink::shrunk(m_simulation.shrink);
     target.blocksMovement = enemy.kind != kDeathKind;
     return target;
 }

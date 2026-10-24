@@ -29,6 +29,7 @@
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelWorld.h"
 #include "game/party/PlayerHealth.h"
+#include "game/players/EnemyShrink.h"
 
 namespace {
 
@@ -3817,6 +3818,45 @@ TEST_CASE("each ordinary birth is reported at its spot with its kind and tier, t
     CHECK(births[0].kind == kGruntKind);
     CHECK(births[0].tier == 2);
     CHECK(enemies.takeBirths().empty());
+}
+
+TEST_CASE("a shrunk swarm takes the low swing, as PlayerMotion judges a scaled-down enemy",
+          "[enemies][shrink][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, root, nullptr, Enemies::kMost, {}, 125);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.loadKind(kRatKind));
+    enemies.setContactGridBounds({-100, -10, -100}, {100, 20, 100});
+    EnemySpawn grunt;
+    grunt.kind = kGruntKind;
+    grunt.placed = true;
+    EnemySpawn rat;
+    rat.kind = kRatKind;
+    rat.position = Vec3{10.0f, 0.0f, 0.0f};
+    rat.placed = true;
+    const auto big = enemies.spawn(grunt, {});
+    const auto small = enemies.spawn(rat, {});
+    REQUIRE(big.has_value());
+    REQUIRE(small.has_value());
+    const auto lowOf = [&](s32 id) {
+        for (const MeleeGeometry::Target& target : enemies.meleeGeometry()) {
+            if (target.id == id) {
+                return target.low;
+            }
+        }
+        FAIL("no melee target for the enemy");
+        return false;
+    };
+    CHECK_FALSE(lowOf(*big)); // six tall: a hit height of three
+    CHECK(lowOf(*small));     // three tall: one and a half
+    enemies.setShrink(EnemyShrink::kPerWearer);
+    CHECK(lowOf(*big)); // under full size, every one of the swarm is low
+    CHECK(lowOf(*small));
+    enemies.setShrink(EnemyShrink::kWhole);
+    CHECK_FALSE(lowOf(*big));
 }
 
 } // namespace
