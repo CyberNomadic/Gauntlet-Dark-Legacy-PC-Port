@@ -363,6 +363,14 @@ public:
     /** Gives `player`'s character experience won in play, which also feeds its turbo meter
      * (unless it is in the middle of a turbo move), as a kill does in the original. */
     void awardExperience(s32 player, s32 amount, bool kill = true);
+    /** The live record of `player`'s character, for the developer console to edit; null when
+     * that player is not in. A level set there reaches the actor through restat(). */
+    CharacterSave* liveSave(s32 player);
+    /** Gives `player`'s actor the pace its record's class and level allow now. */
+    void restat(s32 player);
+    /** Stands everyone standing at `position`, a pace apart, and the camera up over them,
+     * for the developer console; false with nobody standing. */
+    bool relocate(const Vec3& position);
     /** Harms `player`'s character as a blow, a burn, a piercing or gas would, for tests. */
     void harm(s32 player, f32 damage, HurtKind kind);
     /** What `player`'s status box shows. */

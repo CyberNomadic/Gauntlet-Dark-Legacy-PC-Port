@@ -652,4 +652,22 @@ TEST_CASE("a body on the plane of a one-sided railing at a floor's edge can walk
     CHECK(actor.position().y == 0);
 }
 
+TEST_CASE("an actor's pace follows its record's level once told to look again",
+          "[game][player-actor]") {
+    const ClassStats stats = warrior();
+    const CharacterSave save;
+    PlayerActor actor;
+    actor.spawn(0, save, &stats, Vec3{0, 0, 0}, 0.0f);
+    PlayerActor bare;
+    bare.spawn(1, save, nullptr, Vec3{0, 0, 0}, 0.0f);
+    const f32 novice = actor.speed();
+    CHECK(novice > bare.speed());
+    actor.save().progress().experience = levelExperience(kMaxLevel);
+    CHECK(actor.speed() == novice); // nothing changes until it is told
+    actor.restat(&stats);
+    CHECK(actor.speed() > novice);
+    actor.restat(nullptr);
+    CHECK(actor.speed() == bare.speed());
+}
+
 } // namespace

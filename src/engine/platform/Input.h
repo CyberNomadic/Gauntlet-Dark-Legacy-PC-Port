@@ -82,6 +82,8 @@ enum class Key : u8 {
     F11,
     F12,
     Grave, ///< the ` / ~ key left of the digits
+    PageUp,
+    PageDown,
     MouseLeft,
     MouseRight,
     MouseMiddle,

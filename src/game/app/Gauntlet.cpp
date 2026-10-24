@@ -78,22 +78,7 @@ void Gauntlet::onInit() {
         }
     }
     m_buildLabel.load(renderDevice());
-    if (!m_console.load(renderDevice(), m_options.unpackedDirectory)) {
-        log::warn("Developer console: the 8x8 font is missing; its screen will be blank");
-    }
-    m_console.print(std::format("Gauntlet Dark Legacy {}", m_buildLabel.text()));
-    m_console.print("Type help for the commands.");
-    m_console.addCommand("debug_info", "shows or hides the level debug overlay",
-                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
-                             m_levelDebug.toggle();
-                             console.print(m_levelDebug.visible() ? "Level debug overlay on"
-                                                                  : "Level debug overlay off");
-                             if (m_levelDebug.visible() && m_play->scene.isOpen()) {
-                                 for (const std::string& line : levelDebugLines()) {
-                                     log::info("Level debug: {}", line);
-                                 }
-                             }
-                         });
+    setUpConsole();
     m_autoSaveIcon.load(renderDevice(), m_options.unpackedDirectory);
     if (!m_strings.load(m_options.dataDirectory / kTextDirectory, m_config.text.language)) {
         log::warn("No text tables under {}; identifiers will show instead of text",
@@ -565,10 +550,16 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     // joins, pauses or moves anyone, and the party stands until it goes back up. The keys
     // of the frame that sends it up are still its: the Escape that closes it opens no menu.
     const bool consoleWasOpen = m_console.open();
+    if (const PlayerActor* actor = m_play->scene.actor(consolePlayer())) {
+        m_console.setPrompt(actor->save().name + ">");
+    }
     m_console.update(deltaSeconds, input(), m_config.menu.console);
     const bool consoleOpen = m_console.open() || consoleWasOpen;
     if (m_console.open() && !consoleWasOpen) {
         resetPlayInput();
+    }
+    if (!m_play->scene.isOpen()) {
+        return; // a command has sent the party elsewhere
     }
     // Start on a controller the party does not hold, in the tower, brings everyone to the
     // select screen with that player, and the tower back with the party grown

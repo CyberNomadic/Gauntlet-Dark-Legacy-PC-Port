@@ -41,6 +41,15 @@ std::vector<std::string> words(std::string_view line) {
     }
     return result;
 }
+
+/** Where to break `text` for a line of `columns`: at the last space that fits, else hard. */
+usize breakAt(std::string_view text, usize columns) {
+    if (text.size() <= columns) {
+        return text.size();
+    }
+    const usize space = text.rfind(' ', columns);
+    return space == std::string_view::npos || space == 0 ? columns : space;
+}
 } // namespace
 
 DevConsole::DevConsole() {
@@ -78,18 +87,22 @@ void DevConsole::addCommand(std::string name, std::string summary, Handler handl
 
 void DevConsole::print(std::string_view text) {
     do {
-        const usize length = std::min<usize>(text.size(), static_cast<usize>(kColumns));
+        const usize length = breakAt(text, static_cast<usize>(kColumns));
         m_output.emplace_back(text.substr(0, length));
         text.remove_prefix(length);
+        if (!text.empty() && text.front() == ' ') {
+            text.remove_prefix(1); // the break's own space
+        }
     } while (!text.empty());
     if (m_output.size() > kScrollback) {
         m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(
                                                                 m_output.size() - kScrollback));
     }
+    m_scroll = 0; // new output brings the view back to the bottom
 }
 
 void DevConsole::run(std::string_view line) {
-    print(std::format("{}{}", kPrompt, line));
+    print(std::format("{}{}", m_prompt, line));
     const std::vector<std::string> parts = words(line);
     if (parts.empty()) {
         return;
@@ -149,7 +162,7 @@ void DevConsole::readKeys(f64 deltaSeconds, const Input& input, bool toggled) {
         toggle();
         return;
     }
-    const usize room = static_cast<usize>(kColumns) - kPrompt.size() - 1; // a cell for the caret
+    const usize room = static_cast<usize>(kColumns) - m_prompt.size() - 1; // a cell for the caret
     if (!toggled) {
         for (const u32 code : input.typedText()) {
             if (code >= kFirstTypable && code <= kLastTypable && m_line.size() < room) {
@@ -170,15 +183,59 @@ void DevConsole::readKeys(f64 deltaSeconds, const Input& input, bool toggled) {
     } else {
         m_backspaceHeld = 0.0;
     }
+    if (input.wasKeyPressed(Key::Up)) {
+        recall(-1);
+    }
+    if (input.wasKeyPressed(Key::Down)) {
+        recall(1);
+    }
+    if (input.wasKeyPressed(Key::PageUp)) {
+        scrollBy(kRows - 1);
+    }
+    if (input.wasKeyPressed(Key::PageDown)) {
+        scrollBy(-(kRows - 1));
+    }
+    if (input.pointerScroll() != 0.0f) {
+        scrollBy(static_cast<s32>(std::round(input.pointerScroll())) * kWheelLines);
+    }
     if (input.wasKeyPressed(Key::Enter)) {
         const std::string line = std::move(m_line);
         m_line.clear();
+        if (!line.empty() && (m_history.empty() || m_history.back() != line)) {
+            m_history.push_back(line);
+            if (m_history.size() > kHistory) {
+                m_history.erase(m_history.begin());
+            }
+        }
+        m_recalled = m_history.size();
         run(line);
     }
 }
 
 void DevConsole::erase(usize count) {
     m_line.resize(m_line.size() - std::min(count, m_line.size()));
+}
+
+void DevConsole::recall(s32 step) {
+    const auto count = static_cast<s32>(m_history.size());
+    const auto at = std::clamp(static_cast<s32>(m_recalled) + step, 0, count);
+    if (at == static_cast<s32>(m_recalled)) {
+        return;
+    }
+    if (m_recalled == m_history.size()) {
+        m_pending = m_line; // leaving the new line for an older one
+    }
+    m_recalled = static_cast<usize>(at);
+    m_line = m_recalled == m_history.size() ? m_pending : m_history[m_recalled];
+}
+
+usize DevConsole::shownLines() const {
+    return std::min(m_output.size(), static_cast<usize>(kRows - 1));
+}
+
+void DevConsole::scrollBy(s32 lines) {
+    const auto most = static_cast<s32>(m_output.size() - shownLines());
+    m_scroll = static_cast<usize>(std::clamp(static_cast<s32>(m_scroll) + lines, 0, most));
 }
 
 void DevConsole::draw(Canvas& canvas) const {
@@ -190,14 +247,14 @@ void DevConsole::draw(Canvas& canvas) const {
     const auto rowY = [&](usize row) {
         return static_cast<s32>(top) + kMargin + static_cast<s32>(row) * kRowHeight;
     };
-    const TextStyle style{.color = kInk};
-    const usize promptRow = std::min(m_output.size(), static_cast<usize>(kRows - 1));
-    const usize first = m_output.size() - promptRow;
-    for (usize row = 0; row < promptRow; ++row) {
+    const TextStyle style{.scale = kTextScale, .color = kInk};
+    const usize shown = shownLines();
+    const usize first = m_output.size() - m_scroll - shown;
+    for (usize row = 0; row < shown; ++row) {
         m_text.draw(canvas, kMargin, rowY(row), m_output[first + row], style);
     }
-    const s32 y = rowY(promptRow);
-    s32 x = m_text.draw(canvas, kMargin, y, kPrompt, style);
+    const s32 y = rowY(shown);
+    s32 x = m_text.draw(canvas, kMargin, y, m_prompt, style);
     x = m_text.draw(canvas, x, y, m_line, style);
     if (caretShown()) {
         canvas.fill(Rect{static_cast<f32>(x), static_cast<f32>(y + kRowHeight - kCaretHeight),

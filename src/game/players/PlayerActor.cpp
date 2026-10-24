@@ -95,13 +95,11 @@ void PlayerActor::spawn(s32 player, const CharacterSave& save, const ClassStats*
     m_floorObject = -1;
     m_floorFlags = 0;
     m_wallContacts.clear();
-    f32 speedStat = 0.0f;
     m_radius = kDefaultWidth * 0.5f;
     m_height = kDefaultHeight;
     m_followHeight = kDefaultFollowHeight;
     m_attentionHeight = kDefaultFollowHeight;
     if (stats != nullptr) {
-        speedStat = static_cast<f32>(characterStats(*stats, save).speed());
         if (stats->width > 0.0f) {
             m_radius = stats->width * 0.5f;
         }
@@ -115,6 +113,12 @@ void PlayerActor::spawn(s32 player, const CharacterSave& save, const ClassStats*
             m_attentionHeight = stats->attentionY;
         }
     }
+    restat(stats);
+}
+
+void PlayerActor::restat(const ClassStats* stats) {
+    const f32 speedStat =
+        stats != nullptr ? static_cast<f32>(characterStats(*stats, m_save).speed()) : 0.0f;
     m_speed = kMinSpeed + std::clamp(speedStat * kStatScale, 0.0f, 1.0f) * (kMaxSpeed - kMinSpeed);
 }
 

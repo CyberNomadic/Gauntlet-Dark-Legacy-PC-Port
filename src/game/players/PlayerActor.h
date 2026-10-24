@@ -135,6 +135,9 @@ public:
 
     /** Drops the character onto the floor under it, when there is one. */
     void settle(const WorldCollision& collision);
+    /** Takes the pace its record's class and level give it again, after the record
+     * changed under it. */
+    void restat(const ClassStats* stats);
 
     s32 player() const { return m_player; }
     const CharacterSave& save() const { return m_save; }

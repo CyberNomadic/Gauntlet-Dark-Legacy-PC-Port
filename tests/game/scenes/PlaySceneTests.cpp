@@ -3209,8 +3209,8 @@ TEST_CASE("the fields' zombies are bred from their generators, chase the party, 
             const PartyFigures::Scene figureScene{
                 .world = world, .weapons = weapons, .departure = departure};
             device.draws.clear();
-            figures.draw(device, std::span<const PlayerRuntime>(scene.runtime(0), 1),
-                         figureScene, Mat4{1.0f}, CameraFrame{});
+            figures.draw(device, std::span<const PlayerRuntime>(scene.runtime(0), 1), figureScene,
+                         Mat4{1.0f}, CameraFrame{});
             REQUIRE_FALSE(device.draws.empty());
             CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
                 return draw.state.maskedTexture == figures.hitFlash();
@@ -5572,5 +5572,51 @@ TEST_CASE("auto aim off keeps a standing throw on the player's facing",
         CHECK(std::abs(shotYaw - facing) < 0.05f);
         CHECK(actor.yaw() == Approx(facing));
     }
+    scene.close();
+}
+
+TEST_CASE("the console moves the party to a point, stands the camera over it and edits the record",
+          "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, LevelRef::tower()));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    // The town's start marker: floor the party can be put down on, well away from the way in.
+    REQUIRE(world.startPoint(1) != nullptr);
+    const Vec3 target = world.startPoint(1)->position;
+    REQUIRE(scene.actor(0) != nullptr);
+    REQUIRE(glm::distance(scene.actor(0)->position(), target) > 5.0f);
+    REQUIRE(scene.relocate(target));
+    const Vec3 at = scene.actor(0)->position();
+    CHECK(std::hypot(at.x - target.x, at.z - target.z) < 0.01f);
+    CHECK(std::abs(at.y - target.y) < 2.0f);
+    CHECK(glm::distance(scene.camera().attention(), at) < 15.0f);
+    // The record is the console's to edit; a level set there reaches the actor's pace.
+    CharacterSave* live = scene.liveSave(0);
+    REQUIRE(live != nullptr);
+    const f32 pace = scene.actor(0)->speed();
+    live->progress().experience = levelExperience(kMaxLevel);
+    scene.restat(0);
+    CHECK(scene.actor(0)->speed() > pace);
+    CHECK(scene.liveSave(1) == nullptr);
     scene.close();
 }

@@ -27,16 +27,16 @@ constexpr bool validPad(s32 pad) {
 }
 
 constexpr std::array<std::string_view, static_cast<usize>(Key::Count)> kKeyNames{
-    "",           "Escape",     "Enter", "Space",     "Tab",         "Backspace", "Up",
-    "Down",       "Left",       "Right", "LeftShift", "LeftControl", "LeftAlt",   "A",
-    "B",          "C",          "D",     "E",         "F",           "G",         "H",
-    "I",          "J",          "K",     "L",         "M",           "N",         "O",
-    "P",          "Q",          "R",     "S",         "T",           "U",         "V",
-    "W",          "X",          "Y",     "Z",         "0",           "1",         "2",
-    "3",          "4",          "5",     "6",         "7",           "8",         "9",
-    "F1",         "F2",         "F3",    "F4",        "F5",          "F6",        "F7",
-    "F8",         "F9",         "F10",   "F11",       "F12",         "Grave",     "MouseLeft",
-    "MouseRight", "MouseMiddle"};
+    "",         "Escape",    "Enter",      "Space",      "Tab",         "Backspace", "Up",
+    "Down",     "Left",      "Right",      "LeftShift",  "LeftControl", "LeftAlt",   "A",
+    "B",        "C",         "D",          "E",          "F",           "G",         "H",
+    "I",        "J",         "K",          "L",          "M",           "N",         "O",
+    "P",        "Q",         "R",          "S",          "T",           "U",         "V",
+    "W",        "X",         "Y",          "Z",          "0",           "1",         "2",
+    "3",        "4",         "5",          "6",          "7",           "8",         "9",
+    "F1",       "F2",        "F3",         "F4",         "F5",          "F6",        "F7",
+    "F8",       "F9",        "F10",        "F11",        "F12",         "Grave",     "PageUp",
+    "PageDown", "MouseLeft", "MouseRight", "MouseMiddle"};
 
 constexpr std::array<std::string_view, static_cast<usize>(PadButton::Count)> kPadButtonNames{
     "A",

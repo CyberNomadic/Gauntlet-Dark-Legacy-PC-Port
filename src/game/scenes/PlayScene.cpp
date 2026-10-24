@@ -459,6 +459,48 @@ void PlayScene::awardExperience(s32 player, s32 amount, bool kill) {
     PartyRecords::award(m_players, player, amount, kill, m_world->level());
 }
 
+CharacterSave* PlayScene::liveSave(s32 player) {
+    for (PlayerRuntime& runtime : m_players) {
+        if (runtime.actor.player() == player) {
+            return &runtime.actor.save();
+        }
+    }
+    return nullptr;
+}
+
+void PlayScene::restat(s32 player) {
+    for (PlayerRuntime& runtime : m_players) {
+        if (runtime.actor.player() == player) {
+            runtime.actor.restat(m_classes.stats(runtime.actor.save().character));
+        }
+    }
+}
+
+bool PlayScene::relocate(const Vec3& position) {
+    constexpr f32 kSpacing = 2.0f; ///< between those put down, so nobody stands in another
+    constexpr f32 kLift = 1.0f;    ///< put down from just above, to settle onto the floor
+    if (m_world == nullptr) {
+        return false;
+    }
+    std::vector<CameraSubject> subjects;
+    for (PlayerRuntime& runtime : m_players) {
+        if (runtime.life != PlayerLife::Standing) {
+            continue;
+        }
+        const auto apart = static_cast<f32>(subjects.size()) * kSpacing;
+        runtime.actor.place(position + Vec3{apart, kLift, 0.0f});
+        runtime.actor.settle(m_world->collision());
+        runtime.fixtureSpot.reset();
+        subjects.push_back(CameraSubject{runtime.actor.position(), runtime.actor.followPoint(),
+                                         runtime.actor.height() * 0.5f});
+    }
+    if (subjects.empty()) {
+        return false;
+    }
+    m_camera.reset(subjects, m_world->cameraMarkers(), m_world->cameraRange(), cameraView());
+    return true;
+}
+
 /** Puts a help message up over a character, the narrator saying it, unless the party has
  * seen it. */
 bool PlayScene::postHelp(s32 id, usize index, s32 number) {

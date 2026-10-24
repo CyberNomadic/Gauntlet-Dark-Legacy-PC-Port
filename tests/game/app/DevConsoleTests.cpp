@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <format>
 #include <limits>
 #include <span>
 #include <string>
@@ -26,19 +27,24 @@ using Catch::Approx;
 constexpr std::array<Key, 1> kToggle{Key::Grave};
 constexpr f64 kTick = 1.0 / 60.0;
 
-/** One poll of the keyboard: the keys held and the characters typed. */
+/** One poll of the keyboard: the keys held, the characters typed and the wheel's motion. */
 struct Poll {
     std::vector<Key> down;
     std::string typed;
+    f32 wheel = 0.0f;
 };
 
 void poll(Input& input, const Poll& keys) {
     input.beginPoll();
-    for (const Key key : {Key::Grave, Key::Enter, Key::Backspace, Key::Escape, Key::A}) {
+    for (const Key key : {Key::Grave, Key::Enter, Key::Backspace, Key::Escape, Key::A, Key::Up,
+                          Key::Down, Key::PageUp, Key::PageDown}) {
         input.setKey(key, std::ranges::find(keys.down, key) != keys.down.end());
     }
     for (const char c : keys.typed) {
         input.addTypedChar(static_cast<u32>(static_cast<unsigned char>(c)));
+    }
+    if (keys.wheel != 0.0f) {
+        input.scrollPointer(keys.wheel);
     }
 }
 
@@ -54,6 +60,11 @@ void press(DevConsole& console, Input& input, Key key) {
     console.update(kTick, input, kToggle);
     poll(input, {});
     console.update(kTick, input, kToggle);
+}
+
+void enter(DevConsole& console, Input& input, std::string_view text) {
+    type(console, input, text);
+    press(console, input, Key::Enter);
 }
 
 bool mentions(std::span<const std::string> lines, std::string_view text) {
@@ -86,6 +97,20 @@ Quad fillsOf(const test::FakeRenderDevice& device, Color color) {
         }
     }
     return quad;
+}
+
+/** The glyph sheet drawn from and how many cells were drawn. */
+std::pair<const Texture*, usize> glyphsOf(const test::FakeRenderDevice& device) {
+    usize glyphs = 0;
+    const Texture* sheet = nullptr;
+    for (const auto& draw : device.draws) {
+        if (draw.texture == &device.whiteTexture()) {
+            continue;
+        }
+        sheet = draw.texture;
+        glyphs += draw.vertices.size() / 6;
+    }
+    return {sheet, glyphs};
 }
 
 void drawOnce(test::FakeRenderDevice& device, const DevConsole& console) {
@@ -198,6 +223,14 @@ TEST_CASE("typed characters build the line, backspace trims it and enter runs it
     CHECK(console.output().back() == "off");
 }
 
+TEST_CASE("the prompt names whoever is at the keyboard", "[dev-console]") {
+    DevConsole console;
+    CHECK(console.prompt() == DevConsole::kDefaultPrompt);
+    console.setPrompt("MERLIN>");
+    console.run("help");
+    CHECK(console.output().front() == "MERLIN>help");
+}
+
 TEST_CASE("help lists the commands and an unknown name is refused the way DOS refused one",
           "[dev-console]") {
     DevConsole console;
@@ -215,6 +248,68 @@ TEST_CASE("help lists the commands and an unknown name is refused the way DOS re
     CHECK(console.output().back() == "GDL>   "); // an empty line only echoes the prompt
 }
 
+TEST_CASE("up and down walk the lines entered before and come back to the one being typed",
+          "[dev-console]") {
+    DevConsole console;
+    Input input;
+    console.toggle();
+    console.addCommand("second", "",
+                       [](DevConsole& /*self*/, DevConsole::Arguments /*arguments*/) {});
+    enter(console, input, "first");
+    enter(console, input, "second");
+    enter(console, input, "second"); // a repeat of the last is not kept twice
+    enter(console, input, "");       // nor an empty line
+    REQUIRE(console.history().size() == 2);
+    type(console, input, "thi");
+    press(console, input, Key::Up);
+    CHECK(console.line() == "second");
+    press(console, input, Key::Up);
+    CHECK(console.line() == "first");
+    press(console, input, Key::Up); // nothing older
+    CHECK(console.line() == "first");
+    press(console, input, Key::Down);
+    CHECK(console.line() == "second");
+    press(console, input, Key::Down);
+    CHECK(console.line() == "thi"); // the new line, set aside while browsing
+    press(console, input, Key::Down);
+    CHECK(console.line() == "thi");
+    press(console, input, Key::Up);
+    press(console, input, Key::Enter); // runs "second" again
+    CHECK(console.output().back() == "GDL>second");
+    CHECK(console.history().size() == 2);
+    press(console, input, Key::Up);
+    CHECK(console.line() == "second"); // browsing starts over from the newest
+}
+
+TEST_CASE("page up and page down and the wheel scroll the output, and new output comes back down",
+          "[dev-console]") {
+    DevConsole console;
+    Input input;
+    console.toggle();
+    const auto shown = static_cast<usize>(DevConsole::kRows - 1);
+    for (usize i = 0; i < shown * 3; ++i) {
+        console.print(std::to_string(i));
+    }
+    CHECK(console.scroll() == 0);
+    press(console, input, Key::PageUp);
+    CHECK(console.scroll() == shown);
+    press(console, input, Key::PageUp);
+    press(console, input, Key::PageUp); // clamped at the oldest line
+    CHECK(console.scroll() == shown * 2);
+    press(console, input, Key::PageDown);
+    CHECK(console.scroll() == shown);
+    poll(input, {.wheel = 1.0f});
+    console.update(kTick, input, kToggle);
+    CHECK(console.scroll() == shown + DevConsole::kWheelLines);
+    poll(input, {.wheel = -2.0f});
+    console.update(kTick, input, kToggle);
+    CHECK(console.scroll() == shown - DevConsole::kWheelLines);
+    console.print("new");
+    CHECK(console.scroll() == 0);
+    press(console, input, Key::PageDown); // nothing below the newest
+    CHECK(console.scroll() == 0);
+}
+
 TEST_CASE("held backspace repeats after the typematic delay and the line keeps a caret cell",
           "[dev-console]") {
     DevConsole console;
@@ -222,7 +317,8 @@ TEST_CASE("held backspace repeats after the typematic delay and the line keeps a
     console.toggle();
     const std::string fill(static_cast<usize>(DevConsole::kColumns), 'x');
     type(console, input, fill);
-    const usize room = static_cast<usize>(DevConsole::kColumns) - DevConsole::kPrompt.size() - 1;
+    const usize room =
+        static_cast<usize>(DevConsole::kColumns) - DevConsole::kDefaultPrompt.size() - 1;
     CHECK(console.line().size() == room);
     poll(input, {.down = {Key::Backspace}});
     console.update(kTick, input, kToggle);
@@ -256,14 +352,24 @@ TEST_CASE("the caret blinks at the VGA text cursor's rate from the moment the co
     CHECK(console.caretShown());
 }
 
-TEST_CASE("printed text wraps at the screen's columns and the scrollback is bounded",
+TEST_CASE("printed text wraps at spaces within the screen's columns and the scrollback is bounded",
           "[dev-console]") {
     DevConsole console;
     const std::string wide(static_cast<usize>(DevConsole::kColumns) + 5, 'w');
-    console.print(wide);
+    console.print(wide); // no space to break at: hard
     REQUIRE(console.output().size() == 2);
     CHECK(console.output()[0].size() == static_cast<usize>(DevConsole::kColumns));
     CHECK(console.output()[1] == "wwwww");
+    std::string prose;
+    for (s32 i = 0; i < 40; ++i) {
+        prose += "word ";
+    }
+    prose.pop_back(); // 199 characters of five-letter words
+    console.print(prose);
+    REQUIRE(console.output().size() == 4);
+    CHECK(console.output()[2].size() <= static_cast<usize>(DevConsole::kColumns));
+    CHECK(console.output()[2].ends_with("word"));
+    CHECK(console.output()[3].starts_with("word"));
     console.print("");
     CHECK(console.output().back().empty());
     for (usize i = 0; i < DevConsole::kScrollback + 10; ++i) {
@@ -300,7 +406,7 @@ TEST_CASE("the screen is the status strip's width, black, and hangs above the vi
     CHECK(down.bottom == Approx(192.0f));
 }
 
-TEST_CASE("the console writes its lines in the 8x8 font behind an underscore caret",
+TEST_CASE("the console writes its lines in half-size 8x8 cells behind an underscore caret",
           "[dev-console][assets]") {
     const auto root = test::unpackedOrSkip("STATIC/textures.json").parent_path().parent_path();
     test::unpackedOrSkip("fonts/font8x8.json");
@@ -317,25 +423,25 @@ TEST_CASE("the console writes its lines in the 8x8 font behind an underscore car
         console.update(kTick, input, kToggle);
     }
     drawOnce(device, console);
-    usize glyphs = 0;
-    const Texture* sheet = nullptr;
-    for (const auto& draw : device.draws) {
-        if (draw.texture == &device.whiteTexture()) {
-            continue;
-        }
-        sheet = draw.texture;
-        glyphs += draw.vertices.size() / 6;
-    }
+    const auto [sheet, glyphs] = glyphsOf(device);
     CHECK(sheet != nullptr);
-    CHECK(glyphs == 5 + DevConsole::kPrompt.size() + 2);
+    CHECK(glyphs == 5 + DevConsole::kDefaultPrompt.size() + 2);
     const Quad caret = fillsOf(device, DevConsole::kInk);
     CHECK(caret.vertices == 6);
-    // After the prompt and two typed cells on the second row, two scanlines deep.
-    const auto cells = static_cast<f32>(DevConsole::kPrompt.size() + 2);
+    // After the prompt and two typed cells on the second row, one scanline deep.
+    const auto cells = static_cast<f32>(DevConsole::kDefaultPrompt.size() + 2);
     CHECK(caret.left == Approx(DevConsole::kMargin + cells * DevConsole::kCellWidth));
     CHECK(caret.right == Approx(caret.left + DevConsole::kCellWidth));
     CHECK(caret.bottom == Approx(DevConsole::kMargin + 2 * DevConsole::kRowHeight));
     CHECK(caret.top == Approx(caret.bottom - DevConsole::kCaretHeight));
+    // Scrolled up a page with more output than rows, the prompt row stays and the newest
+    // lines leave the screen.
+    for (s32 i = 0; i < DevConsole::kRows * 2; ++i) {
+        console.print(std::format("line {}", i));
+    }
+    press(console, input, Key::PageUp);
+    drawOnce(device, console);
+    CHECK(glyphsOf(device).second > glyphs);
     console.release();
     CHECK_FALSE(console.ready());
 }

@@ -74,6 +74,18 @@ private:
     PlayScene::Inputs readPlayInputs(f64 deltaSeconds);
     /** The level debug overlay's lines for the level in play. */
     std::vector<std::string> levelDebugLines() const;
+    /** The developer console's font, banner and commands (GauntletConsole.cpp). */
+    void setUpConsole();
+    /** The player the console speaks for: the one at the keyboard, else the first in; -1
+     * with nobody in. */
+    s32 consolePlayer();
+    void consoleList(DevConsole& console, DevConsole::Arguments arguments);
+    void consoleGoto(DevConsole& console, DevConsole::Arguments arguments);
+    void consoleUnlockTower(DevConsole& console);
+    void consoleGet(DevConsole& console, DevConsole::Arguments arguments);
+    /** Takes the party to `level` through the loading picture, standing it at `position`
+     * facing `yaw` when given; the scene closes at once. */
+    void consoleTravel(const LevelRef& level, std::optional<Vec3> position, std::optional<f32> yaw);
     void resetPlayInput();
     void updatePause(f64 deltaSeconds);
     bool saveSettings(const GameConfig& config);
