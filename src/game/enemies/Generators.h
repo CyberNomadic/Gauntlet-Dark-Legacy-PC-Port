@@ -84,11 +84,19 @@ public:
     void clear();
     /** Carries bodies, contact boxes and birth origins with their supporting world nodes. */
     void syncFloors();
+    /** The kinds of the temple's and the underworld's mixed broods: generators that breed
+     * their realm's four kinds in turn, at their realm's strength. */
+    static constexpr s32 kTempleBrood = -2;
+    static constexpr s32 kHellBrood = -3;
     /** Stands a generator of `kind` at `position` facing `yaw`, breeding at `tier`, on the
      * level's record for the kind (any of its generator records failing that, else stock
-     * measures), for the developer console: its id, or nothing without bodies or a slot. */
+     * measures), for the developer console: its id, or nothing without bodies or a slot. A
+     * mixed brood breeds at its realm's strength, `tier` then only its durability; its bodies
+     * are in `realmItems` (the level in play's item archive when null) and its record is
+     * `record` when given. */
     std::optional<s32> spawn(RenderDevice& device, Enemies& enemies, s32 kind, s32 tier,
-                             const Vec3& position, f32 yaw);
+                             const Vec3& position, f32 yaw, ItemArchive* realmItems = nullptr,
+                             const ItemInfo* record = nullptr);
     /** A boss effect leaves a tier-one generator. Its optional BOSSGEN art is borrowed. */
     bool placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchive& items, Enemies& enemies,
                    s32 kind, const Mat4& placement, const WorldCollision* collision,

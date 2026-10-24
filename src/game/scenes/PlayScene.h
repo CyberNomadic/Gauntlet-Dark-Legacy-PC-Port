@@ -393,6 +393,9 @@ public:
      * level's archive if need be, for the developer console. */
     bool spawnObject(const LevelRef& level, std::string_view name, const Vec3& position, f32 yaw);
     usize spawnedObjectCount() const { return m_spawned.count(); }
+    /** `level`'s item archive, loaded the first time and kept, for the bodies of the broods
+     * the developer console brings in from it; null when it is not unpacked. */
+    ItemArchive* borrowItems(const LevelRef& level);
     /** Lends the swarm `source`'s voices, its roster and the bank its `audio` record names,
      * for the kinds the developer console brings in from it; false without the bank. */
     bool borrowOpponentSounds(const LevelInfo& source, const LevelAudioInfo* audio);
@@ -602,6 +605,8 @@ private:
     LevelFixtures m_fixtures;
     LevelOpponents m_opponents;
     SpawnedObjects m_spawned; ///< world objects the developer console stood
+    std::vector<std::pair<std::string, std::unique_ptr<LevelItemArchives>>>
+        m_borrowedItems; ///< other levels' item archives, by level, for the console
     TransitionScreen m_transition;
     EffectTrees m_effects;
     std::vector<PointLight> m_lights; ///< this frame's, gathered before it is drawn

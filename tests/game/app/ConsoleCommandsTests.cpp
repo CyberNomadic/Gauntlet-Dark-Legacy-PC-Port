@@ -494,4 +494,36 @@ TEST_CASE("usage lines put the forms in a column with what each does beside them
     CHECK(ConsoleCommands::listUsage().contains("list objects [map]"));
 }
 
+TEST_CASE("spawn generator special asks for a realm's mixed brood", "[dev-console][commands]") {
+    std::string error;
+    const auto brood = ConsoleCommands::parseSpawn(Args{"generator", "special", "e2"}, error);
+    REQUIRE(brood.has_value());
+    CHECK(brood->kind == ConsoleCommands::Spawn::Kind::Generator);
+    CHECK(brood->brood);
+    CHECK(brood->enemyKind == -1);
+    CHECK(brood->name == "SPECIAL");
+    CHECK(brood->map == "E2");
+    CHECK(brood->tier == 1);
+    const auto tough = ConsoleCommands::parseSpawn(Args{"generator", "SPECIAL", "3"}, error);
+    REQUIRE(tough.has_value());
+    CHECK(tough->brood);
+    CHECK(tough->tier == 3);
+    CHECK_FALSE(tough->map.has_value());
+    const auto grunts = ConsoleCommands::parseSpawn(Args{"generator", "gru"}, error);
+    REQUIRE(grunts.has_value());
+    CHECK_FALSE(grunts->brood);
+    CHECK(ConsoleCommands::spawnUsage().contains("<enemy>|special"));
+}
+
+TEST_CASE("a layout's generator record is found by name", "[dev-console][commands][assets]") {
+    const auto level = test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2").parent_path();
+    WorldLayout layout;
+    REQUIRE(layout.load(level));
+    const ItemInfo* grunts = ConsoleCommands::generatorRecord(layout, "gru");
+    REQUIRE(grunts != nullptr);
+    CHECK(grunts->type == ItemInfo::kGenerator);
+    CHECK(grunts->name == "GRU");
+    CHECK(ConsoleCommands::generatorRecord(layout, "NOTHING_OF_THE_KIND") == nullptr);
+}
+
 } // namespace

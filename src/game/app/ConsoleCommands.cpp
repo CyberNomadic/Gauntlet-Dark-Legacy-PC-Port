@@ -291,7 +291,8 @@ std::string ConsoleCommands::getUsage() {
 std::string ConsoleCommands::spawnUsage() {
     return usage(
         {{"spawn <enemy> [tier] [count] [map]", "so many of the swarm's kind, at a tier"},
-         {"spawn generator <enemy> [tier] [map]", "a generator breeding that kind"},
+         {"spawn generator <enemy>|special [tier] [map]",
+          "a generator breeding that kind, or the temple's or underworld's mixed brood"},
          {"spawn golem|general|gargoyle [form] [map]",
           "a great one; a gargoyle's form is eagl, lion or serp"},
          {"spawn item <name>", "a pickup of this level, by its record"},
@@ -587,13 +588,14 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
     }
     if (category == Category::Generator) {
         const auto kind = enemyKindOf(name);
-        if (!kind.has_value() || !spawnableEnemy(*kind)) {
+        spawn.brood = name == "SPECIAL";
+        if (!spawn.brood && (!kind.has_value() || !spawnableEnemy(*kind))) {
             error = std::format("No enemy kind named {} for a generator; list enemies names them",
                                 name);
             return std::nullopt;
         }
         spawn.kind = Spawn::Kind::Generator;
-        spawn.enemyKind = *kind;
+        spawn.enemyKind = spawn.brood ? -1 : *kind;
         spawn.name = name;
         const usize numbers = numbersAhead();
         if (numbers > 1 || !takeMap(numbers)) {
@@ -796,6 +798,13 @@ std::vector<std::string> ConsoleCommands::objectLines(const WorldLayout& layout)
     }
     return {std::format("Objects ({}, {} distinct): {}", layout.objects().size(), counts.size(),
                         joined(counts))};
+}
+
+const ItemInfo* ConsoleCommands::generatorRecord(const WorldLayout& layout, std::string_view name) {
+    const auto found = std::ranges::find_if(layout.itemInfos(), [&](const ItemInfo& info) {
+        return info.type == ItemInfo::kGenerator && sameIgnoringCase(info.name, name);
+    });
+    return found != layout.itemInfos().end() ? &*found : nullptr;
 }
 
 bool ConsoleCommands::hasObject(const WorldLayout& layout, std::string_view name) {

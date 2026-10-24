@@ -15,6 +15,8 @@
 #include "game/characters/Progression.h"
 #include "game/critters/CombatantKind.h"
 #include "game/enemies/Enemies.h"
+#include "game/enemies/Generators.h"
+#include "game/level/TowerAccess.h"
 #include "game/menu/MenuInput.h"
 #include "game/players/ItemPickup.h"
 
@@ -329,8 +331,34 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
         if (from.has_value()) {
             consoleBorrowVoices(console, *from);
         }
-        const auto id = scene.generators().spawn(renderDevice(), scene.enemies(), spawn->enemyKind,
-                                                 spawn->tier, spotAt(0), yawToPlayer);
+        s32 kind = spawn->enemyKind;
+        ItemArchive* realmItems = nullptr;
+        const ItemInfo* record = nullptr;
+        ConsoleLevel source;
+        if (spawn->brood) {
+            // A mixed brood is its realm's: its bodies and record come from that realm's
+            // level, the one in play when it is one of them.
+            const s32 realm = from.has_value() ? from->realmId : m_play->world.ref().realmId;
+            if (realm != TowerAccess::kTempleWorld && realm != TowerAccess::kUnderworldWorld) {
+                console.print("A mixed brood is the temple's (E) or the underworld's (F); name "
+                              "a map of either");
+                break;
+            }
+            kind = realm == TowerAccess::kTempleWorld ? Generators::kTempleBrood
+                                                      : Generators::kHellBrood;
+            if (from.has_value()) {
+                realmItems = scene.borrowItems(*from);
+                if (realmItems == nullptr) {
+                    console.print(std::format("{} lends no item archive", from->name));
+                    break;
+                }
+                if (consoleLevel(console, spawn->map, source)) {
+                    record = ConsoleCommands::generatorRecord(*source.layout, "SPECIAL");
+                }
+            }
+        }
+        const auto id = scene.generators().spawn(renderDevice(), scene.enemies(), kind, spawn->tier,
+                                                 spotAt(0), yawToPlayer, realmItems, record);
         console.print(id.has_value()
                           ? std::format("Stood a tier {} {} generator", spawn->tier, spawn->name)
                           : std::format("No {} generator could stand here", spawn->name));

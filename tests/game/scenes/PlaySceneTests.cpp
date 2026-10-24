@@ -5760,6 +5760,7 @@ TEST_CASE("in the tower the console stands visitors from other levels: the swarm
     const std::filesystem::path root = unpackedRoot();
     test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
     test::unpackedOrSkip("MONSTERS/GOLEM/LEVELG/objects.json");
+    test::unpackedOrSkip("ITEMS/LEVELE/objects.json");
     const GameConfig config;
     test::FakeRenderDevice device;
     LevelCatalog levels;
@@ -5806,6 +5807,17 @@ TEST_CASE("in the tower the console stands visitors from other levels: the swarm
     REQUIRE(grunt.has_value());
     CHECK(scene.enemies().alive(*grunt));
     CHECK(scene.generators().spawn(device, scene.enemies(), kGruntKind, 1, spot, 0.0f).has_value());
+    // The temple's mixed brood, its bodies out of the temple's item archive, breeding its four
+    // kinds at the temple's strength however tough it was asked to be.
+    const auto temple = levels.byName("E1");
+    REQUIRE(temple.has_value());
+    ItemArchive* templeItems = scene.borrowItems(*temple);
+    REQUIRE(templeItems != nullptr);
+    CHECK(scene.borrowItems(*temple) == templeItems); // kept, not loaded again
+    const auto brood = scene.generators().spawn(device, scene.enemies(), Generators::kTempleBrood,
+                                                3, spot, 0.0f, templeItems);
+    REQUIRE(brood.has_value());
+    CHECK(scene.generators().kindOf(*brood) == Generators::kTempleBrood);
     // A golem in the town's costume, which the tower has none of its own.
     CHECK(scene.critters().spawnGolem(spot, 0.0f, 'G').has_value());
     // One of the town's objects, out of its archive.

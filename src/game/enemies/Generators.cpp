@@ -181,6 +181,10 @@ namespace {
 
 constexpr std::array<s32, 4> kTempleKinds{16, 23, 14, 13};
 constexpr std::array<s32, 4> kHellKinds{2, 24, 20, 25};
+/** The strength a mixed brood breeds at: the temple's at two, the underworld's at three. */
+constexpr s32 kTempleBroodStrength = 2;
+constexpr s32 kHellBroodStrength = 3;
+constexpr std::string_view kSpecialRecord = "SPECIAL"; ///< the broods' generator record
 constexpr std::array<s32, 4> kHellAlgorithms{30, 30, 7, 7};
 // A generator's kind resolves as though bred at no strength: never the medium's second row.
 constexpr s32 kGeneratorKindStrength = 0;
@@ -616,9 +620,9 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
         if (info.type != ItemInfo::kGenerator) {
             continue;
         }
-        const bool special = info.name == "SPECIAL" && (realm == 5 || realm == 6);
-        const auto named =
-            special ? std::optional<s32>{realm == 5 ? -2 : -3} : enemyKindOf(info.name);
+        const bool special = info.name == kSpecialRecord && (realm == 5 || realm == 6);
+        const auto named = special ? std::optional<s32>{realm == 5 ? kTempleBrood : kHellBrood}
+                                   : enemyKindOf(info.name);
         if (!named.has_value()) {
             continue;
         }
@@ -634,7 +638,7 @@ bool Generators::bind(RenderDevice& device, const WorldLayout& layout, Enemies& 
                 body = &*low;
             }
         }
-        const s32 specialTier = realm == 5 ? 2 : 3;
+        const s32 specialTier = realm == 5 ? kTempleBroodStrength : kHellBroodStrength;
         const s32 authoredStrength = std::max(paramOf(instance, 0), 1);
         const s32 strength = special ? specialTier : authoredStrength;
         const s32 kind = levelKindOf(roster, *named, kGeneratorKindStrength);
@@ -761,13 +765,22 @@ bool Generators::stand(RenderDevice& device, Enemies& enemies, const Placement& 
 }
 
 std::optional<s32> Generators::spawn(RenderDevice& device, Enemies& enemies, s32 kind, s32 tier,
-                                     const Vec3& position, f32 yaw) {
-    if (!m_sim.bound || kind < 0 || kind >= kEnemyKindCount) {
+                                     const Vec3& position, f32 yaw, ItemArchive* realmItems,
+                                     const ItemInfo* record) {
+    if (!m_sim.bound || !generatorKind(kind)) {
         return std::nullopt;
     }
-    // The level's record for the kind, any of its generator records failing that, else stock
-    // measures: the figure is the kind's own either way.
-    const std::string_view name = enemyKind(kind).name;
+    const bool brood = kind < -1;
+    if (brood) {
+        for (const s32 species : kind == kTempleBrood ? kTempleKinds : kHellKinds) {
+            if (!enemies.loadKind(species)) {
+                return std::nullopt;
+            }
+        }
+    }
+    // The record given, else the level's for the kind, any of its generator records failing
+    // that, else stock measures: the figure is the kind's own either way.
+    const std::string_view name = brood ? kSpecialRecord : enemyKind(kind).name;
     const auto named = std::ranges::find(m_records, name, &ItemInfo::name);
     ItemInfo stock;
     stock.type = ItemInfo::kGenerator;
@@ -775,18 +788,21 @@ std::optional<s32> Generators::spawn(RenderDevice& device, Enemies& enemies, s32
     stock.radius = kStockGeneratorRadius;
     stock.height = kStockGeneratorHeight;
     stock.hitPoints = kStockGeneratorHitPoints;
-    const ItemInfo& info = named != m_records.end() ? *named
-                           : !m_records.empty()     ? m_records.front()
-                                                    : stock;
+    const ItemInfo& info = record != nullptr          ? *record
+                           : named != m_records.end() ? *named
+                           : !m_records.empty()       ? m_records.front()
+                                                      : stock;
     Placement placement;
     placement.info = &info;
     placement.body = &info;
     placement.kind = kind;
-    placement.strength = std::clamp(tier, 1, kStates);
-    placement.authoredStrength = placement.strength;
+    placement.authoredStrength = std::clamp(tier, 1, kStates);
+    placement.strength = brood ? (kind == kTempleBrood ? kTempleBroodStrength : kHellBroodStrength)
+                               : placement.authoredStrength;
     placement.position = position;
     placement.rotation = Vec3{0.0f, yaw, 0.0f};
-    if (!stand(device, enemies, placement, nullptr, m_realmItems, m_lenders)) {
+    if (!stand(device, enemies, placement, nullptr,
+               realmItems != nullptr ? realmItems : m_realmItems, m_lenders)) {
         return std::nullopt;
     }
     syncFloors();

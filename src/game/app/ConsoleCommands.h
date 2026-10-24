@@ -89,6 +89,7 @@ public:
         };
         Kind kind = Kind::Thing;
         s32 enemyKind = -1;
+        bool brood = false; ///< a generator of the temple's or the underworld's mixed kinds
         s32 tier = 1;
         s32 count = 1;
         CombatantKind critter = CombatantKind::Unknown;
@@ -128,6 +129,8 @@ public:
     static std::vector<std::string> pickupLines(const WorldLayout& layout);
     /** A layout's objects: how many, and each distinct name with its count. */
     static std::vector<std::string> objectLines(const WorldLayout& layout);
+    /** A layout's generator record named `name`, or null. */
+    static const ItemInfo* generatorRecord(const WorldLayout& layout, std::string_view name);
     /** Whether a layout has an object or a pickup record named `name`, in any case. */
     static bool hasObject(const WorldLayout& layout, std::string_view name);
     static bool hasPickup(const WorldLayout& layout, std::string_view name);

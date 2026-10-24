@@ -265,6 +265,7 @@ void PlayScene::close() {
     m_audio.stopCues();
     m_sumnerVisit.clear();
     m_spawned.clear();
+    m_borrowedItems.clear();
     m_promotion.clear();
     m_towerRelics.clear();
     m_relicVoice = {};
@@ -530,6 +531,20 @@ bool PlayScene::spawnObject(const LevelRef& level, std::string_view name, const 
     const Mat4 transform =
         glm::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f});
     return m_spawned.spawn(*m_device, m_context.unpackedRoot, level, name, transform);
+}
+
+ItemArchive* PlayScene::borrowItems(const LevelRef& level) {
+    for (auto& [name, archives] : m_borrowedItems) {
+        if (name == level.name) {
+            return &archives->primary();
+        }
+    }
+    auto archives = std::make_unique<LevelItemArchives>();
+    if (!archives->load(m_context.unpackedRoot, level)) {
+        return nullptr;
+    }
+    m_borrowedItems.emplace_back(level.name, std::move(archives));
+    return &m_borrowedItems.back().second->primary();
 }
 
 bool PlayScene::borrowOpponentSounds(const LevelInfo& source, const LevelAudioInfo* audio) {
