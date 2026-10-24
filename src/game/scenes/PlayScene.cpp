@@ -264,6 +264,7 @@ void PlayScene::close() {
     endRecordedAudio();
     m_audio.stopCues();
     m_sumnerVisit.clear();
+    m_spawned.clear();
     m_promotion.clear();
     m_towerRelics.clear();
     m_relicVoice = {};
@@ -519,6 +520,25 @@ void PlayScene::setViewOverride(const std::optional<WorldCamera>& camera) {
         m_previousCamera.reset(); // a cut either way, not a glide between the two
     }
     m_viewOverride = camera;
+}
+
+bool PlayScene::spawnObject(const LevelRef& level, std::string_view name, const Vec3& position,
+                            f32 yaw) {
+    if (m_device == nullptr) {
+        return false;
+    }
+    const Mat4 transform =
+        glm::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f});
+    return m_spawned.spawn(*m_device, m_context.unpackedRoot, level, name, transform);
+}
+
+bool PlayScene::borrowOpponentSounds(const LevelInfo& source, const LevelAudioInfo* audio) {
+    if (m_world == nullptr) {
+        return false;
+    }
+    m_opponents.borrowRoster(source.enemies);
+    return audio != nullptr && !audio->bank.empty() &&
+           m_audio.borrowBank(m_context.unpackedRoot / "audio" / audio->bank);
 }
 
 /** Puts a help message up over a character, the narrator saying it, unless the party has
@@ -1582,6 +1602,7 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     m_presentedClip = clip;
     const CameraFrame companionCamera = CameraFrame::of(camera);
     m_world->drawOpaque(device, clip, camera, effectBlend);
+    m_spawned.draw(device, clip, m_world->lighting());
     m_towerRelics.draw(device, clip, m_world->lighting(), camera, effectBlend);
     m_sumner.draw(device, clip, m_world->lighting(), effectBlend);
     m_figures.draw(device, m_players, figureScene(frameBlend), clip, companionCamera);

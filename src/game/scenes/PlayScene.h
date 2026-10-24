@@ -43,6 +43,7 @@
 #include "game/level/LevelWorld.h"
 #include "game/level/NativeStateResources.h"
 #include "game/level/SecretChallenge.h"
+#include "game/level/SpawnedObjects.h"
 #include "game/level/SwitchCutscene.h"
 #include "game/level/TowerAccess.h"
 #include "game/level/TriggerCues.h"
@@ -388,6 +389,13 @@ public:
     /** Fells `player`'s character where it stands, for the developer console; false in the
      * tower, where nobody falls, or for one not standing. */
     bool kill(s32 player);
+    /** Stands a copy of `level`'s object `name` at `position` facing `yaw`, loading that
+     * level's archive if need be, for the developer console. */
+    bool spawnObject(const LevelRef& level, std::string_view name, const Vec3& position, f32 yaw);
+    usize spawnedObjectCount() const { return m_spawned.count(); }
+    /** Lends the swarm `source`'s voices, its roster and the bank its `audio` record names,
+     * for the kinds the developer console brings in from it; false without the bank. */
+    bool borrowOpponentSounds(const LevelInfo& source, const LevelAudioInfo* audio);
     /** Harms `player`'s character as a blow, a burn, a piercing or gas would, for tests. */
     void harm(s32 player, f32 damage, HurtKind kind);
     /** What `player`'s status box shows. */
@@ -593,6 +601,7 @@ private:
     PlayerAttacks m_attacks;
     LevelFixtures m_fixtures;
     LevelOpponents m_opponents;
+    SpawnedObjects m_spawned; ///< world objects the developer console stood
     TransitionScreen m_transition;
     EffectTrees m_effects;
     std::vector<PointLight> m_lights; ///< this frame's, gathered before it is drawn

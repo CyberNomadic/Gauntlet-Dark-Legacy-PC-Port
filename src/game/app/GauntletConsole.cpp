@@ -1,3 +1,4 @@
+#include <cctype>
 #include <format>
 #include <optional>
 #include <string>
@@ -226,6 +227,17 @@ void Gauntlet::consoleList(DevConsole& console, DevConsole::Arguments arguments)
     }
 }
 
+void Gauntlet::consoleBorrowVoices(DevConsole& console, const LevelRef& level) {
+    WorldData data;
+    const LevelInfo* info = data.load(m_options.unpackedDirectory / level.worldDataFile())
+                                ? data.level(level.name)
+                                : nullptr;
+    if (info == nullptr ||
+        !m_play->scene.borrowOpponentSounds(*info, data.audio(info->audioIndex))) {
+        console.print(std::format("({} lends no voices)", level.name));
+    }
+}
+
 void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments) {
     constexpr f32 kAhead = 6.0f; ///< units before the character
     constexpr f32 kApart = 3.0f; ///< between several
@@ -242,6 +254,16 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
         console.print(error);
         return;
     }
+    // The map named, when one is: where a visitor's voices, costume or object come from.
+    std::optional<LevelRef> from;
+    if (spawn->map.has_value()) {
+        from = *spawn->map == "TOWER" ? std::optional{LevelRef::tower()}
+                                      : m_levels.byName(*spawn->map);
+        if (!from.has_value()) {
+            console.print(std::format("No map named {}; list maps names them", *spawn->map));
+            return;
+        }
+    }
     const Vec3 facing = actor->facing();
     const f32 yawToPlayer = actor->yaw() + kPi;
     const auto spotAt = [&](s32 index) {
@@ -255,6 +277,9 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
     PlayScene& scene = m_play->scene;
     switch (spawn->kind) {
     case ConsoleCommands::Spawn::Kind::Enemy: {
+        if (from.has_value()) {
+            consoleBorrowVoices(console, *from);
+        }
         s32 stood = 0;
         const std::vector<EnemyView> views = scene.opponents().views(scene.participants());
         for (s32 i = 0; i < spawn->count; ++i) {
@@ -276,14 +301,20 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
         break;
     }
     case ConsoleCommands::Spawn::Kind::Critter: {
+        const char realm =
+            from.has_value() && !from->name.empty()
+                ? static_cast<char>(std::toupper(static_cast<unsigned char>(from->name.front())))
+                : '\0';
         std::optional<s32> id;
         switch (spawn->critter) {
-        case CombatantKind::Golem: id = scene.critters().spawnGolem(spotAt(0), yawToPlayer); break;
+        case CombatantKind::Golem:
+            id = scene.critters().spawnGolem(spotAt(0), yawToPlayer, realm);
+            break;
         case CombatantKind::General:
-            id = scene.critters().spawnGeneral(spotAt(0), yawToPlayer);
+            id = scene.critters().spawnGeneral(spotAt(0), yawToPlayer, 0.0f, realm);
             break;
         case CombatantKind::Gargoyle:
-            id = scene.critters().spawnGargoyle(spotAt(0), yawToPlayer, spawn->form);
+            id = scene.critters().spawnGargoyle(spotAt(0), yawToPlayer, spawn->form, realm);
             break;
         case CombatantKind::Unknown:
         case CombatantKind::Boss: break;
@@ -295,6 +326,9 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
         break;
     }
     case ConsoleCommands::Spawn::Kind::Generator: {
+        if (from.has_value()) {
+            consoleBorrowVoices(console, *from);
+        }
         const auto id = scene.generators().spawn(renderDevice(), scene.enemies(), spawn->enemyKind,
                                                  spawn->tier, spotAt(0), yawToPlayer);
         console.print(id.has_value()
@@ -302,18 +336,24 @@ void Gauntlet::consoleSpawn(DevConsole& console, DevConsole::Arguments arguments
                           : std::format("No {} generator could stand here", spawn->name));
         break;
     }
-    case ConsoleCommands::Spawn::Kind::Thing:
-        if (m_play->world.placeItem(renderDevice(), spawn->name, spotAt(0))) {
+    case ConsoleCommands::Spawn::Kind::Thing: {
+        if (!from.has_value() && m_play->world.placeItem(renderDevice(), spawn->name, spotAt(0))) {
             console.print(std::format("Dropped {}", spawn->name));
-        } else if (ConsoleCommands::hasObject(m_play->world.layout(), spawn->name)) {
-            console.print(
-                std::format("{}; {} is one of them", ConsoleCommands::kObjectsStay, spawn->name));
+            break;
+        }
+        const LevelRef source = from.has_value() ? *from : m_play->world.ref();
+        if (scene.spawnObject(source, spawn->name, spotAt(0), yawToPlayer)) {
+            console.print(std::format("Stood {} of {}", spawn->name, source.name));
+        } else if (from.has_value()) {
+            console.print(std::format("Nothing named {} in {}; list objects {} names what there is",
+                                      spawn->name, from->name, from->name));
         } else {
             console.print(std::format("Nothing named {} here; list items, objects, enemies or "
                                       "critters name what there is",
                                       spawn->name));
         }
         break;
+    }
     }
 }
 

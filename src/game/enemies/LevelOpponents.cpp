@@ -595,6 +595,8 @@ void LevelOpponents::close() {
     }
     m_placements.clear();
     m_statues.clear();
+    m_borrowedRoster.clear();
+    m_levelNow.reset();
     clearDeaths();
     if (m_resources.has_value()) {
         m_combatantProjectiles.clear(m_resources->effects);
@@ -937,6 +939,37 @@ void LevelOpponents::setUnseen(s32 player, bool unseen) {
     }
 }
 
+void LevelOpponents::borrowRoster(std::span<const LevelEnemy> entries) {
+    if (!m_resources.has_value()) {
+        return;
+    }
+    const LevelInfo* level = m_resources->world.level();
+    const auto known = [](std::span<const LevelEnemy> roster, s32 kind) {
+        return std::ranges::find(roster, kind, &LevelEnemy::kind) != roster.end();
+    };
+    for (const LevelEnemy& entry : entries) {
+        if (entry.kind < 0 || (level != nullptr && known(level->enemies, entry.kind)) ||
+            known(m_borrowedRoster, entry.kind)) {
+            continue;
+        }
+        m_borrowedRoster.push_back(entry);
+    }
+    if (level == nullptr) {
+        m_levelNow.reset();
+        return;
+    }
+    m_levelNow = *level;
+    m_levelNow->enemies.insert(m_levelNow->enemies.end(), m_borrowedRoster.begin(),
+                               m_borrowedRoster.end());
+}
+
+const LevelInfo* LevelOpponents::levelNow() const {
+    if (m_levelNow.has_value()) {
+        return &*m_levelNow;
+    }
+    return m_resources.has_value() ? m_resources->world.level() : nullptr;
+}
+
 bool LevelOpponents::unseen(s32 player) const {
     return player >= 0 && static_cast<usize>(player) < m_unseen.size() &&
            m_unseen[static_cast<usize>(player)];
@@ -949,7 +982,7 @@ void LevelOpponents::applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRunti
     }
     for (usize i = 0; i < players.size(); ++i) {
         PlayerRuntime& player = players[i];
-        const LevelInfo* level = m_resources->world.level();
+        const LevelInfo* level = levelNow();
         const auto impact =
             PartyDamage::enemy(blow, player,
                                level != nullptr ? std::span<const LevelEnemy>(level->enemies)
@@ -1416,9 +1449,8 @@ bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublis
         auto scope =
             audio.soundScope({20, static_cast<u64>(std::max(feedback.enemy, 0)), feedback.instance},
                              feedback.killed ? 17 : 16);
-        const auto emission =
-            EnemyFeedbackEmission::resolve(feedback, m_enemies.archive(feedback.kind),
-                                           m_resources->weapons, m_resources->world.level());
+        const auto emission = EnemyFeedbackEmission::resolve(
+            feedback, m_enemies.archive(feedback.kind), m_resources->weapons, levelNow());
         u32 effect = 0;
         if (publish) {
             const auto emitted = publish(emission);

@@ -327,6 +327,7 @@ add_executable(tests
     game/audio/VoiceQueueTests.cpp
     game/menu/HintMenuTests.cpp
     game/level/PlacedItemsTests.cpp
+    game/level/SpawnedObjectsTests.cpp
     game/audio/AmbientSoundsTests.cpp
     game/audio/MusicAreasTests.cpp
     engine/world/WorldLightingTests.cpp

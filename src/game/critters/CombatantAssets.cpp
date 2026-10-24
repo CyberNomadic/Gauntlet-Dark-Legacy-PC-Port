@@ -70,6 +70,7 @@ bool CombatantAssets::load(RenderDevice& device, const std::filesystem::path& ro
                            std::span<TextureSet* const> textureLenders) {
     clear();
     definition = family;
+    this->realm = realm;
     if (definition.name.empty() || !data.load(root / "critter" / (definition.name + ".json"))) {
         return false;
     }

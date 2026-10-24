@@ -123,6 +123,11 @@ public:
     std::vector<EnemyView> views(std::span<const PlayerRuntime> players) const;
     void setUnseen(s32 player, bool unseen);
     bool unseen(s32 player) const;
+    /** Lends the swarm another level's roster entries, for the voices of kinds the developer
+     * console brings in from it; kinds the level has keep its own. */
+    void borrowRoster(std::span<const LevelEnemy> entries);
+    /** The level's record with the borrowed roster entries added, else the level's own. */
+    const LevelInfo* levelNow() const;
     Vec3 resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to) const;
     /** Routes a contact by player identity; breath uses a shared quarter-second gate. */
     static bool applyCritterBlow(const CombatBlow& blow, std::span<PlayerRuntime> players,
@@ -270,6 +275,8 @@ private:
                      const Events& events);
     std::optional<Resources> m_resources;
     std::array<bool, 4> m_unseen{}; ///< by player, at the developer console's word
+    std::vector<LevelEnemy> m_borrowedRoster;
+    std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
     Generators m_generators;
     Critters m_critters;

@@ -69,6 +69,9 @@ public:
                          SceneSoundPlayback playback, f32 volume = 1, f32 pan = 0,
                          SoundCueToken start = {});
     bool hasNamed(std::string_view name);
+    /** Adds another level's bank (audio/<bank>) to those named sounds are found in, for the
+     * developer console's visitors from other realms; false when it is not there. */
+    bool borrowBank(const std::filesystem::path& directory);
     SpeechTiming namedTiming(std::string_view name);
     f32 panAt(const Vec3& position) const { return AmbientSounds::panOf(position, m_ear); }
     SoundCueToken beginNamedCue(std::string_view name);
@@ -342,7 +345,8 @@ private:
     SoundSet m_narrator;
     SoundSet m_narratorSecond;
     SoundSet m_promotions;
-    AmbientSounds m_ambience; ///< cleared before its borrowed banks
+    std::vector<std::unique_ptr<SoundSet>> m_borrowed; ///< other levels', by the console
+    AmbientSounds m_ambience;                          ///< cleared before its borrowed banks
     MusicAreas m_areas;
     std::vector<u32> m_objectFlags; ///< the level's objects' flags, by object
     std::optional<u32> m_pickup;

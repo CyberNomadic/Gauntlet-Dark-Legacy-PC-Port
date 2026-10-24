@@ -411,31 +411,49 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
         return std::nullopt;
     }
     const std::string name = upper(arguments[0]);
-    const Arguments rest = arguments.subspan(1);
-    const auto argument = [&](usize index) {
-        return index < rest.size() ? std::optional<std::string_view>{rest[index]} : std::nullopt;
-    };
+    Arguments rest = arguments.subspan(1);
     Spawn spawn;
+    // A map comes last; it is whatever is left that is no number or form.
+    const auto takeMap = [&](usize numbers) -> bool {
+        if (rest.size() > numbers + 1) {
+            error = std::string(kSpawnUsage);
+            return false;
+        }
+        if (rest.size() == numbers + 1) {
+            spawn.map = upper(rest.back());
+            rest = rest.first(numbers);
+        }
+        return true;
+    };
+    const auto numbersAhead = [&] {
+        usize count = 0;
+        while (count < rest.size() && integer(rest[count]).has_value()) {
+            ++count;
+        }
+        return count;
+    };
     if (const auto kind = enemyKindOf(name); kind.has_value() && spawnableEnemy(*kind)) {
         spawn.kind = Spawn::Kind::Enemy;
         spawn.enemyKind = *kind;
         spawn.name = name;
-        const auto tier = tierOf(argument(0), error);
+        const usize numbers = numbersAhead();
+        if (numbers > 2 || !takeMap(numbers)) {
+            error = std::string(kSpawnUsage);
+            return std::nullopt;
+        }
+        const auto tier =
+            tierOf(rest.empty() ? std::nullopt : std::optional<std::string_view>{rest[0]}, error);
         if (!tier.has_value()) {
             return std::nullopt;
         }
         spawn.tier = *tier;
-        if (const auto count = argument(1)) {
-            const auto value = integer(*count);
+        if (rest.size() > 1) {
+            const auto value = integer(rest[1]);
             if (!value.has_value() || *value < 1 || *value > kMostSpawned) {
                 error = std::format("A count is 1 to {}", kMostSpawned);
                 return std::nullopt;
             }
             spawn.count = *value;
-        }
-        if (rest.size() > 2) {
-            error = std::string(kSpawnUsage);
-            return std::nullopt;
         }
         return spawn;
     }
@@ -446,37 +464,46 @@ std::optional<ConsoleCommands::Spawn> ConsoleCommands::parseSpawn(Arguments argu
         spawn.critter = critter->kind;
         spawn.name = std::string(critter->name);
         if (critter->kind == CombatantKind::Gargoyle) {
-            const std::string form = upper(argument(0).value_or(kGargoyleForms.front()));
-            if (std::ranges::find(kGargoyleForms, form) == kGargoyleForms.end()) {
-                error = "A gargoyle is an eagl, a lion or a serp";
-                return std::nullopt;
+            spawn.form = std::string(kGargoylePrefix) + std::string(kGargoyleForms.front());
+            if (!rest.empty() &&
+                std::ranges::find(kGargoyleForms, upper(rest[0])) != kGargoyleForms.end()) {
+                spawn.form = std::string(kGargoylePrefix) + upper(rest[0]);
+                rest = rest.subspan(1);
             }
-            spawn.form = std::string(kGargoylePrefix) + form;
-        } else if (!rest.empty()) {
-            error = std::string(kSpawnUsage);
+        }
+        if (!takeMap(0)) {
+            error = critter->kind == CombatantKind::Gargoyle
+                        ? "A gargoyle is an eagl, a lion or a serp, then a map at most"
+                        : std::string(kSpawnUsage);
             return std::nullopt;
         }
         return spawn;
     }
     if (lowered == "generator") {
-        const auto bred = argument(0);
-        const auto kind = bred.has_value() ? enemyKindOf(upper(*bred)) : std::nullopt;
+        const auto bred = rest.empty() ? std::nullopt : std::optional<std::string>{upper(rest[0])};
+        const auto kind = bred.has_value() ? enemyKindOf(*bred) : std::nullopt;
         if (!kind.has_value() || !spawnableEnemy(*kind)) {
-            error = "spawn generator <enemy> [tier]; list enemies names the kinds";
+            error = "spawn generator <enemy> [tier] [map]; list enemies names the kinds";
             return std::nullopt;
         }
         spawn.kind = Spawn::Kind::Generator;
         spawn.enemyKind = *kind;
-        spawn.name = upper(*bred);
-        const auto tier = tierOf(argument(1), error);
+        spawn.name = *bred;
+        rest = rest.subspan(1);
+        const usize numbers = numbersAhead();
+        if (numbers > 1 || !takeMap(numbers)) {
+            error = std::string(kSpawnUsage);
+            return std::nullopt;
+        }
+        const auto tier =
+            tierOf(rest.empty() ? std::nullopt : std::optional<std::string_view>{rest[0]}, error);
         if (!tier.has_value()) {
             return std::nullopt;
         }
         spawn.tier = *tier;
         return spawn;
     }
-    if (!rest.empty()) {
-        error = std::string(kSpawnUsage);
+    if (!takeMap(0)) {
         return std::nullopt;
     }
     spawn.kind = Spawn::Kind::Thing;

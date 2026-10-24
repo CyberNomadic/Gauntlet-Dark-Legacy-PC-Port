@@ -218,17 +218,18 @@ void Critters::close() {
     m_collision = nullptr;
     m_hazards = nullptr;
 }
-CombatantAssets* Critters::stockFor(const CombatantDefinition& definition) {
+CombatantAssets* Critters::stockFor(const CombatantDefinition& definition, char realm) {
+    const char costume = realm != 0 ? realm : m_realm;
     for (auto& stock : m_sim.stocks) {
         if (stock->definition.name == definition.name &&
-            stock->definition.kind == definition.kind) {
+            stock->definition.kind == definition.kind && stock->realm == costume) {
             return stock;
         }
     }
     CombatantAssets* active = nullptr;
     for (const auto& stock : m_stockCache) {
         if (stock->definition.name == definition.name &&
-            stock->definition.kind == definition.kind) {
+            stock->definition.kind == definition.kind && stock->realm == costume) {
             active = stock.get();
             break;
         }
@@ -238,7 +239,7 @@ CombatantAssets* Critters::stockFor(const CombatantDefinition& definition) {
             return nullptr;
         }
         auto stock = std::make_unique<CombatantAssets>();
-        if (!stock->load(*m_device, m_root, definition, m_realm, m_textureLenders)) {
+        if (!stock->load(*m_device, m_root, definition, costume, m_textureLenders)) {
             return nullptr;
         }
         active = stock.get();
@@ -260,14 +261,15 @@ CombatantDefinition Critters::definitionOf(CombatantKind kind, std::string_view 
     default: return CombatantDefinition{};
     }
 }
-std::optional<s32> Critters::spawnGolem(const Vec3& position, f32 yaw) {
-    return spawn(Golem::definition(m_realm), position, yaw);
+std::optional<s32> Critters::spawnGolem(const Vec3& position, f32 yaw, char realm) {
+    return spawn(Golem::definition(realm != 0 ? realm : m_realm), position, yaw, 0.0f, realm);
 }
-std::optional<s32> Critters::spawnGeneral(const Vec3& position, f32 yaw, f32 sight) {
-    return spawn(General::definition(), position, yaw, sight);
+std::optional<s32> Critters::spawnGeneral(const Vec3& position, f32 yaw, f32 sight, char realm) {
+    return spawn(General::definition(), position, yaw, sight, realm);
 }
-std::optional<s32> Critters::spawnGargoyle(const Vec3& position, f32 yaw, std::string_view form) {
-    return spawn(definitionOf(CombatantKind::Gargoyle, form), position, yaw);
+std::optional<s32> Critters::spawnGargoyle(const Vec3& position, f32 yaw, std::string_view form,
+                                           char realm) {
+    return spawn(definitionOf(CombatantKind::Gargoyle, form), position, yaw, 0.0f, realm);
 }
 std::optional<s32> Critters::spawn(CombatantKind kind, const Vec3& position, f32 yaw,
                                    std::string_view form, f32 sight) {
@@ -286,15 +288,16 @@ ItemArchive* Critters::archiveFor(CombatantKind kind, std::string_view form) {
     return stock != nullptr ? &stock->archive : nullptr;
 }
 std::optional<s32> Critters::spawn(const CombatantDefinition& definition, const Vec3& position,
-                                   f32 yaw, f32 sight) {
-    auto* stock = stockFor(definition);
+                                   f32 yaw, f32 sight, char realm) {
+    auto* stock = stockFor(definition, realm);
     if (stock == nullptr) {
         return std::nullopt;
     }
     for (s32 id = 0; id < kMost; ++id) {
         auto& actor = m_critters[static_cast<usize>(id)];
         if (!actor.present()) {
-            if (actor.spawn(*stock, id, position, yaw, m_collision, m_scales, m_realm)) {
+            if (actor.spawn(*stock, id, position, yaw, m_collision, m_scales,
+                            realm != 0 ? realm : m_realm)) {
                 actor.setHazards(m_hazards);
                 // A general takes up its round of the lookouts where it is placed, seeing
                 // only as far as its placement allows meanwhile (visrad at the level's scale).

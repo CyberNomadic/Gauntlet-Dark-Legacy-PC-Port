@@ -88,6 +88,8 @@ private:
     void consoleGet(DevConsole& console, DevConsole::Arguments arguments);
     void consoleSpawn(DevConsole& console, DevConsole::Arguments arguments);
     void consoleSuicide(DevConsole& console);
+    /** Lends the swarm `level`'s voices for the visitors brought in from it. */
+    void consoleBorrowVoices(DevConsole& console, const LevelRef& level);
     /** What `list` reads of a level: the one in play's, or a named map's loaded for it. */
     struct ConsoleLevel {
         std::string name;

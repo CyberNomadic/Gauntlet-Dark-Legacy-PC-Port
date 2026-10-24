@@ -138,9 +138,13 @@ public:
     /** A gargoyle's form ("EAGL"), empty for the rest. */
     std::string formOf(s32 id) const;
 
-    std::optional<s32> spawnGolem(const Vec3& position, f32 yaw);
-    std::optional<s32> spawnGeneral(const Vec3& position, f32 yaw, f32 sight = 0.0f);
-    std::optional<s32> spawnGargoyle(const Vec3& position, f32 yaw, std::string_view form = {});
+    /** `realm` (a level name's letter) dresses the great one in another realm's costume, for
+     * the developer console; nought keeps the level's own. */
+    std::optional<s32> spawnGolem(const Vec3& position, f32 yaw, char realm = 0);
+    std::optional<s32> spawnGeneral(const Vec3& position, f32 yaw, f32 sight = 0.0f,
+                                    char realm = 0);
+    std::optional<s32> spawnGargoyle(const Vec3& position, f32 yaw, std::string_view form = {},
+                                     char realm = 0);
     /** Whether it is on its round of the lookouts, and which it makes for. */
     bool patrolling(s32 id) const;
     s32 lookoutOf(s32 id) const;
@@ -149,8 +153,8 @@ private:
     friend class OpponentCombatCheckpoint;
     friend class CrittersCheckpoint;
     std::optional<s32> spawn(const CombatantDefinition& definition, const Vec3& position, f32 yaw,
-                             f32 sight = 0.0f);
-    CombatantAssets* stockFor(const CombatantDefinition& definition);
+                             f32 sight = 0.0f, char realm = 0);
+    CombatantAssets* stockFor(const CombatantDefinition& definition, char realm = 0);
     CombatantDefinition definitionOf(CombatantKind kind, std::string_view form) const;
     void collect(Combatant& actor);
     RenderDevice* m_device = nullptr;

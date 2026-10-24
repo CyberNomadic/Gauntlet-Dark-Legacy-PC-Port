@@ -280,6 +280,8 @@ add_library(game STATIC
     effects/EffectTrees.cpp
     level/PlacedItems.h
     level/PlacedItems.cpp
+    level/SpawnedObjects.h
+    level/SpawnedObjects.cpp
     audio/AmbientSounds.h
     audio/AmbientSounds.cpp
     audio/MusicAreas.h

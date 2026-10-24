@@ -21,6 +21,7 @@ namespace gdl::game {
 /** Stable shared assets for a fighter family. Release only after all borrowers finish. */
 struct CombatantAssets {
     CombatantDefinition definition;
+    char realm = 0; ///< the realm whose costume the archive holds
     CritterData data;
     std::vector<CritterData> children;
     ItemArchive archive;

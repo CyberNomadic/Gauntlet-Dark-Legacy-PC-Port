@@ -90,12 +90,14 @@ public:
         s32 tier = 1;
         s32 count = 1;
         CombatantKind critter = CombatantKind::Unknown;
-        std::string form; ///< a gargoyle's ("GAR_EAGL")
-        std::string name; ///< a thing's, as the level's records spell it
+        std::string form;               ///< a gargoyle's ("GAR_EAGL")
+        std::string name;               ///< a thing's, as the level's records spell it
+        std::optional<std::string> map; ///< the level it comes from, else the one in play
     };
     static constexpr std::string_view kSpawnUsage =
-        "spawn <enemy> [tier] [count], spawn golem|general|gargoyle [eagl|lion|serp], spawn "
-        "generator <enemy> [tier], or spawn <item>; list enemies, critters and items name them";
+        "spawn <enemy> [tier] [count] [map], spawn golem|general|gargoyle [eagl|lion|serp] "
+        "[map], spawn generator <enemy> [tier] [map], or spawn <item or object> [map]; list "
+        "names them";
     static constexpr s32 kMostSpawned = 20;
     static constexpr std::string_view kObjectsStay =
         "The level's objects are built into its drawing batches and cannot be spawned";

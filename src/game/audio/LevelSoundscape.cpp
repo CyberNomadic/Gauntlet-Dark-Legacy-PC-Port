@@ -667,6 +667,7 @@ void LevelSoundscape::close() {
     m_areas.clear();
     m_objectFlags.clear();
     m_common = SoundSet{};
+    m_borrowed.clear();
     m_level = SoundSet{};
     m_ambient = SoundSet{};
     m_narrator = SoundSet{};
@@ -715,7 +716,22 @@ SoundSet* LevelSoundscape::bankOf(std::string_view name, u32& sound) {
             return bank;
         }
     }
+    for (const auto& bank : m_borrowed) {
+        if (const auto found = bank->find(name); found.has_value()) {
+            sound = *found;
+            return bank.get();
+        }
+    }
     return nullptr;
+}
+
+bool LevelSoundscape::borrowBank(const std::filesystem::path& directory) {
+    auto bank = std::make_unique<SoundSet>();
+    if (!bank->load(directory)) {
+        return false;
+    }
+    m_borrowed.push_back(std::move(bank));
+    return true;
 }
 
 bool LevelSoundscape::isPlaying(SoundHandle handle) const {

@@ -16,7 +16,9 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "engine/assets/AnimationSet.h"
+#include "engine/assets/ModelSet.h"
 #include "engine/assets/StringTable.h"
+#include "engine/assets/WorldData.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/audio/AudioMixer.h"
 #include "engine/audio/SoundPlayer.h"
@@ -5750,4 +5752,74 @@ TEST_CASE("the console stands the swarm, the great ones, generators and pickups 
     CHECK(scene.fallen(0));
     CHECK_FALSE(scene.kill(0));
     scene.close();
+}
+
+TEST_CASE("in the tower the console stands visitors from other levels: the swarm, a costumed "
+          "great one and another level's object, with that level's voices",
+          "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
+    test::unpackedOrSkip("MONSTERS/GOLEM/LEVELG/objects.json");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, LevelRef::tower()));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.actor(0) != nullptr);
+    const PlayerActor& actor = *scene.actor(0);
+    const Vec3 spot = actor.position() + actor.facing() * 6.0f;
+    // The town's voices lent, its grunts stand in the tower.
+    const auto town = levels.byName("G1");
+    REQUIRE(town.has_value());
+    WorldData data;
+    REQUIRE(data.load(root / town->worldDataFile()));
+    const LevelInfo* townInfo = data.level("G1");
+    REQUIRE(townInfo != nullptr);
+    const LevelAudioInfo* townAudio = data.audio(townInfo->audioIndex);
+    REQUIRE(townAudio != nullptr);
+    CHECK(scene.borrowOpponentSounds(*townInfo, townAudio));
+    CHECK_FALSE(scene.borrowOpponentSounds(*townInfo, nullptr)); // no record, no bank
+    REQUIRE(scene.enemies().loadKind(kGruntKind));
+    EnemySpawn birth;
+    birth.kind = kGruntKind;
+    birth.position = spot;
+    birth.direction = -actor.facing();
+    birth.placed = true;
+    const auto grunt = scene.enemies().spawn(birth, scene.opponents().views(scene.participants()));
+    REQUIRE(grunt.has_value());
+    CHECK(scene.enemies().alive(*grunt));
+    CHECK(scene.generators().spawn(device, scene.enemies(), kGruntKind, 1, spot, 0.0f).has_value());
+    // A golem in the town's costume, which the tower has none of its own.
+    CHECK(scene.critters().spawnGolem(spot, 0.0f, 'G').has_value());
+    // One of the town's objects, out of its archive.
+    WorldLayout townLayout;
+    REQUIRE(townLayout.load(root / town->directory));
+    ModelSet townModels;
+    REQUIRE(townModels.load(root / town->directory));
+    const auto object = std::ranges::find_if(townLayout.objects(), [&](const WorldObject& item) {
+        return !item.particles() && townModels.find(item.name).has_value();
+    });
+    REQUIRE(object != townLayout.objects().end());
+    CHECK(scene.spawnObject(*town, object->name, spot, 0.0f));
+    CHECK(scene.spawnedObjectCount() == 1);
+    CHECK_FALSE(scene.spawnObject(*town, "NOTHING_OF_THE_KIND", spot, 0.0f));
+    scene.close();
+    CHECK(scene.spawnedObjectCount() == 0);
 }

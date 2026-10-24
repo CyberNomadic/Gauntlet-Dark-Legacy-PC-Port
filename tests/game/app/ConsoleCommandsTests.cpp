@@ -287,7 +287,7 @@ TEST_CASE("spawn reads an enemy with its tier and count, a critter, a generator 
     CHECK(crowd.count == 5);
     CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "4"}, error).has_value());
     CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "1", "0"}, error).has_value());
-    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "1", "2", "x"}, error).has_value());
+    CHECK(spawn({"gru", "1", "2", "x"}).map == "X"); // whatever is left names a map
     auto golem = spawn({"golem"});
     CHECK(golem.kind == Kind::Critter);
     CHECK(golem.critter == CombatantKind::Golem);
@@ -295,8 +295,8 @@ TEST_CASE("spawn reads an enemy with its tier and count, a critter, a generator 
     CHECK(spawn({"gargoyle"}).form == "GAR_EAGL");
     CHECK(spawn({"Gargoyle", "lion"}).form == "GAR_LION");
     CHECK(spawn({"general"}).critter == CombatantKind::General);
-    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gargoyle", "dog"}, error).has_value());
-    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"general", "x"}, error).has_value());
+    CHECK(spawn({"gargoyle", "dog"}).map == "DOG");
+    CHECK(spawn({"general", "x"}).map == "X");
     auto generator = spawn({"generator", "rat", "2"});
     CHECK(generator.kind == Kind::Generator);
     CHECK(generator.enemyKind == kRatKind);
@@ -307,7 +307,7 @@ TEST_CASE("spawn reads an enemy with its tier and count, a critter, a generator 
     auto key = spawn({"key"});
     CHECK(key.kind == Kind::Thing);
     CHECK(key.name == "KEY");
-    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"key", "x"}, error).has_value());
+    CHECK(spawn({"key", "x"}).map == "X");
     CHECK_FALSE(ConsoleCommands::parseSpawn(Args{}, error).has_value());
     CHECK(error == ConsoleCommands::kSpawnUsage);
     CHECK(ConsoleCommands::spawnableEnemy(kGruntKind));
@@ -372,6 +372,45 @@ TEST_CASE("the layout lines count a level's generators, placed enemies, pickups 
     REQUIRE(pickup != layout.itemInfos().end());
     CHECK(ConsoleCommands::hasPickup(layout, pickup->name));
     CHECK_FALSE(ConsoleCommands::hasPickup(layout, "NOTHING_OF_THE_KIND"));
+}
+
+TEST_CASE("spawn takes the map a visitor comes from after everything else",
+          "[dev-console][commands]") {
+    using Kind = ConsoleCommands::Spawn::Kind;
+    std::string error;
+    const auto spawn = [&](Args args) {
+        const auto request = ConsoleCommands::parseSpawn(args, error);
+        REQUIRE(request.has_value());
+        return *request;
+    };
+    auto visitors = spawn({"gru", "2", "3", "e2"});
+    CHECK(visitors.kind == Kind::Enemy);
+    CHECK(visitors.tier == 2);
+    CHECK(visitors.count == 3);
+    CHECK(visitors.map == "E2");
+    auto one = spawn({"gru", "e2"});
+    CHECK(one.tier == 1);
+    CHECK(one.count == 1);
+    CHECK(one.map == "E2");
+    CHECK_FALSE(spawn({"gru", "2"}).map.has_value());
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"gru", "1", "2", "e2", "x"}, error).has_value());
+    auto generator = spawn({"generator", "war", "1", "E2"});
+    CHECK(generator.kind == Kind::Generator);
+    CHECK(generator.tier == 1);
+    CHECK(generator.map == "E2");
+    CHECK(spawn({"generator", "war", "e2"}).map == "E2");
+    auto lion = spawn({"gargoyle", "lion", "d1"});
+    CHECK(lion.form == "GAR_LION");
+    CHECK(lion.map == "D1");
+    CHECK(spawn({"gargoyle", "d1"}).form == "GAR_EAGL");
+    CHECK(spawn({"gargoyle", "d1"}).map == "D1");
+    CHECK(spawn({"golem", "f1"}).map == "F1");
+    CHECK_FALSE(ConsoleCommands::parseSpawn(Args{"golem", "f1", "x"}, error).has_value());
+    auto lamp = spawn({"L1XS_LAMPHO#12", "l1"});
+    CHECK(lamp.kind == Kind::Thing);
+    CHECK(lamp.name == "L1XS_LAMPHO#12");
+    CHECK(lamp.map == "L1");
+    CHECK_FALSE(spawn({"key"}).map.has_value());
 }
 
 } // namespace
