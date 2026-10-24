@@ -1,6 +1,7 @@
 # Gauntlet Dark Legacy
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/vyZM7jwGg)
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/641-gauntlet-dark-legacy/)
 
 A PC port of the GameCube version of *Gauntlet Dark Legacy* for Windows and
 Linux. Currently in alpha.
