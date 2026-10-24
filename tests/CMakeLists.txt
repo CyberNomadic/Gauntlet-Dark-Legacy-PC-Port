@@ -311,6 +311,7 @@ add_executable(tests
     game/party/MikeyFigureTests.cpp
     game/effects/WeaponGlowTests.cpp
     game/camera/CameraMovementLimitTests.cpp
+    game/camera/FreeCameraTests.cpp
     game/level/SkorneArenaTests.cpp
     game/level/FallingPieceTests.cpp
     game/level/FallingSceneryTests.cpp

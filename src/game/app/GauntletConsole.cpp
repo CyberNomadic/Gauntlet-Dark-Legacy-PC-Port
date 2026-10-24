@@ -46,6 +46,64 @@ void Gauntlet::setUpConsole() {
                          [this](DevConsole& console, DevConsole::Arguments arguments) {
                              consoleGet(console, arguments);
                          });
+    m_console.addCommand("notarget", "the enemies stop seeing you, or see you again",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleToggleCheat(console, &PlayScene::ConsoleCheats::noTarget,
+                                                "The enemies no longer see you",
+                                                "The enemies see you again");
+                         });
+    m_console.addCommand("god", "nothing harms you, or everything does again",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleToggleCheat(console, &PlayScene::ConsoleCheats::god,
+                                                "God mode on", "God mode off");
+                         });
+    m_console.addCommand("hidehud", "hides or shows every HUD element",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleHideHud(console);
+                         });
+    m_console.addCommand("freecam", "lets the camera off the party to fly; you stand still",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleFreeCam(console);
+                         });
+}
+
+void Gauntlet::consoleToggleCheat(DevConsole& console, bool PlayScene::ConsoleCheats::*flag,
+                                  std::string_view on, std::string_view off) {
+    const s32 player = consolePlayer();
+    if (player < 0) {
+        console.print("Nobody is in.");
+        return;
+    }
+    bool& granted = m_consoleCheats[static_cast<usize>(player)].*flag;
+    granted = !granted;
+    console.print(granted ? on : off);
+}
+
+void Gauntlet::consoleHideHud(DevConsole& console) {
+    m_hudHidden = !m_hudHidden;
+    console.print(m_hudHidden ? "HUD hidden" : "HUD shown");
+}
+
+void Gauntlet::consoleFreeCam(DevConsole& console) {
+    if (m_freeCamera.active()) {
+        m_freeCamera.stop();
+        console.print("Free camera off");
+        return;
+    }
+    m_freeCamera.start(m_play->scene.viewCamera());
+    console.print(std::format("Free camera on: {}", FreeCamera::kHelp));
+}
+
+void Gauntlet::applyConsoleState(f64 deltaSeconds, bool consoleOpen) {
+    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+        m_play->scene.setCheats(player, m_consoleCheats[static_cast<usize>(player)]);
+    }
+    m_play->scene.setHudHidden(m_hudHidden);
+    if (m_freeCamera.active() && !consoleOpen) {
+        m_freeCamera.update(input(), static_cast<f32>(deltaSeconds));
+    }
+    m_play->scene.setViewOverride(m_freeCamera.active() ? std::optional{m_freeCamera.camera()}
+                                                        : std::nullopt);
 }
 
 /** The player the console speaks for: the one at the keyboard, else the first in. */
@@ -127,6 +185,7 @@ void Gauntlet::consoleTravel(const LevelRef& level, std::optional<Vec3> position
     journey.options.welcome = false;
     journey.options.position = position;
     journey.options.yaw = yaw;
+    m_freeCamera.stop(); // its place means nothing in another level
     m_play->scene.close();
     m_loadingPicture.load(renderDevice(), m_options.unpackedDirectory);
     m_loadingPicture.cover();

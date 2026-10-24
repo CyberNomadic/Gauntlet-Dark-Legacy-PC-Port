@@ -54,6 +54,9 @@ void PlayScene::hurt(usize index, f32 damage, HurtKind kind, bool directed,
     if (index >= m_players.size() || m_sim.switchCutscene.active()) {
         return;
     }
+    if (cheats(m_players[index].actor.player()).god) {
+        return; // the developer console's word
+    }
     const LevelInfo* level = m_world->level();
     PlayerRuntime& runtime = m_players[index];
     const auto audioScope = m_audio.soundScope({31, 0, 1, static_cast<u8>(runtime.actor.player())},

@@ -923,6 +923,25 @@ std::vector<EnemyView> LevelOpponents::enemyViews(std::span<const PlayerRuntime>
     return views;
 }
 
+std::vector<EnemyView> LevelOpponents::views(std::span<const PlayerRuntime> players) const {
+    std::vector<EnemyView> views = enemyViews(players);
+    for (EnemyView& view : views) {
+        view.invisible = view.invisible || unseen(view.player);
+    }
+    return views;
+}
+
+void LevelOpponents::setUnseen(s32 player, bool unseen) {
+    if (player >= 0 && static_cast<usize>(player) < m_unseen.size()) {
+        m_unseen[static_cast<usize>(player)] = unseen;
+    }
+}
+
+bool LevelOpponents::unseen(s32 player) const {
+    return player >= 0 && static_cast<usize>(player) < m_unseen.size() &&
+           m_unseen[static_cast<usize>(player)];
+}
+
 void LevelOpponents::applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRuntime> players,
                                     const Events& events) {
     if (!m_resources.has_value()) {
@@ -1094,7 +1113,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     beginOrdinaryFrame(seconds, players);
     updateBags(seconds);
     shrinkOpponents(players);
-    const std::vector<EnemyView> views = enemyViews(players);
+    const std::vector<EnemyView> views = this->views(players);
     countOrdinaryPlayers(players);
     const LevelInfo* level = m_resources->world.level();
     const f32 missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1.0f;

@@ -561,6 +561,7 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     if (!m_play->scene.isOpen()) {
         return; // a command has sent the party elsewhere
     }
+    applyConsoleState(deltaSeconds, consoleOpen);
     // Start on a controller the party does not hold, in the tower, brings everyone to the
     // select screen with that player, and the tower back with the party grown
     // (check_active_players, init_player_select(1)).
@@ -591,8 +592,10 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
             return;
         }
     }
-    const PlayScene::Inputs inputs =
-        consoleOpen ? PlayScene::Inputs{} : readPlayInputs(deltaSeconds);
+    PlayScene::Inputs inputs = consoleOpen ? PlayScene::Inputs{} : readPlayInputs(deltaSeconds);
+    if (const s32 flying = consolePlayer(); m_freeCamera.active() && flying >= 0) {
+        inputs[static_cast<usize>(flying)] = PlayInput{}; // the keys fly the camera instead
+    }
     const bool wasLeaving = m_play->scene.leaving();
     const PlayOutcome outcome = m_play->scene.update(deltaSeconds, m_sessionInputs.advance(inputs));
     // Exit speech begins with the sinking spin, once for the party, and must
@@ -972,11 +975,15 @@ void Gauntlet::returnFromChallenge(std::span<const PartyMember> party) {
 void Gauntlet::onRender(RenderDevice& device) {
     renderScene(device);
     // One final pass covers movies, loading, menus, play, pause and the idle screen.
-    m_buildLabel.render(device, device.framebufferExtent());
+    if (!m_hudHidden) {
+        m_buildLabel.render(device, device.framebufferExtent());
+    }
     if (m_levelDebug.visible() && m_play->scene.isOpen()) {
         m_levelDebug.render(device, device.framebufferExtent(), levelDebugLines());
     }
-    m_autoSaveIcon.render(device, device.framebufferExtent());
+    if (!m_hudHidden) {
+        m_autoSaveIcon.render(device, device.framebufferExtent());
+    }
 }
 
 std::vector<std::string> Gauntlet::levelDebugLines() const {

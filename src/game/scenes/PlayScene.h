@@ -371,6 +371,20 @@ public:
     /** Stands everyone standing at `position`, a pace apart, and the camera up over them,
      * for the developer console; false with nobody standing. */
     bool relocate(const Vec3& position);
+    /** What the developer console grants a player. */
+    struct ConsoleCheats {
+        bool god = false;      ///< takes no harm
+        bool noTarget = false; ///< unseen by the enemies, critters and bosses
+        bool operator==(const ConsoleCheats&) const = default;
+    };
+    void setCheats(s32 player, const ConsoleCheats& cheats);
+    const ConsoleCheats& cheats(s32 player) const;
+    /** Draws no HUD: no names, status boxes, compass, messages or captions. */
+    void setHudHidden(bool hidden) { m_hudHidden = hidden; }
+    bool hudHidden() const { return m_hudHidden; }
+    /** Looks through `camera` instead of the level's own, for the developer console's free
+     * camera; nothing gives the level's back. Either change cuts rather than glides. */
+    void setViewOverride(const std::optional<WorldCamera>& camera);
     /** Harms `player`'s character as a blow, a burn, a piercing or gas would, for tests. */
     void harm(s32 player, f32 damage, HurtKind kind);
     /** What `player`'s status box shows. */
@@ -556,6 +570,9 @@ private:
     std::optional<Mat4> m_presentedCanvas; ///< local pointer mapping, never simulation state
     std::optional<WorldCamera> m_previousCamera;
     bool m_previousBossCamera = false;
+    std::optional<WorldCamera> m_viewOverride;
+    std::array<ConsoleCheats, static_cast<usize>(kPlayerCount)> m_cheats{};
+    bool m_hudHidden = false;
     std::vector<PlayerRuntime> m_players;
     LevelSoundscape m_audio;
     SceneSoundEvents m_recordedAudio;

@@ -501,6 +501,26 @@ bool PlayScene::relocate(const Vec3& position) {
     return true;
 }
 
+void PlayScene::setCheats(s32 player, const ConsoleCheats& cheats) {
+    if (player < 0 || player >= kPlayerCount) {
+        return;
+    }
+    m_cheats[static_cast<usize>(player)] = cheats;
+    m_opponents.setUnseen(player, cheats.noTarget);
+}
+
+const PlayScene::ConsoleCheats& PlayScene::cheats(s32 player) const {
+    static constexpr ConsoleCheats kNone{};
+    return player < 0 || player >= kPlayerCount ? kNone : m_cheats[static_cast<usize>(player)];
+}
+
+void PlayScene::setViewOverride(const std::optional<WorldCamera>& camera) {
+    if (camera.has_value() != m_viewOverride.has_value()) {
+        m_previousCamera.reset(); // a cut either way, not a glide between the two
+    }
+    m_viewOverride = camera;
+}
+
 /** Puts a help message up over a character, the narrator saying it, unless the party has
  * seen it. */
 bool PlayScene::postHelp(s32 id, usize index, s32 number) {
@@ -1657,7 +1677,7 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
         blur.transition = std::max(20.0f, blur.focusEnd);
         device.applyDepthOfField(blur);
     }
-    if (config.camera.compass && !optionsOpen && !m_sim.gameOver.active()) {
+    if (config.camera.compass && !optionsOpen && !m_sim.gameOver.active() && !m_hudHidden) {
         m_compass.draw(device, clip, camera, config.horizontalFovRadians(),
                        frameWidth / frameHeight, m_world->lighting());
     }
@@ -1676,6 +1696,10 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // bars top and bottom, the status boxes hidden beneath the lower one.
     const bool cut = cinematicBars();
     m_transition.draw(m_canvas, width, height); // over the view, under the boxes
+    if (m_hudHidden) {
+        m_canvas.end(); // the developer console asked for the view alone
+        return;
+    }
     // Rendering can precede the first simulation tick, before PartyNames has observed the hold.
     if (!spawning()) {
         m_names.draw(m_canvas, m_players, clip, canvasProjection, frameBlend);

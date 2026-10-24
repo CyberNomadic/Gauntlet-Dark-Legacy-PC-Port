@@ -5620,3 +5620,68 @@ TEST_CASE("the console moves the party to a point, stands the camera over it and
     CHECK(scene.liveSave(1) == nullptr);
     scene.close();
 }
+
+TEST_CASE(
+    "the console's cheats leave a character unharmed and unseen, hide the HUD and lend the view",
+    "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("A1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.actor(0) != nullptr);
+    const s32 health = scene.actor(0)->save().health();
+    PlayScene::ConsoleCheats cheats;
+    cheats.god = true;
+    scene.setCheats(0, cheats);
+    CHECK(scene.cheats(0).god);
+    CHECK_FALSE(scene.cheats(1).god);
+    scene.harm(0, 100.0f, HurtKind::Blow);
+    CHECK(scene.actor(0)->save().health() == health);
+    scene.setCheats(0, {});
+    scene.harm(0, 100.0f, HurtKind::Blow);
+    CHECK(scene.actor(0)->save().health() < health);
+    // Unseen, the swarm's view of the character is of an invisible one.
+    CHECK_FALSE(scene.opponents().views(scene.participants())[0].invisible);
+    cheats = {};
+    cheats.noTarget = true;
+    scene.setCheats(0, cheats);
+    CHECK(scene.opponents().unseen(0));
+    CHECK(scene.opponents().views(scene.participants())[0].invisible);
+    // The view lent to a free camera is looked through until it is taken back.
+    const WorldCamera lent{.position = Vec3{1.0f, 2.0f, 3.0f}, .pitch = 0.1f, .yaw = 0.2f};
+    scene.setViewOverride(lent);
+    CHECK(scene.viewCamera() == lent);
+    scene.setViewOverride(std::nullopt);
+    CHECK_FALSE(scene.viewCamera() == lent);
+    // Hidden, the HUD draws nothing over the view.
+    const auto projection = makeLetterboxProjection(640, 448, 640, 448);
+    device.draws.clear();
+    scene.render(device, projection, 640, 448);
+    const usize shown = device.draws.size();
+    scene.setHudHidden(true);
+    CHECK(scene.hudHidden());
+    device.draws.clear();
+    scene.render(device, projection, 640, 448);
+    CHECK(device.draws.size() < shown);
+    scene.close();
+}

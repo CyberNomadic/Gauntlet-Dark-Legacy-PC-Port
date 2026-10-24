@@ -25,6 +25,7 @@
 #include "game/app/LevelDebugOverlay.h"
 #include "game/app/OnlineRun.h"
 #include "game/audio/MusicDuck.h"
+#include "game/camera/FreeCamera.h"
 #include "game/config/GameConfig.h"
 #include "game/hud/AutoSaveIcon.h"
 #include "game/level/LevelWorld.h"
@@ -83,6 +84,12 @@ private:
     void consoleGoto(DevConsole& console, DevConsole::Arguments arguments);
     void consoleUnlockTower(DevConsole& console);
     void consoleGet(DevConsole& console, DevConsole::Arguments arguments);
+    void consoleToggleCheat(DevConsole& console, bool PlayScene::ConsoleCheats::*flag,
+                            std::string_view on, std::string_view off);
+    void consoleHideHud(DevConsole& console);
+    void consoleFreeCam(DevConsole& console);
+    /** Carries the console's cheats, hidden HUD and free camera into the scene each tick. */
+    void applyConsoleState(f64 deltaSeconds, bool consoleOpen);
     /** Takes the party to `level` through the loading picture, standing it at `position`
      * facing `yaw` when given; the scene closes at once. */
     void consoleTravel(const LevelRef& level, std::optional<Vec3> position, std::optional<f32> yaw);
@@ -115,6 +122,10 @@ private:
     BuildLabel m_buildLabel;
     LevelDebugOverlay m_levelDebug;
     DevConsole m_console;
+    FreeCamera m_freeCamera;
+    std::array<PlayScene::ConsoleCheats, static_cast<usize>(PlayScene::kPlayerCount)>
+        m_consoleCheats{};
+    bool m_hudHidden = false;
     std::string m_version;
     std::unique_ptr<OnlineRun> m_online;
     struct NetplayNavigation {

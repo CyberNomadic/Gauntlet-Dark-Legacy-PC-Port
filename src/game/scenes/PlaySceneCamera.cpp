@@ -21,6 +21,9 @@ bool PlayScene::cameraContinuous() const {
 }
 
 WorldCamera PlayScene::viewCamera() const {
+    if (m_viewOverride.has_value()) {
+        return *m_viewOverride;
+    }
     if (const auto& camera = m_sim.switchCutscene.camera();
         m_sim.switchCutscene.showing() && camera.has_value()) {
         return *camera;

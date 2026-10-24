@@ -118,6 +118,11 @@ public:
     /** Complete desired combat audio, once after the entire native tick. */
     void gatherLoops() const;
     static std::vector<EnemyView> enemyViews(std::span<const PlayerRuntime> players);
+    /** enemyViews with the players the developer console hides marked invisible: not sought
+     * or shot at, still struck by what they walk into. */
+    std::vector<EnemyView> views(std::span<const PlayerRuntime> players) const;
+    void setUnseen(s32 player, bool unseen);
+    bool unseen(s32 player) const;
     Vec3 resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to) const;
     /** Routes a contact by player identity; breath uses a shared quarter-second gate. */
     static bool applyCritterBlow(const CombatBlow& blow, std::span<PlayerRuntime> players,
@@ -264,6 +269,7 @@ private:
     void dropCarried(const CombatLoss& loss, std::span<const PlayerRuntime> players,
                      const Events& events);
     std::optional<Resources> m_resources;
+    std::array<bool, 4> m_unseen{}; ///< by player, at the developer console's word
     Enemies m_enemies;
     Generators m_generators;
     Critters m_critters;

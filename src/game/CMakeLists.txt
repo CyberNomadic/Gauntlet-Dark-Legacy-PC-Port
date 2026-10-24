@@ -246,6 +246,8 @@ add_library(game STATIC
     camera/CameraShake.cpp
     camera/StartCamera.h
     camera/StartCamera.cpp
+    camera/FreeCamera.h
+    camera/FreeCamera.cpp
     tower/SumnerFigure.h
     tower/SumnerFigure.cpp
     tower/SumnerHints.h
