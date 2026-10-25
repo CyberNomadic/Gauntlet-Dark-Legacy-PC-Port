@@ -12,6 +12,7 @@
 #include "engine/assets/TextureSet.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/SelectionHighlight.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/TreeModel.h"
 
@@ -1300,4 +1301,49 @@ TEST_CASE("a figure without silhouette masks draws every part uncut",
         CHECK_FALSE(draw.state.lightmapCutout);
         CHECK(draw.state.lightmap == nullptr);
     }
+}
+
+TEST_CASE("a highlighted figure draws each part's rim and wash after the part",
+          "[world][model][dev-console]") {
+    const auto dir = sampleFigure("highlighted-figure");
+    ModelSet models;
+    TextureSet textures;
+    AnimationSet trees;
+    REQUIRE(models.load(dir));
+    REQUIRE(textures.load(dir));
+    REQUIRE(trees.load(dir));
+    test::FakeRenderDevice device;
+    TreeModel model;
+    REQUIRE(model.bind(trees.tree(0), models, textures, device));
+    CHECK(model.highlight() == nullptr);
+    model.draw(device, Mat4{1}, Mat4{1}, {});
+    const usize plain = device.draws.size();
+    REQUIRE(plain == 2);
+    const SelectionHighlight highlight{Vec3{0.0f, 0.0f, -10.0f}};
+    model.setHighlight(&highlight);
+    CHECK(model.highlight() == &highlight);
+    device.draws.clear();
+    model.draw(device, Mat4{1}, Mat4{1}, {});
+    REQUIRE(device.draws.size() == plain * 3);
+    for (usize part = 0; part < plain; ++part) {
+        const auto& rim = device.draws[part * 3 + 1];
+        const auto& wash = device.draws[part * 3 + 2];
+        CHECK(rim.texture == device.draws[part * 3].texture);
+        CHECK(rim.state.maskedTexture == &device.whiteTexture());
+        REQUIRE_FALSE(rim.vertices.empty());
+        CHECK(rim.vertices[0].color == SelectionHighlight::kRim);
+        CHECK(wash.texture == device.draws[part * 3].texture);
+        REQUIRE_FALSE(wash.vertices.empty());
+        CHECK(wash.vertices[0].color == SelectionHighlight::kWash);
+        CHECK_FALSE(rim.state.depthWrite);
+        CHECK_FALSE(wash.state.depthWrite);
+    }
+    // Let go, the parts draw alone again; cleared, the model forgets the highlight.
+    model.setHighlight(nullptr);
+    device.draws.clear();
+    model.draw(device, Mat4{1}, Mat4{1}, {});
+    CHECK(device.draws.size() == plain);
+    model.setHighlight(&highlight);
+    model.clear();
+    CHECK(model.highlight() == nullptr);
 }

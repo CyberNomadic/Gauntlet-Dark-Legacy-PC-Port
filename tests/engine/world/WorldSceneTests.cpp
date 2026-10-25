@@ -12,6 +12,7 @@
 #include "engine/assets/WorldLayout.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/world/SelectionHighlight.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/WorldScene.h"
 #include "engine/world/WorldStateCheckpoint.h"
@@ -1249,6 +1250,42 @@ TEST_CASE("world static digest versions follow native history across corrections
     fixture.scene.clear();
     CHECK_FALSE(fixture.scene.canRestoreLocal(alternateState));
     CHECK_FALSE(sceneDigest(fixture.scene, {}, &alternateState));
+}
+
+TEST_CASE("the console's selected object is marked out from its mesh where it stands",
+          "[world][scene][dev-console]") {
+    Fixture f("world-scene-highlight");
+    REQUIRE(f.build());
+    const auto& objects = f.layout.objects();
+    const auto wall = std::ranges::find_if(
+        objects, [](const WorldObject& object) { return object.name == "WALL"; });
+    REQUIRE(wall != objects.end());
+    const auto index = static_cast<usize>(wall - objects.begin());
+    const SelectionHighlight highlight{Vec3{0.0f, 5.0f, -20.0f}};
+    f.scene.drawHighlight(f.device, Mat4{1.0f}, index, highlight);
+    REQUIRE_FALSE(f.device.draws.empty());
+    CHECK(f.device.draws.size() % 2 == 0);
+    const Vec3 at{f.scene.worldTransform(index)[3]};
+    for (usize i = 0; i < f.device.draws.size(); ++i) {
+        const auto& draw = f.device.draws[i];
+        CHECK_FALSE(draw.state.depthWrite);
+        CHECK(draw.state.depthTest);
+        REQUIRE_FALSE(draw.vertices.empty());
+        CHECK(draw.vertices[0].color ==
+              (i % 2 == 0 ? SelectionHighlight::kRim : SelectionHighlight::kWash));
+        // Both lie about where the object stands, not at the origin.
+        CHECK(glm::distance(draw.vertices[0].position, at) < 5.0f);
+    }
+    // A marker with no mesh, or an index past the end, draws nothing.
+    const auto marker =
+        std::ranges::find_if(objects, [](const WorldObject& object) { return object.particles(); });
+    REQUIRE(marker != objects.end());
+    f.device.draws.clear();
+    f.scene.drawHighlight(f.device, Mat4{1.0f}, static_cast<usize>(marker - objects.begin()),
+                          highlight);
+    CHECK(f.device.draws.empty());
+    f.scene.drawHighlight(f.device, Mat4{1.0f}, objects.size() + 5, highlight);
+    CHECK(f.device.draws.empty());
 }
 
 } // namespace

@@ -15,6 +15,7 @@
 #include "engine/render/ImmediateBatch.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/world/SceneGeometry.h"
+#include "engine/world/SelectionHighlight.h"
 #include "engine/world/WorldCamera.h"
 #include "engine/world/WorldLighting.h"
 
@@ -76,6 +77,10 @@ public:
     usize triangleCount() const { return m_triangles; }
     /** Whether an object is placed every frame: it, or something above it, is animated. */
     bool moving(usize object) const;
+    /** Marks `object` out with `highlight` where it stands now, as the developer console's
+     * selection; nothing for one that has no mesh. */
+    void drawHighlight(RenderDevice& device, const Mat4& clip, usize object,
+                       const SelectionHighlight& highlight) const;
 
     /** Moves an animated object: `local` replaces its offset from its parent, and everything
      * under it follows. Objects that are not animated stay where the layout put them. */
@@ -298,6 +303,7 @@ private:
     const CanonicalDigestSink::Digest& rosterDigest() const;
     std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::unordered_map<u32, Slot> m_slots;
+    std::vector<const Mesh*> m_objectMeshes; ///< one per layout object, null for none
     std::vector<Batch> m_batches;
     std::vector<Unit> m_units;
     std::vector<Placement> m_placements;

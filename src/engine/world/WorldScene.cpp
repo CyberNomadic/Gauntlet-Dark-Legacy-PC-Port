@@ -195,6 +195,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         return m_batches.back();
     };
 
+    m_objectMeshes.assign(objects.size(), nullptr);
     for (usize i = 0; i < objects.size(); ++i) {
         const WorldObject& object = objects[i];
         // A particle system's marker is where its effect plays, not something to draw.
@@ -212,6 +213,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             log::warn("World scene: {}: {}", object.name, e.what());
             continue;
         }
+        m_objectMeshes[i] = mesh;
         const auto material = ObjectMaterial::fromFlags(object.objectFlags);
         const bool chrome = material.chrome;
         const bool additive = material.additive;
@@ -529,6 +531,7 @@ bool WorldScene::restoreLocal(const LocalSnapshot& saved) {
 void WorldScene::clear() {
     m_localBinding = std::make_shared<const u8>(0);
     m_slots.clear();
+    m_objectMeshes.clear();
     m_batches.clear();
     m_units.clear();
     m_placements.clear();
@@ -810,6 +813,22 @@ const Mat4& WorldScene::presentedWorldOf(usize object, f32 alpha) const {
         m_presentedValid[index] = 1;
     }
     return m_presentedWorld[object];
+}
+
+void WorldScene::drawHighlight(RenderDevice& device, const Mat4& clip, usize object,
+                               const SelectionHighlight& highlight) const {
+    if (object >= m_objectMeshes.size() || m_objectMeshes[object] == nullptr) {
+        return;
+    }
+    const Mesh& mesh = *m_objectMeshes[object];
+    const Mat4& placement = worldTransform(object);
+    for (const MeshPart& part : mesh.parts) {
+        const auto slot = m_slots.find(part.texture);
+        if (slot == m_slots.end() || !slot->second.usable || slot->second.current() == nullptr) {
+            continue;
+        }
+        highlight.draw(device, clip, mesh, part, placement, *slot->second.current());
+    }
 }
 
 void WorldScene::drawBatch(RenderDevice& device, const Batch& batch, const Mat4& clip,

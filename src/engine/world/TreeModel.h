@@ -12,6 +12,7 @@
 #include "engine/render/ImmediateBatch.h"
 #include "engine/render/Mesh.h"
 #include "engine/render/RenderDevice.h"
+#include "engine/world/SelectionHighlight.h"
 #include "engine/world/WorldCamera.h"
 #include "engine/world/WorldLighting.h"
 
@@ -42,6 +43,7 @@ public:
     void clear() {
         m_nodes.clear();
         m_textureSampling.clear();
+        m_highlight = nullptr;
         resetTextures();
         setAppearance(false);
         m_cullBack = true;
@@ -93,6 +95,10 @@ public:
     void setFadedDepthWrite(bool keep) { m_fadedDepthWrite = keep; }
     /** Draws both faces of every part: a flat decal seen from either side. */
     void setDoubleSided(bool doubleSided) { m_cullBack = !doubleSided; }
+    /** Marks every part out with `highlight` as it is drawn, as the developer console's
+     * selection; null marks nothing. */
+    void setHighlight(const SelectionHighlight* highlight) { m_highlight = highlight; }
+    const SelectionHighlight* highlight() const { return m_highlight; }
     Vec2 textureOffset(u32 slot) const;
     /** How a slot's coordinates are stretched, one and one when they are not. */
     Vec2 textureScale(u32 slot) const;
@@ -209,6 +215,7 @@ private:
     bool m_fadedDepthWrite = false;
     bool m_cullBack = true;
     Color m_tint = Color::white();
+    const SelectionHighlight* m_highlight = nullptr;
     std::vector<TextureFrame> m_frames;
     struct TextureSampling {
         u32 slot;

@@ -614,6 +614,9 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                 }
             }
             device.draw(m_batch, *texture, clip, state);
+            if (m_highlight != nullptr) {
+                m_highlight->draw(device, clip, *shape.mesh, part, placement, *texture);
+            }
         }
     }
 }

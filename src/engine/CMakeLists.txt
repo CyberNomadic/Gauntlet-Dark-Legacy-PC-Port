@@ -161,6 +161,7 @@ add_library(engine STATIC
     world/WorldCamera.h
     world/WorldCamera.cpp
     world/WorldScene.h
+    world/SelectionHighlight.cpp
     world/WorldScene.cpp
     world/TextureAnimator.h
     world/TextureAnimator.cpp
