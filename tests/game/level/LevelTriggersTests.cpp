@@ -495,22 +495,43 @@ TEST_CASE("A5's native linked whole-party switch rejects a single participant's 
     CHECK(triggers.opened(25));
 }
 
-TEST_CASE("trigger contact uses authored height and the visitor's half height",
-          "[triggers][temple-gates]") {
-    SwitchFixture f(R"({"info":0,"position":[0,-5,0],"params":[0,0,0,0,0,255,0,0,0,0,0,0]})",
-                    R"({"name":"WALL","position":[0,10,0]})", 24, "", 3.0f);
-    std::array party{TriggerVisitor{.position = Vec3{0}, .height = 3.0f}};
-    f.step(kStep, party);
-    CHECK_FALSE(f.triggers.trigger(0).fired);
-    party[0].height = 5.0f;
-    f.step(kStep, party);
-    CHECK(f.triggers.trigger(0).fired);
-    party[0].position.y = 0.51f;
-    f.step(kStep, party);
-    CHECK_FALSE(f.triggers.trigger(0).fired);
-    party[0].position = Vec3{3, 0, 0};
-    f.step(kStep, party);
-    CHECK_FALSE(f.triggers.trigger(0).fired);
+TEST_CASE(
+    "trigger contact reaches a height and one below the feet, the body's height further above",
+    "[triggers][temple-gates]") {
+    // fn_8005F0F4 compares the body's centre, half its height up, with the item's contact
+    // point, a unit above its base, within the item's height plus the body's half.
+    const auto padAt = [](f32 y) {
+        return std::format(
+            R"({{"info":0,"position":[0,{},0],"params":[0,0,0,0,0,255,0,0,0,0,0,0]}})", y);
+    };
+    constexpr std::string_view kWall = R"({"name":"WALL","position":[0,10,0]})";
+    SECTION("below the feet, its height and one down, whatever the body's height") {
+        SwitchFixture shallow(padAt(-3.9f), kWall, 24, "", 3.0f);
+        std::array party{TriggerVisitor{.position = Vec3{0}, .height = 5.0f}};
+        shallow.step(kStep, party);
+        CHECK(shallow.triggers.trigger(0).fired);
+        SwitchFixture deep(padAt(-4.1f), kWall, 24, "", 3.0f);
+        deep.step(kStep, party);
+        CHECK_FALSE(deep.triggers.trigger(0).fired);
+        party[0].height = 50.0f;
+        deep.step(kStep, party);
+        CHECK_FALSE(deep.triggers.trigger(0).fired);
+    }
+    SECTION("above the feet, its height and the body's less one up") {
+        SwitchFixture f(padAt(6.9f), kWall, 24, "", 3.0f);
+        std::array party{TriggerVisitor{.position = Vec3{0}, .height = 3.0f}};
+        f.step(kStep, party);
+        CHECK_FALSE(f.triggers.trigger(0).fired);
+        party[0].height = 5.0f;
+        f.step(kStep, party);
+        CHECK(f.triggers.trigger(0).fired);
+    }
+    SECTION("sideways, its radius and the visitor's") {
+        SwitchFixture f(padAt(0.0f), kWall, 24, "", 3.0f);
+        std::array party{TriggerVisitor{.position = Vec3{3, 0, 0}}};
+        f.step(kStep, party);
+        CHECK_FALSE(f.triggers.trigger(0).fired);
+    }
 }
 
 TEST_CASE("a switch and its artwork follow the floor from its rest pose through motion",
@@ -1264,9 +1285,11 @@ TEST_CASE("Temple floor contact opens the altar gates and both switch chains",
     REQUIRE(world.load(device, root, *ref));
     world.startTriggers({});
     world.updateTriggers(0, {});
-    // The two altar approach gates have their markers below the traversable
-    // floor. Touch them at floor height, never by teleporting to the marker.
-    for (const s32 instance : {110, 112, 130, 159}) {
+    // The two altar approach pads (110, 112) ride lift E1ELEV99, authored five under the
+    // hall floor and out of reach from it (fn_8005F0F4's height rule) until the lever
+    // (130) raises them through its chain. Each is touched at floor height, never by
+    // teleporting to the marker.
+    for (const s32 instance : {130, 110, 112, 159}) {
         if (instance == 159) {
             // The preceding switch lowers E1ELEV1, which carries the final pad.
             for (usize i = 0; i < world.triggers().size(); ++i) {
@@ -1310,6 +1333,13 @@ TEST_CASE("Temple floor contact opens the altar gates and both switch chains",
             const auto& next = world.triggers().trigger(static_cast<usize>(trigger.next));
             CHECK(next.fired);
             CHECK(world.triggers().opened(next.target));
+        }
+        if (instance == 130) {
+            // The lift rises its five at four a second; the pads come up on its deck.
+            for (s32 frame = 0; frame < 90; ++frame) {
+                world.update(kStep);
+                world.updateTriggers(kStep, {});
+            }
         }
     }
 }
@@ -2120,6 +2150,68 @@ TEST_CASE("the Nightmare's swinging platform brings its lever and the gargoyle p
     const LevelTrigger& lever = world.triggers().trigger(onDeck);
     CHECK(glm::distance(lever.spot, Vec3{154.98f, 64.1f, 51.76f}) < 0.25f);
     CHECK(lever.placement[1].y == Approx(1.0f).margin(0.01f));
+}
+
+TEST_CASE(
+    "E1's door pads ride the lift its lever raises, out of reach from the hall floor till then",
+    "[triggers][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto ref = catalog.byName("E1");
+    REQUIRE(ref);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *ref));
+    const auto indexOf = [&](s32 instance) {
+        for (usize i = 0; i < world.triggers().size(); ++i) {
+            if (world.triggers().trigger(i).instance == instance) {
+                return i;
+            }
+        }
+        return world.triggers().size();
+    };
+    // TRIGGER3 (instance 130) is the lever; its chain fires BRIDGEPAD 12, which raises the
+    // lift E1ELEV99. The door pads (110 and 112, for E1OPEN3 and E1OPEN4) stand on the
+    // lift's deck, authored five under the hall floor, which lies at nought over them.
+    const usize lever = indexOf(130);
+    const usize pad = indexOf(110);
+    REQUIRE(lever < world.triggers().size());
+    REQUIRE(pad < world.triggers().size());
+    constexpr s32 kLift = 627;
+    constexpr s32 kDoor3 = 625;
+    constexpr s32 kDoor4 = 626;
+    CHECK(world.triggers().trigger(pad).floor == 628); // E1FLOOR#19, the deck
+    CHECK(world.triggers().trigger(pad).spot.y == Approx(-5.0f).margin(0.15f));
+    const Vec3 overPads{0.07f, 0.0f, -77.5f};
+    REQUIRE(world.collision().floorAt(overPads, 1.0f, 1.0f).has_value());
+    std::vector<TriggerVisitor> party{
+        TriggerVisitor{.position = overPads, .radius = 1.5f, .party = 0, .height = 5.0f}};
+    const auto run = [&](s32 ticks) {
+        for (s32 tick = 0; tick < ticks; ++tick) {
+            world.update(kStep, false);
+            world.updateTriggers(kStep, party);
+        }
+    };
+    // Crossing the hall over the sunken pads, a body stands five above them: more than
+    // their height and one.
+    run(60);
+    CHECK_FALSE(world.triggers().opened(kDoor3));
+    CHECK_FALSE(world.triggers().opened(kDoor4));
+    CHECK_FALSE(world.triggers().opened(kLift));
+    // The lever raises the lift, and the deck brings the pads up flush with the hall.
+    party[0].position = world.triggers().trigger(lever).spot;
+    run(1);
+    CHECK(world.triggers().opened(kLift));
+    party[0].position = overPads + Vec3{1000, 0, 0};
+    run(180);
+    CHECK(world.triggers().settled(kLift));
+    CHECK(world.triggers().trigger(pad).spot.y == Approx(0.0f).margin(0.15f));
+    party[0].position = overPads;
+    run(2);
+    CHECK(world.triggers().opened(kDoor3));
+    CHECK(world.triggers().opened(kDoor4));
 }
 
 } // namespace

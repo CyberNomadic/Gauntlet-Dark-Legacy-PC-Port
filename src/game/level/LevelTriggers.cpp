@@ -75,6 +75,8 @@ constexpr f32 kFloorAbove = 4.0f;
 constexpr f32 kFloorBelow = 10.0f;
 constexpr f32 kFloorRadius = 1.0f;
 constexpr f32 kFloorLift = 0.1f;
+/** How far above its base an item is touched (AddItemSub's coll_offset[1] += 1). */
+constexpr f32 kContactHeight = 1.0f;
 /** The authored pose's floor must lie this much nearer a marker's height than the
  * initialized world's to be taken for the floor the marker was set on. */
 constexpr f32 kRestPosePreference = 1.0f;
@@ -922,8 +924,15 @@ bool LevelTriggers::reaches(const LevelTrigger& trigger, f32 radius,
     }
     const Vec3 away = visitor.position - trigger.spot;
     const f32 reach = radius + visitor.radius;
+    // fn_8005F0F4 measures the height from the body's centre (effectpos, the feet plus
+    // col_height) to the item's contact point, a unit above its base (AddItemSub adds one
+    // to every kind's collision offset; no trigger kind carries one of its own). So a pad
+    // sunk five below the feet, on a lift yet to rise, is out of reach while one five
+    // above the feet is not.
+    const f32 half = visitor.height * 0.5f;
+    const f32 rise = visitor.position.y + half - (trigger.spot.y + kContactHeight);
     return away.x * away.x + away.z * away.z <= reach * reach &&
-           std::abs(away.y) <= trigger.height + visitor.height * 0.5f;
+           std::abs(rise) <= trigger.height + half;
 }
 
 void LevelTriggers::collectContacts(usize index, u32 mask, std::span<u32> contacts) const {
