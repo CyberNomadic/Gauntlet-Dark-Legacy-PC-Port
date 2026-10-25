@@ -33,7 +33,7 @@ TEST_CASE("the inventory label rests immediately above the runestones",
 
 TEST_CASE("inventory labels shrink only once they would leave the player's box",
           "[selector][inventory-label]") {
-    constexpr s32 budget = PowerupSelector::kLabelBudget;
+    constexpr s32 kBudget = PowerupSelector::kLabelBudget;
     TextPainter text;
     CHECK(PowerupSelector::labelScale(text, {}) == PowerupSelector::kLabelScale);
 
@@ -48,16 +48,16 @@ TEST_CASE("inventory labels shrink only once they would leave the player's box",
     const std::string fits(27, 'A');
     const std::string over(28, 'A');
     const std::string longer(80, 'A');
-    REQUIRE(text.measure(fits, PowerupSelector::kLabelScale) == budget);
-    REQUIRE(text.measure(over, PowerupSelector::kLabelScale) > budget);
+    REQUIRE(text.measure(fits, PowerupSelector::kLabelScale) == kBudget);
+    REQUIRE(text.measure(over, PowerupSelector::kLabelScale) > kBudget);
     CHECK(PowerupSelector::labelScale(text, "POJO") == PowerupSelector::kLabelScale);
     CHECK(PowerupSelector::labelScale(text, fits) == PowerupSelector::kLabelScale);
     const f32 shrunk = PowerupSelector::labelScale(text, over);
     CHECK(shrunk < PowerupSelector::kLabelScale);
-    CHECK(text.measure(over, shrunk) <= budget);
+    CHECK(text.measure(over, shrunk) <= kBudget);
     const f32 further = PowerupSelector::labelScale(text, longer);
     CHECK(further < shrunk);
-    CHECK(text.measure(longer, further) <= budget);
+    CHECK(text.measure(longer, further) <= kBudget);
 }
 
 SelectorInput press(bool up, bool down, bool left, bool right) {
