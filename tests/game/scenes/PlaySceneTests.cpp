@@ -26,6 +26,7 @@
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
 #include "engine/math/Math.h"
+#include "engine/world/SelectionHighlight.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -33,6 +34,7 @@
 #include "game/bosses/BossSequence.h"
 #include "game/characters/CharacterSave.h"
 #include "game/characters/ClassData.h"
+#include "game/characters/Inventory.h"
 #include "game/characters/Progression.h"
 #include "game/combat/DamageTypes.h"
 #include "game/config/GameConfig.h"
@@ -50,6 +52,7 @@
 #include "game/players/PowerupEffects.h"
 #include "game/scenes/GameContext.h"
 #include "game/scenes/PlayScene.h"
+#include "game/scenes/SceneSelection.h"
 
 namespace {
 
@@ -5834,4 +5837,150 @@ TEST_CASE("in the tower the console stands visitors from other levels: the swarm
     CHECK_FALSE(scene.spawnObject(*town, "NOTHING_OF_THE_KIND", spot, 0.0f));
     scene.close();
     CHECK(scene.spawnedObjectCount() == 0);
+}
+
+TEST_CASE("the console picks what stands under the cursor, marks it out while selected and "
+          "flies a character through everything",
+          "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("A1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    REQUIRE(scene.actor(0) != nullptr);
+    // Nothing rendered yet: nothing to pick under.
+    CHECK_FALSE(scene.pick(Vec2{0.5f, 0.5f}).has_value());
+    const auto projection = makeLetterboxProjection(640, 448, 640, 448);
+    scene.render(device, projection, 640, 448);
+    // The character's chest, projected to the view, picks the character.
+    const PlayerActor& actor = *scene.actor(0);
+    const Mat4 clip =
+        scene.viewCamera().clipTransform(config.horizontalFovRadians(), 640, 448, projection);
+    const Vec4 projected =
+        clip * Vec4{actor.position() + Vec3{0.0f, actor.height() * 0.5f, 0.0f}, 1};
+    REQUIRE(projected.w > 0.0f);
+    const Vec2 cursor = (Vec2{projected} / projected.w + Vec2{1.0f}) * 0.5f;
+    const auto picked = scene.pick(cursor);
+    REQUIRE(picked.has_value());
+    CHECK(picked->kind == SceneSelection::Kind::Player);
+    CHECK(picked->id == 0);
+    CHECK(picked->name == "AB");
+    CHECK(picked->token() == "player#0");
+    // Off the view, nothing.
+    CHECK_FALSE(scene.pick(Vec2{2.0f, 2.0f}).has_value());
+    // Selected, it is marked out as the scene draws: the rim's orange is among the draws,
+    // and gone once the selection is let go.
+    const auto orange = [&] {
+        return std::ranges::any_of(device.draws, [](const auto& draw) {
+            return !draw.vertices.empty() && draw.vertices[0].color == SelectionHighlight::kRim;
+        });
+    };
+    scene.select(picked);
+    CHECK(scene.selection() == picked);
+    device.draws.clear();
+    scene.render(device, projection, 640, 448);
+    CHECK(orange());
+    scene.select(std::nullopt);
+    device.draws.clear();
+    scene.render(device, projection, 640, 448);
+    CHECK_FALSE(orange());
+    // Noclip lifts the character where no floor is and turns it, and the step leaves it
+    // there, its input the console's.
+    const Vec3 before = actor.position();
+    REQUIRE(scene.noclipMove(0, Vec3{0.0f, 8.0f, 0.0f}, 1.0f));
+    CHECK(actor.position().y == Approx(before.y + 8.0f));
+    CHECK(actor.yaw() == Approx(1.0f));
+    PlayScene::ConsoleCheats cheats;
+    cheats.noclip = true;
+    scene.setCheats(0, cheats);
+    CHECK(scene.cheats(0).noclip);
+    for (s32 i = 0; i < 120; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    CHECK(actor.position().y == Approx(before.y + 8.0f).margin(0.01f)); // held aloft
+    // Set down again, it falls to its floor.
+    scene.setCheats(0, {});
+    for (s32 i = 0; i < 120; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    CHECK(actor.position().y < before.y + 7.0f);
+    CHECK_FALSE(scene.noclipMove(3, Vec3{0.0f, 1.0f, 0.0f}, std::nullopt)); // nobody is player four
+    scene.close();
+    CHECK_FALSE(scene.selection().has_value());
+}
+
+TEST_CASE("a timed powerup drains and a potion is spent while the console's cheats are off",
+          "[game][screens][dev-console][assets]") {
+    const std::filesystem::path root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2");
+    const GameConfig config;
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName("A1")));
+    GameContext context;
+    context.config = &config;
+    context.tower = &world;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    CharacterSave save;
+    save.name = "AB";
+    const std::vector<PartyMember> party{PartyMember{0, save}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    const PlayScene::Inputs still{};
+    for (s32 i = 0; i < 400 && awaitingEntrance(scene); ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    CharacterSave* live = scene.liveSave(0);
+    REQUIRE(live != nullptr);
+    Inventory& inventory = live->progress().inventory;
+    inventory.addPowerup(powerup::kArmor, powerup::kInvulnerable, 0.0f, 30.0f);
+    REQUIRE(inventory.addPotions(1, 2) == 2);
+    const PowerupSlot* held = inventory.powerup(powerup::kArmor, powerup::kInvulnerable);
+    REQUIRE(held != nullptr);
+    CHECK(held->strength == Approx(30.0f));
+    // A second of play takes a second off the powerup, cheats or none.
+    PlayScene::ConsoleCheats cheats;
+    cheats.noTarget = true;
+    scene.setCheats(0, cheats);
+    for (s32 i = 0; i < 60; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    held = inventory.powerup(powerup::kArmor, powerup::kInvulnerable);
+    REQUIRE(held != nullptr);
+    CHECK(held->strength == Approx(29.0f).margin(0.1f));
+    // A potion used is a potion gone.
+    PlayScene::Inputs drinking{};
+    drinking[0].usePotion = true;
+    for (s32 i = 0; i < 3; ++i) {
+        scene.update(1.0 / 60.0, drinking);
+    }
+    for (s32 i = 0; i < 60; ++i) {
+        scene.update(1.0 / 60.0, still);
+    }
+    CHECK(inventory.potions.size() == 1);
+    scene.close();
 }

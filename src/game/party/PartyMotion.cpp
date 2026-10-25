@@ -437,8 +437,10 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                     : StrafeWay::None);
         }
         players[i].glow.step(seconds);
+        // Held aloft by the console, the body rides no floor, meets nothing and never falls.
+        const bool flying = events.flying && events.flying(i);
         // Riding a moving floor, the body goes where the floor took it (PlayerCheckFloor).
-        if (!down) {
+        if (!down && !flying) {
             FloorRiding::carry(players[i], collision);
         } else {
             players[i].floor = {};
@@ -447,7 +449,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         const Vec3 attackFrom = actor.followPoint();
         // A knock slides the body on, then what hit it last frame kicks it, turning it to
         // face along the push or against it (PlayerMotion, PlayerKnockback).
-        if (!down) {
+        if (!down && !flying) {
             actor.slide(players[i].knockback.step(seconds, actor.speed()), &collision);
             if (const auto heading = players[i].knockback.kick(
                     actor.yaw(), (powerups.special & powerup::kPojo) != 0)) {
@@ -461,17 +463,17 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         if (!down) {
             players[i].attackStep = PlayerRuntime::AttackStep{attackFrom, actor.followPoint()};
         }
-        if (!down && events.resolveMovement) {
+        if (!down && !flying && events.resolveMovement) {
             // A body/fixture push is still movement, not a teleport. Sweep the
             // correction through the same walls and floor edges as the step.
             actor.slide(events.resolveMovement(i, before, actor.position()) - actor.position(),
                         &collision);
         }
-        if (!down) {
+        if (!down && !flying) {
             contacts[i] = PartyCollision::step(players, i, before, seconds, &collision);
             FloorRiding::land(players, i, before, collision);
         }
-        if (!down && events.limitMovement) {
+        if (!down && !flying && events.limitMovement) {
             const Vec3 limited = events.limitMovement(i, before, actor.position());
             if (glm::distance(limited, actor.position()) > 1.0e-5f) {
                 actor.place(before);
@@ -490,10 +492,11 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         }
         // A floor gone from under it lets it sink; lost under the world, it stands again
         // beside another, or at the start.
-        if (players[i].life != PlayerLife::InTower) {
+        if (players[i].life != PlayerLife::InTower && !flying) {
             actor.fall(seconds, collision);
         }
-        if (!down && collision.loaded() && actor.position().y <= collision.lowest() - kLostDepth) {
+        if (!down && !flying && collision.loaded() &&
+            actor.position().y <= collision.lowest() - kLostDepth) {
             std::optional<Vec3> spot = rescueSpot(players, i, collision);
             if (!spot.has_value() && events.startPoint) {
                 spot = events.startPoint();

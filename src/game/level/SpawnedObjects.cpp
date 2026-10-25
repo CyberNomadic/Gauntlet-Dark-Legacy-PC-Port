@@ -107,9 +107,24 @@ bool SpawnedObjects::spawn(RenderDevice& device, const std::filesystem::path& un
 
 void SpawnedObjects::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                           TreeModel::Pass pass) const {
-    for (const auto& spawned : m_spawned) {
+    for (usize index = 0; index < m_spawned.size(); ++index) {
+        const auto& spawned = m_spawned[index];
+        spawned->model.setHighlight(static_cast<s32>(index) == m_highlightedId ? m_highlight
+                                                                               : nullptr);
         spawned->model.draw(device, clip, spawned->transform, lighting, {}, nullptr, 1.0f, pass);
+        spawned->model.setHighlight(nullptr);
     }
+}
+
+SpawnedObjects::View SpawnedObjects::view(usize index) const {
+    if (index >= m_spawned.size()) {
+        return {};
+    }
+    const Spawned& spawned = *m_spawned[index];
+    const Vec3 low = spawned.model.minBounds();
+    const Vec3 high = spawned.model.maxBounds();
+    const Vec3 centre{spawned.transform * Vec4{(low + high) * 0.5f, 1.0f}};
+    return {spawned.name, centre, std::max(glm::distance(low, high) * 0.5f, 1.0f)};
 }
 
 void SpawnedObjects::clear() {

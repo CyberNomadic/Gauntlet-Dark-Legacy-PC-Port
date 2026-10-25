@@ -3070,6 +3070,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         if (alpha <= 0.0f) {
             continue; // gone from sight altogether
         }
+        body.setHighlight(i == m_highlightedId ? m_highlight : nullptr);
         if (enemy.kind == kDeathKind && enemy.state == State::Asleep) {
             body.draw(device, clip, model, lighting, {}, camera, 1, pass);
         } else {
@@ -3081,6 +3082,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
                       presentationAlpha >= 0 ? pose.matrices() : enemy.animator.pose().matrices(),
                       camera, alpha, pass);
         }
+        body.setHighlight(nullptr); // the body is its kind's, shared
     }
 }
 

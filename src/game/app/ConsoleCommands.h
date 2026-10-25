@@ -57,13 +57,14 @@ public:
     /** Reads `goto`'s arguments; nothing, with `error` set, when they make no sense. */
     static std::optional<Destination> parseGoto(Arguments arguments, std::string& error);
 
-    /** What `get` hands over. */
+    /** What `get` hands over, or tells. */
     struct Gift {
-        enum class Kind : u8 { Item, Experience, Level };
+        enum class Kind : u8 { Item, Experience, Level, Info };
         Kind kind = Kind::Item;
-        ItemOffer offer; ///< the item, as if it lay in the level
-        s32 amount = 0;  ///< the experience to add or the level to reach
-        std::string name;
+        ItemOffer offer;  ///< the item, as if it lay in the level
+        s32 amount = 0;   ///< the experience to add or the level to reach
+        std::string name; ///< the item's, or the thing `info` is asked of (empty: what is
+                          ///< selected)
     };
     static std::string getUsage();
     static constexpr s32 kDefaultKeys = 1;

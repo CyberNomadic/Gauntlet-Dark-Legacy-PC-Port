@@ -512,4 +512,38 @@ TEST_CASE("the console writes its lines in half-size 8x8 cells behind an undersc
     CHECK_FALSE(console.ready());
 }
 
+TEST_CASE("a line's $words stand for the console's variables, or the line is refused",
+          "[dev-console]") {
+    DevConsole console;
+    Input input;
+    std::vector<std::string> echoed;
+    console.addCommand("echo", "says its arguments back",
+                       [&](DevConsole& self, DevConsole::Arguments arguments) {
+                           for (const std::string& argument : arguments) {
+                               echoed.push_back(argument);
+                           }
+                           self.print("echoed");
+                       });
+    press(console, input, Key::Grave);
+    REQUIRE(console.open());
+    CHECK_FALSE(console.variable("SELECTED").has_value());
+    enter(console, input, "echo $SELECTED");
+    CHECK(echoed.empty());
+    CHECK(mentions(console.output(), "$SELECTED is not set"));
+    CHECK_FALSE(mentions(console.output(), "echoed"));
+    // Set, in any case, the word is its value wherever it stands in the line.
+    console.setVariable("selected", "object#12");
+    CHECK(console.variable("SELECTED") == "object#12");
+    enter(console, input, "echo $selected plain $SELECTED");
+    CHECK(echoed == std::vector<std::string>{"object#12", "plain", "object#12"});
+    CHECK(mentions(console.output(), "echo $selected plain $SELECTED")); // echoed as typed
+    // A lone dollar is a word of its own; set again, the new value stands; unset, it is gone.
+    enter(console, input, "echo $");
+    CHECK(echoed.back() == "$");
+    console.setVariable("SELECTED", "enemy#3");
+    CHECK(console.variable("selected") == "enemy#3");
+    console.setVariable("SELECTED", std::nullopt);
+    CHECK_FALSE(console.variable("SELECTED").has_value());
+}
+
 } // namespace

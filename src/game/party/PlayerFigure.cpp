@@ -632,7 +632,9 @@ void PlayerFigure::draw(RenderDevice& device, const Mat4& clip, const Mat4& body
     }
     applyCostumeTextures(m_model, frameBlend);
     applyCostumeTextures(m_weapon, frameBlend);
+    m_model.setHighlight(m_highlight);
     m_model.draw(device, clip, body, lighting, m_visualTransforms, camera, alpha);
+    m_model.setHighlight(nullptr);
     drawCompanions(device, clip, body, lighting, alpha, camera, frameBlend, companionPass);
     const bool thrown = m_action.animator.recovering() ||
                         m_action.animator.action() == PlayerAnimator::Action::StrongThrowRecover;

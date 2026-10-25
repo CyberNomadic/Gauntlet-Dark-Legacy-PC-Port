@@ -138,6 +138,12 @@ public:
               f32 presentationAlpha = -1.0f, TreeModel::Pass pass = TreeModel::Pass::All);
 
     usize count() const { return m_sim.generators.size(); }
+    /** Marks `id` out with `highlight` as it is drawn, as the developer console's
+     * selection; null, or nobody's id, marks nothing. */
+    void setHighlight(s32 id, const SelectionHighlight* highlight) {
+        m_highlightedId = id;
+        m_highlight = highlight;
+    }
     /** Native lifetime identity; zero means no retained slot at this index. */
     u64 instanceOf(s32 id) const {
         return id >= 0 && static_cast<usize>(id) < m_sim.generators.size()
@@ -289,6 +295,8 @@ private:
     bool loadBodies(RenderDevice& device, Enemies& enemies, s32 kind, ItemArchive* realmItems,
                     std::span<TextureSet* const> lenders);
     static s32 stateFor(const Generator& generator, bool destroyed);
+    s32 m_highlightedId = -1;                        ///< the developer console's selection
+    const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     bool seen(const Generator& generator) const;
     void updatePresence(Generator& generator, bool seen) const;
     void applyBroodEvents(Enemies& enemies);

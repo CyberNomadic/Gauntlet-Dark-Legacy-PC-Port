@@ -558,6 +558,17 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     if (m_console.open() && !consoleWasOpen) {
         resetPlayInput();
     }
+    // A click in the view under the console picks what stands there; the console going
+    // up lets it go.
+    if (m_console.open()) {
+        const PointerSnapshot& pointer = input().pointer();
+        if (input().wasPointerPressed() && pointer.inside &&
+            !consoleCovers(Vec2{pointer.x, pointer.y})) {
+            consoleSelect(Vec2{pointer.x, pointer.y});
+        }
+    } else if (consoleWasOpen) {
+        consoleSelect(std::nullopt);
+    }
     if (!m_play->scene.isOpen()) {
         return; // a command has sent the party elsewhere
     }
@@ -595,6 +606,11 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     PlayScene::Inputs inputs = consoleOpen ? PlayScene::Inputs{} : readPlayInputs(deltaSeconds);
     if (const s32 flying = consolePlayer(); m_freeCamera.active() && flying >= 0) {
         inputs[static_cast<usize>(flying)] = PlayInput{}; // the keys fly the camera instead
+    }
+    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+        if (m_consoleCheats[static_cast<usize>(player)].noclip) {
+            inputs[static_cast<usize>(player)] = PlayInput{}; // flown by the console instead
+        }
     }
     const bool wasLeaving = m_play->scene.leaving();
     const PlayOutcome outcome = m_play->scene.update(deltaSeconds, m_sessionInputs.advance(inputs));

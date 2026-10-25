@@ -533,4 +533,20 @@ TEST_CASE("a layout's generator record is found by name", "[dev-console][command
     CHECK(ConsoleCommands::generatorRecord(layout, "NOTHING_OF_THE_KIND") == nullptr);
 }
 
+TEST_CASE("get info asks after the thing selected, or one named by its token",
+          "[dev-console][commands]") {
+    std::string error;
+    const auto selected = ConsoleCommands::parseGet(Args{"info"}, error);
+    REQUIRE(selected.has_value());
+    CHECK(selected->kind == Kind::Info);
+    CHECK(selected->name.empty());
+    const auto named = ConsoleCommands::parseGet(Args{"INFO", "object#3"}, error);
+    REQUIRE(named.has_value());
+    CHECK(named->kind == Kind::Info);
+    CHECK(named->name == "object#3");
+    CHECK_FALSE(ConsoleCommands::parseGet(Args{"info", "object#3", "more"}, error).has_value());
+    CHECK(error.find("get info") != std::string::npos);
+    CHECK(ConsoleCommands::getUsage().find("get info [$SELECTED]") != std::string::npos);
+}
+
 } // namespace

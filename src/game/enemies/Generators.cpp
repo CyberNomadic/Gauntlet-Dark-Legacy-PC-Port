@@ -741,6 +741,8 @@ bool Generators::stand(RenderDevice& device, Enemies& enemies, const Placement& 
     generator.collisionOffset = info.collisionOffset;
     generator.targetRadius = body.radius;
     generator.targetHeight = body.height;
+    // A brood is born its height out (do_items hands generate_enemy the record's height), a
+    // patrol sentry its radius out (generate_single).
     generator.clearance = body.height;
     generator.patrolClearance = body.radius;
     generator.viewRadius = kGeneratorViewScale * std::max(info.radius, info.height);
@@ -1251,7 +1253,8 @@ std::vector<Obstacle> Generators::enemyObstacles() const {
 
 void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 presentationAlpha, TreeModel::Pass pass) {
-    for (const Generator& generator : m_sim.generators) {
+    for (usize index = 0; index < m_sim.generators.size(); ++index) {
+        const Generator& generator = m_sim.generators[index];
         if (generator.presence != Generator::Presence::Shown) {
             continue;
         }
@@ -1272,7 +1275,9 @@ void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
         }
         bodies->textures.apply(model, bodies->trees[state], 0, 0.0f,
                                bodies->textures.presentationOffset(presentationAlpha));
+        model.setHighlight(static_cast<s32>(index) == m_highlightedId ? m_highlight : nullptr);
         model.draw(device, clip, generator.placement, lighting, {}, nullptr, 1.0f, pass);
+        model.setHighlight(nullptr); // the body is its kind's, shared
     }
 }
 

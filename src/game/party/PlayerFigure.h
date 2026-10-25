@@ -221,6 +221,9 @@ public:
     s32 familiarTier() const { return m_familiar.tier(); }
     bool phoenixActive() const { return m_companion.kind() == PowerupCompanion::Kind::Phoenix; }
     bool pojoActive() const { return m_companion.kind() == PowerupCompanion::Kind::Pojo; }
+    /** Marks the costume out with `highlight` as it is drawn, as the developer console's
+     * selection; null marks nothing. */
+    void setHighlight(const SelectionHighlight* highlight) { m_highlight = highlight; }
     /** Phoenix uses the opposite perch when an earned familiar occupies the native one.
      * Both its model and projectile use this same, body-scaled attachment. */
     Mat4 phoenixAttachment(const Mat4& body) const {
@@ -306,6 +309,7 @@ private:
     std::string m_actionResourceKey;
     const TreeInfo* m_actionTree = nullptr;
     mutable TreeModel m_model;
+    const SelectionHighlight* m_highlight = nullptr; ///< the console's mark, while drawn
     ActionState m_action;
     const TreeInfo* m_costume = nullptr;
     std::filesystem::path m_directory;

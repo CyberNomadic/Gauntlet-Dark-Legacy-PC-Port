@@ -61,6 +61,9 @@ public:
         /** A combo's flier or charger (its index, its thrower's, the blow it deals) against
          * the level's items; true when it struck one, which turns it. */
         std::function<bool(usize, usize, f32)> comboImpact;
+        /** Whether the developer console holds a player's body aloft (noclip): it then
+         * rides no floor, collides with nothing and never falls. */
+        std::function<bool(usize)> flying;
     };
     static constexpr f32 kLostDepth = 4.5f;   ///< under the world's lowest point a body is lost
     static constexpr f32 kTurnFrames = 30.0f; ///< the rate a partial turn is taken at, a second

@@ -12,7 +12,7 @@ void PlayScene::updateTransporters(s32 ticks, f32 seconds, bool held) {
         auto& runtime = m_players[i];
         auto& actor = runtime.actor;
         auto& transport = runtime.transport;
-        if (runtime.life != PlayerLife::Standing || runtime.capture.active()) {
+        if (runtime.life != PlayerLife::Standing || runtime.capture.active() || runtime.ghost) {
             transport.clear();
             continue;
         }

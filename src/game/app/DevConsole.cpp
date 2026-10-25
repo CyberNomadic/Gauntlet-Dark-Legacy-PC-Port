@@ -113,15 +113,46 @@ void DevConsole::printLine(std::string_view line) {
 
 void DevConsole::run(std::string_view line) {
     print(std::format("{}{}", m_prompt, line));
-    const std::vector<std::string> parts = words(line);
+    std::vector<std::string> parts = words(line);
     if (parts.empty()) {
         return;
+    }
+    for (std::string& part : parts) {
+        if (part.size() < 2 || part.front() != '$') {
+            continue;
+        }
+        if (std::optional<std::string> value = variable(std::string_view{part}.substr(1))) {
+            part = std::move(*value);
+        } else {
+            print(std::format("{} is not set", part));
+            return;
+        }
     }
     if (const Command* command = find(parts.front())) {
         command->handler(*this, Arguments{parts}.subspan(1));
     } else {
         print(kBadCommand);
     }
+}
+
+void DevConsole::setVariable(std::string_view name, std::optional<std::string> value) {
+    std::string key(name);
+    for (char& c : key) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    std::erase_if(m_variables, [&](const auto& entry) { return entry.first == key; });
+    if (value.has_value()) {
+        m_variables.emplace_back(std::move(key), std::move(*value));
+    }
+}
+
+std::optional<std::string> DevConsole::variable(std::string_view name) const {
+    for (const auto& [key, value] : m_variables) {
+        if (sameNameIgnoringCase(key, name)) {
+            return value;
+        }
+    }
+    return std::nullopt;
 }
 
 const DevConsole::Command* DevConsole::find(std::string_view name) const {

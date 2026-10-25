@@ -148,6 +148,7 @@ add_library(game STATIC
     players/PlayerControls.h
     players/PlayerControls.cpp
     players/CursorAim.cpp
+    players/NoclipMotion.cpp
     players/PlayerActor.h
     players/PlayerActor.cpp
     players/PlayerCapture.h
@@ -381,6 +382,8 @@ add_library(game STATIC
     scenes/PlaySceneMotion.cpp
     scenes/PlaySceneHarm.cpp
     scenes/PlaySceneCamera.cpp
+    scenes/PlaySceneSelection.cpp
+    scenes/SceneSelection.cpp
     scenes/PlaySceneSwitch.cpp
     level/SwitchCutscene.cpp
     level/SwitchCutscene.h)

@@ -80,6 +80,10 @@ public:
     /** What stands before the line being typed, such as the character's name and `>`. */
     void setPrompt(std::string prompt) { m_prompt = std::move(prompt); }
     const std::string& prompt() const { return m_prompt; }
+    /** Gives `$name` (matched ignoring case) a value for a line's words to stand for, or
+     * takes it away. A line naming one that has none is refused, having said so. */
+    void setVariable(std::string_view name, std::optional<std::string> value);
+    std::optional<std::string> variable(std::string_view name) const;
 
     /** Slides the console the other way; coming down, the caret starts shown. */
     void toggle();
@@ -135,6 +139,7 @@ private:
     std::vector<Command> m_commands;
     std::vector<std::string> m_output;
     std::vector<std::string> m_history;
+    std::vector<std::pair<std::string, std::string>> m_variables; ///< by upper-case name
     usize m_recalled = 0;  ///< the history line shown; the count when typing a new one
     std::string m_pending; ///< the new line set aside while an older one is shown
     std::string m_line;

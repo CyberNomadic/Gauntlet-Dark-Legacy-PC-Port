@@ -363,6 +363,12 @@ public:
 
     bool alive(s32 id) const;
     bool dying(s32 id) const;
+    /** Marks `id` out with `highlight` as it is drawn, as the developer console's
+     * selection; null, or nobody's id, marks nothing. */
+    void setHighlight(s32 id, const SelectionHighlight* highlight) {
+        m_highlightedId = id;
+        m_highlight = highlight;
+    }
     /** Read-only lifetime/health observation. Pool slots can be recycled without
      * an intervening empty frame; instance is never reused by this owner, even
      * across close/open. Does not expose AI mutation or consume feedback queues. */
@@ -656,6 +662,8 @@ private:
     };
     Figure bodyOf(const Enemy& enemy);
     Figure bodyOf(const Appearance& appearance);
+    s32 m_highlightedId = -1;                        ///< the developer console's selection
+    const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     void move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& step,
               std::span<const EnemyView> players, std::span<const Obstacle> obstacles,
               bool seeking = false);

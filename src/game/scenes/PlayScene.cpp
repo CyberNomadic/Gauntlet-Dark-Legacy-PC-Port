@@ -244,6 +244,7 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
 
 void PlayScene::close() {
     ++m_openGeneration;
+    m_selection.reset();
     m_nativeDigestResources.clear();
     if (m_context.stopVibration) {
         m_context.stopVibration();
@@ -509,6 +510,11 @@ void PlayScene::setCheats(s32 player, const ConsoleCheats& cheats) {
     }
     m_cheats[static_cast<usize>(player)] = cheats;
     m_opponents.setUnseen(player, cheats.noTarget);
+    for (PlayerRuntime& runtime : m_players) {
+        if (runtime.actor.player() == player) {
+            runtime.ghost = cheats.noclip;
+        }
+    }
 }
 
 const PlayScene::ConsoleCheats& PlayScene::cheats(s32 player) const {
@@ -1419,7 +1425,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         std::vector<PortalVisitor> standing;
         standing.reserve(m_players.size());
         for (usize i = 0; i < m_players.size(); ++i) {
-            if (!isDown(i)) {
+            if (!isDown(i) && !m_players[i].ghost) {
                 const auto player = static_cast<usize>(m_players[i].actor.player());
                 standing.push_back(PortalVisitor{
                     m_players[i].actor.position(), m_players[i].actor.radius(), static_cast<s32>(i),
@@ -1536,7 +1542,7 @@ void PlayScene::updateAmbience() {
 std::vector<TriggerVisitor> PlayScene::visitors() const {
     std::vector<TriggerVisitor> out;
     for (usize i = 0; i < m_players.size(); ++i) {
-        if (isDown(i)) {
+        if (isDown(i) || m_players[i].ghost) {
             continue;
         }
         const PlayerActor& actor = m_players[i].actor;
@@ -1616,6 +1622,8 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
                                            frameProjection);
     m_presentedClip = clip;
     const CameraFrame companionCamera = CameraFrame::of(camera);
+    const SelectionHighlight highlight{camera.position};
+    markSelection(&highlight);
     m_world->drawOpaque(device, clip, camera, effectBlend);
     m_spawned.draw(device, clip, m_world->lighting());
     m_towerRelics.draw(device, clip, m_world->lighting(), camera, effectBlend);
@@ -1691,6 +1699,11 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
         drawVictoryWizard();
     }
     m_arrival.drawEffects(device, clip, m_world->lighting(), effectBlend);
+    if (m_selection.has_value() && m_selection->kind == SceneSelection::Kind::Object) {
+        m_world->scene().drawHighlight(device, clip, static_cast<usize>(m_selection->id),
+                                       highlight);
+    }
+    markSelection(nullptr);
     if (config.display.bloom) {
         device.applyBloom();
     }

@@ -154,6 +154,7 @@ public:
     bool particlesAdvanced() const { return m_sim.particlesAdvanced; }
     /** The pickups the level places: the crystals Sumner keeps for a new party. */
     const PlacedItems& placedItems() const { return m_placedItems; }
+    PlacedItems& placedItems() { return m_placedItems; }
     std::vector<PlacedItems::PerkChange> blessItems(RenderDevice& device, const Vec3& position,
                                                     f32 radius, MagicPerk perk) {
         return m_placedItems.bless(device, position, radius, perk);
@@ -246,6 +247,7 @@ public:
     const ItemArchive& items() const { return m_itemArchives.primary(); }
     /** Stage textures borrowed by native item/enemy animation slots such as LAVA. */
     TextureSet& textures() { return m_textures; }
+    ModelSet& models() { return m_models; }
     /** Common realm figures still available when a boss supplies its own item archive. */
     ItemArchive& realmItems() { return m_itemArchives.realm(); }
     /** The item archives in the order the original searches them: the level's, the realm's. */

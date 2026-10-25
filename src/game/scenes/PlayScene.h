@@ -62,6 +62,7 @@
 #include "game/rollback/FrameEventLedger.h"
 #include "game/rollback/SimulationObservation.h"
 #include "game/scenes/GameContext.h"
+#include "game/scenes/SceneSelection.h"
 #include "game/scenes/TransitionScreen.h"
 #include "game/tower/GameOver.h"
 #include "game/tower/LevelArrivalPresentation.h"
@@ -358,6 +359,9 @@ public:
     const HelpMessages& help() const { return m_hud.help(); }
     const PartyHud& hud() const { return m_hud; }
     bool cinematicBars() const;
+    /** Hands the selection's highlight to whichever owns the thing selected; null takes
+     * it back. */
+    void markSelection(const SelectionHighlight* highlight);
     bool hudVisible() const { return !m_sim.gameOver.active() && !cinematicBars(); }
     const MoveStrikes& strikes() const { return m_attacks.strikes(); }
     const AmbientDimmer& dimmer() const { return m_sim.dimmer; }
@@ -376,6 +380,7 @@ public:
     struct ConsoleCheats {
         bool god = false;      ///< takes no harm
         bool noTarget = false; ///< unseen by the enemies, critters and bosses
+        bool noclip = false;   ///< flies through everything, as the console moves it
         bool operator==(const ConsoleCheats&) const = default;
     };
     void setCheats(s32 player, const ConsoleCheats& cheats);
@@ -389,10 +394,21 @@ public:
     /** Fells `player`'s character where it stands, for the developer console; false in the
      * tower, where nobody falls, or for one not standing. */
     bool kill(s32 player);
+    /** Flies `player`'s character by `offset`, through everything, facing `yaw` when
+     * given; false for one not standing. */
+    bool noclipMove(s32 player, const Vec3& offset, std::optional<f32> yaw);
+    /** What stands under `cursor` (0 to 1 across and down the view as last rendered): the
+     * nearest object, enemy, great one, generator, pickup, character or stood object the
+     * ray from the eye meets; nothing with nothing there or nothing rendered yet. */
+    std::optional<SceneSelection> pick(Vec2 cursor);
+    /** The developer console's selection, marked out in the view while it holds. */
+    void select(const std::optional<SceneSelection>& selection) { m_selection = selection; }
+    const std::optional<SceneSelection>& selection() const { return m_selection; }
     /** Stands a copy of `level`'s object `name` at `position` facing `yaw`, loading that
      * level's archive if need be, for the developer console. */
     bool spawnObject(const LevelRef& level, std::string_view name, const Vec3& position, f32 yaw);
     usize spawnedObjectCount() const { return m_spawned.count(); }
+    const SpawnedObjects& spawnedObjects() const { return m_spawned; }
     /** `level`'s item archive, loaded the first time and kept, for the bodies of the broods
      * the developer console brings in from it; null when it is not unpacked. */
     ItemArchive* borrowItems(const LevelRef& level);
@@ -587,6 +603,7 @@ private:
     std::optional<WorldCamera> m_previousCamera;
     bool m_previousBossCamera = false;
     std::optional<WorldCamera> m_viewOverride;
+    std::optional<SceneSelection> m_selection;
     std::array<ConsoleCheats, static_cast<usize>(kPlayerCount)> m_cheats{};
     bool m_hudHidden = false;
     std::vector<PlayerRuntime> m_players;

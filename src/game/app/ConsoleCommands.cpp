@@ -288,7 +288,8 @@ std::string ConsoleCommands::gotoUsage() {
 std::string ConsoleCommands::getUsage() {
     return usage({{"get <item> [amount]", "keys, potions, gold, health or a powerup"},
                   {"get exp <points>", "experience to add"},
-                  {"get level <level>", std::format("the level to be, 1 to {}", kMaxLevel)}},
+                  {"get level <level>", std::format("the level to be, 1 to {}", kMaxLevel)},
+                  {"get info [$SELECTED]", "what the thing clicked in the view is"}},
                  {"list items names the items."});
 }
 
@@ -349,6 +350,15 @@ std::optional<ConsoleCommands::Gift> ConsoleCommands::parseGet(Arguments argumen
     const std::string name = lower(arguments[0]);
     const Arguments rest = arguments.subspan(1);
     Gift gift;
+    if (name == "info") {
+        if (rest.size() > 1) {
+            error = "get info [$SELECTED]: one thing, or what is selected";
+            return std::nullopt;
+        }
+        gift.kind = Gift::Kind::Info;
+        gift.name = rest.empty() ? "" : rest[0];
+        return gift;
+    }
     if (name == "exp" || name == "experience") {
         const auto points = rest.size() == 1 ? integer(rest[0]) : std::nullopt;
         if (!points.has_value() || *points <= 0) {
@@ -913,6 +923,9 @@ void ConsoleCommands::unlockTower(CharacterSave& save) {
     progress.relics.pendingRunes = 0;
     progress.relics.pendingShards = 0;
     progress.relics.pendingCeremonies = 0;
+    // The gargoyle statues' wings: each kind's pieces kept as the tower keeps them once it
+    // has congratulated the collector, so no ceremony waits.
+    progress.relics.gargoylePieces.fill(-1);
     for (const s32 gate : TowerAccess::kWorldGates) {
         if (gate != 0) {
             progress.crystals[static_cast<usize>(gate)] = std::max(
@@ -923,6 +936,3 @@ void ConsoleCommands::unlockTower(CharacterSave& save) {
 }
 
 } // namespace gdl::game
-    // The gargoyle statues' wings: each kind's pieces kept as the tower keeps them once it
-    // has congratulated the collector, so no ceremony waits.
-    progress.relics.gargoylePieces.fill(-1);

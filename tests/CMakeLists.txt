@@ -312,6 +312,8 @@ add_executable(tests
     game/effects/WeaponGlowTests.cpp
     game/camera/CameraMovementLimitTests.cpp
     game/camera/FreeCameraTests.cpp
+    game/players/NoclipMotionTests.cpp
+    game/scenes/SceneSelectionTests.cpp
     engine/world/SelectionHighlightTests.cpp
     game/level/SkorneArenaTests.cpp
     game/level/FallingPieceTests.cpp

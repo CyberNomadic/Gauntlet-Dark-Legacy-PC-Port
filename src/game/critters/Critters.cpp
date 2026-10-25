@@ -572,7 +572,7 @@ void Critters::draw(RenderDevice& device, const Mat4& clip, const WorldLighting&
                     bool healthBars) const {
     for (const auto& actor : m_critters) {
         actor.draw(device, clip, lighting, frozenTexture, camera, m_hitFlash, presentationAlpha,
-                   healthBars);
+                   healthBars, actor.id() == m_highlightedId ? m_highlight : nullptr);
     }
 }
 } // namespace gdl::game

@@ -148,10 +148,18 @@ public:
     /** Whether it is on its round of the lookouts, and which it makes for. */
     bool patrolling(s32 id) const;
     s32 lookoutOf(s32 id) const;
+    /** Marks `id` out with `highlight` as it is drawn, as the developer console's
+     * selection; null, or nobody's id, marks nothing. */
+    void setHighlight(s32 id, const SelectionHighlight* highlight) {
+        m_highlightedId = id;
+        m_highlight = highlight;
+    }
 
 private:
     friend class OpponentCombatCheckpoint;
     friend class CrittersCheckpoint;
+    s32 m_highlightedId = -1;                        ///< the developer console's selection
+    const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     std::optional<s32> spawn(const CombatantDefinition& definition, const Vec3& position, f32 yaw,
                              f32 sight = 0.0f, char realm = 0);
     CombatantAssets* stockFor(const CombatantDefinition& definition, char realm = 0);

@@ -669,7 +669,7 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
     victims.reserve(players.size());
     for (PlayerRuntime& player : players) {
         PlayerActor& actor = player.actor;
-        if (player.life != PlayerLife::Standing || player.capture.held()) {
+        if (player.life != PlayerLife::Standing || player.capture.held() || player.ghost) {
             player.fixtureSpot.reset();
             visitors.push_back(ChestVisitor{kNowhere, actor.radius(), 0});
             victims.push_back(TrapVictim{kNowhere, actor.radius()});

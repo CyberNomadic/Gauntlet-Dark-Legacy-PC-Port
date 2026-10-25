@@ -42,6 +42,19 @@ public:
               TreeModel::Pass pass = TreeModel::Pass::All) const;
     void clear();
     usize count() const { return m_spawned.size(); }
+    /** One stood object as the console sees it: its name, and the sphere round it. */
+    struct View {
+        std::string name;
+        Vec3 position{0.0f, 0.0f, 0.0f};
+        f32 radius = 0.0f;
+    };
+    View view(usize index) const;
+    /** Marks `id` out with `highlight` as it is drawn, as the developer console's
+     * selection; null, or nobody's id, marks nothing. */
+    void setHighlight(s32 id, const SelectionHighlight* highlight) {
+        m_highlightedId = id;
+        m_highlight = highlight;
+    }
     usize sourceCount() const { return m_sources.size(); }
 
     /** The object at `index` and its descendants as a tree, each at its offset from its
@@ -68,6 +81,8 @@ private:
 
     std::vector<std::unique_ptr<Source>> m_sources;
     std::vector<std::unique_ptr<Spawned>> m_spawned;
+    s32 m_highlightedId = -1;                        ///< the developer console's selection
+    const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
 };
 
 } // namespace gdl::game

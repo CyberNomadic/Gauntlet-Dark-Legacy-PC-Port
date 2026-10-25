@@ -261,7 +261,8 @@ Combatant::meterPose(const CameraFrame* camera, f32 presentationAlpha) const {
 
 void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                      const Texture* frozenTexture, const CameraFrame* camera,
-                     const Texture* hitFlash, f32 presentationAlpha, bool healthBars) const {
+                     const Texture* hitFlash, f32 presentationAlpha, bool healthBars,
+                     const SelectionHighlight* highlight) const {
     const Actor& critter = m_sim.actor;
     if (critter.state == State::Inactive || critter.stock == nullptr || critter.hidden) {
         return;
@@ -321,8 +322,10 @@ void Combatant::draw(RenderDevice& device, const Mat4& clip, const WorldLighting
             drawNodeState(branch, hitFlash);
         }
     }
+    critter.stock->body.setHighlight(highlight);
     critter.stock->body.draw(device, clip, shownModel, lighting, pose.matrices(), nullptr,
                              critter.alpha);
+    critter.stock->body.setHighlight(nullptr); // the body is its species', shared
     for (usize j = 0; j < critter.attachments.size(); ++j) {
         const auto& instance = critter.attachments[j];
         auto& auxiliary = critter.stock->attachments[j];

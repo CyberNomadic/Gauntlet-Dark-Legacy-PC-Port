@@ -1149,8 +1149,11 @@ void PlacedItems::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
                 }
                 item.model->setPresentationFrame(item.player.sequence(), visualFrame);
             }
+            item.model->setHighlight(static_cast<s32>(index) == m_highlightedId ? m_highlight
+                                                                                : nullptr);
             item.model->draw(device, clip, transform, lighting, pose->matrices(), camera, alpha,
                              pass);
+            item.model->setHighlight(nullptr);
             if (pass != TreeModel::Pass::DepthWriting && pass != TreeModel::Pass::Opaque) {
                 const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
                 item.particles.draw(device, clip, frame.right, frame.up,

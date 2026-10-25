@@ -109,9 +109,12 @@ std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> p
     result.reserve(players.size());
     for (const PlayerRuntime& runtime : players) {
         const PlayerActor& actor = runtime.actor;
-        // Against an open chest, a character reaches what lies in it; the fallen reach nothing.
+        // Against an open chest, a character reaches what lies in it; the fallen reach
+        // nothing, nor does one the console flies.
         const Vec3 here =
-            runtime.life == PlayerLife::Standing && !runtime.departed ? actor.position() : kNowhere;
+            runtime.life == PlayerLife::Standing && !runtime.departed && !runtime.ghost
+                ? actor.position()
+                : kNowhere;
         const s32 chest = chests.holdingTouchedBy(ChestVisitor{here, actor.radius()});
         Vec3 from = here;
         if (chest >= 0) {

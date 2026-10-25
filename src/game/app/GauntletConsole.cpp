@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "engine/assets/ModelSet.h"
+#include "engine/assets/ObjectMaterial.h"
 #include "engine/assets/WorldData.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Log.h"
@@ -12,13 +14,18 @@
 
 #include "game/app/ConsoleCommands.h"
 #include "game/app/Gauntlet.h"
+#include "game/characters/ClassData.h"
 #include "game/characters/Progression.h"
 #include "game/critters/CombatantKind.h"
 #include "game/enemies/Enemies.h"
+#include "game/enemies/EnemyKinds.h"
 #include "game/enemies/Generators.h"
+#include "game/level/PlacedItems.h"
 #include "game/level/TowerAccess.h"
 #include "game/menu/MenuInput.h"
 #include "game/players/ItemPickup.h"
+#include "game/players/NoclipMotion.h"
+#include "game/scenes/SceneSelection.h"
 
 namespace gdl::game {
 
@@ -84,6 +91,246 @@ void Gauntlet::setUpConsole() {
                          [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
                              consoleFreeCam(console);
                          });
+    m_console.addCommand("noclip", "flies you through everything, or sets you down again",
+                         [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
+                             consoleNoclip(console);
+                         });
+}
+
+void Gauntlet::consoleNoclip(DevConsole& console) {
+    const s32 player = consolePlayer();
+    if (player < 0) {
+        console.print("Nobody is in.");
+        return;
+    }
+    bool& flying = m_consoleCheats[static_cast<usize>(player)].noclip;
+    flying = !flying;
+    m_noclip[static_cast<usize>(player)].reset();
+    console.print(flying ? std::format("Noclip on: {}", NoclipMotion::kHelp) : "Noclip off");
+}
+
+bool Gauntlet::consoleCovers(Vec2 cursor) {
+    // The 2D layer is letterboxed into the window: as wide or as tall as the window
+    // allows at the frame's shape, centred. The console spans that frame's width.
+    const Extent2D window = renderDevice().framebufferExtent();
+    if (window.isZero()) {
+        return false;
+    }
+    const auto frameWidth = static_cast<f32>(m_config.display.frameWidth);
+    const auto frameHeight = static_cast<f32>(m_config.display.frameHeight);
+    const auto windowWidth = static_cast<f32>(window.width);
+    const auto windowHeight = static_cast<f32>(window.height);
+    const f32 scale = std::min(windowWidth / frameWidth, windowHeight / frameHeight);
+    const f32 width = frameWidth * scale / windowWidth;
+    const f32 height = frameHeight * scale / windowHeight;
+    const f32 left = (1.0f - width) * 0.5f;
+    const f32 top = (1.0f - height) * 0.5f;
+    const f32 shown = height * m_console.slide() * static_cast<f32>(DevConsole::kHeight) /
+                      static_cast<f32>(m_config.display.virtualHeight);
+    return cursor.x >= left && cursor.x <= left + width && cursor.y >= top &&
+           cursor.y <= top + shown;
+}
+
+void Gauntlet::consoleSelect(std::optional<Vec2> cursor) {
+    std::optional<SceneSelection> picked;
+    if (cursor.has_value() && m_play->scene.isOpen()) {
+        picked = m_play->scene.pick(*cursor);
+    }
+    if (m_play->scene.isOpen()) {
+        m_play->scene.select(picked);
+    }
+    m_console.setVariable("SELECTED",
+                          picked.has_value() ? std::optional{picked->token()} : std::nullopt);
+    if (cursor.has_value()) {
+        m_console.print(picked.has_value() ? std::format("Selected {}", picked->label())
+                                           : "Nothing there to select");
+    }
+}
+
+std::vector<std::string> Gauntlet::consoleDescribe(const SceneSelection& selection) {
+    using Kind = SceneSelection::Kind;
+    std::vector<std::string> lines;
+    PlayScene& scene = m_play->scene;
+    if (!scene.isOpen()) {
+        lines.emplace_back("Nothing is in play.");
+        return lines;
+    }
+    const auto place = [](const Vec3& at) {
+        return std::format("at {:.1f} {:.1f} {:.1f}", at.x, at.y, at.z);
+    };
+    const auto gone = [&] {
+        lines.push_back(std::format("{} is no longer there", selection.token()));
+    };
+    const s32 id = selection.id;
+    switch (selection.kind) {
+    case Kind::Object: {
+        const LevelWorld& world = m_play->world;
+        const auto& objects = world.layout().objects();
+        if (id < 0 || static_cast<usize>(id) >= objects.size()) {
+            lines.push_back(
+                std::format("{} names no object of {}", selection.token(), world.ref().name));
+            break;
+        }
+        const auto index = static_cast<usize>(id);
+        const WorldObject& object = objects[index];
+        const WorldScene& view = world.scene();
+        lines.push_back(std::format("{} {}: object {} of {}", selection.token(), object.name, id,
+                                    world.ref().name));
+        const std::string parent =
+            object.parent >= 0 && static_cast<usize>(object.parent) < objects.size()
+                ? std::format("{} (object {})", objects[static_cast<usize>(object.parent)].name,
+                              object.parent)
+                : std::string("none");
+        lines.push_back(std::format("{}; radius {:.1f}; parent {}",
+                                    place(Vec3{view.worldTransform(index)[3]}), object.radius,
+                                    parent));
+        std::string flags;
+        for (const auto& [bit, word] :
+             {std::pair{WorldObject::kPrelit, "prelit"}, std::pair{WorldObject::kFloor, "floor"},
+              std::pair{WorldObject::kParticles, "particles"},
+              std::pair{WorldObject::kAnimated, "animated"},
+              std::pair{WorldObject::kReverse, "reverse"}, std::pair{WorldObject::kOnce, "once"}}) {
+            if ((object.flags & bit) != 0) {
+                flags += std::format(" {}", word);
+            }
+        }
+        const ObjectMaterial material = ObjectMaterial::fromFlags(object.objectFlags);
+        std::string look;
+        if (material.chrome) {
+            look += " chrome";
+        }
+        if (material.additive) {
+            look += " additive";
+        }
+        if (material.sorted) {
+            look += " sorted";
+        }
+        if (!material.depthWrite) {
+            look += " no-depth-write";
+        }
+        if (!material.depthTest) {
+            look += " no-depth-test";
+        }
+        if (material.facing != 0) {
+            look += std::format(" facing-{}", material.facing);
+        }
+        lines.push_back(std::format("flags {:#x}{}; object flags {:#x}{}", object.flags, flags,
+                                    object.objectFlags, look));
+        lines.push_back(std::format("{}; {}",
+                                    view.moving(index) ? "animated: placed every frame" : "static",
+                                    view.objectVisible(index) ? "shown" : "hidden"));
+        ModelSet& models = m_play->world.models();
+        const TextureSet& textures = m_play->world.textures();
+        const auto model = models.find(object.name);
+        if (!model.has_value()) {
+            lines.emplace_back("no mesh");
+            break;
+        }
+        const ModelSetEntry& entry = models.entry(*model);
+        try {
+            const Mesh& mesh = models.mesh(*model);
+            std::string names;
+            for (const MeshPart& part : mesh.parts) {
+                const std::string name = part.texture < textures.size()
+                                             ? textures.entry(part.texture).name
+                                             : std::format("texture {}", part.texture);
+                if (names.find(name) == std::string::npos) {
+                    names += (names.empty() ? "" : ", ") + name;
+                }
+            }
+            lines.push_back(std::format("mesh: {} triangles, {} part{}: {}", entry.triangles,
+                                        mesh.parts.size(), mesh.parts.size() == 1 ? "" : "s",
+                                        names));
+        } catch (const std::exception&) {
+            lines.push_back(std::format("mesh: {} triangles, not decoded", entry.triangles));
+        }
+        break;
+    }
+    case Kind::Enemy: {
+        const Enemies& swarm = scene.enemies();
+        if (id < 0 || id >= Enemies::kMost || !swarm.alive(id)) {
+            gone();
+            break;
+        }
+        const EnemyKind& kind = enemyKind(swarm.kindOf(id));
+        lines.push_back(std::format("{} {}: tier {}, health {:.0f}{}", selection.token(), kind.name,
+                                    swarm.tierOf(id), swarm.healthOf(id),
+                                    swarm.dying(id) ? ", dying" : ""));
+        lines.push_back(std::format("{}; radius {:.1f}, height {:.1f}", place(swarm.positionOf(id)),
+                                    swarm.radiusOf(id), swarm.heightOf(id)));
+        break;
+    }
+    case Kind::Critter: {
+        const Critters& critters = scene.critters();
+        if (id < 0 || static_cast<usize>(id) >= critters.count() || !critters.alive(id)) {
+            gone();
+            break;
+        }
+        const std::string form = critters.formOf(id);
+        lines.push_back(std::format(
+            "{} {}{}: health {:.0f}", selection.token(), combatantKindName(critters.kindOf(id)),
+            form.empty() ? "" : std::format(" {}", form), critters.healthOf(id)));
+        lines.push_back(std::format("{}; radius {:.1f}", place(critters.positionOf(id)),
+                                    critters.radiusOf(id)));
+        break;
+    }
+    case Kind::Generator: {
+        const Generators& generators = scene.generators();
+        if (id < 0 || static_cast<usize>(id) >= generators.count()) {
+            gone();
+            break;
+        }
+        const s32 kind = generators.kindOf(id);
+        lines.push_back(std::format("{} {}: tier {}, state {} of {}, health {:.0f}",
+                                    selection.token(), kind >= 0 ? enemyKind(kind).name : "brood",
+                                    generators.tierOf(id), generators.stateOf(id),
+                                    Generators::kStates, generators.healthOf(id)));
+        lines.push_back(place(generators.positionOf(id)));
+        break;
+    }
+    case Kind::Pickup: {
+        const PlacedItems& items = m_play->world.placedItems();
+        if (id < 0 || static_cast<usize>(id) >= items.size()) {
+            gone();
+            break;
+        }
+        const PlacedItems::Item& item = items.item(static_cast<usize>(id));
+        lines.push_back(std::format("{} {}: {}, worth {}{}{}", selection.token(), item.name,
+                                    ConsoleCommands::pickupKindName(item.subtype), item.value,
+                                    item.taken ? ", taken" : "", item.visible ? "" : ", unseen"));
+        lines.push_back(std::format("{}; radius {:.1f}, height {:.1f}; instance {} of record {}",
+                                    place(item.position), item.radius, item.height, item.instance,
+                                    item.info));
+        break;
+    }
+    case Kind::Player: {
+        const PlayerActor* actor = scene.actor(id);
+        if (actor == nullptr) {
+            gone();
+            break;
+        }
+        const CharacterSave& save = actor->save();
+        lines.push_back(std::format("{} {}: {} of level {}, health {}", selection.token(),
+                                    save.name, classCode(save.character % kStartingClassCount),
+                                    experienceLevel(save.experience()), save.health()));
+        lines.push_back(std::format("{}; facing {:.0f} degrees; radius {:.1f}, height {:.1f}",
+                                    place(actor->position()), glm::degrees(actor->yaw()),
+                                    actor->radius(), actor->height()));
+        break;
+    }
+    case Kind::Spawned: {
+        const SpawnedObjects& spawned = scene.spawnedObjects();
+        if (id < 0 || static_cast<usize>(id) >= spawned.count()) {
+            gone();
+            break;
+        }
+        const SpawnedObjects::View view = spawned.view(static_cast<usize>(id));
+        lines.push_back(std::format("{} {}: stood by the console", selection.token(), view.name));
+        lines.push_back(std::format("{}; radius {:.1f}", place(view.position), view.radius));
+        break;
+    }
+    }
+    return lines;
 }
 
 void Gauntlet::consoleToggleCheat(DevConsole& console, bool PlayScene::ConsoleCheats::*flag,
@@ -120,6 +367,27 @@ void Gauntlet::applyConsoleState(f64 deltaSeconds, bool consoleOpen) {
     m_play->scene.setHudHidden(m_hudHidden);
     if (m_freeCamera.active() && !consoleOpen) {
         m_freeCamera.update(input(), static_cast<f32>(deltaSeconds));
+    }
+    // While the free camera is turned by the right button, the pointer is hidden where
+    // it is and shows there again when the button is let go.
+    window().holdCursor(m_freeCamera.active() && !consoleOpen &&
+                        input().isKeyDown(Key::MouseRight));
+    // Noclip flies a character as the camera looks, the console's keys left alone.
+    for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
+        NoclipMotion& flight = m_noclip[static_cast<usize>(player)];
+        if (!m_consoleCheats[static_cast<usize>(player)].noclip) {
+            continue;
+        }
+        if (consoleOpen) {
+            flight.reset();
+            continue;
+        }
+        const MenuInputSource source = playerInputSource(input(), m_config, player);
+        const NoclipMotion::Wish wish =
+            NoclipMotion::wish(input(), playBindings(m_config, player), source.keyboard, source.pad,
+                               m_play->scene.viewCamera());
+        const NoclipMotion::Step step = flight.advance(wish, static_cast<f32>(deltaSeconds));
+        m_play->scene.noclipMove(player, step.offset, step.yaw);
     }
     m_play->scene.setViewOverride(m_freeCamera.active() ? std::optional{m_freeCamera.camera()}
                                                         : std::nullopt);
@@ -493,16 +761,33 @@ void Gauntlet::consoleUnlockTower(DevConsole& console) {
 }
 
 void Gauntlet::consoleGet(DevConsole& console, DevConsole::Arguments arguments) {
-    const s32 player = consolePlayer();
-    CharacterSave* save = m_play->scene.liveSave(player);
-    if (save == nullptr) {
-        console.print("Nobody is in to give it to.");
-        return;
-    }
     std::string error;
     const auto gift = ConsoleCommands::parseGet(arguments, error);
     if (!gift.has_value()) {
         console.print(error);
+        return;
+    }
+    if (gift->kind == ConsoleCommands::Gift::Kind::Info) {
+        const std::optional<SceneSelection> what =
+            gift->name.empty() ? m_play->scene.selection() : SceneSelection::parse(gift->name);
+        if (!what.has_value()) {
+            console.print(gift->name.empty()
+                              ? "Nothing is selected: click something in the view while the "
+                                "console is down, then get info $SELECTED"
+                              : std::format("{} names nothing; $SELECTED or a token such as "
+                                            "object#12 or enemy#3 does",
+                                            gift->name));
+            return;
+        }
+        for (const std::string& line : consoleDescribe(*what)) {
+            console.print(line);
+        }
+        return;
+    }
+    const s32 player = consolePlayer();
+    CharacterSave* save = m_play->scene.liveSave(player);
+    if (save == nullptr) {
+        console.print("Nobody is in to give it to.");
         return;
     }
     switch (gift->kind) {

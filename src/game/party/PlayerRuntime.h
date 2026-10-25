@@ -148,6 +148,9 @@ struct PlayerRuntime : PlayerSimulation {
     SoundHandle deathHeldSuck = kNoSound;
     BodyGlow glow;
     WeaponGlow weaponGlow;
+    /** Flown by the developer console (noclip): it touches no pad, lever, chest, pickup,
+     * portal or transporter. Never part of the simulation's record. */
+    bool ghost = false;
 };
 
 } // namespace gdl::game

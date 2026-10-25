@@ -33,6 +33,7 @@
 #include "game/level/LevelWorld.h"
 #include "game/menu/PauseMenu.h"
 #include "game/players/CursorAim.h"
+#include "game/players/NoclipMotion.h"
 #include "game/players/PlayerControls.h"
 #include "game/rollback/SessionInputs.h"
 #include "game/scenes/AfterLevelScene.h"
@@ -43,6 +44,7 @@
 #include "game/scenes/MovieScene.h"
 #include "game/scenes/PlayScene.h"
 #include "game/scenes/PlayerSelectScene.h"
+#include "game/scenes/SceneSelection.h"
 #include "game/scenes/SmokeTestScene.h"
 #include "game/scenes/TitleScene.h"
 #include "game/tower/LevelExitSpeech.h"
@@ -106,6 +108,16 @@ private:
                             std::string_view on, std::string_view off);
     void consoleHideHud(DevConsole& console);
     void consoleFreeCam(DevConsole& console);
+    void consoleNoclip(DevConsole& console);
+    /** Picks what stands under `cursor` in the view for the console, or lets the selection
+     * go without one; the console's $SELECTED follows. */
+    void consoleSelect(std::optional<Vec2> cursor);
+    /** Whether the console's screen, as far down as it has slid, lies under `cursor` (0 to
+     * 1 across and down the window): the 2D layer's letterboxed frame, its top rows. */
+    bool consoleCovers(Vec2 cursor);
+    /** What the console says of a thing selected or named: its token, name, place and
+     * what else is known of its kind. */
+    std::vector<std::string> consoleDescribe(const SceneSelection& selection);
     /** Carries the console's cheats, hidden HUD and free camera into the scene each tick. */
     void applyConsoleState(f64 deltaSeconds, bool consoleOpen);
     /** Takes the party to `level` through the loading picture, standing it at `position`
@@ -141,6 +153,7 @@ private:
     LevelDebugOverlay m_levelDebug;
     DevConsole m_console;
     FreeCamera m_freeCamera;
+    std::array<NoclipMotion, static_cast<usize>(PlayScene::kPlayerCount)> m_noclip;
     std::array<PlayScene::ConsoleCheats, static_cast<usize>(PlayScene::kPlayerCount)>
         m_consoleCheats{};
     bool m_hudHidden = false;

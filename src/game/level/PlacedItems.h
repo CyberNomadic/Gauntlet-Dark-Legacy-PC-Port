@@ -340,6 +340,12 @@ public:
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               const CameraFrame* camera = nullptr, TreeModel::Pass pass = TreeModel::Pass::All,
               f32 frameBlend = -1.0f) const;
+    /** Marks `id` out with `highlight` as it is drawn, as the developer console's
+     * selection; null, or nobody's id, marks nothing. */
+    void setHighlight(s32 id, const SelectionHighlight* highlight) {
+        m_highlightedId = id;
+        m_highlight = highlight;
+    }
 
 private:
     friend class PlacedItemsCheckpoint;
@@ -386,6 +392,8 @@ private:
                             const WorldCollision* collision, f32 noGrabSeconds, s32 players);
     bool replaceFigure(RenderDevice& device, Item& item, std::string_view name);
     bool exposedWithin(const Item& item, const Vec3& position, f32 radius) const;
+    s32 m_highlightedId = -1;                        ///< the developer console's selection
+    const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     /** Flies a thrown item `seconds` on. */
     void fly(Item& item, f32 seconds);
     static void restOnFloor(Item& item, const WorldCollision* collision, f32 lift);
