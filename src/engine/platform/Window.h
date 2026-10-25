@@ -70,6 +70,10 @@ public:
      * leave the current cursor unchanged. The image is copied before returning. */
     virtual bool setCursor(const Image& image, u32 hotX, u32 hotY) = 0;
     virtual void resetCursor() = 0;
+    /** Hides the pointer where it is and reads its motion without bounds while `held`,
+     * for a dragged look; let go, it shows again where it was. Ignored where the
+     * platform has no pointer. */
+    virtual void holdCursor(bool /*held*/) {}
 
     virtual std::vector<const char*> requiredVulkanInstanceExtensions() const = 0;
     virtual bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* outSurface) const = 0;

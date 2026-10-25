@@ -387,6 +387,19 @@ WindowMode GlfwWindow::windowMode() const {
                : WindowMode::BorderlessFullscreen;
 }
 
+void GlfwWindow::holdCursor(bool held) {
+    if (held) {
+        // Disabled, GLFW hides the pointer, keeps its place to put it back and reports
+        // its motion without the screen's edges in the way.
+        glfwSetInputMode(m_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    } else if (m_cursorHeld) {
+        glfwSetInputMode(m_window, GLFW_CURSOR,
+                         windowMode() == WindowMode::Fullscreen ? GLFW_CURSOR_CAPTURED
+                                                                : GLFW_CURSOR_NORMAL);
+    }
+    m_cursorHeld = held;
+}
+
 bool GlfwWindow::cursorCaptured() const {
     return glfwGetInputMode(m_window, GLFW_CURSOR) == GLFW_CURSOR_CAPTURED;
 }

@@ -37,6 +37,7 @@ public:
     void setIcon(std::span<const Image> images) override;
     bool setCursor(const Image& image, u32 hotX, u32 hotY) override;
     void resetCursor() override;
+    void holdCursor(bool held) override;
 
     std::vector<const char*> requiredVulkanInstanceExtensions() const override;
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* outSurface) const override;
@@ -49,6 +50,7 @@ private:
 
     GLFWwindow* m_window = nullptr;
     GLFWcursor* m_cursor = nullptr;
+    bool m_cursorHeld = false;
     Input m_input;
     Gamepads m_gamepads;
     GLFWmonitor* m_desktopMonitor = nullptr;

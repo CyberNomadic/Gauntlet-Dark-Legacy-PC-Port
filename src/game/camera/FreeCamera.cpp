@@ -13,11 +13,13 @@ void FreeCamera::start(const WorldCamera& from) {
     m_active = true;
     m_camera = from;
     m_camera.roll = 0.0f;
+    m_velocity.reset();
     m_dragFrom.reset();
 }
 
 void FreeCamera::stop() {
     m_active = false;
+    m_velocity.reset();
     m_dragFrom.reset();
 }
 
@@ -25,43 +27,34 @@ void FreeCamera::update(const Input& input, f32 seconds) {
     if (!m_active) {
         return;
     }
-    const f32 pace = kSpeed * (input.isKeyDown(Key::LeftShift) ? kFastFactor : 1.0f) * seconds;
-    Vec3 move{0.0f};
+    Vec3 wish{0.0f};
     if (input.isKeyDown(Key::W)) {
-        move += m_camera.forward();
+        wish += m_camera.forward();
     }
     if (input.isKeyDown(Key::S)) {
-        move -= m_camera.forward();
+        wish -= m_camera.forward();
     }
     if (input.isKeyDown(Key::D)) {
-        move += m_camera.right();
+        wish += m_camera.right();
     }
     if (input.isKeyDown(Key::A)) {
-        move -= m_camera.right();
+        wish -= m_camera.right();
     }
-    if (input.isKeyDown(Key::Space)) {
-        move += kWorldUp;
+    if (input.isKeyDown(Key::Q)) {
+        wish += kWorldUp;
     }
-    if (input.isKeyDown(Key::LeftControl)) {
-        move -= kWorldUp;
+    if (input.isKeyDown(Key::E)) {
+        wish -= kWorldUp;
     }
-    m_camera.position += move * pace;
-    // A larger yaw turns toward the camera's right; a larger pitch looks further down.
-    const f32 turn = kTurnRate * seconds;
-    if (input.isKeyDown(Key::Right)) {
-        m_camera.yaw += turn;
+    if (const f32 length = glm::length(wish); length > 1.0f) {
+        wish /= length;
     }
-    if (input.isKeyDown(Key::Left)) {
-        m_camera.yaw -= turn;
-    }
-    if (input.isKeyDown(Key::Up)) {
-        m_camera.pitch -= turn;
-    }
-    if (input.isKeyDown(Key::Down)) {
-        m_camera.pitch += turn;
-    }
+    wish *= kSpeed * (input.isKeyDown(Key::LeftShift) ? kSlowFactor : 1.0f);
+    m_camera.position += m_velocity.advance(wish, seconds);
+    // The pointer dragged with the right button held turns the view: across for yaw, a
+    // larger one turning toward the camera's right, and down for pitch, looking further down.
     const PointerSnapshot& pointer = input.pointer();
-    if (pointer.down) {
+    if (input.isKeyDown(Key::MouseRight)) {
         const Vec2 at{pointer.x, pointer.y};
         if (m_dragFrom.has_value()) {
             m_camera.yaw += (at.x - m_dragFrom->x) * kDragTurn;
