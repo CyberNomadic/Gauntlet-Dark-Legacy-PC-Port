@@ -240,6 +240,13 @@ TEST_CASE("unlock_tower opens every wing and portal to the character", "[dev-con
     CHECK(relics.pendingRunes == 0);
     CHECK(relics.pendingShards == 0);
     CHECK(relics.legends == 0); // the bosses' items are left to be found
+    // The gargoyle statues' wings open too: every kind's pieces are kept as collected and
+    // congratulated, so no ceremony waits.
+    for (s32 kind = 0; kind < static_cast<s32>(Relics::kGargoyleKinds); ++kind) {
+        CHECK(relics.gargoyleComplete(kind));
+        CHECK(relics.gargoylePieces[static_cast<usize>(kind)] < 0);
+    }
+    CHECK(relics.pendingCeremonies == 0);
 }
 
 TEST_CASE("the map list names every level of every realm", "[dev-console][commands][assets]") {

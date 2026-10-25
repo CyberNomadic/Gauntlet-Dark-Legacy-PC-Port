@@ -923,3 +923,6 @@ void ConsoleCommands::unlockTower(CharacterSave& save) {
 }
 
 } // namespace gdl::game
+    // The gargoyle statues' wings: each kind's pieces kept as the tower keeps them once it
+    // has congratulated the collector, so no ceremony waits.
+    progress.relics.gargoylePieces.fill(-1);
