@@ -8,6 +8,7 @@
 #include "game/characters/Progression.h"
 #include "game/enemies/LevelOpponents.h"
 #include "game/hud/HelpMessages.h"
+#include "game/players/ItemPickup.h"
 #include "game/players/PickupVoices.h"
 
 namespace gdl::game {
@@ -120,13 +121,15 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
             }
             auto& progress = player.actor.save().progress();
             const auto amount = static_cast<s32>(std::lround(cue.amount));
-            if (cue.kind == DeathEvent::Kind::MagicHeal) {
-                const s32 cap = std::min(
-                    9999, kStartingHealth + 100 * (experienceLevel(progress.experience) - 1));
+            // heal_player: no further than the level's most, 9999 at the top, whether the
+            // health is his magic's (hurtDeath) or his own taken back through the halo.
+            const auto heal = [&] {
+                const s32 cap = mostHealth(experienceLevel(progress.experience));
                 if (progress.health < cap) {
                     progress.health = std::min(cap, progress.health + amount);
                 }
-            } else if (cue.form == DeathForm::Black) {
+            };
+            if (cue.form == DeathForm::Black && cue.kind != DeathEvent::Kind::MagicHeal) {
                 const s32 before = experienceLevel(progress.experience);
                 progress.experience =
                     std::max(0, progress.experience +
@@ -139,8 +142,9 @@ void LevelOpponents::updateDeaths(std::span<PlayerRuntime> players, const Events
                         player.figure->voice(), PickupVoices::nameOf(save.character, save.color),
                         PickupVoices::carriesPojo(save), lines, kLostLevelWait);
                 }
-            } else if (cue.kind == DeathEvent::Kind::Return) {
-                progress.health += amount;
+            } else if (cue.kind == DeathEvent::Kind::MagicHeal ||
+                       cue.kind == DeathEvent::Kind::Return) {
+                heal();
             } else if (events.hurt) {
                 events.hurt(i, cue.amount, HurtKind::DeathDrain, true,
                             PlayerImpact{.flags = 0x1000});

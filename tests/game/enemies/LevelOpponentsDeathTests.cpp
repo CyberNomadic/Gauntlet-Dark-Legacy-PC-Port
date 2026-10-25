@@ -18,6 +18,7 @@
 #include "game/hud/HelpMessages.h"
 #include "game/level/LevelCatalog.h"
 #include "game/party/PlayerHealth.h"
+#include "game/players/ItemPickup.h"
 #include "game/players/PowerupEffects.h"
 
 namespace {
@@ -790,6 +791,49 @@ TEST_CASE("Authored Red and Black Death placements enter the level roster",
     REQUIRE(opponents.releaseDeath(index, {}, black ? 1 : 0));
     CHECK(opponents.enemies().count() == 1);
     CHECK(opponents.enemies().tierOf(0) == (black ? 2 : 1));
+    opponents.close();
+}
+
+TEST_CASE("the health a halo takes back from Death stops at the level's most, 9999 at the top",
+          "[death][level-opponents][player-health]") {
+    // heal_player: no further than 100 a level over 500, and 9999 however high the level.
+    const s32 level = GENERATE(1, 99);
+    const auto root = test::deathArchive();
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(3, {}, nullptr, {0, 0, 2}, 0);
+    auto& progress = players[0].actor.save().progress();
+    progress.experience = levelExperience(level);
+    const s32 most = mostHealth(level);
+    CHECK(most == (level == 1 ? 500 : 9999));
+    progress.health = most - 1;
+    progress.inventory.addPowerup(powerup::kArmor, DeathRules::kProtection, 0, 60);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root}, players);
+    opponents.enemies().open(device, root, nullptr, 2, {}, 1);
+    REQUIRE(opponents.enemies().loadKind(kDeathKind));
+    const auto id = opponents.enemies().spawn({.kind = kDeathKind, .tier = 1, .placed = true}, {});
+    REQUIRE(id);
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {
+        FAIL("a halo wearer is never drained");
+    };
+    events.help = [](s32, usize) { return true; };
+    // Each blow through the halo takes a point of health back from him.
+    for (s32 blow = 0; blow < 3; ++blow) {
+        opponents.strikeEnemy(*id, 0, 0, Vec3{0}, 3, players);
+        opponents.update(2, 1.0f / 30, players, {}, events);
+    }
+    CHECK(progress.health == most);
     opponents.close();
 }
 } // namespace
