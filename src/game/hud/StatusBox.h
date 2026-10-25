@@ -86,6 +86,10 @@ public:
     static constexpr s32 kRuneStep = 8;
     static constexpr s32 kRunesInColour = 3;
     static constexpr s32 kRuneY = 306;
+    static constexpr u16 kThirteenthRune = 1U << 12; ///< the tower's own, with an icon apart
+    static constexpr s32 kRune13X = 8;
+    static constexpr s32 kRune13Y = 340;
+    static constexpr f32 kRune13Size = 16.0f;
     static constexpr s32 kKeyCount = 8;
     static constexpr s32 kKeyX = 12;
     static constexpr s32 kKeyStep = 12;

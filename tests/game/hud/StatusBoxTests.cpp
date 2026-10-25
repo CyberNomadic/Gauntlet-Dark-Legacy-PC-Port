@@ -155,6 +155,16 @@ TEST_CASE("the runestones held line the box, the bosses' keys a while as a level
     const std::vector<Vec2> keys = corners(0, u16{0x2});
     CHECK(keys == std::vector<Vec2>{{128.0f + 24.0f, 300.0f}});
     CHECK(corners(0, std::nullopt).empty());
+    // The thirteenth has its own icon, sixteen square, eight in at 340 (hod_blit).
+    CHECK(corners(StatusBoxPainter::kThirteenthRune, std::nullopt) ==
+          std::vector<Vec2>{{128.0f + 8.0f, 340.0f}});
+    device.draws.clear();
+    Canvas canvas;
+    canvas.begin(device, Mat4{1.0f});
+    painter.drawRelics(canvas, 1, StatusBoxPainter::kThirteenthRune, std::nullopt);
+    canvas.end();
+    REQUIRE(device.draws.size() == 1);
+    CHECK(test::maxCorner(device.draws[0]) == Vec2{128.0f + 24.0f, 356.0f});
     painter.release();
 }
 
