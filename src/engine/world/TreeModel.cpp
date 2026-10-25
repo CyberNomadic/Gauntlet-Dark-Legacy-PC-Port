@@ -570,7 +570,9 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
             state.alphaToCoverage = pass != Pass::Blended && !dissolving;
             state.cullBack = m_cullBack;
             state.blend = additive ? BlendMode::Additive : BlendMode::Alpha;
-            state.darken = additive ? 0.0f : lighting.darken; // baked colour darkens too
+            // A baked colour is darkened as drawn; a lit part has it in the light it was
+            // given, with the lanterns' light over it.
+            state.darken = additive || !shape.mesh->prelit ? 0.0f : lighting.darken;
             if (mask != nullptr && !blended) {
                 state.blend = BlendMode::Opaque;
             }

@@ -243,6 +243,15 @@ TEST_CASE("prelit tree meshes retain vertex colour while ordinary meshes use sce
     checkColors(true);
     figure.setAppearance(false);
     checkColors(false);
+    // Darkened, the baked colour is taken down as drawn; the lit part has the darkening in
+    // the light it is given, so the lanterns' light stays over it.
+    WorldLighting dimmed;
+    dimmed.darken = 0.5f;
+    device.draws.clear();
+    figure.draw(device, Mat4{1}, Mat4{1}, dimmed);
+    REQUIRE(device.draws.size() == 2);
+    CHECK(device.draws[0].state.darken == 0.5f);
+    CHECK(device.draws[1].state.darken == 0.0f);
 }
 
 TEST_CASE("tree models resolve native external slots only through local named lenders",

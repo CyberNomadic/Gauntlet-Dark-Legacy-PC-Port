@@ -13,6 +13,7 @@
 #include "engine/io/NativeStateDigest.h"
 
 #include "game/bosses/BossDefinition.h"
+#include "game/effects/DynamicLights.h"
 #include "game/level/NativeStateResources.h"
 
 namespace gdl::game {
@@ -275,6 +276,7 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
         clear();
         return false;
     }
+    applyAmbientOffset(dark() ? -1.0f : 0.0f); // the Trenches start dark, not on a first strike
     m_worldAnimator.bind(m_layout);
     if (m_level != nullptr && m_level->bossType == 42) {
         m_skorneArena.bind(device, m_layout, m_models, m_textures);
@@ -541,7 +543,17 @@ void LevelWorld::setPointLights(std::span<const PointLight> points) {
     m_scene.setPointLights(points);
 }
 
+bool LevelWorld::dark() const {
+    return m_level != nullptr && (m_level->flags & DynamicLights::kDarkLevel) != 0;
+}
+
 void LevelWorld::setAmbientOffset(f32 offset) {
+    // DoLighting pins the ambient special at minus one in a dark level (the Trenches, the
+    // coin room), whatever a strike or a rite asks: only the lanterns light it.
+    applyAmbientOffset(dark() ? -1.0f : offset);
+}
+
+void LevelWorld::applyAmbientOffset(f32 offset) {
     if (offset == m_sim.ambientOffset) {
         return;
     }
@@ -549,13 +561,15 @@ void LevelWorld::setAmbientOffset(f32 offset) {
     // A level's light saturates what faces it, so taking the offset off the ambient term
     // alone would leave most of it as bright as ever; the original darkens the whole picture
     // with it, and so is everything lit here: the level's baked geometry through the scene,
-    // what is lit as it is drawn through the light it is given. What glows is left alone.
+    // what is lit as it is drawn through the light it is given. What glows is left alone,
+    // and the point lights add theirs over what is left.
     const f32 kept = std::clamp(1.0f + offset, 0.0f, 1.0f);
     m_sim.litNow = m_sim.lighting;
     m_sim.litNow.ambient = m_sim.lighting.ambient * kept;
     m_sim.litNow.lightColor = m_sim.lighting.lightColor * kept;
     m_sim.litNow.darken = 1.0f - kept; // the secret walls' and fixtures' baked colour as well
     m_scene.setDarken(1.0f - kept);
+    m_scene.setLighting(m_sim.litNow);
 }
 
 const WorldLocator* LevelWorld::startPoint(u32 index) const {

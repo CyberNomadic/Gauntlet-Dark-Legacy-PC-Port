@@ -522,6 +522,7 @@ bool WorldScene::restoreLocal(const LocalSnapshot& saved) {
     }
     m_lighting = saved.m_lighting;
     m_darken = saved.m_darken;
+    m_lighting.darken = m_darken;
     m_textureFrame = saved.m_textureFrame;
     std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
     std::fill(m_presentedValid.begin(), m_presentedValid.end(), u8{0});
@@ -679,6 +680,7 @@ bool WorldScene::applyGeometry(const SceneGeometry& state) {
         captureStaticPlacements();
     }
     m_darken = state.darken;
+    m_lighting.darken = m_darken;
     std::fill(m_worldValid.begin(), m_worldValid.end(), u8{0});
     std::fill(m_presentedValid.begin(), m_presentedValid.end(), u8{0});
     return true;
@@ -863,6 +865,7 @@ void WorldScene::drawBatch(RenderDevice& device, const Batch& batch, const Mat4&
             m_lit.vertex(v);
         }
         m_lit.end();
+        state.darken = 0.0f; // taken off the baked colour already, under the lights added
         const Texture* texture = slot.presentedTexture(state, textureFrameOffset);
         device.draw(m_lit, *texture, clip, state);
         return;
@@ -945,7 +948,7 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
         state.cullBack = true;
         state.depthWrite = unit.depthWrite && unit.alpha >= 1.0f;
         state.depthTest = unit.depthTest;
-        state.darken = part.additive ? 0.0f : m_darken;
+        // Lit as it is placed (shadeAt): the darkening is in its colours, the lights over it.
         // Fading a solid cutout must not opt it into soft flipbook blending.
         const auto cycleOffset =
             part.additive || !unit.depthWrite ? textureFrameOffset : std::nullopt;

@@ -36,6 +36,17 @@ TEST_CASE("a point light adds its colour to what faces it, falling off to its ra
     CHECK(lit.g == plain.g);
     CHECK(lighting.brighten(Color{10, 20, 30, 128}, Vec3{0}, up).r > 10);
     CHECK(lighting.brighten(Color{10, 20, 30, 128}, Vec3{0}, up).a == 128);
+    // Darkened, the base alone is taken down; the light is added whole over what is left
+    // (a lantern in a dark level), and the alpha is kept.
+    lighting.darken = 1.0f;
+    const Color dark = lighting.brighten(Color{200, 200, 200, 128}, Vec3{0}, up);
+    CHECK(dark.r == Color::fromFloats(2.0f * 0.375f, 0, 0).r);
+    CHECK(dark.g == 0);
+    CHECK(dark.b == 0);
+    CHECK(dark.a == 128);
+    lighting.darken = 0.5f;
+    CHECK(lighting.brighten(Color{200, 200, 200, 255}, Vec3{0, -20, 0}, up).g == 100);
+    lighting.darken = 0.0f;
     CHECK(lighting.pointsReach(Vec3{0, 20, 0}, 0.0f)); // fifteen from it, within twenty
     CHECK_FALSE(lighting.pointsReach(Vec3{0, 20, 0}, -10.0f));
 }

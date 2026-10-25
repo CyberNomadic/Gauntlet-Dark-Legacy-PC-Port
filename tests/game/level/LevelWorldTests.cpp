@@ -747,6 +747,37 @@ TEST_CASE("the tower takes its light, camera range and sounds from the realm's d
     REQUIRE(lightmapped > 100);
 }
 
+TEST_CASE("a dark level's ambient is pinned out from the start, whatever a strike asks",
+          "[game][world][lighting][assets]") {
+    // DoLighting holds the ambient special at minus one in a level flagged dark (the
+    // Trenches, the coin room): its gloom is the party's lanterns alone.
+    test::assetOrSkip("LEVELS/LEVELS5/WORLDS.PS2");
+    const std::filesystem::path root =
+        test::assetOrSkip("WDATA/SECRET.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto trenches = catalog.byName("S5");
+    REQUIRE(trenches);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *trenches));
+    REQUIRE(world.hasLevelData());
+    CHECK(world.dark());
+    CHECK(world.ambientOffset() == -1.0f);
+    CHECK(world.lighting().ambient == Vec3{0.0f});
+    CHECK(world.lighting().darken == 1.0f);
+    CHECK(world.scene().darken() == 1.0f);
+    world.setAmbientOffset(-0.4f);
+    CHECK(world.ambientOffset() == -1.0f);
+    world.setAmbientOffset(0.0f);
+    CHECK(world.ambientOffset() == -1.0f);
+    test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2");
+    LevelWorld tower;
+    REQUIRE(tower.load(device, root));
+    CHECK_FALSE(tower.dark());
+    CHECK(tower.ambientOffset() == 0.0f);
+}
+
 TEST_CASE("returning parties do not respawn the province's introductory tower crystals",
           "[tower-crystals][assets]") {
     const auto root =

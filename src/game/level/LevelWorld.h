@@ -267,6 +267,9 @@ public:
      * original's ambient special darkens the picture. */
     void setAmbientOffset(f32 offset);
     f32 ambientOffset() const { return m_sim.ambientOffset; }
+    /** Whether the level's record flags it dark: its ambient pinned out, the party's lanterns
+     * its light (DoLighting, player.c 2499). */
+    bool dark() const;
     /** What the follow camera takes from the level. */
     const CameraRange& cameraRange() const { return m_cameraRange; }
     /** The level's record, and its sound bank and music stream; null without the realm's
@@ -347,6 +350,7 @@ private:
     u64 m_checkpointGeneration = 0;
     std::optional<f32> presentedTextureFrameOffset(f32 alpha) const;
     void loadLevelData(const std::filesystem::path& unpackedRoot);
+    void applyAmbientOffset(f32 offset);
     LevelRef m_ref = LevelRef::tower();
     Simulation m_sim;
     void syncCollision();

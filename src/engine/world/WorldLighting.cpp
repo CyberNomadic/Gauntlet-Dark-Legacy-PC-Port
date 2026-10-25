@@ -48,8 +48,12 @@ Color WorldLighting::shade(const Vec3& position, const Vec3& normal) const {
 
 Color WorldLighting::brighten(Color base, const Vec3& position, const Vec3& normal) const {
     constexpr f32 kByte = 255.0f;
-    Vec3 lit{static_cast<f32>(base.r) / kByte, static_cast<f32>(base.g) / kByte,
-             static_cast<f32>(base.b) / kByte};
+    // The darkening takes from the base alone: the original's ambient special is folded
+    // into the ambient term, and a lantern's light is added whole over it (DoLighting,
+    // pbCameraUpdate), so a dark level shows what the lanterns reach.
+    const f32 kept = 1.0f - std::clamp(darken, 0.0f, 1.0f);
+    Vec3 lit{static_cast<f32>(base.r) / kByte * kept, static_cast<f32>(base.g) / kByte * kept,
+             static_cast<f32>(base.b) / kByte * kept};
     for (const PointLight& light : points) {
         lit += light.on(position, normal);
     }

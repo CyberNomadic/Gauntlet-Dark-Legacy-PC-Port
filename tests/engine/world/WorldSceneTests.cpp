@@ -935,7 +935,15 @@ TEST_CASE("point lights brighten the baked geometry they reach, prelit or not",
     }
     f.scene.setPointLights(lights);
     CHECK(reddest() > plain);
+    // Darkened, the lit copy carries the darkening in its colours with the light over it,
+    // while an unlit batch is darkened as it is drawn.
+    f.scene.setDarken(0.5f);
+    CHECK(reddest() > plain);
+    CHECK(f.device.draws[0].state.darken == 0.0f);
     f.scene.setPointLights({});
+    CHECK(reddest() == plain);
+    CHECK(f.device.draws[0].state.darken == 0.5f);
+    f.scene.setDarken(0.0f);
     CHECK(reddest() == plain);
 }
 

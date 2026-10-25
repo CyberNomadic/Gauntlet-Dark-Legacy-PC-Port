@@ -141,7 +141,17 @@ public:
                       std::optional<f32> textureFrameOffset = {}) const;
     /** Takes this much of the colour out of everything but what glows (the level's light is
      * baked into its vertices, so a change of ambient light is made this way). */
-    void setDarken(f32 darken) { m_darken = darken; }
+    /** The light everything placed is lit by as it is drawn, as the level scales it. */
+    void setLighting(const WorldLighting& lighting) {
+        m_lighting = lighting;
+        m_lighting.darken = m_darken;
+    }
+    /** How much is taken from the baked colour of the batches and of what is lit here as it
+     * is drawn; the point lights add theirs over what is left. */
+    void setDarken(f32 darken) {
+        m_darken = darken;
+        m_lighting.darken = darken;
+    }
     /** This frame's point lights, which light everything but what glows. */
     void setPointLights(std::span<const PointLight> points);
     f32 darken() const { return m_darken; }
