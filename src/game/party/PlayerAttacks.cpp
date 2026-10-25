@@ -25,6 +25,7 @@
 #include "game/level/Chests.h"
 #include "game/party/PartyDamage.h"
 #include "game/party/TargetAssist.h"
+#include "game/players/ComboMove.h"
 #include "game/players/ItemPickup.h"
 #include "game/players/MagicPerks.h"
 #include "game/players/PowerupEffects.h"
@@ -279,19 +280,22 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
     const PlayerActor& actor = players[flier].actor;
     std::vector<usize>& struck = players[flier].rammed;
     bool hit = false;
-    const auto once = [&](usize key, const auto& strike) {
+    bool any = false;
+    // Each thing once a flight; what stops the body (hitKind 1) and what it passes through.
+    const auto once = [&](usize key, bool stops, const auto& strike) {
         if (std::ranges::find(struck, key) != struck.end()) {
             return;
         }
         struck.push_back(key);
         strike();
-        hit = true;
+        any = true;
+        hit = hit || stops;
     };
     const auto& walls = m_resources->world.walls();
     for (usize i = 0; i < walls.size(); ++i) {
         if (walls.standing(i) &&
             walls.target(i, 0).touches(actor.followPoint(), actor.radius() + kRamReach)) {
-            once(static_cast<usize>(kWallTargetBase) + i,
+            once(static_cast<usize>(kWallTargetBase) + i, true,
                  [&] { targets.fixtures.strikeWall(i, blow, EnemyHit::kKnockDown); });
         }
     }
@@ -299,7 +303,7 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
         if (targets.fixtures.barrels().standing(barrel) &&
             targets.fixtures.barrels().barrel(barrel).box.touchedBy(actor.position(),
                                                                     actor.radius(), kRamReach)) {
-            once(barrel, [&] {
+            once(barrel, true, [&] {
                 targets.fixtures.strikeBarrel(barrel, blow, actor.player(), players,
                                               targets.fixtureEvents);
             });
@@ -309,7 +313,7 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
         if (targets.fixtures.safeRocks().standing(rock) &&
             targets.fixtures.safeRocks().rock(rock).obstacle.touchedBy(actor.position(),
                                                                        actor.radius(), kRamReach)) {
-            once(rock + static_cast<usize>(kSafeRockTargetBase),
+            once(rock + static_cast<usize>(kSafeRockTargetBase), true,
                  [&] { targets.fixtures.strikeSafeRock(rock, blow); });
         }
     }
@@ -318,11 +322,37 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
         const auto id = static_cast<s32>(g);
         if (generators.standing(id) &&
             generators.boxOf(id).touchedBy(actor.position(), actor.radius(), kRamReach)) {
-            once(static_cast<usize>(kGeneratorTargetBase) + g,
+            once(static_cast<usize>(kGeneratorTargetBase) + g, true,
                  [&] { targets.opponents.strikeGenerator(id, blow, actor.player(), players); });
         }
     }
-    if (hit && thrower < players.size()) {
+    // A body run into is thrown down (PlayerMotion_DamageTarget, 0x20) within the sweep's
+    // reach, four about a pinball and three about a charger (pmotion.c 1360), a pinball's
+    // blow or a charger's twenty, twice for a grown body. The swarm is passed through; a
+    // critter alone stops and turns the body (pmotion.c 1407).
+    const bool pinball = ComboMove::flies(players[flier].combo);
+    const f32 reach = pinball ? ComboMove::kPinballReach : ComboMove::kChargerReach;
+    const f32 bodyBlow =
+        (pinball ? blow : ComboMove::kChargerBodyBlow) *
+        (PowerupEffects::of(actor.save().progress().inventory).grown() ? 2.0f : 1.0f);
+    const Vec3 facing = actor.facing();
+    for (const MissileTarget& target : targets.opponents.enemies().targets()) {
+        if (target.touches(actor.followPoint(), reach)) {
+            once(static_cast<usize>(kEnemyTargetBase) + static_cast<usize>(target.id), false, [&] {
+                targets.opponents.strikeEnemy(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
+                                              actor.player(), players, true, target.base);
+            });
+        }
+    }
+    for (const MissileTarget& target : targets.opponents.critters().targets()) {
+        if (target.touches(actor.followPoint(), reach)) {
+            once(static_cast<usize>(kCritterTargetBase) + static_cast<usize>(target.id), true, [&] {
+                targets.opponents.strikeCritter(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
+                                                actor.player(), target.base, true, players);
+            });
+        }
+    }
+    if (any && thrower < players.size()) {
         // The thrower's combo-hit row bursts where its partner struck (pmotion.c 1306).
         if (const ClassStats* stats =
                 m_resources->classes.stats(players[thrower].actor.save().character)) {

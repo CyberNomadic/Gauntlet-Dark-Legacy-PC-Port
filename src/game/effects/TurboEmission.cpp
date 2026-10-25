@@ -120,15 +120,24 @@ std::optional<TurboEmission::Strike> TurboEmission::prepare(const ClassStats& st
         setting.seconds = effect.lifetime;
         setting.shrinks = (effect.flags & 0x10000U) != 0 && strike.hitEffect < 0;
         emission.carriesFlight = emission.primary && carrier != nullptr && carrier->flies;
+        const bool loops = strike.loopEffect >= 0 &&
+                           static_cast<usize>(strike.loopEffect) < stats.moveEffects.size();
         if (emission.carriesFlight) {
             setting.velocity = carrier->facing * carrier->speed;
             setting.seconds = carrier->secondsLeft;
-            if (strike.loopEffect >= 0 &&
-                static_cast<usize>(strike.loopEffect) < stats.moveEffects.size()) {
+            if (loops) {
                 setting.then = stats.moveEffects[static_cast<usize>(strike.loopEffect)].tree;
                 setting.morphIn = carrier->secondsLeft - strike.maxTime;
                 setting.holdForMorph = (strike.flags & 0x800) != 0;
             }
+        } else if (emission.primary && carrier != nullptr && loops) {
+            // PlyrSfxDoDamageSub morphs every harming row's effect into its loop effect once
+            // it has played, for the row's time (psfx.c 650): the dwarf's charge flame stays
+            // on the charger the whole ride.
+            setting.then = stats.moveEffects[static_cast<usize>(strike.loopEffect)].tree;
+            setting.seconds = effectSeconds + strike.maxTime;
+            setting.morphIn = effectSeconds;
+            setting.holdForMorph = (strike.flags & 0x800) != 0;
         }
         emission.position = origin + side * effect.offset.x + Vec3{0, effect.offset.y, 0} +
                             context.facing * effect.offset.z;

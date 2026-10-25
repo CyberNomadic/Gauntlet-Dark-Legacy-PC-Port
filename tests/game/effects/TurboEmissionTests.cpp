@@ -152,6 +152,38 @@ TEST_CASE("turbo preparation preserves the native flying carrier and chained eff
     vectorMatches(secondary.setting.velocity, Vec3{0});
 }
 
+TEST_CASE("a harming row that stays put hands its effect to its loop effect for its time",
+          "[game][turbo-emission]") {
+    // PlyrSfxDoDamageSub morphs any harming row's effect into its loop effect once it has
+    // played (psfx.c 650): the dwarf's charge flame plays its three frames and then loops on
+    // the charger for the ride.
+    ClassStats stats = authoredStrike();
+    auto& strike = stats.moveStrikes.front();
+    strike.type = MoveStrike::kBursts;
+    strike.speed = 0;
+    strike.maxTime = 4.25f;
+    const TurboEmission::Context context{4, {0, 0, 0}, {0, 0, 1}};
+    const auto prepared = TurboEmission::prepare(stats, 0, context, 7, 0.1f);
+    REQUIRE(prepared);
+    REQUIRE(prepared->carrier);
+    REQUIRE(prepared->effects.size() == 2);
+    const auto& primary = prepared->effects[0];
+    CHECK(primary.primary);
+    CHECK_FALSE(primary.carriesFlight);
+    CHECK(primary.setting.then == "LOOP");
+    CHECK(primary.setting.seconds == Approx(0.1f + 4.25f));
+    REQUIRE(primary.setting.morphIn);
+    CHECK(*primary.setting.morphIn == Approx(0.1f));
+    CHECK(primary.setting.holdForMorph);
+    CHECK(prepared->effects[1].setting.then.empty());
+    // A row without a loop effect plays its effect once, as before.
+    strike.loopEffect = -1;
+    const auto plain = TurboEmission::prepare(stats, 0, context, 7, 0.1f);
+    REQUIRE(plain);
+    CHECK(plain->effects[0].setting.then.empty());
+    CHECK(plain->effects[0].setting.seconds == stats.moveEffects[0].lifetime);
+}
+
 TEST_CASE("turbo attachment descriptors retain native body root partner and detached policies",
           "[game][turbo-emission]") {
     auto stats = authoredStrike();

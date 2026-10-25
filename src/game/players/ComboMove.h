@@ -82,7 +82,10 @@ public:
     static constexpr f32 kBounceTurn = 3.0f * std::numbers::pi_v<f32> / 4.0f;
     static constexpr f32 kThrowerGrace = 1.5f; ///< seconds a flier passes through its thrower
     static constexpr f32 kWarriorBlow = 50.0f; ///< what a pinball does to what it hits
-    static constexpr f32 kDwarfBlow = 10.0f;   ///< and a charger
+    static constexpr f32 kDwarfBlow = 10.0f;   ///< and a charger, to the level's things
+    static constexpr f32 kChargerBodyBlow = 20.0f; ///< a charger's, to a body run into
+    static constexpr f32 kPinballReach = 4.0f;     ///< the sweep for bodies about a pinball
+    static constexpr f32 kChargerReach = 3.0f;     ///< and about a charger
     static constexpr f32 kRidePace = 1.5f;     ///< a charger's pace, steered by the dwarf
     static constexpr f32 kRideTurn = 0.5f;     ///< and how far it turns a frame
     static constexpr s32 kWarrior = 0;

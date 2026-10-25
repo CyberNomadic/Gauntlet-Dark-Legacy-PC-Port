@@ -32,6 +32,7 @@
 #include "game/party/PartyMotion.h"
 #include "game/party/PlayerAttacks.h"
 #include "game/party/PlayerHealth.h"
+#include "game/players/ComboMove.h"
 #include "game/players/MagicPerks.h"
 #include "game/players/PowerupEffects.h"
 namespace {
@@ -1516,6 +1517,52 @@ TEST_CASE("a charge throws down the enemy it runs into, once a charge",
     const f32 once = enemies.healthOf(against);
     f.attacks.ramBarrels(0, f.players, f.targets);
     CHECK(enemies.healthOf(against) == once); // not again in the same charge
+    f.opponents.close();
+}
+
+TEST_CASE("a charger and a pinball throw down the bodies they run into and pass the swarm by",
+          "[game][screens][player-attacks][combo]") {
+    // PlayerMotion sweeps the swarm about a flier (three for a charger, four for a pinball)
+    // and throws down what it meets, twenty for a charger, its blow for a pinball; the swarm
+    // never stops it, so the pair is not held up (pmotion.c 1360, 1407).
+    const bool pinball = GENERATE(false, true);
+    const auto root = turboAssets();
+    Fixture f;
+    REQUIRE(f.classes.load(root / "pdata"));
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    EnemyScales scales;
+    scales.health = 100;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 8, scales, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const auto spawnAt = [&](const Vec3& position) {
+        EnemySpawn spawn;
+        spawn.kind = kGruntKind;
+        spawn.placed = true;
+        spawn.position = position;
+        const auto id = enemies.spawn(spawn, {});
+        REQUIRE(id);
+        return *id;
+    };
+    const s32 against = spawnAt(Vec3{0, 0, 2.5f});
+    const s32 afar = spawnAt(Vec3{0, 0, 20});
+    const f32 whole = enemies.healthOf(against);
+    ComboState& combo = f.players[0].combo;
+    combo.role = ComboRole::Thrown;
+    combo.partner = 1;
+    combo.grabberClass = pinball ? ComboMove::kWarrior : ComboMove::kDwarf;
+    const f32 blow = pinball ? ComboMove::kWarriorBlow : ComboMove::kDwarfBlow;
+    CHECK_FALSE(f.attacks.comboImpact(0, 1, blow, f.players, f.targets)); // not stopped
+    const f32 taken = whole - enemies.healthOf(against);
+    CHECK(taken > 0.0f);
+    CHECK(taken <= (pinball ? ComboMove::kWarriorBlow : ComboMove::kChargerBodyBlow));
+    CHECK(taken > (pinball ? ComboMove::kChargerBodyBlow : 0.0f)); // a pinball's is the heavier
+    CHECK(enemies.healthOf(afar) == whole);
+    enemies.update(2, 1.0f / 30, {});
+    CHECK(enemies.pushCountOf(against) == 1); // thrown down
+    const f32 once = enemies.healthOf(against);
+    CHECK_FALSE(f.attacks.comboImpact(0, 1, blow, f.players, f.targets));
+    CHECK(enemies.healthOf(against) == once); // once a flight
     f.opponents.close();
 }
 
