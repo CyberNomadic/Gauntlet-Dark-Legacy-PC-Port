@@ -54,6 +54,21 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
         placement.viewRadius = 2 * std::max(info.radius, info.height);
         placement.sight = sightParamOf(instance);
         placement.spawn.position = instance.position;
+        // AddItemSub sets the item on the floor about it (FloorPos, four up and ten down) and
+        // parents it to a moving one, so a placement on a flying platform (the Grounds'
+        // general) is seen and born where the platform is, not where it was authored.
+        if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
+            if (const auto floor = collision->floorAt(instance.position, 4, 10, 1)) {
+                if (const auto transform = collision->objectTransform(floor->object)) {
+                    Mat4 placed = stood;
+                    placed[3] = Vec4{instance.position.x, floor->y + ItemFigure::kFloorLift,
+                                     instance.position.z, 1};
+                    placement.spawn.position = Vec3{placed[3]};
+                    placement.support = floor->object;
+                    placement.supportLocal = glm::inverse(*transform) * placed;
+                }
+            }
+        }
         const bool great =
             kind == kGolemEnemyKind || kind == kGeneralEnemyKind || kind == kGargoyleEnemyKind;
         if (great) {

@@ -732,7 +732,8 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
                                                m_enemies, m_critters, m_statues, &world.collision(),
                                                [&](const Vec3& position, f32 reach, f32 rise) {
                                                    return world.claimItem(position, reach, rise);
-                                               }));
+                                               }),
+                      &world.collision());
     if (!resources.standOnSight) {
         standPlacements(std::nullopt, Vec3{0.0f});
     }

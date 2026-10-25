@@ -14,6 +14,16 @@ bool bounded(f32 value, f32 low = -kMagnitude, f32 high = kMagnitude) {
 bool bounded(const Vec3& value) {
     return bounded(value.x) && bounded(value.y) && bounded(value.z);
 }
+bool bounded(const Mat4& value) {
+    for (glm::length_t column = 0; column < 4; ++column) {
+        for (glm::length_t row = 0; row < 4; ++row) {
+            if (!bounded(value[column][row])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 bool validView(const ViewVolume& view) {
     return bounded(view.position) && bounded(view.right) && bounded(view.up) &&
            bounded(view.forward) && bounded(view.sinX, -1, 1) && bounded(view.cosX, -1, 1) &&
@@ -41,7 +51,7 @@ std::optional<PlacedEnemies::Placement> activationOf(const PlacedEnemies::Placem
 } // namespace
 
 bool PlacedEnemiesCheckpoint::validPlacement(const PlacedEnemies::Placement& value) {
-    const auto& [spawn, kind, facing, viewRadius, sight, carried] = value;
+    const auto& [spawn, kind, facing, viewRadius, sight, carried, support, supportLocal] = value;
     return kind >= 0 && kind < kEnemyKindCount && spawn.kind >= 0 && spawn.kind < kEnemyKindCount &&
            spawn.tier >= 1 && spawn.tier <= 32767 && spawn.algorithm >= -32768 &&
            spawn.algorithm <= 32767 && spawn.zigZagSide >= -1 && spawn.zigZagSide <= 1 &&
@@ -51,7 +61,8 @@ bool PlacedEnemiesCheckpoint::validPlacement(const PlacedEnemies::Placement& val
            spawn.priority >= EnemySpawn::Priority::FreeSlotOnly &&
            spawn.priority <= EnemySpawn::Priority::Visible && bounded(spawn.sight) &&
            bounded(facing) && bounded(viewRadius, 0) && bounded(sight) &&
-           (!carried || *carried <= 1'000'000);
+           (!carried || *carried <= 1'000'000) && support >= -1 && support <= 1'000'000 &&
+           bounded(supportLocal);
 }
 
 bool PlacedEnemiesCheckpoint::State::valid() const {

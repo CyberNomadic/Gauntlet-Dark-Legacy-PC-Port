@@ -27,6 +27,7 @@
 #include "game/combat/Damage.h"
 #include "game/critters/CombatantKind.h"
 #include "game/critters/CritterStatues.h"
+#include "game/enemies/EnemyKinds.h"
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/LevelOpponents.h"
 #include "game/hud/HelpMessages.h"
@@ -1331,6 +1332,76 @@ TEST_CASE("the placed enemies stand only once the camera comes to see them",
     CHECK(opponents.pendingPlacements() < waiting);
     CHECK(opponents.pendingPlacements() > 0);
     CHECK(opponents.enemies().count() + opponents.critters().count() > 0);
+    opponents.close();
+}
+
+TEST_CASE("a placement set on a flying platform is seen and born where the platform is",
+          "[level-opponents][placed-platform][assets]") {
+    // The Grounds' general (instance 98) is authored on the deck of J2FLOOR_FLY1 (object 976),
+    // which carries it off within a second and brings it back each round. AddItemSub parents
+    // the item to the deck, so it is neither seen nor born floating where it was authored.
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELJ2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("J2")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    LevelOpponents opponents;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, {0, 0, 0}, 0);
+    LevelOpponents::Resources resources{device, world, weapons, effects, audio, root, 1};
+    resources.standOnSight = true;
+    opponents.open(resources, players);
+    const Vec3 authored = world.layout().itemInstances().at(98).position;
+    const auto roster = opponents.placements().roster();
+    const auto bound = std::ranges::find_if(roster, [&](const PlacedEnemies::Placement& p) {
+        return std::abs(p.spawn.position.x - authored.x) < 0.1f &&
+               std::abs(p.spawn.position.z - authored.z) < 0.1f;
+    });
+    REQUIRE(bound != roster.end());
+    CHECK(bound->kind == kGeneralEnemyKind);
+    CHECK(bound->support == 976); // J2FLOOR53#0, the deck
+    // The platform waits on its call pad (instance 313); two seconds after it is stepped on,
+    // the deck has flown off with the spot.
+    usize call = world.triggers().size();
+    for (usize i = 0; i < world.triggers().size(); ++i) {
+        if (world.triggers().trigger(i).instance == 313) {
+            call = i;
+        }
+    }
+    REQUIRE(call < world.triggers().size());
+    world.startTriggers({});
+    std::vector<TriggerVisitor> party{
+        TriggerVisitor{.position = world.triggers().trigger(call).spot, .party = 0}};
+    for (s32 tick = 0; tick < 60; ++tick) {
+        world.update(1.0f / 30);
+        world.updateTriggers(1.0f / 30, party);
+        opponents.syncFloors();
+        party[0].position = Vec3{0, -1000, 0}; // stepped off
+    }
+    CHECK(world.triggers().opened(962));
+    const auto deck = world.collision().objectTransform(976);
+    REQUIRE(deck);
+    const Vec3 riding{*deck * bound->supportLocal[3]};
+    CHECK(glm::distance(riding, authored) > 5.0f);
+    const auto lookDownAt = [](const Vec3& spot) {
+        ViewVolume view;
+        view.position = spot + Vec3{0.0f, 10.0f, 0.0f};
+        view.forward = Vec3{0.0f, -1.0f, 0.0f};
+        view.up = Vec3{0.0f, 0.0f, 1.0f};
+        return view;
+    };
+    const usize waiting = opponents.pendingPlacements();
+    opponents.watch(lookDownAt(authored), authored);
+    CHECK(opponents.pendingPlacements() == waiting); // nothing floats there
+    CHECK(opponents.critters().count() == 0);
+    opponents.watch(lookDownAt(riding), riding);
+    CHECK(opponents.pendingPlacements() < waiting);
+    CHECK(opponents.critters().count() >= 1);
     opponents.close();
 }
 

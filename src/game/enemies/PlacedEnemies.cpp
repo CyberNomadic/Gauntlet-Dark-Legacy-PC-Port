@@ -5,6 +5,8 @@
 #include <tuple>
 #include <utility>
 
+#include "engine/math/PortableMath.h"
+
 namespace gdl::game {
 namespace {
 auto viewFields(const ViewVolume& view) {
@@ -36,8 +38,9 @@ std::optional<PlacedEnemies::Placement> activationOf(const PlacedEnemies::Placem
 
 bool PlacedEnemies::Placement::operator==(const Placement& other) const {
     return spawnFields(spawn) == spawnFields(other.spawn) &&
-           std::tie(kind, facing, viewRadius, sight, carried) ==
-               std::tie(other.kind, other.facing, other.viewRadius, other.sight, other.carried);
+           std::tie(kind, facing, viewRadius, sight, carried, support, supportLocal) ==
+               std::tie(other.kind, other.facing, other.viewRadius, other.sight, other.carried,
+                        other.support, other.supportLocal);
 }
 
 void PlacedEnemies::saveLocal(LocalSnapshot& saved) const {
@@ -84,10 +87,11 @@ bool PlacedEnemies::appendLocalDigest(NativeStateDigest& digest, const LocalSnap
     return appendStateDigest(digest, saved.m_values);
 }
 
-void PlacedEnemies::bind(std::vector<Placement> roster) {
+void PlacedEnemies::bind(std::vector<Placement> roster, const WorldCollision* collision) {
     std::vector<usize> pending(roster.size());
     std::iota(pending.begin(), pending.end(), usize{0});
     m_roster = std::move(roster);
+    m_collision = collision;
     m_sim.pending = std::move(pending);
     m_sim.view.reset();
     m_bound = true;
@@ -96,6 +100,7 @@ void PlacedEnemies::bind(std::vector<Placement> roster) {
 
 void PlacedEnemies::clear() {
     m_roster.clear();
+    m_collision = nullptr;
     m_sim.pending.clear();
     m_sim.view.reset();
     m_bound = false;
@@ -113,7 +118,20 @@ bool PlacedEnemies::inView(const Vec3& position, f32 radius) const {
 }
 
 std::optional<PlacedEnemies::Placement> PlacedEnemies::activation(usize index) const {
-    return activationOf(m_roster[index], m_sim.view, m_sim.attention);
+    Placement placement = m_roster[index];
+    // Set on a moving floor, it is seen and born where that floor is now: the original
+    // refreshes a parented item from its node every frame (fn_800606FC) before the sight
+    // test and the birth (fn_80060114).
+    if (placement.support >= 0 && m_collision != nullptr) {
+        if (const auto transform = m_collision->objectTransform(placement.support)) {
+            const Mat4 placed = *transform * placement.supportLocal;
+            placement.spawn.position = Vec3{placed[3]};
+            placement.facing = portable::atan2(placed[2].x, placed[2].z);
+            placement.spawn.direction =
+                Vec3{portable::sin(placement.facing), 0, portable::cos(placement.facing)};
+        }
+    }
+    return activationOf(placement, m_sim.view, m_sim.attention);
 }
 
 std::vector<PlacedEnemies::Placement> PlacedEnemies::activations() const {

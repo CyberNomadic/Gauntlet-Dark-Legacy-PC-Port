@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "engine/io/NativeStateDigest.h"
+#include "engine/world/WorldCollision.h"
 
 #include "game/enemies/Enemies.h"
 
@@ -26,9 +27,13 @@ public:
         f32 viewRadius = 0;
         f32 sight = 0;
         std::optional<usize> carried;
+        /** The moving floor it was set on, if any (AddItemSub parents the item to it), and
+         * where it stands on that floor: it is seen and born where the floor is now. */
+        s32 support = -1;
+        Mat4 supportLocal{1.0f};
         bool operator==(const Placement& /*other*/) const;
         friend void visitNativeState(NativeStateDigest& digest, const Placement& value) {
-            digest.fields<6>(value);
+            digest.fields<8>(value);
         }
     };
 
@@ -40,8 +45,8 @@ public:
     ~PlacedEnemies() = default;
 
     /** Load-time records have already passed the level's native resource and
-     * party filters. */
-    void bind(std::vector<Placement> roster);
+     * party filters. `collision` carries the floors the records set on moving ones ride. */
+    void bind(std::vector<Placement> roster, const WorldCollision* collision = nullptr);
     void clear();
     void observe(std::optional<ViewVolume> view, const Vec3& attention);
     bool inView(const Vec3& position, f32 radius) const;
@@ -59,6 +64,7 @@ public:
 
 private:
     std::optional<Placement> activation(usize index) const;
+    const WorldCollision* m_collision = nullptr; ///< the floors the records ride
     struct Simulation {
         std::vector<usize> pending;
         std::optional<ViewVolume> view;
