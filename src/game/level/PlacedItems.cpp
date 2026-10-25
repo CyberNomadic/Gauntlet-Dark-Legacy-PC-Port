@@ -8,6 +8,7 @@
 #include "engine/io/NativeStateDigest.h"
 #include "engine/math/PortableMath.h"
 
+#include "game/level/Chests.h"
 #include "game/level/ItemFigure.h"
 #include "game/level/ItemSupport.h"
 #include "game/level/NativeStateResources.h"
@@ -270,6 +271,16 @@ bool PlacedItems::bind(RenderDevice& device, const WorldLayout& layout,
         if (info.subtype == ItemInfo::kScroll) {
             // A scroll's page is the instance's, from one.
             item.value = static_cast<s16>(instance.params[0] | (instance.params[1] << 8));
+        }
+        if (info.subtype == static_cast<s32>(ItemKind::Keys)) {
+            // SetItem: a key instance carries its count, and more than one is the KEYRING
+            // record's figure (the Poison Fields' two by the note of traps for the greedy).
+            const s32 count = static_cast<s16>(instance.params[0] | (instance.params[1] << 8));
+            item.value = std::max(count, 1);
+            item.info = Chests::contentsRecord(infos, instance.info, count);
+            if (instance.name.empty()) {
+                item.name = infos[static_cast<usize>(item.info)].name;
+            }
         }
         item.flags = info.properties;
         item.strength = static_cast<f32>(info.activeOn);

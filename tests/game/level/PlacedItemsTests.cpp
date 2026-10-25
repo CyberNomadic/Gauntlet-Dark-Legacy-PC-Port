@@ -745,6 +745,40 @@ TEST_CASE("food poisoning preserves missing artwork and uses record kind rather 
     CHECK(items.blast(device, Vec3{2, 0, 0}, 1, 5).empty());
 }
 
+TEST_CASE("a key instance with a count is a key ring worth that many, as SetItem places it",
+          "[game][world][placed-items][assets]") {
+    const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
+    test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
+    WorldLayout layout;
+    REQUIRE(layout.load(root / "LEVELS/LEVELG1"));
+    ItemArchive powerups;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    test::FakeRenderDevice device;
+    PlacedItems items;
+    const std::array archives{&powerups};
+    REQUIRE(items.bind(device, layout, nullptr, archives));
+    const auto byInstance = [&](s32 instance) -> const PlacedItems::Item& {
+        for (usize i = 0; i < items.size(); ++i) {
+            if (items.item(i).instance == instance) {
+                return items.item(i);
+            }
+        }
+        FAIL("instance " << instance << " was not placed");
+        return items.item(0);
+    };
+    // The Poison Fields' key by the note of traps for the greedy (instance 296) carries two,
+    // the one by the trapped gate (298) three; a key with no count is one.
+    const PlacedItems::Item& byTheNote = byInstance(296);
+    CHECK(byTheNote.name == "KEYRING");
+    CHECK(byTheNote.value == 2);
+    CHECK(byTheNote.subtype == static_cast<s32>(ItemKind::Keys));
+    CHECK(byInstance(298).name == "KEYRING");
+    CHECK(byInstance(298).value == 3);
+    const PlacedItems::Item& single = byInstance(292);
+    CHECK(single.name == "KEY");
+    CHECK(single.value == 1);
+}
+
 TEST_CASE("explosions destroy exposed food and powerups but preserve quest pickups",
           "[game][world][blast-items][assets]") {
     const auto root = test::assetOrSkip("POWERUPS/ANIM.PS2").parent_path().parent_path();
