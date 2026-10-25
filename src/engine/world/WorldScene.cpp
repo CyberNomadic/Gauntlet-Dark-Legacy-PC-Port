@@ -25,7 +25,6 @@ constexpr u64 kAdditiveKey = u64{1} << 40U;
 constexpr u64 kNoDepthKey = u64{1} << 41U;
 constexpr u64 kNoDepthTestKey = u64{1} << 42U;
 constexpr u64 kVeilKey = u64{1} << 43U;
-constexpr u64 kBaseLevelKey = u64{1} << 44U;
 
 /** Local TRS interpolation preserves a child's arc about its moving parent. */
 Mat4 blendPlacement(const Mat4& previous, const Mat4& current, f32 alpha) {
@@ -171,11 +170,10 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         return !additive && slot < textures.size() && textures.entry(slot).translucent();
     };
     const auto batchFor = [&](u32 slot, u32 lightmap, bool additive, bool depthWrite,
-                              bool depthTest, bool veil, bool baseLevel) -> Batch& {
+                              bool depthTest, bool veil) -> Batch& {
         const u64 key = u64{slot} | (u64{lightmap} << kLightmapShift) |
                         (additive ? kAdditiveKey : 0) | (depthWrite ? 0 : kNoDepthKey) |
-                        (depthTest ? 0 : kNoDepthTestKey) | (veil ? kVeilKey : 0) |
-                        (baseLevel ? kBaseLevelKey : 0);
+                        (depthTest ? 0 : kNoDepthTestKey) | (veil ? kVeilKey : 0);
         if (const auto found = batchByKey.find(key); found != batchByKey.end()) {
             return m_batches[found->second];
         }
@@ -191,7 +189,6 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         batch.depthWrite = depthWrite;
         batch.depthTest = depthTest;
         batch.veil = veil;
-        batch.baseLevel = baseLevel;
         batch.geometry.begin(PrimitiveTopology::TriangleList);
         m_batches.push_back(std::move(batch));
         batchByKey[key] = m_batches.size() - 1;
@@ -255,17 +252,11 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             if (!slot.usable) {
                 continue;
             }
-            // A part pinned to a clamped edge of its texture (the Sky Docks' hanging
-            // sheets, held at the clear edge of SKYDECK_CRACK) shows that edge alone:
-            // the mip levels would blend what lies beside it into a smear.
-            const bool baseLevel = !chrome && part.texture < textures.size() &&
-                                   textures.entry(part.texture).holdsEdge(edgePinOf(*mesh, part));
             try {
                 if (unit) {
                     UnitPart unitPart;
                     unitPart.slot = part.texture;
                     unitPart.part = &part;
-                    unitPart.baseLevel = baseLevel;
                     if (part.lightmap != 0 && part.lightmap < textures.size()) {
                         const TextureSetEntry& map = textures.entry(part.lightmap);
                         unitPart.lightmap = &textures.texture(device, part.lightmap);
@@ -278,7 +269,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                     placedUnit.parts.push_back(unitPart);
                 } else {
                     Batch& batch = batchFor(part.texture, part.lightmap, additive, depthWrite,
-                                            depthTest, veilOf(part.texture, additive), baseLevel);
+                                            depthTest, veilOf(part.texture, additive));
                     for (const u32 index : part.indices) {
                         const MeshVertex& v = mesh->vertices[index];
                         const Vec3 at = v.position + offset;
@@ -825,7 +816,7 @@ void WorldScene::drawBatch(RenderDevice& device, const Batch& batch, const Mat4&
                            std::optional<f32> textureFrameOffset) const {
     const Slot& slot = m_slots.at(batch.slot);
     DrawState state;
-    state.mipmaps = !batch.baseLevel;
+    state.mipmaps = true;
     state.alphaToCoverage = true;
     state.blend = batch.additive ? BlendMode::Additive : BlendMode::Alpha;
     state.lightmap = batch.lightmap;
@@ -926,7 +917,7 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
         }
         m_scratch.end();
         DrawState state;
-        state.mipmaps = !part.baseLevel;
+        state.mipmaps = true;
         state.alphaToCoverage = true;
         state.blend = part.additive ? BlendMode::Additive : BlendMode::Alpha;
         state.lightmap = part.lightmap;

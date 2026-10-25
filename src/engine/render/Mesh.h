@@ -44,31 +44,4 @@ struct Mesh {
     }
 };
 
-/** The ways a part's coordinates never leave one edge of its texture: pinned there, it
- * samples that edge's single column (across) or row (down) over its whole face. */
-struct EdgePin {
-    bool across = false;
-    bool down = false;
-};
-
-/** Where `part` is pinned to an edge of its texture: its coordinates hold one value that
- * way, at or past the edge (a clamped texture shows its edge from there on). */
-inline EdgePin edgePinOf(const Mesh& mesh, const MeshPart& part) {
-    if (part.indices.empty()) {
-        return {};
-    }
-    Vec2 low = mesh.vertices[part.indices.front()].uv;
-    Vec2 high = low;
-    for (const u32 index : part.indices) {
-        const Vec2& uv = mesh.vertices[index].uv;
-        low = glm::min(low, uv);
-        high = glm::max(high, uv);
-    }
-    constexpr f32 kSlack = 1.0f / 1024.0f;
-    const auto pinned = [](f32 lowest, f32 highest) {
-        return highest - lowest <= kSlack && (highest <= kSlack || lowest >= 1.0f - kSlack);
-    };
-    return {.across = pinned(low.x, high.x), .down = pinned(low.y, high.y)};
-}
-
 } // namespace gdl

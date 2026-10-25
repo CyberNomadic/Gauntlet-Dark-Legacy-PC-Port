@@ -145,10 +145,12 @@ const Texture& TextureSet::texture(RenderDevice& device, u32 index) {
         };
         TextureDesc desc{pixels.width, pixels.height, TextureFilter::Linear,
                          wrapOf(m_entries[index].clampU), wrapOf(m_entries[index].clampV)};
-        desc.generateMipmaps = !m_entries[index].noPicture;
-        // GameCube files store only the base image despite the legacy mip count in objects.ngc.
-        // pb_texture.c initializes GX textures with mipmapping disabled. Generate our own
-        // chain; reading extra levels here would consume the next bitmap's palette/pixels.
+        // The base image alone, as the GameCube draws it: pbSetupTextures makes every
+        // texture object without mip levels (GXInitTexObj's mipmap flag off), and the files
+        // hold none despite the records' PS2 mip counts. Levels made here blurred a sprite's
+        // clear surround into its edge, a border round a candle or a familiar's wing, and
+        // the planks beside a clear column into the Sky Docks' hanging sheets.
+        desc.generateMipmaps = false;
         texture = device.createTexture(desc, pixels.pixels);
     }
     return *texture;

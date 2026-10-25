@@ -188,8 +188,7 @@ private:
         bool additive = false;
         bool depthWrite = true;
         bool depthTest = true;
-        bool veil = false;      ///< wears a translucent texture: drawn after the figures
-        bool baseLevel = false; ///< pinned to a clamped edge: sampled at the base level
+        bool veil = false; ///< wears a translucent texture: drawn after the figures
     };
     struct UnitPart {
         u32 slot = 0;
@@ -197,7 +196,6 @@ private:
         const Texture* lightmap = nullptr;
         Vec2 lightmapScale{1.0f, 1.0f};
         bool additive = false;
-        bool baseLevel = false; ///< pinned to a clamped edge: sampled at the base level
     };
     /** An object placed every frame: animated, or drawn in depth order. */
     struct UnitState {

@@ -72,7 +72,8 @@ TEST_CASE("GPU textures are created once and released on demand", "[assets][text
     REQUIRE(&first == &again);
     REQUIRE(first.width() == 2);
     REQUIRE(device.texturesCreated == 1);
-    CHECK(device.lastTextureDesc.generateMipmaps);
+    // The base image alone, as GXInitTexObj has it (pbSetupTextures asks for no mip levels).
+    CHECK_FALSE(device.lastTextureDesc.generateMipmaps);
     CHECK(device.lastTextureDesc.mipLevels == 1);
     set.texture(device, 1);
     REQUIRE(device.texturesCreated == 2);
@@ -95,10 +96,6 @@ TEST_CASE("clamped tiles are created with edge clamping", "[assets][textures]") 
     set.texture(device, 1);
     REQUIRE(device.lastTextureDesc.wrap == TextureWrap::Repeat);
     REQUIRE(device.lastTextureDesc.wrapDown() == TextureWrap::Repeat);
-    // A part pinned to the edge a tile is held at samples that edge alone.
-    CHECK(set.entry(0).holdsEdge(EdgePin{.across = true}));
-    CHECK_FALSE(set.entry(0).holdsEdge(EdgePin{.down = true}));
-    CHECK_FALSE(set.entry(1).holdsEdge(EdgePin{.across = true, .down = true}));
     // A description that names one way wraps the same both ways.
     REQUIRE(TextureDesc{2, 2, TextureFilter::Linear, TextureWrap::ClampToEdge}.wrapDown() ==
             TextureWrap::ClampToEdge);
@@ -169,7 +166,7 @@ TEST_CASE("native textures generate mips instead of reading legacy metadata as p
             const auto& texture =
                 dynamic_cast<const test::FakeTexture&>(set.texture(device, index));
             const auto& desc = device.lastTextureDesc;
-            CHECK(desc.generateMipmaps);
+            CHECK_FALSE(desc.generateMipmaps);
             CHECK(desc.mipLevels == 1);
             CHECK(texture.pixels == set.image(index).pixels);
             if (archive.bitmaps()[index].mipmapCount > 0) {

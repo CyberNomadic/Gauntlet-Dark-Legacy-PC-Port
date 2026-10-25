@@ -12,7 +12,6 @@
 #include "engine/assets/WorldLayout.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
-#include "engine/render/Mesh.h"
 #include "engine/world/TextureAnimator.h"
 #include "engine/world/WorldScene.h"
 #include "engine/world/WorldStateCheckpoint.h"
@@ -586,55 +585,6 @@ TEST_CASE("the Castle Treasury weapon rack is a veil drawn with the solids' dept
     for (const auto& draw : device.draws) {
         CHECK(draw.texture != texture);
     }
-}
-
-TEST_CASE("the Sky Docks' hanging sheets, pinned to a clamped edge, sample the base level",
-          "[world][scene][assets]") {
-    const auto root = test::assetOrSkip("LEVELS/LEVELK4/WORLDS.PS2").parent_path();
-    test::FakeRenderDevice device;
-    ModelSet models;
-    TextureSet textures;
-    WorldLayout layout;
-    WorldScene scene;
-    REQUIRE(models.load(root));
-    REQUIRE(textures.load(root));
-    REQUIRE(layout.load(root));
-    // K4XS#66 and its kin hold U at 1.0 on every vertex of SKYDECK_CRACK, whose last
-    // column is clear: held there they show nothing, where the mip levels blended the
-    // planks beside it into a half-seen smear. The hull's own planks keep their levels.
-    const auto sheet = textures.find("SKYDECK_CRACK");
-    const auto hull = textures.find("SHIP_SIDEPTS_01");
-    REQUIRE(sheet);
-    REQUIRE(hull);
-    REQUIRE(textures.entry(*sheet).clampU);
-    const auto piece = models.find("K4XS#66");
-    REQUIRE(piece);
-    const Mesh& mesh = models.mesh(*piece);
-    REQUIRE(mesh.parts.size() == 1);
-    REQUIRE(mesh.parts[0].texture == *sheet);
-    CHECK(edgePinOf(mesh, mesh.parts[0]).across);
-    const Texture* sheetTexture = &textures.texture(device, *sheet);
-    const Texture* hullTexture = &textures.texture(device, *hull);
-    REQUIRE(scene.build(layout, models, textures, device, {}, {}));
-    scene.drawOpaque(device, Mat4{1}, CameraFrame{});
-    scene.drawVeils(device, Mat4{1}, CameraFrame{});
-    scene.drawDeferred(device, Mat4{1}, CameraFrame{});
-    // The cracked deck itself (K4GROUP188) spans the texture and keeps its levels; the
-    // pinned sheets batch apart from it, at the base level.
-    usize pinnedDraws = 0;
-    usize deckDraws = 0;
-    usize hullDraws = 0;
-    for (const auto& draw : device.draws) {
-        if (draw.texture == sheetTexture) {
-            ++(draw.state.mipmaps ? deckDraws : pinnedDraws);
-        } else if (draw.texture == hullTexture) {
-            ++hullDraws;
-            CHECK(draw.state.mipmaps);
-        }
-    }
-    REQUIRE(pinnedDraws > 0);
-    CHECK(deckDraws > 0);
-    REQUIRE(hullDraws > 0);
 }
 
 TEST_CASE("the Trenches' haze is a veil: a solid drawn after the figures standing under it",
