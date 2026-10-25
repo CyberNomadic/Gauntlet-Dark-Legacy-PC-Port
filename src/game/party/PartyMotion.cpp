@@ -244,7 +244,8 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         // it asks: hung on the partner, flying as a pinball or steered as a charger.
         if (!down && PartyCombo::aside(players[i])) {
             players[i].knockback.clear();
-            const PartyCombo::Events comboEvents{events.comboImpact, events.advanceTurbo};
+            const PartyCombo::Events comboEvents{events.comboImpact, events.advanceTurbo,
+                                                 events.limitMovement};
             if (ComboMove::flies(players[i].combo)) {
                 PartyCombo::fly(players, i, ticks, seconds, collision, comboEvents);
             } else if (ComboMove::ridden(players[i].combo)) {

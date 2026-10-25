@@ -26,6 +26,9 @@ public:
         /** A flier or charger against the level's items: true when it struck one. */
         std::function<bool(usize, usize, f32)> impact;
         std::function<void(usize, s32, f32)> advanceTurbo;
+        /** The shared view's limit on a step (camera_debug_supervisor): where `after` may
+         * end, given `before`; a pinball takes the view's edge for a hit. */
+        std::function<Vec3(usize, const Vec3&, const Vec3&)> limitMovement;
     };
 
     /** Whom `index` may take hold of now: the nearest other standing member ahead who is

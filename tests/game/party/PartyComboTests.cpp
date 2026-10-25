@@ -54,8 +54,8 @@ struct Fixture {
                                 "for" + std::to_string(static_cast<s32>(blow)));
                 return struck;
             },
-        .advanceTurbo = [this](usize i, s32,
-                               f32) { calls.push_back("turbo" + std::to_string(i)); }};
+        .advanceTurbo = [this](usize i, s32, f32) { calls.push_back("turbo" + std::to_string(i)); },
+        .limitMovement = {}};
     Fixture() {
         players[0].actor.spawn(0, {}, nullptr, Vec3{0, 0, 0}, 0);
         players[1].actor.spawn(1, {}, nullptr, Vec3{0, 0, 3}, 0);
@@ -235,6 +235,50 @@ TEST_CASE("a pinball passes through its thrower for a while and then bounces off
     REQUIRE(f.players[1].actor.yaw() == Approx(ComboMove::kBounceTurn));
     f.players[0].knockback.endFrame();
     CHECK(f.players[0].knockback.pushed());
+}
+
+TEST_CASE("a pinball stops at the floor's edge instead of flying off it",
+          "[game][screens][combo]") {
+    Fixture f;
+    PartyCombo::begin(f.players, 0, 1);
+    f.players[1].combo.role = ComboRole::Thrown;
+    f.players[0].actor.place(Vec3{0, 0, -50});
+    f.players[1].actor.place(Vec3{95, 0, 0});
+    f.players[1].actor.turnTo(std::numbers::pi_v<f32> / 2); // along +x, at the floor's edge
+    for (s32 frame = 0; frame < 30; ++frame) {
+        PartyCombo::fly(f.players, 1, kTicks, kStep, f.collision, f.events);
+    }
+    // PlayerCollideFloor refuses a step with no floor under its end: it stays its width
+    // inside the edge, on the floor, facing the way it went (no hit, no turn).
+    CHECK(f.players[1].actor.position().x > 95.0f);
+    CHECK(f.players[1].actor.position().x < 100.0f);
+    CHECK(f.players[1].actor.position().y == Approx(0.0f));
+    CHECK(f.players[1].actor.yaw() == Approx(std::numbers::pi_v<f32> / 2));
+}
+
+TEST_CASE("the shared view's edge holds a pinball and turns it, and holds a charger",
+          "[game][screens][combo][camera-limit]") {
+    Fixture f;
+    // No further along z than it stands (camera_debug_supervisor, pmotion.c 1244).
+    f.events.limitMovement = [](usize, const Vec3& before, const Vec3& after) {
+        return Vec3{after.x, after.y, std::min(after.z, before.z)};
+    };
+    PartyCombo::begin(f.players, 0, 1);
+    f.players[1].combo.role = ComboRole::Thrown;
+    f.players[0].actor.place(Vec3{0, 0, -50});
+    f.players[1].actor.place(Vec3{0, 0, 4.5f});
+    f.players[1].actor.turnTo(0.0f);
+    PartyCombo::fly(f.players, 1, kTicks, kStep, f.collision, f.events);
+    CHECK(f.players[1].actor.position().z == Approx(4.5f));
+    CHECK(f.players[1].actor.yaw() == Approx(ComboMove::kBounceTurn)); // the edge is a hit
+    f.players[0].combo.grabberClass = ComboMove::kDwarf;
+    f.players[1].combo.grabberClass = ComboMove::kDwarf;
+    f.players[1].actor.place(Vec3{0, 0, 10});
+    f.players[1].actor.turnTo(0.0f);
+    PartyCombo::ride(f.players, 1, MoveInput{Vec2{0, 1}, 1}, 0.0f, kTicks, kStep, f.collision,
+                     f.events);
+    CHECK(f.players[1].actor.position().z == Approx(10.0f));
+    CHECK(f.players[1].actor.yaw() == Approx(0.0f)); // held, not turned
 }
 
 TEST_CASE("a charger goes where the dwarf's stick sends it at half again the pace",

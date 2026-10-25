@@ -14,7 +14,9 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/enemies/LevelOpponents.h"
+#include "game/party/PartyCombo.h"
 #include "game/party/PartyMotion.h"
+#include "game/players/ComboMove.h"
 #include "game/players/CursorAim.h"
 #include "game/players/PowerupEffects.h"
 #include "game/rollback/SessionInputs.h"
@@ -590,6 +592,25 @@ TEST_CASE("party motion consults the shared-view limit before reporting moved su
     f.inputs[3].move.direction.y = -1;
     f.step();
     REQUIRE(f.players[0].actor.position().z < before.z);
+}
+
+TEST_CASE("the shared-view limit holds a pinball too, which takes the view's edge for a hit",
+          "[game][party-motion][camera-limit][combo]") {
+    Fixture f;
+    f.events.advanceTurbo = [](usize, s32, f32) {};
+    f.events.limitMovement = [](usize, const Vec3& before, const Vec3& after) {
+        return after.z <= before.z ? after : before;
+    };
+    PartyCombo::begin(f.players, 0, 1);
+    f.players[0].combo.grabberClass = ComboMove::kWarrior;
+    f.players[1].combo.grabberClass = ComboMove::kWarrior;
+    f.players[1].combo.role = ComboRole::Thrown;
+    f.players[1].combo.ticksLeft = ComboMove::kFlightTicks;
+    f.players[1].actor.turnTo(0.0f); // along +z, which the view refuses
+    const Vec3 before = f.players[1].actor.position();
+    f.step();
+    CHECK(f.players[1].actor.position().z == Approx(before.z));
+    CHECK(f.players[1].actor.yaw() == Approx(ComboMove::kBounceTurn));
 }
 
 TEST_CASE("super shot keeps the player's facing instead of turning toward assisted targets",
@@ -1579,11 +1600,16 @@ TEST_CASE("the combo button with half the meter lifts a warrior's partner ahead,
     CHECK(ticks == ComboMove::kFlightTicks);
     CHECK_FALSE(f.players[0].combo.active());
     CHECK(f.players[1].figure->animator().action() == PlayerAnimator::Action::ComboWar3);
+    // The flight stopped at the floor's edge, a width inside it, rather than over the void.
+    CHECK(f.players[1].actor.position().z == Approx(100.0f - f.players[1].actor.reach()));
+    CHECK(f.players[1].actor.position().y == 0.0f);
+    f.inputs[1].attack = false;
+    const f32 landed = f.players[1].actor.position().x;
     for (s32 i = 0; i < 30; ++i) {
         f.step();
     }
     CHECK(f.players[1].figure->animator().action() != PlayerAnimator::Action::ComboWar3);
-    CHECK(f.players[1].actor.position().x > 0.5f); // its own stick again
+    CHECK(f.players[1].actor.position().x > landed + 0.5f); // its own stick again
 }
 } // namespace
 
