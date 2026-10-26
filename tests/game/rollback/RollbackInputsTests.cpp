@@ -180,9 +180,14 @@ TEST_CASE("the startup delay follows the measured round trip", "[netplay][rollba
     CHECK(RollbackInputs::leadForPing(0) == 0);
     CHECK(RollbackInputs::leadForPing(19) == 0);
     CHECK(RollbackInputs::leadForPing(20) == 1);
-    CHECK(RollbackInputs::leadForPing(59) == 1);
-    CHECK(RollbackInputs::leadForPing(60) == 2);
+    CHECK(RollbackInputs::leadForPing(39) == 1);
+    CHECK(RollbackInputs::leadForPing(40) == 2);
+    CHECK(RollbackInputs::leadForPing(69) == 2);
+    CHECK(RollbackInputs::leadForPing(70) == 3); // half an eighty-millisecond trip is 2.4 ticks
+    CHECK(RollbackInputs::leadForPing(104) == 3);
+    CHECK(RollbackInputs::leadForPing(105) == 4);
     CHECK(RollbackInputs::leadForPing(400) == RollbackInputs::kMaxDelay);
+    CHECK(RollbackInputs::kMaxDelay < RollbackInputs::kPredictionTicks);
 }
 
 } // namespace
@@ -550,7 +555,7 @@ TEST_CASE("rollback startup validates frozen roster and cannot reopen an existin
     CHECK_FALSE(inputs.open(0, kEpoch, owners, grants));
     CHECK_FALSE(inputs.open(3, kEpoch, owners, grants));
     CHECK_FALSE(inputs.open(1, 0, owners, grants));
-    CHECK_FALSE(inputs.open(1, kEpoch, owners, grants, 3));
+    CHECK_FALSE(inputs.open(1, kEpoch, owners, grants, RollbackInputs::kMaxDelay + 1));
     CHECK_FALSE(inputs.open(1, kEpoch, owners, {1, 0, 0, 0}));
     CHECK_FALSE(inputs.open(1, kEpoch, {1, 5, 0, 0}, grants));
     REQUIRE(inputs.open(1, kEpoch, owners, grants));

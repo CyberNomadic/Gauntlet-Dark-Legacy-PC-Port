@@ -157,7 +157,7 @@ Options parse(std::span<char*> args) {
     require(result.players >= 1 && result.players <= 4, "Players must be 1..4");
     require(result.renderEvery <= 60, "Render interval must be 0..60 ticks");
     require(result.perturbTick <= result.ticks, "Perturbation is outside the run");
-    require(result.inputDelay <= RollbackInputs::kMaxDelay, "Input delay must be 0..2");
+    require(result.inputDelay <= RollbackInputs::kMaxDelay, "Input delay must be 0..4");
     require(result.networkRole.empty() || result.timings.empty(),
             "Network rollback reports contain their own native timing metrics");
     require(result.networkRole.empty() == result.ticket.empty(), "Network role requires a ticket");

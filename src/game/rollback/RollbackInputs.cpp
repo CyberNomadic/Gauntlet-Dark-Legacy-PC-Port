@@ -31,7 +31,13 @@ u8 RollbackInputs::leadForPing(s32 pingMs) {
     if (pingMs < kNoDelayPingMs) {
         return 0;
     }
-    return pingMs < kOneTickPingMs ? 1 : kMaxDelay;
+    if (pingMs < kOneTickPingMs) {
+        return 1;
+    }
+    if (pingMs < kTwoTickPingMs) {
+        return 2;
+    }
+    return pingMs < kThreeTickPingMs ? 3 : kMaxDelay;
 }
 
 bool RollbackInputs::occupied(u8 peer) const {

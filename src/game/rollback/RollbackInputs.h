@@ -43,11 +43,17 @@ public:
     static constexpr u64 kHistoryTicks = 128;
     static constexpr u64 kMaxAhead = 120;
     static constexpr u64 kPeerSkew = 2;
-    static constexpr u8 kMaxDelay = 2;
-    /** Round trips under which a startup delay of zero and of one tick still leave the
-     * eight-tick prediction window enough room; longer trips take the longest delay. */
+    static constexpr u8 kMaxDelay = 4;
+    /** The round trips under which a startup delay of nought, one, two and three ticks
+     * still has a peer's input in hand when its tick comes: a tick a way for half the trip
+     * and a little over for the sender's pacing. Prediction covers only the jitter past
+     * that, so a correction, which replays every tick back to the mispredicted one, is
+     * rare; left to prediction (a two-tick cap over an eighty-millisecond trip), a party
+     * on the move corrected most ticks and the replays cost more than the ticks. */
     static constexpr s32 kNoDelayPingMs = 20;
-    static constexpr s32 kOneTickPingMs = 60;
+    static constexpr s32 kOneTickPingMs = 40;
+    static constexpr s32 kTwoTickPingMs = 70;
+    static constexpr s32 kThreeTickPingMs = 105;
     /** The local input delay a measured round trip calls for; an unknown ping keeps the
      * one-tick default. */
     static u8 leadForPing(s32 pingMs);
