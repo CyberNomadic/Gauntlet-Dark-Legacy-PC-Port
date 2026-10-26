@@ -3,6 +3,7 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <chrono>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,6 +38,7 @@
 #include "game/hud/LevelMessages.h"
 #include "game/hud/PartyHud.h"
 #include "game/hud/RuneMeter.h"
+#include "game/hud/StreakMeter.h"
 #include "game/level/ExitPortals.h"
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelTransporters.h"
@@ -421,6 +423,10 @@ public:
     /** Draws no HUD: no names, status boxes, compass, messages or captions. */
     void setHudHidden(bool hidden) { m_hudHidden = hidden; }
     bool hudHidden() const { return m_hudHidden; }
+    /** The seats this machine plays, a bit each: the streak meter shows only theirs.
+     * Presentation only; every seat until told otherwise. */
+    void setLocalSeats(u8 mask) { m_localSeats = mask; }
+    const StreakMeter& streakMeter() const { return m_streakMeter; }
     /** Looks through `camera` instead of the level's own, for the developer console's free
      * camera; nothing gives the level's back. Either change cuts rather than glides. */
     void setViewOverride(const std::optional<WorldCamera>& camera);
@@ -572,6 +578,8 @@ private:
     std::vector<TriggerVisitor> visitors() const;
     PartyPickups::Services pickupServices();
     void praiseStreaks(f32 seconds);
+    /** Steps the meter by the frame's own clock and draws it for the local seats. */
+    void drawStreakMeter();
     bool leaveBy(usize portal);
     void updateFixtures(s32 ticks, f32 seconds);
     void updateTransporters(s32 ticks, f32 seconds, bool held);
@@ -645,6 +653,10 @@ private:
     LevelSoundscape m_audio;
     SceneSoundEvents m_recordedAudio;
     ChallengeHud m_challengeHud;
+    StreakMeter m_streakMeter; ///< presentation only, never simulation state
+    std::optional<std::chrono::steady_clock::time_point> m_streakFrame;
+    u8 m_localSeats = 0xF;
+    const Texture* m_glowSheet = nullptr; ///< FONT32's glow, borrowed from the static set
     const Texture* m_runeFrame = nullptr;
     const Texture* m_runeColumn = nullptr;
     SumnerFigure m_sumner;

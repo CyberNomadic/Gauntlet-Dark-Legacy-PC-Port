@@ -320,6 +320,8 @@ add_library(game STATIC
     scenes/SelectLane.cpp
     hud/StatusBox.h
     hud/StatusBox.cpp
+    hud/StreakMeter.h
+    hud/StreakMeter.cpp
     hud/PowerupSelector.h
     hud/PowerupSelector.cpp
     hud/HelpMessages.h

@@ -90,7 +90,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
                                                     &world.powerups().textures, &m_staticTextures};
     m_effects.setTextureLenders(effectTextures);
     if (const auto glow = m_staticTextures.find("FONT32_GLOW")) {
-        m_hud.setGlow(&m_staticTextures.texture(device, *glow));
+        m_glowSheet = &m_staticTextures.texture(device, *glow);
+        m_hud.setGlow(m_glowSheet);
     }
     // Sumner, his hints and his welcome belong to the tower alone.
     if (world.isTower()) {
@@ -299,6 +300,10 @@ void PlayScene::close() {
     m_sim.towerNoticeSeconds = 0.0f;
     m_hud.clear();   // before the static texture borrowed for selector glow
     m_names.clear(); // before the static sheet its font borrows
+    m_streakMeter.clear();
+    m_streakFrame.reset();
+    m_glowSheet = nullptr;
+    m_localSeats = 0xF;
     m_staticTextures.releaseTextures();
     m_sim.welcome.clear();
     m_sim.dimmer.reset();
@@ -422,16 +427,44 @@ bool PlayScene::weaponHeld(s32 player) const {
 void PlayScene::praiseStreaks(f32 seconds) {
     const bool wizard = m_bossSequence.victory().state().stage() >= BossVictory::Stage::Appearing;
     for (PlayerRuntime& runtime : m_players) {
+        // The record follows the run as it grows, so the meter can announce it live.
+        s32& best = runtime.actor.save().progress().lifetime.bestStreak;
+        best = std::max(best, runtime.streak.count());
         const std::string_view praise = runtime.streak.step(seconds);
         if (!praise.empty() && !wizard && m_audio.narrationRoom(MeleeStreak::kWait)) {
             const auto audioScope =
                 m_audio.soundScope({34, 0, 1, static_cast<u8>(runtime.actor.player())}, 2);
             m_audio.queueNarration(praise, LevelSoundscape::Narrator::Primary);
-        // The record follows the run as it grows, so the meter can announce it live.
-        s32& best = runtime.actor.save().progress().lifetime.bestStreak;
-        best = std::max(best, runtime.streak.count());
         }
     }
+}
+
+void PlayScene::drawStreakMeter() {
+    // Frames, not ticks, drive the meter: it is presentation, never replayed.
+    const auto now = std::chrono::steady_clock::now();
+    f32 seconds = 0.0f;
+    if (m_streakFrame.has_value()) {
+        seconds = std::chrono::duration<f32>(now - *m_streakFrame).count();
+    }
+    m_streakFrame = now;
+    std::array<StreakView, kPlayerCount> views{};
+    usize watched = 0;
+    for (const PlayerRuntime& runtime : m_players) {
+        const s32 seat = runtime.actor.player();
+        if (seat < 0 || seat >= kPlayerCount ||
+            ((static_cast<u32>(m_localSeats) >> static_cast<u32>(seat)) & 1U) == 0 ||
+            runtime.departed) {
+            continue;
+        }
+        views[watched++] = {.player = seat,
+                            .count = runtime.streak.count(),
+                            .quiet = runtime.streak.quiet(),
+                            .running = runtime.streak.running(),
+                            .record = runtime.actor.save().progress().lifetime.bestStreak};
+    }
+    m_streakMeter.observe(std::span(views).first(watched));
+    m_streakMeter.animate(seconds);
+    m_streakMeter.draw(m_canvas, m_messages.text(), m_glowSheet, m_context.strings);
 }
 
 PartyPickups::Services PlayScene::pickupServices() {
@@ -1787,6 +1820,9 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
         m_opponents.meter().draw(m_canvas, device);
         m_bossSequence.victory().drawCaption(m_canvas, m_messages.text(), m_hud.strings(), width,
                                              height);
+        if (config.game.streakMeter) {
+            drawStreakMeter();
+        }
     }
     if (const LevelInfo* level = m_world->level(); level != nullptr) {
         m_arrival.drawTitle(m_canvas, m_messages.text(), level->title, width);

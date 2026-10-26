@@ -45,6 +45,9 @@ public:
     /** Runs the quiet on by `seconds`: the praise earned once it is over, else nothing. */
     std::string_view step(f32 seconds);
     s32 count() const { return m_count; }
+    /** Seconds since the last blow; the run ends past `kQuiet`. */
+    f32 quiet() const { return m_quiet; }
+    bool running() const { return m_running; }
 
 private:
     s32 m_count = 0;

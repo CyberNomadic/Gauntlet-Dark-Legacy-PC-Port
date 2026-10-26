@@ -2,11 +2,27 @@
 
 #include <algorithm>
 #include <exception>
+#include <span>
 
 #include "engine/core/Log.h"
 
 #include "game/netplay/OnlineParty.h"
 #include "game/scenes/AfterLevelScene.h"
+
+namespace {
+
+/** The seats this machine plays, a bit each, for the scene's local presentation. */
+gdl::u8 seatMask(std::span<const gdl::u8> seats) {
+    gdl::u8 mask = 0;
+    for (const gdl::u8 seat : seats) {
+        if (seat < 8) {
+            mask |= static_cast<gdl::u8>(1U << seat);
+        }
+    }
+    return mask;
+}
+
+} // namespace
 
 namespace gdl::game {
 namespace {
@@ -587,6 +603,7 @@ struct NativeOnlinePlay::Data {
                 fail(Failure::Assets);
                 return false;
             }
+            candidate->scene.setLocalSeats(seatMask(session->seats()));
             for (usize seat = 0; seat < consoleCheats.size(); ++seat) {
                 candidate->scene.setCheats(static_cast<s32>(seat), consoleCheats[seat]);
             }
@@ -676,6 +693,7 @@ struct NativeOnlinePlay::Data {
             !candidate->scene.open(*device, context, candidate->world, levelMembers, options)) {
             return fail(Failure::Assets);
         }
+        candidate->scene.setLocalSeats(seatMask(session->seats()));
         for (usize seat = 0; seat < levelConsoleCheats.size(); ++seat) {
             candidate->scene.setCheats(static_cast<s32>(seat), levelConsoleCheats[seat]);
         }
