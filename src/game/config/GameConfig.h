@@ -87,6 +87,7 @@ struct CombatConfig {
 struct GameOptionsConfig {
     bool expandedShop = false;
     bool autoSave = false;
+    bool streakMeter = true; ///< the style meter over a run of close blows
 };
 
 /** Where characters are saved: a `saves` folder beside the game when the directory is

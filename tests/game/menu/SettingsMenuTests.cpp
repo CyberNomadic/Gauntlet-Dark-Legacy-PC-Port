@@ -85,7 +85,7 @@ TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings]
     Fixture f;
     f.choose(1);
     REQUIRE(f.menu.page() == SettingsMenu::Page::Game);
-    REQUIRE(f.menu.menu().definition().items.size() == 6);
+    REQUIRE(f.menu.menu().definition().items.size() == 7);
     CHECK(f.menu.menu().definition().items.front().text == "Difficulty");
     CHECK(f.menu.menu().definition().items.back().text == "Language");
     CHECK(f.menu.menu().definition().items.back().value == "English");
@@ -97,10 +97,16 @@ TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings]
     f.right();
     CHECK(f.config.game.autoSave);
     f.release();
+    CHECK(f.config.game.streakMeter);
+    CHECK(f.menu.menu().definition().items[5].text == "Streak Meter");
+    f.focus(6);
+    f.right();
+    CHECK_FALSE(f.config.game.streakMeter);
+    f.release();
     f.fail = true;
     f.right();
-    CHECK(f.config.game.autoSave);
-    CHECK(f.writes == 2);
+    CHECK_FALSE(f.config.game.streakMeter);
+    CHECK(f.writes == 3);
 }
 
 TEST_CASE("mouse operates settings pages sliders and graphics without keyboard confirmation",

@@ -91,6 +91,19 @@ TEST_CASE("combat is opt-in and movie volume persists independently of other aud
     CHECK(restored.difficulty.level == "hard");
 }
 
+TEST_CASE("the streak meter is on until switched off and survives a round trip",
+          "[game][config][streak]") {
+    GameConfig config;
+    CHECK(config.game.streakMeter);
+    REQUIRE(config.loadFile(test::dataDirectory() / "config.json"));
+    CHECK(config.game.streakMeter);
+    config.mergeJson(R"({"game":{"streakMeter":false}})");
+    CHECK_FALSE(config.game.streakMeter);
+    GameConfig restored;
+    restored.mergeJson(config.toJson());
+    CHECK_FALSE(restored.game.streakMeter);
+}
+
 TEST_CASE("video window modes and resolution survive settings round trips",
           "[game][config][graphics]") {
     for (const auto mode :

@@ -13,6 +13,7 @@ namespace gdl::game {
 namespace {
 constexpr s32 kGraphicsCode = 4;
 constexpr s32 kLanguageCode = 5;
+constexpr s32 kStreakMeterCode = 6;
 constexpr s32 kVideoRows = 10;
 constexpr s32 kAudioSliders = 3;
 constexpr s32 kAudioX = 160;
@@ -290,6 +291,7 @@ void SettingsMenu::rebuild(s32 selection) {
         add(text("settings.combat"), 2);
         rows.toggle(text("settings.expandedShop"), 3, m_config.game.expandedShop);
         rows.toggle(text("settings.autoSave"), 4, m_config.game.autoSave);
+        rows.toggle(text("settings.streakMeter"), kStreakMeterCode, m_config.game.streakMeter);
         rows.value(text("settings.language"), kLanguageCode, languageName());
         break;
     case Page::Combat:
@@ -441,6 +443,8 @@ void SettingsMenu::change(s32 direction) {
             next.game.expandedShop = !next.game.expandedShop;
         } else if (code == 4) {
             next.game.autoSave = !next.game.autoSave;
+        } else if (code == kStreakMeterCode) {
+            next.game.streakMeter = !next.game.streakMeter;
         } else if (code == kLanguageCode) {
             // The next language the text directory holds; a lone one stays.
             const auto choices = languages();

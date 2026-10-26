@@ -41,6 +41,7 @@
   "game": {
     "expandedShop": false,
     "autoSave": false,
+    "streakMeter": true,
     "difficulty": "normal",
     "multiplayer": "normal",
     "combat": { "autoMelee": false, "enemyHealthBars": true, "autoActivateItems": true }
