@@ -11,6 +11,7 @@
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/SpecialMembers.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 #include "engine/render/RenderDevice.h"
 #include "engine/world/TreeModel.h"
@@ -29,7 +30,26 @@ namespace gdl::game {
  * from its batches and never move; these are copies set down beside them.
  */
 class SpawnedObjects {
+    struct Spawn {
+        std::string level;
+        std::string name;
+        Mat4 transform{1.0f};
+        bool operator==(const Spawn&) const = default;
+        template <class Digest> friend void visitNativeState(Digest& digest, const Spawn& value) {
+            digest.template fields<3>(value);
+        }
+    };
+
 public:
+    static constexpr usize kMaxObjects = 256;
+    /** Only the active roster rewinds. Loaded geometry stays bound for the stage. */
+    class LocalSnapshot {
+        friend class SpawnedObjects;
+        std::vector<Spawn> m_spawned;
+        const SpawnedObjects* m_owner = nullptr;
+        std::weak_ptr<const u8> m_binding;
+    };
+
     SpawnedObjects() = default;
     ~SpawnedObjects() = default;
     GDL_NON_COPYABLE_NON_MOVABLE(SpawnedObjects);
@@ -42,6 +62,12 @@ public:
               TreeModel::Pass pass = TreeModel::Pass::All) const;
     void clear();
     usize count() const { return m_spawned.size(); }
+    void saveLocal(LocalSnapshot& saved) const;
+    bool canRestoreLocal(const LocalSnapshot& saved) const;
+    bool equalLocal(const LocalSnapshot& left, const LocalSnapshot& right) const;
+    bool restoreLocal(const LocalSnapshot& saved);
+    bool appendNativeDigest(NativeStateDigest& digest) const;
+    bool appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const;
     /** One stood object as the console sees it: its name, and the sphere round it. */
     struct View {
         std::string name;
@@ -56,6 +82,7 @@ public:
         m_highlight = highlight;
     }
     usize sourceCount() const { return m_sources.size(); }
+    usize bindingCount() const { return m_figures.size(); }
 
     /** The object at `index` and its descendants as a tree, each at its offset from its
      * parent, the object itself at the root. */
@@ -71,16 +98,19 @@ private:
         TextureSet textures;
         LevelItemArchives items; ///< the realm's, lending the textures the level borrows
     };
-    struct Spawned {
+    struct Figure {
+        std::string level;
         std::string name;
         TreeInfo tree;
-        TreeModel model;
-        Mat4 transform{1.0f};
+        mutable TreeModel model; ///< highlight and mesh draw caches, never continuation state
     };
     Source* sourceOf(const std::filesystem::path& unpackedRoot, const LevelRef& level);
+    const Figure* figureOf(const Spawn& spawned) const;
 
     std::vector<std::unique_ptr<Source>> m_sources;
-    std::vector<std::unique_ptr<Spawned>> m_spawned;
+    std::vector<std::unique_ptr<Figure>> m_figures;
+    std::vector<Spawn> m_spawned;
+    std::shared_ptr<const u8> m_binding = std::make_shared<const u8>(0);
     s32 m_highlightedId = -1;                        ///< the developer console's selection
     const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
 };

@@ -81,6 +81,11 @@ private:
     std::vector<std::string> levelDebugLines() const;
     /** The developer console's font, banner and commands (GauntletConsole.cpp). */
     void setUpConsole();
+    const PlayScene* consoleScene() const;
+    const LevelWorld* consoleWorld() const;
+    bool dispatchOnlineConsole(DevConsole& console, std::string_view name,
+                               DevConsole::Arguments arguments);
+    bool updateOnlineConsole(f64 deltaSeconds, bool overlay = false);
     /** The player the console speaks for: the one at the keyboard, else the first in; -1
      * with nobody in. */
     s32 consolePlayer();

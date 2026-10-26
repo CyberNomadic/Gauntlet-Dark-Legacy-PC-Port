@@ -123,7 +123,7 @@ Vec3 PlayerMissiles::launchVelocity(const Vec3& direction, f32 speed, f32 reach,
 
 std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& weapon) {
     Vec3 facing = weapon.direction;
-    if (weapon.target) {
+    if (weapon.target && !weapon.fixedFacing) {
         const Vec3 offset = *weapon.target - weapon.position;
         const f32 distance = portable::hypot(offset.x, offset.z);
         if (distance > 1e-5f) {
@@ -147,12 +147,15 @@ std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& wea
     } else if (weapon.shots == 3) {
         launch.wallSound = MissileWallSound::ThreeWay;
     }
+    const auto target = weapon.target && weapon.fixedFacing
+                            ? TargetAssist::heightTarget(launch.position, *weapon.target, facing)
+                            : weapon.target;
     std::vector<MissileLaunch> launches;
     for (const Vec3& way : spread(facing, weapon.shots)) {
         launch.direction = way;
-        if (weapon.target) {
-            const Vec3 aim = TargetAssist::velocity(launch.position, *weapon.target, launch.speed,
-                                                    launch.spec->weight);
+        if (target) {
+            const Vec3 aim =
+                TargetAssist::velocity(launch.position, *target, launch.speed, launch.spec->weight);
             // Each spread keeps its authored bearing instead of converging on the target.
             const f32 turn = portable::atan2(way.x, way.z) - portable::atan2(facing.x, facing.z);
             launch.velocity = Vec3{aim.x * portable::cos(turn) + aim.z * portable::sin(turn), aim.y,
@@ -516,10 +519,15 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                 if (!contact) {
                     continue;
                 }
-                m_sim.impacts.push_back(
-                    MissileImpact{missile.position, missile.owner, missile.potion, missile.potency,
-                                  missile.damage, target.id, missile.spec->impactTree,
-                                  missile.wallSound, missile.flags, target.node});
+                MissileImpact impact{missile.position, missile.owner, missile.potion,
+                                     missile.potency, missile.damage, target.id,
+                                     missile.spec->impactTree, missile.wallSound, missile.flags,
+                                     target.node};
+                // ProcessEffects normalizes the missile's flight velocity for
+                // CritterDamage. The owner may have moved since releasing it.
+                const f32 speed = glm::length(missile.velocity);
+                impact.direction = speed > 0 ? missile.velocity / speed : Vec3{0};
+                m_sim.impacts.push_back(impact);
                 missile.pierced.push_back(target.id);
                 if (!penetrates) {
                     missile.age = kLifeSeconds;

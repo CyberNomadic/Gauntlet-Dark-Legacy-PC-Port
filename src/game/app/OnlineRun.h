@@ -9,14 +9,19 @@
 #include "engine/render/RenderDevice.h"
 
 #include "game/characters/Party.h"
+#include "engine/world/WorldCamera.h"
+
 #include "game/hud/LinkIndicator.h"
 #include "game/menu/NetplayMenu.h"
 #include "game/rollback/SessionInputs.h"
+#include "game/scenes/SceneSelection.h"
 
 namespace gdl::game {
 struct GameContext;
 struct LevelRef;
 struct PlayOptions;
+class PlayScene;
+class LevelWorld;
 /** Online runtime shared by the menu and development launcher. Transport/admission are
  * independent of presentation; selected local characters remain owned by their machine.
  * Completed shops return authenticated local checkpoints to the application. */
@@ -53,6 +58,18 @@ public:
     bool hasCompletedProgress() const;
     bool saveCompletedProgress();
     std::optional<Vec3> cursorAim(s32 device, Vec2 cursor) const;
+    bool consoleHost() const;
+    bool consoleAllowed() const;
+    bool setConsolePermissions(bool enabled);
+    bool consoleCommand(u8 seat, std::string line);
+    const PlayScene* consoleScene() const;
+    const LevelWorld* consoleWorld() const;
+    std::optional<u8> consoleSeat(s32 device) const;
+    void consoleCapture(bool captured);
+    void consoleView(bool hideHud, const std::optional<WorldCamera>& camera);
+    void consoleSelect(const std::optional<SceneSelection>& selection);
+    std::optional<SceneSelection> consolePick(Vec2 cursor);
+    std::vector<std::string> takeConsoleReplies();
     void render(RenderDevice& device, const Mat4& projection, f32 width, f32 height, f64 seconds,
                 f32 frameBlend);
     void close();

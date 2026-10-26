@@ -16,14 +16,15 @@ bool PlayScene::scriptedCamera() const {
 }
 
 bool PlayScene::cameraContinuous() const {
-    return m_previousCamera.has_value() && !scriptedCamera() &&
+    return !m_viewOverride && m_previousCamera.has_value() && !scriptedCamera() &&
            m_previousBossCamera == bossCameraOn();
 }
 
 WorldCamera PlayScene::viewCamera() const {
-    if (m_viewOverride.has_value()) {
-        return *m_viewOverride;
-    }
+    return m_viewOverride.value_or(simulationCamera());
+}
+
+WorldCamera PlayScene::simulationCamera() const {
     if (const auto& camera = m_sim.switchCutscene.camera();
         m_sim.switchCutscene.showing() && camera.has_value()) {
         return *camera;

@@ -70,7 +70,7 @@ SimulationObservation::Digest PlayScene::simulationControlDigest() const {
         control.level(m_world->ref());
     }
     control.word(simulationTickRate());
-    // These are the actual 23 members copied into local history, including
+    // These are the actual members copied into local history, including
     // hidden camera velocities, RNG, rune cue latches and arbitration clocks.
     control.value(m_sim);
     m_camera.appendNativeDigest(control);
@@ -167,6 +167,14 @@ bool PlayScene::registerNativeDigestResources() {
     }
     if (!m_opponents.enemies().registerNativeResources(resources, stage + "/swarm")) {
         return false;
+    }
+    for (auto& [name, items] : m_borrowedItems) {
+        usize lender = 0;
+        for (const auto* source : items->scope().archives()) {
+            if (!archive(*source, std::format("console/{}/items/{}", name, lender++))) {
+                return false;
+            }
+        }
     }
     for (const auto& player : m_players) {
         if (player.figure && !player.figure->registerNativeResources(resources)) {

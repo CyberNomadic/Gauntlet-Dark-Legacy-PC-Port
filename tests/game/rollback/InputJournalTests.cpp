@@ -70,6 +70,44 @@ TEST_CASE("a journal takes frames in tick order under the epoch's owners", "[net
     CHECK_FALSE(journal.opened());
 }
 
+TEST_CASE("journals retain variable console actions and flight for a full epoch rebuild",
+          "[netplay][journal][console-input]") {
+    EpochInputJournal journal;
+    REQUIRE(journal.open(kEpoch, kOwners));
+    std::vector<InputCommand> loose;
+    for (u64 tick = 1; tick <= 40; ++tick) {
+        auto values = frame(tick);
+        values[0].console =
+            ConsoleAction{1, "spawn " + std::string(153, 'a') + static_cast<char>('a' + tick % 26)};
+        values[1].consoleFlight = Vec3{0, -1, 1};
+        REQUIRE(journal.append(tick, values));
+        loose.push_back(values[0]);
+    }
+    for (const auto& chunks : {JournalPacket::chunks(journal, 1, 40, true),
+                               JournalPacket::tailChunks(kEpoch, loose, true)}) {
+        REQUIRE(chunks.size() > 1);
+        usize carried = 0;
+        for (const auto& chunk : chunks) {
+            const auto encoded = JournalPacket::encode(chunk);
+            REQUIRE(encoded);
+            CHECK(encoded->size() <= JournalPacket::kMaxBytes);
+            const auto decoded = JournalPacket::decode(*encoded);
+            REQUIRE(decoded);
+            for (const auto& got : decoded->commands) {
+                const auto& expected = (*journal.frame(got.tick))[got.seat];
+                CHECK(got.console == expected.console);
+                CHECK(got.consoleFlight == expected.consoleFlight);
+                carried += got.console ? 1U : 0U;
+            }
+        }
+        CHECK(carried == 40);
+        CHECK(chunks.back().last);
+    }
+    auto foreign = frame(41);
+    foreign[1].console = ConsoleAction{1, "god"};
+    CHECK_FALSE(journal.append(41, foreign));
+}
+
 TEST_CASE("journal chunks pack runs, fit the wire and round-trip exactly", "[netplay][journal]") {
     const auto journal = journalOf(1000);
     const auto chunks = JournalPacket::chunks(journal, 1, 1000, true);
@@ -154,7 +192,7 @@ TEST_CASE("journal packets reject malformed bytes and impossible chunks", "[netp
         CHECK_FALSE(JournalPacket::decode(std::span(bytes).first(cut)));
     }
     auto version = bytes;
-    version[4] = 2;
+    version[4] = 1;
     CHECK_FALSE(JournalPacket::decode(version));
     auto flags = bytes;
     flags[5] = 0x80;

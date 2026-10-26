@@ -153,6 +153,7 @@ InputCommand InputTimeline::heldOrNeutral(const std::optional<InputCommand>& pre
         command.pressedButtons = 0;
         command.hintTopic = 0;
         command.hintRevision = 0;
+        command.console.reset();
     }
     command.epoch = epoch;
     command.tick = tick;

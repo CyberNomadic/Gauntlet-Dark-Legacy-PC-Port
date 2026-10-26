@@ -30,6 +30,147 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
+TEST_CASE("pickup contact is centered on the native body anchor rather than the feet",
+          "[pickups][pickup-center]") {
+    const LevelWorld world;
+    const Chests chests;
+    ClassStats stats;
+    stats.height = 4;
+    stats.width = 1.5f;
+    stats.collisionY = 2;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, &stats, {12, 10, 34}, 0);
+    const auto collectors = PartyPickups::collectors(players, world, chests);
+    REQUIRE(collectors.size() == 1);
+    CHECK(collectors[0].position == Vec3{12, 12, 34});
+    CHECK(collectors[0].height == 2);
+    PlacedItems::Item item;
+    item.radius = 0.1f;
+    item.height = 0.2f;
+    item.position = {12, 13.5f, 34};
+    CHECK(item.touchedBy(collectors[0]));
+    item.position.y = 10.1f;
+    CHECK(item.touchedBy(collectors[0]));
+    item.position.y = 9.5f;
+    CHECK_FALSE(item.touchedBy(collectors[0]));
+
+    SECTION("fallen players cannot collect") { players[0].life = PlayerLife::Dying; }
+    SECTION("departed players cannot collect") { players[0].departed = true; }
+    SECTION("ghost players cannot collect") { players[0].ghost = true; }
+    item.position.y = 12;
+    CHECK_FALSE(item.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
+}
+
+TEST_CASE("native blue crystals beside Mausoleum and Cliffs walls can be collected",
+          "[pickups][pickup-center][blue-crystal][assets]") {
+    const auto [level, instance, blockedByWall] =
+        GENERATE(std::tuple{"G4", 509, true}, std::tuple{"B2", 184, false});
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG4/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *levels.byName(level)));
+    world.setPlayerCount(1);
+    ClassDataSet classes;
+    REQUIRE(classes.load(root / "pdata"));
+    LevelFixtures fixtures;
+    PartyHud hud;
+    LevelSoundscape audio;
+    const PartyPickups::Services services{.world = world,
+                                          .fixtures = fixtures,
+                                          .hud = hud,
+                                          .audio = audio,
+                                          .classes = classes,
+                                          .sounds = nullptr,
+                                          .help = {},
+                                          .openMessage = {},
+                                          .challengeCoin = {}};
+    std::array<PlayerRuntime, 1> players;
+    CharacterSave save;
+    save.character = 3;
+    auto& actor = players[0].actor;
+    usize target = world.placedItems().size();
+    for (usize i = 0; i < world.placedItems().size(); ++i) {
+        if (world.placedItems().item(i).instance == instance) {
+            target = i;
+            break;
+        }
+    }
+    REQUIRE(target < world.placedItems().size());
+    const auto& crystal = world.placedItems().item(target);
+    REQUIRE(crystal.name == "GEMBLUE");
+    REQUIRE(crystal.takeable());
+    REQUIRE(crystal.realm() > 0);
+    const auto realm = static_cast<usize>(crystal.realm());
+    const Vec3 destination = crystal.position;
+    Vec3 start = destination + Vec3{-6, 0, 0};
+    const auto floor = world.collision().floorAt(start, 3, 3, 0.1f);
+    REQUIRE(floor);
+    start.y = floor->y;
+    actor.spawn(0, save, classes.stats(save.character), start, 0);
+    PartyPickups pickups;
+    bool feetReached = false;
+    for (s32 tick = 0; tick < 180 && crystal.takeable(); ++tick) {
+        const Vec2 towards{destination.x - actor.position().x,
+                           destination.z - actor.position().z};
+        REQUIRE(glm::length(towards) > 0);
+        actor.update(MoveInput{glm::normalize(towards), 1}, 0, 1.0f / 30,
+                     &world.collision());
+        feetReached |= crystal.touchedBy(
+            {actor.position(), actor.reach(), actor.height() * 0.5f});
+        pickups.collect(device, players, services);
+    }
+    CAPTURE(level, instance, actor.position().x, actor.position().y, actor.position().z);
+    // G4's vine wall stops the body before the tiny crystal collider. Native
+    // PlayerMotion picks it up using its attempted destination before that clip.
+    if (blockedByWall) {
+        CHECK_FALSE(feetReached);
+    }
+    CHECK_FALSE(crystal.takeable());
+    CHECK_FALSE(crystal.visible);
+    CHECK(actor.save().progress().crystals[realm] == 1);
+    pickups.collect(device, players, services);
+    CHECK(actor.save().progress().crystals[realm] == 1);
+}
+
+TEST_CASE("pickup reach includes the attempted step before a wall clips the player's body",
+          "[pickups][pickup-center]") {
+    const LevelWorld world;
+    const Chests chests;
+    const auto face = [](Vec3 a, Vec3 b, Vec3 c, Vec3 normal) {
+        CollisionTriangle triangle;
+        triangle.vertices = {a, b, c};
+        triangle.normal = normal;
+        return triangle;
+    };
+    WorldCollision collision;
+    collision.build({face({-10, 0, -10}, {10, 0, -10}, {10, 0, 10}, {0, 1, 0}),
+                     face({-10, 0, -10}, {10, 0, 10}, {-10, 0, 10}, {0, 1, 0}),
+                     face({5, 0, -10}, {5, 5, -10}, {5, 5, 10}, {-1, 0, 0}),
+                     face({5, 0, -10}, {5, 5, 10}, {5, 0, 10}, {-1, 0, 0})});
+    std::array<PlayerRuntime, 1> players;
+    auto& actor = players[0].actor;
+    actor.spawn(0, {}, nullptr, {3, 0, 0}, 0);
+    for (s32 frame = 0; frame < 30; ++frame) {
+        actor.update(MoveInput{{1, 0}, 1}, 0, 1.0f / 30, &collision);
+    }
+    PlacedItems::Item crystal;
+    crystal.position = {5.2f, 0.1f, 0};
+    crystal.radius = 0.1f;
+    crystal.height = 2;
+    CHECK_FALSE(crystal.touchedBy({actor.followPoint(), actor.reach(), actor.height() * 0.5f}));
+    CHECK(crystal.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
+    players[0].combo.role = ComboRole::Thrown;
+    players[0].combo.grabberClass = ComboMove::kWarrior;
+    CHECK_FALSE(crystal.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
+    players[0].combo = {};
+    // This is one attempted native step, not an enlarged permanent pickup radius.
+    actor.update({}, 0, 1.0f / 30, &collision);
+    CHECK_FALSE(crystal.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
+}
+
 TEST_CASE("a native Turbo Boost pickup is carried until its owner activates the selector",
           "[pickups][turbo-activation][assets][multiplayer]") {
     const auto root =
@@ -292,6 +433,31 @@ TEST_CASE("the tower congratulates the party on the gargoyles' pieces before the
     REQUIRE(opened.size() == 2);
     CHECK(opened[1].first == "UNLOCKLEVEL");
     CHECK_FALSE(PartyPickups::announceTowerUnlock(players, services));
+}
+
+TEST_CASE("Sumner does not authorize a tower crystal ceremony", "[pickups][sumner][tower-crystals]") {
+    LevelWorld world;
+    LevelFixtures fixtures;
+    PartyHud hud;
+    LevelSoundscape audio;
+    const ClassDataSet classes;
+    std::array<PlayerRuntime, 1> players;
+    auto& save = players[0].actor.save();
+    save.selectClass(kSumnerClass);
+    save.progress().crystals[2] = LevelTriggers::crystalsNeeded(2);
+    const PartyPickups::Services services{.world = world,
+                                         .fixtures = fixtures,
+                                         .hud = hud,
+                                         .audio = audio,
+                                         .classes = classes,
+                                         .help = {},
+                                         .openMessage = [](std::string_view, usize) {
+                                             FAIL("Sumner must not open a crystal ceremony");
+                                             return true;
+                                         },
+                                         .challengeCoin = {}};
+    CHECK_FALSE(PartyPickups::announceTowerUnlock(players, services));
+    CHECK(save.progress().crystals[2] == LevelTriggers::crystalsNeeded(2));
 }
 
 TEST_CASE("the narrator counts the party's runestones as the original does",

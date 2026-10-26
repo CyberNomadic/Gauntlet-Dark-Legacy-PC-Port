@@ -7,6 +7,8 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+#include "game/rollback/ConsoleAction.h"
+
 namespace gdl::game {
 
 // Wire values: append new actions only with a protocol version change. Device IDs,
@@ -65,8 +67,10 @@ struct InputCommand {
     std::optional<Vec3> aimDirection;
     u32 heldButtons = 0;
     u32 pressedButtons = 0;
-    u8 hintTopic = 0;    ///< one-shot Sumner topic row + 1; zero means absent
-    u8 hintRevision = 0; ///< observed menu revision; zero when no topic is present
+    u8 hintTopic = 0;                     ///< one-shot Sumner topic row + 1; zero means absent
+    u8 hintRevision = 0;                  ///< observed menu revision; zero when no topic is present
+    std::optional<ConsoleAction> console; ///< host-admitted, never predicted or repeated
+    Vec3 consoleFlight{0}; ///< held world-space noclip wish; ignored unless noclip is admitted
 
     bool held(CommandHeld button) const { return (heldButtons & static_cast<u32>(button)) != 0; }
     bool pressed(CommandPress button) const {
@@ -82,16 +86,21 @@ struct InputCommand {
 };
 
 /** Versioned, little-endian, bounded input datagrams. No native struct serialization.
- * Four seats can resend four ticks each in one 904-byte packet. Redundancy recovers
+ * Four seats can resend four ordinary ticks each in one 968-byte packet. Console
+ * mutations consume variable space; callers split only between complete frames. Redundancy recovers
  * short losses without replaying edges; it is not reliable delivery for menu transactions.
  * The transport must authenticate the sender separately; a packet cannot name its peer. */
 class InputPacket {
 public:
-    static constexpr u16 kVersion = 5;
+    static constexpr u16 kVersion = 6;
     static constexpr usize kMaxCommands = 16;
     static constexpr usize kHeaderBytes = 8;
-    static constexpr usize kCommandBytes = 56;
+    static constexpr usize kCommandBytes = 60; ///< ordinary command; console text is variable
     static constexpr usize kMaxBytes = kHeaderBytes + kMaxCommands * kCommandBytes;
+
+    static usize commandBytes(const InputCommand& command) {
+        return kCommandBytes + (command.console ? 1 + command.console->line.size() : 0);
+    }
 
     static std::optional<std::vector<u8>> encode(std::span<const InputCommand> commands);
     static std::optional<std::vector<InputCommand>> decode(std::span<const u8> bytes);

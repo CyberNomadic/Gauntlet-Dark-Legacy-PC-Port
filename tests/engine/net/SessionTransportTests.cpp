@@ -199,6 +199,9 @@ TEST_CASE(
           [&] {
               host.update(0.002);
               guest.update(0.002);
+              INFO(host.failureDetail());
+              REQUIRE(host.phase() != OnlineSession::Phase::Failed);
+              REQUIRE(host.match().phase() != MatchSession::Phase::Stopped);
           },
           std::chrono::seconds(45));
     CHECK(host.phase() == OnlineSession::Phase::Active);

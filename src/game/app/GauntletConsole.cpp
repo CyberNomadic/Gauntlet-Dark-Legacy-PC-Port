@@ -12,7 +12,6 @@
 #include "engine/core/Log.h"
 #include "engine/math/Math.h"
 
-#include "game/app/ConsoleCommands.h"
 #include "game/app/Gauntlet.h"
 #include "game/characters/ClassData.h"
 #include "game/characters/Progression.h"
@@ -25,6 +24,7 @@
 #include "game/menu/MenuInput.h"
 #include "game/players/ItemPickup.h"
 #include "game/players/NoclipMotion.h"
+#include "game/scenes/ConsoleCommands.h"
 #include "game/scenes/SceneSelection.h"
 
 namespace gdl::game {
@@ -35,12 +35,35 @@ void Gauntlet::setUpConsole() {
     }
     m_console.print(std::format("Gauntlet Dark Legacy {}", m_buildLabel.text()));
     m_console.print("Type help for the commands.");
+    m_console.setPolicy(
+        [this](std::string_view name) {
+            if (name == "console_permissions") {
+                return m_online && m_online->consoleHost();
+            }
+            return !m_online || m_online->consoleAllowed();
+        },
+        [this](DevConsole& console, std::string_view name, DevConsole::Arguments arguments) {
+            return dispatchOnlineConsole(console, name, arguments);
+        });
+    m_console.addCommand("console_permissions", "0 or 1: host allows guests to use the console",
+                         [this](DevConsole& console, DevConsole::Arguments arguments) {
+                             if (arguments.size() != 1 ||
+                                 (arguments[0] != "0" && arguments[0] != "1")) {
+                                 console.print("Usage: console_permissions 0 or 1");
+                             } else if (m_online && m_online->consoleHost() &&
+                                        m_online->setConsolePermissions(arguments[0] == "1")) {
+                                 console.print(arguments[0] == "1" ? "Guest consoles enabled"
+                                                                    : "Guest consoles disabled");
+                             } else {
+                                 console.print("Only the online host can change console permissions.");
+                             }
+                         });
     m_console.addCommand("debug_info", "shows or hides the level debug overlay",
                          [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
                              m_levelDebug.toggle();
                              console.print(m_levelDebug.visible() ? "Level debug overlay on"
                                                                   : "Level debug overlay off");
-                             if (m_levelDebug.visible() && m_play->scene.isOpen()) {
+                             if (m_levelDebug.visible() && consoleScene()) {
                                  for (const std::string& line : levelDebugLines()) {
                                      log::info("Level debug: {}", line);
                                  }
@@ -97,6 +120,105 @@ void Gauntlet::setUpConsole() {
                          });
 }
 
+const PlayScene* Gauntlet::consoleScene() const {
+    return m_online ? m_online->consoleScene()
+                    : (m_play->scene.isOpen() ? &m_play->scene : nullptr);
+}
+
+const LevelWorld* Gauntlet::consoleWorld() const {
+    return m_online ? m_online->consoleWorld()
+                    : (m_play->scene.isOpen() ? &m_play->world : nullptr);
+}
+
+bool Gauntlet::dispatchOnlineConsole(DevConsole& console, std::string_view name,
+                                     DevConsole::Arguments arguments) {
+    if (!m_online || name == "console_permissions" || name == "help" || name == "list" ||
+        name == "debug_info" || name == "hidehud" || name == "freecam") {
+        return false;
+    }
+    std::string error;
+    if (name == "get") {
+        const auto gift = ConsoleCommands::parseGet(arguments, error);
+        if (gift && gift->kind == ConsoleCommands::Gift::Kind::Info) {
+            return false;
+        }
+        if (gift) {
+            error.clear();
+        }
+    } else if (name == "goto") {
+        if (ConsoleCommands::parseGoto(arguments, error)) {
+            error.clear();
+        }
+    } else if (name == "spawn") {
+        if (ConsoleCommands::parseSpawn(arguments, error)) {
+            error.clear();
+        }
+    } else if (!arguments.empty()) {
+        error = std::format("Usage: {}", name);
+    }
+    if (!error.empty()) {
+        console.print(error);
+        return true;
+    }
+    const s32 seat = consolePlayer();
+    std::string line(name);
+    for (const auto& argument : arguments) {
+        line += ' ';
+        line += argument;
+    }
+    if (seat < 0 || !m_online->consoleCommand(static_cast<u8>(seat), std::move(line))) {
+        console.print("Command not queued: permission denied, session busy, or request too long.");
+    } else {
+        console.print("Command requested for the shared game.");
+    }
+    return true;
+}
+
+bool Gauntlet::updateOnlineConsole(f64 deltaSeconds, bool overlay) {
+    const bool wasOpen = m_console.open();
+    const bool allowed = m_online && m_online->consoleAllowed() && !overlay;
+    if (!allowed) {
+        m_console.close();
+        m_freeCamera.stop();
+        window().holdCursor(false);
+    } else {
+        if (const auto* scene = consoleScene()) {
+            if (const auto* actor = scene->actor(consolePlayer())) {
+                m_console.setPrompt(actor->save().name + ">");
+            }
+        }
+        m_console.update(deltaSeconds, input(), m_config.menu.console);
+        if (m_console.open() && !wasOpen) {
+            window().stopRumble();
+            resetPlayInput();
+        }
+        if (m_console.open() && input().wasKeyPressed(Key::MouseLeft)) {
+            const Vec2 cursor{input().pointer().x, input().pointer().y};
+            if (!consoleCovers(cursor)) {
+                consoleSelect(cursor);
+            }
+        }
+        if (m_freeCamera.active() && !m_console.open()) {
+            m_freeCamera.update(input(), static_cast<f32>(deltaSeconds));
+        }
+        window().holdCursor(m_freeCamera.active() && !m_console.open() &&
+                            input().isKeyDown(Key::MouseRight));
+    }
+    if (!allowed || (wasOpen && !m_console.open())) {
+        consoleSelect(std::nullopt);
+    }
+    if (m_online) {
+        m_online->consoleCapture(m_console.open() || wasOpen || m_freeCamera.active());
+        m_online->consoleView(m_hudHidden, m_freeCamera.active()
+                                              ? std::optional{m_freeCamera.camera()}
+                                              : std::nullopt);
+        for (const auto& reply : m_online->takeConsoleReplies()) {
+            m_console.print(reply);
+        }
+    }
+    return m_console.open() || wasOpen;
+}
+
 void Gauntlet::consoleNoclip(DevConsole& console) {
     const s32 player = consolePlayer();
     if (player < 0) {
@@ -133,10 +255,12 @@ bool Gauntlet::consoleCovers(Vec2 cursor) {
 
 void Gauntlet::consoleSelect(std::optional<Vec2> cursor) {
     std::optional<SceneSelection> picked;
-    if (cursor.has_value() && m_play->scene.isOpen()) {
-        picked = m_play->scene.pick(*cursor);
+    if (cursor.has_value() && consoleScene()) {
+        picked = m_online ? m_online->consolePick(*cursor) : m_play->scene.pick(*cursor);
     }
-    if (m_play->scene.isOpen()) {
+    if (m_online) {
+        m_online->consoleSelect(picked);
+    } else if (m_play->scene.isOpen()) {
         m_play->scene.select(picked);
     }
     m_console.setVariable("SELECTED",
@@ -150,11 +274,12 @@ void Gauntlet::consoleSelect(std::optional<Vec2> cursor) {
 std::vector<std::string> Gauntlet::consoleDescribe(const SceneSelection& selection) {
     using Kind = SceneSelection::Kind;
     std::vector<std::string> lines;
-    PlayScene& scene = m_play->scene;
-    if (!scene.isOpen()) {
+    const PlayScene* active = consoleScene();
+    if (active == nullptr) {
         lines.emplace_back("Nothing is in play.");
         return lines;
     }
+    const PlayScene& scene = *active;
     const auto place = [](const Vec3& at) {
         return std::format("at {:.1f} {:.1f} {:.1f}", at.x, at.y, at.z);
     };
@@ -164,7 +289,7 @@ std::vector<std::string> Gauntlet::consoleDescribe(const SceneSelection& selecti
     const s32 id = selection.id;
     switch (selection.kind) {
     case Kind::Object: {
-        const LevelWorld& world = m_play->world;
+        const LevelWorld& world = *consoleWorld();
         const auto& objects = world.layout().objects();
         if (id < 0 || static_cast<usize>(id) >= objects.size()) {
             lines.push_back(
@@ -219,6 +344,10 @@ std::vector<std::string> Gauntlet::consoleDescribe(const SceneSelection& selecti
         lines.push_back(std::format("{}; {}",
                                     view.moving(index) ? "animated: placed every frame" : "static",
                                     view.objectVisible(index) ? "shown" : "hidden"));
+        if (m_online) {
+            // Inspection must not lazily bind additional assets in a running shared scene.
+            break;
+        }
         ModelSet& models = m_play->world.models();
         const TextureSet& textures = m_play->world.textures();
         const auto model = models.find(object.name);
@@ -289,7 +418,7 @@ std::vector<std::string> Gauntlet::consoleDescribe(const SceneSelection& selecti
         break;
     }
     case Kind::Pickup: {
-        const PlacedItems& items = m_play->world.placedItems();
+        const PlacedItems& items = consoleWorld()->placedItems();
         if (id < 0 || static_cast<usize>(id) >= items.size()) {
             gone();
             break;
@@ -356,7 +485,11 @@ void Gauntlet::consoleFreeCam(DevConsole& console) {
         console.print("Free camera off");
         return;
     }
-    m_freeCamera.start(m_play->scene.viewCamera());
+    if (consoleScene() == nullptr) {
+        console.print("Nothing is in play.");
+        return;
+    }
+    m_freeCamera.start(consoleScene()->viewCamera());
     console.print(std::format("Free camera on: {}", FreeCamera::kHelp));
 }
 
@@ -396,6 +529,21 @@ void Gauntlet::applyConsoleState(f64 deltaSeconds, bool consoleOpen) {
 /** The player the console speaks for: the one at the keyboard, else the first in. */
 s32 Gauntlet::consolePlayer() {
     s32 first = -1;
+    if (m_online) {
+        for (s32 device = 0; device < PlayScene::kPlayerCount; ++device) {
+            const auto seat = m_online->consoleSeat(device);
+            if (!seat || !consoleScene() || !consoleScene()->actor(*seat)) {
+                continue;
+            }
+            if (first < 0) {
+                first = *seat;
+            }
+            if (playerInputSource(input(), m_config, device).keyboard) {
+                return *seat;
+            }
+        }
+        return first;
+    }
     for (s32 player = 0; player < PlayScene::kPlayerCount; ++player) {
         if (m_play->scene.actor(player) == nullptr) {
             continue;
@@ -413,9 +561,14 @@ s32 Gauntlet::consolePlayer() {
 bool Gauntlet::consoleLevel(DevConsole& console, const std::optional<std::string>& map,
                             ConsoleLevel& level) {
     if (!map.has_value()) {
-        level.name = m_play->world.ref().name;
-        level.layout = &m_play->world.layout();
-        if (const LevelInfo* info = m_play->world.level()) {
+        const auto* world = consoleWorld();
+        if (world == nullptr) {
+            console.print("Nothing is in play.");
+            return false;
+        }
+        level.name = world->ref().name;
+        level.layout = &world->layout();
+        if (const LevelInfo* info = world->level()) {
             level.roster = info->enemies;
         }
         return true;
@@ -452,8 +605,9 @@ void Gauntlet::consoleList(DevConsole& console, DevConsole::Arguments arguments)
     switch (listing) {
     case Listing::Maps: say(ConsoleCommands::mapLines(m_levels)); return;
     case Listing::Inventory:
-        if (const CharacterSave* save = m_play->scene.liveSave(consolePlayer())) {
-            say(ConsoleCommands::inventoryLines(*save));
+        if (const PlayerActor* actor = consoleScene() ? consoleScene()->actor(consolePlayer())
+                                                     : nullptr) {
+            say(ConsoleCommands::inventoryLines(actor->save()));
         } else {
             console.print("Nobody is in.");
         }
@@ -769,7 +923,8 @@ void Gauntlet::consoleGet(DevConsole& console, DevConsole::Arguments arguments) 
     }
     if (gift->kind == ConsoleCommands::Gift::Kind::Info) {
         const std::optional<SceneSelection> what =
-            gift->name.empty() ? m_play->scene.selection() : SceneSelection::parse(gift->name);
+            gift->name.empty() ? (consoleScene() ? consoleScene()->selection() : std::nullopt)
+                               : SceneSelection::parse(gift->name);
         if (!what.has_value()) {
             console.print(gift->name.empty()
                               ? "Nothing is selected: click something in the view while the "

@@ -392,7 +392,7 @@ void Combatant::chooseMove(Actor& critter, std::span<const EnemyView> players) {
     };
     // A hit shoves it by its flags, dead or alive, a golem less and a boss never.
     u32 flags = critter.hurtFlags;
-    if (critter.hurtPending >= 1.0f) {
+    if (critter.stock->definition.kind != CombatantKind::Boss) {
         f32 scale = 0.0f;
         if (critter.state == State::Dying) {
             scale = kDeathPush;
@@ -404,11 +404,14 @@ void Combatant::chooseMove(Actor& critter, std::span<const EnemyView> players) {
             scale = kShakePush;
         }
         scale -= critter.stock->definition.knockbackReduction;
-        if (critter.stock->definition.kind != CombatantKind::Boss && scale > 0.0f) {
+        if (scale > 0.0f) {
             critter.push += critter.hurtDirection * scale;
             if (const f32 magnitude = glm::length(critter.push); magnitude > kMostPush) {
                 critter.push *= kMostPush / magnitude;
             }
+            // CritterDoKnockback clears its input only when it applies a positive
+            // scale. Plain hits can accumulate until a later knockback-class hit.
+            critter.hurtDirection = Vec3{0};
         }
     }
     // Consume the hit's shove before clearing reaction requests. Even during a flinch,
@@ -436,15 +439,14 @@ void Combatant::chooseMove(Actor& critter, std::span<const EnemyView> players) {
     // Only a hit flagged to do so moves it off what it is doing: knocked down, knocked back,
     // a roar once enough is taken, then a flinch. Rejected hit reactions are not queued;
     // an authored link takes precedence. A roar can be retried while its damage remains.
-    const bool hurt = critter.hurtPending >= 1.0f;
     critter.hurtPending = 0.0f;
     critter.hurtFlags = 0;
     const bool linked = current != nullptr && current->link >= 0;
     bool reacted = linked;
-    if (hurt && !reacted && (flags & kKnockOver) != 0) {
+    if (!reacted && (flags & kKnockOver) != 0) {
         reacted = cutIn(data.moveOfType(MoveDefinition::kKnockDown));
     }
-    if (hurt && !reacted && (flags & (kKnockOver | kKnockedBack)) != 0) {
+    if (!reacted && (flags & (kKnockOver | kKnockedBack)) != 0) {
         reacted = cutIn(data.moveOfType(MoveDefinition::kKnockBack));
     }
     if (!reacted && critter.roarOwed >= roarThreshold(m_sim.scales.players) &&
@@ -452,7 +454,7 @@ void Combatant::chooseMove(Actor& critter, std::span<const EnemyView> players) {
         critter.roarOwed = 0.0f;
         reacted = true;
     }
-    if (hurt && !reacted && (flags & kShaken) != 0) {
+    if (!reacted && (flags & kShaken) != 0) {
         reacted = cutIn(data.moveOfType(MoveDefinition::kHitReact));
     }
     if (reacted && !linked) {

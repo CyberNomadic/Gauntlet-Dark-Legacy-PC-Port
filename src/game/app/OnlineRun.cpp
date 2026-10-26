@@ -695,6 +695,116 @@ std::optional<Vec3> OnlineRun::cursorAim(s32 device, Vec2 cursor) const {
 #endif
     return std::nullopt;
 }
+bool OnlineRun::consoleHost() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl && m_impl->session && m_impl->session->host();
+#else
+    return false;
+#endif
+}
+bool OnlineRun::consoleAllowed() const {
+#if GDL_ENABLE_NETPLAY
+    if (!m_impl || !m_impl->session) {
+        return false;
+    }
+    const auto& match = m_impl->session->match();
+    const auto phase = m_impl->nativePlay.phase();
+    return (phase == NativeOnlinePlay::Phase::Playing || phase == NativeOnlinePlay::Phase::Paused) &&
+           match.phase() == MatchSession::Phase::Running && !match.resyncing() &&
+           !match.nativeDraining() && (match.host() || match.consolePermissions());
+#else
+    return false;
+#endif
+}
+bool OnlineRun::setConsolePermissions(bool enabled) {
+#if GDL_ENABLE_NETPLAY
+    return consoleHost() && m_impl->session->match().setConsolePermissions(enabled);
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+bool OnlineRun::consoleCommand(u8 seat, std::string line) {
+#if GDL_ENABLE_NETPLAY
+    return consoleAllowed() &&
+           m_impl->session->match().requestConsole(ConsoleAction{seat, std::move(line)});
+#else
+    (void)seat;
+    (void)line;
+    return false;
+#endif
+}
+const PlayScene* OnlineRun::consoleScene() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.scene() : nullptr;
+#else
+    return nullptr;
+#endif
+}
+const LevelWorld* OnlineRun::consoleWorld() const {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.world() : nullptr;
+#else
+    return nullptr;
+#endif
+}
+std::optional<u8> OnlineRun::consoleSeat(s32 device) const {
+#if GDL_ENABLE_NETPLAY
+    if (m_impl && m_impl->session) {
+        for (u8 seat : m_impl->session->seats()) {
+            if (m_impl->selection.device(*m_impl->session, seat) == device) {
+                return seat;
+            }
+        }
+    }
+#else
+    (void)device;
+#endif
+    return std::nullopt;
+}
+void OnlineRun::consoleCapture(bool captured) {
+#if GDL_ENABLE_NETPLAY
+    if (m_impl) {
+        m_impl->nativePlay.consoleCapture(captured);
+    }
+#else
+    (void)captured;
+#endif
+}
+void OnlineRun::consoleView(bool hideHud, const std::optional<WorldCamera>& camera) {
+#if GDL_ENABLE_NETPLAY
+    if (m_impl) {
+        m_impl->nativePlay.consoleView(hideHud, camera);
+    }
+#else
+    (void)hideHud;
+    (void)camera;
+#endif
+}
+void OnlineRun::consoleSelect(const std::optional<SceneSelection>& selection) {
+#if GDL_ENABLE_NETPLAY
+    if (m_impl) {
+        m_impl->nativePlay.consoleSelect(selection);
+    }
+#else
+    (void)selection;
+#endif
+}
+std::vector<std::string> OnlineRun::takeConsoleReplies() {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.takeConsoleReplies() : std::vector<std::string>{};
+#else
+    return {};
+#endif
+}
+std::optional<SceneSelection> OnlineRun::consolePick(Vec2 cursor) {
+#if GDL_ENABLE_NETPLAY
+    return m_impl ? m_impl->nativePlay.consolePick(cursor) : std::nullopt;
+#else
+    (void)cursor;
+    return std::nullopt;
+#endif
+}
 void OnlineRun::render(RenderDevice& device, const Mat4& projection, f32 width, f32 height,
                        f64 seconds, f32 frameBlend) {
 #if GDL_ENABLE_NETPLAY

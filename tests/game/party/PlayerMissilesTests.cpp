@@ -24,17 +24,19 @@ using Catch::Approx;
 
 constexpr f32 kStep = 1.0f / 60.0f;
 
-TEST_CASE("weapon replay admits only authored elemental and ordinary spread modifiers",
+TEST_CASE("weapon replay admits authored elemental strong and ordinary spread modifiers",
           "[game][missiles][weapon-replay][elemental-prediction]") {
     for (u32 element = 0; element < 16; ++element) {
-        for (const u32 flags : {0U, PlayerMissiles::kPlainModifiers}) {
+        for (const u32 flags : {0U, PlayerMissiles::kPlainModifiers,
+                               PlayerMissiles::kStrongThrowFlags,
+                               PlayerMissiles::kPlainModifiers | PlayerMissiles::kStrongThrowFlags}) {
             CHECK(PlayerMissiles::replayModifiers(flags | element) == (element <= 4));
         }
     }
     for (u32 bit = 4; bit < 32; ++bit) {
         const u32 flag = 1U << bit;
         CHECK(PlayerMissiles::replayModifiers(flag) ==
-              ((flag & PlayerMissiles::kPlainModifiers) != 0));
+              ((flag & PlayerMissiles::kReplayModifiers) != 0));
     }
 }
 
@@ -248,6 +250,59 @@ TEST_CASE("assisted prepared volleys share the native muzzle and retain spread a
     weapon.target = weapon.position + Vec3{0, 9, 0};
     const auto vertical = PlayerMissiles::weaponLaunches(weapon);
     CHECK(vertical.front().direction == weapon.direction);
+}
+
+TEST_CASE("cursor volley height correction preserves muzzle yaw and every spread bearing",
+          "[game][missiles][cursor-projectile-aim]") {
+    for (const f32 height : {1.5f, 9.0f}) {
+        CAPTURE(height);
+        PlayerMissiles::WeaponThrow weapon;
+        weapon.position = {5, 1, 10};
+        weapon.center = {5, 7, 10};
+        weapon.hand = {1, -1, 0.5f};
+        weapon.direction = {0, 0, 1};
+        weapon.speed = 50;
+        weapon.target = Vec3{6.4f, height, 23};
+        weapon.fixedFacing = true;
+        weapon.shots = 5;
+        const auto launches = PlayerMissiles::weaponLaunches(weapon);
+        REQUIRE(launches.size() == 5);
+        const Vec3 muzzle{6, 6, 12.5f};
+        const auto bearings = PlayerMissiles::spread(weapon.direction, weapon.shots);
+        for (usize index = 0; index < launches.size(); ++index) {
+            const auto& launch = launches[index];
+            REQUIRE(launch.velocity);
+            CHECK(launch.position == muzzle);
+            CHECK(launch.direction == bearings[index]);
+            CHECK(launch.velocity->x == Approx(bearings[index].x * weapon.speed).margin(0.0001f));
+            CHECK(launch.velocity->z == Approx(bearings[index].z * weapon.speed).margin(0.0001f));
+        }
+        const auto& center = launches.front();
+        const f32 flight = (weapon.target->z - muzzle.z) / weapon.speed;
+        const Vec3 reached = muzzle + *center.velocity * flight -
+                             Vec3{0, 0.5f * center.spec->weight * flight * flight, 0};
+        CHECK(reached.x == Approx(muzzle.x));
+        CHECK(reached.y == Approx(height));
+        CHECK(reached.z == Approx(weapon.target->z));
+
+        // Exercise actual collision, not just the calculated ballistic endpoint.
+        const std::array targets{MissileTarget{47, {6.4f, height - 0.5f, 23}, 0.75f, 1}};
+        PlayerMissiles corrected;
+        REQUIRE(corrected.launch(center));
+        for (s32 tick = 0; tick < 30; ++tick) {
+            corrected.update(kStep, nullptr, targets);
+        }
+        const auto impacts = corrected.takeImpacts();
+        REQUIRE(impacts.size() == 1);
+        CHECK(impacts.front().target == 47);
+        weapon.target.reset();
+        PlayerMissiles unassisted;
+        REQUIRE(unassisted.launch(PlayerMissiles::weaponLaunches(weapon).front()));
+        for (s32 tick = 0; tick < 30; ++tick) {
+            unassisted.update(kStep, nullptr, targets);
+        }
+        CHECK(unassisted.takeImpacts().empty());
+    }
 }
 
 TEST_CASE("ordinary flight checkpoints rewind and replay every native class exactly",

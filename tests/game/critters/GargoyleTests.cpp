@@ -56,6 +56,52 @@ TEST_CASE("the gargoyle's family names its form and its key, and stands as a sta
     REQUIRE(Gargoyle::definition("gar_lion").dropForm == "LION");
 }
 
+TEST_CASE("a strong hit drives an advancing native gargoyle back without inventing a hit reaction",
+          "[game][gargoyle][gargoyle-knockback][assets]") {
+    const auto* form = GENERATE("GAR_EAGL", "GAR_LION", "GAR_SERP");
+    const bool finisher = GENERATE(false, true);
+    const auto root = test::assetOrSkip("CRITTER/GAR_EAGL.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, Gargoyle::definition(form), 'B'));
+    Combatant actor;
+    REQUIRE(actor.spawn(assets, 0, Vec3{0}, 0, nullptr, {}, 'B'));
+    const std::array players{playerAt({0, 0, 100})};
+    for (s32 frame = 0; frame < 180; ++frame) {
+        actor.update(kTicks, kStep, players);
+    }
+    REQUIRE(actor.moveName() == "WALK");
+    REQUIRE_FALSE(assets.data.moveOfType(MoveDefinition::kHitReact));
+    EnemyHit hit;
+    hit.player = 0;
+    hit.damage = 5;
+    hit.direction = {0, 0, -1};
+    // CritterDamage keeps ordinary impacts in its pending vector; the next
+    // knockback-class hit consumes their combined push (CritterDoKnockback).
+    actor.hurt(hit);
+    actor.update(kTicks, kStep, players);
+    actor.hurt(hit);
+    actor.update(kTicks, kStep, players);
+    const Vec3 before = actor.position();
+    hit.flags = finisher ? EnemyHit::kKnockDown : EnemyHit::kKnockBack;
+    actor.hurt(hit);
+    Combatant::LocalSnapshot hitState;
+    REQUIRE(actor.saveLocal(hitState));
+    actor.update(kTicks, kStep, players);
+    const f32 push = finisher ? 7.5f : 5.0f;
+    const f32 walk = finisher ? 0.0f : 5.0f;
+    CHECK(actor.position().z == Approx(before.z + (walk - 3 * push) * kStep));
+    CHECK(actor.position().z < before.z);
+    CHECK(actor.moveName() == (finisher ? "KB" : "WALK"));
+    Combatant::LocalSnapshot after;
+    REQUIRE(actor.saveLocal(after));
+    REQUIRE(actor.restoreLocal(hitState));
+    actor.update(kTicks, kStep, players);
+    Combatant::LocalSnapshot replayed;
+    REQUIRE(actor.saveLocal(replayed));
+    CHECK(actor.equalLocal(after, replayed));
+}
+
 TEST_CASE("gargoyle death skins follow the death cue and the sack waits for the final pose",
           "[game][enemies][gargoyle][critter-death][assets]") {
     const auto* form = GENERATE("GAR_EAGL", "GAR_LION", "GAR_SERP");

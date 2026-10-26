@@ -13,6 +13,7 @@
 #include "RecordedDrawChecks.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
+#include "game/level/LevelWorld.h"
 #include "game/level/PlacedItemsCheckpoint.h"
 
 namespace {
@@ -758,6 +759,54 @@ TEST_CASE("pickup scratch requires current bindings and permits independently eq
     scratch = changed;
     // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from value is deliberately exercised
     CHECK(first.owner.checkpoint(std::move(scratch)) == std::optional{changed});
+}
+
+TEST_CASE("pickup observation accepts only the authored multiple key record substitution",
+          "[placed-items-checkpoint][pickup-keyring-observation][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG2/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("G2");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    auto& items = world.placedItems();
+    PlacedItemsCheckpoint owner{items};
+    REQUIRE(owner.bindResources(device));
+    const auto baseline = owner.checkpoint();
+    REQUIRE(baseline);
+    REQUIRE(baseline->valid());
+    const auto converted = std::ranges::find_if(baseline->items, [&](const auto& item) {
+        return item.instance >= 0 &&
+               baseline->placements[static_cast<usize>(item.instance)].info != item.info;
+    });
+    REQUIRE(converted != baseline->items.end());
+    const auto itemIndex = static_cast<usize>(converted - baseline->items.begin());
+    const auto placementIndex = static_cast<usize>(converted->instance);
+    const auto sourceRecord = baseline->placements[placementIndex].info;
+    REQUIRE(baseline->definitions[static_cast<usize>(sourceRecord)].name == "KEY");
+    REQUIRE(baseline->definitions[static_cast<usize>(converted->info)].name == "KEYRING");
+    CHECK(converted->value == 2);
+
+    auto changed = *baseline;
+    changed.items[itemIndex].info = sourceRecord;
+    CHECK_FALSE(changed.valid());
+    CHECK_FALSE(owner.prepareRestore(changed));
+    changed = *baseline;
+    changed.placements[placementIndex].params[0] = 1;
+    changed.placements[placementIndex].params[1] = 0;
+    CHECK_FALSE(changed.valid());
+    changed = *baseline;
+    changed.definitions[static_cast<usize>(sourceRecord)].subtype = 1;
+    CHECK_FALSE(changed.valid());
+    changed = *baseline;
+    changed.items[itemIndex].radius += 1;
+    CHECK_FALSE(changed.valid());
+
+    REQUIRE(owner.restore(*baseline));
+    CHECK(owner.checkpoint() == baseline);
 }
 
 TEST_CASE("native pickup catalog includes inactive level resources and resumes collection bursts",

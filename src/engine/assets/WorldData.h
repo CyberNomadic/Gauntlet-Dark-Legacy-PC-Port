@@ -67,6 +67,7 @@ struct LevelEnemy {
     // for roster aggregates that only supply audio (-Wmissing-field-initializers).
     // NOLINTNEXTLINE(readability-redundant-member-init)
     std::string form{};
+    bool operator==(const LevelEnemy&) const = default;
 };
 
 /** How the camera frames a boss fight: how far about the party's line to the boss it may

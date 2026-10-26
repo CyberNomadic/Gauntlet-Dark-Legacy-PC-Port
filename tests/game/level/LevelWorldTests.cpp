@@ -38,6 +38,72 @@ using namespace gdl;
 using namespace gdl::game;
 using Catch::Approx;
 
+TEST_CASE("Desecrated Temple opts only broken column tops into camera fading",
+          "[game][world][temple-cap-fade][assets]") {
+    const auto directory = test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2").parent_path();
+    const auto root = directory.parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("E1");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    ModelSet models;
+    REQUIRE(models.load(directory));
+    // The seven overrides, followed by their intact top, pedestal and native shaft.
+    for (const usize index : {126U, 189U, 386U, 388U, 447U, 452U, 556U, 191U, 196U, 190U}) {
+        const auto& object = world.layout().objects().at(index);
+        const bool fades = index != 191 && index != 196;
+        CAPTURE(object.name);
+        REQUIRE(object.objectFlags == (index == 190 ? 0x1400U : 0U));
+        const auto model = models.find(object.name);
+        REQUIRE(model);
+        const auto& mesh = models.mesh(*model);
+        REQUIRE_FALSE(mesh.parts.empty());
+        const auto& part = mesh.parts.front();
+        REQUIRE(part.indices.size() >= 3);
+        std::array<Vec3, 3> triangle{};
+        for (usize v = 0; v < triangle.size(); ++v) {
+            triangle[v] = mesh.vertices[part.indices[v]].position + object.position;
+        }
+        const auto hasTriangle = [&](const test::RecordedDraw& draw) {
+            // Unchanged opaque pieces can remain within a shared texture batch.
+            for (usize v = 0; v + 2 < draw.vertices.size(); v += 3) {
+                if (draw.vertices[v].position == triangle[0] &&
+                    draw.vertices[v + 1].position == triangle[1] &&
+                    draw.vertices[v + 2].position == triangle[2]) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (const f32 depth : {50.0f, 150.0f}) {
+            CAPTURE(depth);
+            device.draws.clear();
+            const auto camera = CameraFrame::at(object.position - Vec3{0, 0, depth});
+            world.scene().drawOpaque(device, Mat4{1}, camera);
+            CHECK(std::ranges::any_of(device.draws, hasTriangle) == (!fades || depth >= 100));
+            world.scene().drawDeferred(device, Mat4{1}, camera);
+            const auto found = std::ranges::find_if(device.draws, hasTriangle);
+            REQUIRE(found != device.draws.end());
+            const auto vertex =
+                std::ranges::find(found->vertices, triangle[0], &ImmediateVertex::position);
+            REQUIRE(vertex != found->vertices.end());
+            CHECK(vertex->color.a == (fades && depth < 100 ? 127 : 255));
+            CHECK(found->state.depthWrite);
+            CHECK(world.scene().objectAlpha(index) == 1);
+        }
+    }
+    // Explicitly identify the excluded pieces covered above.
+    CHECK(world.layout().objects()[196].name == "E1COLUMN#07");
+    CHECK(world.layout().objects()[196].objectFlags == 0);
+    CHECK(world.layout().objects()[191].name == "E1COLUMN#06");
+    CHECK(world.layout().objects()[191].objectFlags == 0);
+    CHECK(world.layout().objects()[190].name == "E1NSXD_COLUM#0");
+    CHECK(world.layout().objects()[190].objectFlags == 0x1400);
+}
+
 TEST_CASE("gameplay camera bounds respect native CAMS limits on reopen",
           "[game][world][camera-bounds][s8-camera][assets]") {
     const auto root = test::assetOrSkip("WDATA/SECRET.WAD").parent_path().parent_path();

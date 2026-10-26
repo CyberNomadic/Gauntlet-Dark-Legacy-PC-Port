@@ -9,6 +9,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "game/level/Chests.h"
+
 namespace gdl::game {
 namespace {
 constexpr f32 kMagnitude = 1'000'000;
@@ -220,27 +222,36 @@ bool PlacedItemsCheckpoint::State::validMutable() const {
             !item.particles.valid() || !particlesWithin(item.particles.field, particleCount)) {
             return false;
         }
-        const auto& definition = definitions[static_cast<usize>(item.info)];
-        if (definition.type != ItemInfo::kPowerup || item.subtype != definition.subtype ||
-            item.radius != definition.radius || item.height != definition.height ||
-            item.flags != definition.properties) {
-            return false;
-        }
+        const ItemInfo* definition = &definitions[static_cast<usize>(item.info)];
         if (item.instance >= 0) {
             if (dynamic || item.instance <= lastInstance ||
                 static_cast<usize>(item.instance) >= placements.size()) {
                 return false;
             }
             const auto& placement = placements[static_cast<usize>(item.instance)];
-            if (placement.info != item.info || placement.minPlayers != item.minPlayers) {
+            if (placement.info < 0 || static_cast<usize>(placement.info) >= definitions.size()) {
                 return false;
             }
+            // Native SetItem resolves a multiple-key placement to KEYRING's
+            // artwork/record while retaining the placed KEY's collision values.
+            // No other authored record substitution is valid here.
+            const auto count = static_cast<s16>(placement.params[0] | (placement.params[1] << 8));
+            const s32 resolved = Chests::contentsRecord(definitions, placement.info, count);
+            if (resolved != item.info || placement.minPlayers != item.minPlayers) {
+                return false;
+            }
+            definition = &definitions[static_cast<usize>(placement.info)];
             lastInstance = item.instance;
         } else {
             dynamic = true;
             if (item.minPlayers != 0) {
                 return false;
             }
+        }
+        if (definition->type != ItemInfo::kPowerup || item.subtype != definition->subtype ||
+            item.radius != definition->radius || item.height != definition->height ||
+            item.flags != definition->properties) {
+            return false;
         }
         if (item.floor && (!collision || item.floor->object < 0 || item.floor->object > 65535 ||
                            !matrix(item.floor->local))) {

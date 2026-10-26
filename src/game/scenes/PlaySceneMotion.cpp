@@ -108,9 +108,9 @@ void PlayScene::perform(usize i, PartyMotion::Action action) {
     case PartyMotion::Action::Ram: m_attacks.ramBarrels(i, m_players, attackTargets()); break;
     case PartyMotion::Action::ThrowWeapon: throwWeapon(m_players[i].actor); break;
     case PartyMotion::Action::FamiliarShot:
-        m_arsenal.launchFamiliar(
-            m_players[i].actor, m_players[i].figure.get(),
-            m_players[i].cursorAiming ? std::nullopt : assistedAim(i, m_players[i].actor.facing()));
+        m_arsenal.launchFamiliar(m_players[i].actor, m_players[i].figure.get(),
+                                 assistedAim(i, m_players[i].actor.facing()),
+                                 m_players[i].cursorAiming);
         break;
     case PartyMotion::Action::StrongThrow:
         launchWeapon(i, m_players[i].actor.facing(), kStrongThrowScale, true);

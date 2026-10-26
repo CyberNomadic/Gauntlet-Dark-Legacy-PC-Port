@@ -60,6 +60,7 @@
 #include "game/players/PlayerAnimator.h"
 #include "game/players/TurboMeter.h"
 #include "game/rollback/FrameEventLedger.h"
+#include "game/rollback/ConsoleAction.h"
 #include "game/rollback/SimulationObservation.h"
 #include "game/scenes/GameContext.h"
 #include "game/scenes/SceneSelection.h"
@@ -127,12 +128,37 @@ enum class PlayOutcome : u8 {
  * everyone has fallen the game-over sequence ends the session.
  */
 class PlayScene {
+public:
+    static constexpr s32 kPlayerCount = 4;
+    /** Native values, not local console-window preferences: rewound with the scene. */
+    struct ConsoleCheats {
+        bool god = false;
+        bool noTarget = false;
+        bool noclip = false;
+        template <class Visitor>
+        friend void visitNativeState(Visitor& visitor, const ConsoleCheats& value) {
+            visitor.template fields<3>(value);
+        }
+        bool operator==(const ConsoleCheats&) const = default;
+    };
+    struct ConsoleTravelRequest {
+        LevelRef destination;
+        std::optional<Vec3> position;
+        std::optional<f32> yaw;
+        template <class Visitor>
+        friend void visitNativeState(Visitor& visitor, const ConsoleTravelRequest& value) {
+            visitor.template fields<3>(value);
+        }
+        bool operator==(const ConsoleTravelRequest&) const = default;
+    };
+
+private:
     /** Live, value-owned control state. Pure gameplay helpers are copied directly,
      * not translated into a second checkpoint schema. Assets, devices, callbacks
      * and persistent save-slot identities stay in their existing owners. */
     struct Simulation {
         friend void visitNativeState(NativeStateDigest& digest, const Simulation& value) {
-            digest.fields<23>(value);
+            digest.fields<26>(value);
         }
         BossCamera bossCamera;
         GameOver gameOver;
@@ -157,12 +183,14 @@ class PlayScene {
         bool opponentsAdvanced = false;
         bool projectilesAdvanced = false;
         bool movementUpdated = false;
+        std::array<ConsoleCheats, static_cast<usize>(kPlayerCount)> cheats{};
+        std::optional<ConsoleTravelRequest> consoleTravel;
+        u32 consoleSpawns = 0;
 
         bool operator==(const Simulation&) const = default;
     };
 
 public:
-    static constexpr s32 kPlayerCount = 4;
     static constexpr f32 kSpawnSpacing = 2.0f; ///< between party members at the entrance
     static constexpr s32 kSpawnTicks = LevelArrivalPresentation::kSpawnTicks;
     static constexpr s32 kCrystalTicks = TowerWelcome::kCrystalTicks;
@@ -192,10 +220,15 @@ public:
     };
     using OutputPayload = std::variant<RumbleOutput, UnlockClassesOutput>;
     using OutputLedger = FrameEventLedger<OutputPayload>;
+    struct ConsoleReply {
+        u8 seat = 0;
+        std::string text;
+    };
     struct RecordedStep {
         PlayOutcome outcome = PlayOutcome::Running;
         OutputLedger::Journal journal;
         std::optional<SceneSoundEvents::Frame> audio;
+        std::vector<ConsoleReply> consoleReplies;
     };
     /** Captures rumble and persistent class-unlock intents without invoking those
      * application callbacks. Native character rewards still change immediately.
@@ -203,7 +236,8 @@ public:
      * The caller owns the fixed-roster epoch and supplies the completed tick.
      * Audio is journaled only after beginRecordedAudio; otherwise the offline
      * sound path remains immediate. Callers must explicitly select that boundary. */
-    RecordedStep recordStep(u64 epoch, u64 tick, f64 deltaSeconds, const Inputs& inputs);
+    RecordedStep recordStep(u64 epoch, u64 tick, f64 deltaSeconds, const Inputs& inputs,
+                            std::span<const ConsoleAction> actions = {});
     /** Native audio gate, before the first snapshot of a loaded online epoch.
      * Rollback requires this dispatcher; offline play keeps immediate audio. */
     bool beginRecordedAudio(u64 epoch);
@@ -294,6 +328,8 @@ public:
     /** The camera the scene is seen through: the start camera while it holds and rides in,
      * the crystals during the welcome's cut, else the follow camera. */
     WorldCamera viewCamera() const;
+    /** Shared gameplay camera, never the local developer free camera. */
+    WorldCamera simulationCamera() const;
     /** Horizontal world direction, zero in the cursor dead zone; never a world target. */
     std::optional<Vec3> cursorAim(Vec2 cursor, const Vec3& position) const;
     /** The boss fight's camera, used while a boss level's boss stands. */
@@ -377,14 +413,11 @@ public:
      * for the developer console; false with nobody standing. */
     bool relocate(const Vec3& position);
     /** What the developer console grants a player. */
-    struct ConsoleCheats {
-        bool god = false;      ///< takes no harm
-        bool noTarget = false; ///< unseen by the enemies, critters and bosses
-        bool noclip = false;   ///< flies through everything, as the console moves it
-        bool operator==(const ConsoleCheats&) const = default;
-    };
     void setCheats(s32 player, const ConsoleCheats& cheats);
     const ConsoleCheats& cheats(s32 player) const;
+    const std::optional<ConsoleTravelRequest>& consoleTravelRequest() const {
+        return m_sim.consoleTravel;
+    }
     /** Draws no HUD: no names, status boxes, compass, messages or captions. */
     void setHudHidden(bool hidden) { m_hudHidden = hidden; }
     bool hudHidden() const { return m_hudHidden; }
@@ -514,6 +547,9 @@ private:
     OutputFrame* m_outputFrame = nullptr; ///< call-scoped collector, never snapshot state
     void emitOutput(OutputPayload payload);
     PlayOutcome advanceNative(f64 deltaSeconds, const Inputs& inputs);
+    std::string applyConsoleAction(const ConsoleAction& action);
+    std::string spawnConsoleAction(s32 player, std::span<const std::string> arguments);
+    void advanceConsoleFlight(f64 deltaSeconds, const Inputs& inputs);
     SimulationObservation::Digest simulationControlDigest() const;
     SimulationObservation::Digest opponentFollowupDigest() const;
     bool registerNativeDigestResources();
@@ -604,7 +640,6 @@ private:
     bool m_previousBossCamera = false;
     std::optional<WorldCamera> m_viewOverride;
     std::optional<SceneSelection> m_selection;
-    std::array<ConsoleCheats, static_cast<usize>(kPlayerCount)> m_cheats{};
     bool m_hudHidden = false;
     std::vector<PlayerRuntime> m_players;
     LevelSoundscape m_audio;

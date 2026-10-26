@@ -345,7 +345,12 @@ private:
     SoundSet m_narrator;
     SoundSet m_narratorSecond;
     SoundSet m_promotions;
-    std::vector<std::unique_ptr<SoundSet>> m_borrowed; ///< other levels', by the console
+    struct BorrowedBank {
+        std::string name;
+        std::filesystem::path directory;
+        std::unique_ptr<SoundSet> sounds;
+    };
+    std::vector<BorrowedBank> m_borrowed; ///< retained resources, including undone console loads
     AmbientSounds m_ambience;                          ///< cleared before its borrowed banks
     MusicAreas m_areas;
     std::vector<u32> m_objectFlags; ///< the level's objects' flags, by object
@@ -401,9 +406,10 @@ private:
         f32 duckScale = 1;
         bool bossAwake = false;
         s32 players = 1;
+        std::vector<std::string> borrowedBanks; ///< active logical names, in lookup order
         template <class Visitor>
         friend void visitNativeState(Visitor& visitor, const Simulation& state) {
-            visitor.template fields<8>(state);
+            visitor.template fields<9>(state);
         }
         bool operator==(const Simulation&) const = default;
     };

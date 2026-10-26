@@ -23,6 +23,7 @@ struct PlayScene::LocalSnapshot::Data {
     std::vector<Participant> players;
     LevelWorld::LocalSnapshot world;
     LevelFixtures::LocalSnapshot fixtures;
+    SpawnedObjects::LocalSnapshot spawned;
     LevelOpponents::LocalSnapshot opponents;
     PlayerAttacks::LocalSnapshot attacks;
     PlayerArsenal::LocalSnapshot arsenal;
@@ -91,7 +92,7 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
         // A new captured owner must enter this schema explicitly; never silently
         // let the rewind roster grow beyond the state checked for agreement.
         [[maybe_unused]] const auto& [owner, worldOwner, generation, state, players, world,
-                                      fixtures, opponents, attacks, arsenal, effects, portals,
+                                      fixtures, spawned, opponents, attacks, arsenal, effects, portals,
                                       transporters, departure, arrival, sumner, hud, messages,
                                       sumnerVisit, promotion, relics, bossSequence, audio,
                                       challengeHud, camera, transition, relicSpeech,
@@ -99,7 +100,7 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
                                       previousBossCamera, namesHeld] = *data;
     }
     measured("control", [&] {
-        digest.string("PlayScene.native.7");
+        digest.string("PlayScene.native.8");
         digest.value(m_world->ref());
         digest.value(simulationTickRate());
         digest.value(data ? data->state : m_sim);
@@ -147,6 +148,7 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
     using Data = LocalSnapshot::Data;
     child("world", *m_world, &Data::world);
     child("fixtures", m_fixtures, &Data::fixtures);
+    child("console-objects", m_spawned, &Data::spawned);
     child("opponents", m_opponents, &Data::opponents);
     child("attacks", m_attacks, &Data::attacks);
     child("arsenal", m_arsenal, &Data::arsenal);
@@ -213,6 +215,7 @@ bool PlayScene::saveLocal(LocalSnapshot& saved) const {
     }
     m_world->saveLocal(data.world);
     m_fixtures.saveLocal(data.fixtures);
+    m_spawned.saveLocal(data.spawned);
     if (!m_opponents.saveLocal(data.opponents)) {
         data.owner = nullptr;
         return false;
@@ -263,6 +266,7 @@ bool PlayScene::canRestoreLocal(const LocalSnapshot& saved) const {
         }
     }
     return m_world->canRestoreLocal(data.world) && m_fixtures.canRestoreLocal(data.fixtures) &&
+           m_spawned.canRestoreLocal(data.spawned) &&
            m_opponents.canRestoreLocal(data.opponents) && m_attacks.canRestoreLocal(data.attacks) &&
            m_arsenal.canRestoreLocal(data.arsenal) && m_effects.canRestoreLocal(data.effects) &&
            m_portals.canRestoreLocal(data.portals) &&
@@ -293,6 +297,7 @@ bool PlayScene::restoreLocal(const LocalSnapshot& saved) {
     const auto& data = *saved.m_data;
     m_world->restoreLocal(data.world);
     m_fixtures.restoreLocal(data.fixtures);
+    m_spawned.restoreLocal(data.spawned);
     m_opponents.restoreLocal(data.opponents);
     m_attacks.restoreLocal(data.attacks);
     m_arsenal.restoreLocal(data.arsenal);

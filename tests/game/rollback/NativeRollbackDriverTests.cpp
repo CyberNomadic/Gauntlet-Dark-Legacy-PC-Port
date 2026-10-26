@@ -8,7 +8,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/assets/ModelSet.h"
 #include "engine/assets/StringTable.h"
+#include "engine/assets/WorldLayout.h"
 #include "engine/audio/AudioMixer.h"
 
 #include "FakeRenderDevice.h"
@@ -209,6 +211,213 @@ TEST_CASE("a scene rebuilt from the confirmed journal stands where the live one 
     CHECK(rebuilt->driver.journal().frames().back()[0].magnitude == 1);
 }
 
+TEST_CASE("late host admitted console input rewinds all peers and survives journal rebuilding once",
+          "[native-rollback-driver][online-console][journal][assets]") {
+    const u8 peers = GENERATE(u8{2}, u8{4});
+    const MatchOwners owners = peers == 2 ? MatchOwners{1, 2, 0, 0} : MatchOwners{1, 2, 3, 4};
+    const auto target = static_cast<u8>(peers - 1);
+    auto reference = std::make_unique<Fixture>(owners);
+    auto delayed = std::make_unique<Fixture>(owners);
+    for (auto* fixture : {reference.get(), delayed.get()}) {
+        REQUIRE(fixture->driver.bind(fixture->scene, fixture->match, 2));
+        // A guest may not attach a mutation directly to its locally owned input.
+        CHECK_FALSE(fixture->driver.sample({}, ConsoleAction{target, "get gold 321"}));
+        CHECK(fixture->driver.failure() == NativeRollbackDriver::Failure::None);
+        auto spoof = fixture->commands(2, 1);
+        spoof.front().console = ConsoleAction{target, "get gold 999"};
+        CHECK(fixture->driver.submit(2, spoof) == Admission::WrongPeer);
+    }
+    constexpr u64 kActionTick = 3;
+    constexpr u64 kThrough = 8;
+    usize referenceReplies = 0;
+    usize delayedReplies = 0;
+    const auto commands = [&](Fixture& fixture, u8 peer, u64 tick) {
+        auto input = fixture.commands(peer, tick);
+        if (peer == 1 && tick == kActionTick) {
+            input.front().console = ConsoleAction{target, "get gold 321"};
+        }
+        return input;
+    };
+    for (u64 tick = 1; tick <= kThrough; ++tick) {
+        for (auto* fixture : {reference.get(), delayed.get()}) {
+            for (u8 peer = 1; peer <= peers; ++peer) {
+                if (peer == 2) {
+                    continue;
+                }
+                if (fixture != delayed.get() || peer != 1 || tick != kActionTick) {
+                    REQUIRE(fixture->driver.submit(peer, commands(*fixture, peer, tick)) ==
+                            Admission::Accepted);
+                }
+                const auto progress = fixture->driver.observePeerTick(peer, kEpoch, tick);
+                REQUIRE((progress == Admission::Accepted || progress == Admission::Duplicate));
+            }
+            REQUIRE(fixture->driver.sample({}));
+            const auto result = fixture->driver.advance();
+            REQUIRE(result.status == Status::Advanced);
+            if (fixture == reference.get()) {
+                referenceReplies += result.consoleReplies.size();
+            } else {
+                delayedReplies += result.consoleReplies.size();
+            }
+        }
+    }
+    CHECK(referenceReplies == 1);
+    CHECK(delayedReplies == 0);
+    CHECK(delayed->driver.confirmedTick() == kActionTick - 1);
+    CHECK(delayed->scene.actor(target)->save().gold == 0);
+    CHECK(reference->scene.actor(target)->save().gold == 321);
+
+    const auto missing = commands(*delayed, 1, kActionTick);
+    REQUIRE(delayed->driver.submit(1, missing) == Admission::Accepted);
+    const auto corrected = delayed->driver.advance(false);
+    REQUIRE(corrected.status == Status::Held);
+    CHECK(delayed->driver.statistics().corrections == 1);
+    CHECK(delayed->driver.statistics().replayTicks == kThrough - kActionTick + 1);
+    REQUIRE(corrected.consoleReplies.size() == 1);
+    CHECK(corrected.consoleReplies.front().seat == target);
+    CHECK_FALSE(corrected.consoleReplies.front().text.empty());
+    CHECK(delayed->driver.confirmedTick() == kThrough);
+    REQUIRE(reference->scene.nativeAgreementDigest());
+    CHECK(delayed->scene.nativeAgreementDigest() == reference->scene.nativeAgreementDigest());
+    for (u8 seat = 0; seat < peers; ++seat) {
+        CHECK(delayed->scene.actor(seat)->save().gold == (seat == target ? 321 : 0));
+    }
+    REQUIRE(delayed->driver.submit(1, missing) == Admission::Duplicate);
+    CHECK(delayed->driver.advance(false).consoleReplies.empty());
+    CHECK(delayed->scene.actor(target)->save().gold == 321);
+
+    // The reliable resync payload must retain the command, but rebuilding an
+    // already confirmed tick must not print the command's reply a second time.
+    auto rebuilt = std::make_unique<Fixture>(owners);
+    REQUIRE(rebuilt->driver.bind(rebuilt->scene, rebuilt->match, 2));
+    const auto chunks = JournalPacket::chunks(delayed->driver.journal(), 1, kThrough, true);
+    REQUIRE_FALSE(chunks.empty());
+    usize consoleCommands = 0;
+    for (const auto& chunk : chunks) {
+        const auto bytes = JournalPacket::encode(chunk);
+        REQUIRE(bytes);
+        const auto decoded = JournalPacket::decode(*bytes);
+        REQUIRE(decoded);
+        for (const auto& command : decoded->commands) {
+            consoleCommands += command.console.has_value() ? 1 : 0;
+        }
+        REQUIRE(rebuilt->driver.adopt(decoded->commands));
+    }
+    CHECK(consoleCommands == 1);
+    REQUIRE(rebuilt->driver.beginRebuild(kThrough));
+    while (rebuilt->driver.nextTick() <= kThrough) {
+        const auto result = rebuilt->driver.advance();
+        REQUIRE(result.status == Status::Advanced);
+        CHECK(result.consoleReplies.empty());
+    }
+    REQUIRE(rebuilt->driver.finishRebuild());
+    CHECK(rebuilt->scene.nativeAgreementDigest() == reference->scene.nativeAgreementDigest());
+    CHECK(rebuilt->scene.actor(target)->save().gold == 321);
+}
+
+TEST_CASE("borrowed console births survive late input correction and a fresh audio journal rebuild",
+          "[native-rollback-driver][online-console][journal][native-console-spawn][assets]") {
+    test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2");
+    auto reference = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0}, true, "G1", true);
+    auto delayed = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0}, true, "G1", true);
+    const auto source = reference->levels.byName("E1");
+    REQUIRE(source);
+    WorldLayout borrowedLayout;
+    ModelSet borrowedModels;
+    REQUIRE(borrowedLayout.load(reference->root / source->directory));
+    REQUIRE(borrowedModels.load(reference->root / source->directory));
+    const auto object = std::ranges::find_if(borrowedLayout.objects(), [&](const auto& value) {
+        return !value.particles() && borrowedModels.find(value.name).has_value();
+    });
+    REQUIRE(object != borrowedLayout.objects().end());
+    const std::array<std::string, 3> actions{"spawn generator special E1",
+                                             "spawn object " + object->name + " E1",
+                                             "spawn enemy gru 2 1 E1"};
+    const auto generatorsBefore = reference->scene.generators().count();
+    for (auto* fixture : {reference.get(), delayed.get()}) {
+        REQUIRE(fixture->scene.beginRecordedAudio(kEpoch));
+        REQUIRE(fixture->driver.bind(fixture->scene, fixture->match, 2,
+                                     NativeRollbackDriver::AudioMode::Required));
+    }
+    constexpr u64 kMissing = 2;
+    constexpr u64 kThrough = 8;
+    const auto commands = [&](Fixture& fixture, u64 tick) {
+        auto result = fixture.commands(1, tick);
+        if (tick >= 2 && tick <= 6 && tick % 2 == 0) {
+            result.front().console = ConsoleAction{1, actions[static_cast<usize>(tick / 2 - 1)]};
+        }
+        return result;
+    };
+    usize referenceReplies = 0;
+    for (u64 tick = 1; tick <= kThrough; ++tick) {
+        for (auto* fixture : {reference.get(), delayed.get()}) {
+            if (fixture != delayed.get() || tick != kMissing) {
+                REQUIRE(fixture->driver.submit(1, commands(*fixture, tick)) == Admission::Accepted);
+            }
+            const auto progress = fixture->driver.observePeerTick(1, kEpoch, tick);
+            REQUIRE((progress == Admission::Accepted || progress == Admission::Duplicate));
+            REQUIRE(fixture->driver.sample({}));
+            const auto result = fixture->driver.advance();
+            REQUIRE(result.status == Status::Advanced);
+            REQUIRE(result.audio);
+            if (fixture == reference.get()) {
+                referenceReplies += result.consoleReplies.size();
+                for (const auto& reply : result.consoleReplies) {
+                    CAPTURE(reply.text);
+                    CHECK(reply.seat == 1);
+                    CHECK_FALSE(reply.text.starts_with("No "));
+                    CHECK_FALSE(reply.text.starts_with("Spawned 0 "));
+                }
+            } else {
+                CHECK(result.consoleReplies.empty());
+            }
+        }
+    }
+    CHECK(referenceReplies == actions.size());
+    CHECK(reference->scene.generators().count() == generatorsBefore + 1);
+    CHECK(reference->scene.spawnedObjects().count() == 1);
+    CHECK(delayed->scene.generators().count() == generatorsBefore);
+    CHECK(delayed->scene.spawnedObjects().count() == 1);
+    const auto bindingsBefore = delayed->scene.spawnedObjects().bindingCount();
+    REQUIRE(delayed->driver.submit(1, commands(*delayed, kMissing)) == Admission::Accepted);
+    const auto corrected = delayed->driver.advance(false);
+    REQUIRE(corrected.status == Status::Held);
+    REQUIRE(corrected.audio);
+    CHECK(corrected.consoleReplies.size() == actions.size());
+    CHECK(delayed->driver.statistics().replayTicks == kThrough - kMissing + 1);
+    CHECK(delayed->scene.generators().count() == generatorsBefore + 1);
+    CHECK(delayed->scene.spawnedObjects().count() == 1);
+    CHECK(delayed->scene.spawnedObjects().bindingCount() == bindingsBefore);
+    REQUIRE(reference->scene.nativeAgreementDigest());
+    CHECK(delayed->scene.nativeAgreementDigest() == reference->scene.nativeAgreementDigest());
+
+    // A new process has none of the abandoned prediction's retained archives or
+    // banks. The input journal must recreate the same logical roster and sounds.
+    auto rebuilt = std::make_unique<Fixture>(MatchOwners{1, 2, 0, 0}, true, "G1", true);
+    REQUIRE(rebuilt->scene.beginRecordedAudio(kEpoch));
+    REQUIRE(rebuilt->driver.bind(rebuilt->scene, rebuilt->match, 2,
+                                 NativeRollbackDriver::AudioMode::Required));
+    const auto chunks = JournalPacket::chunks(delayed->driver.journal(), 1, kThrough, true);
+    REQUIRE_FALSE(chunks.empty());
+    for (const auto& chunk : chunks) {
+        const auto encoded = JournalPacket::encode(chunk);
+        REQUIRE(encoded);
+        const auto decoded = JournalPacket::decode(*encoded);
+        REQUIRE(decoded);
+        REQUIRE(rebuilt->driver.adopt(decoded->commands));
+    }
+    REQUIRE(rebuilt->driver.beginRebuild(kThrough));
+    while (rebuilt->driver.nextTick() <= kThrough) {
+        const auto result = rebuilt->driver.advance();
+        REQUIRE(result.status == Status::Advanced);
+        CHECK(result.consoleReplies.empty());
+    }
+    REQUIRE(rebuilt->driver.finishRebuild());
+    CHECK(rebuilt->scene.generators().count() == generatorsBefore + 1);
+    CHECK(rebuilt->scene.spawnedObjects().count() == 1);
+    CHECK(rebuilt->scene.nativeAgreementDigest() == reference->scene.nativeAgreementDigest());
+}
+
 TEST_CASE("rollback hashes the corrected saved frame only after every seat confirms it",
           "[native-rollback-driver][native-rollback-digest][assets]") {
     const bool mismatched = GENERATE(false, true);
@@ -310,7 +519,7 @@ TEST_CASE("native rollback binds a frozen loaded scene and refuses stale resourc
     auto fixture = std::make_unique<Fixture>(MatchOwners{1, 0, 2, 0}, false);
     auto& driver = fixture->driver;
     auto wrong = fixture->match;
-    wrong.inputLead = 3;
+    wrong.inputLead = RollbackInputs::kMaxDelay + 1;
     CHECK_FALSE(driver.bind(fixture->scene, wrong, 1));
     wrong = fixture->match;
     wrong.tickRate = 30;

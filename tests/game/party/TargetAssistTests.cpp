@@ -16,6 +16,42 @@ using namespace gdl;
 using namespace gdl::game;
 using Catch::Approx;
 
+TEST_CASE("cursor height acquisition only considers bodies on the current firing line",
+          "[game][target-assist][cursor-projectile-aim]") {
+    const Vec3 origin{1, 5, 2};
+    const Vec3 facing{0, 0, 1};
+    MissileTarget low{0, {1.4f, 0, 12}, 1, 3};
+    low.acquisition = MissileTarget::Acquisition{{1.4f, 1.5f, 12}, 1, 1, 10};
+    const auto select = [&](const MissileTarget& target, bool fixed = true,
+                            const WorldCollision* collision = nullptr) {
+        return TargetAssist::select(origin, facing, std::span{&target, 1}, 30, collision,
+                                    TargetAssist::kFacingDot, fixed);
+    };
+    CHECK(select(low) == low.acquisition->point);
+    auto offAxis = low;
+    offAxis.base.x = offAxis.acquisition->point.x = 5;
+    REQUIRE(select(offAxis, false)); // within the controller's larger cone
+    CHECK_FALSE(select(offAxis));
+    auto behind = low;
+    behind.base.z = behind.acquisition->point.z = 0;
+    CHECK_FALSE(select(behind));
+    auto disabled = low;
+    disabled.acquisition->enabled = false;
+    CHECK_FALSE(select(disabled));
+    auto otherFloor = low;
+    otherFloor.base.y += 30;
+    otherFloor.acquisition->point.y += 30;
+    CHECK_FALSE(select(otherFloor));
+    WorldCollision wall;
+    wall.build({{{0, 0, -1}, {Vec3{-10, 0, 8}, Vec3{10, 0, 8}, Vec3{0, 20, 8}}}});
+    CHECK_FALSE(select(low, true, &wall));
+    const auto projected = TargetAssist::heightTarget(origin, low.acquisition->point, facing);
+    REQUIRE(projected);
+    CHECK(*projected == Vec3{1, 1.5f, 12});
+    CHECK_FALSE(TargetAssist::heightTarget(origin, {1, 3, 0}, facing));
+    CHECK_FALSE(TargetAssist::heightTarget(origin, {1, 3, 12}, Vec3{0}));
+}
+
 TEST_CASE("item aim anchors keep authored offsets while capping only acquisition radii",
           "[game][target-assist][alpha-aim-acquisition]") {
     const Mat4 placement = itemPlacement({10, 20, 30}, {0, 0, 1.57079637f});

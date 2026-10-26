@@ -538,6 +538,12 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
     if (bodiesOf(kind) != nullptr) {
         return true;
     }
+    // A rewind can retain the artwork while removing the enemy kind from its
+    // active simulation roster. Replaying this birth must reactivate both,
+    // exactly as the first uncached load did.
+    if (kind >= 0 && !enemies.loadKind(kind)) {
+        return false;
+    }
     for (auto& cached : m_bodyCache) {
         if (cached->kind == kind) {
             cached->textures.restoreClock({});
@@ -545,9 +551,6 @@ bool Generators::loadBodies(RenderDevice& device, Enemies& enemies, s32 kind,
             ++m_restoreGeneration;
             return true;
         }
-    }
-    if (kind >= 0 && !enemies.loadKind(kind)) {
-        return false;
     }
     ItemArchive* archive = kind < -1 ? realmItems : enemies.archive(kind);
     if (archive == nullptr) {
@@ -731,19 +734,19 @@ bool Generators::stand(RenderDevice& device, Enemies& enemies, const Placement& 
     generator.yaw = portable::atan2(placed[2][0], placed[2][2]);
     generator.placement = placed;
     generator.placement[3] = Vec4{generator.position, 1};
+    // do_items passes worldmat[2] to generate_enemy unchanged. Its horizontal
+    // magnitude matters: a pitched generator has shorter exits, and a vertical
+    // one births at its centre instead of inventing a horizontal forward axis.
     generator.direction = Vec3{placed[2][0], 0.0f, placed[2][2]};
-    if (glm::length(generator.direction) > 0.001f) {
-        generator.direction = glm::normalize(generator.direction);
-    } else {
-        generator.direction = Vec3{0.0f, 0.0f, 1.0f};
-    }
     // SetItem copies the original offset before replacing a rat's info by LOW.
     generator.collisionOffset = info.collisionOffset;
     generator.targetRadius = body.radius;
     generator.targetHeight = body.height;
-    // A brood is born its height out (do_items hands generate_enemy the record's height), a
-    // patrol sentry its radius out (generate_single).
-    generator.clearance = body.height;
+    // do_items (0x80061148) loads iteminfo+0x0c: radius, not height (+0x10).
+    // generate_enemy adds the enemy's radius. START artwork is authored backwards
+    // from that landing point, so a height-sized offset makes floor-portal births
+    // visibly appear beside the portal rather than emerge through its centre.
+    generator.clearance = body.radius;
     generator.patrolClearance = body.radius;
     generator.viewRadius = kGeneratorViewScale * std::max(info.radius, info.height);
     generator.alwaysActive = placement.alwaysActive;
@@ -849,7 +852,7 @@ void Generators::syncFloors() {
         generator.placement = *transform * generator.supportLocal;
         generator.position = Vec3{generator.placement[3]};
         generator.yaw = portable::atan2(generator.placement[2].x, generator.placement[2].z);
-        generator.direction = Vec3{portable::sin(generator.yaw), 0, portable::cos(generator.yaw)};
+        generator.direction = Vec3{generator.placement[2].x, 0, generator.placement[2].z};
         generator.box.centre = Vec3{generator.placement * Vec4{generator.boxOffset, 1}};
         generator.box.yaw = generator.yaw + generator.boxYaw;
         if (generator.bossFigure.has_value()) {
@@ -915,11 +918,11 @@ bool Generators::placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchi
     generator.placement = placement;
     generator.placement[3] = Vec4{generator.position, 1};
     generator.yaw = yaw;
-    generator.direction = Vec3{portable::sin(generator.yaw), 0, portable::cos(generator.yaw)};
+    generator.direction = Vec3{generator.placement[2].x, 0, generator.placement[2].z};
     generator.collisionOffset = info.collisionOffset;
     generator.targetRadius = info.radius;
     generator.targetHeight = info.height;
-    generator.clearance = info.height;
+    generator.clearance = info.radius;
     generator.patrolClearance = info.radius;
     generator.box = generator.bossFigure->obstacle(info);
     bindSupport(generator, info, instance.position, collision);

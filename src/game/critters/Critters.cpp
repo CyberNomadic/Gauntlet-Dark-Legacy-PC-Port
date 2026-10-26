@@ -85,9 +85,9 @@ bool Critters::registerNativeResources(NativeStateResources& resources,
     }
     for (const auto& stock : m_stockCache) {
         if (!resources.registerCombatantAssets(*stock,
-                                               std::format("{}/{}/{}", stablePrefix,
+                                               std::format("{}/{}/{}/{}", stablePrefix,
                                                            static_cast<s32>(stock->definition.kind),
-                                                           stock->definition.name))) {
+                                                           stock->definition.name, stock->realm))) {
             return false;
         }
     }

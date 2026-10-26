@@ -27,7 +27,7 @@ struct Wire final : PacketTransport {
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
         CHECK(delivery == Delivery::Unreliable);
         CHECK(bytes.size() <= Exchange::kMaxBytes);
-        CHECK(bytes.size() + 1 < 1000); // room envelope plus one Iroh fragment
+        CHECK(bytes.size() + 1 <= 1000); // one provider fragment, including room envelope
         if (result == SendResult::Sent) {
             if (const auto budget = budgets.find(connection); budget != budgets.end()) {
                 if (budget->second == 0) {
@@ -145,6 +145,75 @@ struct Room {
     }
 };
 } // namespace
+
+TEST_CASE("console input bursts split by encoded size without losing complete seat frames",
+          "[rollback-exchange][console-input]") {
+    Room room({1, 1, 1, 2});
+    std::vector<InputCommand> commands;
+    for (u64 tick = 1; tick <= 8; ++tick) {
+        auto frame = room.frame(1, tick);
+        for (auto& command : frame) {
+            command.console = ConsoleAction{3, "spawn " + std::string(154, 'a')};
+        }
+        commands.insert(commands.end(), frame.begin(), frame.end());
+    }
+    REQUIRE(room.peers[1].publish(commands, 1));
+    REQUIRE(room.peers[1].flush(room.wires[1]));
+    CHECK(room.wires[1].packets.size() >= 8);
+    for (const auto& packet : room.wires[1].packets) {
+        const auto decoded = Exchange::decode(packet.bytes);
+        REQUIRE(decoded);
+        CHECK(decoded->commands.size() == 3);
+        CHECK(packet.bytes.size() <= Exchange::kMaxBytes);
+    }
+    room.deliver(1);
+    for (usize seat = 0; seat < 3; ++seat) {
+        CHECK(room.actual[2][seat].size() == 8);
+    }
+}
+
+TEST_CASE("a maximum four-seat console frame still fits the single-fragment envelope",
+          "[rollback-exchange][console-input]") {
+    const Room room({1, 1, 1, 1});
+    auto frame = room.frame(1, 1);
+    for (auto& command : frame) {
+        command.console = ConsoleAction{3, "spawn " + std::string(154, 'a')};
+    }
+    const auto packet = Exchange::encode({kEpoch, 1, 1, {}, frame});
+    REQUIRE(packet);
+    CHECK(packet->size() + 1 <= 1000);
+    const auto decoded = Exchange::decode(*packet);
+    REQUIRE(decoded);
+    CHECK(decoded->commands.size() == 4);
+    CHECK(InputPacket::encode(decoded->commands) == InputPacket::encode(frame));
+}
+
+TEST_CASE("direct guest links cannot smuggle host-only console input",
+          "[rollback-exchange][console-input]") {
+    constexpr Exchange::Owners kOwners{1, 2, 3, 0};
+    constexpr Exchange::Grants kGrants{10, 11, 12, 0};
+    Exchange guest;
+    const std::array links{Exchange::Link{1, kHost}, Exchange::Link{3, 23}};
+    REQUIRE(guest.open(2, kEpoch, kOwners, kGrants, 0, links));
+    InputCommand command;
+    command.epoch = kEpoch;
+    command.tick = 1;
+    command.grant = 12;
+    command.seat = 2;
+    command.console = ConsoleAction{2, "god"};
+    Exchange::Message message;
+    message.epoch = kEpoch;
+    message.origin = 3;
+    message.commands = {command};
+    const auto bytes = Exchange::encode(message);
+    REQUIRE(bytes);
+    bool consumed = false;
+    CHECK(guest.receive(23, *bytes, 0, [&](const auto&, auto) {
+        consumed = true;
+        return true;
+    }) == Exchange::Admission::Invalid);
+    CHECK_FALSE(consumed);
+}
 
 TEST_CASE("rollback datagrams bound and authenticate their envelope before parsing input",
           "[rollback-exchange]") {

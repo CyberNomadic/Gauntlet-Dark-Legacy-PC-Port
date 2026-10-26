@@ -788,9 +788,6 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
     if (boss && !m_sim.fullHarm) {
         amount *= kBossShares[static_cast<usize>(players)];
     }
-    if (const f32 length = glm::length(hit.direction); length > 0.001f) {
-        critter.hurtDirection = hit.direction / length;
-    }
     // Every hit is worth its share of the creature's value to the one who dealt it (a boss's
     // times the players); then a character under the level the place is meant for does a
     // fiftieth less a level to anything but a boss (CritterDamage).
@@ -825,6 +822,9 @@ f32 Combatant::hurtActor(const EnemyHit& hit) {
     critter.patrolAim.reset();
     critter.hurtPending += counterDamage;
     critter.hurtFlags |= flags;
+    // CritterDamage accumulates the caller's unnormalized knockback input only after
+    // the struck node accepts damage. Concurrent hits contribute to the same shove.
+    critter.hurtDirection += hit.direction;
     critter.sinceHurt = 0.0f;
     const Vec3 where = hit.where.value_or(partPosition(critter, {}));
     const u32 element = damage::element(flags);

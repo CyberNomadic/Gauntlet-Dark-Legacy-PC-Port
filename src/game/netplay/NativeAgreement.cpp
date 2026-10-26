@@ -385,7 +385,11 @@ NativeAgreement::Admission NativeAgreement::receive(PacketTransport::Connection 
     settle();
     return duplicate ? Admission::Duplicate : Admission::Accepted;
 }
-bool NativeAgreement::flush(PacketTransport& transport, Time now) {
+bool NativeAgreement::flush(PacketTransport& transport, Time now,
+                            PacketTransport::Connection* closedConnection) {
+    if (closedConnection != nullptr) {
+        *closedConnection = 0;
+    }
     if (!m_open) {
         return false;
     }
@@ -397,6 +401,11 @@ bool NativeAgreement::flush(PacketTransport& transport, Time now) {
                                                PacketTransport::Delivery::Reliable);
             if (result == PacketTransport::SendResult::Congested) {
                 break;
+            }
+            if (result == PacketTransport::SendResult::Disconnected &&
+                closedConnection != nullptr && !failed()) {
+                *closedConnection = m_links[peer];
+                return false;
             }
             if (result != PacketTransport::SendResult::Sent) {
                 m_links[peer] = 0;

@@ -109,8 +109,8 @@ public:
     static constexpr f32 kLightningShieldDamage = 20.0f;
     static constexpr f32 kShockGap = 1.0f; ///< seconds before the lightning strikes one again
     void cry(usize index, std::string_view which, std::span<PlayerRuntime> players);
-    std::optional<Vec3> aim(const PlayerActor& actor, const Vec3& facing,
-                            const Targets& targets) const;
+    std::optional<Vec3> aim(const PlayerActor& actor, const Vec3& facing, const Targets& targets,
+                            bool fixedFacing = false) const;
     /** What the attack buttons ask of a character: a close attack when something is within
      * a swing, or within a step while the stick moves, else a throw. `chain` is how far into
      * a chain of close attacks it is. */

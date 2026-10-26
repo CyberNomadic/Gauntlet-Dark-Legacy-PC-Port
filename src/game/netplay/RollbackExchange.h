@@ -48,10 +48,10 @@ public:
         Rejected
     };
     enum class Failure : u8 { None, Conflict, Window, Disconnected, Transport };
-    // 68 bytes plus the existing bounded 904-byte input codec. Three seats'
-    // eight frames use two datagrams, each containing complete owned-seat frames.
+    // The room adds one byte; keep inputs in one 1000-byte provider fragment.
+    // Variable console text splits earlier, between complete owned-seat frames.
     static constexpr usize kHeaderBytes = 68;
-    static constexpr usize kMaxBytes = kHeaderBytes + InputPacket::kMaxBytes;
+    static constexpr usize kMaxBytes = 999;
     static constexpr usize kHistory = 128;
     static constexpr u8 kVersion = 2;
     static constexpr u32 kMaxProgressAgeUs =
@@ -76,7 +76,11 @@ public:
      * duplicate/reordered reports may still contain useful inputs and ACKs. */
     Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes, s32 pingMs,
                       const std::function<bool(const Message&, std::optional<u8>)>& consume);
-    bool flush(PacketTransport& transport);
+    /** An optional closed-link result lets the owning session drop a guest before
+     * marking the exchange failed. Handle it only after flush returns: dropping a
+     * peer can retire this exchange while completing a stage transition. */
+    bool flush(PacketTransport& transport,
+               PacketTransport::Connection* closedConnection = nullptr);
     void disconnected(PacketTransport::Connection connection);
     /** Forgets a direct link that closed without failing the stream: the host's relay
      * still carries that peer's inputs. */

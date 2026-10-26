@@ -69,7 +69,7 @@ WorldMotion::State WorldMotion::capture(const WorldAnimator& animator,
         result.collision.push_back(
             static_cast<u8>((collision.solid(object) ? kSolid : 0) |
                             (collision.contactOnly(object) ? kContactOnly : 0) |
-                            (collision.floorExitBlocked(object) ? kFloorExitBlocked : 0)));
+                            (collision.ownFloorExitBlocked(object) ? kFloorExitBlocked : 0)));
     }
     return result;
 }

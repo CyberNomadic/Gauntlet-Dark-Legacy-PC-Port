@@ -111,12 +111,20 @@ std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> p
         const PlayerActor& actor = runtime.actor;
         // Against an open chest, a character reaches what lies in it; the fallen reach
         // nothing, nor does one the console flies.
-        const Vec3 here =
-            runtime.life == PlayerLife::Standing && !runtime.departed && !runtime.ghost
-                ? actor.position()
-                : kNowhere;
+        const bool canCollect =
+            runtime.life == PlayerLife::Standing && !runtime.departed && !runtime.ghost;
+        const Vec3 here = canCollect ? actor.position() : kNowhere;
         const s32 chest = chests.holdingTouchedBy(ChestVisitor{here, actor.radius()});
-        Vec3 from = here;
+        // PlayerMotion's first sItems sweep (8008760C) uses effectpos + dpos
+        // before walls clip the step. effectpos is feet + PDAT coly, not the
+        // floor position. Both offsets matter for crystals along a wall/ledge.
+        Vec3 from = canCollect ? actor.stepAim() + (actor.followPoint() - actor.position())
+                               : kNowhere;
+        if (canCollect && ComboMove::flies(runtime.combo)) {
+            // Pinball flight advances with slide(), not an ordinary input step;
+            // it must not retain the last walk's attempted target.
+            from = actor.followPoint();
+        }
         if (chest >= 0) {
             const s32 held = chests.chest(static_cast<usize>(chest)).held;
             from = world.placedItems().item(static_cast<usize>(held)).position;
@@ -456,8 +464,9 @@ bool PartyPickups::announceTowerUnlock(std::span<PlayerRuntime> players, const S
     const auto participates = [](const PlayerRuntime& runtime) {
         const auto& save = runtime.actor.save();
         const auto* costume = hiddenCostume(save.name);
-        return !runtime.departed && (costume == nullptr || costume->character != save.character ||
-                                     costume->directory != "SUM");
+        return !runtime.departed && save.character != kSumnerClass &&
+               (costume == nullptr || costume->character != save.character ||
+                costume->directory != "SUM");
     };
     // TowerCheckMessages looks to the gargoyles' pieces first (completion record A: the
     // fangs, feathers and claws), then to completion2[0..7], excluding the black-crystal

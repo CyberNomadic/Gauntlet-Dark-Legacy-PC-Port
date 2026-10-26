@@ -33,6 +33,8 @@ class DevConsole {
 public:
     using Arguments = std::span<const std::string>;
     using Handler = std::function<void(DevConsole& console, Arguments arguments)>;
+    using Gate = std::function<bool(std::string_view name)>;
+    using Dispatch = std::function<bool(DevConsole&, std::string_view, Arguments)>;
 
     static constexpr s32 kLanes = 4;
     static constexpr s32 kWidth = StatusBoxPainter::kWidth * kLanes; ///< the status strip's
@@ -71,6 +73,12 @@ public:
 
     /** Registers `name`, matched ignoring case; `summary` is what `help` says of it. */
     void addCommand(std::string name, std::string summary, Handler handler);
+    /** A session policy applies to help as well as execution. Dispatch may consume a
+     * parsed command (e.g. queue it for a shared tick) instead of invoking its handler. */
+    void setPolicy(Gate gate, Dispatch dispatch = {}) {
+        m_gate = std::move(gate);
+        m_dispatch = std::move(dispatch);
+    }
     /** Appends output, a line per line break, each wrapped to the screen's columns at
      * spaces where it can be. */
     void print(std::string_view text);
@@ -87,6 +95,8 @@ public:
 
     /** Slides the console the other way; coming down, the caret starts shown. */
     void toggle();
+    /** Revocation closes immediately and discards unfinished text, not history. */
+    void close();
     /** Whether the console holds the keyboard: it is down or coming down. */
     bool open() const { return m_open; }
     /** Whether any of the screen shows. */
@@ -137,6 +147,8 @@ private:
     TextureSet m_textures;
     TextPainter m_text;
     std::vector<Command> m_commands;
+    Gate m_gate;
+    Dispatch m_dispatch;
     std::vector<std::string> m_output;
     std::vector<std::string> m_history;
     std::vector<std::pair<std::string, std::string>> m_variables; ///< by upper-case name

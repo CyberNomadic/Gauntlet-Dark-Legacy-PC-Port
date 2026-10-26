@@ -21,6 +21,8 @@ struct ObjectMaterial {
     bool deferAlways = false; ///< a glow or sort-behind object: deferred while sorted
     u32 facing = 0;
     f32 sortBias = 0;
+    f32 distanceFadeRange = 0; ///< view-depth range of an authored near-camera fade
+    f32 distanceSortScale = 1; ///< AddDistObject's separate near-fade ordering rule
 
     static constexpr ObjectMaterial fromFlags(u32 flags) {
         using namespace object_flags;
@@ -39,7 +41,14 @@ struct ObjectMaterial {
                 .sorted = (flags & kSorted) != 0,
                 .deferAlways = (flags & kDeferAlways) != 0,
                 .facing = (flags >> kFacingShift) & kFacingMask,
-                .sortBias = bias};
+                .sortBias = bias,
+                // MBSetupObject: lbl_80343EC0 / lbl_80343EC4, 100 / 200 world units.
+                .distanceFadeRange = (flags & kDistanceFade) == 0 ? 0.0f
+                                     : (flags & 0x100000) != 0    ? 200.0f
+                                                                  : 100.0f,
+                .distanceSortScale = (flags & kSortBehind) != 0 ? 0.00001f
+                                     : (flags & kSortBack) != 0 ? 0.001f
+                                                                : 1.0f};
     }
 
     /** Whether the object is drawn after the solids, farthest first, at `alpha`. */

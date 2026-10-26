@@ -108,6 +108,14 @@ public:
     const MatchParty* travelParty() const;
     bool loaded();
     bool requestMovieSkip(u8 seat);
+    /** Room policy, host-only and off by default. Revocation cancels queued guest
+     * requests, never input commands already admitted to the timeline. */
+    bool setConsolePermissions(bool enabled);
+    bool consolePermissions() const { return m_consolePermissions; }
+    /** Reliable request for the calling peer's seat. The host consumes accepted
+     * requests into its own next immutable input, never executes them on receipt. */
+    bool requestConsole(const ConsoleAction& action);
+    std::optional<ConsoleAction> takeConsoleRequest();
     bool movieSkipReady() const;
     u8 movieSkipVotes() const { return m_movieSkipVotes; }
     /** Global pause has no shared tick boundary and is deliberately unsupported. */
@@ -241,6 +249,10 @@ private:
     bool finishNativeDrain();
     Admission control(u8 peer, const MatchControl& message);
     Admission checkpoint(u8 peer, const PartyCheckpoint& message);
+    bool consoleReady() const;
+    Admission consoleMessage(u8 peer, std::span<const u8> bytes);
+    bool admitConsole(u8 peer, u64 epoch, u64 revision, u64 request, u32 grant,
+                      const ConsoleAction& action);
 
     Phase m_phase = Phase::Offline;
     MatchStop m_stop = MatchStop::None;
@@ -276,6 +288,17 @@ private:
     ShopSync m_shop;
     f64 m_loadingSeconds = 0;
     std::deque<ControlDelivery> m_controls;
+    struct ConsoleRequest {
+        u8 peer = 0;
+        u64 epoch = 0;
+        ConsoleAction action;
+    };
+    static constexpr usize kConsoleRequests = 32;
+    bool m_consolePermissions = false;
+    u64 m_consoleRevision = 0;
+    u64 m_consoleNextRequest = 0;
+    std::array<u64, 5> m_consoleSeen{};
+    std::deque<ConsoleRequest> m_consoleRequests;
     std::deque<ControlDelivery> m_journalDeliveries;
     std::map<u64, NativeAgreement::Digest> m_recentDigests;
     std::optional<Resync> m_resync;

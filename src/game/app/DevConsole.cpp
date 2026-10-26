@@ -129,7 +129,11 @@ void DevConsole::run(std::string_view line) {
         }
     }
     if (const Command* command = find(parts.front())) {
-        command->handler(*this, Arguments{parts}.subspan(1));
+        if (m_gate && !m_gate(command->name)) {
+            print("This command is not available in this session.");
+        } else if (!m_dispatch || !m_dispatch(*this, command->name, Arguments{parts}.subspan(1))) {
+            command->handler(*this, Arguments{parts}.subspan(1));
+        }
     } else {
         print(kBadCommand);
     }
@@ -168,6 +172,9 @@ void DevConsole::help() {
         widest = std::max(widest, command.name.size());
     }
     for (const Command& command : m_commands) {
+        if (m_gate && !m_gate(command.name)) {
+            continue;
+        }
         print(std::format("{:<{}}  {}", command.name, widest, command.summary));
     }
 }
@@ -180,6 +187,17 @@ void DevConsole::toggle() {
     for (HeldKey* key : {&m_backspace, &m_left, &m_right}) {
         key->held = 0.0;
     }
+}
+
+void DevConsole::close() {
+    if (m_open) {
+        toggle();
+    }
+    m_slide = 0;
+    m_line.clear();
+    m_pending.clear();
+    m_cursor = 0;
+    m_recalled = m_history.size();
 }
 
 s32 DevConsole::strokes(HeldKey& key, const Input& input, f64 deltaSeconds) {

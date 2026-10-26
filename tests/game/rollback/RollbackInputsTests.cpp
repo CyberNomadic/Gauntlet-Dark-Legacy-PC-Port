@@ -68,6 +68,43 @@ struct Fixture {
 bool same(const InputCommand& a, const InputCommand& b) {
     return InputPacket::encode(std::span{&a, 1}) == InputPacket::encode(std::span{&b, 1});
 }
+
+TEST_CASE("only host input admits console actions and prediction never repeats them",
+          "[netplay][rollback-inputs][console-input]") {
+    constexpr RollbackInputs::Owners kOwners{1, 2, 0, 0};
+    constexpr RollbackInputs::Grants kGrants{10, 11, 0, 0};
+    RollbackInputs guest;
+    REQUIRE(guest.open(2, kEpoch, kOwners, kGrants, 0));
+    const auto command = [](u8 seat, u64 tick) {
+        InputCommand value;
+        value.epoch = kEpoch;
+        value.tick = tick;
+        value.grant = 10 + seat;
+        value.seat = seat;
+        return value;
+    };
+    auto host = command(0, 1);
+    host.console = ConsoleAction{1, "god"};
+    host.consoleFlight = {0, 1, 0};
+    REQUIRE(guest.submit(1, std::array{host}) == Admission::Accepted);
+    REQUIRE(guest.sample(std::array{command(1, 1)}));
+    REQUIRE(guest.advance());
+    REQUIRE(guest.sample(std::array{command(1, 2)}));
+    const auto predicted = guest.advance();
+    REQUIRE(predicted);
+    CHECK_FALSE(predicted->commands[0].console);
+    CHECK(predicted->commands[0].consoleFlight == host.consoleFlight);
+    host.tick = 2;
+    REQUIRE(guest.submit(1, std::array{host}) == Admission::Accepted);
+    CHECK(guest.mismatchTick() == 2);
+
+    Fixture receiving({1, 2, 0, 0});
+    auto forged = receiving.frame(2, 1);
+    forged.front().console = ConsoleAction{1, "god"};
+    CHECK(receiving.inputs.submit(2, forged) == Admission::WrongPeer);
+    CHECK_FALSE(receiving.inputs.adoptActual(forged.front()));
+    CHECK_FALSE(guest.sample(std::array{forged.front()}));
+}
 TEST_CASE("adopted journal input is actual for every seat and sampling resumes after it",
           "[netplay][rollback-inputs][journal]") {
     RollbackInputs inputs;

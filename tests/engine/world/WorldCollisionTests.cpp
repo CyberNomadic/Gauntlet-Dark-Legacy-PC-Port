@@ -199,6 +199,40 @@ TEST_CASE("repeated moving collision placement preserves first identity and corr
     CHECK_FALSE(collision.canRestoreLocal(start));
 }
 
+TEST_CASE("moving floor locks inherit from parents without owning the inherited bit",
+          "[world][collision][lift-floor-inheritance]") {
+    WorldCollision collision;
+    const std::array<s32, 4> parents{-1, 0, 1, -1};
+    collision.build(room(), parents);
+    collision.setFloorExitBlocked(0, true);
+    CHECK(collision.floorExitBlocked(0));
+    CHECK(collision.floorExitBlocked(1));
+    CHECK(collision.floorExitBlocked(2));
+    CHECK_FALSE(collision.ownFloorExitBlocked(1));
+    CHECK_FALSE(collision.ownFloorExitBlocked(2));
+    CHECK_FALSE(collision.floorExitBlocked(3));
+    CHECK_FALSE(collision.floorExitBlocked(-1));
+    WorldCollision::LocalSnapshot held;
+    collision.saveLocal(held);
+    collision.setFloorExitBlocked(0, false);
+    CHECK_FALSE(collision.floorExitBlocked(2));
+    REQUIRE(collision.restoreLocal(held));
+    CHECK(collision.floorExitBlocked(2));
+    collision.setFloorExitBlocked(1, true);
+    collision.setFloorExitBlocked(0, false);
+    CHECK(collision.floorExitBlocked(2)); // the child may independently hold its own riders
+    collision.setFloorExitBlocked(1, false);
+    CHECK_FALSE(collision.floorExitBlocked(2));
+    NativeStateDigest parented;
+    REQUIRE(collision.appendNativeDigest(parented));
+    collision.build(room());
+    NativeStateDigest unparented;
+    REQUIRE(collision.appendNativeDigest(unparented));
+    CHECK(parented.finish() != unparented.finish());
+    collision.setFloorExitBlocked(0, true);
+    CHECK_FALSE(collision.floorExitBlocked(1)); // rebuilding discards the previous hierarchy
+}
+
 TEST_CASE("collision placement reuse does not discard signed zero transform changes",
           "[world][collision][local-rewind][collision-placement-reuse]") {
     WorldCollision collision;

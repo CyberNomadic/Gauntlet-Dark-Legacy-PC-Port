@@ -27,6 +27,45 @@ using Catch::Approx;
 constexpr std::array<Key, 1> kToggle{Key::Grave};
 constexpr f64 kTick = 1.0 / 60.0;
 
+TEST_CASE("console policy hides host commands and prevents their handlers running",
+          "[console][online-console]") {
+    DevConsole console;
+    bool host = false;
+    s32 calls = 0;
+    console.addCommand("console_permissions", "host-only switch",
+                       [&](DevConsole&, DevConsole::Arguments) { ++calls; });
+    console.setPolicy([&](std::string_view name) { return host || name != "console_permissions"; });
+    console.run("help");
+    REQUIRE(std::ranges::none_of(console.output(), [](const auto& line) {
+        return line.contains("host-only switch");
+    }));
+    console.run("CONSOLE_PERMISSIONS 1");
+    REQUIRE(calls == 0);
+    host = true;
+    console.run("console_permissions 1");
+    REQUIRE(calls == 1);
+}
+
+TEST_CASE("console dispatch routes expanded commands without mutating the local scene",
+          "[console][online-console]") {
+    DevConsole console;
+    s32 localCalls = 0;
+    std::string received;
+    console.addCommand("get", "give an item", [&](DevConsole&, DevConsole::Arguments) {
+        ++localCalls;
+    });
+    console.setVariable("ITEM", "gold");
+    console.setPolicy({}, [&](DevConsole&, std::string_view name, DevConsole::Arguments args) {
+        REQUIRE(name == "get");
+        REQUIRE(args.size() == 2);
+        received = args[0] + " " + args[1];
+        return true;
+    });
+    console.run("GET $ITEM 100");
+    REQUIRE(received == "gold 100");
+    REQUIRE(localCalls == 0);
+}
+
 /** One poll of the keyboard: the keys held, the characters typed and the wheel's motion. */
 struct Poll {
     std::vector<Key> down;
@@ -65,6 +104,26 @@ void press(DevConsole& console, Input& input, Key key) {
 void enter(DevConsole& console, Input& input, std::string_view text) {
     type(console, input, text);
     press(console, input, Key::Enter);
+}
+
+TEST_CASE("revoking console access immediately releases input and unfinished text",
+          "[console][online-console]") {
+    DevConsole console;
+    Input input;
+    press(console, input, Key::Grave);
+    enter(console, input, "help");
+    type(console, input, "get gold 1000");
+    REQUIRE(console.open());
+    REQUIRE_FALSE(console.line().empty());
+    const auto historySize = console.history().size();
+    console.close();
+    REQUIRE_FALSE(console.open());
+    REQUIRE_FALSE(console.visible());
+    REQUIRE(console.line().empty());
+    REQUIRE(console.cursor() == 0);
+    REQUIRE(console.history().size() == historySize);
+    press(console, input, Key::Grave);
+    REQUIRE(console.line().empty());
 }
 
 bool mentions(std::span<const std::string> lines, std::string_view text) {

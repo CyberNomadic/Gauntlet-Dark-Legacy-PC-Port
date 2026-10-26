@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -7,6 +8,7 @@
 #include "engine/assets/ModelSet.h"
 #include "engine/assets/WorldLayout.h"
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/math/Math.h"
 
 #include "FakeRenderDevice.h"
@@ -20,6 +22,29 @@ using namespace gdl::game;
 
 std::filesystem::path unpackedRoot() {
     return test::assetOrSkip("LEVELS/LEVELA1/WORLDS.PS2").parent_path().parent_path().parent_path();
+}
+
+TEST_CASE("spawned object snapshots reject another owner and an expired stage binding",
+          "[level][spawned-objects][dev-console][local-rewind]") {
+    SpawnedObjects objects;
+    SpawnedObjects other;
+    SpawnedObjects::LocalSnapshot before;
+    objects.saveLocal(before);
+    REQUIRE(objects.canRestoreLocal(before));
+    REQUIRE(objects.restoreLocal(before));
+    CHECK_FALSE(other.canRestoreLocal(before));
+    CHECK_FALSE(other.restoreLocal(before));
+    NativeStateDigest live;
+    NativeStateDigest saved;
+    REQUIRE(objects.appendNativeDigest(live));
+    REQUIRE(objects.appendLocalDigest(saved, before));
+    CHECK(live.checkedFinish() == saved.checkedFinish());
+    objects.clear();
+    CHECK_FALSE(objects.canRestoreLocal(before));
+    CHECK_FALSE(objects.restoreLocal(before));
+    NativeStateDigest expired;
+    CHECK_FALSE(objects.appendLocalDigest(expired, before));
+    CHECK_FALSE(expired.checkedFinish());
 }
 
 TEST_CASE("an object's tree is the object at the root with its descendants at their offsets",
@@ -105,6 +130,88 @@ TEST_CASE("objects are stood out of their own level's archive, kept once per lev
     spawned.clear();
     CHECK(spawned.count() == 0);
     CHECK(spawned.sourceCount() == 0);
+}
+
+TEST_CASE("console object births rewind without duplicating or rebinding their models",
+          "[level][spawned-objects][dev-console][local-rewind][assets]") {
+    const auto root = unpackedRoot();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("A1");
+    REQUIRE(level);
+    WorldLayout layout;
+    ModelSet models;
+    REQUIRE(layout.load(root / level->directory));
+    REQUIRE(models.load(root / level->directory));
+    std::vector<std::string> names;
+    for (const auto& object : layout.objects()) {
+        if (!object.particles() && models.find(object.name)) {
+            names.push_back(object.name);
+        }
+        if (names.size() == 2) {
+            break;
+        }
+    }
+    REQUIRE(names.size() == 2);
+    test::FakeRenderDevice device;
+    SpawnedObjects objects;
+    SpawnedObjects::LocalSnapshot empty;
+    SpawnedObjects::LocalSnapshot spawned;
+    SpawnedObjects::LocalSnapshot replayed;
+    objects.saveLocal(empty);
+    const auto placement = glm::translate(Mat4{1}, Vec3{10, 20, 30});
+    REQUIRE(objects.spawn(device, root, *level, names[0], placement));
+    objects.saveLocal(spawned);
+    const auto textures = device.texturesCreated;
+    const auto view = objects.view(0);
+    REQUIRE(objects.bindingCount() == 1);
+    NativeStateDigest original;
+    REQUIRE(objects.appendNativeDigest(original));
+    REQUIRE(objects.restoreLocal(empty));
+    CHECK(objects.count() == 0);
+    CHECK(objects.bindingCount() == 1);
+    device.draws.clear();
+    objects.draw(device, Mat4{1}, {});
+    CHECK(device.draws.empty());
+    REQUIRE(objects.spawn(device, root, *level, names[0], placement));
+    CHECK(objects.count() == 1);
+    CHECK(objects.bindingCount() == 1);
+    CHECK(device.texturesCreated == textures);
+    CHECK(objects.view(0).name == view.name);
+    CHECK(objects.view(0).position == view.position);
+    objects.saveLocal(replayed);
+    CHECK(objects.equalLocal(spawned, replayed));
+    NativeStateDigest corrected;
+    REQUIRE(objects.appendNativeDigest(corrected));
+    CHECK(corrected.checkedFinish() == original.checkedFinish());
+
+    // Retaining a different predicted object cannot leak its cache into native state.
+    REQUIRE(objects.restoreLocal(empty));
+    REQUIRE(objects.spawn(device, root, *level, names[1], Mat4{1}));
+    REQUIRE(objects.restoreLocal(spawned));
+    CHECK(objects.count() == 1);
+    CHECK(objects.bindingCount() == 2);
+    NativeStateDigest afterDifferentPrediction;
+    REQUIRE(objects.appendNativeDigest(afterDifferentPrediction));
+    CHECK(afterDifferentPrediction.checkedFinish() == original.checkedFinish());
+    NativeStateDigest historical;
+    REQUIRE(objects.appendLocalDigest(historical, spawned));
+    CHECK(historical.checkedFinish() == original.checkedFinish());
+    device.draws.clear();
+    objects.draw(device, Mat4{1}, {});
+    CHECK_FALSE(device.draws.empty());
+
+    auto invalidPlacement = placement;
+    invalidPlacement[3].x = std::numeric_limits<f32>::infinity();
+    CHECK_FALSE(objects.spawn(device, root, *level, names[0], invalidPlacement));
+    CHECK(objects.count() == 1);
+    while (objects.count() < SpawnedObjects::kMaxObjects) {
+        REQUIRE(objects.spawn(device, root, *level, names[0], placement));
+    }
+    CHECK_FALSE(objects.spawn(device, root, *level, names[0], placement));
+    REQUIRE(objects.restoreLocal(empty));
+    CHECK(objects.count() == 0);
+    CHECK(objects.bindingCount() == 2);
 }
 
 } // namespace

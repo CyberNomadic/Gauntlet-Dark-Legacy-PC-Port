@@ -1280,8 +1280,12 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
                 continue;
             }
             const Vec3 struck = targets.opponents.critters().positionOf(id);
+            Vec3 direction{struck.x - at.x, 0, struck.z - at.z};
+            if (const f32 length = glm::length(direction); length > 0) {
+                direction /= length; // CritterExpCollide normalizes the radial XZ direction.
+            }
             const f32 credit =
-                targets.opponents.strikeCritter(id, shield.damage, shield.flags, struck - at,
+                targets.opponents.strikeCritter(id, shield.damage, shield.flags, direction,
                                                 actor.player(), std::nullopt, false, players);
             healHit(actor.player(), shield.flags, credit, struck, players, targets);
         }
@@ -1582,20 +1586,32 @@ std::vector<MissileTarget> PlayerAttacks::projectileTargets(const Targets& targe
 }
 
 std::optional<Vec3> PlayerAttacks::aim(const PlayerActor& actor, const Vec3& facing,
-                                       const Targets& targets) const {
+                                       const Targets& targets, bool fixedFacing) const {
     if (!m_resources) {
         return std::nullopt;
     }
     auto candidates = acquisitionTargets(targets);
     const f32 range =
         targets.opponents.bosses().view().alive ? TargetAssist::kBossRange : TargetAssist::kRange;
-    if (const auto contact = contactEnemy(actor, targets, facing, range);
-        contact && contact->acquisition) {
-        return contact->acquisition->point;
+    if (!fixedFacing) {
+        if (const auto contact = contactEnemy(actor, targets, facing, range);
+            contact && contact->acquisition) {
+            return contact->acquisition->point;
+        }
+    }
+    Vec3 origin = actor.followPoint();
+    if (fixedFacing) {
+        // Acquisition must use the actual hand-offset line, not a parallel ray
+        // through the player's feet which can miss a small creature entirely.
+        if (auto weapon = m_resources->arsenal.weaponThrow(actor, 0)) {
+            weapon->direction = facing;
+            weapon->shots = 1;
+            origin = PlayerMissiles::weaponLaunches(*weapon).front().position;
+        }
     }
     const auto ordinary =
-        TargetAssist::select(actor.followPoint(), facing, candidates, range,
-                             &m_resources->world.collision(), m_resources->acquisitionCone);
+        TargetAssist::select(origin, facing, candidates, range, &m_resources->world.collision(),
+                             m_resources->acquisitionCone, fixedFacing);
     if (ordinary || targets.multiplayer != MultiplayerMode::Hurt) {
         return ordinary;
     }
@@ -1611,8 +1627,8 @@ std::optional<Vec3> PlayerAttacks::aim(const PlayerActor& actor, const Vec3& fac
             }
         }
     }
-    return TargetAssist::select(actor.followPoint(), facing, candidates, range,
-                                &m_resources->world.collision());
+    return TargetAssist::select(origin, facing, candidates, range, &m_resources->world.collision(),
+                                TargetAssist::kFacingDot, fixedFacing);
 }
 
 /** Whether a target id is a creature: an enemy, a great one or a boss, not a thing. */
@@ -2062,12 +2078,11 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
     default: break;
     }
     const Vec3 point = target->base + Vec3{0, target->height * 0.5f, 0};
-    const Vec3 direction = target->base - actor.position();
     const s32 id = target->id;
     if (id >= kPlayerTargetBase) {
         if (targets.hurt) {
             targets.hurt(static_cast<usize>(id - kPlayerTargetBase), damage, HurtKind::Burn,
-                         {flags, glm::normalize(direction)});
+                         {flags, glm::normalize(target->base - actor.position())});
         }
         return true;
     }
@@ -2080,6 +2095,11 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
     if (strikeSwitch(id, flags)) {
         return true;
     }
+    // PlayerMotion_DamageTarget (80086A24): use the player's forward basis
+    // and a damage-scaled lift, not a vector toward an animated collision node.
+    // Large gargoyles can overlap the player or have nodes below their feet.
+    Vec3 direction = actor.facing();
+    direction.y = std::min(0.05f * damage, 2.0f);
     f32 credit = 0.0f;
     if (id >= kWallTargetBase) {
         targets.fixtures.strikeWall(static_cast<usize>(id - kWallTargetBase), damage, flags);
@@ -2311,26 +2331,17 @@ bool PlayerAttacks::dispatchProjectileImpact(
         hit.player = impact.owner;
         hit.where = impact.position;
         hit.node = impact.node;
+        hit.direction = impact.direction;
         for (const PlayerRuntime& runtime : players) {
             const PlayerActor& actor = runtime.actor;
             if (actor.player() == impact.owner) {
-                hit.direction = impact.position - actor.position();
-                hit.direction.y = 0.0f;
                 hit.level = experienceLevel(actor.save().experience());
             }
         }
         credit = targets.opponents.bosses().hurt(hit, impact.target - kBossTargetBase);
     } else if (impact.target >= kCritterTargetBase) {
-        Vec3 direction{0.0f, 0.0f, 1.0f};
-        for (const PlayerRuntime& runtime : players) {
-            const PlayerActor& actor = runtime.actor;
-            if (actor.player() == impact.owner) {
-                direction = impact.position - actor.position();
-                direction.y = 0.0f;
-            }
-        }
         credit = targets.opponents.strikeCritter(impact.target - kCritterTargetBase, impact.damage,
-                                                 impact.flags, direction, impact.owner,
+                                                 impact.flags, impact.direction, impact.owner,
                                                  impact.position, false, players, impact.node);
     } else if (impact.target >= kGeneratorTargetBase) {
         if (!targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
@@ -2338,18 +2349,9 @@ bool PlayerAttacks::dispatchProjectileImpact(
             return false;
         }
     } else if (impact.target >= kEnemyTargetBase) {
-        // The hit travels the way the weapon flew: out from whoever threw it.
-        Vec3 direction{0.0f, 0.0f, 1.0f};
-        for (const PlayerRuntime& runtime : players) {
-            const PlayerActor& actor = runtime.actor;
-            if (actor.player() == impact.owner) {
-                direction = impact.position - actor.position();
-                direction.y = 0.0f;
-            }
-        }
         credit = targets.opponents.strikeEnemy(impact.target - kEnemyTargetBase, impact.damage,
-                                               impact.flags, direction, impact.owner, players,
-                                               false, impact.position);
+                                               impact.flags, impact.direction, impact.owner,
+                                               players, false, impact.position);
     } else if (impact.target >= 0) {
         if (!targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
                                            impact.owner, players, targets.fixtureEvents, barrels)) {
@@ -2513,6 +2515,9 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
             }
             burst.hit.push_back(target.id);
             direction.y = 0;
+            if (const f32 length = glm::length(direction); length > 0) {
+                direction /= length;
+            }
             const s32 byPlayer = burst.impact.owner;
             if (immuneToMagic(target.id, targets)) {
                 continue;

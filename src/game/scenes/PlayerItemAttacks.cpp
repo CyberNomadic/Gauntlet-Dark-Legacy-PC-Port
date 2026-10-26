@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "engine/core/Types.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/characters/Progression.h"
 #include "game/party/PlayerAttacks.h"
@@ -157,7 +158,11 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
 void PlayerAttacks::strikeTarget(const MissileTarget& target, f32 damage, u32 flags,
                                  const PlayerActor& owner, std::span<PlayerRuntime> players,
                                  const Targets& targets) {
-    const Vec3 direction = target.base - owner.position();
+    // ProcessEffects' area query (CritterExpCollide) returns a horizontal unit
+    // vector, not distance from the owner; that input is accumulated verbatim.
+    const Vec3 away = target.base - owner.position();
+    const f32 across = portable::hypot(away.x, away.z);
+    const Vec3 direction = across > 0 ? Vec3{away.x, 0.0f, away.z} / across : Vec3{0};
     if (target.id >= kStatueTargetBase) {
         targets.opponents.wakeStatue(static_cast<usize>(target.id - kStatueTargetBase));
         return;

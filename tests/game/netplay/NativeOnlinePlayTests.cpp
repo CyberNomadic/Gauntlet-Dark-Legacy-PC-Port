@@ -565,6 +565,192 @@ TEST_CASE("native online local pause fences only the owned device while agreed t
     CHECK_FALSE(pair->host.resume(kHostDevice));
 }
 
+TEST_CASE(
+    "online console permission routes guest mutations to its canonical seat and revokes requests",
+    "[native-online-play][online-console][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower());
+    pair->settle();
+    auto& host = pair->hostSession.match();
+    auto& guest = pair->guestSession.match();
+    CHECK_FALSE(host.consolePermissions());
+    CHECK_FALSE(guest.consolePermissions());
+    CHECK_FALSE(guest.setConsolePermissions(true));
+    CHECK_FALSE(guest.requestConsole({kSeats[1], "get gold 321"}));
+    REQUIRE(host.setConsolePermissions(true));
+    for (u32 frame = 0; frame < 10 && !guest.consolePermissions(); ++frame) {
+        pair->step();
+    }
+    REQUIRE(guest.consolePermissions());
+    CHECK_FALSE(guest.requestConsole({kSeats[0], "get gold 999"}));
+    CHECK_FALSE(guest.requestConsole({kSeats[1], "console_permissions 0"}));
+
+    const s32 hostGold = pair->host.scene()->actor(kSeats[0])->save().gold;
+    const s32 guestGold = pair->guest.scene()->actor(kSeats[1])->save().gold;
+    const usize placed = pair->host.world()->placedItems().size();
+    REQUIRE(guest.requestConsole({kSeats[1], "get gold 321"}));
+    REQUIRE(guest.requestConsole({kSeats[1], "god"}));
+    REQUIRE(guest.requestConsole({kSeats[1], "spawn item KEY"}));
+    for (u32 frame = 0; frame < 60; ++frame) {
+        pair->step();
+    }
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        REQUIRE(play->scene());
+        CHECK(play->scene()->actor(kSeats[0])->save().gold == hostGold);
+        CHECK(play->scene()->actor(kSeats[1])->save().gold == guestGold + 321);
+        CHECK_FALSE(play->scene()->cheats(kSeats[0]).god);
+        CHECK(play->scene()->cheats(kSeats[1]).god);
+        CHECK(play->world()->placedItems().size() == placed + 1);
+    }
+    CHECK(pair->host.takeConsoleReplies().empty());
+    CHECK(pair->guest.takeConsoleReplies().size() == 3);
+    CHECK(pair->guest.takeConsoleReplies().empty());
+
+    // The console captures the owner's devices, not shared time or remote controls.
+    pair->guest.consoleCapture(true);
+    const auto tick = pair->host.simulatedTick();
+    SessionInputs::Frame first;
+    SessionInputs::Frame second;
+    first[kHostDevice].move = {{1, 0}, 0.5f};
+    second[kGuestDevice].move = {{-1, 0}, 0.5f};
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step(first, second);
+    }
+    CHECK(pair->host.simulatedTick() > tick + 20);
+    CHECK(pair->guest.phase() == NativeOnlinePlay::Phase::Playing);
+    CHECK(pair->host.scene()->actor(kSeats[0])->moving());
+    CHECK_FALSE(pair->host.scene()->actor(kSeats[1])->moving());
+    CHECK_FALSE(pair->guest.scene()->actor(kSeats[1])->moving());
+    pair->guest.consoleCapture(false);
+
+    // Admission by the host and execution by the simulation are separate. A
+    // revocation before sampling cancels even an already delivered guest request.
+    REQUIRE(guest.requestConsole({kSeats[1], "notarget"}));
+    pair->guestSession.update(0);
+    pair->hostSession.update(0);
+    REQUIRE(host.setConsolePermissions(false));
+    for (u32 frame = 0; frame < 60; ++frame) {
+        pair->step();
+    }
+    CHECK_FALSE(guest.consolePermissions());
+    CHECK_FALSE(guest.requestConsole({kSeats[1], "god"}));
+    CHECK_FALSE(pair->host.scene()->cheats(kSeats[1]).noTarget);
+    CHECK_FALSE(pair->guest.scene()->cheats(kSeats[1]).noTarget);
+    CHECK(pair->guest.takeConsoleReplies().empty());
+    // Revocation does not undo a previously confirmed command, or deny the host.
+    CHECK(pair->guest.scene()->cheats(kSeats[1]).god);
+    REQUIRE(host.requestConsole({kSeats[0], "get gold 27"}));
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step();
+    }
+    CHECK(pair->host.scene()->actor(kSeats[0])->save().gold == hostGold + 27);
+    CHECK(pair->guest.scene()->actor(kSeats[0])->save().gold == hostGold + 27);
+    CHECK(pair->host.takeConsoleReplies().size() == 1);
+    CHECK(pair->guest.takeConsoleReplies().empty());
+}
+
+TEST_CASE("guest console travel and tower unlock share the confirmed online load boundary",
+          "[native-online-play][online-console][native-travel][assets]") {
+    auto pair = std::make_unique<NativePair>(immediateTower(), "", false);
+    pair->settle();
+    REQUIRE(pair->hostSession.match().setConsolePermissions(true));
+    for (u32 frame = 0; frame < 10 && !pair->guestSession.match().consolePermissions(); ++frame) {
+        pair->step();
+    }
+    REQUIRE(pair->guestSession.match().consolePermissions());
+    const auto travel = [&](std::string_view line, std::string_view destination) {
+        const auto epoch = pair->hostSession.match().context().epoch;
+        REQUIRE(pair->guestSession.match().requestConsole({kSeats[1], std::string{line}}));
+        for (u32 frame = 0; frame < 3600; ++frame) {
+            pair->step();
+            if (pair->hostSession.match().context().epoch > epoch &&
+                pair->guestSession.match().context().epoch > epoch &&
+                pair->host.phase() == NativeOnlinePlay::Phase::Playing &&
+                pair->guest.phase() == NativeOnlinePlay::Phase::Playing) {
+                break;
+            }
+        }
+        REQUIRE(pair->host.phase() == NativeOnlinePlay::Phase::Playing);
+        REQUIRE(pair->guest.phase() == NativeOnlinePlay::Phase::Playing);
+        const auto& context = pair->hostSession.match().context();
+        REQUIRE(context.epoch > epoch);
+        CHECK(context.sourceEpoch == epoch);
+        CHECK(context.sourceTick > 0);
+        CHECK(context == pair->guestSession.match().context());
+        REQUIRE(pair->host.world());
+        REQUIRE(pair->guest.world());
+        CHECK(pair->host.world()->ref().name == destination);
+        CHECK(pair->guest.world()->ref().name == destination);
+        CHECK(pair->host.shopScene() == nullptr);
+        CHECK(pair->guest.shopScene() == nullptr);
+        CHECK(pair->hostSession.match().consolePermissions());
+        CHECK(pair->guestSession.match().consolePermissions());
+        pair->settle();
+    };
+    REQUIRE(pair->guestSession.match().requestConsole({kSeats[1], "god"}));
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step();
+    }
+    travel("goto G1", "G1");
+    const auto* hostParent = pair->host.scene();
+    const auto* guestParent = pair->guest.scene();
+    CHECK(hostParent->cheats(kSeats[1]).god);
+    CHECK(guestParent->cheats(kSeats[1]).god);
+    travel("goto S4", "S4");
+    CHECK(pair->hostSession.match().context().transition == MatchTransition::SecretEnter);
+    CHECK(pair->host.scene() != hostParent);
+    CHECK(pair->guest.scene() != guestParent);
+    CHECK(pair->host.scene()->cheats(kSeats[1]).god);
+    CHECK(pair->guest.scene()->cheats(kSeats[1]).god);
+    REQUIRE(pair->guestSession.match().requestConsole({kSeats[1], "god"}));
+    REQUIRE(pair->guestSession.match().requestConsole({kSeats[1], "notarget"}));
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step();
+    }
+    travel("goto S1", "S1");
+    CHECK(pair->hostSession.match().context().transition == MatchTransition::Travel);
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        CHECK_FALSE(play->scene()->cheats(kSeats[1]).god);
+        CHECK(play->scene()->cheats(kSeats[1]).noTarget);
+    }
+    travel("goto G1", "G1");
+    CHECK(pair->hostSession.match().context().transition == MatchTransition::SecretReturn);
+    CHECK_FALSE(pair->hostSession.match().context().challengeWon);
+    CHECK(pair->host.scene() == hostParent);
+    CHECK(pair->guest.scene() == guestParent);
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        CHECK_FALSE(play->scene()->consoleTravelRequest());
+        CHECK_FALSE(play->scene()->secretTravel());
+        CHECK_FALSE(play->scene()->cheats(kSeats[1]).god);
+        CHECK(play->scene()->cheats(kSeats[1]).noTarget);
+    }
+    const auto returnedEpoch = pair->hostSession.match().context().epoch;
+    for (u32 frame = 0; frame < 30; ++frame) {
+        pair->step();
+    }
+    CHECK(pair->hostSession.match().context().epoch == returnedEpoch);
+    CHECK(pair->guestSession.match().context().epoch == returnedEpoch);
+    // Leaving a challenge for a different normal map discards its suspended
+    // parent instead of trying to resume it or awarding the challenge reward.
+    travel("goto S4", "S4");
+    travel("goto G2", "G2");
+    CHECK(pair->hostSession.match().context().transition == MatchTransition::Travel);
+    travel("goto tower", "L1");
+    travel("unlock_tower", "L1");
+    for (const auto* play : {&pair->host, &pair->guest}) {
+        for (const auto seat : kSeats) {
+            REQUIRE(play->scene()->actor(seat));
+            const auto& relics = play->scene()->actor(seat)->save().progress().relics;
+            CHECK(relics.runeCount() == Relics::kRuneCount);
+            CHECK(relics.pendingRunes == 0);
+            CHECK(relics.pendingShards == 0);
+        }
+    }
+    CHECK(pair->hostSaves == 0);
+    CHECK(pair->guestSaves == 0);
+    CHECK(pair->hostAwards == 0);
+    CHECK(pair->guestAwards == 0);
+}
+
 TEST_CASE("shipping native online predicts local movement before delayed peer inputs arrive",
           "[native-online-play][native-rollback-online][native-latency][assets]") {
     auto pair = std::make_unique<NativePair>(immediateTower(), "", false, "L1", true);

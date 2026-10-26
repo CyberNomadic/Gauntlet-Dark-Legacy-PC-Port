@@ -104,7 +104,8 @@ std::optional<MissileTarget> TargetAssist::ahead(const Vec3& feet, f32 height, c
 
 std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
                                          std::span<const MissileTarget> targets, f32 range,
-                                         const WorldCollision* collision, f32 facingDot) {
+                                         const WorldCollision* collision, f32 facingDot,
+                                         bool fixedFacing) {
     const f32 facingLength = portable::hypot(facing.x, facing.z);
     if (facingLength < 1e-5f || range <= 0.0f) {
         return std::nullopt;
@@ -126,6 +127,13 @@ std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
             target.acquisition ? target.acquisition->point : target.pointNear(origin);
         const Vec3 offset = point - origin;
         const f32 flat = portable::hypot(offset.x, offset.z);
+        // Cursor aiming owns yaw. Only adjust height for a body already crossing
+        // the firing line, not for another target anywhere in the controller cone.
+        if (fixedFacing &&
+            ((offset.x * facing.x + offset.z * facing.z) <= 0 ||
+             std::abs(offset.x * facing.z - offset.z * facing.x) > target.radius * facingLength)) {
+            continue;
+        }
         const f32 targetRadius = target.surface.empty() ? target.radius : 0.0f;
         const f32 distance = target.acquisition
                                  ? glm::length(offset) * target.acquisition->distanceScale -
@@ -188,6 +196,22 @@ std::optional<Vec3> TargetAssist::select(const Vec3& origin, const Vec3& facing,
     }
     const auto best = std::ranges::min_element(candidates, {}, &Candidate::distance);
     return best != candidates.end() ? std::optional{best->point} : std::nullopt;
+}
+
+std::optional<Vec3> TargetAssist::heightTarget(const Vec3& origin, const Vec3& target,
+                                               const Vec3& facing) {
+    const f32 length = portable::hypot(facing.x, facing.z);
+    if (length < 1e-5f) {
+        return std::nullopt;
+    }
+    const Vec3 direction{facing.x / length, 0, facing.z / length};
+    const f32 along = glm::dot(target - origin, direction);
+    if (along <= 1e-5f) {
+        return std::nullopt;
+    }
+    Vec3 point = origin + direction * along;
+    point.y = target.y;
+    return point;
 }
 
 Vec3 TargetAssist::velocity(const Vec3& origin, const Vec3& target, f32 speed, f32 gravity) {

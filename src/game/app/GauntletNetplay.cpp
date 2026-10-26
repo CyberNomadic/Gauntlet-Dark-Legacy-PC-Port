@@ -32,6 +32,10 @@ void Gauntlet::connectNetplay() {
     }
 }
 void Gauntlet::leaveNetplay() {
+    consoleSelect(std::nullopt);
+    m_console.close();
+    m_freeCamera.stop();
+    window().holdCursor(false);
     m_select.close();
     m_online.reset();
     m_netplay.reset();
@@ -46,6 +50,7 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
     using Page = NetplayMenu::Page;
     using Action = NetplayMenu::Action;
     auto& ui = *m_netplay;
+    const bool consoleOpen = updateOnlineConsole(deltaSeconds, ui.overlay || m_select.isOpen());
     if (ui.digestResult.valid() &&
         ui.digestResult.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         try {
@@ -58,8 +63,12 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
     auto menu = ui.overlay && (ui.view.page == Page::Pause || ui.view.page == Page::Leave)
                     ? readPauseMenuInput(input(), m_config, ui.pauseOwner)
                     : readSharedMenuInput(input(), m_config);
+    if (consoleOpen) {
+        menu = {};
+    }
     if (m_online) {
-        if (!ui.overlay && (menu.start || menu.escape || input().wasKeyPressed(Key::Escape))) {
+        if (!consoleOpen && !ui.overlay &&
+            (menu.start || menu.escape || input().wasKeyPressed(Key::Escape))) {
             ui.pauseOwner = input().wasKeyPressed(Key::Escape) ? -1 : playerPressingStart();
             if (m_online->pause(ui.pauseOwner)) {
                 ui.overlay = true;
@@ -69,8 +78,19 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
                 window().stopRumble();
             }
         }
-        m_online->update(m_select.isOpen() ? SessionInputs::Frame{} : readPlayInputs(deltaSeconds),
+        m_online->update(m_select.isOpen() || consoleOpen ? SessionInputs::Frame{}
+                                                         : readPlayInputs(deltaSeconds),
                          {});
+        // A permission revocation can arrive during this update. Do not keep a guest
+        // console (or its input capture) open for an additional rendered frame.
+        if (!m_online->consoleAllowed()) {
+            consoleSelect(std::nullopt);
+            m_console.close();
+            m_freeCamera.stop();
+            m_online->consoleCapture(false);
+            m_online->consoleView(m_hudHidden, std::nullopt);
+            window().holdCursor(false);
+        }
         ui.view.canSaveCompletedProgress = m_online->hasCompletedProgress();
         if (m_select.isOpen()) {
             updateSelect(deltaSeconds);

@@ -277,6 +277,11 @@ Vec3 readVec3(const Json& array, usize first) {
 
 bool WorldCollision::load(const std::filesystem::path& directory, const WorldLayout& layout) {
     clear();
+    std::vector<s32> parents;
+    parents.reserve(layout.objects().size());
+    for (const auto& object : layout.objects()) {
+        parents.push_back(object.parent);
+    }
     const std::filesystem::path file = directory / "collision.json";
     try {
         if (const auto native = AssetLocator(directory).find("worlds.ps2")) {
@@ -302,7 +307,7 @@ bool WorldCollision::load(const std::filesystem::path& directory, const WorldLay
                                          layout.objects()[i].flags});
                 }
             }
-            build(std::move(triangles));
+            build(std::move(triangles), parents);
             return loaded();
         }
         const Json root = Json::parse(readTextFile(file), nullptr, true, true);
@@ -333,7 +338,7 @@ bool WorldCollision::load(const std::filesystem::path& directory, const WorldLay
                 triangles.push_back(triangle);
             }
         }
-        build(std::move(triangles));
+        build(std::move(triangles), parents);
     } catch (const std::exception& e) {
         log::warn("World collision: cannot read {}: {}", file.string(), e.what());
         clear();
@@ -345,7 +350,8 @@ bool WorldCollision::load(const std::filesystem::path& directory, const WorldLay
 const CanonicalDigestSink::Digest& WorldCollision::geometryDigest() const {
     if (!m_geometryDigest) {
         NativeStateDigest geometry;
-        geometry.string("WorldCollision.geometry/1");
+        geometry.string("WorldCollision.geometry/2");
+        geometry.value(m_objectParents);
         const auto triangles = [&](const auto& values) {
             geometry.wide(values.size());
             for (const auto& value : values) {
@@ -435,9 +441,10 @@ bool WorldCollision::restoreLocal(const LocalSnapshot& saved) {
     return true;
 }
 
-void WorldCollision::build(std::vector<CollisionTriangle> triangles) {
+void WorldCollision::build(std::vector<CollisionTriangle> triangles, std::span<const s32> parents) {
     clear();
     m_triangles = std::move(triangles);
+    m_objectParents.assign(parents.begin(), parents.end());
     index();
 }
 
@@ -533,6 +540,24 @@ void WorldCollision::setFloorExitBlocked(s32 object, bool blocked) {
 }
 
 bool WorldCollision::floorExitBlocked(s32 object) const {
+    if (object < 0 || !solid(object)) {
+        return false;
+    }
+    // PlayerCollideFloor queries WorldObjGetAllFlags, not just the contact
+    // triangle's object. K4's elevator is animated root 231, with floor 232.
+    for (usize depth = 0; depth <= m_objectParents.size(); ++depth) {
+        if (ownFloorExitBlocked(object)) {
+            return true;
+        }
+        if (object < 0 || static_cast<usize>(object) >= m_objectParents.size()) {
+            break;
+        }
+        object = m_objectParents[static_cast<usize>(object)];
+    }
+    return false;
+}
+
+bool WorldCollision::ownFloorExitBlocked(s32 object) const {
     return object >= 0 && solid(object) &&
            std::ranges::find(m_blockedFloorExits, object) != m_blockedFloorExits.end();
 }
@@ -600,6 +625,7 @@ void WorldCollision::clear() {
     m_geometryDigest.reset();
     m_triangles.clear();
     m_moving.clear();
+    m_objectParents.clear();
     m_hidden.clear();
     m_contactOnly.clear();
     m_blockedFloorExits.clear();

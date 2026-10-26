@@ -294,6 +294,50 @@ TEST_CASE("native full-turbo effect tags distinguish duplicate rows and missing 
     fixture.effects.clear();
 }
 
+TEST_CASE("cursor and controller aiming reach a low snake using the native knight hand offset",
+          "[game][player-attacks][cursor-projectile-aim][assets]") {
+    const bool cursorAiming = GENERATE(false, true);
+    CAPTURE(cursorAiming);
+    const auto root =
+        test::assetOrSkip("MONSTERS/SNA/ANIM.PS2").parent_path().parent_path().parent_path();
+    Fixture fixture;
+    REQUIRE(fixture.classes.load(root / "pdata"));
+    auto& actor = fixture.players[0].actor;
+    CharacterSave save;
+    save.character = 1;
+    save.progress().experience = levelExperience(53);
+    actor.spawn(3, save, fixture.classes.stats(save.character), {10, 0, 20}, 0);
+    const auto weapon = fixture.arsenal.weaponThrow(actor, 0);
+    REQUIRE(weapon);
+    const auto unassisted = PlayerMissiles::weaponLaunches(*weapon).front();
+    auto& enemies = fixture.opponents.enemies();
+    enemies.open(fixture.device, root, nullptr, 4, {}, 1);
+    constexpr s32 kSnake = 6;
+    REQUIRE(enemies.loadKind(kSnake));
+    const Vec3 at{unassisted.position.x + 0.3f, 0, unassisted.position.z + 10};
+    REQUIRE(enemies.spawn({.kind = kSnake, .position = at, .placed = true}, {}));
+    const auto target = fixture.attacks.aim(actor, actor.facing(), fixture.targets, cursorAiming);
+    REQUIRE(target);
+    CHECK(target->y == Approx(1.5f));
+    const PlayerFigure figure;
+    const auto corrected = fixture.arsenal.prepareWeapon(actor, figure, actor.facing(), 1, false,
+                                                         target, std::nullopt, cursorAiming);
+    REQUIRE(corrected);
+    REQUIRE(corrected->missiles.size() == 1);
+    REQUIRE(corrected->missiles.front().velocity);
+    if (cursorAiming) {
+        CHECK(corrected->missiles.front().velocity->x == 0);
+    }
+    const auto bodies = enemies.targets();
+    PlayerMissiles assistedPool;
+    REQUIRE(assistedPool.launch(corrected->missiles.front()));
+    for (s32 tick = 0; tick < 45; ++tick) {
+        assistedPool.update(1.0f / 60, nullptr, bodies);
+    }
+    CHECK_FALSE(assistedPool.takeImpacts().empty());
+    enemies.close();
+}
+
 TEST_CASE("touching a swarm enemy takes priority over a fresh barrel aim search",
           "[game][player-attacks][alpha-contact-target]") {
     Fixture f;
@@ -4669,6 +4713,89 @@ TEST_CASE("golem gargoyle general and boss melee contacts report the attacker",
     f.attacks.melee(0, f.players, f.targets);
     CHECK((boss ? bosses.view().health : critters.healthOf(general)) < health);
     CHECK(f.meleeHits == std::vector<s32>{3});
+}
+
+TEST_CASE("native gargoyles recoil from strong throws and melee along the attack direction",
+          "[game][player-attacks][gargoyle][gargoyle-knockback][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GAR_EAGL.WAD").parent_path().parent_path();
+    const auto* form = GENERATE("GAR_EAGL", "GAR_LION", "GAR_SERP");
+    Fixture f;
+    auto& player = f.players[0];
+    player.figure = PlayerFigure::load(f.device, root, player.actor.save(), false);
+    REQUIRE(player.figure);
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    auto& critters = f.opponents.critters();
+    critters.open(f.device, root, nullptr, {}, 'B');
+    const auto id = critters.spawnGargoyle({}, 0, form);
+    REQUIRE(id);
+    critters.hold(*id, true);
+    constexpr f32 kStep = 1.0f / 30;
+    for (s32 frame = 0; frame < 180; ++frame) {
+        critters.update(2, kStep, {});
+    }
+    REQUIRE(critters.moveOf(*id) == "READY");
+    const auto bodies = critters.targets();
+    REQUIRE_FALSE(bodies.empty());
+    const auto& body = bodies.front();
+    const Vec3 before = critters.positionOf(*id);
+    const f32 health = critters.healthOf(*id);
+    f32 expectedPush = 5;
+    f32 expectedRise = 0;
+    SECTION("strong missile retains knockback after its owner moves past the target") {
+        for (s32 tick = 0; tick < 180 && !player.figure->animator().strongReleased(); ++tick) {
+            player.figure->animate(0, 2, kStep, PlayerDeed::StrongAttack);
+        }
+        REQUIRE(player.figure->animator().strongReleased());
+        const auto prepared =
+            f.arsenal.prepareWeapon(player.actor, *player.figure, {0, 0, 1}, 2, true);
+        REQUIRE(prepared);
+        REQUIRE(prepared->missiles.size() == 1);
+        CHECK(prepared->missiles.front().flags == 0x02000010U);
+        auto shot = prepared->missiles.front();
+        shot.position = body.base + Vec3{0, body.height * 0.5f, 0};
+        shot.velocity = Vec3{0, 0, 20};
+        const f32 substeps = std::ceil(20 * kStep / (shot.spec->radius * 0.5f));
+        const Vec3 impactDirection =
+            glm::normalize(Vec3{0, -shot.spec->weight * kStep / substeps, 20});
+        expectedPush *= impactDirection.z;
+        expectedRise = 5 * impactDirection.y;
+        // The owner is no longer behind the shot: impact direction must come
+        // from flight velocity, not a new vector from the owner's current feet.
+        player.actor.place(shot.position + Vec3{10, 0, 10});
+        REQUIRE(f.arsenal.missiles().launch(shot));
+        f.attacks.updateProjectiles(kStep, f.players, f.targets);
+    }
+    SECTION("ordinary missile does not gain a strong attack shove") {
+        const auto prepared =
+            f.arsenal.prepareWeapon(player.actor, *player.figure, {0, 0, 1}, 1, true);
+        REQUIRE(prepared);
+        auto shot = prepared->missiles.front();
+        REQUIRE(shot.flags == 0);
+        shot.position = body.base + Vec3{0, body.height * 0.5f, 0};
+        shot.velocity = Vec3{0, 0, 20};
+        REQUIRE(f.arsenal.missiles().launch(shot));
+        f.attacks.updateProjectiles(kStep, f.players, f.targets);
+        expectedPush = 0;
+    }
+    SECTION("heavy melee pushes along player facing rather than the offset hit node") {
+        player.actor.place(body.base - Vec3{1, 0, body.radius + 0.5f});
+        REQUIRE(f.attacks.meleeSense(player.actor, true, f.targets).range == MeleeRange::Swing);
+        player.figure->animate(0, 2, kStep, PlayerDeed::MeleeSlow);
+        for (s32 frame = 0; frame < 180 && !player.figure->animator().meleeStruck(); ++frame) {
+            player.figure->animate(0, 2, kStep);
+        }
+        REQUIRE(player.figure->animator().meleeBlow() == MeleeBlow::Heavy);
+        expectedRise = std::min(0.05f * 2 * f.attacks.meleeDamageOf(0, f.players), 2.0f) * 5;
+        f.attacks.melee(0, f.players, f.targets);
+    }
+    REQUIRE(critters.healthOf(*id) < health);
+    critters.update(2, kStep, {});
+    CHECK(critters.positionOf(*id).x == Approx(before.x).margin(0.0001f));
+    CHECK(critters.positionOf(*id).z == Approx(before.z + expectedPush * kStep).margin(0.0001f));
+    CHECK(critters.positionOf(*id).y == Approx(before.y + expectedRise * kStep).margin(0.001f));
+    f.attacks.clear();
+    f.arsenal.clear();
+    f.opponents.close();
 }
 
 TEST_CASE("native player width governs melee bands and the anklebiter low threshold",

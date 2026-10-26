@@ -12,13 +12,13 @@
 #include "engine/core/Types.h"
 
 #include "TestSupport.h"
-#include "game/app/ConsoleCommands.h"
 #include "game/characters/Progression.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/TowerAccess.h"
 #include "game/players/ItemPickup.h"
 #include "game/players/PowerupEffects.h"
+#include "game/scenes/ConsoleCommands.h"
 
 namespace {
 using namespace gdl;

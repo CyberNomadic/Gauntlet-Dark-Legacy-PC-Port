@@ -228,7 +228,7 @@ void PlayerFigure::loadMissile(const std::filesystem::path& root, const Characte
         log::warn("Tower: no {} for the {} to throw", name, classCode(save.character));
     }
     // The unlockable classes speak with the voice of the class they shadow.
-    const std::string_view voice = classCode(save.character % kStartingClassCount);
+    const std::string_view voice = classCode(baseClassOf(save.character));
     if (m_voice.load(root / kSoundDirectory / voice)) {
         m_throwSound = m_voice.find(std::format("S_{}THROW", voice));
     }
@@ -320,6 +320,17 @@ bool PlayerFigure::bindModel(TreeModel& model, const TreeInfo& tree, ItemArchive
         }
     }
     const std::array<TextureSet*, 1> lenders{&m_sharedTextures};
+    if (std::ranges::any_of(tree.nodes, [](const auto& node) { return node.name == "CFGLOW"; })) {
+        // load_player_geo adds 0x800810 to the costume's hand glow. Its archive
+        // alone supplies the facing mode, but not the additive blend at runtime.
+        TreeInfo runtimeTree = tree;
+        for (auto& node : runtimeTree.nodes) {
+            if (node.name == "CFGLOW") {
+                node.objectFlags |= 0x800810;
+            }
+        }
+        return model.bind(runtimeTree, archive.models, archive.textures, device, lenders);
+    }
     return model.bind(tree, archive.models, archive.textures, device, lenders);
 }
 

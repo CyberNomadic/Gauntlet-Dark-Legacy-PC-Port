@@ -122,6 +122,7 @@ void PlayScene::suspendForChallenge() {
 }
 
 void PlayScene::resumeFromChallenge(std::span<const PartyMember> party) {
+    m_sim.consoleTravel.reset();
     usize standing = 0;
     for (auto& runtime : m_players) {
         const auto member = std::ranges::find(party, runtime.actor.player(), &PartyMember::player);

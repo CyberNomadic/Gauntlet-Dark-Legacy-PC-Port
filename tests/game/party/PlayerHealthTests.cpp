@@ -218,6 +218,26 @@ TEST_CASE("player armor is subtracted before elemental affinity but not from gas
     CHECK(f.player.actor.save().health() == 944);
 }
 
+TEST_CASE("Sumner damage uses his fixed armor without reducing gas or Death drain",
+          "[player-health][damage][sumner-armor]") {
+    Fixture f;
+    ClassStats wizard;
+    wizard.armorMin = 100;
+    wizard.armorMax = 500;
+    f.player.actor.save().character = kSumnerClass;
+    f.player.actor.save().progress().health = 1000;
+    const auto liveHealth = [&] {
+        return static_cast<f32>(f.player.actor.save().health()) + f.player.healthFraction;
+    };
+    f.health.hurt(f.player, 10, HurtKind::Blow, false, false, 1, f.events, {}, false, &wizard);
+    CHECK(liveHealth() == Approx(994.995f));
+    f.health.hurt(f.player, 10, HurtKind::Gas, false, false, 1, f.events, {}, false, &wizard);
+    CHECK(liveHealth() == Approx(984.995f));
+    f.health.hurt(f.player, 10, HurtKind::DeathDrain, false, false, 1, f.events, {}, false,
+                  &wizard);
+    CHECK(liveHealth() == Approx(974.995f));
+}
+
 TEST_CASE("armor absorbs ground-hand damage without preventing its sticky reaction",
           "[player-health][lich-hands]") {
     Fixture f;

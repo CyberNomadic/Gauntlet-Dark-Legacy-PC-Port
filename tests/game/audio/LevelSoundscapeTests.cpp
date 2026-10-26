@@ -52,6 +52,34 @@ void writeBank(const std::filesystem::path& root, std::string_view bank,
     }
 }
 
+TEST_CASE("borrowed console sound banks rewind activation while retaining their loaded resources",
+          "[native-console][soundscape][soundscape-local-rewind]") {
+    const auto root = test::scratchDirectory("console-borrowed-sounds");
+    writeBank(root, "BORROWED", {"S_CONSOLE_ONLY"});
+    LevelSoundscape sounds;
+    sounds.open(root, nullptr, nullptr);
+    LevelSoundscape::LocalSnapshot before;
+    sounds.saveLocal(before);
+    CHECK_FALSE(sounds.hasNamed("S_CONSOLE_ONLY"));
+    REQUIRE(sounds.borrowBank(root / "audio" / "BORROWED"));
+    CHECK(sounds.hasNamed("S_CONSOLE_ONLY"));
+    LevelSoundscape::LocalSnapshot after;
+    sounds.saveLocal(after);
+    REQUIRE(sounds.borrowBank(root / "audio" / "BORROWED"));
+    LevelSoundscape::LocalSnapshot repeated;
+    sounds.saveLocal(repeated);
+    CHECK(sounds.equalLocal(after, repeated));
+    REQUIRE(sounds.restoreLocal(before));
+    CHECK_FALSE(sounds.hasNamed("S_CONSOLE_ONLY"));
+    REQUIRE(sounds.borrowBank(root / "audio" / "BORROWED"));
+    sounds.saveLocal(repeated);
+    CHECK(sounds.equalLocal(after, repeated));
+    CHECK(sounds.hasNamed("S_CONSOLE_ONLY"));
+    REQUIRE(sounds.restoreLocal(before));
+    REQUIRE(sounds.restoreLocal(after));
+    CHECK(sounds.hasNamed("S_CONSOLE_ONLY"));
+}
+
 TEST_CASE("tower ceremony cues reach wizard common and tower banks and stop on close",
           "[game][tower-completion][soundscape]") {
     const auto root = test::scratchDirectory("tower-completion-sounds");

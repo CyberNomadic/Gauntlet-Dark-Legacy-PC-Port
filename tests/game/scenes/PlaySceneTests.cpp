@@ -5512,7 +5512,8 @@ TEST_CASE("the lich comes for a party that waits by the crypt's gate",
 TEST_CASE("auto aim off keeps a standing throw on the player's facing",
           "[game][screens][auto-aim][combat-settings][assets]") {
     const bool enabled = GENERATE(true, false);
-    CAPTURE(enabled);
+    const bool cursor = GENERATE(true, false);
+    CAPTURE(enabled, cursor);
     const auto root = unpackedRoot();
     test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2");
     LevelCatalog levels;
@@ -5564,6 +5565,9 @@ TEST_CASE("auto aim off keeps a standing throw on the player's facing",
     for (s32 frame = 0; frame < 90 && scene.missiles().count() == 0; ++frame) {
         PlayScene::Inputs input{};
         input[kPlayer].attack = true;
+        if (cursor) {
+            input[kPlayer].aimDirection = Vec3{std::sin(facing), 0, std::cos(facing)};
+        }
         REQUIRE(scene.update(1.0 / 60.0, input) == PlayOutcome::Running);
     }
     REQUIRE(scene.missiles().count() >= 1);
@@ -5572,7 +5576,7 @@ TEST_CASE("auto aim off keeps a standing throw on the player's facing",
     const f32 shotYaw = std::atan2(velocity.x, velocity.z);
     const f32 targetYaw = std::atan2(toward.x, toward.z);
     CAPTURE(facing, shotYaw, targetYaw, actor.yaw());
-    if (enabled) {
+    if (enabled && !cursor) {
         CHECK(std::abs(shotYaw - targetYaw) < 0.1f);
         CHECK(std::abs(actor.yaw() - targetYaw) < 0.1f);
     } else {

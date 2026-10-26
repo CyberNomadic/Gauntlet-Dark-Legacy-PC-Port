@@ -35,6 +35,7 @@
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelWorld.h"
 #include "game/level/SafeRocks.h"
+#include "game/party/PlayerAttacks.h"
 #include "game/party/PlayerHealth.h"
 #include "game/party/TargetAssist.h"
 #include "game/players/PlayerAnimator.h"
@@ -878,6 +879,85 @@ TEST_CASE("a blast reaches a generator once, unless its blow is slight enough to
     CHECK(thrice < twice);
     opponents.blast(at, 1.0f, 3.0f, reached, players);
     CHECK(opponents.generators().healthOf(generator) == thrice);
+    opponents.close();
+}
+
+TEST_CASE("area blasts and Thunder Hammer give gargoyles distance-independent horizontal recoil",
+          "[level-opponents][gargoyle][critter-knockback][items][assets]") {
+    const bool hammer = GENERATE(false, true);
+    const f32 distance = GENERATE(0.0f, 2.0f, 8.0f);
+    CAPTURE(hammer, distance);
+    const auto root = test::assetOrSkip("CRITTER/GAR_EAGL.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    const ClassDataSet classes;
+    LevelWorld world;
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    AmbientDimmer dimmer;
+    PlayerArsenal arsenal;
+    LevelFixtures fixtures;
+    LevelOpponents opponents;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    EnemyScales scales;
+    scales.health = 100;
+    auto& critters = opponents.critters();
+    critters.open(device, root, nullptr, scales, 'B');
+    const Vec3 placed{distance, 3, 0};
+    const auto id = critters.spawnGargoyle(placed, 0, "GAR_EAGL");
+    REQUIRE(id);
+    critters.hold(*id, true);
+    for (s32 frame = 0; frame < 120; ++frame) {
+        critters.update(2, 1.0f / 30, {});
+    }
+    REQUIRE(critters.moveOf(*id) == "READY");
+    REQUIRE(critters.positionOf(*id) == placed);
+    const auto bodies = critters.targets();
+    REQUIRE_FALSE(bodies.empty());
+    // The item query visits animated collision nodes; an area blast's roster
+    // query uses the root. Both supply a planar unit vector, but the node can
+    // lie away from the body's floor anchor even when their XZ roots coincide.
+    const Vec3 radial = hammer ? bodies.front().base : placed;
+    const f32 health = critters.healthOf(*id);
+    PlayerAttacks attacks;
+    if (hammer) {
+        test::assetOrSkip("PLAYERS/WAR/ANIM/ANIM.PS2");
+        REQUIRE(weapons.load(root / "WEAPONS"));
+        arsenal.bind({device, classes, weapons, world.collision(), effects, audio, nullptr, {}});
+        attacks.bind({device, classes, world, weapons, effects, audio, nullptr, arsenal, dimmer});
+        auto& player = players[0];
+        player.figure = PlayerFigure::load(device, root, player.actor.save(), false);
+        REQUIRE(player.figure);
+        player.actor.save().progress().inventory.addPowerup(powerup::kWeapon,
+                                                            powerup::kThunderHammer, 2, -1);
+        player.figure->animate(0, 2, 1.0f / 30, PlayerDeed::Hammer);
+        for (s32 frame = 0;
+             frame < 180 && player.figure->animator().itemReleased() == PlayerDeed::None; ++frame) {
+            player.figure->animate(0, 2, 1.0f / 30);
+        }
+        REQUIRE(player.figure->animator().itemReleased() == PlayerDeed::Hammer);
+        attacks.useItemAttack(0, players);
+        const PlayerAttacks::Targets targets{opponents, fixtures, {}};
+        for (s32 frame = 0; frame < 180 && critters.healthOf(*id) == health; ++frame) {
+            attacks.updateProjectiles(1.0f / 60, players, targets);
+        }
+    } else {
+        std::vector<s32> reached;
+        opponents.blast(Vec3{0}, 20, 10, reached, players, EnemyHit::kKnockDown);
+    }
+    REQUIRE(critters.healthOf(*id) < health);
+    REQUIRE(critters.alive(*id));
+    critters.update(2, 1.0f / 30, {});
+    // CritterExpCollide normalizes XZ and clears Y before CritterDamage.
+    // A 0x20 blow contributes 7.5 units/second, irrespective of area radius.
+    const f32 recoil = glm::length(Vec2{radial.x, radial.z}) > 0 ? 7.5f / 30 : 0;
+    const Vec3 moved = critters.positionOf(*id) - placed;
+    CHECK(glm::length(Vec2{moved.x, moved.z}) == Catch::Approx(recoil).margin(1e-5f));
+    CHECK(critters.positionOf(*id).y == Catch::Approx(placed.y));
+    CHECK(glm::dot(Vec2{moved.x, moved.z}, Vec2{radial.x, radial.z}) >= 0);
+    attacks.clear();
     opponents.close();
 }
 

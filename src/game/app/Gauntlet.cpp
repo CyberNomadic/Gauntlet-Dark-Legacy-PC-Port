@@ -282,12 +282,21 @@ void Gauntlet::onUpdate(f64 deltaSeconds) {
         return;
     }
     if (m_online) {
-        const auto menu = readSharedMenuInput(input(), m_config);
+        const bool consoleOpen = updateOnlineConsole(deltaSeconds);
+        const auto menu = consoleOpen ? MenuInput{} : readSharedMenuInput(input(), m_config);
         if (menu.escape) {
             requestQuit();
             return;
         }
-        m_online->update(readPlayInputs(deltaSeconds), menu);
+        m_online->update(consoleOpen ? SessionInputs::Frame{} : readPlayInputs(deltaSeconds), menu);
+        if (!m_online->consoleAllowed()) {
+            consoleSelect(std::nullopt);
+            m_console.close();
+            m_freeCamera.stop();
+            m_online->consoleCapture(false);
+            m_online->consoleView(m_hudHidden, std::nullopt);
+            window().holdCursor(false);
+        }
         m_sounds->update();
         return;
     }
@@ -990,11 +999,24 @@ void Gauntlet::returnFromChallenge(std::span<const PartyMember> party) {
 
 void Gauntlet::onRender(RenderDevice& device) {
     renderScene(device);
+    if (m_online && m_online->consoleAllowed() && m_console.visible()) {
+        const auto width = static_cast<f32>(m_config.display.frameWidth);
+        const auto height = static_cast<f32>(m_config.display.frameHeight);
+        const auto extent = device.framebufferExtent();
+        const auto projection = makeLetterboxProjection(width, height,
+                                                        static_cast<f32>(extent.width),
+                                                        static_cast<f32>(extent.height));
+        m_canvas.begin(device, makeVirtualScreenTransform(
+                                   projection, static_cast<f32>(m_config.display.virtualWidth),
+                                   static_cast<f32>(m_config.display.virtualHeight), width, height));
+        m_console.draw(m_canvas);
+        m_canvas.end();
+    }
     // One final pass covers movies, loading, menus, play, pause and the idle screen.
     if (!m_hudHidden) {
         m_buildLabel.render(device, device.framebufferExtent());
     }
-    if (m_levelDebug.visible() && m_play->scene.isOpen()) {
+    if (m_levelDebug.visible() && consoleScene() != nullptr) {
         m_levelDebug.render(device, device.framebufferExtent(), levelDebugLines());
     }
     if (!m_hudHidden) {
@@ -1003,13 +1025,18 @@ void Gauntlet::onRender(RenderDevice& device) {
 }
 
 std::vector<std::string> Gauntlet::levelDebugLines() const {
+    const auto* scene = consoleScene();
+    const auto* world = consoleWorld();
+    if (scene == nullptr || world == nullptr) {
+        return {};
+    }
     s32 enemiesAlive = 0;
-    const Enemies& enemies = m_play->scene.opponents().enemies();
+    const Enemies& enemies = scene->opponents().enemies();
     for (s32 id = 0; id < Enemies::kMost; ++id) {
         enemiesAlive += enemies.alive(id) ? 1 : 0;
     }
-    return LevelDebugOverlay::describe(m_play->world, m_play->scene.participants(),
-                                       m_play->scene.camera().localState(), enemiesAlive);
+    return LevelDebugOverlay::describe(*world, scene->participants(),
+                                       scene->camera().localState(), enemiesAlive);
 }
 
 PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
@@ -1018,6 +1045,15 @@ PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
         const MenuInputSource source = playerInputSource(input(), m_config, player);
         const auto& bindings = playBindings(m_config, player);
         PlayInput& in = inputs[static_cast<usize>(player)];
+        if (m_online) {
+            const auto seat = m_online->consoleSeat(player);
+            const auto* scene = m_online->consoleScene();
+            if (seat && scene && scene->cheats(*seat).noclip) {
+                const auto wish = NoclipMotion::wish(input(), bindings, source.keyboard, source.pad,
+                                                     scene->viewCamera());
+                in.consoleFlight = wish.direction * (wish.slow ? NoclipMotion::kSlowFactor : 1.0f);
+            }
+        }
         in.move = readMoveInput(input(), bindings, source.keyboard, source.pad);
         in.freeMove = source.keyboard && m_config.controls[static_cast<usize>(player)].scheme ==
                                              KeyboardScheme::Robotron;

@@ -54,7 +54,8 @@ std::optional<std::vector<u8>> RollbackExchange::encode(const Message& message) 
     }
     const auto inputs = message.commands.empty() ? std::optional{std::vector<u8>{}}
                                                  : InputPacket::encode(message.commands);
-    if (!inputs || std::ranges::any_of(message.commands, [&](const auto& command) {
+    if (!inputs || inputs->size() > kMaxBytes - kHeaderBytes ||
+        std::ranges::any_of(message.commands, [&](const auto& command) {
             return command.epoch != message.epoch || command.tick == 0;
         })) {
         return std::nullopt;
@@ -201,7 +202,8 @@ RollbackExchange::Admission RollbackExchange::validate(const Message& message,
     for (const auto& command : message.commands) {
         if (!command.valid() || command.epoch != m_epoch || command.tick <= m_delay ||
             command.grant != m_grants[command.seat] || m_owners[command.seat] != message.origin ||
-            tooFar(command.tick, m_next[m_local])) {
+            tooFar(command.tick, m_next[m_local]) ||
+            (command.console && (message.origin != 1 || m_owners[command.console->seat] == 0))) {
             return Admission::Invalid;
         }
         incoming[command.tick].push_back(command);
@@ -360,7 +362,11 @@ RollbackExchange::receive(PacketTransport::Connection connection, std::span<cons
     commit(*message, incoming, progress);
     return Admission::Accepted;
 }
-bool RollbackExchange::flush(PacketTransport& transport) {
+bool RollbackExchange::flush(PacketTransport& transport,
+                             PacketTransport::Connection* closedConnection) {
+    if (closedConnection) {
+        *closedConnection = 0;
+    }
     if (!m_open || m_failure != Failure::None) {
         return false;
     }
@@ -403,6 +409,7 @@ bool RollbackExchange::flush(PacketTransport& transport) {
                             progress.serial,
                             addAge(progress.ageUs, *time - progress.observedAt)};
             usize frames = 0;
+            usize inputBytes = InputPacket::kHeaderBytes;
             const auto send = [&] {
                 const auto encoded = encode(message);
                 if (!encoded) {
@@ -425,12 +432,27 @@ bool RollbackExchange::flush(PacketTransport& transport) {
                     congested = true;
                     return true;
                 }
+                if (result == PacketTransport::SendResult::Disconnected && closedConnection) {
+                    // A provider can observe closure in send before its asynchronous
+                    // Disconnected event is polled. Let the session apply its normal
+                    // departure policy without first poisoning the input stream.
+                    *closedConnection = m_links[destination];
+                    return false;
+                }
                 return fail(Failure::Transport);
             };
             for (const u64 tick : selected) {
                 const auto& frame = history.at(tick);
+                usize frameBytes = 0;
+                for (const auto& command : frame) {
+                    frameBytes += InputPacket::commandBytes(command);
+                }
+                if (InputPacket::kHeaderBytes + frameBytes > kMaxBytes - kHeaderBytes) {
+                    return fail(Failure::Transport);
+                }
                 if (message.commands.size() + frame.size() > InputPacket::kMaxCommands ||
-                    frames == RollbackInputs::kRedundantTicks) {
+                    frames == RollbackInputs::kRedundantTicks ||
+                    inputBytes + frameBytes > kMaxBytes - kHeaderBytes) {
                     if (!send()) {
                         return false;
                     }
@@ -439,8 +461,10 @@ bool RollbackExchange::flush(PacketTransport& transport) {
                     }
                     message.commands.clear();
                     frames = 0;
+                    inputBytes = InputPacket::kHeaderBytes;
                 }
                 message.commands.insert(message.commands.end(), frame.begin(), frame.end());
+                inputBytes += frameBytes;
                 ++frames;
             }
             // Empty heartbeats carry ACK/progress even before the first sample.

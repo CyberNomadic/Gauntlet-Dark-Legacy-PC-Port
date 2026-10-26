@@ -75,8 +75,8 @@ public:
      * malformed. */
     bool load(const std::filesystem::path& directory, const WorldLayout& layout);
 
-    /** Takes world-space triangles directly. */
-    void build(std::vector<CollisionTriangle> triangles);
+    /** Takes world-space triangles and optional immutable world-object parent indices. */
+    void build(std::vector<CollisionTriangle> triangles, std::span<const s32> parents = {});
     /** Adds independently removable, already world-space item surfaces. Object ids must
      * be disjoint from the level objects. Existing visibility and moving objects survive. */
     void append(std::span<const CollisionTriangle> triangles);
@@ -95,7 +95,10 @@ public:
     bool contactOnly(s32 object) const;
     /** Temporarily prevent a rider from crossing this floor's boundary. */
     void setFloorExitBlocked(s32 object, bool blocked);
+    /** Effective rider lock, including flags inherited from an animated ancestor. */
     bool floorExitBlocked(s32 object) const;
+    /** Only this object's owned lock; snapshots must not materialize inherited flags. */
+    bool ownFloorExitBlocked(s32 object) const;
     bool moving(s32 object) const;
     /** Where a moving object was last placed; none for a still one. */
     std::optional<Mat4> objectTransform(s32 object) const;
@@ -240,6 +243,7 @@ private:
     std::shared_ptr<const u8> m_localBinding = std::make_shared<const u8>(0);
     std::vector<CollisionTriangle> m_triangles;
     std::vector<MovingObject> m_moving;
+    std::vector<s32> m_objectParents; ///< immutable layout, included in the geometry digest
     // Geometry is immutable between build/append/setMovingObjects/clear. Local
     // history copies only masks/transforms; this cache authenticates every
     // original triangle once without scanning the level on each agreement tick.

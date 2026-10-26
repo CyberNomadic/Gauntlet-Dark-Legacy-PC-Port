@@ -87,7 +87,7 @@ add_library(game STATIC
     app/BuildLabel.cpp
     app/LevelDebugOverlay.cpp
     app/DevConsole.cpp
-    app/ConsoleCommands.cpp
+    scenes/ConsoleCommands.cpp
     app/GauntletConsole.cpp
     app/LevelCompletion.h
     audio/MusicDuck.h
@@ -378,6 +378,7 @@ add_library(game STATIC
     effects/WeaponTrail.cpp
     party/PlayerHealth.cpp
     scenes/PlayScene.cpp
+    scenes/PlaySceneConsole.cpp
     scenes/PlaySceneTransport.cpp
     scenes/PlaySceneMotion.cpp
     scenes/PlaySceneHarm.cpp

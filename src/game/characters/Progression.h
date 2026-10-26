@@ -91,6 +91,9 @@ StatBlock characterStats(const ClassStats& stats, const CharacterSave& save);
 /** Flat damage absorption from the current armor attribute, including level and shop gains. */
 f32 armorDefense(const ClassStats& stats, const ClassProgress& progress);
 
+/** The hidden master's armor stays at 999, independent of the underlying wizard class. */
+f32 armorDefense(const ClassStats& stats, const CharacterSave& save);
+
 void visitNativeState(NativeStateDigest& digest, const LifetimeStats& value);
 void visitNativeState(NativeStateDigest& digest, const ClassProgress& value);
 

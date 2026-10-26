@@ -386,6 +386,40 @@ TEST_CASE("native generator equality includes player admission and offscreen att
     changed([&] { generators.setView(std::nullopt, Vec3{7, 8, 9}); });
 }
 
+TEST_CASE("cached generator births reactivate their enemy stock after a native rewind",
+          "[local-rewind][generator-local-rewind][generator-cached-birth][assets]") {
+    Pool pool;
+    REQUIRE_FALSE(pool.enemies.kindLoaded(kRatKind));
+    Generators::LocalSnapshot initialGenerators;
+    Enemies::LocalSnapshot initialEnemies;
+    pool.generators.saveLocal(initialGenerators);
+    REQUIRE(pool.enemies.saveLocal(initialEnemies));
+    const auto birth = [&] {
+        REQUIRE(pool.generators.spawn(pool.device, pool.enemies, kRatKind, 2, {0, 0, 5}, 0));
+        REQUIRE(pool.enemies.kindLoaded(kRatKind));
+        pool.generators.update(1, pool.enemies, pool.players, {}, false);
+        pool.enemies.update(1, kStep, pool.players, pool.generators.enemyObstacles(), nullptr, 1,
+                            false);
+    };
+    birth();
+    Generators::LocalSnapshot expectedGenerators;
+    Enemies::LocalSnapshot expectedEnemies;
+    pool.generators.saveLocal(expectedGenerators);
+    REQUIRE(pool.enemies.saveLocal(expectedEnemies));
+    const auto uploads = pool.device.texturesCreated;
+    REQUIRE(pool.generators.restoreLocal(initialGenerators));
+    REQUIRE(pool.enemies.restoreLocal(initialEnemies));
+    REQUIRE_FALSE(pool.enemies.kindLoaded(kRatKind));
+    birth();
+    Generators::LocalSnapshot replayedGenerators;
+    Enemies::LocalSnapshot replayedEnemies;
+    pool.generators.saveLocal(replayedGenerators);
+    REQUIRE(pool.enemies.saveLocal(replayedEnemies));
+    CHECK(pool.generators.equalLocal(expectedGenerators, replayedGenerators));
+    CHECK(pool.enemies.equalLocal(expectedEnemies, replayedEnemies));
+    CHECK(pool.device.texturesCreated == uploads);
+}
+
 TEST_CASE("empty bound generator pools have resumable clocks but unbound pools do not",
           "[rollback][generators][generators-checkpoint]") {
     test::FakeRenderDevice device;

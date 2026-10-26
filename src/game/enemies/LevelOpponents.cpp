@@ -79,7 +79,7 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     const auto& [clouds, deathShots, carried, bags, bagSeed, barrelRams, rockHits, hitStreak,
                  lessons, critterEffects, moveEffects, cueEffects, deathEffects, deathContact,
                  deathSound, yells, yellClocks, hearers, shrink, critterExperienceOwed,
-                 generatorRewards] = values;
+                 generatorRewards, unseen, borrowedRoster] = values;
     const auto rows = [&digest]<usize N>(const auto& list) {
         digest.wide(list.size());
         for (const auto& row : list) {
@@ -116,6 +116,8 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     rows.template operator()<2>(yellClocks);
     digest.values(hearers, shrink, critterExperienceOwed);
     rows.template operator()<3>(generatorRewards);
+    digest.value(unseen);
+    rows.template operator()<4>(borrowedRoster);
 }
 
 bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const {
@@ -124,7 +126,7 @@ bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const
 }
 
 bool LevelOpponents::appendNativeDigest(NativeStateDigest& digest) const {
-    digest.string("LevelOpponents.native.1");
+    digest.string("LevelOpponents.native.2");
     return m_generators.appendNativeDigest(digest) && m_enemyMissiles.appendNativeDigest(digest) &&
            m_combatantProjectiles.appendNativeDigest(digest) &&
            m_enemies.appendNativeDigest(digest) && m_placements.appendNativeDigest(digest) &&
@@ -139,7 +141,7 @@ bool LevelOpponents::appendLocalDigest(NativeStateDigest& digest,
         digest.invalidate();
         return false;
     }
-    digest.string("LevelOpponents.native.1");
+    digest.string("LevelOpponents.native.2");
     return m_generators.appendLocalDigest(digest, saved.m_generators) &&
            m_enemyMissiles.appendLocalDigest(digest, saved.m_missiles) &&
            m_combatantProjectiles.appendLocalDigest(digest, saved.m_projectiles) &&
@@ -571,6 +573,7 @@ bool LevelOpponents::restoreLocal(const LocalSnapshot& saved) {
     m_enemyMissiles.restoreLocal(saved.m_missiles);
     m_combatantProjectiles.restoreLocal(saved.m_projectiles);
     m_sim = saved.m_values;
+    refreshBorrowedRoster();
     ++m_bindingGeneration; // any prepared diagnostic transaction is now stale
     return true;
 }
@@ -595,7 +598,8 @@ void LevelOpponents::close() {
     }
     m_placements.clear();
     m_statues.clear();
-    m_borrowedRoster.clear();
+    m_sim.borrowedRoster.clear();
+    m_sim.unseen = {};
     m_levelNow.reset();
     clearDeaths();
     if (m_resources.has_value()) {
@@ -935,8 +939,8 @@ std::vector<EnemyView> LevelOpponents::views(std::span<const PlayerRuntime> play
 }
 
 void LevelOpponents::setUnseen(s32 player, bool unseen) {
-    if (player >= 0 && static_cast<usize>(player) < m_unseen.size()) {
-        m_unseen[static_cast<usize>(player)] = unseen;
+    if (player >= 0 && static_cast<usize>(player) < m_sim.unseen.size()) {
+        m_sim.unseen[static_cast<usize>(player)] = unseen;
     }
 }
 
@@ -950,18 +954,23 @@ void LevelOpponents::borrowRoster(std::span<const LevelEnemy> entries) {
     };
     for (const LevelEnemy& entry : entries) {
         if (entry.kind < 0 || (level != nullptr && known(level->enemies, entry.kind)) ||
-            known(m_borrowedRoster, entry.kind)) {
+            known(m_sim.borrowedRoster, entry.kind)) {
             continue;
         }
-        m_borrowedRoster.push_back(entry);
+        m_sim.borrowedRoster.push_back(entry);
     }
-    if (level == nullptr) {
+    refreshBorrowedRoster();
+}
+
+void LevelOpponents::refreshBorrowedRoster() {
+    const LevelInfo* level = m_resources ? m_resources->world.level() : nullptr;
+    if (level == nullptr || m_sim.borrowedRoster.empty()) {
         m_levelNow.reset();
         return;
     }
     m_levelNow = *level;
-    m_levelNow->enemies.insert(m_levelNow->enemies.end(), m_borrowedRoster.begin(),
-                               m_borrowedRoster.end());
+    m_levelNow->enemies.insert(m_levelNow->enemies.end(), m_sim.borrowedRoster.begin(),
+                               m_sim.borrowedRoster.end());
 }
 
 const LevelInfo* LevelOpponents::levelNow() const {
@@ -972,8 +981,8 @@ const LevelInfo* LevelOpponents::levelNow() const {
 }
 
 bool LevelOpponents::unseen(s32 player) const {
-    return player >= 0 && static_cast<usize>(player) < m_unseen.size() &&
-           m_unseen[static_cast<usize>(player)];
+    return player >= 0 && static_cast<usize>(player) < m_sim.unseen.size() &&
+           m_sim.unseen[static_cast<usize>(player)];
 }
 
 void LevelOpponents::applyEnemyBlow(const EnemyBlow& blow, std::span<PlayerRuntime> players,
@@ -1602,7 +1611,11 @@ void LevelOpponents::blast(const Vec3& position, f32 radius, f32 damage, std::ve
             continue;
         }
         const Vec3 away = critters().positionOf(critter) - position;
-        strikeCritter(critter, damage, flags, Vec3{away.x, 0.0f, away.z}, -1, std::nullopt, false,
+        // CritterExpCollide supplies ProcessEffects a planar unit direction.
+        // CritterDamage accumulates that input; distance is not blast force.
+        const f32 across = portable::hypot(away.x, away.z);
+        const Vec3 direction = across > 0 ? Vec3{away.x, 0.0f, away.z} / across : Vec3{0};
+        strikeCritter(critter, damage, flags, direction, -1, std::nullopt, false,
                       players);
     }
 }

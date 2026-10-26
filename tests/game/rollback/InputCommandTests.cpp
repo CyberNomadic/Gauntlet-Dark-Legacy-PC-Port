@@ -73,19 +73,55 @@ TEST_CASE("steadied commands round analogue jitter away and stay valid", "[netpl
     CHECK_FALSE(stick.steadied().aimDirection);
 }
 
+TEST_CASE("console input has bounded mutating text and quantized held flight",
+          "[netplay][protocol][console-input]") {
+    auto command = sample();
+    command.console = ConsoleAction{1, "get gold 50"};
+    command.consoleFlight = {0.33f, -1, 0.25f};
+    command = command.steadied();
+    const auto encoded = InputPacket::encode(std::array{command});
+    REQUIRE(encoded);
+    const auto decoded = InputPacket::decode(*encoded);
+    REQUIRE(decoded);
+    CHECK(decoded->front().console == command.console);
+    CHECK(decoded->front().consoleFlight == command.consoleFlight);
+    CHECK(encoded->size() == InputPacket::kHeaderBytes + InputPacket::commandBytes(command));
+    for (usize cut = 0; cut < encoded->size(); ++cut) {
+        CHECK_FALSE(InputPacket::decode(std::span(*encoded).first(cut)));
+    }
+    auto invalidFlight = *encoded;
+    invalidFlight[InputPacket::kHeaderBytes + 56] = 128;
+    CHECK_FALSE(InputPacket::decode(invalidFlight));
+    for (const auto* line : {"", "get info", "GET INFO enemy#1", "help", "console_permissions 1",
+                             "god\nget gold 5", "get\tgold 5", "freecam", "list items"}) {
+        command.console = ConsoleAction{0, line};
+        CHECK_FALSE(command.valid());
+        CHECK_FALSE(InputPacket::encode(std::array{command}));
+    }
+    command.console = ConsoleAction{4, "god"};
+    CHECK_FALSE(command.valid());
+    command.console = ConsoleAction{0, "spawn " + std::string(155, 'a')};
+    CHECK_FALSE(command.valid());
+    command.console = ConsoleAction{0, "spawn " + std::string(154, 'a')};
+    CHECK(command.valid());
+    std::vector<InputCommand> crowded(InputPacket::kMaxCommands, command);
+    CHECK_FALSE(InputPacket::encode(crowded));
+}
+
 TEST_CASE("input packets have a fixed endian and version independent of C++ layout",
           "[netplay][protocol]") {
     const std::array commands{sample()};
     const auto encoded = InputPacket::encode(commands);
     REQUIRE(encoded);
     const std::vector<u8> expected{
-        0x47, 0x44, 0x4c, 0x49, 5,    0,    1,    0,    // header
+        0x47, 0x44, 0x4c, 0x49, 6,    0,    1,    0,    // header
         1,    0,    0,    0,    0,    0,    0,    0,    // epoch
         0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // tick
         4,    3,    2,    1,    2,    1,    0,    0,    // grant, seat, aim, topic/revision
         0,    0,    0,    0,    0,    0,    0x80, 0x3f, 0, 0, 0, 0x3f, // direction, magnitude
         0,    0,    0x80, 0x3f, 0,    0,    0,    0,    0, 0, 0, 0,    // aim
-        1,    0,    0,    0,    1,    0,    0,    0};                  // held, pressed
+        1,    0,    0,    0,    1,    0,    0,    0,                   // held, pressed
+        0,    0,    0,    0};                                          // flight, absent console
     CHECK(*encoded == expected);
     const auto decoded = InputPacket::decode(expected);
     REQUIRE(decoded);
@@ -190,7 +226,7 @@ TEST_CASE("potion throws use the held wire domain and reject the retired press e
     CHECK_FALSE(command.valid());
     CHECK_FALSE(InputPacket::encode(std::array{command}));
     auto legacyPress = *bytes;
-    legacyPress[InputPacket::kHeaderBytes + InputPacket::kCommandBytes - 4] = 2;
+    legacyPress[InputPacket::kHeaderBytes + InputPacket::kCommandBytes - 8] = 2;
     CHECK_FALSE(InputPacket::decode(legacyPress));
 }
 

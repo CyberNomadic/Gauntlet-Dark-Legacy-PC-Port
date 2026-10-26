@@ -70,8 +70,11 @@ public:
     Admission submit(u64 tick, const Digest& digest, Time now = Clock::now());
     Admission receive(PacketTransport::Connection connection, std::span<const u8> bytes,
                       Time now = Clock::now());
-    /** False means terminal failure; still attempts to send its notification. */
-    bool flush(PacketTransport& transport, Time now = Clock::now());
+    /** False means terminal failure, or a send-discovered closed link reported to
+     * closedConnection without failing the stream. The caller must resolve that
+     * link after flush returns; other send errors remain terminal. */
+    bool flush(PacketTransport& transport, Time now = Clock::now(),
+               PacketTransport::Connection* closedConnection = nullptr);
     bool update(Time now = Clock::now());
     void disconnected(PacketTransport::Connection connection);
     /** A dropped peer is awaited no more and told nothing; pending ticks settle without it. */

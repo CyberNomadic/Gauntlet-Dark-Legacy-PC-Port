@@ -76,7 +76,11 @@ struct Fixture {
             }
             triangles.push_back(floor);
         }
-        collision.build(std::move(triangles));
+        std::vector<s32> parents;
+        for (const auto& object : layout.objects()) {
+            parents.push_back(object.parent);
+        }
+        collision.build(std::move(triangles), parents);
         const std::array<s32, 6> moving{0, 1, 2, 3, 4, 5};
         collision.setMovingObjects(moving);
         sync();
@@ -118,6 +122,28 @@ void sameGeometry(const WorldScene& actual, const WorldScene& expected, usize co
         CHECK(actual.objectAlpha(object) == expected.objectAlpha(object));
         CHECK(actual.objectVisible(object) == expected.objectVisible(object));
     }
+}
+
+TEST_CASE(
+    "restoring a moving parent never turns its inherited floor lock into a permanent child lock",
+    "[world-motion][rollback][lift-floor-inheritance]") {
+    Fixture host;
+    host.collision.setFloorExitBlocked(0, true);
+    REQUIRE(host.collision.floorExitBlocked(1));
+    REQUIRE_FALSE(host.collision.ownFloorExitBlocked(1));
+    const auto seed = host.state();
+    REQUIRE(seed.valid());
+    CHECK((seed.collision[0] & WorldMotion::kFloorExitBlocked) != 0);
+    CHECK((seed.collision[1] & WorldMotion::kFloorExitBlocked) == 0);
+    auto scene = host.scene;
+    auto collision = host.collision;
+    WorldMotion replay;
+    replay.bind(host.layout);
+    REQUIRE(replay.prepare(seed, host.scene.geometry(), scene, collision));
+    CHECK(collision.floorExitBlocked(1));
+    CHECK_FALSE(collision.ownFloorExitBlocked(1));
+    collision.setFloorExitBlocked(0, false);
+    CHECK_FALSE(collision.floorExitBlocked(1));
 }
 
 TEST_CASE("world replay preserves native before and after motion across endpoints and rewinds",

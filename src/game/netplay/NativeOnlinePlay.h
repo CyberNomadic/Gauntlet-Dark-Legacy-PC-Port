@@ -62,6 +62,13 @@ public:
     std::string_view failureDetail() const;
     NativeRollbackDriver::Status outcome() const;
     const PlayScene* scene() const;
+    const LevelWorld* world() const;
+    /** Local presentation/input capture only. Never changes the shared scene's clock. */
+    void consoleCapture(bool captured);
+    void consoleView(bool hideHud, const std::optional<WorldCamera>& camera);
+    void consoleSelect(const std::optional<SceneSelection>& selection);
+    std::optional<SceneSelection> consolePick(Vec2 cursor);
+    std::vector<std::string> takeConsoleReplies();
     /** The displayed state can be ahead of the all-seat confirmed frontier. */
     u64 simulatedTick() const;
     u64 confirmedTick() const;

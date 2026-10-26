@@ -60,6 +60,16 @@ Vec2 steppedTurn(f32 radians) {
 
 InputCommand InputCommand::steadied() const {
     InputCommand result = *this;
+    for (usize axis = 0; axis < 3; ++axis) {
+        const auto index = static_cast<glm::length_t>(axis);
+        result.consoleFlight[index] =
+            std::isfinite(consoleFlight[index])
+                ? std::clamp(std::round(consoleFlight[index] * 127.0f), -127.0f, 127.0f) / 127.0f
+                : 0.0f;
+        if (result.consoleFlight[index] == 0) {
+            result.consoleFlight[index] = 0.0f; // wire zero has one sign
+        }
+    }
     result.magnitude =
         std::clamp(std::round(magnitude * kMagnitudeSteps) / kMagnitudeSteps, 0.0f, 1.0f);
     if (result.magnitude == 0 || !std::isfinite(direction.x) || !std::isfinite(direction.y)) {
@@ -82,7 +92,10 @@ bool InputCommand::valid() const {
            magnitude <= 1 && lengthSquared <= 1.00001f &&
            (magnitude == 0 || lengthSquared >= 0.99999f) && (heldButtons & ~kHeldMask) == 0 &&
            (pressedButtons & ~kPressMask) == 0 && (!aimDirection || validAim(*aimDirection)) &&
-           hintTopic <= 4 && (hintTopic != 0 || hintRevision == 0);
+           hintTopic <= 4 && (hintTopic != 0 || hintRevision == 0) &&
+           (!console || console->valid()) && std::isfinite(consoleFlight.x) &&
+           std::isfinite(consoleFlight.y) && std::isfinite(consoleFlight.z) &&
+           glm::all(glm::lessThanEqual(glm::abs(consoleFlight), Vec3{1}));
 }
 
 std::optional<std::vector<u8>> InputPacket::encode(std::span<const InputCommand> commands) {
@@ -112,6 +125,18 @@ std::optional<std::vector<u8>> InputPacket::encode(std::span<const InputCommand>
         }
         writeU32(bytes, command.heldButtons);
         writeU32(bytes, command.pressedButtons);
+        for (const f32 value :
+             {command.consoleFlight.x, command.consoleFlight.y, command.consoleFlight.z}) {
+            bytes.push_back(std::bit_cast<u8>(static_cast<s8>(std::round(value * 127.0f))));
+        }
+        bytes.push_back(command.console ? static_cast<u8>(command.console->line.size()) : 0);
+        if (command.console) {
+            bytes.push_back(command.console->seat);
+            bytes.insert(bytes.end(), command.console->line.begin(), command.console->line.end());
+        }
+    }
+    if (bytes.size() > kMaxBytes) {
+        return std::nullopt;
     }
     return bytes;
 }
@@ -126,12 +151,15 @@ std::optional<std::vector<InputCommand>> InputPacket::decode(std::span<const u8>
     }
     const usize count = reader.readU8();
     if (reader.readU8() != 0 || count == 0 || count > kMaxCommands ||
-        reader.remaining() != count * kCommandBytes) {
+        reader.remaining() < count * kCommandBytes) {
         return std::nullopt;
     }
     std::vector<InputCommand> commands;
     commands.reserve(count);
     for (usize i = 0; i < count; ++i) {
+        if (reader.remaining() < kCommandBytes) {
+            return std::nullopt;
+        }
         InputCommand command;
         command.epoch = readU64(reader);
         command.tick = readU64(reader);
@@ -157,12 +185,31 @@ std::optional<std::vector<InputCommand>> InputPacket::decode(std::span<const u8>
         }
         command.heldButtons = reader.readU32();
         command.pressedButtons = reader.readU32();
+        for (usize axis = 0; axis < 3; ++axis) {
+            const s8 value = std::bit_cast<s8>(reader.readU8());
+            if (value == std::numeric_limits<s8>::min()) {
+                return std::nullopt;
+            }
+            command.consoleFlight[static_cast<glm::length_t>(axis)] =
+                static_cast<f32>(value) / 127.0f;
+        }
+        const usize consoleLength = reader.readU8();
+        if (consoleLength != 0) {
+            if (consoleLength > ConsoleAction::kMaxLine || reader.remaining() < consoleLength + 1) {
+                return std::nullopt;
+            }
+            ConsoleAction action;
+            action.seat = reader.readU8();
+            const auto line = reader.readBytes(consoleLength);
+            action.line.assign(line.begin(), line.end());
+            command.console = std::move(action);
+        }
         if (!command.valid()) {
             return std::nullopt;
         }
         commands.push_back(command);
     }
-    return commands;
+    return reader.atEnd() ? std::optional{std::move(commands)} : std::nullopt;
 }
 
 bool InputHistory::record(std::span<const InputCommand> frame) {

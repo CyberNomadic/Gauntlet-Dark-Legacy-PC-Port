@@ -100,7 +100,21 @@ bool applyNameCheats(CharacterSave& save) {
         return true;
     }
     if (const auto* costume = hiddenCostume(save.name)) {
-        save.selectClass(costume->character);
+        // SUM224 and change_player(16) both select player_sumner_desc in retail,
+        // including its fixed progression, not just the wizard's costume.
+        if (costume->directory == "SUM" && save.character == costume->character) {
+            // Earlier port saves stored this costume's earned progress under WIZ.
+            // Preserve it when moving to SUM, without overwriting a played SUM slot.
+            auto& sumner = save.classes[kSumnerClass];
+            ClassProgress unused;
+            // JSON normalizes an unused slot's -1 promotion marker to level 1.
+            unused.promotedLevel = sumner.promotedLevel;
+            if (sumner == unused) {
+                sumner = save.progress();
+                sumner.gold = save.gold;
+            }
+        }
+        save.selectClass(costume->directory == "SUM" ? kSumnerClass : costume->character);
         save.color = costume->color;
         return true;
     }

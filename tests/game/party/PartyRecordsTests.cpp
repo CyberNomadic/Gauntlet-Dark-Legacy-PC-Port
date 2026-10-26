@@ -145,21 +145,26 @@ TEST_CASE("departed party slots cannot collect rewards or appear in level result
     CHECK(results[0].player == 3);
 }
 
-TEST_CASE("hidden Sumner restores health without rolling back the level's progress",
-          "[game][screens][party-records][multiplayer]") {
-    const s32 level = GENERATE(30, 99);
+TEST_CASE("Sumner restores health without rolling back the level's progress",
+          "[game][screens][party-records][multiplayer][sumner]") {
+    const bool cheat = GENERATE(false, true);
+    constexpr s32 kLevel = kMaxLevel;
     auto players = twoPlayers();
     CharacterSave& sumner = players[1].actor.save();
-    sumner.name = "SUM224";
-    REQUIRE(applyNameCheats(sumner));
-    REQUIRE(sumner.character == 2);
-    sumner.progress().experience = levelExperience(level);
+    if (cheat) {
+        sumner.name = "SUM224";
+        REQUIRE(applyNameCheats(sumner));
+    } else {
+        sumner.selectClass(kSumnerClass);
+    }
+    REQUIRE(sumner.character == kSumnerClass);
+    REQUIRE(sumner.experience() == levelExperience(kLevel));
     sumner.progress().health = 700;
     sumner.gold = 10;
     players[1].entrySave = sumner;
     sumner.gold = 70;
     sumner.progress().health = 0;
-    sumner.progress().relics.addRune(7);
+    sumner.progress().relics.addLegend(7);
     sumner.helpSeen = {4};
     players[1].helpHeard = {12};
     players[1].life = PlayerLife::InTower;
@@ -175,15 +180,15 @@ TEST_CASE("hidden Sumner restores health without rolling back the level's progre
     CHECK(party[1].player == 3);
     CHECK(party[1].slot == std::optional<usize>{4});
     CHECK(party[1].save.gold == 70);
-    CHECK(party[1].save.progress().relics.hasRune(7));
+    CHECK(party[1].save.progress().relics.hasLegend(7));
     CHECK(party[1].save.progress().health ==
-          (players[1].life == PlayerLife::Standing ? 100 : mostHealth(level)));
+          (players[1].life == PlayerLife::Standing ? 100 : mostHealth(kLevel)));
     const auto abandoned = PartyRecords::abandoned(players, party);
     REQUIRE(abandoned.size() == 2);
     CHECK(abandoned[0].save.gold == 0); // Ordinary characters still restore their checkpoint.
     CHECK(abandoned[1].save.gold == 70);
-    CHECK(abandoned[1].save.progress().relics.hasRune(7));
-    CHECK(abandoned[1].save.progress().health == mostHealth(level));
+    CHECK(abandoned[1].save.progress().relics.hasLegend(7));
+    CHECK(abandoned[1].save.progress().health == mostHealth(kLevel));
     CHECK(abandoned[1].save.helpSeen == std::vector<s32>{4});
     CHECK(abandoned[1].helpHeard == std::vector<s32>{12});
     CHECK_FALSE(abandoned[1].fallen);

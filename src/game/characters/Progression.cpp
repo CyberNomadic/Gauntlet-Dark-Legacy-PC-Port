@@ -27,6 +27,7 @@ constexpr s32 kCurveBase = 1000;
 constexpr s32 kLateLevelStep = 4600;
 constexpr s32 kLateLevelBase = 0x28550;
 constexpr s32 kStatPerLevel = 5;
+constexpr f32 kArmorPerAttribute = 0.005f;
 
 } // namespace
 
@@ -90,11 +91,17 @@ StatBlock characterStats(const ClassStats& stats, const CharacterSave& save) {
 }
 
 f32 armorDefense(const ClassStats& stats, const ClassProgress& progress) {
-    constexpr f32 kArmorPerAttribute = 0.005f;
     const f32 growth = static_cast<f32>((experienceLevel(progress.experience) - 1) * kStatPerLevel);
     const f32 base = std::min(stats.armorMin + growth, stats.armorMax);
     const f32 attribute = std::clamp(base + progress.armorAdd, 0.0f, static_cast<f32>(kMaxStat));
     return attribute * kArmorPerAttribute;
+}
+
+f32 armorDefense(const ClassStats& stats, const CharacterSave& save) {
+    // PlayerUpdateAtts (8007F874) fixes Sumner's attributes before player_scale_att
+    // maps armor to the 0..5 absorption range, including during guard recovery.
+    return save.character == kSumnerClass ? static_cast<f32>(kMaxStat) * kArmorPerAttribute
+                                          : armorDefense(stats, save.progress());
 }
 
 } // namespace gdl::game

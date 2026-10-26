@@ -163,6 +163,79 @@ TEST_CASE("legacy gold belongs only to the selected class and keeps top-level co
     CHECK(save.gold == 100);
 }
 
+TEST_CASE("selecting Sumner grants his native starting supplies without refilling a live save",
+          "[save][sumner]") {
+    CharacterSave save;
+    save.name = "SUMNER";
+    save.gold = 123;
+    save.selectClass(kSumnerClass);
+    CHECK(save.classes[0].gold == 123);
+    CHECK(experienceLevel(save.experience()) == 99);
+    CHECK(save.experience() == 0x54218);
+    CHECK(save.progress().appearanceLevel() == 99);
+    CHECK(save.health() == 9999);
+    CHECK(save.gold == 5000);
+    CHECK(save.progress().inventory.keys == 9);
+    CHECK(save.progress().inventory.potions.size() == 9);
+    CHECK(save.progress().inventory.powerupCount() == 0);
+    CHECK(save.progress().relics.runes == 0x1fff);
+    CHECK(save.progress().relics.shards == 0x7fe);
+    CHECK(save.progress().relics.pendingRunes == 0);
+    CHECK(save.progress().relics.pendingShards == 0);
+    save.gold -= 500;
+    save.progress().inventory.keys -= 1;
+    save.progress().health -= 100;
+    save.selectClass(kSumnerClass);
+    const auto loaded = CharacterSave::fromJson(save.toJson());
+    CHECK(loaded.gold == 4500);
+    CHECK(loaded.progress().inventory.keys == 8);
+    CHECK(loaded.health() == 9899);
+    save.selectClass(0);
+    CHECK(save.gold == 123);
+    save.selectClass(kSumnerClass);
+    CHECK(save.gold == 4500);
+}
+
+TEST_CASE("an old underlevelled Sumner save receives the missing initial supplies",
+          "[save][sumner]") {
+    const auto save = CharacterSave::fromJson(R"({"name":"OLD","character":16})");
+    CHECK(experienceLevel(save.experience()) == 99);
+    CHECK(save.health() == 9999);
+    CHECK(save.gold == 5000);
+    CHECK(save.progress().inventory.keys == 9);
+    CHECK(save.progress().inventory.potions.size() == 9);
+    CHECK(save.progress().relics.runes == 0x1fff);
+    CHECK(save.progress().relics.shards == 0x7fe);
+}
+
+TEST_CASE("legacy SUM224 saves retain earned progress when adopting the Sumner class",
+          "[save][sumner][cheats]") {
+    auto legacy = sampleSave();
+    legacy.name = "SUM224";
+    legacy.progress().relics.legends = 7;
+    const auto loaded = CharacterSave::fromJson(legacy.toJson());
+    REQUIRE(loaded.character == kSumnerClass);
+    CHECK(loaded.experience() == levelExperience(kMaxLevel));
+    CHECK(loaded.progress().crystals == legacy.progress().crystals);
+    CHECK(loaded.progress().levels == legacy.progress().levels);
+    CHECK(loaded.progress().inventory.powerups == legacy.progress().inventory.powerups);
+    CHECK(loaded.progress().relics.legends == 7);
+    CHECK(loaded.classes[2].levels == legacy.progress().levels);
+    CHECK(loaded.progress().inventory.keys == 9);
+
+    auto established = loaded;
+    established.gold = 321;
+    established.progress().inventory.keys = 2;
+    established.progress().health = 1234;
+    established.selectClass(2);
+    const auto reopened = CharacterSave::fromJson(established.toJson());
+    CHECK(reopened.character == kSumnerClass);
+    CHECK(reopened.gold == 321);
+    CHECK(reopened.progress().inventory.keys == 2);
+    CHECK(reopened.health() == 1234);
+    CHECK(reopened.progress() == established.classes[kSumnerClass]);
+}
+
 TEST_CASE("a character round-trips through JSON", "[game][players][save]") {
     const CharacterSave save = sampleSave();
     const CharacterSave loaded = CharacterSave::fromJson(save.toJson());

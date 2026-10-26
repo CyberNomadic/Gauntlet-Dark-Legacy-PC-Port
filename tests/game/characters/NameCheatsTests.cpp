@@ -155,7 +155,8 @@ TEST_CASE("hidden name codes choose their authored class colour and persistent a
         save.character = 15;
         save.color = 0;
         REQUIRE(applyNameCheats(save));
-        CHECK(save.character == costume.character);
+        CHECK(save.character ==
+              (costume.directory == "SUM" ? kSumnerClass : costume.character));
         CHECK(save.color == costume.color);
         CHECK(save.progress().inventory.powerupCount() == 0);
         const auto loaded = CharacterSave::fromJson(save.toJson());
@@ -165,6 +166,25 @@ TEST_CASE("hidden name codes choose their authored class colour and persistent a
     REQUIRE(hiddenCostume("DBRNKR"));
     CHECK(hiddenCostume("DBRNKR") == hiddenCostume("AYA555"));
     CHECK(hiddenCostume("SUM224")->character == 2);
+}
+
+TEST_CASE("SUM224 selects the same supplied master as unlocked Sumner", "[cheats][sumner]") {
+    CharacterSave save;
+    save.name = "SUM224";
+    REQUIRE(applyNameCheats(save));
+    REQUIRE(save.character == kSumnerClass);
+    CHECK(experienceLevel(save.experience()) == kMaxLevel);
+    CHECK(save.health() == 9999);
+    CHECK(save.gold == 5000);
+    CHECK(save.progress().inventory.keys == 9);
+    CHECK(save.progress().relics.runes == 0x1fff);
+    const ClassStats ordinaryWizard;
+    CHECK(characterStats(ordinaryWizard, save).strength() == 999);
+    save.gold -= 500;
+    save.progress().inventory.keys -= 1;
+    REQUIRE(applyNameCheats(save));
+    CHECK(save.gold == 4500);
+    CHECK(save.progress().inventory.keys == 8);
 }
 
 TEST_CASE("permanent turbo and super shot cheats use normal gameplay consumers",

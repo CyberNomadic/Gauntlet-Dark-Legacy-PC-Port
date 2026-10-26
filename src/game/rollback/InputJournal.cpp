@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <exception>
+#include <limits>
 
 #include "engine/core/Types.h"
 #include "engine/io/ByteReader.h"
@@ -48,7 +50,14 @@ bool sameControls(const InputCommand& a, const InputCommand& b) {
            bits(aimA.x) == bits(aimB.x) && bits(aimA.y) == bits(aimB.y) &&
            bits(aimA.z) == bits(aimB.z) && a.heldButtons == b.heldButtons &&
            a.pressedButtons == b.pressedButtons && a.hintTopic == b.hintTopic &&
-           a.hintRevision == b.hintRevision;
+           a.hintRevision == b.hintRevision && a.console == b.console &&
+           bits(a.consoleFlight.x) == bits(b.consoleFlight.x) &&
+           bits(a.consoleFlight.y) == bits(b.consoleFlight.y) &&
+           bits(a.consoleFlight.z) == bits(b.consoleFlight.z);
+}
+
+usize runBytes(const InputCommand& command) {
+    return JournalPacket::kRunBytes + (command.console ? 1 + command.console->line.size() : 0);
 }
 
 void writeRun(std::vector<u8>& bytes, const InputCommand& command, u16 run) {
@@ -65,6 +74,15 @@ void writeRun(std::vector<u8>& bytes, const InputCommand& command, u16 run) {
     writeU32(bytes, command.pressedButtons);
     bytes.push_back(command.hintTopic);
     bytes.push_back(command.hintRevision);
+    for (const f32 value :
+         {command.consoleFlight.x, command.consoleFlight.y, command.consoleFlight.z}) {
+        bytes.push_back(std::bit_cast<u8>(static_cast<s8>(std::round(value * 127.0f))));
+    }
+    bytes.push_back(command.console ? static_cast<u8>(command.console->line.size()) : 0);
+    if (command.console) {
+        bytes.push_back(command.console->seat);
+        bytes.insert(bytes.end(), command.console->line.begin(), command.console->line.end());
+    }
     writeU16(bytes, run);
 }
 
@@ -112,7 +130,7 @@ bool EpochInputJournal::append(u64 tick, const JournalFrame& frame) {
             continue;
         }
         if (command.epoch != m_epoch || command.tick != tick || command.seat != seat ||
-            !command.valid()) {
+            !command.valid() || (command.console && m_owners[seat] != 1)) {
             return false;
         }
     }
@@ -232,6 +250,25 @@ std::optional<JournalPacket::Chunk> JournalPacket::decode(std::span<const u8> by
                 command.pressedButtons = reader.readU32();
                 command.hintTopic = reader.readU8();
                 command.hintRevision = reader.readU8();
+                for (usize axis = 0; axis < 3; ++axis) {
+                    const s8 value = std::bit_cast<s8>(reader.readU8());
+                    if (value == std::numeric_limits<s8>::min()) {
+                        return std::nullopt;
+                    }
+                    command.consoleFlight[static_cast<glm::length_t>(axis)] =
+                        static_cast<f32>(value) / 127.0f;
+                }
+                const usize consoleLength = reader.readU8();
+                if (consoleLength != 0) {
+                    if (consoleLength > ConsoleAction::kMaxLine) {
+                        return std::nullopt;
+                    }
+                    ConsoleAction action;
+                    action.seat = reader.readU8();
+                    const auto line = reader.readBytes(consoleLength);
+                    action.line.assign(line.begin(), line.end());
+                    command.console = std::move(action);
+                }
                 const u16 run = reader.readU16();
                 if (run == 0 || covered + run > chunk.count) {
                     return std::nullopt;
@@ -266,11 +303,15 @@ std::vector<JournalPacket::Chunk> JournalPacket::chunks(const EpochInputJournal&
             seats |= static_cast<u8>(1U << seat);
         }
     }
-    const usize present = seatCount(seats);
     u64 start = firstTick;
     while (start <= lastTick) {
         // Grow the chunk a tick at a time; a tick costs a run only where a seat changed.
-        usize bytes = kHeaderBytes + present * kRunBytes;
+        usize bytes = kHeaderBytes;
+        for (u8 seat = 0; seat < InputCommand::kSeats; ++seat) {
+            if ((seats & (1U << seat)) != 0) {
+                bytes += runBytes((*journal.frame(start))[seat]);
+            }
+        }
         u64 end = start;
         while (end < lastTick && end - start + 1 < kMaxTicks) {
             usize added = 0;
@@ -278,7 +319,7 @@ std::vector<JournalPacket::Chunk> JournalPacket::chunks(const EpochInputJournal&
             const JournalFrame& next = *journal.frame(end + 1);
             for (u8 seat = 0; seat < InputCommand::kSeats; ++seat) {
                 if ((seats & (1U << seat)) != 0 && !sameControls(next[seat], previous[seat])) {
-                    added += kRunBytes;
+                    added += runBytes(next[seat]);
                 }
             }
             if (bytes + added > kMaxBytes) {
@@ -316,14 +357,19 @@ JournalPacket::tailChunks(u64 epoch, std::vector<InputCommand> commands, bool ma
     std::ranges::sort(commands, [](const InputCommand& a, const InputCommand& b) {
         return a.seat != b.seat ? a.seat < b.seat : a.tick < b.tick;
     });
-    // Every tick may be its own run, so this many always fit the wire.
-    const usize perChunk = (kMaxBytes - kHeaderBytes) / kRunBytes;
     usize start = 0;
     while (start < commands.size()) {
         usize end = start + 1;
-        while (end < commands.size() && end - start < perChunk &&
+        usize bytes = kHeaderBytes + runBytes(commands[start]);
+        while (end < commands.size() && end - start < kMaxTicks &&
                commands[end].seat == commands[start].seat &&
                commands[end].tick == commands[end - 1].tick + 1) {
+            const usize added =
+                sameControls(commands[end], commands[end - 1]) ? 0 : runBytes(commands[end]);
+            if (bytes + added > kMaxBytes) {
+                break;
+            }
+            bytes += added;
             ++end;
         }
         Chunk chunk;

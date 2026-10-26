@@ -45,10 +45,11 @@ struct Fixture {
         REQUIRE(lender.load(test::sampleLender(std::string(name) + "-lender")));
     }
 
-    bool build(std::span<const usize> controlled = {}, std::span<const usize> background = {}) {
+    bool build(std::span<const usize> controlled = {}, std::span<const usize> background = {},
+               std::span<const usize> cameraFade = {}) {
         const std::array<TextureSet*, 1> lenders{&lender};
         return scene.build(layout, models, textures, device, WorldLighting{}, lenders, controlled,
-                           background);
+                           background, cameraFade);
     }
 };
 
@@ -436,6 +437,189 @@ TEST_CASE("deferred depth biases layer light sheets after curtains without disab
         CHECK(draw.state.depthTest);
     }
     CHECK_FALSE(f.device.draws[3].state.depthWrite);
+}
+
+TEST_CASE("camera-depth scenery fades near the eye without changing gameplay opacity",
+          "[world][scene][camera-depth-fade]") {
+    Fixture f("world-camera-depth-fade");
+    writeTextFile(f.directory / "world.json", R"({"objects":[
+      {"name":"WALL","position":[0,0,50],"next":1,"child":-1,"objectFlags":1024},
+      {"name":"WALL","position":[1000,0,50],"next":-1,"child":-1,"objectFlags":1048576}]})");
+    REQUIRE(f.layout.load(f.directory));
+    REQUIRE(f.build());
+    for (const f32 eye : {0.0f, -200.0f, 100.0f, 0.0f}) {
+        f.device.draws.clear();
+        const auto camera = CameraFrame::at(Vec3{0, 0, eye});
+        f.scene.drawOpaque(f.device, Mat4{1}, camera);
+        if (eye == 0) {
+            CHECK(f.device.draws.empty()); // no sort bit is needed for the near-distance queue
+        }
+        f.scene.drawDeferred(f.device, Mat4{1}, camera);
+        if (eye == 100) {
+            CHECK(f.device.draws.empty());
+        } else {
+            REQUIRE(f.device.draws.size() == 2);
+            for (const auto& draw : f.device.draws) {
+                const bool longFade = draw.vertices.front().position.x > 100;
+                const u8 expected = eye < 0 ? 255 : (longFade ? 63 : 127);
+                CHECK(draw.vertices.front().color.a == expected);
+                CHECK(draw.state.depthWrite); // camera fade keeps the authored depth mask
+            }
+        }
+        CHECK(f.scene.objectAlpha(0) == 1);
+        CHECK(f.scene.objectAlpha(1) == 1);
+    }
+}
+
+TEST_CASE("Temple arches columns and slabs use their authored camera fade",
+          "[world][scene][camera-depth-fade][assets]") {
+    const auto root = test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout native;
+    REQUIRE(models.load(root));
+    REQUIRE(textures.load(root));
+    REQUIRE(native.load(root));
+    const auto directory = test::scratchDirectory("temple-camera-fade");
+    usize checked = 0;
+    for (const auto& object : native.objects()) {
+        if ((object.objectFlags & object_flags::kDistanceFade) == 0) {
+            continue;
+        }
+        CAPTURE(object.name);
+        if (!models.find(object.name)) {
+            // The native roster also carries a meshless group and two names
+            // without geometry in this archive; they submit no world draw.
+            CHECK((object.name == "E1XD_BIGSLAB01" || object.name == "E1XD_BLOCKPI#0" ||
+                   object.name == "E1XD_BLOCKPI#1"));
+            continue;
+        }
+        // Draw each real mesh in isolation at its origin, using its native material flags.
+        writeTextFile(directory / "world.json",
+                      R"({"objects":[{"name":")" + object.name +
+                          R"(","position":[0,0,0],"next":-1,"child":-1,"objectFlags":)" +
+                          std::to_string(object.objectFlags) + "}]}");
+        WorldLayout layout;
+        WorldScene scene;
+        REQUIRE(layout.load(directory));
+        REQUIRE(scene.build(layout, models, textures, device));
+        REQUIRE(scene.unitCount() == 1);
+        device.draws.clear();
+        scene.drawOpaque(device, Mat4{1}, CameraFrame::at({0, 0, -50}));
+        CHECK(device.draws.empty());
+        scene.drawDeferred(device, Mat4{1}, CameraFrame::at({0, 0, -50}));
+        REQUIRE_FALSE(device.draws.empty());
+        for (const auto& draw : device.draws) {
+            CHECK(draw.state.depthWrite);
+            CHECK(draw.vertices.front().color.a == 127);
+        }
+        CHECK(scene.objectAlpha(0) == 1);
+        ++checked;
+    }
+    CHECK(checked == 19);
+}
+
+TEST_CASE("near-camera fading keeps AddDistObject's authored layer scales",
+          "[world][scene][camera-depth-fade]") {
+    Fixture f("world-camera-fade-layers");
+    writeTextFile(f.directory / "world.json", R"({"objects":[
+      {"name":"WALL","position":[0,0,5],"next":1,"child":-1,"objectFlags":1024},
+      {"name":"WALL","position":[0,0,50],"next":2,"child":-1,"objectFlags":525312},
+      {"name":"WALL","position":[0,0,40],"next":-1,"child":-1,"objectFlags":4719744}]})");
+    REQUIRE(f.layout.load(f.directory));
+    REQUIRE(f.build());
+    f.scene.drawOpaque(f.device, Mat4{1}, CameraFrame{});
+    CHECK(f.device.draws.empty());
+    f.scene.drawDeferred(f.device, Mat4{1}, CameraFrame{});
+    REQUIRE(f.device.draws.size() == 3);
+    // AddDistObject scales instead of applying AddSortObject's constant bias.
+    // Both flags select 0x400000's scale rather than multiplying the two.
+    CHECK(f.device.draws[0].vertices.front().position.z == 5);
+    CHECK(f.device.draws[1].vertices.front().position.z == 50);
+    CHECK(f.device.draws[2].vertices.front().position.z == 40);
+    CHECK(f.device.draws[0].state.depthWrite);
+    CHECK(f.device.draws[1].state.depthWrite);
+    CHECK_FALSE(f.device.draws[2].state.depthWrite); // explicitly authored 0x80
+}
+
+TEST_CASE("Temple broken column fades its shaft but keeps its native cap and pedestal solid",
+          "[world][scene][camera-depth-fade][temple-column][assets]") {
+    const auto root = test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ModelSet models;
+    TextureSet textures;
+    WorldLayout native;
+    REQUIRE(models.load(root));
+    REQUIRE(textures.load(root));
+    REQUIRE(native.load(root));
+    const auto directory = test::scratchDirectory("temple-column-parts");
+    for (const usize index : {189U, 190U, 196U}) {
+        const auto& object = native.objects().at(index);
+        const bool shaft = index == 190;
+        CAPTURE(object.name);
+        REQUIRE(object.name == (index == 189 ? "E1COLUMN#05"
+                                : shaft      ? "E1NSXD_COLUM#0"
+                                             : "E1COLUMN#07"));
+        REQUIRE(object.objectFlags == (shaft ? 0x1400U : 0U));
+        REQUIRE(object.parent == -1);
+        // NewWorldObject (800AB780) applies each piece's flags independently;
+        // the broken top and pedestal do not inherit the adjacent shaft's fade.
+        writeTextFile(directory / "world.json",
+                      R"({"objects":[{"name":")" + object.name +
+                          R"(","position":[0,0,0],"next":-1,"child":-1,"flags":2,"objectFlags":)" +
+                          std::to_string(object.objectFlags) + "}]}");
+        WorldLayout layout;
+        WorldScene scene;
+        REQUIRE(layout.load(directory));
+        REQUIRE(scene.build(layout, models, textures, device));
+        device.draws.clear();
+        scene.drawOpaque(device, Mat4{1}, CameraFrame::at({0, 0, -50}));
+        CHECK(device.draws.empty() == shaft);
+        scene.drawDeferred(device, Mat4{1}, CameraFrame::at({0, 0, -50}));
+        REQUIRE_FALSE(device.draws.empty());
+        for (const auto& draw : device.draws) {
+            CHECK(draw.state.depthWrite);
+            for (const auto& vertex : draw.vertices) {
+                CHECK(vertex.color.a == (shaft ? 127 : 255));
+            }
+        }
+    }
+}
+
+TEST_CASE("camera fade overrides affect only selected geometry and never simulation state",
+          "[world][scene][camera-depth-fade][camera-fade-override]") {
+    Fixture f("world-camera-fade-override");
+    writeTextFile(f.directory / "world.json", R"({"objects":[
+      {"name":"WALL","position":[0,0,50],"next":1,"child":-1,"objectFlags":0},
+      {"name":"WALL","position":[10,0,50],"next":2,"child":-1,"objectFlags":0},
+      {"name":"WALL","position":[20,0,50],"next":-1,"child":-1,"objectFlags":1024}]})");
+    REQUIRE(f.layout.load(f.directory));
+    const std::array<usize, 1> overrides{0};
+    REQUIRE(f.build({}, {}, overrides));
+    CHECK(f.layout.objects()[0].objectFlags == 0);
+    CHECK(f.layout.objects()[1].objectFlags == 0);
+    CHECK(f.layout.objects()[2].objectFlags == 1024);
+    DigestTextures textures(f);
+    const auto before = sceneDigest(f.scene, textures.resources());
+    REQUIRE(before);
+    for (const f32 eye : {0.0f, -200.0f, 0.0f}) {
+        f.device.draws.clear();
+        f.scene.draw(f.device, Mat4{1}, CameraFrame::at({0, 0, eye}));
+        REQUIRE(f.device.draws.size() == 3);
+        for (const auto& draw : f.device.draws) {
+            const bool unchangedSolid = draw.vertices.front().position.x == 10;
+            CHECK(draw.vertices.front().color.a == (unchangedSolid || eye < 0 ? 255 : 127));
+        }
+        CHECK(f.scene.objectAlpha(0) == 1);
+        CHECK(f.scene.objectAlpha(2) == 1);
+        CHECK(sceneDigest(f.scene, textures.resources()) == before);
+    }
+    REQUIRE(f.build()); // the override cannot leak into a subsequent world build
+    f.device.draws.clear();
+    f.scene.drawOpaque(f.device, Mat4{1}, CameraFrame{});
+    REQUIRE(f.device.draws.size() == 1);
+    CHECK(f.device.draws.front().vertices.size() == 6); // both unflagged walls are solid again
 }
 
 TEST_CASE("Temple stained-glass light rays composite after the curtain meshes",

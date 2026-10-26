@@ -27,7 +27,10 @@ public:
     static std::optional<Vec3> select(const Vec3& origin, const Vec3& facing,
                                       std::span<const MissileTarget> targets, f32 range,
                                       const WorldCollision* collision = nullptr,
-                                      f32 facingDot = kFacingDot);
+                                      f32 facingDot = kFacingDot, bool fixedFacing = false);
+    /** Put a target's height on the current firing line, without changing mouse yaw. */
+    static std::optional<Vec3> heightTarget(const Vec3& origin, const Vec3& target,
+                                            const Vec3& facing);
     /** Pass through the selected point at unchanged horizontal speed. */
     static Vec3 velocity(const Vec3& origin, const Vec3& target, f32 speed, f32 gravity);
     /** Nearest reachable body at any bearing, by surface distance, with vertical overlap and a

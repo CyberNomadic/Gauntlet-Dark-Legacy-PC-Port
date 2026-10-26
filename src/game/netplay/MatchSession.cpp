@@ -12,10 +12,37 @@
 namespace gdl::game {
 namespace {
 constexpr u32 kMagic = fourcc("GDLT");
+constexpr u32 kConsoleMagic = fourcc("GDLC");
+constexpr u8 kConsoleVersion = 1;
+constexpr usize kConsoleHeader = 37;
 void word(std::vector<u8>& bytes, u32 value) {
     for (u32 shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<u8>(value >> shift));
     }
+}
+void wide(std::vector<u8>& bytes, u64 value) {
+    word(bytes, static_cast<u32>(value));
+    word(bytes, static_cast<u32>(value >> 32U));
+}
+u64 readWide(ByteReader& reader) {
+    const u64 low = reader.readU32();
+    return low | (static_cast<u64>(reader.readU32()) << 32U);
+}
+std::vector<u8> consolePacket(bool permission, bool enabled, u64 epoch, u64 revision, u64 request,
+                              u32 grant, const ConsoleAction* action = nullptr) {
+    std::vector<u8> bytes;
+    word(bytes, kConsoleMagic);
+    bytes.insert(bytes.end(), {kConsoleVersion, static_cast<u8>(permission ? 0 : 1),
+                               static_cast<u8>(enabled), action ? action->seat : u8{0}});
+    wide(bytes, epoch);
+    wide(bytes, revision);
+    wide(bytes, request);
+    word(bytes, grant);
+    bytes.push_back(action ? static_cast<u8>(action->line.size()) : 0);
+    if (action) {
+        bytes.insert(bytes.end(), action->line.begin(), action->line.end());
+    }
+    return bytes;
 }
 bool validOwners(const MatchOwners& owners) {
     return std::ranges::all_of(owners, [](u8 peer) { return peer <= 4; }) &&
@@ -204,6 +231,141 @@ bool MatchSession::open(u8 localPeer, const MatchOwners& owners, std::span<const
 void MatchSession::clear() {
     *this = MatchSession{};
 }
+bool MatchSession::consoleReady() const {
+    return m_phase == Phase::Running && m_context.transition != MatchTransition::Shop &&
+           !m_resync && !m_pendingNativeContext && !m_nativeTerminal;
+}
+bool MatchSession::setConsolePermissions(bool enabled) {
+    if (!host() || m_phase == Phase::Offline || m_phase == Phase::Stopped ||
+        m_consoleRevision == std::numeric_limits<u64>::max()) {
+        return false;
+    }
+    if (enabled == m_consolePermissions) {
+        return true;
+    }
+    const auto peers = std::ranges::count_if(m_links, [](auto link) { return link != 0; });
+    if (m_controls.size() + static_cast<usize>(peers) > kControlBudget) {
+        return false;
+    }
+    ++m_consoleRevision;
+    m_consolePermissions = enabled;
+    const auto bytes = consolePacket(true, enabled, 0, m_consoleRevision, 0, 0);
+    for (const auto link : m_links) {
+        if (link != 0) {
+            m_controls.push_back({link, bytes});
+        }
+    }
+    if (!enabled) {
+        std::erase_if(m_consoleRequests, [](const auto& request) { return request.peer != 1; });
+    }
+    return true;
+}
+bool MatchSession::admitConsole(u8 peer, u64 epoch, u64 revision, u64 request, u32 grant,
+                                const ConsoleAction& action) {
+    if (!host() || !consoleReady() || !action.valid() || peer == 0 || peer > 4 || dropped(peer) ||
+        epoch != m_context.epoch || m_context.owners[action.seat] != peer ||
+        m_context.grants[action.seat] != grant || request == 0 || request <= m_consoleSeen[peer] ||
+        (peer != 1 && (!m_consolePermissions || revision != m_consoleRevision)) ||
+        m_consoleRequests.size() >= kConsoleRequests) {
+        return false;
+    }
+    m_consoleSeen[peer] = request;
+    m_consoleRequests.push_back({peer, epoch, action});
+    return true;
+}
+bool MatchSession::requestConsole(const ConsoleAction& action) {
+    if (!consoleReady() || !action.valid() || m_context.owners[action.seat] != m_local ||
+        (!host() && !m_consolePermissions) ||
+        m_consoleNextRequest == std::numeric_limits<u64>::max()) {
+        return false;
+    }
+    const u64 request = m_consoleNextRequest + 1;
+    const u32 grant = m_context.grants[action.seat];
+    if (host()) {
+        if (!admitConsole(m_local, m_context.epoch, m_consoleRevision, request, grant, action)) {
+            return false;
+        }
+    } else {
+        if (m_links[1] == 0 || m_controls.size() >= kControlBudget) {
+            return false;
+        }
+        m_controls.push_back(
+            {m_links[1], consolePacket(false, false, m_context.epoch, m_consoleRevision, request,
+                                       grant, &action)});
+    }
+    m_consoleNextRequest = request;
+    return true;
+}
+std::optional<ConsoleAction> MatchSession::takeConsoleRequest() {
+    if (!host() || !consoleReady()) {
+        m_consoleRequests.clear();
+        return std::nullopt;
+    }
+    while (!m_consoleRequests.empty()) {
+        auto request = std::move(m_consoleRequests.front());
+        m_consoleRequests.pop_front();
+        if (request.epoch == m_context.epoch && !dropped(request.peer) &&
+            (request.peer == 1 || m_consolePermissions)) {
+            return std::move(request.action);
+        }
+    }
+    return std::nullopt;
+}
+MatchSession::Admission MatchSession::consoleMessage(u8 peer, std::span<const u8> bytes) {
+    if (bytes.size() < kConsoleHeader || bytes.size() > kConsoleHeader + ConsoleAction::kMaxLine) {
+        return Admission::Invalid;
+    }
+    ByteReader reader(bytes);
+    if (reader.readU32() != kConsoleMagic || reader.readU8() != kConsoleVersion) {
+        return Admission::Invalid;
+    }
+    const u8 kind = reader.readU8();
+    const u8 enabled = reader.readU8();
+    ConsoleAction action;
+    action.seat = reader.readU8();
+    const u64 epoch = readWide(reader);
+    const u64 revision = readWide(reader);
+    const u64 request = readWide(reader);
+    const u32 grant = reader.readU32();
+    const usize length = reader.readU8();
+    if (kind > 1 || enabled > 1 || length != reader.remaining()) {
+        return Admission::Invalid;
+    }
+    if (kind == 0) {
+        if (host() || peer != 1) {
+            return Admission::WrongPeer;
+        }
+        if (epoch != 0 || request != 0 || grant != 0 || action.seat != 0 || length != 0 ||
+            revision == 0) {
+            return Admission::Invalid;
+        }
+        if (revision <= m_consoleRevision) {
+            return revision == m_consoleRevision && (enabled != 0) != m_consolePermissions
+                       ? Admission::Invalid
+                       : Admission::Stale;
+        }
+        m_consoleRevision = revision;
+        m_consolePermissions = enabled != 0;
+        return Admission::Accepted;
+    }
+    if (!host() || peer == 1) {
+        return Admission::WrongPeer;
+    }
+    const auto line = reader.readBytes(length);
+    action.line.assign(line.begin(), line.end());
+    if (enabled != 0 || !action.valid() || request == 0) {
+        return Admission::Invalid;
+    }
+    if (epoch != m_context.epoch || !consoleReady() || request <= m_consoleSeen[peer] ||
+        revision != m_consoleRevision || !m_consolePermissions) {
+        return Admission::Stale;
+    }
+    if (m_context.owners[action.seat] != peer || m_context.grants[action.seat] != grant) {
+        return Admission::WrongPeer;
+    }
+    return admitConsole(peer, epoch, revision, request, grant, action) ? Admission::Accepted
+                                                                       : Admission::Stale;
+}
 u8 MatchSession::directPeerOf(PacketTransport::Connection connection) const {
     if (connection != 0) {
         for (u8 peer = 2; peer <= 4; ++peer) {
@@ -264,6 +426,7 @@ bool MatchSession::broadcast(MatchControlKind kind, MatchStop reason, u8 votes, 
     return true;
 }
 void MatchSession::discardGameplay() {
+    m_consoleRequests.clear();
     m_resync.reset();
     m_journalQueuedPeers = 0;
     m_resyncTarget = false;
@@ -374,6 +537,7 @@ bool MatchSession::beginResync(Time now) {
     log::warn("Native observation mismatch at epoch {} tick {}: peers {:#x} will rebuild",
               m_context.epoch, resync.tick, resync.peers);
     m_resync = resync;
+    m_consoleRequests.clear();
     m_journalQueuedPeers = 0;
     return true;
 }
@@ -1074,6 +1238,7 @@ MatchSession::Admission MatchSession::control(u8 peer, const MatchControl& messa
             return Admission::Accepted;
         }
         m_resync = Resync{message.resyncTick, message.resyncPeers};
+        m_consoleRequests.clear();
         m_resyncTarget = (message.resyncPeers & (1U << m_local)) != 0;
         m_journalComplete = false;
         m_journalIncoming.clear();
@@ -1150,6 +1315,9 @@ MatchSession::Admission MatchSession::receive(PacketTransport::Connection connec
     }
     if (m_phase == Phase::Stopped || m_phase == Phase::Offline) {
         return Admission::WrongPhase;
+    }
+    if (bytes.size() >= 4 && ByteReader(bytes).readU32() == kConsoleMagic) {
+        return consoleMessage(peer, bytes);
     }
     if (bytes.size() >= 4 && ByteReader(bytes).readU32() == kMagic) {
         const auto message = MatchControlPacket::decode(bytes);
@@ -1434,9 +1602,14 @@ bool MatchSession::observeNative(u64 tick, const NativeAgreement::Digest& digest
     return false;
 }
 void MatchSession::flush(PacketTransport& transport, Time now) {
+    PacketTransport::Connection closedConnection = 0;
     // A final source verdict precedes Prepare/Ready on the same reliable link.
     for (auto* agreement : {m_terminalAgreement.get(), m_drainingTerminal.get()}) {
-        if (agreement && !agreement->flush(transport, now)) {
+        if (agreement && !agreement->flush(transport, now, &closedConnection)) {
+            if (closedConnection != 0) {
+                disconnected(closedConnection);
+                return;
+            }
             failNativeAgreement(NativeAgreement::Failure::Transport, 0, agreement);
             return;
         }
@@ -1448,7 +1621,11 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
     // already be loading the destination, but its last confirmed source hash
     // must not disappear when the source scene/consumer is released.
     if (m_drainingAgreement) {
-        if (!m_drainingAgreement->flush(transport, now)) {
+        if (!m_drainingAgreement->flush(transport, now, &closedConnection)) {
+            if (closedConnection != 0) {
+                disconnected(closedConnection);
+                return;
+            }
             failNativeAgreement(NativeAgreement::Failure::Transport, 0, m_drainingAgreement.get());
             return;
         }
@@ -1492,7 +1669,11 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
     // Prepare may reach a guest before old input deliveries. Retain and drain
     // the source relay throughout Loading; Ready acknowledges execution of its
     // terminal tick, so tryCommit() is the only successful retirement boundary.
-    if (m_drainingInputs && !m_drainingInputs->flush(transport)) {
+    if (m_drainingInputs && !m_drainingInputs->flush(transport, &closedConnection)) {
+        if (closedConnection != 0) {
+            disconnected(closedConnection);
+            return;
+        }
         stop(MatchStop::TransportFailure, true);
         return;
     }
@@ -1518,11 +1699,19 @@ void MatchSession::flush(PacketTransport& transport, Time now) {
     // In particular, a congested Commit above must reach this destination
     // before any new input publication. The unreliable stream independently
     // retains ACKed/redundant actual input while every native scene owns replay.
-    if (!m_exchange || !m_exchange->flush(transport)) {
+    if (!m_exchange || !m_exchange->flush(transport, &closedConnection)) {
+        if (closedConnection != 0) {
+            disconnected(closedConnection);
+            return;
+        }
         stop(MatchStop::TransportFailure, true);
         return;
     }
-    if (m_nativeAgreement && !m_nativeAgreement->flush(transport, now)) {
+    if (m_nativeAgreement && !m_nativeAgreement->flush(transport, now, &closedConnection)) {
+        if (closedConnection != 0) {
+            disconnected(closedConnection);
+            return;
+        }
         failNativeAgreement(NativeAgreement::Failure::Transport);
     }
 }

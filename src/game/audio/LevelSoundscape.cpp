@@ -45,7 +45,7 @@ void LevelSoundscape::saveLocal(LocalSnapshot& saved) const {
     saved.m_epoch = m_localEpoch;
 }
 bool LevelSoundscape::appendNativeDigest(NativeStateDigest& digest) const {
-    digest.string("LevelSoundscape.native.1");
+    digest.string("LevelSoundscape.native.2");
     digest.value(m_sim);
     return m_narration.appendNativeDigest(digest) && m_barks.appendNativeDigest(digest) &&
            digest.good();
@@ -56,13 +56,16 @@ bool LevelSoundscape::appendLocalDigest(NativeStateDigest& digest,
         digest.invalidate();
         return false;
     }
-    digest.string("LevelSoundscape.native.1");
+    digest.string("LevelSoundscape.native.2");
     digest.value(saved.m_values);
     return m_narration.appendLocalDigest(digest, saved.m_narration) &&
            m_barks.appendLocalDigest(digest, saved.m_barks) && digest.good();
 }
 bool LevelSoundscape::canRestoreLocal(const LocalSnapshot& saved) const {
     return saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch &&
+           std::ranges::all_of(saved.m_values.borrowedBanks, [&](const auto& name) {
+               return std::ranges::find(m_borrowed, name, &BorrowedBank::name) != m_borrowed.end();
+           }) &&
            m_narration.canRestoreLocal(saved.m_narration) && m_barks.canRestoreLocal(saved.m_barks);
 }
 bool LevelSoundscape::restoreLocal(const LocalSnapshot& saved) {
@@ -668,6 +671,7 @@ void LevelSoundscape::close() {
     m_objectFlags.clear();
     m_common = SoundSet{};
     m_borrowed.clear();
+    m_sim.borrowedBanks.clear();
     m_level = SoundSet{};
     m_ambient = SoundSet{};
     m_narrator = SoundSet{};
@@ -716,21 +720,36 @@ SoundSet* LevelSoundscape::bankOf(std::string_view name, u32& sound) {
             return bank;
         }
     }
-    for (const auto& bank : m_borrowed) {
-        if (const auto found = bank->find(name); found.has_value()) {
+    for (const auto& key : m_sim.borrowedBanks) {
+        const auto bank = std::ranges::find(m_borrowed, key, &BorrowedBank::name);
+        if (bank == m_borrowed.end()) {
+            continue;
+        }
+        if (const auto found = bank->sounds->find(name); found.has_value()) {
             sound = *found;
-            return bank.get();
+            return bank->sounds.get();
         }
     }
     return nullptr;
 }
 
 bool LevelSoundscape::borrowBank(const std::filesystem::path& directory) {
-    auto bank = std::make_unique<SoundSet>();
-    if (!bank->load(directory)) {
-        return false;
+    // Native WDATA bank names are root-relative. Cache disk resources separately
+    // from active lookup order so rollback cannot leak a future bank into a tick.
+    const std::string key = directory.filename().generic_string();
+    auto found = std::ranges::find(m_borrowed, key, &BorrowedBank::name);
+    if (found == m_borrowed.end()) {
+        auto bank = std::make_unique<SoundSet>();
+        if (!bank->load(directory)) {
+            return false;
+        }
+        m_borrowed.push_back({key, directory, std::move(bank)});
+    } else if (found->directory != directory) {
+        return false; // One logical bank cannot silently bind different roots.
     }
-    m_borrowed.push_back(std::move(bank));
+    if (std::ranges::find(m_sim.borrowedBanks, key) == m_sim.borrowedBanks.end()) {
+        m_sim.borrowedBanks.push_back(key);
+    }
     return true;
 }
 

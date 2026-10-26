@@ -9,6 +9,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include "game/rollback/InputJournal.h"
+#include "game/rollback/RollbackInputs.h"
 #include "game/rollback/RollbackSessionHarness.h"
 
 namespace {
@@ -231,9 +232,10 @@ struct Room {
 };
 } // namespace
 
-TEST_CASE("match control authenticates the fixed native startup delay",
+TEST_CASE("match control authenticates every supported native startup delay",
           "[match-lockstep][match-rollback]") {
-    const u8 delay = GENERATE(u8{0}, u8{1}, u8{2});
+    const u8 delay = GENERATE(u8{0}, u8{1}, u8{2}, u8{3}, u8{4});
+    STATIC_REQUIRE(RollbackInputs::kMaxDelay == 4);
     auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0}, delay);
     REQUIRE(room->sessions[1].prepare(7));
     const auto context = room->sessions[1].context();
@@ -257,26 +259,40 @@ TEST_CASE("match control authenticates the fixed native startup delay",
     invalid = bytes;
     invalid[4] = 6; // prior lockstep protocol is not compatible
     CHECK_FALSE(MatchControlPacket::decode(invalid));
-    invalid = bytes;
-    invalid[22] = 3;
-    CHECK_FALSE(MatchControlPacket::decode(invalid));
+    for (const u8 unsupported :
+         {static_cast<u8>(RollbackInputs::kMaxDelay + 1), std::numeric_limits<u8>::max()}) {
+        invalid = bytes;
+        invalid[22] = unsupported;
+        CHECK_FALSE(MatchControlPacket::decode(invalid));
+        auto invalidContext = context;
+        invalidContext.inputLead = unsupported;
+        CHECK_FALSE(MatchControlPacket::encode(
+            {MatchControlKind::Prepare, MatchStop::None, invalidContext}));
+    }
 }
 
 TEST_CASE("native match delay must match the authenticated host prepare",
           "[match-lockstep][match-rollback]") {
-    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0}, 2);
+    const u8 offeredDelay = GENERATE(u8{0}, u8{1}, u8{2}, u8{3}, u8{4});
+    auto room = std::make_unique<Room>(MatchOwners{1, 2, 0, 0}, offeredDelay);
     REQUIRE(room->sessions[1].prepare(7));
     const auto offered = room->sessions[1].context();
     const std::array hostLink{MatchLink{1, kHost}};
-    for (u8 const delay : {u8{0}, u8{1}}) {
+    for (u8 delay = 0; delay <= RollbackInputs::kMaxDelay; ++delay) {
+        if (delay == offeredDelay) {
+            continue;
+        }
         MatchSession wrong;
         REQUIRE(wrong.open(2, room->owners, hostLink, delay));
         CHECK(wrong.receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) ==
               Admission::Invalid);
         CHECK(wrong.phase() == Phase::Lobby);
     }
-    MatchSession invalid;
-    CHECK_FALSE(invalid.open(2, room->owners, hostLink, 3));
+    for (const u8 unsupported :
+         {static_cast<u8>(RollbackInputs::kMaxDelay + 1), std::numeric_limits<u8>::max()}) {
+        MatchSession invalid;
+        CHECK_FALSE(invalid.open(2, room->owners, hostLink, unsupported));
+    }
     CHECK(room->sessions[2].receive(kHost, controlBytes(MatchControlKind::Prepare, offered)) ==
           Admission::Accepted);
 }
@@ -285,7 +301,7 @@ TEST_CASE("native match advances identical complete frames on every peer without
           "[match-lockstep][match-rollback]") {
     const auto owners = GENERATE(MatchOwners{1, 2, 0, 0}, MatchOwners{1, 2, 3, 0},
                                  MatchOwners{1, 2, 3, 4}, MatchOwners{2, 1, 2, 3});
-    const auto delay = GENERATE(u8{0}, u8{1}, u8{2});
+    const auto delay = GENERATE(u8{0}, u8{1}, u8{2}, u8{3}, u8{4});
     auto room = std::make_unique<Room>(owners, delay);
     room->ready();
     for (u64 tick = 1; tick <= 20 + delay; ++tick) {

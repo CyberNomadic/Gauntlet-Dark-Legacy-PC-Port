@@ -147,7 +147,7 @@ struct EnemySpawn {
     s32 algorithm = -1; ///< the kind's own when negative
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 direction{0.0f, 0.0f, 1.0f};
-    f32 clearance = 0.0f; ///< how far out from `position` it is set (a generator's height)
+    f32 clearance = 0.0f; ///< how far out from `position` it is set (a generator's radius)
     s32 generator = -1;
     bool placed = false;             ///< set exactly where asked, as a level's placement is
     bool patrolBirth = false;        ///< generate_single's sentry, not an ordinary repeating brood

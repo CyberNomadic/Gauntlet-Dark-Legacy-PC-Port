@@ -46,6 +46,7 @@ public:
         std::vector<Ledger::Action> actions;
         std::vector<FrameEventIdentity> unretractable;
         std::vector<ConfirmedDigest> digests;
+        std::vector<PlayScene::ConsoleReply> consoleReplies; ///< confirmed, exactly once
         /** Exact confirmed final frame, including off-cadence exits. Published
          * once alongside Travel/GameOver/Leave; periodic digests stay on their
          * ordinary cadence and never contain a duplicate terminal entry. */
@@ -83,7 +84,7 @@ public:
     ~NativeRollbackDriver();
     NativeRollbackDriver(const NativeRollbackDriver&) = delete;
     NativeRollbackDriver& operator=(const NativeRollbackDriver&) = delete;
-    /** Requires the actual loaded party, 60 Hz and negotiated local delay 0..2.
+    /** Requires the actual loaded party, 60 Hz and negotiated local delay 0..4.
      * A new binding requires a newer epoch, including after clear(). A failed
      * loaded scene cannot bind again until it has been closed and reopened.
      * Old scene resources must outlive clear().
@@ -97,7 +98,8 @@ public:
     /** Local device order maps to owned seats in ascending order. Accumulates
      * unsampled press edges under backpressure; admitted frames never change.
      * No sampling, semantic pointer lookup or device polling occurs on replay. */
-    bool sample(const SessionInputs::Frame& local);
+    bool sample(const SessionInputs::Frame& local,
+                std::optional<ConsoleAction> console = std::nullopt);
     /** Cancel only a local seat's unsampled controls when its local menu opens.
      * Already admitted input history remains immutable. A valid owned seat with
      * no pending capture succeeds; foreign or unbound seats are rejected. */

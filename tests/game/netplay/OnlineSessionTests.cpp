@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "game/netplay/OnlinePair.h"
 #include "game/netplay/OnlineSession.h"
@@ -469,6 +470,8 @@ TEST_CASE("native backpressure resends retained input without resampling an edge
 
 TEST_CASE("an immediate guest input send failure stops the active session",
           "[netplay][online-session][latency][early-input-flush]") {
+    const auto result =
+        GENERATE(PacketTransport::SendResult::Disconnected, PacketTransport::SendResult::Invalid);
     usize attempts = 0;
     test::OnlinePair pair;
     pair.prepare();
@@ -476,7 +479,7 @@ TEST_CASE("an immediate guest input send failure stops the active session",
     pair.guestWire.beforeSend = [&](std::span<const u8> bytes, PacketTransport::Delivery) {
         if (RollbackExchange::recognizes(bytes)) {
             ++attempts;
-            return PacketTransport::SendResult::Disconnected;
+            return result;
         }
         return PacketTransport::SendResult::Sent;
     };
@@ -485,7 +488,9 @@ TEST_CASE("an immediate guest input send failure stops the active session",
     CHECK(pair.guestSession.phase() == Phase::Failed);
     CHECK(pair.guestSession.failure() == Failure::Match);
     CHECK(pair.guest.phase() == MatchSession::Phase::Stopped);
-    CHECK(pair.guest.stopReason() == MatchStop::TransportFailure);
+    CHECK(pair.guest.stopReason() == (result == PacketTransport::SendResult::Disconnected
+                                          ? MatchStop::Disconnected
+                                          : MatchStop::TransportFailure));
     CHECK_FALSE(pair.guestSession.flush());
     CHECK(attempts == 1);
     pair.guestWire.beforeSend = {};

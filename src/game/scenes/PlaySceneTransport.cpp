@@ -38,7 +38,7 @@ void PlayScene::updateTransporters(s32 ticks, f32 seconds, bool held) {
             continue;
         }
         if (const auto destination = m_transporters.landing(
-                *source, actor.radius(), m_world->collision(), viewCamera(), cameraView());
+                *source, actor.radius(), m_world->collision(), simulationCamera(), cameraView());
             destination && transport.begin(*destination)) {
             const auto sound = LevelTransporters::soundForRealm(m_world->ref().realmId);
             if (!sound.empty()) {

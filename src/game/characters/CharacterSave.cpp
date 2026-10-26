@@ -29,6 +29,27 @@ using Json = nlohmann::json;
 constexpr s32 kSaveFormatVersion = 1;
 constexpr u16 kClassUnlockMask = (1U << (kClassCount - kStartingClassCount)) - 1;
 
+void prepareSumner(CharacterSave& save) {
+    if (save.character != kSumnerClass || save.experience() >= levelExperience(kMaxLevel)) {
+        return;
+    }
+    // player_get_from_save (8007A7A4) starts Sumner at level 99, with the keys,
+    // potions and installed relics already granted. Do not refill an established
+    // port character when its save is decoded for a shop or online handoff.
+    auto& progress = save.progress();
+    progress.experience = levelExperience(kMaxLevel);
+    progress.promotedLevel = kMaxLevel;
+    progress.health = 9999;
+    save.gold = progress.gold = 5000;
+    progress.inventory.keys = Inventory::kMostKeys;
+    progress.inventory.potions.clear();
+    for (s32 potion = 0; potion < Inventory::kMostPotions; ++potion) {
+        progress.inventory.potions.push_back(potion % kColorCount);
+    }
+    progress.relics.runes = 0x1fff;
+    progress.relics.shards = 0x7fe;
+}
+
 /** What is carried; only the powerup slots that hold something are written. */
 Json inventoryJson(const Inventory& inventory) {
     Json powerups = Json::array();
@@ -183,11 +204,13 @@ ClassProgress progressFromJson(const Json& object) {
 void CharacterSave::selectClass(s32 next) {
     GDL_VERIFY(next >= 0 && next < kClassCount, "Selected class must be in range");
     if (next == character) {
+        prepareSumner(*this);
         return;
     }
     progress().gold = gold;
     character = next;
     gold = progress().gold;
+    prepareSumner(*this);
 }
 
 std::string CharacterSave::toJson() const {
@@ -251,6 +274,11 @@ CharacterSave CharacterSave::fromJson(std::string_view text) {
     // The top-level wallet remains authoritative for the selected class, including
     // legacy saves that never recorded balances for the other classes.
     save.progress().gold = save.gold;
+    if (save.name == "SUM224" && save.character == baseClassOf(kSumnerClass)) {
+        applyNameCheats(save);
+    } else {
+        prepareSumner(save);
+    }
     restoreNameForm(save);
     return save;
 }

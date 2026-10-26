@@ -2159,7 +2159,118 @@ TEST_CASE("plain harm leaves a great one be; flagged hits shake, knock back or k
     hit.flags = EnemyHit::kKnockBack; // 0x10 shakes it: five
     actor.hurt(hit);
     actor.update(2, 1.0f / 30, {});
+    // CritterDoKnockback leaves an unflagged hit's input pending until a positive
+    // knockback scale consumes it. Both accepted directions now contribute.
+    CHECK(actor.position().x == Approx(10.0f / 30));
+}
+
+TEST_CASE("critter knockback accumulates raw hit inputs before clamping the combined velocity",
+          "[game][combatant][critter-knockback]") {
+    const bool capped = GENERATE(false, true);
+    CAPTURE(capped);
+    const auto root = familyAssets();
+    test::FakeRenderDevice device;
+    for (const auto& definition : {General::definition(), Gargoyle::definition()}) {
+        CombatantAssets assets;
+        REQUIRE(assets.load(device, root, definition, 'G'));
+        Combatant actor;
+        REQUIRE(actor.spawn(assets, 0, {}, 0, nullptr, {}, 'G'));
+        EnemyHit first;
+        first.damage = 1;
+        first.flags = EnemyHit::kKnockBack;
+        first.direction = {2, 0.5f, 0};
+        EnemyHit second = first;
+        second.direction = {0, 0, 1};
+        if (capped) {
+            first.direction = {10, 0, 0};
+            second.direction = {0, 0, 10};
+        }
+        actor.hurt(first);
+        actor.hurt(second);
+        CHECK(actor.health() == 98);
+        Vec3 expected = (first.direction + second.direction) * 5.0f;
+        if (const f32 magnitude = glm::length(expected); magnitude > 40.0f) {
+            expected *= 40.0f / magnitude;
+        }
+        actor.update(2, 1.0f / 30, {});
+        CHECK(glm::distance(actor.position(), expected / 30.0f) < 0.0001f);
+    }
+}
+
+TEST_CASE("a directionless critter hit cannot reapply a consumed knockback input",
+          "[game][combatant][critter-knockback]") {
+    const auto root = familyAssets();
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, General::definition(), 'G'));
+    Combatant actor;
+    REQUIRE(actor.spawn(assets, 0, {}, 0, nullptr, {}, 'G'));
+    EnemyHit hit;
+    hit.damage = 1;
+    hit.flags = EnemyHit::kKnockBack;
+    hit.direction = {2, 0, 0};
+    actor.hurt(hit);
+    actor.update(2, 1.0f / 30, {});
+    CHECK(actor.position().x == Approx(10.0f / 30));
+    hit.direction = Vec3{0};
+    actor.hurt(hit);
+    actor.update(2, 1.0f / 30, {});
+    CHECK(actor.position().x == Approx((10.0f / 30) * (1.0f + 0.8f)));
+    actor.update(2, 1.0f / 30, {});
+    CHECK(actor.position().x == Approx((10.0f / 30) * (1.0f + 0.8f + 0.64f)));
+}
+
+TEST_CASE("a rejected critter node hit cannot change an accepted knockback input",
+          "[game][combatant][critter-knockback]") {
+    const auto root = familyAssets();
+    writeTextFile(root / "critter/GENERAL.json", R"({
+      "descriptors":[{"prefix":"BODY","name":"GENERAL","type":8}],
+      "types":[{"moveCount":1,"maxHealth":100,"radius":1,"colCount":1}],
+      "moves":[{"name":"READY","anim":"STEP","type":32}],
+      "nodes":[{"nodeName":"BODY","radius":1,"healthScale":0.1,"damageScale":1}]
+    })");
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, General::definition(), 'G'));
+    Combatant actor;
+    REQUIRE(actor.spawn(assets, 0, {}, 0, nullptr, {}, 'G'));
+    EnemyHit hit;
+    hit.damage = 10;
+    hit.flags = EnemyHit::kKnockBack;
+    hit.direction = {1, 0, 0};
+    hit.node = 0;
+    actor.hurt(hit);
+    REQUIRE(actor.health() == Approx(90));
+    hit.direction = {0, 0, 100};
+    actor.hurt(hit); // The already-exhausted node rejects this hit completely.
+    CHECK(actor.health() == Approx(90));
+    actor.update(2, 1.0f / 30, {});
     CHECK(actor.position().x == Approx(5.0f / 30));
+    CHECK(actor.position().z == 0.0f);
+}
+
+TEST_CASE("fractional accepted critter damage still requests knockback and a hit reaction",
+          "[game][combatant][critter-knockback]") {
+    s32 readyInterrupt = 60;
+    SECTION("the authored stance allows the reaction") {}
+    SECTION("an uninterruptible stance still accepts the impulse") {
+        readyInterrupt = 0;
+    }
+    const auto root = familyAssets(readyInterrupt);
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, General::definition(), 'G'));
+    Combatant actor;
+    REQUIRE(actor.spawn(assets, 0, {}, 0, nullptr, {}, 'G'));
+    EnemyHit hit;
+    hit.damage = 0.25f;
+    hit.flags = kKnockOver;
+    hit.direction = {0.5f, 0, 0};
+    actor.hurt(hit);
+    actor.update(2, 1.0f / 30, {});
+    CHECK(actor.health() == Approx(99.75f));
+    CHECK(actor.position().x == Approx(5.0f / 30));
+    CHECK(actor.moveName() == (readyInterrupt != 0 ? "KD" : "READY"));
 }
 
 TEST_CASE("mixed families preserve the shared capacity while boss ownership is independent",

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "game/netplay/HostedRoom.h"
 #include "game/netplay/NativePlaySetup.h"
@@ -127,7 +128,8 @@ TEST_CASE("peers missing replay capabilities cannot join even with the same buil
 }
 
 TEST_CASE("hosted exact-input packets fit a single provider fragment", "[netplay][hosted-room]") {
-    Pair pair;
+    const bool console = GENERATE(false, true);
+    Pair pair(2, 1);
     pair.pump();
     REQUIRE(pair.host.ready());
     REQUIRE(pair.guest.ready());
@@ -140,19 +142,42 @@ TEST_CASE("hosted exact-input packets fit a single provider fragment", "[netplay
     std::vector<InputCommand> inputs(InputPacket::kMaxCommands);
     for (usize index = 0; index < inputs.size(); ++index) {
         inputs[index].epoch = 1;
-        inputs[index].tick = index + 1;
+        inputs[index].tick = index / 2 + 1;
+        inputs[index].seat = static_cast<u8>(index % 2);
         inputs[index].grant = 1;
+        if (console) {
+            inputs[index].console = ConsoleAction{2, "spawn " + std::string(154, 'a')};
+        }
     }
     const RollbackExchange::Message message{1, 1, 1, {}, inputs, 1};
-    const auto packet = RollbackExchange::encode(message);
-    REQUIRE(packet);
-    REQUIRE(pair.hostRoom.transport().send(7, *packet, PacketTransport::Delivery::Unreliable) ==
-            PacketTransport::SendResult::Sent);
-    REQUIRE(pair.b.incoming.size() == 1);
-    const auto& wrapped = pair.b.incoming.front().bytes;
-    CHECK(wrapped.size() == packet->size() + 1);
-    CHECK(std::equal(packet->begin(), packet->end(), wrapped.begin() + 1));
-    CHECK(wrapped.size() <= 1000);
+    CHECK_FALSE(RollbackExchange::encode(message)); // the full burst needs multiple packets
+    RollbackExchange exchange;
+    const std::array links{RollbackExchange::Link{2, 7}};
+    REQUIRE(exchange.open(1, 1, {1, 1, 2, 0}, {1, 1, 1, 0}, 0, links));
+    REQUIRE(exchange.publish(inputs, 1));
+    REQUIRE(exchange.flush(pair.hostRoom.transport()));
+    REQUIRE(pair.b.incoming.size() > 1);
+    usize delivered = 0;
+    for (const auto& event : pair.b.incoming) {
+        const auto& wrapped = event.bytes;
+        REQUIRE(wrapped.size() <= 1000);
+        const auto packet = RollbackExchange::decode(std::span{wrapped}.subspan(1));
+        REQUIRE(packet);
+        REQUIRE_FALSE(packet->commands.empty());
+        std::map<u64, usize> seatsPerTick;
+        for (const auto& command : packet->commands) {
+            REQUIRE(delivered < inputs.size());
+            CHECK(InputPacket::encode(std::span{&command, 1}) ==
+                  InputPacket::encode(std::span{&inputs[delivered], 1}));
+            ++delivered;
+            ++seatsPerTick[command.tick];
+        }
+        for (const auto& [tick, seats] : seatsPerTick) {
+            CAPTURE(tick);
+            CHECK(seats == 2); // a datagram never splits an owned-seat frame
+        }
+    }
+    CHECK(delivered == inputs.size());
 }
 
 TEST_CASE("self hosted admission starts existing online gameplay without a room server",

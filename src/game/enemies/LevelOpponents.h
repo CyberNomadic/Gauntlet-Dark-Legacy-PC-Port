@@ -274,8 +274,7 @@ private:
     void dropCarried(const CombatLoss& loss, std::span<const PlayerRuntime> players,
                      const Events& events);
     std::optional<Resources> m_resources;
-    std::array<bool, 4> m_unseen{}; ///< by player, at the developer console's word
-    std::vector<LevelEnemy> m_borrowedRoster;
+    void refreshBorrowedRoster();
     std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
     Generators m_generators;
@@ -366,6 +365,8 @@ private:
         f32 shrink = 1.0f;
         std::array<f32, 4> critterExperienceOwed{};
         std::vector<GeneratorReward> generatorRewards;
+        std::array<bool, 4> unseen{};
+        std::vector<LevelEnemy> borrowedRoster;
         bool operator==(const Simulation&) const = default;
     };
 

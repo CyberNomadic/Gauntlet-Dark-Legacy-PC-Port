@@ -15,7 +15,10 @@ bool same(const InputCommand& a, const InputCommand& b) {
         !sameReal(a.magnitude, b.magnitude) ||
         a.aimDirection.has_value() != b.aimDirection.has_value() ||
         a.heldButtons != b.heldButtons || a.pressedButtons != b.pressedButtons ||
-        a.hintTopic != b.hintTopic || a.hintRevision != b.hintRevision) {
+        a.hintTopic != b.hintTopic || a.hintRevision != b.hintRevision || a.console != b.console ||
+        !sameReal(a.consoleFlight.x, b.consoleFlight.x) ||
+        !sameReal(a.consoleFlight.y, b.consoleFlight.y) ||
+        !sameReal(a.consoleFlight.z, b.consoleFlight.z)) {
         return false;
     }
     return !a.aimDirection || (sameReal(a.aimDirection->x, b.aimDirection->x) &&
@@ -177,7 +180,8 @@ RollbackInputs::Admission RollbackInputs::admit(u8 peer, std::span<const InputCo
         if (command.epoch != m_epoch) {
             return Admission::WrongEpoch;
         }
-        if (m_owners[command.seat] != peer) {
+        if (m_owners[command.seat] != peer ||
+            (command.console && (peer != 1 || m_owners[command.console->seat] == 0))) {
             return Admission::WrongPeer;
         }
         if (command.grant != m_grants[command.seat]) {
@@ -344,6 +348,7 @@ InputCommand RollbackInputs::prediction(u8 seat, u64 tick) const {
     command.seat = seat;
     command.pressedButtons = 0;
     command.hintTopic = command.hintRevision = 0;
+    command.console.reset();
     return command;
 }
 
@@ -474,7 +479,9 @@ std::vector<InputCommand> RollbackInputs::actualAfter(u64 tick) const {
 bool RollbackInputs::adoptActual(const InputCommand& command) {
     if (!m_open || !command.valid() || command.tick == 0 || command.epoch != m_epoch ||
         command.seat >= m_owners.size() || m_owners[command.seat] == 0 ||
-        command.grant != m_grants[command.seat]) {
+        command.grant != m_grants[command.seat] ||
+        (command.console &&
+         (m_owners[command.seat] != 1 || m_owners[command.console->seat] == 0))) {
         return false;
     }
     auto& slot = m_actual[command.tick][command.seat];

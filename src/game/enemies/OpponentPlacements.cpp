@@ -10,6 +10,7 @@
 #include "game/critters/Critters.h"
 #include "game/enemies/Generators.h"
 #include "game/level/ItemFigure.h"
+#include "game/level/ItemSupport.h"
 
 namespace gdl::game {
 namespace {
@@ -32,6 +33,7 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
                          Critters& critters, CritterStatues& statues,
                          const WorldCollision* collision, const ClaimItem& claim) {
     std::vector<PlacedEnemies::Placement> placements;
+    const auto authored = itemSupportWorld(layout, collision);
     const auto& infos = layout.itemInfos();
     for (const auto& instance : layout.itemInstances()) {
         if (instance.info < 0 || static_cast<usize>(instance.info) >= infos.size()) {
@@ -58,12 +60,18 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
         // parents it to a moving one, so a placement on a flying platform (the Grounds'
         // general) is seen and born where the platform is, not where it was authored.
         if (collision != nullptr && (info.collisionFlags & 1U) == 0) {
-            if (const auto floor = collision->floorAt(instance.position, 4, 10, 1)) {
-                if (const auto transform = collision->objectTransform(floor->object)) {
+            // Animated stumps may already start lowered by the time opponents
+            // load. Bind to the floor at the authored pose, as other item riders
+            // do, then let PlacedEnemies use its current transform for admission.
+            const auto* support =
+                itemSupportAt(instance.position, collision, authored ? &*authored : nullptr);
+            if (const auto floor = support != nullptr
+                                       ? support->restingFloorAt(instance.position, 4, 10, 1)
+                                       : std::nullopt) {
+                placement.spawn.position.y = floor->y + ItemFigure::kFloorLift;
+                if (const auto transform = support->objectTransform(floor->object)) {
                     Mat4 placed = stood;
-                    placed[3] = Vec4{instance.position.x, floor->y + ItemFigure::kFloorLift,
-                                     instance.position.z, 1};
-                    placement.spawn.position = Vec3{placed[3]};
+                    placed[3] = Vec4{placement.spawn.position, 1};
                     placement.support = floor->object;
                     placement.supportLocal = glm::inverse(*transform) * placed;
                 }
@@ -108,7 +116,11 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
         if (!row) {
             continue;
         }
-        placement = *row;
+        // Keep the floor placement/attachment resolved above. Replacing the
+        // whole row here discarded it for ordinary archers and bombers only.
+        const Vec3 settled = placement.spawn.position;
+        placement.spawn = row->spawn;
+        placement.spawn.position = settled;
         if (kind == kDeathKind) {
             // SetItem: 0/1 are red and 2/3 black; odd values start awakened.
             placement.spawn.tier = strength >= 2 ? 2 : 1;

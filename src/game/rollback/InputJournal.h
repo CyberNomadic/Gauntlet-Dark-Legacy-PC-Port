@@ -66,9 +66,9 @@ public:
         std::vector<InputCommand> commands;
         bool valid() const;
     };
-    static constexpr u8 kVersion = 1;
+    static constexpr u8 kVersion = 2;
     static constexpr usize kHeaderBytes = 28;
-    static constexpr usize kRunBytes = 41;
+    static constexpr usize kRunBytes = 45; ///< ordinary run; console text is variable
     static constexpr usize kMaxBytes = 1200;
     static constexpr u16 kMaxTicks = 4096;
 

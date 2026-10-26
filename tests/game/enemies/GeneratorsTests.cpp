@@ -422,6 +422,78 @@ TEST_CASE("wall generators share their authored facing across rendering collisio
     REQUIRE(found);
 }
 
+TEST_CASE("pitched generators retain their horizontal birth-axis magnitude",
+          "[game][generators][generator-floor-birth]") {
+    const auto root = test::scratchDirectory("generator-floor-birth");
+    writeGeneratorArchive(root);
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"GROUND","position":[0,0,0]}],
+      "itemInfos":[{"type":3,"name":"GRU","radius":2,"height":5,"hitPoints":10}],
+      "itemInstances":[
+        {"info":0,"position":[0,0,0],"rotation":[1.57079637,0,0],
+         "params":[1,0,12,0,5,0,20,0,0,0,0,0]},
+        {"info":0,"position":[60,0,0],"rotation":[1.04719755,0,0],
+         "params":[1,0,12,0,5,0,20,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(root));
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, root, nullptr, 4, {}, 1);
+    Generators generators;
+    REQUIRE(generators.bind(device, layout, enemies, nullptr, {}, 1));
+    const std::array party{EnemyView{.position = {30, 0, -30}}};
+    generators.update(kTicks, enemies, party);
+    REQUIRE(generators.bredOf(0) == 1);
+    REQUIRE(generators.bredOf(1) == 1);
+    for (s32 id = 0; id < 2; ++id) {
+        REQUIRE(enemies.alive(id));
+        const auto& generator = generators.slot(static_cast<usize>(id));
+        // do_items passes worldmat[2] unchanged; generate_enemy uses only X/Z.
+        const Vec3 direction{generator.placement[2].x, 0, generator.placement[2].z};
+        const Vec3 expected =
+            generator.position + direction * (generator.clearance + enemies.radiusOf(id));
+        CHECK(glm::distance(enemies.positionOf(id), expected) < 0.0001f);
+    }
+    CHECK(glm::distance(enemies.positionOf(0), generators.positionOf(0)) < 0.0001f);
+    CHECK(enemies.positionOf(1).z == Approx((2 + enemies.radiusOf(1)) * 0.5f));
+}
+
+TEST_CASE("floor generators keep centered births after their supporting platform moves",
+          "[game][generators][generator-floor-birth][generator-platform]") {
+    const auto root = test::scratchDirectory("generator-floor-birth-moving");
+    writeGeneratorArchive(root);
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"LIFT","position":[0,0,0],"flags":4102}],
+      "itemInfos":[{"type":3,"name":"GRU","radius":2,"height":5,"hitPoints":10}],
+      "itemInstances":[{"info":0,"position":[0,0,0],"rotation":[1.57079637,0,0],
+                        "params":[1,0,12,0,5,0,20,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(root));
+    WorldCollision collision;
+    collision.build(
+        {CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{30, 0, 30}, Vec3{30, 0, -30}},
+                           .object = 0},
+         CollisionTriangle{.vertices = {Vec3{-30, 0, -30}, Vec3{-30, 0, 30}, Vec3{30, 0, 30}},
+                           .object = 0}});
+    collision.setMovingObjects(std::array<s32, 1>{0});
+    collision.setObjectTransform(0, Mat4{1});
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, root, &collision, 4, {}, 1);
+    Generators generators;
+    REQUIRE(generators.bind(device, layout, enemies, &collision, {}, 1));
+    REQUIRE(generators.floorOf(0) == 0);
+    const Mat4 moved = glm::rotate(glm::translate(Mat4{1}, Vec3{20, 10, 30}), 0.7f, Vec3{0, 1, 0});
+    collision.setObjectTransform(0, moved);
+    generators.syncFloors();
+    CHECK(glm::length(generators.slot(0).direction) < 0.001f);
+    const std::array party{EnemyView{.position = {20, 10, 50}}};
+    generators.update(kTicks, enemies, party);
+    REQUIRE(generators.bredOf(0) == 1);
+    REQUIRE(enemies.alive(0));
+    CHECK(glm::distance(enemies.positionOf(0), Vec3{20, 10, 30}) < 0.001f);
+}
+
 TEST_CASE("generators retain authored support offsets through platform motion and collision holds",
           "[game][generators][generator-platform][alpha-aim-acquisition]") {
     const auto root = test::scratchDirectory("generator-platform");
@@ -1477,8 +1549,8 @@ TEST_CASE("a generator breeds grunts for a party near it up to its count, and cr
     REQUIRE(enemies.kindOf(mine[0]) == kGruntKind);
     REQUIRE(enemies.tierOf(mine[0]) == 2);
     REQUIRE(enemies.algorithmOf(mine[0]) == 7);
-    REQUIRE(enemies.positionOf(mine[0]).z > 4.0f); // ahead of it
-    REQUIRE(glm::length(enemies.positionOf(mine[0])) == Approx(6.5f).margin(0.01f));
+    REQUIRE(enemies.positionOf(mine[0]).z > 3.0f); // ahead of it
+    REQUIRE(glm::length(enemies.positionOf(mine[0])) == Approx(3.5f).margin(0.01f));
     // It breeds up to its count and no further while they live.
     s32 bred = 1;
     for (s32 i = 0; i < 600 && bred < 3; ++i) {
@@ -1772,9 +1844,73 @@ TEST_CASE("Temple generators can breed at every native collision placement",
         CAPTURE(enemies.count(), world.level()->maxEnemies, generators.kindOf(chosen),
                 generators.tierOf(chosen), generators.mostOf(chosen));
         CHECK(generators.bredOf(chosen) == 1);
+        const auto& generator = generators.slot(static_cast<usize>(chosen));
+        CHECK(generator.clearance == Approx(2)); // do_items reads iteminfo+0x0c, not +0x10.
+        const Vec3 axis{generator.placement[2].x, 0, generator.placement[2].z};
+        CHECK(glm::distance(generator.direction, axis) < 0.0001f);
         ++checked;
     }
     CHECK(checked > 0);
+}
+
+TEST_CASE("Temple births emerge through the portal before reaching their clear landing point",
+          "[game][generators][temple-birth-pose][assets]") {
+    const auto root = test::assetOrSkip("WDATA/TEMPLE.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("E1")));
+    REQUIRE(world.level());
+    Enemies enemies;
+    enemies.open(device, root, nullptr, 4, {}, 7);
+    Generators generators;
+    REQUIRE(generators.bind(device, world.layout(), enemies, nullptr, {}, 1, world.level()->enemies,
+                            5, &world.items()));
+    REQUIRE(generators.count() > 0);
+    const auto& generator = generators.slot(0);
+    REQUIRE(generator.kind == -2);
+    CHECK(generator.targetHeight == Approx(5)); // Keep the authored hit/collision body.
+    CHECK(generator.clearance == Approx(2));
+
+    // Use the native record and ICE2 START object frames, at an unobstructed
+    // origin. The body's landing point lies outside the portal; its authored
+    // first mesh is translated back almost four units to emerge inside it.
+    EnemySpawn spawn;
+    spawn.kind = 16;
+    spawn.tier = 2;
+    spawn.generator = 0;
+    spawn.direction = Vec3{0, 0, 1};
+    spawn.clearance = generator.clearance;
+    spawn.allBirthDirections = true;
+    const auto born = enemies.spawn(spawn, {});
+    REQUIRE(born);
+    CHECK(glm::length(enemies.positionOf(*born)) == Approx(3.5f).margin(0.001f));
+    device.draws.clear();
+    enemies.draw(device, Mat4{1}, WorldLighting{});
+    REQUIRE_FALSE(device.draws.empty());
+    usize vertices = 0;
+    for (const auto& draw : device.draws) {
+        for (const auto& vertex : draw.vertices) {
+            CHECK(glm::length(Vec2{vertex.position.x, vertex.position.z}) < 2.0f);
+            ++vertices;
+        }
+    }
+    CHECK(vertices > 0);
+    for (s32 tick = 0; tick < 20; ++tick) {
+        enemies.update(kTicks, kStep, {});
+    }
+    device.draws.clear();
+    enemies.draw(device, Mat4{1}, WorldLighting{});
+    bool leftPortal = false;
+    for (const auto& draw : device.draws) {
+        for (const auto& vertex : draw.vertices) {
+            if (glm::length(Vec2{vertex.position.x, vertex.position.z}) > 2.0f) {
+                leftPortal = true;
+            }
+        }
+    }
+    CHECK(leftPortal);
 }
 
 TEST_CASE("Ghost Town generators retain viable exits beside props and select native landing floors",

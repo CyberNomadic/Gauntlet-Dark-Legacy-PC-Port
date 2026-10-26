@@ -22,7 +22,8 @@ s32 scaledExperience(s32 amount, const CharacterSave& save, const LevelInfo* lev
 CharacterSave restoredSave(const PlayerRuntime& runtime) {
     const CharacterSave& live = runtime.actor.save();
     const HiddenCostume* costume = hiddenCostume(live.name);
-    if (costume != nullptr && costume->character == live.character && costume->directory == "SUM") {
+    if (live.character == kSumnerClass ||
+        (costume != nullptr && costume->character == live.character && costume->directory == "SUM")) {
         // PlayerRestoreState and restore_inactive_player refill the hidden Sumner's
         // health instead of unpacking the level-start image (player.c 3622/4195).
         CharacterSave restored = live;

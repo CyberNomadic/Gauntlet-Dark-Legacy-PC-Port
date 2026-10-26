@@ -893,7 +893,13 @@ TEST_CASE("native name-code costumes bind and animate with their ordinary class"
         CharacterSave save;
         save.name = costume.name;
         REQUIRE(applyNameCheats(save));
-        save.progress().experience = levelExperience(level);
+        if (save.character == kSumnerClass) {
+            CHECK(save.experience() == levelExperience(kMaxLevel));
+            CHECK(save.progress().appearanceLevel() == kMaxLevel);
+        } else {
+            save.progress().experience = levelExperience(level);
+        }
+        const auto appearanceLevel = save.progress().appearanceLevel();
         test::FakeRenderDevice device;
         const auto figure = PlayerFigure::load(device, root, save, false);
         REQUIRE(figure);
@@ -904,8 +910,8 @@ TEST_CASE("native name-code costumes bind and animate with their ordinary class"
         CHECK_FALSE(device.draws.empty());
         CHECK(figure->heldWeaponBound());
         CHECK(figure->missile().bound());
-        if (level >= 30) {
-            CHECK(figure->familiarTier() == (level >= 80 ? 2 : 1));
+        if (appearanceLevel >= 30) {
+            CHECK(figure->familiarTier() == (appearanceLevel >= 80 ? 2 : 1));
             CHECK(figure->familiarMissile().bound());
         }
     }
@@ -1027,7 +1033,8 @@ std::filesystem::path sumnerFixture() {
     writeTextFile(root / "PLAYERS/WIZ/SUM/animations.json", R"({"trees":[
         {"name":"WIZ_SUM","nodes":[
             {"name":"HAND","object":"R_WRIST","position":[1,2,3]},
-            {"name":"ORNAMENT","object":"ORNAMENT","position":[4,0,0]}],"sequences":[]}]})");
+            {"name":"ORNAMENT","object":"ORNAMENT","position":[4,0,0]},
+            {"name":"CFGLOW","object":"ORNAMENT","position":[0,2,0]}],"sequences":[]}]})");
     writeTextFile(root / "PLAYERS/WIZ/ANIM/animations.json", R"({"trees":[
         {"name":"WIZ","nodes":[
             {"name":"UNUSED","position":[0,0,0]},
@@ -1054,6 +1061,9 @@ TEST_CASE("Sumner wears the wizard's SUM costume and takes the wizard's actions 
     device.draws.clear();
     figure->draw(device, Mat4{1}, Mat4{1}, {}, 1.0f, false);
     CHECK_FALSE(device.draws.empty());
+    CHECK(std::ranges::count_if(device.draws, [](const auto& draw) {
+              return draw.state.blend == BlendMode::Additive;
+          }) == 1);
 }
 
 TEST_CASE("a player figure draws a rest-pose weapon when optional animations are missing",
@@ -1075,6 +1085,18 @@ TEST_CASE("a player figure draws a rest-pose weapon when optional animations are
     device.draws.clear();
     figure->draw(device, Mat4{1.0f}, Mat4{1.0f}, {}, 1.0f, true);
     REQUIRE(device.draws.size() == 2);
+}
+
+TEST_CASE("Sumner throws with the wizard's native voice bank", "[figure][sumner][assets]") {
+    const auto root =
+        test::assetOrSkip("PLAYERS/WIZ/SUM/objects.ngc").parent_path().parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    CharacterSave save;
+    save.selectClass(kSumnerClass);
+    const auto figure = PlayerFigure::load(device, root, save, false);
+    REQUIRE(figure != nullptr);
+    REQUIRE(figure->throwSound().has_value());
+    CHECK(figure->voice().entry(*figure->throwSound()).name == "S_WIZTHROW");
 }
 
 TEST_CASE("a costume's shadow lies on the ground it is given, apart from the body",

@@ -28,19 +28,23 @@ struct Wire final : PacketTransport {
         Delivery delivery;
     };
     SendResult result = SendResult::Sent;
+    Connection failingConnection = 0; // zero applies result to every connection
     usize budget = std::numeric_limits<usize>::max();
     std::vector<Packet> sent;
     std::optional<Statistics> stats;
     mutable usize statisticsQueries = 0;
     SendResult send(Connection connection, std::span<const u8> bytes, Delivery delivery) override {
-        if (result == SendResult::Sent) {
+        const auto outcome = failingConnection == 0 || connection == failingConnection
+                                 ? result
+                                 : SendResult::Sent;
+        if (outcome == SendResult::Sent) {
             if (budget == 0) {
                 return SendResult::Congested;
             }
             --budget;
             sent.push_back({connection, {bytes.begin(), bytes.end()}, delivery});
         }
-        return result;
+        return outcome;
     }
     std::vector<Event> poll() override { return {}; }
     std::optional<Statistics> statistics(Connection /*connection*/) const override {
@@ -199,6 +203,112 @@ std::vector<u8> message(const MatchSession& session, MatchControlKind kind,
     REQUIRE(bytes);
     return *bytes;
 }
+std::vector<u8> consoleMessageFrom(const Wire& wire, u8 kind) {
+    const auto packet = std::ranges::find_if(wire.sent, [kind](const auto& sent) {
+        return sent.bytes.size() >= 6 && sent.bytes[0] == 'G' && sent.bytes[1] == 'D' &&
+               sent.bytes[2] == 'L' && sent.bytes[3] == 'C' && sent.bytes[5] == kind;
+    });
+    REQUIRE(packet != wire.sent.end());
+    CHECK(packet->delivery == PacketTransport::Delivery::Reliable);
+    return packet->bytes;
+}
+
+TEST_CASE("console permissions are host-only retained under congestion and default off",
+          "[netplay][match-session][console-input]") {
+    Room room({1, 2, 0, 0});
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    CHECK_FALSE(host.consolePermissions());
+    CHECK_FALSE(guest.consolePermissions());
+    CHECK_FALSE(guest.setConsolePermissions(true));
+    CHECK_FALSE(host.requestConsole({0, "god"})); // not in gameplay yet
+    room.ready();
+    CHECK_FALSE(guest.requestConsole({1, "god"}));
+    REQUIRE(host.requestConsole({0, "god"}));
+    CHECK(host.takeConsoleRequest() == std::optional{ConsoleAction{0, "god"}});
+    REQUIRE(host.setConsolePermissions(true));
+    room.wires[1].result = PacketTransport::SendResult::Congested;
+    host.flush(room.wires[1]);
+    CHECK_FALSE(guest.consolePermissions());
+    CHECK(host.queuedControls() != 0);
+    room.wires[1].result = PacketTransport::SendResult::Sent;
+    host.flush(room.wires[1]);
+    const auto permission = consoleMessageFrom(room.wires[1], 0);
+    CHECK(host.receive(1, permission) == Admission::WrongPeer); // forged host privilege
+    CHECK(guest.receive(99, permission) == Admission::Accepted);
+    CHECK(guest.receive(99, permission) == Admission::Stale);
+    CHECK(guest.consolePermissions());
+    room.wires[1].sent.clear();
+    REQUIRE(guest.requestConsole({1, "get gold 50"}));
+    room.pump();
+    CHECK(host.takeConsoleRequest() == std::optional{ConsoleAction{1, "get gold 50"}});
+    CHECK_FALSE(host.takeConsoleRequest());
+    room.ready(MatchTransition::Travel, 8);
+    CHECK(host.consolePermissions());
+    CHECK(guest.consolePermissions());
+    host.clear();
+    guest.clear();
+    CHECK_FALSE(host.consolePermissions());
+    CHECK_FALSE(guest.consolePermissions());
+}
+
+TEST_CASE("console request admission checks ownership duplicates revocation and stale epochs",
+          "[netplay][match-session][console-input]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    auto& guest = room.sessions[2];
+    REQUIRE(host.setConsolePermissions(true));
+    room.pump();
+    CHECK_FALSE(guest.requestConsole({0, "god"}));
+    REQUIRE(guest.requestConsole({1, "god"}));
+    guest.flush(room.wires[2]);
+    const auto request = consoleMessageFrom(room.wires[2], 1);
+    room.wires[2].sent.clear();
+    for (usize cut = 0; cut < request.size(); ++cut) {
+        CHECK(host.receive(1, std::span(request).first(cut)) == Admission::Invalid);
+    }
+    auto forged = request;
+    forged[7] = 0; // another peer's player
+    CHECK(host.receive(1, forged) == Admission::WrongPeer);
+    forged = request;
+    forged[32] ^= 1; // stale seat grant
+    CHECK(host.receive(1, forged) == Admission::WrongPeer);
+    CHECK(guest.receive(99, request) == Admission::WrongPeer);
+    CHECK(host.receive(1, request) == Admission::Accepted);
+    CHECK(host.receive(1, request) == Admission::Stale);
+    REQUIRE(host.requestConsole({0, "notarget"}));
+    REQUIRE(host.setConsolePermissions(false));
+    CHECK(host.takeConsoleRequest() == std::optional{ConsoleAction{0, "notarget"}});
+    CHECK_FALSE(host.takeConsoleRequest()); // guest's not-yet-admitted command was revoked
+    REQUIRE(host.setConsolePermissions(true));
+    CHECK(host.receive(1, request) == Admission::Stale);
+    room.pump();
+    REQUIRE(guest.requestConsole({1, "get gold 1"}));
+    guest.flush(room.wires[2]);
+    const auto oldEpoch = consoleMessageFrom(room.wires[2], 1);
+    room.wires[2].sent.clear();
+    room.ready(MatchTransition::Travel, 8);
+    CHECK(host.receive(1, oldEpoch) == Admission::Stale);
+    CHECK_FALSE(host.takeConsoleRequest());
+}
+
+TEST_CASE("console host requests are bounded and discarded when entering a load barrier",
+          "[netplay][match-session][console-input]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    auto& host = room.sessions[1];
+    for (usize i = 0; i < 32; ++i) {
+        REQUIRE(host.requestConsole({0, "god"}));
+    }
+    CHECK_FALSE(host.requestConsole({0, "god"}));
+    room.completeOne();
+    const auto party = room.party();
+    REQUIRE(host.prepare(8, MatchTransition::Travel, &party));
+    CHECK_FALSE(host.requestConsole({0, "god"}));
+    CHECK_FALSE(host.takeConsoleRequest());
+}
+
 TEST_CASE("match control has an exact bounded versioned encoding", "[netplay][match-session]") {
     Room room;
     REQUIRE(room.sessions[1].prepare(7));
@@ -766,6 +876,72 @@ TEST_CASE("a guest's lost link drops it while the host and the rest carry on",
     }
     CHECK_FALSE(host.drop(2)); // once
     CHECK_FALSE(host.drop(1)); // never the host
+}
+
+TEST_CASE("send detects a closed guest before its disconnect event without stopping the match",
+          "[netplay][match-session][drop][send-disconnect]") {
+    const auto result = GENERATE(PacketTransport::SendResult::Disconnected,
+                                 PacketTransport::SendResult::Invalid);
+    Room room({1, 2, 3, 0});
+    room.ready();
+    REQUIRE(room.sample(1));
+    auto& host = room.sessions[1];
+    auto& wire = room.wires[1];
+    REQUIRE(host.queuedControls() == 0);
+    wire.failingConnection = 1; // guest 2; guest 3's connection is healthy
+    wire.result = result;
+    host.flush(wire);
+    if (result == PacketTransport::SendResult::Invalid) {
+        CHECK(host.phase() == Phase::Stopped);
+        CHECK(host.stopReason() == MatchStop::TransportFailure);
+        CHECK_FALSE(host.dropped(2));
+        return;
+    }
+    REQUIRE(host.phase() == Phase::Running);
+    REQUIRE(host.dropped(2));
+    CHECK_FALSE(host.dropped(3));
+    CHECK(host.disconnected(1)); // the delayed provider event is harmless
+    host.flush(wire);
+    REQUIRE_FALSE(wire.sent.empty());
+    for (const auto& packet : wire.sent) {
+        REQUIRE(packet.connection == 2);
+        CHECK(room.sessions[3].receive(99, packet.bytes) == Admission::Accepted);
+    }
+    CHECK(host.phase() == Phase::Running);
+    CHECK(room.sessions[3].phase() == Phase::Running);
+    CHECK(room.sessions[3].dropped(2));
+}
+
+TEST_CASE("a send-time guest departure can retire the draining source exchange safely",
+          "[netplay][match-session][drop][send-disconnect]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    room.completeOne();
+    auto& host = room.sessions[1];
+    const auto profiles = room.party();
+    REQUIRE(host.prepare(8, MatchTransition::Travel, &profiles));
+    room.pump();
+    REQUIRE(room.loaded(1));
+    REQUIRE(host.phase() == Phase::Loading);
+    REQUIRE(host.queuedControls() == 0);
+    room.wires[1].result = PacketTransport::SendResult::Disconnected;
+    host.flush(room.wires[1]);
+    CHECK(host.dropped(2));
+    CHECK(host.phase() == Phase::Running);
+    CHECK(host.disconnected(1));
+    host.flush(room.wires[1]);
+    CHECK(host.phase() == Phase::Running);
+}
+
+TEST_CASE("a guest detecting its host closure in send still stops the match",
+          "[netplay][match-session][drop][send-disconnect]") {
+    Room room({1, 2, 0, 0});
+    room.ready();
+    REQUIRE(room.sample(2));
+    room.wires[2].result = PacketTransport::SendResult::Disconnected;
+    room.sessions[2].flush(room.wires[2]);
+    CHECK(room.sessions[2].phase() == Phase::Stopped);
+    CHECK_FALSE(room.sessions[2].dropped(1));
 }
 
 TEST_CASE("transport send failure terminates loading instead of pretending a start succeeded",

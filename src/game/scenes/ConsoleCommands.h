@@ -21,9 +21,9 @@ namespace gdl::game {
 /**
  * The developer console's commands as far as they need no scene: reading their arguments,
  * listing the maps, the items, a character's inventory and what a level's layout holds, and
- * opening the tower in a character's record. The application wires them to the party and the
- * level in play. Each command's usage is a few lines, its forms in a column with what each
- * does beside them.
+ * opening the tower in a character's record. Scene and application callers wire them to the
+ * party and level in play. Each command's usage is a few lines, its forms in a column with
+ * what each does beside them.
  */
 class ConsoleCommands {
 public:

@@ -95,7 +95,7 @@ void PlayerHealth::hurt(PlayerRuntime& runtime, f32 damage, HurtKind kind, bool 
     if (kind == HurtKind::Gas) {
         received.flags |= Damage::kGas;
     }
-    const f32 armor = stats != nullptr ? armorDefense(*stats, runtime.actor.save().progress()) : 0;
+    const f32 armor = stats != nullptr ? armorDefense(*stats, runtime.actor.save()) : 0;
     const Damage modified = Damage::modify(kind == HurtKind::DeathDrain ? -damage : damage,
                                            received.flags, worn.armor, armor, bossEncounter);
     damage = modified.amount;

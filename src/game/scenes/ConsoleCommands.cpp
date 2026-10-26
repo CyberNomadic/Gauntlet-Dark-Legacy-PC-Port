@@ -1,4 +1,4 @@
-#include "game/app/ConsoleCommands.h"
+#include "game/scenes/ConsoleCommands.h"
 
 #include <algorithm>
 #include <array>

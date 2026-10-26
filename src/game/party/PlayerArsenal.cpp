@@ -14,6 +14,7 @@
 #include "game/effects/DynamicLights.h"
 #include "game/effects/WeaponGlow.h"
 #include "game/level/NativeStateResources.h"
+#include "game/party/TargetAssist.h"
 #include "game/players/PowerupEffects.h"
 #include "game/players/TurboMove.h"
 namespace gdl::game {
@@ -241,7 +242,8 @@ std::optional<PlayerMissiles::WeaponThrow> PlayerArsenal::weaponThrow(const Play
 
 std::optional<PlayerArsenal::PreparedWeapon> PlayerArsenal::prepareWeapon(
     const PlayerActor& actor, const PlayerFigure& figure, const Vec3& direction, f32 scale,
-    bool spreads, std::optional<Vec3> target, std::optional<MissileRelease> explicitRelease) const {
+    bool spreads, std::optional<Vec3> target, std::optional<MissileRelease> explicitRelease,
+    bool fixedFacing) const {
     const auto& animator = figure.animator();
     const auto weapon = weaponThrow(actor, animator.attackSeconds());
     if (!weapon) {
@@ -253,6 +255,13 @@ std::optional<PlayerArsenal::PreparedWeapon> PlayerArsenal::prepareWeapon(
     prepared.weapon.scale = scale;
     prepared.weapon.shots = spreads ? prepared.weapon.shots : 1;
     prepared.weapon.target = target;
+    prepared.weapon.fixedFacing = fixedFacing;
+    // PlayerMotion 800850B8..800850C4 marks a completed PWRA_THROW with
+    // both the large-weapon bit and knockback. Damage/visual scale alone
+    // does not shove the target. Do not infer this from an arbitrary scale.
+    if (animator.strongReleased()) {
+        prepared.weapon.flags |= PlayerMissiles::kStrongThrowFlags;
+    }
     const auto worn = PowerupEffects::of(actor.save().progress().inventory);
     prepared.soundFlags = worn.weapon;
     prepared.pojo = (worn.special & powerup::kPojo) != 0;
@@ -398,13 +407,13 @@ Vec3 PlayerArsenal::weaponMuzzle(const MissileLaunch& first) const {
 void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
                                  const Vec3& direction, f32 scale, bool spreads,
                                  std::optional<Vec3> target,
-                                 std::optional<MissileRelease> explicitRelease) {
+                                 std::optional<MissileRelease> explicitRelease, bool fixedFacing) {
     if (!m_resources || body == nullptr) {
         return;
     }
     PlayerFigure& figure = *body;
-    auto prepared =
-        prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease);
+    auto prepared = prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease,
+                                  fixedFacing);
     if (!prepared || prepared->missiles.empty()) {
         return;
     }
@@ -493,9 +502,10 @@ const MissileSpec& PlayerArsenal::familiarSpec(bool boss) {
     return boss ? kBossShot : kLevelShot;
 }
 
-std::optional<std::vector<MissileLaunch>>
-PlayerArsenal::prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
-                               std::optional<Vec3> target) const {
+std::optional<std::vector<MissileLaunch>> PlayerArsenal::prepareFamiliar(const PlayerActor& actor,
+                                                                         PlayerFigure& figure,
+                                                                         std::optional<Vec3> target,
+                                                                         bool fixedFacing) const {
     if (!m_resources) {
         return std::nullopt;
     }
@@ -525,7 +535,11 @@ PlayerArsenal::prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
     // CalcTargetDir normalizes horizontal displacement, uses a 50-unit/second
     // flight estimate, then StartFX scales the direction by 35.
     const auto launchShot = [&] {
-        const Vec3 aim = target.value_or(launch.position + actor.facing() * 21.0f);
+        const auto corrected =
+            target && fixedFacing
+                ? TargetAssist::heightTarget(launch.position, *target, actor.facing())
+                : target;
+        const Vec3 aim = corrected.value_or(launch.position + actor.facing() * 21.0f);
         const Vec3 delta = aim - launch.position;
         const f32 distance = portable::hypot(delta.x, delta.z);
         const f32 inverse = distance > 0.001f ? 1.0f / distance : 1.0f;
@@ -559,7 +573,7 @@ PlayerArsenal::prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
 }
 
 void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
-                                   std::optional<Vec3> target) {
+                                   std::optional<Vec3> target, bool fixedFacing) {
     if (!m_resources || body == nullptr) {
         return;
     }
@@ -568,7 +582,7 @@ void PlayerArsenal::launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
         body->familiarMissile().bound()) {
         body->effects();
     }
-    if (const auto shots = prepareFamiliar(actor, *body, target)) {
+    if (const auto shots = prepareFamiliar(actor, *body, target, fixedFacing)) {
         for (const auto& launch : *shots) {
             m_missiles.launch(launch);
         }

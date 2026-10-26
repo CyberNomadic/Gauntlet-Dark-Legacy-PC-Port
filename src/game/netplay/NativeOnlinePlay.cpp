@@ -133,6 +133,7 @@ struct NativeOnlinePlay::Data {
         u64 sourceTick = 0;
         u32 scene = 0;
         MatchTransition transition = MatchTransition::Travel;
+        bool consoleTravel = false;
         bool challengeWon = false;
         MatchParty profiles;
         std::vector<PartyMember> members;
@@ -173,6 +174,10 @@ struct NativeOnlinePlay::Data {
     NativeRollbackDriver::Status outcome = NativeRollbackDriver::Status::Held;
     u64 epoch = 0, entryEpoch = 0, completionEpoch = 0;
     u32 pausedDevices = 0;
+    bool consoleCaptured = false;
+    std::vector<std::string> consoleReplies;
+    std::array<PlayScene::ConsoleCheats, InputCommand::kSeats> consoleCheats{};
+    std::array<PlayScene::ConsoleCheats, InputCommand::kSeats> levelConsoleCheats{};
     bool advanced = false, afterShop = false, saveAfterShop = false, shopFinished = false;
     bool completedProgress = false;
 
@@ -215,6 +220,9 @@ struct NativeOnlinePlay::Data {
         outcome = NativeRollbackDriver::Status::Held;
         epoch = entryEpoch = completionEpoch = 0;
         pausedDevices = 0;
+        consoleCaptured = false;
+        consoleReplies.clear();
+        consoleCheats = levelConsoleCheats = {};
         advanced = afterShop = saveAfterShop = shopFinished = false;
         completedProgress = false;
     }
@@ -262,8 +270,17 @@ struct NativeOnlinePlay::Data {
         }
         const auto& scene = level->scene;
         const auto& world = level->world;
-        const bool returning = scene.secretTravel() && world.ref().isSecret();
-        const bool entering = scene.secretTravel() && !returning;
+        for (usize seat = 0; seat < consoleCheats.size(); ++seat) {
+            consoleCheats[seat] = scene.cheats(static_cast<s32>(seat));
+        }
+        const auto& consoleTravel = scene.consoleTravelRequest();
+        const bool returning = consoleTravel
+                                   ? world.ref().isSecret() && secretParent &&
+                                         consoleTravel->destination == *secretParent
+                                   : scene.secretTravel() && world.ref().isSecret();
+        const bool entering = consoleTravel
+                                  ? consoleTravel->destination.isSecret() && !world.ref().isSecret()
+                                  : scene.secretTravel() && !returning;
         if (returning && (!parent || !secretParent)) {
             fail(Failure::Scene);
             return false;
@@ -276,11 +293,12 @@ struct NativeOnlinePlay::Data {
         }
         Boundary next;
         next.sourceEpoch = epoch;
+        next.consoleTravel = consoleTravel.has_value();
         next.sourceTick = level->driver.confirmedTick();
         next.scene = *id;
         next.members = scene.party();
         const auto* info = world.level();
-        if (!world.isTower() && !scene.secretTravel()) {
+        if (!consoleTravel && !world.isTower() && !scene.secretTravel()) {
             recordLevelBeaten(next.members, world.ref().realmId, world.ref().index,
                               info != nullptr ? info->rune : 0, info != nullptr ? info->legend : 0);
         }
@@ -293,8 +311,8 @@ struct NativeOnlinePlay::Data {
         if (entering || returning) {
             next.transition =
                 entering ? MatchTransition::SecretEnter : MatchTransition::SecretReturn;
-            next.challengeWon = returning && scene.challenge().won();
-        } else if (!world.isTower() && destination.isTower()) {
+            next.challengeWon = !consoleTravel && returning && scene.challenge().won();
+        } else if (!consoleTravel && !world.isTower() && destination.isTower()) {
             const auto source = NativeOnlinePlay::sceneId(*context.levels, world.ref());
             if (!source) {
                 fail(Failure::Scene);
@@ -343,6 +361,11 @@ struct NativeOnlinePlay::Data {
         options.welcome = false;
         options.arriving = true;
         options.arrivalWorld = static_cast<u32>(std::max(world.ref().realmId, 0));
+        if (consoleTravel) {
+            options.arriving = false;
+            options.position = consoleTravel->position;
+            options.yaw = consoleTravel->yaw;
+        }
         // The guest retains this complete native continuation even if its local
         // terminal tick precedes the host's Prepare. No profiles replace it.
         if (session->host() && !prepareBoundary()) {
@@ -493,6 +516,14 @@ struct NativeOnlinePlay::Data {
                         context.saveLocalParty(selection->localMembers());
                     }
                 }
+            } else if (boundary && boundary->consoleTravel) {
+                // Debug travel is still a confirmed common boundary, but it does not
+                // award a level or force the normal results/shop route. Replacing a
+                // challenge keeps its suspended parent; leaving it discards that parent.
+                if (!destination->isSecret()) {
+                    parent.reset();
+                    secretParent.reset();
+                }
             } else if (destination->isSecret() || secretParent) {
                 fail(Failure::Scene);
                 return false;
@@ -535,9 +566,16 @@ struct NativeOnlinePlay::Data {
         }
         levelMembers.assign(members.begin(), members.end());
         levelResumed = returning;
+        levelConsoleCheats = consoleCheats;
         if (returning) {
             level = std::move(parent);
             level->scene.resumeFromChallenge(members);
+            for (usize seat = 0; seat < consoleCheats.size(); ++seat) {
+                level->scene.setCheats(static_cast<s32>(seat), consoleCheats[seat]);
+            }
+            if (boundary && boundary->consoleTravel && options.position) {
+                level->scene.relocate(*options.position);
+            }
             if (!level->bind(match) || !applyDrops(*level)) {
                 fail(Failure::Scene);
                 return false;
@@ -545,8 +583,14 @@ struct NativeOnlinePlay::Data {
         } else {
             auto candidate = std::make_unique<Level>();
             if (!candidate->world.load(*device, context.unpackedRoot, *destination) ||
-                !candidate->scene.open(*device, context, candidate->world, members, options) ||
-                !candidate->scene.nativePresentationReady() || !candidate->bind(match)) {
+                !candidate->scene.open(*device, context, candidate->world, members, options)) {
+                fail(Failure::Assets);
+                return false;
+            }
+            for (usize seat = 0; seat < consoleCheats.size(); ++seat) {
+                candidate->scene.setCheats(static_cast<s32>(seat), consoleCheats[seat]);
+            }
+            if (!candidate->scene.nativePresentationReady() || !candidate->bind(match)) {
                 fail(Failure::Assets);
                 return false;
             }
@@ -629,8 +673,13 @@ struct NativeOnlinePlay::Data {
         level->unbind();
         auto candidate = std::make_unique<Level>();
         if (!candidate->world.load(*device, context.unpackedRoot, *current) ||
-            !candidate->scene.open(*device, context, candidate->world, levelMembers, options) ||
-            !candidate->scene.nativePresentationReady() || !candidate->bindDriver(match) ||
+            !candidate->scene.open(*device, context, candidate->world, levelMembers, options)) {
+            return fail(Failure::Assets);
+        }
+        for (usize seat = 0; seat < levelConsoleCheats.size(); ++seat) {
+            candidate->scene.setCheats(static_cast<s32>(seat), levelConsoleCheats[seat]);
+        }
+        if (!candidate->scene.nativePresentationReady() || !candidate->bindDriver(match) ||
             !applyDrops(*candidate) || !candidate->driver.adopt(commands) ||
             !candidate->driver.beginRebuild(*through)) {
             log::error(
@@ -780,7 +829,7 @@ struct NativeOnlinePlay::Data {
         advanced = false;
         auto localDevices = devices;
         for (usize index = 0; index < localDevices.size(); ++index) {
-            if ((pausedDevices & (1U << index)) != 0) {
+            if (consoleCaptured || (pausedDevices & (1U << index)) != 0) {
                 localDevices[index] = {};
             }
         }
@@ -845,7 +894,11 @@ struct NativeOnlinePlay::Data {
             return rebuild(match);
         }
         const auto local = selection->inputs(*session, localDevices);
-        if (!local || !level->driver.sample(*local)) {
+        auto console = match.host() && level->driver.sampleReady() &&
+                               !level->driver.tentativeTerminal()
+                           ? match.takeConsoleRequest()
+                           : std::nullopt;
+        if (!local || !level->driver.sample(*local, std::move(console))) {
             return fail(Failure::Input);
         }
         if (!match.publishNativeInputs(level->driver.redundantInputs(), level->driver.nextTick()) ||
@@ -854,6 +907,14 @@ struct NativeOnlinePlay::Data {
         }
         const auto end = match.nativeEndTick();
         const auto result = level->driver.advance(!end || level->driver.nextTick() <= *end);
+        for (const auto& reply : result.consoleReplies) {
+            if (selection->device(*session, reply.seat)) {
+                if (consoleReplies.size() >= 64) {
+                    consoleReplies.erase(consoleReplies.begin());
+                }
+                consoleReplies.push_back(reply.text);
+            }
+        }
         if (result.status == NativeRollbackDriver::Status::Failed) {
             log::error("Native rollback failed at epoch {} tick {}: {}", epoch,
                        level->driver.nextTick(), static_cast<u32>(level->driver.failure()));
@@ -1126,6 +1187,38 @@ NativeRollbackDriver::Status NativeOnlinePlay::outcome() const {
 }
 const PlayScene* NativeOnlinePlay::scene() const {
     return m_data->level ? &m_data->level->scene : nullptr;
+}
+const LevelWorld* NativeOnlinePlay::world() const {
+    return m_data->level ? &m_data->level->world : nullptr;
+}
+void NativeOnlinePlay::consoleCapture(bool captured) {
+    auto& data = *m_data;
+    if (captured && !data.consoleCaptured && data.level && data.level->boundEpoch != 0) {
+        for (const auto seat : data.session->seats()) {
+            if (!data.level->driver.clearPendingInput(seat)) {
+                data.fail(Failure::Input);
+                return;
+            }
+        }
+    }
+    data.consoleCaptured = captured;
+}
+void NativeOnlinePlay::consoleView(bool hideHud, const std::optional<WorldCamera>& camera) {
+    if (m_data->level) {
+        m_data->level->scene.setHudHidden(hideHud);
+        m_data->level->scene.setViewOverride(camera);
+    }
+}
+void NativeOnlinePlay::consoleSelect(const std::optional<SceneSelection>& selection) {
+    if (m_data->level) {
+        m_data->level->scene.select(selection);
+    }
+}
+std::optional<SceneSelection> NativeOnlinePlay::consolePick(Vec2 cursor) {
+    return m_data->level ? m_data->level->scene.pick(cursor) : std::nullopt;
+}
+std::vector<std::string> NativeOnlinePlay::takeConsoleReplies() {
+    return std::exchange(m_data->consoleReplies, {});
 }
 u64 NativeOnlinePlay::simulatedTick() const {
     const auto next = m_data->level ? m_data->level->driver.nextTick() : 0;

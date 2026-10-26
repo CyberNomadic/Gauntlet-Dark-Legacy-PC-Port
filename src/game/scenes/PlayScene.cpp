@@ -266,6 +266,9 @@ void PlayScene::close() {
     m_audio.stopCues();
     m_sumnerVisit.clear();
     m_spawned.clear();
+    m_sim.cheats = {};
+    m_sim.consoleTravel.reset();
+    m_sim.consoleSpawns = 0;
     m_borrowedItems.clear();
     m_promotion.clear();
     m_towerRelics.clear();
@@ -376,9 +379,9 @@ void PlayScene::throwWeapon(const PlayerActor& actor) {
 
 void PlayScene::launchWeapon(usize index, const Vec3& direction, f32 scale, bool spreads) {
     if (index < m_players.size()) {
-        m_arsenal.launchWeapon(
-            m_players[index].actor, m_players[index].figure.get(), direction, scale, spreads,
-            m_players[index].cursorAiming ? std::nullopt : assistedAim(index, direction));
+        m_arsenal.launchWeapon(m_players[index].actor, m_players[index].figure.get(), direction,
+                               scale, spreads, assistedAim(index, direction), std::nullopt,
+                               m_players[index].cursorAiming);
     }
 }
 
@@ -388,7 +391,10 @@ std::optional<Vec3> PlayScene::assistedAim(usize index, const Vec3& direction) {
     if (m_context.config != nullptr && !m_context.config->combat.autoAim) {
         return std::nullopt;
     }
-    return m_attacks.aim(m_players[index].actor, direction, attackTargets());
+    // Retail PlayerGetTarget/ModifyPlayerDpos retain target-height correction
+    // independently of facing adjustment. Cursor aiming only replaces the latter.
+    return m_attacks.aim(m_players[index].actor, direction, attackTargets(),
+                         m_players[index].cursorAiming);
 }
 
 std::optional<std::filesystem::path> PlayScene::figureDirectory(s32 player) const {
@@ -508,7 +514,7 @@ void PlayScene::setCheats(s32 player, const ConsoleCheats& cheats) {
     if (player < 0 || player >= kPlayerCount) {
         return;
     }
-    m_cheats[static_cast<usize>(player)] = cheats;
+    m_sim.cheats[static_cast<usize>(player)] = cheats;
     m_opponents.setUnseen(player, cheats.noTarget);
     for (PlayerRuntime& runtime : m_players) {
         if (runtime.actor.player() == player) {
@@ -519,13 +525,10 @@ void PlayScene::setCheats(s32 player, const ConsoleCheats& cheats) {
 
 const PlayScene::ConsoleCheats& PlayScene::cheats(s32 player) const {
     static constexpr ConsoleCheats kNone{};
-    return player < 0 || player >= kPlayerCount ? kNone : m_cheats[static_cast<usize>(player)];
+    return player < 0 || player >= kPlayerCount ? kNone : m_sim.cheats[static_cast<usize>(player)];
 }
 
 void PlayScene::setViewOverride(const std::optional<WorldCamera>& camera) {
-    if (camera.has_value() != m_viewOverride.has_value()) {
-        m_previousCamera.reset(); // a cut either way, not a glide between the two
-    }
     m_viewOverride = camera;
 }
 
@@ -606,7 +609,7 @@ LevelFixtures::Events PlayScene::fixtureEvents() {
 }
 void PlayScene::updateFixtures(s32 ticks, f32 seconds) {
     m_fixtures.update(ticks, seconds, m_players, fixtureEvents());
-    const CameraFrame ear = CameraFrame::of(viewCamera());
+    const CameraFrame ear = CameraFrame::of(simulationCamera());
     const Vec3 attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
     for (const usize index : m_fixtures.traps().wakes()) {
         const auto& trap = m_fixtures.traps().trap(index);
@@ -693,7 +696,7 @@ void PlayScene::updateEnemies(s32 ticks, f32 seconds) {
  * to see stand. */
 void PlayScene::watchOpponents(bool standPlaced) {
     const CameraView view = cameraView();
-    const WorldCamera camera = viewCamera();
+    const WorldCamera camera = simulationCamera();
     Vec3 attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
     if (m_sim.switchCutscene.showing()) {
         // TriggerCamUpdate uses the shot's eye as gCameras[0].attn for placement range.
@@ -921,7 +924,8 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
 }
 
 PlayScene::RecordedStep PlayScene::recordStep(u64 epoch, u64 tick, f64 deltaSeconds,
-                                              const Inputs& inputs) {
+                                              const Inputs& inputs,
+                                              std::span<const ConsoleAction> actions) {
     if (epoch == 0 || tick == 0) {
         throw std::invalid_argument("Recorded native output needs a nonzero epoch and tick");
     }
@@ -946,12 +950,26 @@ PlayScene::RecordedStep PlayScene::recordStep(u64 epoch, u64 tick, f64 deltaSeco
     } const abortSounds{m_recordedAudio};
     if (m_audio.recordingSounds()) {
         m_recordedAudio.beginTick(tick);
-        const auto camera = CameraFrame::of(viewCamera());
+        const auto camera = CameraFrame::of(simulationCamera());
         m_audio.prepareRecordedFrame({camera.position, camera.right});
     }
     {
         const auto sharedAudio = m_audio.soundScope({30, 0, 1, FrameEventEmitter::kNoSeat}, 1);
-        result.outcome = advanceNative(deltaSeconds, inputs);
+        for (const auto& action : actions) {
+            result.consoleReplies.push_back({action.seat, applyConsoleAction(action)});
+        }
+        if (m_sim.consoleTravel) {
+            result.outcome = PlayOutcome::Travel;
+        } else {
+            advanceConsoleFlight(deltaSeconds, inputs);
+            Inputs gameplayInputs = inputs;
+            for (s32 seat = 0; seat < kPlayerCount; ++seat) {
+                if (cheats(seat).noclip) {
+                    gameplayInputs[static_cast<usize>(seat)] = {};
+                }
+            }
+            result.outcome = advanceNative(deltaSeconds, gameplayInputs);
+        }
         if (m_open) {
             // Point lights are derived from native state. Refresh even when this peer
             // does not draw a frame; rendering must not decide what a tick observes.
@@ -1029,7 +1047,7 @@ void PlayScene::gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome) {
             hourglass = actor.position();
         }
     }
-    const auto frame = CameraFrame::of(viewCamera());
+    const auto frame = CameraFrame::of(simulationCamera());
     const auto* level = m_world->level();
     m_audio.gatherLoops(
         listeners, {frame.position, frame.right}, level != nullptr ? level->soundVolume : 1.0f,
@@ -1124,7 +1142,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     m_bossSequence.capturePresentation();
     m_sim.opponentsAdvanced = false;
     m_sim.projectilesAdvanced = false;
-    m_previousCamera = scriptedCamera() ? std::nullopt : std::optional{viewCamera()};
+    m_previousCamera = scriptedCamera() ? std::nullopt : std::optional{simulationCamera()};
     m_previousBossCamera = bossCameraOn();
     // Application supplies fixed simulation ticks independently of rendered frames.
     const f32 tickRate =
@@ -1355,7 +1373,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         if (player.figure != nullptr) {
             const auto* stats = m_classes.stats(player.actor.save().character);
             player.figure->setGuardArmor(
-                stats != nullptr ? armorDefense(*stats, player.actor.save().progress()) : 0.0f);
+                stats != nullptr ? armorDefense(*stats, player.actor.save()) : 0.0f);
             player.figure->setCompanionPowerups(*m_device, m_world->powerups(),
                                                 player.actor.save().progress().inventory,
                                                 &m_weapons);
@@ -1443,7 +1461,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
             return PlayOutcome::Travel;
         }
         const std::optional<usize> reached = m_portals.update(ticks, seconds, standing);
-        const CameraFrame ear = CameraFrame::of(viewCamera());
+        const CameraFrame ear = CameraFrame::of(simulationCamera());
         m_audio.updateExitFlame(m_portals.flamePosition(standing), {ear.position, ear.right});
         const LevelInfo* level = m_world->level();
         const std::vector<s32> waiting = m_portals.takeWaiting();
@@ -1498,7 +1516,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         const bool available = *m_sim.runeItem < items.size() && !items.item(*m_sim.runeItem).taken;
         const auto cue = m_sim.runeMeter.update(m_camera.attention(), available);
         if (cue != RuneMeter::Cue::None) {
-            const auto frame = CameraFrame::of(viewCamera());
+            const auto frame = CameraFrame::of(simulationCamera());
             m_audio.announceRune(cue == RuneMeter::Cue::Nearby, m_camera.attention(),
                                  {frame.position, frame.right});
         }
@@ -1518,7 +1536,7 @@ void PlayScene::updateAmbience() {
             listeners.push_back(runtime.actor.position());
         }
     }
-    const CameraFrame frame = CameraFrame::of(viewCamera());
+    const CameraFrame frame = CameraFrame::of(simulationCamera());
     const LevelInfo* level = m_world->level();
     m_audio.updateAmbience(listeners, AmbientEar{frame.position, frame.right},
                            level != nullptr ? level->soundVolume : 1.0f,

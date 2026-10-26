@@ -174,7 +174,8 @@ public:
     ~PlayerMissiles() = default;
     static constexpr u32 kPlainModifiers =
         powerup::kRapidFire | powerup::kThreeWayShot | powerup::kFiveWayShot;
-    static constexpr u32 kReplayModifiers = kPlainModifiers | 0xFU;
+    static constexpr u32 kStrongThrowFlags = 0x02000010U;
+    static constexpr u32 kReplayModifiers = kPlainModifiers | kStrongThrowFlags | 0xFU;
     /** Ordinary elemental or plain throws only; other weapon modes remain authoritative. */
     static bool replayModifiers(u32 flags);
     static constexpr f32 kSlowest = 20.0f; ///< units a second with no strength at all
@@ -207,6 +208,7 @@ public:
         s32 shots = 1;
         MultiplayerMode multiplayer = MultiplayerMode::Normal;
         std::optional<Vec3> target;
+        bool fixedFacing = false; ///< cursor controls yaw; a target only adjusts pitch
     };
 
     /** Resumable flight of one ordinary weapon. Resource bindings and identity

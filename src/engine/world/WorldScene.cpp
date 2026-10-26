@@ -131,7 +131,8 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                        RenderDevice& device, const WorldLighting& lighting,
                        std::span<TextureSet* const> lenders,
                        std::span<const usize> controlledObjects,
-                       std::span<const usize> backgroundObjects) {
+                       std::span<const usize> backgroundObjects,
+                       std::span<const usize> cameraFadeObjects) {
     clear();
     m_lighting = lighting;
     const std::vector<WorldObject>& objects = layout.objects();
@@ -214,7 +215,11 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             continue;
         }
         m_objectMeshes[i] = mesh;
-        const auto material = ObjectMaterial::fromFlags(object.objectFlags);
+        const bool cameraFade = std::ranges::find(cameraFadeObjects, i) != cameraFadeObjects.end();
+        // A presentation-only opt-in to MBSetupObject's 100-unit fade. Existing
+        // long-distance fade flags, if present, retain their native precedence.
+        const auto material =
+            ObjectMaterial::fromFlags(object.objectFlags | (cameraFade ? 0x400U : 0U));
         const bool chrome = material.chrome;
         const bool additive = material.additive;
         const bool prelit = object.prelit() && mesh->prelit;
@@ -231,7 +236,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             return slotFor(part.texture, textures, device, lenders).thermal;
         });
         const bool unit = thermal || background || m_placements[i].moving || material.sorted ||
-                          facing != 0 || lifted ||
+                          material.distanceFadeRange > 0 || facing != 0 || lifted ||
                           std::ranges::find(controlledObjects, i) != controlledObjects.end();
         Unit placedUnit;
         placedUnit.object = i;
@@ -247,6 +252,8 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         placedUnit.facing = facing;
         placedUnit.prelit = prelit;
         placedUnit.sortBias = material.sortBias;
+        placedUnit.distanceFadeRange = material.distanceFadeRange;
+        placedUnit.distanceSortScale = material.distanceSortScale;
         const Vec3 offset = layout.worldPosition(i);
         bool placed = false;
         for (const MeshPart& part : mesh->parts) {
@@ -379,9 +386,10 @@ const CanonicalDigestSink::Digest& WorldScene::rosterDigest() const {
     }
     digest.wide(m_units.size());
     for (const auto& unit : m_units) {
-        digest.values(unit.object, unit.sortBias, unit.facing, unit.prelit, unit.chrome,
-                      unit.sorted, unit.deferAlways, unit.meshAlpha, unit.background,
-                      unit.depthWrite, unit.depthTest, unit.lifted, unit.veil);
+        digest.values(unit.object, unit.sortBias, unit.distanceFadeRange, unit.distanceSortScale,
+                      unit.facing, unit.prelit, unit.chrome, unit.sorted, unit.deferAlways,
+                      unit.meshAlpha, unit.background, unit.depthWrite, unit.depthTest, unit.lifted,
+                      unit.veil);
     }
     m_rosterDigest = digest.finish();
     return *m_rosterDigest;
@@ -895,12 +903,27 @@ Color WorldScene::shadeAt(bool additive, bool prelit, const MeshVertex& vertex,
                   : lighting.shade(position, normal);
 }
 
+f32 WorldScene::drawnOpacity(const Unit& unit, const CameraFrame& camera,
+                             f32 presentationAlpha) const {
+    if (unit.distanceFadeRange <= 0) {
+        return unit.alpha;
+    }
+    // MBSetupObject (800B9410) fades by the node origin's forward depth, not its
+    // distance from the eye. Keep it draw-only: peers may use different cameras.
+    const Vec3 origin{presentedWorldOf(unit.object, presentationAlpha)[3]};
+    const f32 depth = glm::dot(origin - camera.position, camera.forward);
+    const auto opacity =
+        static_cast<u8>(std::clamp(depth * (255.0f / unit.distanceFadeRange), 0.0f, 255.0f));
+    return unit.alpha * (static_cast<f32>(opacity) / 255.0f);
+}
+
 /** Places, lights and draws a unit's parts: the plain ones when `plainParts`, the glowing
- * ones when `additiveParts`. A fading unit blends and stops writing depth as a whole. */
+ * ones when `additiveParts`. Gameplay fades stop depth writes; camera fades keep the mask. */
 void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& clip,
                           const CameraFrame& camera, bool plainParts, bool additiveParts, f32 alpha,
                           std::optional<f32> textureFrameOffset) const {
-    if (!unit.visible || unit.alpha <= 0.0f) {
+    const f32 opacity = drawnOpacity(unit, camera, alpha);
+    if (!unit.visible || opacity <= 0.0f) {
         return;
     }
     const Mat4 world = camera.face(presentedWorldOf(unit.object, alpha), unit.facing);
@@ -931,8 +954,8 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
                 }
             }
             Color color = shadeAt(part.additive, unit.prelit, v, Vec3{placed}, normal, m_lighting);
-            if (unit.alpha < 1.0f) {
-                color.a = static_cast<u8>(static_cast<f32>(color.a) * unit.alpha);
+            if (opacity < 1.0f) {
+                color.a = static_cast<u8>(static_cast<f32>(color.a) * opacity);
             }
             m_scratch.vertex(Vec3{placed}, color, unit.chrome ? chromeUv(normal) : v.uv,
                              v.lightmapUv * part.lightmapScale);
@@ -946,6 +969,8 @@ void WorldScene::drawUnit(RenderDevice& device, const Unit& unit, const Mat4& cl
         state.uvOffset = slot.presentedOffset(textureFrameOffset);
         state.alphaTest = kAlphaTest; // Same native cutout test as the baked geometry.
         state.cullBack = true;
+        // MBSetupObject's camera fade changes alpha/queue, not the authored
+        // depth mask. Explicit gameplay fades retain their existing policy.
         state.depthWrite = unit.depthWrite && unit.alpha >= 1.0f;
         state.depthTest = unit.depthTest;
         // Lit as it is placed (shadeAt): the darkening is in its colours, the lights over it.
@@ -994,7 +1019,8 @@ void WorldScene::drawOpaque(RenderDevice& device, const Mat4& clip, const Camera
     // units it defers wait, the veils for the figures, and the glows add themselves after
     // everything.
     for (const Unit& unit : m_units) {
-        if (!unit.background && !unit.deferred() && !unit.veil) {
+        if (!unit.background && !unit.deferred(drawnOpacity(unit, camera, presentationAlpha)) &&
+            !unit.veil) {
             drawUnit(device, unit, clip, camera, true, false, presentationAlpha,
                      textureFrameOffset);
         }
@@ -1011,7 +1037,8 @@ void WorldScene::drawVeils(RenderDevice& device, const Mat4& clip, const CameraF
         ++next;
     }
     for (const Unit& unit : m_units) {
-        if (!unit.background && !unit.deferred() && unit.veil) {
+        if (!unit.background && !unit.deferred(drawnOpacity(unit, camera, presentationAlpha)) &&
+            unit.veil) {
             drawUnit(device, unit, clip, camera, true, false, presentationAlpha,
                      textureFrameOffset);
         }
@@ -1034,15 +1061,20 @@ void WorldScene::drawDeferred(RenderDevice& device, const Mat4& clip, const Came
     for (usize i = 0; i < m_units.size(); ++i) {
         m_order[i] = i;
         const Vec3 origin{presentedWorldOf(m_units[i].object, presentationAlpha)[3]};
-        keys[i] = glm::dot(origin - eye, camera.forward) + m_units[i].sortBias;
+        const Unit& unit = m_units[i];
+        const bool nearFade = unit.distanceFadeRange > 0 &&
+                              drawnOpacity(unit, camera, presentationAlpha) < unit.alpha;
+        const f32 depth = glm::dot(origin - eye, camera.forward);
+        keys[i] = nearFade ? depth * unit.distanceSortScale : depth + unit.sortBias;
     }
     std::stable_sort(m_order.begin(), m_order.end(),
                      [&](usize a, usize b) { return keys[a] > keys[b]; });
     for (const usize i : m_order) {
         const Unit& unit = m_units[i];
         if (!unit.background) {
-            drawUnit(device, unit, clip, camera, unit.deferred(), true, presentationAlpha,
-                     textureFrameOffset);
+            drawUnit(device, unit, clip, camera,
+                     unit.deferred(drawnOpacity(unit, camera, presentationAlpha)), true,
+                     presentationAlpha, textureFrameOffset);
         }
     }
     while (next < m_batches.size()) {

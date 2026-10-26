@@ -271,8 +271,22 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
             }
         }
     }
+    std::vector<usize> cameraFadeObjects;
+    if (m_ref.name == "E1") {
+        // Intentional visibility improvement: fade the broken column tops along
+        // with the nearby shafts. Native caps have no fade flag; keep the disc
+        // data, collision, intact tops, pedestals and shaft materials unchanged.
+        constexpr std::array<std::string_view, 7> kBrokenCaps{
+            "E1COLUMN#02", "E1COLUMN#05", "E1COLUMN#20", "E1COLUMN#22",
+            "E1COLUMN#25", "E1COLUMN#28", "E1COLUMN#29"};
+        for (usize i = 0; i < m_layout.objects().size(); ++i) {
+            if (std::ranges::find(kBrokenCaps, m_layout.objects()[i].name) != kBrokenCaps.end()) {
+                cameraFadeObjects.push_back(i);
+            }
+        }
+    }
     if (!m_scene.build(m_layout, m_models, m_textures, device, m_sim.lighting, lent,
-                       controlledObjects, backgroundObjects)) {
+                       controlledObjects, backgroundObjects, cameraFadeObjects)) {
         clear();
         return false;
     }

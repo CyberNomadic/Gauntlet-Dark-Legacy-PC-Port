@@ -39,6 +39,7 @@ struct NativeRollbackDriver::Data {
     // Only digest-period and terminal post-tick states are retained here, not
     // another every-frame history. Correction discards the wrong suffix.
     std::map<u64, State> hashes;
+    std::map<u64, std::vector<PlayScene::ConsoleReply>> consoleReplies;
     Statistics stats;
     EpochInputJournal journal;
     std::optional<u64> rebuildThrough;
@@ -138,11 +139,18 @@ struct NativeRollbackDriver::Data {
             return fail(Failure::Input);
         }
         SessionInputs::Frame commands;
+        std::vector<ConsoleAction> console;
         for (usize seat = 0; seat < commands.size(); ++seat) {
             commands[seat] = SessionInputs::playInput(frame->commands[seat]);
+            if (frame->commands[seat].console) {
+                console.push_back(*frame->commands[seat].console);
+            }
         }
         filterArrival(commands);
-        auto output = scene->recordStep(context.epoch, tick, 1.0 / 60, commands);
+        auto output = scene->recordStep(context.epoch, tick, 1.0 / 60, commands, console);
+        if (!output.consoleReplies.empty() && (!rebuildThrough || tick > *rebuildThrough)) {
+            consoleReplies[tick] = std::move(output.consoleReplies);
+        }
         if (output.audio.has_value() != (audioMode == AudioMode::Required)) {
             return fail(Failure::Audio);
         }
@@ -195,6 +203,7 @@ struct NativeRollbackDriver::Data {
         control = saved->control;
         history.discardAfter(*wrong);
         hashes.erase(hashes.lower_bound(*wrong), hashes.end());
+        consoleReplies.erase(consoleReplies.lower_bound(*wrong), consoleReplies.end());
         if (!inputs.rewind(*wrong)) {
             return fail(Failure::Replay);
         }
@@ -293,6 +302,13 @@ struct NativeRollbackDriver::Data {
                 }
             }
             confirmed = through;
+            for (auto reply = consoleReplies.begin();
+                 reply != consoleReplies.end() && reply->first <= through;) {
+                result.consoleReplies.insert(result.consoleReplies.end(),
+                                               std::make_move_iterator(reply->second.begin()),
+                                               std::make_move_iterator(reply->second.end()));
+                reply = consoleReplies.erase(reply);
+            }
         }
         if (!terminalReported && control.terminal && control.terminal->tick <= confirmed) {
             if (!result.terminalDigest || result.terminalDigest->tick != control.terminal->tick) {
@@ -427,13 +443,18 @@ void NativeRollbackDriver::clear() {
     m_data = std::make_unique<Data>();
 }
 
-bool NativeRollbackDriver::sample(const SessionInputs::Frame& local) {
+bool NativeRollbackDriver::sample(const SessionInputs::Frame& local,
+                                  std::optional<ConsoleAction> console) {
     auto& data = *m_data;
     if (!data.valid()) {
         return false;
     }
     if (data.terminalReported) {
         return true;
+    }
+    if (console && (data.localPeer != 1 || !console->valid() ||
+                    !data.inputs.sampleReady() || data.control.terminal)) {
+        return false;
     }
     std::vector<InputCommand> commands;
     for (usize seat = 0; seat < data.context.owners.size(); ++seat) {
@@ -459,6 +480,7 @@ bool NativeRollbackDriver::sample(const SessionInputs::Frame& local) {
         }
         if (!data.pending.empty()) {
             const auto& pending = data.pending[index];
+            command.console = pending.console;
             command.pressedButtons |= pending.pressedButtons;
             if (data.scene->hints().acceptsTopic(pending.hintTopic, pending.hintRevision)) {
                 command.hintTopic = pending.hintTopic;
@@ -469,6 +491,11 @@ bool NativeRollbackDriver::sample(const SessionInputs::Frame& local) {
                 command.heldButtons |= static_cast<u32>(CommandHeld::Attack);
             }
         }
+    }
+    if (console) {
+        // The host is the sole admitting writer. The target is still the requesting
+        // player's canonical seat, not the host seat carrying this one-shot event.
+        commands.front().console = std::move(console);
     }
     data.pending = std::move(commands);
     // A tentative exit may disappear under an earlier correction. Preserve
@@ -485,8 +512,10 @@ bool NativeRollbackDriver::clearPendingInput(u8 canonicalSeat) {
     }
     for (auto& command : data.pending) {
         if (command.seat == canonicalSeat) {
+            auto console = std::move(command.console);
             command = SessionInputs::command({}, command.epoch, command.tick, command.grant,
                                              command.seat);
+            command.console = std::move(console);
         }
     }
     return true;

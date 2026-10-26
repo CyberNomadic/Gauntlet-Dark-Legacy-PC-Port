@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "game/characters/CharacterSave.h"
 #include "game/characters/Progression.h"
 
 namespace {
@@ -24,6 +25,28 @@ TEST_CASE("armor absorption follows class level and permanent bonuses", "[player
     CHECK(armorDefense(stats, progress) == Catch::Approx(4.995f));
     progress.armorAdd = -1000;
     CHECK(armorDefense(stats, progress) == 0);
+}
+
+TEST_CASE("Sumner absorbs damage with the master's armor instead of wizard growth",
+          "[players][damage][sumner-armor]") {
+    ClassStats wizard;
+    wizard.armorMin = 100;
+    wizard.armorMax = 500;
+    CharacterSave save;
+    save.character = kSumnerClass;
+    for (const s32 level : {1, 21, 99}) {
+        save.progress().experience = levelExperience(level);
+        for (const f32 bonus : {-1000.0f, 0.0f, 10.5f, 1000.0f}) {
+            save.progress().armorAdd = bonus;
+            CHECK(armorDefense(wizard, save) == Catch::Approx(4.995f));
+        }
+    }
+
+    save.character = kWizardClass;
+    save.progress().experience = levelExperience(21);
+    save.progress().armorAdd = 10.5f;
+    CHECK(armorDefense(wizard, save) == Catch::Approx(1.0525f));
+    CHECK(armorDefense(wizard, save) == armorDefense(wizard, save.progress()));
 }
 
 TEST_CASE("the experience curve matches the original's levels", "[game][players]") {

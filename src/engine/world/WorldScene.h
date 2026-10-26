@@ -62,12 +62,15 @@ public:
      * `controlledObjects` stay individual units even without animation, so gameplay
      * may hide them without affecting other geometry sharing the same texture.
      * `backgroundObjects` explicitly selects backdrop sheets drawn before solids;
-     * the model's sorting flags alone do not make geometry a backdrop. */
+     * the model's sorting flags alone do not make geometry a backdrop.
+     * `cameraFadeObjects` opts selected geometry into the short camera-depth fade
+     * without changing the authored layout, collision or gameplay opacity. */
     bool build(const WorldLayout& layout, ModelSet& models, TextureSet& textures,
                RenderDevice& device, const WorldLighting& lighting = {},
                std::span<TextureSet* const> lenders = {},
                std::span<const usize> controlledObjects = {},
-               std::span<const usize> backgroundObjects = {});
+               std::span<const usize> backgroundObjects = {},
+               std::span<const usize> cameraFadeObjects = {});
 
     void clear();
     bool built() const { return !m_batches.empty() || !m_units.empty(); }
@@ -227,6 +230,8 @@ private:
         const Mesh* mesh = nullptr;
         std::vector<UnitPart> parts;
         f32 sortBias = 0.0f;
+        f32 distanceFadeRange = 0.0f;
+        f32 distanceSortScale = 1.0f;
         u32 facing = 0;
         bool prelit = false; ///< shaded by its vertices' colours ///< turned to the camera this way
         bool chrome = false;
@@ -240,7 +245,10 @@ private:
         bool veil = false;   ///< a solid wearing a translucent texture: drawn after the figures
 
         /** Drawn after the solids, farthest first, as the original's MBSetupObject decides. */
-        bool deferred() const { return sorted && (alpha < 1.0f || deferAlways || meshAlpha); }
+        bool deferred(f32 opacity) const {
+            return (distanceFadeRange > 0 && opacity < 1) ||
+                   (sorted && (opacity < 1.0f || deferAlways || meshAlpha));
+        }
     };
     struct PlacementState {
         Mat4 local{1.0f};
@@ -276,6 +284,7 @@ private:
     const Mat4& presentedWorldOf(usize object, f32 alpha) const;
     Unit* unitOf(usize object);
     const Unit* unitOf(usize object) const;
+    f32 drawnOpacity(const Unit& unit, const CameraFrame& camera, f32 presentationAlpha) const;
     void drawBatch(RenderDevice& device, const Batch& batch, const Mat4& clip,
                    std::optional<f32> textureFrameOffset) const;
     /** Draws the unit's plain parts, its additive parts, or both. */

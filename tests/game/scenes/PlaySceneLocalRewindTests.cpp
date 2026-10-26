@@ -67,8 +67,10 @@ struct Fixture {
     GameContext context;
     std::vector<PartyMember> initialParty;
     u32 tick = 0;
+    bool bindLegacyObserver = true;
 
-    explicit Fixture(std::string_view levelName, s32 seats = 2) {
+    explicit Fixture(std::string_view levelName, s32 seats = 2, bool legacyObserver = true)
+        : bindLegacyObserver(legacyObserver) {
         test::assetOrSkip(std::format("LEVELS/LEVEL{}/WORLDS.PS2", levelName));
         config.timing.tickRate = 60;
         REQUIRE(catalog.load(root));
@@ -99,7 +101,13 @@ struct Fixture {
         PlayOptions options;
         options.welcome = false;
         REQUIRE(scene.open(device, context, world, initialParty, options));
-        REQUIRE(observer.bind());
+        if (bindLegacyObserver) {
+            REQUIRE(observer.bind());
+        } else {
+            // Native-only tests use the shipping full-state resource registry,
+            // not the retired cross-process diagnostic catalog's narrower domain.
+            REQUIRE(scene.nativeAgreementDigest());
+        }
         tick = 0;
     }
 
@@ -275,6 +283,181 @@ void checkDraws(std::span<const test::RecordedDraw> actual,
     }
 }
 } // namespace
+
+TEST_CASE("native console actions target their canonical seat and rewind cheats gifts and flight",
+          "[native-console][play-scene-local-rewind][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    fixture->advanceTo(360);
+    auto& scene = fixture->scene;
+    REQUIRE(scene.beginRecordedAudio(1));
+    PlayScene::LocalSnapshot before;
+    REQUIRE(scene.saveLocal(before));
+    const auto beforeDigest = scene.nativeAgreementDigest();
+    REQUIRE(beforeDigest);
+    const s32 hostGold = scene.actor(0)->save().gold;
+    const s32 guestGold = scene.actor(1)->save().gold;
+    const std::array actions{ConsoleAction{1, "god"}, ConsoleAction{1, "notarget"},
+                             ConsoleAction{1, "noclip"}, ConsoleAction{1, "get gold 37"}};
+    PlayScene::Inputs input;
+    input[1].consoleFlight = {0, 1, 0};
+    input[1].move = {{1, 0}, 1}; // Ignored while flight owns movement.
+    const Vec3 position = scene.actor(1)->position();
+    const auto step = scene.recordStep(1, 361, kStep, input, actions);
+    REQUIRE(step.outcome == PlayOutcome::Running);
+    REQUIRE(step.consoleReplies.size() == actions.size());
+    CHECK(scene.cheats(1).god);
+    CHECK(scene.cheats(1).noTarget);
+    CHECK(scene.cheats(1).noclip);
+    CHECK_FALSE(scene.cheats(0).god);
+    CHECK(scene.actor(0)->save().gold == hostGold);
+    CHECK(scene.actor(1)->save().gold == guestGold + 37);
+    CHECK(scene.actor(1)->position().y > position.y);
+    CHECK(scene.actor(1)->position().x == position.x);
+    const auto afterDigest = scene.nativeAgreementDigest();
+    REQUIRE(afterDigest);
+    REQUIRE(scene.restoreLocal(before));
+    CHECK(scene.nativeAgreementDigest() == beforeDigest);
+    CHECK_FALSE(scene.cheats(1).god);
+    CHECK_FALSE(scene.cheats(1).noTarget);
+    CHECK_FALSE(scene.cheats(1).noclip);
+    REQUIRE(scene.recordStep(1, 361, kStep, input, actions).outcome == PlayOutcome::Running);
+    CHECK(scene.nativeAgreementDigest() == afterDigest);
+}
+
+TEST_CASE("local console camera changes neither native state nor the next native tick",
+          "[native-console][native-console-camera][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    fixture->advanceTo(360);
+    auto& scene = fixture->scene;
+    PlayScene::LocalSnapshot before;
+    REQUIRE(scene.saveLocal(before));
+    const auto initial = scene.nativeAgreementDigest();
+    REQUIRE(initial);
+    REQUIRE(scene.recordStep(1, 361, kStep, {}).outcome == PlayOutcome::Running);
+    const auto expected = scene.nativeAgreementDigest();
+    REQUIRE(expected);
+    REQUIRE(scene.restoreLocal(before));
+    WorldCamera free = scene.simulationCamera();
+    free.position += Vec3{900, 900, 900};
+    free.yaw += 1.0f;
+    scene.setViewOverride(free);
+    CHECK(scene.nativeAgreementDigest() == initial);
+    CHECK(scene.viewCamera().position == free.position);
+    CHECK(scene.simulationCamera().position != free.position);
+    REQUIRE(scene.recordStep(1, 361, kStep, {}).outcome == PlayOutcome::Running);
+    CHECK(scene.nativeAgreementDigest() == expected);
+    scene.setViewOverride(std::nullopt);
+    CHECK(scene.nativeAgreementDigest() == expected);
+}
+
+TEST_CASE("console travel records reversible intent and clears on secret return",
+          "[native-console][native-console-travel][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    auto& scene = fixture->scene;
+    PlayScene::LocalSnapshot before;
+    REQUIRE(scene.saveLocal(before));
+    const std::array actions{ConsoleAction{1, "goto S1 10 20 30"}};
+    REQUIRE(scene.recordStep(1, 1, kStep, {}, actions).outcome == PlayOutcome::Travel);
+    REQUIRE(scene.consoleTravelRequest());
+    CHECK(scene.consoleTravelRequest()->destination.name == "S1");
+    CHECK(scene.consoleTravelRequest()->position == Vec3{10, 20, 30});
+    CHECK(scene.secretTravel());
+    CHECK(scene.isOpen());
+    const auto planned = scene.nativeAgreementDigest();
+    REQUIRE(planned);
+    REQUIRE(scene.restoreLocal(before));
+    CHECK_FALSE(scene.consoleTravelRequest());
+    REQUIRE(scene.recordStep(1, 1, kStep, {}, actions).outcome == PlayOutcome::Travel);
+    CHECK(scene.nativeAgreementDigest() == planned);
+    scene.resumeFromChallenge(scene.party());
+    CHECK_FALSE(scene.consoleTravelRequest());
+    CHECK_FALSE(scene.secretTravel());
+    CHECK(scene.recordStep(1, 2, kStep, {}).outcome == PlayOutcome::Running);
+}
+
+TEST_CASE("shared console rejects invalid values and absent seats without mutation",
+          "[native-console][native-console-validation][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    auto& scene = fixture->scene;
+    PlayScene::LocalSnapshot before;
+    REQUIRE(scene.saveLocal(before));
+    REQUIRE(scene.recordStep(1, 1, kStep, {}).outcome == PlayOutcome::Running);
+    const auto expected = scene.nativeAgreementDigest();
+    REQUIRE(expected);
+    for (const auto& action :
+         {ConsoleAction{0, "goto nan 0 0"}, ConsoleAction{0, "goto 1e38 0 0"},
+          ConsoleAction{3, "god"}, ConsoleAction{0, "god unwanted"}, ConsoleAction{0, "get info"},
+          ConsoleAction{0, "get exp 2147483647"}, ConsoleAction{0, "get gold 2147483647"},
+          ConsoleAction{0, "get keys 2147483647"}, ConsoleAction{0, "get health 2147483647"},
+          ConsoleAction{0, "get levitate 1e38"}, ConsoleAction{0, "get levitate nan"},
+          ConsoleAction{0, "goto MISSING"}}) {
+        CAPTURE(action.line, action.seat);
+        REQUIRE(scene.restoreLocal(before));
+        const std::array actions{action};
+        const auto step = scene.recordStep(1, 1, kStep, {}, actions);
+        REQUIRE(step.consoleReplies.size() == 1);
+        CHECK_FALSE(step.consoleReplies.front().text.empty());
+        CHECK(step.outcome == PlayOutcome::Running);
+        CHECK(scene.nativeAgreementDigest() == expected);
+    }
+}
+
+TEST_CASE("native console spawn categories survive correction with retained resource caches",
+          "[native-console][native-console-spawn][assets]") {
+    test::assetOrSkip("LEVELS/LEVELE1/WORLDS.PS2");
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    auto& scene = fixture->scene;
+    REQUIRE_FALSE(fixture->world.layout().objects().empty());
+    REQUIRE(scene.beginRecordedAudio(1));
+    REQUIRE(fixture->world.placedItems().size() > 0);
+    const std::vector<std::string> commands{
+        "spawn enemy gru 2 2 G1",
+        "spawn critter golem",
+        "spawn critter golem B1",
+        "spawn generator rat 2",
+        "spawn generator special E1",
+        "spawn item " + fixture->world.placedItems().item(0).name,
+        "spawn object " + fixture->world.layout().objects().front().name};
+    for (const auto& command : commands) {
+        CAPTURE(command);
+        PlayScene::LocalSnapshot before;
+        REQUIRE(scene.saveLocal(before));
+        const auto initial = scene.nativeAgreementDigest();
+        REQUIRE(initial);
+        const std::array actions{ConsoleAction{1, command}};
+        const auto step = scene.recordStep(1, 1, kStep, {}, actions);
+        REQUIRE(step.consoleReplies.size() == 1);
+        CAPTURE(step.consoleReplies.front().text);
+        CHECK_FALSE(step.consoleReplies.front().text.starts_with("No "));
+        CHECK_FALSE(step.consoleReplies.front().text.starts_with("Spawned 0 "));
+        const auto expected = scene.nativeAgreementDigest();
+        REQUIRE(expected);
+        REQUIRE(scene.restoreLocal(before));
+        CHECK(scene.nativeAgreementDigest() == initial);
+        REQUIRE(scene.recordStep(1, 1, kStep, {}, actions).outcome == PlayOutcome::Running);
+        CHECK(scene.nativeAgreementDigest() == expected);
+    }
+}
+
+TEST_CASE("console spawn budget is bounded and restored with its active objects",
+          "[native-console][native-console-spawn-limit][assets]") {
+    auto fixture = std::make_unique<Fixture>("G2", 2, false);
+    auto& scene = fixture->scene;
+    REQUIRE_FALSE(fixture->world.layout().objects().empty());
+    const std::string command = "spawn object " + fixture->world.layout().objects().front().name;
+    PlayScene::LocalSnapshot before;
+    REQUIRE(scene.saveLocal(before));
+    const std::vector<ConsoleAction> crowded(257, ConsoleAction{0, command});
+    const auto step = scene.recordStep(1, 1, kStep, {}, crowded);
+    REQUIRE(step.consoleReplies.size() == crowded.size());
+    CHECK(scene.spawnedObjectCount() == 256);
+    CHECK(step.consoleReplies.back().text == "The stage's console spawn limit is reached.");
+    REQUIRE(scene.restoreLocal(before));
+    CHECK(scene.spawnedObjectCount() == 0);
+    const std::array one{ConsoleAction{0, command}};
+    REQUIRE(scene.recordStep(1, 1, kStep, {}, one).outcome == PlayOutcome::Running);
+    CHECK(scene.spawnedObjectCount() == 1);
+}
 
 TEST_CASE("whole native scenes rewind wrong one to eight tick branches and replay their journal",
           "[play-scene-local-rewind][assets]") {

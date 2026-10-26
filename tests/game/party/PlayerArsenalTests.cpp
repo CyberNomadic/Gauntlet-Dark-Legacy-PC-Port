@@ -133,6 +133,25 @@ TEST_CASE("complete weapon preparation is resource-free and keeps single-volley 
         fixture.arsenal.prepareWeapon(fixture.actor, figure, direction, 2, spreads, target));
 }
 
+TEST_CASE("cursor weapon preparation passes height assistance without changing player facing",
+          "[game][player-arsenal][cursor-projectile-aim]") {
+    const Fixture fixture;
+    const PlayerFigure figure;
+    const Vec3 facing{0, 0, 1};
+    const Vec3 target{11, 1.5f, 30};
+    const auto prepared = fixture.arsenal.prepareWeapon(fixture.actor, figure, facing, 1, true,
+                                                        target, std::nullopt, true);
+    REQUIRE(prepared);
+    REQUIRE(prepared->weapon.fixedFacing);
+    REQUIRE(prepared->missiles.size() == 1);
+    const auto& shot = prepared->missiles.front();
+    REQUIRE(shot.velocity);
+    CHECK(shot.direction == facing);
+    CHECK(shot.velocity->x == 0);
+    CHECK(shot.velocity->z == Approx(shot.speed));
+    CHECK(fixture.actor.facing() == facing);
+}
+
 TEST_CASE("explicit prepared provenance is canonical and never inferred from a turbo animation",
           "[game][world][player-arsenal][weapon-prepare][assets]") {
     Fixture fixture;
@@ -442,7 +461,7 @@ TEST_CASE("plain weapon birth retains release provenance after the player is int
     const auto launches = PlayerMissiles::weaponLaunches(*prepared);
     for (usize ordinal = 0; ordinal < f.arsenal.missiles().count(); ++ordinal) {
         const auto& shot = f.arsenal.missiles().missile(ordinal);
-        CHECK(shot.flags == prepared->flags);
+        CHECK(shot.flags == (prepared->flags | (strong ? PlayerMissiles::kStrongThrowFlags : 0U)));
         CHECK(shot.wallSound == launches[ordinal].wallSound);
         CHECK(shot.release.has_value() == eligible);
         if (eligible) {
@@ -1022,6 +1041,31 @@ TEST_CASE("Phoenix fires fixed fire damage without a permanent familiar or weapo
     CHECK(impacts.front().damage == 10);
     CHECK(impacts.front().flags == 0x11);
     f.arsenal.clear();
+}
+
+TEST_CASE("both cursor-aimed familiars correct height without steering toward an offset target",
+          "[game][player-arsenal][cursor-projectile-aim][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    Fixture fixture;
+    REQUIRE(fixture.classes.load(root / "pdata"));
+    REQUIRE(fixture.weapons.load(root / "WEAPONS"));
+    fixture.actor.save().progress().experience = levelExperience(80);
+    auto figure = PlayerFigure::load(fixture.device, root, fixture.actor.save(), false);
+    REQUIRE(figure);
+    REQUIRE(figure->familiarTier() > 0);
+    fixture.actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kPhoenix, 0,
+                                                         60);
+    const Vec3 target{11, 1.5f, 40};
+    const auto shots = fixture.arsenal.prepareFamiliar(fixture.actor, *figure, target, true);
+    REQUIRE(shots);
+    REQUIRE(shots->size() == 2);
+    CHECK(shots->front().position != shots->back().position);
+    for (const auto& shot : *shots) {
+        REQUIRE(shot.velocity);
+        CHECK(shot.velocity->x == 0);
+        CHECK(shot.velocity->z == Approx(35));
+        CHECK(shot.velocity->y < 0);
+    }
 }
 
 TEST_CASE("a ranged volley fires the player's weapon and both earned and Phoenix familiars",

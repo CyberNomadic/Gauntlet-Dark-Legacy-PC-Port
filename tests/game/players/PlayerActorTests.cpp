@@ -4,14 +4,18 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "engine/core/Types.h"
 #include "engine/world/WorldCollision.h"
 
+#include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/characters/CharacterSave.h"
 #include "game/characters/ClassData.h"
 #include "game/characters/Progression.h"
+#include "game/level/LevelWorld.h"
+#include "game/party/FloorRiding.h"
 #include "game/players/PlayerActor.h"
 
 namespace {
@@ -650,6 +654,62 @@ TEST_CASE("a body on the plane of a one-sided railing at a floor's edge can walk
     }
     CHECK(actor.position().x <= 0.0f);
     CHECK(actor.position().y == 0);
+}
+
+TEST_CASE("K4 elevator riders cannot step onto the passing gold platform through its corner",
+          "[game][players][actor][lift-floor-inheritance][k4-lift-corner][assets]") {
+    const s32 hz = GENERATE(30, 60, 120);
+    const f32 seconds = 1.0f / static_cast<f32>(hz);
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELK4/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("K4");
+    REQUIRE(level);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    world.startTriggers({});
+    world.updateTriggers(0, {});
+    ClassDataSet classes;
+    REQUIRE(classes.load(root / "PDATA"));
+    std::array<PlayerRuntime, 1> party;
+    auto& player = party[0];
+    player.actor.spawn(0, {}, classes.stats(0), {-7.625f, 16.328125f, -136.625f}, 0);
+    player.actor.settle(world.collision());
+    FloorRiding::land(party, 0, player.actor.position(), world.collision());
+    REQUIRE(player.floor.object == 232);
+    // BRIDGEPAD 441 animates root K4PLAT3 (231), while K4WHATA (232)
+    // carries its floor. Shoot target 610 raises the adjacent gold floor 451.
+    REQUIRE(world.layout().objects()[232].parent == 231);
+    REQUIRE(world.layout().objects()[451].parent == 450);
+    bool passedGoldHeight = false;
+    s32 heldFrames = 0;
+    for (s32 frame = 0; frame < 8 * hz; ++frame) {
+        world.update(seconds);
+        FloorRiding::carry(player, world.collision());
+        const Vec3 from = player.actor.position();
+        const bool locked = world.collision().ownFloorExitBlocked(231);
+        if (locked) {
+            ++heldFrames;
+            REQUIRE(world.collision().floorExitBlocked(232));
+            player.actor.update(push(-1, -1), 0, seconds, &world.collision());
+        }
+        FloorRiding::land(party, 0, from, world.collision());
+        player.actor.fall(seconds, world.collision());
+        if (locked) {
+            CHECK(player.floor.object == 232);
+            CHECK(player.actor.floorObject() == 232);
+            passedGoldHeight |= player.actor.position().y > 32 && player.actor.position().y < 35;
+        }
+        const std::array visitors{TriggerVisitor{.position = player.actor.position(),
+                                                 .radius = player.actor.reach(),
+                                                 .floorObject = player.floor.object,
+                                                 .height = player.actor.height()}};
+        world.updateTriggers(seconds, visitors);
+    }
+    CHECK(heldFrames > hz);
+    CHECK(passedGoldHeight);
 }
 
 TEST_CASE("an actor's pace follows its record's level once told to look again",

@@ -643,6 +643,87 @@ TEST_CASE("native agreement disconnect and fatal send notify surviving peers wit
     CHECK(room.streams[2].failure() == Failure::Disconnected);
 }
 
+TEST_CASE("native agreement reports a closed send before its owner drops the departed peer",
+          "[netplay][native-agreement][native-terminal-agreement]") {
+    const bool terminal = GENERATE(false, true);
+    const NativeAgreement::Owners owners{1, 2, 3, 0};
+    const std::array hostLinks{NativeAgreement::Link{2, 102}, NativeAgreement::Link{3, 103}};
+    const std::array guestLinks{NativeAgreement::Link{1, kHost}};
+    std::array<NativeAgreement, 4> streams;
+    std::array<Wire, 4> wires;
+    for (u8 peer = 1; peer <= 3; ++peer) {
+        const std::span<const NativeAgreement::Link> links =
+            peer == 1 ? std::span<const NativeAgreement::Link>{hostLinks}
+                      : std::span<const NativeAgreement::Link>{guestLinks};
+        REQUIRE((terminal ? streams[peer].openTerminal(peer, kEpoch, owners, links, kPeriod, Time{})
+                          : streams[peer].open(peer, kEpoch, owners, links, kPeriod, Time{})));
+        REQUIRE(streams[peer].submit(kPeriod, digest(kPeriod), Time{}) == Admission::Accepted);
+    }
+    for (u8 peer = 2; peer <= 3; ++peer) {
+        REQUIRE(streams[peer].flush(wires[peer], Time{}));
+        REQUIRE(wires[peer].sent.size() == 1);
+        REQUIRE(streams[1].receive(Room::connection(peer), wires[peer].sent.front().bytes,
+                                   Time{}) == Admission::Accepted);
+    }
+    REQUIRE(streams[1].queuedPackets() == 2);
+    wires[1].faultConnection = 102;
+    wires[1].result = PacketTransport::SendResult::Disconnected;
+    PacketTransport::Connection closed = 777;
+    CHECK_FALSE(streams[1].flush(wires[1], Time{}, &closed));
+    CHECK(closed == 102);
+    CHECK_FALSE(streams[1].failed());
+    CHECK(streams[1].queuedPackets() == 2);
+    CHECK(wires[1].attempts == 1);
+
+    // The session resolves the authenticated connection only after flush returns.
+    streams[1].suspend(2);
+    streams[3].suspend(2);
+    REQUIRE(streams[1].flush(wires[1], Time{}, &closed));
+    CHECK(closed == 0);
+    REQUIRE(wires[1].sent.size() == 1);
+    CHECK(wires[1].sent.front().connection == 103);
+    CHECK(wires[1].attempts == 2);
+    REQUIRE(streams[3].receive(kHost, wires[1].sent.front().bytes, Time{}) == Admission::Accepted);
+    CHECK(streams[3].agreedTick() == kPeriod);
+    CHECK_FALSE(streams[3].failed());
+    CHECK(streams[1].queuedPackets() == 0);
+}
+
+TEST_CASE("native agreement's closed-link report does not make losing the host recoverable",
+          "[netplay][native-agreement]") {
+    Room room;
+    auto& guest = room.streams[2];
+    REQUIRE(guest.submit(kPeriod, {}, room.now) == Admission::Accepted);
+    room.wires[2].result = PacketTransport::SendResult::Disconnected;
+    PacketTransport::Connection closed = 0;
+    CHECK_FALSE(guest.flush(room.wires[2], room.now, &closed));
+    REQUIRE(closed == kHost);
+    CHECK_FALSE(guest.failed());
+    guest.disconnected(closed);
+    CHECK(guest.failure() == Failure::Disconnected);
+    CHECK_FALSE(guest.flush(room.wires[2], room.now, &closed));
+    CHECK(closed == 0);
+    CHECK(guest.failure() == Failure::Disconnected);
+}
+
+TEST_CASE("native agreement reports no closed link for congestion or generic send failure",
+          "[netplay][native-agreement]") {
+    const auto result =
+        GENERATE(PacketTransport::SendResult::Sent, PacketTransport::SendResult::Congested,
+                 PacketTransport::SendResult::Invalid);
+    Room room;
+    auto& guest = room.streams[2];
+    REQUIRE(guest.submit(kPeriod, {}, room.now) == Admission::Accepted);
+    room.wires[2].result = result;
+    PacketTransport::Connection closed = 777;
+    CHECK(guest.flush(room.wires[2], room.now, &closed) ==
+          (result != PacketTransport::SendResult::Invalid));
+    CHECK(closed == 0);
+    CHECK(guest.failure() ==
+          (result == PacketTransport::SendResult::Invalid ? Failure::Transport : Failure::None));
+    CHECK(guest.queuedPackets() == (result == PacketTransport::SendResult::Congested ? 1 : 0));
+}
+
 TEST_CASE("native agreement retains a bounded duplicate history and does not revive old epochs",
           "[netplay][native-agreement]") {
     Room room;

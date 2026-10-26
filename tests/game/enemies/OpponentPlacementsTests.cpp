@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -15,6 +17,9 @@
 #include "game/critters/Critters.h"
 #include "game/enemies/OpponentPlacements.h"
 #include "game/level/ItemFigure.h"
+#include "game/level/ItemSupport.h"
+#include "game/level/LevelCatalog.h"
+#include "game/level/LevelWorld.h"
 
 namespace {
 using namespace gdl;
@@ -214,6 +219,71 @@ TEST_CASE("native statue placement loader preserves the authored floor-binding f
     REQUIRE(state);
     REQUIRE(statues.restore(*state));
     CHECK(statues.checkpoint() == state);
+}
+
+TEST_CASE("Ancient Tree's placed archers and bombers keep their stump floor binding",
+          "[opponent-placements][ancient-tree-placements][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD3/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto level = catalog.byName("D3");
+    REQUIRE(level);
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    REQUIRE(world.level());
+    WorldCollision collision = world.collision();
+    const auto restPose = itemSupportWorld(world.layout(), &collision);
+    REQUIRE(restPose);
+    Enemies enemies;
+    enemies.open(device, root, &collision, 25, {}, 7);
+    Critters critters;
+    CritterStatues statues;
+    const auto rows = OpponentPlacements::load(
+        device, world.layout(), world.level()->enemies, 1, enemies, critters, statues, &collision,
+        [](const Vec3&, f32, f32) -> std::optional<usize> { return std::nullopt; });
+    for (const usize instance : {101U, 102U, 106U, 109U, 137U}) {
+        const Vec3 authored = world.layout().itemInstances().at(instance).position;
+        const auto row = std::ranges::find_if(rows, [&](const auto& placement) {
+            const Vec3& at = placement.spawn.position;
+            return std::abs(at.x - authored.x) < 0.01f && std::abs(at.z - authored.z) < 0.01f;
+        });
+        CAPTURE(instance, authored.x, authored.y, authored.z);
+        REQUIRE(row != rows.end());
+        const auto* support = itemSupportAt(authored, &collision, &*restPose);
+        REQUIRE(support);
+        const auto floor = support->restingFloorAt(authored, 4, 10, 1);
+        REQUIRE(floor);
+        CAPTURE(floor->object, floor->y, row->support, row->spawn.position.y);
+        CHECK(row->spawn.position.y == Catch::Approx(floor->y + ItemFigure::kFloorLift));
+        if (!collision.moving(floor->object)) {
+            CHECK(row->support == -1);
+            continue;
+        }
+        CHECK(row->support == floor->object);
+
+        // A pending placement must follow its branch before the camera admits it.
+        // Losing this attachment leaves the enemy high over the lowered stump,
+        // where the later birth's narrower six-unit floor probe can reject it.
+        const auto stood = support->objectTransform(floor->object);
+        REQUIRE(stood);
+        const auto current = collision.objectTransform(floor->object);
+        REQUIRE(current);
+        const Mat4 moved = glm::translate(Mat4{1}, Vec3{0, -8, 0}) * *stood;
+        collision.setObjectTransform(floor->object, moved);
+        PlacedEnemies pending;
+        pending.bind({*row}, &collision);
+        const auto activations = pending.activations();
+        REQUIRE(activations.size() == 1);
+        const auto& activation = activations.front();
+        const Vec3 expected{moved * row->supportLocal[3]};
+        CHECK(glm::distance(activation.spawn.position, expected) < 0.001f);
+        const auto born = enemies.spawn(activation.spawn, {});
+        REQUIRE(born);
+        CHECK(enemies.positionOf(*born).y == Catch::Approx(floor->y - 8).margin(0.01f));
+        collision.setObjectTransform(floor->object, *current);
+    }
 }
 
 } // namespace

@@ -117,7 +117,8 @@ public:
     std::optional<PreparedWeapon>
     prepareWeapon(const PlayerActor& actor, const PlayerFigure& figure, const Vec3& direction,
                   f32 scale, bool spreads, std::optional<Vec3> target = std::nullopt,
-                  std::optional<MissileRelease> explicitRelease = std::nullopt) const;
+                  std::optional<MissileRelease> explicitRelease = std::nullopt,
+                  bool fixedFacing = false) const;
     /** Borrows the native streak texture and tint; may populate the texture cache. */
     MissileStreak weaponStreak(const PlayerActor& actor, bool superShot = false);
     /** Existing plain-weapon texture bank clock, absent before the bank's first use. */
@@ -132,12 +133,13 @@ public:
     std::optional<WeaponRider> weaponRider(const PlayerActor& actor, PlayerFigure& figure) const;
     void launchWeapon(const PlayerActor& actor, PlayerFigure* body, const Vec3& direction,
                       f32 scale, bool spreads, std::optional<Vec3> target = std::nullopt,
-                      std::optional<MissileRelease> explicitRelease = std::nullopt);
+                      std::optional<MissileRelease> explicitRelease = std::nullopt,
+                      bool fixedFacing = false);
     void launchSuperShot(PlayerActor& actor, PlayerFigure* body,
                          std::optional<Vec3> target = std::nullopt);
     void launchGauntlet(const PlayerActor& actor, PlayerFigure* body, bool left);
     void launchFamiliar(const PlayerActor& actor, PlayerFigure* body,
-                        std::optional<Vec3> target = std::nullopt);
+                        std::optional<Vec3> target = std::nullopt, bool fixedFacing = false);
     /** Native companion physics; stable addresses also identify trusted pool resources. */
     static const MissileSpec& familiarSpec(bool boss = false);
     const TreeModel& phoenixMissile() const { return m_phoenixShot; }
@@ -146,7 +148,7 @@ public:
      * belongs to these silent shots. Empty means neither companion fires. */
     std::optional<std::vector<MissileLaunch>>
     prepareFamiliar(const PlayerActor& actor, PlayerFigure& figure,
-                    std::optional<Vec3> target = std::nullopt) const;
+                    std::optional<Vec3> target = std::nullopt, bool fixedFacing = false) const;
     std::optional<MissileImpact> usePotion(PlayerActor& actor);
     /** Unspecified magic advances one shared colour cycle for every caster and floor bottle. */
     s32 resolvePotionKind(s32 kind);
