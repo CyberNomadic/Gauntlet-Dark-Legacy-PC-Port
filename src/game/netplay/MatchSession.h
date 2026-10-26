@@ -254,19 +254,11 @@ private:
     bool admitConsole(u8 peer, u64 epoch, u64 revision, u64 request, u32 grant,
                       const ConsoleAction& action);
 
-    Phase m_phase = Phase::Offline;
-    MatchStop m_stop = MatchStop::None;
     std::string m_failureDetail;
-    u8 m_local = 0;
-    MatchOwners m_owners{};
     std::array<PacketTransport::Connection, 5> m_links{};
     std::array<PacketTransport::Connection, 5> m_droppedLinks{}; ///< what a drop took down
     std::array<PacketTransport::Connection, 5> m_direct{};
-    std::array<bool, 5> m_loaded{};
-    u8 m_movieSkipVotes = 0;
-    u8 m_movieSkipRequests = 0;
     MatchContext m_context;
-    u8 m_startupDelay = 1;
     std::unique_ptr<RollbackExchange> m_exchange;
     NativeInputConsumer m_nativeConsumer;
     std::unique_ptr<NativeAgreement> m_nativeAgreement;
@@ -277,7 +269,6 @@ private:
     std::optional<MatchContext> m_pendingNativeContext;
     MatchParty m_pendingNativeParty;
     std::unique_ptr<ShopSync> m_pendingNativeShop;
-    u8 m_pendingNativeMovieVotes = 0;
     // Only the old relay survives loading, not another scene. Ready acknowledges
     // execution through its fence; tryCommit retires this relay.
     std::unique_ptr<RollbackExchange> m_drainingInputs;
@@ -294,7 +285,6 @@ private:
         ConsoleAction action;
     };
     static constexpr usize kConsoleRequests = 32;
-    bool m_consolePermissions = false;
     u64 m_consoleRevision = 0;
     u64 m_consoleNextRequest = 0;
     std::array<u64, 5> m_consoleSeen{};
@@ -302,11 +292,23 @@ private:
     std::deque<ControlDelivery> m_journalDeliveries;
     std::map<u64, NativeAgreement::Digest> m_recentDigests;
     std::optional<Resync> m_resync;
-    u8 m_journalQueuedPeers = 0;
-    bool m_resyncTarget = false;
-    bool m_journalComplete = false;
     std::vector<InputCommand> m_journalIncoming;
     std::array<Drop, 5> m_dropped{};
     std::vector<Drop> m_pendingDrops;
+
+    // Keep byte-sized lifecycle state together rather than between aligned streams.
+    Phase m_phase = Phase::Offline;
+    MatchStop m_stop = MatchStop::None;
+    u8 m_local = 0;
+    MatchOwners m_owners{};
+    std::array<bool, 5> m_loaded{};
+    u8 m_movieSkipVotes = 0;
+    u8 m_movieSkipRequests = 0;
+    u8 m_startupDelay = 1;
+    u8 m_pendingNativeMovieVotes = 0;
+    bool m_consolePermissions = false;
+    u8 m_journalQueuedPeers = 0;
+    bool m_resyncTarget = false;
+    bool m_journalComplete = false;
 };
 } // namespace gdl::game
