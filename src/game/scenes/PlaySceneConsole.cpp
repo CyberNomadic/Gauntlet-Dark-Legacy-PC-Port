@@ -49,7 +49,7 @@ std::string PlayScene::applyConsoleAction(const ConsoleAction& action) {
     }
     const auto words = wordsOf(action.line);
     const auto& verb = words.front();
-    const std::span<const std::string> arguments{words.data() + 1, words.size() - 1};
+    const auto arguments = std::span<const std::string>{words}.subspan(1);
     const s32 player = action.seat;
     CharacterSave* save = liveSave(player);
     if (save == nullptr) {
