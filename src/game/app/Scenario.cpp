@@ -84,9 +84,11 @@ Scenario Scenario::fromJson(std::string_view text) {
         member.gold = entry.value("gold", 0);
         const auto totals = entry.value("lifetime", Json::object());
         member.lifetime = {totals.value("enemiesKilled", 0), totals.value("generatorsDestroyed", 0),
-                           totals.value("goldFound", 0), totals.value("playSeconds", 0.0)};
+                           totals.value("goldFound", 0), totals.value("playSeconds", 0.0),
+                           totals.value("bestStreak", 0)};
         if (member.lifetime.enemiesKilled < 0 || member.lifetime.generatorsDestroyed < 0 ||
-            member.lifetime.goldFound < 0 || !std::isfinite(member.lifetime.playSeconds) ||
+            member.lifetime.goldFound < 0 || member.lifetime.bestStreak < 0 ||
+            !std::isfinite(member.lifetime.playSeconds) ||
             member.lifetime.playSeconds < 0 || member.lifetime.playSeconds > 1e12) {
             throw FormatError("scenario: invalid lifetime statistics");
         }

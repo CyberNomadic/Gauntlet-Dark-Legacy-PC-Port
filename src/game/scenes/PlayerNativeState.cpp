@@ -36,7 +36,7 @@ void visitNativeState(NativeStateDigest& digest, const ClassProgress& value) {
 }
 
 void visitNativeState(NativeStateDigest& digest, const LifetimeStats& value) {
-    digest.fields<4>(value);
+    digest.fields<5>(value);
 }
 
 void visitNativeState(NativeStateDigest& digest, const Inventory& value) {

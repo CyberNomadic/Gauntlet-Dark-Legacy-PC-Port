@@ -45,7 +45,7 @@ CharacterSave character() {
     p.levels.runeLevels = {8191, 127};
     p.levels.legendLevels = {65535, 32768};
     p.levels.bossDeaths = {123, 64};
-    p.lifetime = {10000, 200, 123456, 36000.125};
+    p.lifetime = {10000, 200, 123456, 36000.125, 57};
     return save;
 }
 TEST_CASE("network character profiles preserve selected progress without exporting local saves",

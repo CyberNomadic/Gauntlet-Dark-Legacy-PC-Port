@@ -427,6 +427,9 @@ void PlayScene::praiseStreaks(f32 seconds) {
             const auto audioScope =
                 m_audio.soundScope({34, 0, 1, static_cast<u8>(runtime.actor.player())}, 2);
             m_audio.queueNarration(praise, LevelSoundscape::Narrator::Primary);
+        // The record follows the run as it grows, so the meter can announce it live.
+        s32& best = runtime.actor.save().progress().lifetime.bestStreak;
+        best = std::max(best, runtime.streak.count());
         }
     }
 }

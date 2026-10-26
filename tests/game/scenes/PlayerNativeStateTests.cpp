@@ -230,6 +230,7 @@ TEST_CASE("native player digest includes all inactive classes and the untouched 
             change("generators", [](auto& p) { ++p.lifetime.generatorsDestroyed; });
             change("gold found", [](auto& p) { ++p.lifetime.goldFound; });
             change("play time", [](auto& p) { p.lifetime.playSeconds = 0.125; });
+            change("best streak", [](auto& p) { ++p.lifetime.bestStreak; });
         }
     }
 }

@@ -41,6 +41,7 @@ struct LifetimeStats {
     s32 generatorsDestroyed = 0;
     s32 goldFound = 0;
     f64 playSeconds = 0;
+    s32 bestStreak = 0; ///< the longest run of close blows, counted as MeleeStreak does
 };
 
 struct ClassProgress {

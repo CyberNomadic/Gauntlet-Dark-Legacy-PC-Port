@@ -27,7 +27,7 @@ struct CharacterProfile {
 class CharacterProfilePacket {
 public:
     static constexpr u32 kVersion = 1;
-    static constexpr usize kBytes = 508;
+    static constexpr usize kBytes = 512;
     static std::optional<std::vector<u8>> encode(const CharacterProfile& profile);
     static std::optional<CharacterProfile> decode(std::span<const u8> bytes);
 };

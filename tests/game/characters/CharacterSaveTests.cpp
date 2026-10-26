@@ -101,13 +101,15 @@ TEST_CASE("save slots reload independent autoattack preferences",
 TEST_CASE("lifetime totals persist per class and old saves do not fabricate history",
           "[save][shop]") {
     auto save = sampleSave();
-    save.progress().lifetime = {123, 45, 6789, 93780.5};
+    save.progress().lifetime = {123, 45, 6789, 93780.5, 57};
     const auto loaded = CharacterSave::fromJson(save.toJson());
     CHECK(loaded.progress().lifetime.enemiesKilled == 123);
     CHECK(loaded.progress().lifetime.generatorsDestroyed == 45);
     CHECK(loaded.progress().lifetime.goldFound == 6789);
     CHECK(loaded.progress().lifetime.playSeconds == 93780.5);
+    CHECK(loaded.progress().lifetime.bestStreak == 57);
     CHECK(loaded.classes[0].lifetime.enemiesKilled == 0);
+    CHECK(loaded.classes[0].lifetime.bestStreak == 0);
     const auto old = CharacterSave::fromJson(
         R"({"name":"OLD","character":0,"gold":500,"classes":{"WAR":{"experience":5000}}})");
     CHECK(old.progress().lifetime.goldFound == 0);

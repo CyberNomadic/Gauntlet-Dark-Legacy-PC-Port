@@ -66,7 +66,8 @@ bool CharacterProfile::valid() const {
         !std::ranges::all_of(p.levels.runeLevels,
                              [](u16 mask) { return (mask >> Relics::kRuneCount) == 0; }) ||
         p.lifetime.enemiesKilled < 0 || p.lifetime.generatorsDestroyed < 0 ||
-        p.lifetime.goldFound < 0 || !std::isfinite(p.lifetime.playSeconds) ||
+        p.lifetime.goldFound < 0 || p.lifetime.bestStreak < 0 ||
+        !std::isfinite(p.lifetime.playSeconds) ||
         p.lifetime.playSeconds < 0 || p.lifetime.playSeconds > 1e12 || helpSeen.size() > 151 ||
         !std::ranges::all_of(helpSeen, [](s32 value) { return value >= 0 && value <= 150; }) ||
         !std::ranges::is_sorted(helpSeen)) {
@@ -158,8 +159,8 @@ std::optional<std::vector<u8>> CharacterProfilePacket::encode(const CharacterPro
             word(bytes, value);
         }
     }
-    for (const s32 value :
-         {p.lifetime.enemiesKilled, p.lifetime.generatorsDestroyed, p.lifetime.goldFound}) {
+    for (const s32 value : {p.lifetime.enemiesKilled, p.lifetime.generatorsDestroyed,
+                            p.lifetime.goldFound, p.lifetime.bestStreak}) {
         word(bytes, static_cast<u32>(value));
     }
     const auto seconds = std::bit_cast<u64>(p.lifetime.playSeconds);
@@ -271,6 +272,7 @@ std::optional<CharacterProfile> CharacterProfilePacket::decode(std::span<const u
     p.lifetime.enemiesKilled = reader.readS32();
     p.lifetime.generatorsDestroyed = reader.readS32();
     p.lifetime.goldFound = reader.readS32();
+    p.lifetime.bestStreak = reader.readS32();
     const u64 low = reader.readU32();
     p.lifetime.playSeconds = std::bit_cast<f64>(low | (u64{reader.readU32()} << 32U));
     for (s32 block = 0; block < 5; ++block) {

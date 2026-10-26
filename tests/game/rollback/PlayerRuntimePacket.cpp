@@ -218,7 +218,7 @@ template <class A, class T> void progress(A& archive, T& value) {
         archive.number(mask);
     }
     numbers(archive, value.lifetime.enemiesKilled, value.lifetime.generatorsDestroyed,
-            value.lifetime.goldFound, value.lifetime.playSeconds);
+            value.lifetime.goldFound, value.lifetime.playSeconds, value.lifetime.bestStreak);
 }
 template <class A, class T> void save(A& archive, T& value) {
     text(archive, value.name, kCharacterNameLength);

@@ -156,7 +156,8 @@ Json progressJson(const ClassProgress& progress) {
                  {{"enemiesKilled", progress.lifetime.enemiesKilled},
                   {"generatorsDestroyed", progress.lifetime.generatorsDestroyed},
                   {"goldFound", progress.lifetime.goldFound},
-                  {"playSeconds", progress.lifetime.playSeconds}}},
+                  {"playSeconds", progress.lifetime.playSeconds},
+                  {"bestStreak", progress.lifetime.bestStreak}}},
                 {"inventory", inventoryJson(progress.inventory)},
                 {"relics", relicsJson(progress.relics)},
                 {"levels", levelsJson(progress.levels)}};
@@ -179,7 +180,8 @@ ClassProgress progressFromJson(const Json& object) {
     progress.lifetime = {std::max(0, totals.value("enemiesKilled", 0)),
                          std::max(0, totals.value("generatorsDestroyed", 0)),
                          std::max(0, totals.value("goldFound", 0)),
-                         std::max(0.0, totals.value("playSeconds", 0.0))};
+                         std::max(0.0, totals.value("playSeconds", 0.0)),
+                         std::max(0, totals.value("bestStreak", 0))};
     if (!std::isfinite(progress.lifetime.playSeconds) || progress.lifetime.playSeconds > 1e12) {
         throw FormatError("character save: invalid lifetime playtime");
     }
