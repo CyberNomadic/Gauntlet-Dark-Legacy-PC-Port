@@ -1335,38 +1335,4 @@ TEST_CASE("Jester strong and turbo trails use their delayed texture windows",
     }
 }
 
-TEST_CASE("a standalone emitter over a sprite of its own keeps it through checkpoint and restore",
-          "[effects][elemental]") {
-    test::FakeRenderDevice device;
-    ItemArchive archive; // unloaded: nothing of it is borrowed
-    const test::FakeTexture sprite{8, 8};
-    EffectTrees effects;
-    ParticleDescriptor descriptor;
-    descriptor.emitFrames = ParticleDescriptor::kEndless;
-    descriptor.rate = {1.0f, 1.0f, 1.0f, 1.0f}; // one a frame
-    descriptor.particleLife = 20;
-    descriptor.width = {1.0f, 1.0f, 1.0f, 1.0f};
-    descriptor.alpha = {1.0f, 1.0f, 1.0f, 1.0f};
-    descriptor.red = descriptor.alpha;
-    descriptor.green = descriptor.alpha;
-    descriptor.blue = descriptor.alpha;
-    descriptor.additive = true;
-    descriptor.texture = "OWN";
-    const u32 id = effects.startParticles(archive, descriptor, sprite, Mat4{1});
-    REQUIRE(id != 0);
-    effects.update(0.1f); // three frames, three motes
-    const auto saved = effects.checkpoint(id);
-    REQUIRE(saved.has_value());
-    CHECK_FALSE(saved->particleTextureSlot.has_value()); // no archive sprite to play
-    effects.update(0.5f);
-    REQUIRE(effects.restore(id, *saved));
-    const CameraFrame camera = CameraFrame::at(Vec3{0.0f, 0.0f, -10.0f});
-    device.draws.clear();
-    effects.draw(device, Mat4{1}, {}, &camera);
-    REQUIRE(device.draws.size() == 1);
-    CHECK(device.draws.front().texture == &sprite);
-    CHECK(device.draws.front().vertices.size() == 18); // three motes, six vertices each
-    CHECK(device.draws.front().blend() == BlendMode::Additive);
-}
-
 } // namespace

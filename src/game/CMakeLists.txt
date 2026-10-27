@@ -266,6 +266,8 @@ add_library(game STATIC
     effects/WeaponGlow.cpp
     effects/ElementAura.h
     effects/ElementAura.cpp
+    effects/ElementAuraShow.h
+    effects/ElementAuraShow.cpp
     camera/CameraMovementLimit.cpp
     level/SkorneArena.cpp
     level/FallingPiece.cpp

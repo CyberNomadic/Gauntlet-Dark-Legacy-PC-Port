@@ -1,151 +1,140 @@
-#include <algorithm>
-#include <format>
-#include <string>
+#include <array>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
-#include "engine/world/ParticleSystem.h"
-#include "engine/world/WorldCamera.h"
 
 #include "FakeRenderDevice.h"
-#include "game/effects/EffectTrees.h"
 #include "game/effects/ElementAura.h"
 
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+using Sprite = ElementAura::Sprite;
 
-TEST_CASE("each element's aura is endless, born wide of its body and keeps its own manner",
-          "[game][effects][aggression][elemental]") {
-    for (s32 element = 1; element <= ElementAura::kElements; ++element) {
-        CAPTURE(element);
-        const ParticleDescriptor d = ElementAura::descriptor(element, 1.5f, 9.0f);
-        CHECK(d.emitFrames == ParticleDescriptor::kEndless);
-        CHECK(d.dynamic);
-        CHECK(d.additive);
-        CHECK_FALSE(d.depthWrite);
-        CHECK(d.depthTest); // walls still hide it; the wide birth box keeps the body from it
-        CHECK(d.volume == Vec3{4.5f, 9.0f, 4.5f});
-        CHECK(d.maxParticles == ElementAura::kMostParticles);
-        CHECK(d.rate[0] > 0.0f);
-        CHECK(d.rate[3] == d.rate[0]);
-        CHECK(d.particleLife >= 1);
-        CHECK(d.speed > 0.0f);
-        CHECK(d.texture == ElementAura::kSpriteName);
-        CHECK(d.width.lifeStart >= 1.0f); // a mote at least a unit wide at birth, to be seen
-        CHECK(d.alpha.lifeStart >= 200.0f); // colours run 0 to 255; a share of one is unseen
-        CHECK(d.alpha.fadeEnd == 0.0f);     // every mote fades to nothing
+constexpr std::array<Sprite, ElementAura::kSprites> kAll{
+    Sprite::Glow,   Sprite::Ring,   Sprite::Streak, Sprite::Beam,  Sprite::Flame0,
+    Sprite::Flame1, Sprite::Flame2, Sprite::Flame3, Sprite::Glint, Sprite::Drop};
+
+struct Atlas {
+    std::vector<u8> pixels = ElementAura::pixels();
+    /** The alpha at `x`, `y` of `sprite`'s place. */
+    u8 alpha(Sprite sprite, u32 x, u32 y) const {
+        const auto at = ElementAura::place(sprite);
+        return pixels[((static_cast<usize>(at.y) + y) * ElementAura::kWidth + at.x + x) * 4 + 3];
     }
-    // Fire's embers rise and redden; acid's drips fall green; electric's sparks fly every way;
-    // light's motes drift up, the largest and slowest.
-    const auto fire = ElementAura::descriptor(1, 1.0f, 6.0f);
-    const auto electric = ElementAura::descriptor(2, 1.0f, 6.0f);
-    const auto light = ElementAura::descriptor(3, 1.0f, 6.0f);
-    const auto acid = ElementAura::descriptor(4, 1.0f, 6.0f);
-    CHECK(fire.direction.y > 0.0f);
-    CHECK(fire.gravity > 0.0f);
-    CHECK(fire.red.lifeStart == 255.0f);
-    CHECK(fire.green.lifeEnd < fire.green.lifeStart);
-    CHECK(acid.direction.y < 0.0f);
-    CHECK(acid.gravity < 0.0f);
-    CHECK(acid.green.lifeStart > acid.red.lifeStart);
-    CHECK(electric.angle == ParticleDescriptor::kSphere);
-    CHECK(electric.speed > fire.speed);
-    CHECK(electric.particleLife < fire.particleLife);
-    CHECK(electric.blue.lifeStart == 255.0f);
-    CHECK(light.width.lifeStart > fire.width.lifeStart);
-    CHECK(light.speed < fire.speed);
-    CHECK(light.particleLife > fire.particleLife);
-    // No element, no aura: the plain descriptor, emitting once.
-    const auto none = ElementAura::descriptor(0, 1.0f, 6.0f);
-    CHECK(none.emitFrames == 1);
-    CHECK_FALSE(none.dynamic);
+    /** The red, green and blue there. */
+    std::array<u8, 3> rgb(Sprite sprite, u32 x, u32 y) const {
+        const auto at = ElementAura::place(sprite);
+        const usize index = ((static_cast<usize>(at.y) + y) * ElementAura::kWidth + at.x + x) * 4;
+        return {pixels[index], pixels[index + 1], pixels[index + 2]};
+    }
+};
+
+TEST_CASE("the aura atlas places its sprites apart, within it, premultiplied, half a texel in",
+          "[game][effects][aggression][elemental]") {
+    const Atlas atlas;
+    REQUIRE(atlas.pixels.size() ==
+            static_cast<usize>(ElementAura::kWidth) * ElementAura::kHeight * 4);
+    for (usize i = 0; i < atlas.pixels.size(); i += 4) {
+        REQUIRE(atlas.pixels[i] <= atlas.pixels[i + 3]);
+        REQUIRE(atlas.pixels[i + 1] <= atlas.pixels[i + 3]);
+        REQUIRE(atlas.pixels[i + 2] <= atlas.pixels[i + 3]);
+    }
+    for (const Sprite sprite : kAll) {
+        CAPTURE(static_cast<int>(sprite));
+        const auto at = ElementAura::place(sprite);
+        CHECK(at.w > 0);
+        CHECK(at.h > 0);
+        CHECK(at.x + at.w <= ElementAura::kWidth);
+        CHECK(at.y + at.h <= ElementAura::kHeight);
+        const auto cell = ElementAura::cell(sprite);
+        CHECK(cell.u0 > static_cast<f32>(at.x) / ElementAura::kWidth);
+        CHECK(cell.u1 < static_cast<f32>(at.x + at.w) / ElementAura::kWidth);
+        CHECK(cell.v0 > static_cast<f32>(at.y) / ElementAura::kHeight);
+        CHECK(cell.v1 < static_cast<f32>(at.y + at.h) / ElementAura::kHeight);
+        for (const Sprite other : kAll) {
+            if (other == sprite) {
+                continue;
+            }
+            const auto b = ElementAura::place(other);
+            const bool apart = at.x + at.w < b.x || b.x + b.w < at.x || at.y + at.h < b.y ||
+                               b.y + b.h < at.y;
+            CHECK(apart);
+        }
+    }
+    CHECK(ElementAura::flame(0) == Sprite::Flame0);
+    CHECK(ElementAura::flame(3) == Sprite::Flame3);
+    CHECK(ElementAura::flame(5) == Sprite::Flame1);
 }
 
-TEST_CASE("the glow sprite is a soft white disc, premultiplied and clear at its corners",
+TEST_CASE("each sprite has its shape: glow, ring, streak, beam, flames, glint and drop",
           "[game][effects][aggression][elemental]") {
-    const u32 size = ElementAura::kSpriteSize;
-    const std::vector<u8> pixels = ElementAura::glowPixels(size);
-    REQUIRE(pixels.size() == static_cast<usize>(size) * size * 4);
-    const auto alphaAt = [&](u32 x, u32 y) { return pixels[(y * size + x) * 4 + 3]; };
-    CHECK(alphaAt(size / 2, size / 2) >= 250);
-    CHECK(alphaAt(size / 2 - 1, size / 2 - 1) >= 250);
-    CHECK(alphaAt(0, 0) == 0);
-    CHECK(alphaAt(size - 1, size - 1) == 0);
-    CHECK(alphaAt(0, size - 1) == 0);
-    // Softer with every step from the centre to the rim, and still there halfway out.
-    u8 last = 255;
-    for (u32 x = size / 2; x < size; ++x) {
-        CHECK(alphaAt(x, size / 2) <= last);
-        last = alphaAt(x, size / 2);
+    const Atlas atlas;
+    // The glow: full at the centre, nothing at the corners.
+    CHECK(atlas.alpha(Sprite::Glow, 16, 16) >= 250);
+    CHECK(atlas.alpha(Sprite::Glow, 0, 0) == 0);
+    CHECK(atlas.alpha(Sprite::Glow, 31, 31) == 0);
+    // The ring: clear within, bright near the rim, nothing at the corners.
+    CHECK(atlas.alpha(Sprite::Ring, 16, 16) < 20);
+    CHECK(atlas.alpha(Sprite::Ring, 16, 4) >= 180);
+    CHECK(atlas.alpha(Sprite::Ring, 0, 0) == 0);
+    // The streak: bright at its base, gone at its tip and above its base.
+    CHECK(atlas.alpha(Sprite::Streak, 1, 8) >= 200);
+    CHECK(atlas.alpha(Sprite::Streak, 62, 8) <= 30);
+    CHECK(atlas.alpha(Sprite::Streak, 1, 0) <= 10);
+    // The beam: bright down its middle, gone at its edges.
+    CHECK(atlas.alpha(Sprite::Beam, 8, 16) >= 240);
+    CHECK(atlas.alpha(Sprite::Beam, 8, 0) <= 30);
+    CHECK(atlas.alpha(Sprite::Beam, 8, 31) <= 30);
+    // The flames: full and warm low in the middle, clear at every corner, each its own.
+    for (u32 frame = 0; frame < ElementAura::kFlames; ++frame) {
+        CAPTURE(frame);
+        const Sprite sprite = ElementAura::flame(frame);
+        CHECK(atlas.alpha(sprite, 16, 36) >= 200);
+        const auto core = atlas.rgb(sprite, 16, 36);
+        CHECK(core[0] >= core[1]);
+        CHECK(core[1] >= core[2]);
+        CHECK(core[0] > core[2] + 40);
+        CHECK(atlas.alpha(sprite, 1, 1) == 0);
+        CHECK(atlas.alpha(sprite, 30, 1) == 0);
+        CHECK(atlas.alpha(sprite, 1, 46) == 0);
+        CHECK(atlas.alpha(sprite, 30, 46) == 0);
+        for (u32 other = 0; other < frame; ++other) {
+            bool differs = false;
+            for (u32 y = 0; y < 48 && !differs; ++y) {
+                for (u32 x = 0; x < 32 && !differs; ++x) {
+                    differs = atlas.alpha(sprite, x, y) !=
+                              atlas.alpha(ElementAura::flame(other), x, y);
+                }
+            }
+            CHECK(differs);
+        }
     }
-    CHECK(alphaAt(size * 3 / 4, size / 2) > 0);
-    CHECK(alphaAt(size * 3 / 4, size / 2) < 250);
-    CHECK(alphaAt(size - 1, size / 2) < 10);
-    for (usize i = 0; i < pixels.size(); i += 4) {
-        REQUIRE(pixels[i] == pixels[i + 3]); // premultiplied: the colour is the coverage
-        REQUIRE(pixels[i + 1] == pixels[i + 3]);
-        REQUIRE(pixels[i + 2] == pixels[i + 3]);
-    }
-    CHECK(ElementAura::glowPixels(0).empty());
+    // The glint: full at the centre, brighter along its arms than between them.
+    CHECK(atlas.alpha(Sprite::Glint, 16, 16) >= 240);
+    CHECK(atlas.alpha(Sprite::Glint, 26, 16) > atlas.alpha(Sprite::Glint, 23, 23));
+    CHECK(atlas.alpha(Sprite::Glint, 0, 0) == 0);
+    // The drop: round and full above, pointed to nothing below.
+    CHECK(atlas.alpha(Sprite::Drop, 8, 8) >= 200);
+    CHECK(atlas.alpha(Sprite::Drop, 1, 30) == 0);
+    CHECK(atlas.alpha(Sprite::Drop, 14, 30) == 0);
+    CHECK(atlas.alpha(Sprite::Drop, 8, 31) <= 40);
 }
 
-TEST_CASE("an aura over the sprite of its own births motes and draws them additive",
+TEST_CASE("the aura atlas goes onto the device once and again after a release",
           "[game][effects][aggression][elemental]") {
     test::FakeRenderDevice device;
     ElementAura aura;
-    const Texture* sprite = aura.sprite(device);
-    REQUIRE(sprite != nullptr);
-    CHECK(aura.sprite(device) == sprite); // made once
+    const Texture* atlas = aura.texture(device);
+    REQUIRE(atlas != nullptr);
+    CHECK(aura.texture(device) == atlas);
     CHECK(device.texturesCreated == 1);
-    CHECK(device.lastTextureDesc.width == ElementAura::kSpriteSize);
-    ItemArchive weapons; // unloaded: the aura borrows nothing from it
-    for (s32 element = 1; element <= ElementAura::kElements; ++element) {
-        CAPTURE(element);
-        EffectTrees effects;
-        const u32 id = effects.startParticles(
-            weapons, ElementAura::descriptor(element, 1.5f, 9.0f), *sprite, Mat4{1.0f});
-        REQUIRE(id != 0);
-        for (s32 frame = 0; frame < 60; ++frame) {
-            effects.update(1.0f / 30.0f);
-        }
-        CHECK(effects.playing(id)); // endless
-        CHECK(effects.count() == 1);
-        // Its motes are drawn: additive quads over the glow, no depth written.
-        device.draws.clear();
-        const CameraFrame camera = CameraFrame::at(Vec3{0.0f, 5.0f, -30.0f});
-        effects.draw(device, Mat4{1.0f}, {}, &camera);
-        usize motes = 0;
-        std::string drawn;
-        u8 brightest = 0;
-        u8 mostOpaque = 0;
-        for (const auto& draw : device.draws) {
-            motes += draw.vertices.size() / 6;
-            drawn += std::format("[{} verts, blend {}] ", draw.vertices.size(),
-                                 static_cast<int>(draw.blend()));
-            CHECK(draw.blend() == BlendMode::Additive);
-            CHECK(draw.texture == sprite);
-            CHECK_FALSE(draw.state.depthWrite);
-            for (const ImmediateVertex& vertex : draw.vertices) {
-                brightest = std::max({brightest, vertex.color.r, vertex.color.g, vertex.color.b});
-                mostOpaque = std::max(mostOpaque, vertex.color.a);
-            }
-        }
-        CAPTURE(drawn);
-        CHECK(motes > 0);
-        // Bright and opaque enough to pass the alpha test and show: colours are 0 to 255.
-        CHECK(brightest >= 200);
-        CHECK(mostOpaque >= 200);
-        CHECK(motes <= ElementAura::kMostParticles);
-        effects.stop(id);
-        CHECK_FALSE(effects.playing(id));
-        effects.clear();
-    }
+    CHECK(device.lastTextureDesc.width == ElementAura::kWidth);
+    CHECK(device.lastTextureDesc.height == ElementAura::kHeight);
     aura.release();
-    CHECK(aura.sprite(device) != nullptr); // made anew after a release
+    CHECK(aura.texture(device) != nullptr);
     CHECK(device.texturesCreated == 2);
 }
 

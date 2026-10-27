@@ -659,6 +659,7 @@ private:
     MechanicsFacade m_mechanics; ///< the additive mechanics' settings for this level
     StreakMeter m_streakMeter;   ///< presentation only, never simulation state
     std::optional<std::chrono::steady_clock::time_point> m_streakFrame;
+    std::optional<std::chrono::steady_clock::time_point> m_auraFrame; ///< the elemental show's
     u8 m_localSeats = 0xF;
     const Texture* m_glowSheet = nullptr; ///< FONT32's glow, borrowed from the static set
     const Texture* m_runeFrame = nullptr;

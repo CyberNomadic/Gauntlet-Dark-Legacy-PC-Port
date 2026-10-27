@@ -3797,7 +3797,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-TEST_CASE("the level marks each elemental one with its aura while it lives",
+TEST_CASE("the level shows each elemental one its aura while it lives",
           "[level-opponents][streak][aggression][elemental][assets]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELH1/WORLDS.PS2").parent_path().parent_path().parent_path();
@@ -3839,30 +3839,24 @@ TEST_CASE("the level marks each elemental one with its aura while it lives",
     REQUIRE(id.has_value());
     const s32 element = opponents.enemies().elementOf(*id);
     REQUIRE(element != 0);
-    CHECK(opponents.elementMarkCount() == 0);
-    const usize before = effects.count();
+    CHECK(opponents.elementalAuras() == 0);
     opponents.update(1, 1.0f / 60, players, {}, events);
-    CHECK(opponents.elementMarkCount() == 1);
-    CHECK(effects.count() > before); // its aura started
+    // The show follows the body frame by frame: presentation, never simulation state.
+    const CameraFrame camera = CameraFrame::at(spawn.position + Vec3{0.0f, 10.0f, -30.0f});
     for (s32 frame = 0; frame < 30; ++frame) {
         opponents.update(1, 1.0f / 30, players, {}, events);
-        effects.update(1.0f / 30);
+        device.draws.clear();
+        opponents.drawElementals(device, Mat4{1}, camera, 1.0f / 30);
     }
-    CHECK(opponents.elementMarkCount() == 1); // one mark a body, not one an update
-    // Its motes are drawn about where it stands, additive over the aura's own glow.
-    device.draws.clear();
-    const CameraFrame camera = CameraFrame::at(spawn.position + Vec3{0.0f, 10.0f, -30.0f});
-    effects.draw(device, Mat4{1}, {}, &camera);
-    usize motes = 0;
+    CHECK(opponents.elementalAuras() == 1);
+    REQUIRE_FALSE(device.draws.empty());
     u8 mostOpaque = 0;
     for (const auto& draw : device.draws) {
-        CHECK(draw.blend() == BlendMode::Additive);
-        motes += draw.vertices.size() / 6;
+        CHECK_FALSE(draw.state.depthWrite);
         for (const ImmediateVertex& vertex : draw.vertices) {
             mostOpaque = std::max(mostOpaque, vertex.color.a);
         }
     }
-    CHECK(motes > 0);
     CHECK(mostOpaque >= 200); // opaque enough for the alpha test: colours are 0 to 255
     // Slain by another element, it leaves its mark behind and its potion in a bag.
     const usize bags = opponents.bagCount();
@@ -3870,7 +3864,8 @@ TEST_CASE("the level marks each elemental one with its aura while it lives",
                           players);
     REQUIRE_FALSE(opponents.enemies().alive(*id));
     opponents.update(1, 1.0f / 60, players, {}, events);
-    CHECK(opponents.elementMarkCount() == 0);
+    opponents.drawElementals(device, Mat4{1}, camera, 1.0f / 30);
+    CHECK(opponents.elementalAuras() == 0);
     CHECK(opponents.bagCount() >= bags); // the bag's artwork is optional; the reward is not
     opponents.close();
 }

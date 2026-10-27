@@ -17,7 +17,7 @@
 #include "game/critters/CritterStatues.h"
 #include "game/critters/Critters.h"
 #include "game/effects/EffectTrees.h"
-#include "game/effects/ElementAura.h"
+#include "game/effects/ElementAuraShow.h"
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/enemies/Generators.h"
@@ -88,7 +88,11 @@ public:
     void setMechanics(const MechanicsFacade* mechanics) { m_mechanics = mechanics; }
     /** The swarm's answer to the party's run of close blows, as of the last update. */
     const SwarmAggression& aggression() const { return m_sim.aggression; }
-    usize elementMarkCount() const { return m_sim.elementMarks.size(); }
+    /** Draws the show on the elemental ones, `seconds` of presentation on from the last
+     * frame; it is never simulation state. */
+    void drawElementals(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
+                        f32 seconds);
+    usize elementalAuras() const { return m_auras.auras(); }
     usize bagCount() const { return m_sim.bags.size(); }
     /** The longest run of close blows under way among the players still in the party. */
     static s32 longestRun(std::span<const PlayerRuntime> players);
@@ -281,9 +285,6 @@ private:
     void releaseBag(const Bag& bag);
     /** Sends a bag up where it lies, to open where it lands. */
     void throwBag(Bag bag);
-    /** Keeps the aura on each elemental one, starting one for each found, stopping each
-     * whose body is gone. */
-    void markElementals();
     /** An elemental one slain leaves its element's potion in a bag. */
     void dropElementalPotion(const EnemyLoss& loss);
     /** A great one slain lets what it carried go, a gargoyle its piece of the wings if it
@@ -295,7 +296,7 @@ private:
     std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
     const MechanicsFacade* m_mechanics = nullptr; ///< never simulation state
-    ElementAura m_aura; ///< the elemental ones' glow sprite; never simulation state
+    ElementAuraShow m_auras; ///< the show on the elemental ones; never simulation state
     Generators m_generators;
     Critters m_critters;
     static constexpr usize kPlayerIds = 4;   ///< players are numbered 0 to 3
@@ -357,13 +358,6 @@ private:
         bool operator==(const GeneratorReward&) const = default;
     };
     /** Mutable coordinator state; archives, services and playback handles stay outside. */
-    /** The aura of one of Aggressor Mode's elemental ones, kept while it lives. */
-    struct ElementMark {
-        u64 instance = 0;
-        s32 enemy = -1;
-        u32 effect = 0; ///< 0 without the artwork; the mark is kept all the same
-        bool operator==(const ElementMark&) const = default;
-    };
     struct Simulation {
         std::vector<Cloud> clouds;
         std::vector<DeathShot> deathShots;
@@ -394,7 +388,6 @@ private:
         std::array<bool, 4> unseen{};
         std::vector<LevelEnemy> borrowedRoster;
         SwarmAggression aggression; ///< the swarm's answer to the party's run of close blows
-        std::vector<ElementMark> elementMarks;
         bool operator==(const Simulation&) const = default;
     };
 

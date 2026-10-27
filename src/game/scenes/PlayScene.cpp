@@ -305,6 +305,7 @@ void PlayScene::close() {
     m_names.clear(); // before the static sheet its font borrows
     m_streakMeter.clear();
     m_streakFrame.reset();
+    m_auraFrame.reset();
     m_glowSheet = nullptr;
     m_localSeats = 0xF;
     m_staticTextures.releaseTextures();
@@ -1743,6 +1744,14 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // A fence blended over it instead makes even a nearer ghost appear behind the fence.
     m_opponents.enemies().draw(device, clip, m_world->lighting(), m_figures.hitFlash(), &m_weapons,
                                &effectCamera, opponentBlend, TreeModel::Pass::Effects);
+    // The elemental show runs on frames, not ticks: presentation, never replayed.
+    const auto auraNow = std::chrono::steady_clock::now();
+    const f32 auraSeconds =
+        m_auraFrame.has_value() && !optionsOpen
+            ? std::min(std::chrono::duration<f32>(auraNow - *m_auraFrame).count(), 0.1f)
+            : 0.0f;
+    m_auraFrame = auraNow;
+    m_opponents.drawElementals(device, clip, effectCamera, auraSeconds);
     m_portals.draw(device, clip, m_world->lighting(), &effectCamera, TreeModel::Pass::Effects);
     m_fixtures.drawEffects(device, clip, m_world->lighting(), &effectCamera, effectBlend);
     PartyFigures::drawEffects(device, m_players, figureScene(frameBlend), clip, effectCamera);
