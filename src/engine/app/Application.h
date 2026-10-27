@@ -2,11 +2,13 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 
 #include "engine/core/Clock.h"
 #include "engine/core/SpecialMembers.h"
 #include "engine/core/Types.h"
 #include "engine/platform/Input.h"
+#include "engine/platform/DisplayTiming.h"
 #include "engine/platform/Window.h"
 #include "engine/render/RenderDevice.h"
 
@@ -25,6 +27,15 @@ struct ApplicationDesc {
     bool threadedPresentation = false; ///< keep online ticks independent of GPU/present waits
 };
 
+/** A frame whose work ran past the spike threshold: its phases, for a line in the log. */
+struct FrameSpike {
+    FrameTimingSample timing;
+    f64 busyMilliseconds = 0;      ///< from the frame's start to its work's end, no sleep
+    f64 thresholdMilliseconds = 0; ///< what it ran past
+    u64 frame = 0;                 ///< the frames rendered so far
+    std::string describe() const;
+};
+
 /** Owns the window, the render device and the frame loop. Subclass and override the hooks. */
 class Application {
 public:
@@ -41,6 +52,8 @@ protected:
     virtual void onUpdate(f64 /*deltaSeconds*/) {}
     virtual void onRender(RenderDevice& /*device*/) {}
     virtual void onShutdown() {}
+    /** A frame whose work ran past the spike threshold; the default logs its phases. */
+    virtual void onFrameSpike(const FrameSpike& spike);
 
     Window& window() { return *m_window; }
     RenderDevice& renderDevice() { return *m_device; }
@@ -63,6 +76,10 @@ protected:
      * A request during onUpdate ends the old-rate batch after that callback. */
     void setUpdateRate(u32 rate);
     u32 updateRate() const { return m_desc.updateRate; }
+    /** Frames whose work runs past this are reported through `onFrameSpike`; none follows
+     * the display at three frame budgets, 0 reports nothing. `GDL_SPIKE_MS` sets it at start. */
+    void setSpikeThreshold(const SpikeThreshold& threshold) { m_spikeThreshold = threshold; }
+    const SpikeThreshold& spikeThreshold() const { return m_spikeThreshold; }
 
 private:
     void checkAssetDirectory() const;
@@ -75,6 +92,7 @@ private:
     Input m_updateInput;
     f64 m_renderDelta = 0;
     u64 m_renderedFrames = 0;
+    SpikeThreshold m_spikeThreshold;
     bool m_quitRequested = false;
 };
 

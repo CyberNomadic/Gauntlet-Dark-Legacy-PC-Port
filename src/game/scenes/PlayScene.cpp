@@ -470,6 +470,22 @@ void PlayScene::drawStreakMeter() {
     m_streakMeter.draw(m_canvas, m_messages.text(), m_glowSheet, m_context.strings);
 }
 
+std::string PlayScene::spikeReport() const {
+    if (!m_open) {
+        return {};
+    }
+    const Enemies& enemies = m_opponents.enemies();
+    const Generators& generators = m_opponents.generators();
+    const SwarmAggression& aggression = m_opponents.aggression();
+    return std::format(" | enemies {}/{} seen of {} slots, aura on {}, huts frenzied {} births "
+                       "tried {}, missiles {}+{}, strikes {}, effects {}, heat {:.2f} rage {:.2f}",
+                       enemies.count(), enemies.inView(), enemies.most(), enemies.auraBodies(),
+                       generators.frenziedHuts(), generators.birthsTried(),
+                       m_opponents.missiles().count(), m_arsenal.missiles().count(),
+                       m_attacks.strikes().count(), m_effects.count(), aggression.heat,
+                       aggression.rage);
+}
+
 PartyPickups::Services PlayScene::pickupServices() {
     return {.world = *m_world,
             .fixtures = m_fixtures,

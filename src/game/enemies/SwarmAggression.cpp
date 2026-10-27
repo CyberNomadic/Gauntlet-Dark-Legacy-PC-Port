@@ -14,11 +14,16 @@ void SwarmAggression::step(f32 seconds, s32 run) {
     if (!(seconds > 0.0f)) {
         return;
     }
-    const f32 target = static_cast<f32>(std::max(run, 0)) / static_cast<f32>(kFullRun);
+    // The run over, the swarm is itself again at once.
+    if (run <= 0) {
+        heat = 0.0f;
+        rage = 0.0f;
+        return;
+    }
+    const f32 target = static_cast<f32>(run) / static_cast<f32>(kFullRun);
     heat = target > heat ? std::min(target, heat + kRise * seconds)
                          : std::max(target, heat - kCool * seconds);
-    rage = run >= kFullRun ? std::min(kMostMeasure, rage + seconds / kRageSeconds)
-                           : std::max(0.0f, rage - seconds / kCalmSeconds);
+    rage = run >= kFullRun ? std::min(kMostMeasure, rage + seconds / kRageSeconds) : 0.0f;
     heat = std::min(heat, kMostMeasure);
 }
 

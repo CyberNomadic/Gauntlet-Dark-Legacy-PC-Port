@@ -428,6 +428,8 @@ public:
      * Presentation only; every seat until told otherwise. */
     void setLocalSeats(u8 mask) { m_localSeats = mask; }
     const StreakMeter& streakMeter() const { return m_streakMeter; }
+    /** What the level is doing, for a frame spike's line in the log. */
+    std::string spikeReport() const;
     /** Looks through `camera` instead of the level's own, for the developer console's free
      * camera; nothing gives the level's back. Either change cuts rather than glides. */
     void setViewOverride(const std::optional<WorldCamera>& camera);

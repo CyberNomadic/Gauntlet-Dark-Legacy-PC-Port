@@ -267,6 +267,8 @@ public:
      * and past the bravery line red with an aura. Set before each step; not kept. */
     void setAggression(const SwarmAggression& aggression) { m_aggression = aggression; }
     const SwarmAggression& aggression() const { return m_aggression; }
+    /** The bodies the last draw marked with the rage's aura, for the log. */
+    s32 auraBodies() const { return m_auraBodies; }
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): shown and
      * shadowed at it, taking double and dealing half while under one. */
     void setShrink(f32 scale) { m_simulation.shrink = scale; }
@@ -673,6 +675,7 @@ private:
     Figure bodyOf(const Enemy& enemy);
     Figure bodyOf(const Appearance& appearance);
     SwarmAggression m_aggression;                    ///< this step's, from the simulation
+    s32 m_auraBodies = 0;                            ///< of the last draw, for the log
     s32 m_highlightedId = -1;                        ///< the developer console's selection
     const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     void move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& step,

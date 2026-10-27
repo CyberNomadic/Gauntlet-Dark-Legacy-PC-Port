@@ -1019,6 +1019,8 @@ void Generators::applyBroodEvents(Enemies& enemies) {
 void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> players,
                         std::span<const Obstacle> obstacles, bool timeStopped) {
     syncFloors();
+    m_frenziedHuts = 0;
+    m_birthsTried = 0;
     if (ticks <= 0) {
         return;
     }
@@ -1069,6 +1071,7 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
             static_cast<s32>(static_cast<f32>(generator.most) * m_aggression.broodScale());
         const bool frenzied = m_aggression.frenzied() &&
                               nearestPlayer(generator.position) <= SwarmAggression::kFrenzyReach;
+        m_frenziedHuts += frenzied ? 1 : 0;
         if (patrol ? generator.living > 0
                    : generator.most <= 0 || (!frenzied && generator.living >= quota)) {
             continue;
@@ -1122,6 +1125,7 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
                 birthObstacles.push_back(m_sim.generators[other].box);
             }
         }
+        ++m_birthsTried;
         const auto child = enemies.spawn(spawn, players, birthObstacles);
         // Recycled slots release their previous generator even when birth fails.
         applyBroodEvents(enemies);

@@ -118,6 +118,35 @@ void Gauntlet::setUpConsole() {
                          [this](DevConsole& console, DevConsole::Arguments /*arguments*/) {
                              consoleNoclip(console);
                          });
+    m_console.addCommand("spikes",
+                         "logs frames whose work runs past a threshold: spikes [ms|auto|off]",
+                         [this](DevConsole& console, DevConsole::Arguments arguments) {
+                             consoleSpikes(console, arguments);
+                         });
+}
+
+void Gauntlet::consoleSpikes(DevConsole& console, DevConsole::Arguments arguments) {
+    if (arguments.empty()) {
+        console.print(std::format("Spike threshold: {}", spikeThreshold().describe()));
+        return;
+    }
+    const auto threshold = arguments.size() == 1 ? SpikeThreshold::parse(arguments[0])
+                                                 : std::nullopt;
+    if (!threshold.has_value()) {
+        console.print("Usage: spikes <milliseconds>, spikes auto or spikes off");
+        return;
+    }
+    setSpikeThreshold(*threshold);
+    console.print(std::format("Spike threshold: {}", threshold->describe()));
+}
+
+void Gauntlet::onFrameSpike(const FrameSpike& spike) {
+    std::string line = spike.describe();
+    if (const PlayScene* scene = consoleScene(); scene != nullptr) {
+        line += scene->spikeReport();
+    }
+    log::warn("{}", line);
+    m_console.print(line);
 }
 
 const PlayScene* Gauntlet::consoleScene() const {

@@ -3026,6 +3026,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
                      SelectionHighlight::kRimWidth * (1.0f + 0.6f * aura * beat));
     }
     const Color tint = m_aggression.tint();
+    m_auraBodies = 0;
     for (s32 i = 0; i < m_simulation.most; ++i) {
         const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state == State::Inactive || !enemy.animator.bound() ||
@@ -3101,6 +3102,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         const SelectionHighlight* mark = i == m_highlightedId ? m_highlight : nullptr;
         if (mark == nullptr && rage.has_value() && !enemy.killed && enemy.kind != kDeathKind) {
             mark = &*rage;
+            ++m_auraBodies;
         }
         body.setHighlight(mark);
         if (enemy.kind == kDeathKind && enemy.state == State::Asleep) {

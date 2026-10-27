@@ -3779,15 +3779,14 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
           Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.02f));
     CHECK(opponents.enemies().aggression() == opponents.aggression());
     CHECK(opponents.enemies().most() == Enemies::kMost); // the frenzy opened the whole pool
-    // The run over, the swarm cools.
+    // The run over, the swarm is itself again on the next tick.
     players[1].streak.step(MeleeStreak::kQuiet + 0.5f);
     players[0].streak.step(MeleeStreak::kQuiet + 0.5f);
     CHECK(LevelOpponents::longestRun(players) == 0);
-    for (s32 frame = 0; frame < 60; ++frame) {
-        opponents.update(1, 1.0f / 60, players, {}, events);
-    }
-    CHECK(opponents.aggression().heat == Approx(1.0f - SwarmAggression::kCool).margin(0.02f));
+    opponents.update(1, 1.0f / 60, players, {}, events);
+    CHECK(opponents.aggression().heat == 0.0f);
     CHECK(opponents.aggression().rage == 0.0f);
+    CHECK(opponents.enemies().aggression() == opponents.aggression());
     opponents.close();
 }
 

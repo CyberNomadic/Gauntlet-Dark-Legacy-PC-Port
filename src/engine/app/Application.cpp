@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <format>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -19,6 +20,18 @@ namespace {
 bool frameTimingEnabled() {
     const char* value = std::getenv("GDL_FRAME_TIMING");
     return value != nullptr && std::string_view(value) == "1";
+}
+
+std::optional<SpikeThreshold> spikeThresholdFromEnvironment() {
+    const char* value = std::getenv("GDL_SPIKE_MS");
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    const auto parsed = SpikeThreshold::parse(value);
+    if (!parsed.has_value()) {
+        log::warn("GDL_SPIKE_MS={} is not off, auto or a number of milliseconds", value);
+    }
+    return parsed;
 }
 
 void reportFrameTiming(const FrameTimingTotals& totals, u32 frameRate) {
@@ -43,6 +56,22 @@ void reportFrameTiming(const FrameTimingTotals& totals, u32 frameRate) {
 Application::Application(ApplicationDesc desc) : m_desc(std::move(desc)) {}
 
 Application::~Application() = default;
+
+std::string FrameSpike::describe() const {
+    using Phase = FrameTimingPhase;
+    const auto ms = [this](Phase phase) {
+        return timing.milliseconds[static_cast<usize>(phase)];
+    };
+    return std::format("Frame spike: {:.1f} ms of work past {:.1f} at frame {}: poll {:.1f} "
+                       "update {:.1f} ({} ticks) acquire {:.1f} render {:.1f} present {:.1f}",
+                       busyMilliseconds, thresholdMilliseconds, frame, ms(Phase::Poll),
+                       ms(Phase::Update), timing.updates, ms(Phase::Acquire), ms(Phase::Render),
+                       ms(Phase::Present));
+}
+
+void Application::onFrameSpike(const FrameSpike& spike) {
+    log::warn("{}", spike.describe());
+}
 
 void Application::setUpdateRate(u32 rate) {
     if (rate != m_desc.updateRate) {
@@ -71,6 +100,9 @@ s32 Application::run() {
         }
 
         checkAssetDirectory();
+        if (const auto threshold = spikeThresholdFromEnvironment()) {
+            m_spikeThreshold = *threshold;
+        }
         onInit();
         u32 lastFrameRate = 0;
         FramePacer framePacer;
@@ -84,8 +116,12 @@ s32 Application::run() {
             const auto frameStart = std::chrono::steady_clock::now();
             auto mark = frameStart;
             FrameTimingSample timing;
+            // The spike tracer measures too: a few clock reads a frame, reported only when
+            // a frame's work runs past its threshold.
+            const bool traceSpikes =
+                m_spikeThreshold.at(lastFrameRate != 0 ? lastFrameRate : 60) > 0;
             const auto measure = [&](FrameTimingPhase phase) {
-                if (measureFrames) {
+                if (measureFrames || traceSpikes) {
                     const auto now = std::chrono::steady_clock::now();
                     timing.measure(phase, mark, now);
                     mark = now;
@@ -142,6 +178,14 @@ s32 Application::run() {
                 lastFrameRate = frameRate;
             }
             const auto frameFinished = std::chrono::steady_clock::now();
+            if (traceSpikes) {
+                const f64 busy =
+                    std::chrono::duration<f64, std::milli>(frameFinished - frameStart).count();
+                const f64 threshold = m_spikeThreshold.at(frameRate);
+                if (threshold > 0 && busy > threshold) {
+                    onFrameSpike({timing, busy, threshold, m_renderedFrames});
+                }
+            }
             // Rendering at 30 Hz must not batch 60 Hz online input/network ticks in pairs.
             // A busy or minimized renderer still polls and services the session normally.
             const u32 loopRate =

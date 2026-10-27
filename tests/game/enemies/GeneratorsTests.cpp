@@ -2186,6 +2186,8 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     }
     generators.update(kTicks, enemies, party);
     REQUIRE(generators.livingOf(0) == 10);
+    CHECK(generators.frenziedHuts() == 0);
+    CHECK(generators.birthsTried() == 0);
     SwarmAggression frenzied;
     frenzied.heat = 1.0f;
     frenzied.rage = 1.0f;
@@ -2198,6 +2200,8 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     generators.update(kTicks, enemies, party);
     CHECK(generators.bredOf(0) == 3);
     CHECK(generators.countdownOf(0) == SwarmAggression::kFrenzyTicks);
+    CHECK(generators.frenziedHuts() == 1); // for the spike tracer's line
+    CHECK(generators.birthsTried() == 1);
     // A grunt hut has three exits, and three children stand in them: two seconds of
     // walking toward the party clears them.
     for (s32 frame = 0; frame < 60; ++frame) {

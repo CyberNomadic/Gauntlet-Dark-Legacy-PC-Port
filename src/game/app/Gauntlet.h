@@ -62,6 +62,7 @@ protected:
     void onUpdate(f64 deltaSeconds) override;
     void onRender(RenderDevice& device) override;
     void onShutdown() override;
+    void onFrameSpike(const FrameSpike& spike) override;
 
 private:
     bool startMovie(std::string_view name);
@@ -114,6 +115,7 @@ private:
     void consoleHideHud(DevConsole& console);
     void consoleFreeCam(DevConsole& console);
     void consoleNoclip(DevConsole& console);
+    void consoleSpikes(DevConsole& console, DevConsole::Arguments arguments);
     /** Picks what stands under `cursor` in the view for the console, or lets the selection
      * go without one; the console's $SELECTED follows. */
     void consoleSelect(std::optional<Vec2> cursor);
