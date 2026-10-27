@@ -3854,11 +3854,16 @@ TEST_CASE("the level marks each elemental one with its aura while it lives",
     const CameraFrame camera = CameraFrame::at(spawn.position + Vec3{0.0f, 10.0f, -30.0f});
     effects.draw(device, Mat4{1}, {}, &camera);
     usize motes = 0;
+    u8 mostOpaque = 0;
     for (const auto& draw : device.draws) {
         CHECK(draw.blend() == BlendMode::Additive);
         motes += draw.vertices.size() / 6;
+        for (const ImmediateVertex& vertex : draw.vertices) {
+            mostOpaque = std::max(mostOpaque, vertex.color.a);
+        }
     }
     CHECK(motes > 0);
+    CHECK(mostOpaque >= 200); // opaque enough for the alpha test: colours are 0 to 255
     // Slain by another element, it leaves its mark behind and its potion in a bag.
     const usize bags = opponents.bagCount();
     opponents.strikeEnemy(*id, 1.0e6f, static_cast<u32>(element % 4 + 1), Vec3{0, 0, 1}, 0,

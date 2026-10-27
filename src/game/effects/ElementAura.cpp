@@ -23,6 +23,11 @@ constexpr ParticleEnvelope over(f32 start, f32 end, f32 gone) {
     return {start, end, end, gone};
 }
 
+/** A colour lane the same way, from shares of one: the descriptor's colours run 0 to 255. */
+constexpr ParticleEnvelope shade(f32 start, f32 end, f32 gone) {
+    return over(255.0f * start, 255.0f * end, 255.0f * gone);
+}
+
 } // namespace
 
 std::vector<u8> ElementAura::glowPixels(u32 size) {
@@ -94,10 +99,10 @@ ParticleDescriptor ElementAura::descriptor(s32 element, f32 radius, f32 height) 
         d.particleFade = frames(0.3f);
         perSecond(36.0f);
         d.width = over(1.6f, 1.0f, 0.2f);
-        d.red = over(1.0f, 1.0f, 0.8f);
-        d.green = over(0.65f, 0.25f, 0.0f);
-        d.blue = over(0.1f, 0.0f, 0.0f);
-        d.alpha = over(1.0f, 0.7f, 0.0f);
+        d.red = shade(1.0f, 1.0f, 0.8f);
+        d.green = shade(0.65f, 0.25f, 0.0f);
+        d.blue = shade(0.1f, 0.0f, 0.0f);
+        d.alpha = shade(1.0f, 0.7f, 0.0f);
         break;
     case 2: // electric: sparks fly every way and are gone in a blink
         d.angle = ParticleDescriptor::kSphere;
@@ -107,10 +112,10 @@ ParticleDescriptor ElementAura::descriptor(s32 element, f32 radius, f32 height) 
         d.particleFade = frames(0.15f);
         perSecond(48.0f);
         d.width = over(1.2f, 0.8f, 0.2f);
-        d.red = over(0.7f, 0.3f, 0.1f);
-        d.green = over(0.85f, 0.5f, 0.2f);
-        d.blue = over(1.0f, 1.0f, 1.0f);
-        d.alpha = over(1.0f, 0.8f, 0.0f);
+        d.red = shade(0.7f, 0.3f, 0.1f);
+        d.green = shade(0.85f, 0.5f, 0.2f);
+        d.blue = shade(1.0f, 1.0f, 1.0f);
+        d.alpha = shade(1.0f, 0.8f, 0.0f);
         break;
     case 3: // light: motes drift up, large and slow
         d.direction = Vec3{0.0f, 1.0f, 0.0f};
@@ -120,10 +125,10 @@ ParticleDescriptor ElementAura::descriptor(s32 element, f32 radius, f32 height) 
         d.particleFade = frames(0.5f);
         perSecond(18.0f);
         d.width = over(2.6f, 1.8f, 0.6f);
-        d.red = over(1.0f, 1.0f, 1.0f);
-        d.green = over(1.0f, 0.9f, 0.7f);
-        d.blue = over(0.6f, 0.3f, 0.1f);
-        d.alpha = over(0.9f, 0.6f, 0.0f);
+        d.red = shade(1.0f, 1.0f, 1.0f);
+        d.green = shade(1.0f, 0.9f, 0.7f);
+        d.blue = shade(0.6f, 0.3f, 0.1f);
+        d.alpha = shade(0.9f, 0.6f, 0.0f);
         break;
     default: // acid: drips fall green and pool
         d.direction = Vec3{0.0f, -1.0f, 0.0f};
@@ -134,10 +139,10 @@ ParticleDescriptor ElementAura::descriptor(s32 element, f32 radius, f32 height) 
         d.particleFade = frames(0.3f);
         perSecond(30.0f);
         d.width = over(1.4f, 1.0f, 0.3f);
-        d.red = over(0.4f, 0.2f, 0.0f);
-        d.green = over(1.0f, 0.8f, 0.4f);
-        d.blue = over(0.2f, 0.1f, 0.0f);
-        d.alpha = over(1.0f, 0.8f, 0.0f);
+        d.red = shade(0.4f, 0.2f, 0.0f);
+        d.green = shade(1.0f, 0.8f, 0.4f);
+        d.blue = shade(0.2f, 0.1f, 0.0f);
+        d.alpha = shade(1.0f, 0.8f, 0.0f);
         break;
     }
     return d;

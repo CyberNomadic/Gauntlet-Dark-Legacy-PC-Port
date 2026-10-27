@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -35,7 +36,8 @@ TEST_CASE("each element's aura is endless, born wide of its body and keeps its o
         CHECK(d.speed > 0.0f);
         CHECK(d.texture == ElementAura::kSpriteName);
         CHECK(d.width.lifeStart >= 1.0f); // a mote at least a unit wide at birth, to be seen
-        CHECK(d.alpha.fadeEnd == 0.0f);   // every mote fades to nothing
+        CHECK(d.alpha.lifeStart >= 200.0f); // colours run 0 to 255; a share of one is unseen
+        CHECK(d.alpha.fadeEnd == 0.0f);     // every mote fades to nothing
     }
     // Fire's embers rise and redden; acid's drips fall green; electric's sparks fly every way;
     // light's motes drift up, the largest and slowest.
@@ -45,7 +47,7 @@ TEST_CASE("each element's aura is endless, born wide of its body and keeps its o
     const auto acid = ElementAura::descriptor(4, 1.0f, 6.0f);
     CHECK(fire.direction.y > 0.0f);
     CHECK(fire.gravity > 0.0f);
-    CHECK(fire.red.lifeStart == 1.0f);
+    CHECK(fire.red.lifeStart == 255.0f);
     CHECK(fire.green.lifeEnd < fire.green.lifeStart);
     CHECK(acid.direction.y < 0.0f);
     CHECK(acid.gravity < 0.0f);
@@ -53,7 +55,7 @@ TEST_CASE("each element's aura is endless, born wide of its body and keeps its o
     CHECK(electric.angle == ParticleDescriptor::kSphere);
     CHECK(electric.speed > fire.speed);
     CHECK(electric.particleLife < fire.particleLife);
-    CHECK(electric.blue.lifeStart == 1.0f);
+    CHECK(electric.blue.lifeStart == 255.0f);
     CHECK(light.width.lifeStart > fire.width.lifeStart);
     CHECK(light.speed < fire.speed);
     CHECK(light.particleLife > fire.particleLife);
@@ -118,6 +120,8 @@ TEST_CASE("an aura over the sprite of its own births motes and draws them additi
         effects.draw(device, Mat4{1.0f}, {}, &camera);
         usize motes = 0;
         std::string drawn;
+        u8 brightest = 0;
+        u8 mostOpaque = 0;
         for (const auto& draw : device.draws) {
             motes += draw.vertices.size() / 6;
             drawn += std::format("[{} verts, blend {}] ", draw.vertices.size(),
@@ -125,9 +129,16 @@ TEST_CASE("an aura over the sprite of its own births motes and draws them additi
             CHECK(draw.blend() == BlendMode::Additive);
             CHECK(draw.texture == sprite);
             CHECK_FALSE(draw.state.depthWrite);
+            for (const ImmediateVertex& vertex : draw.vertices) {
+                brightest = std::max({brightest, vertex.color.r, vertex.color.g, vertex.color.b});
+                mostOpaque = std::max(mostOpaque, vertex.color.a);
+            }
         }
         CAPTURE(drawn);
         CHECK(motes > 0);
+        // Bright and opaque enough to pass the alpha test and show: colours are 0 to 255.
+        CHECK(brightest >= 200);
+        CHECK(mostOpaque >= 200);
         CHECK(motes <= ElementAura::kMostParticles);
         effects.stop(id);
         CHECK_FALSE(effects.playing(id));
