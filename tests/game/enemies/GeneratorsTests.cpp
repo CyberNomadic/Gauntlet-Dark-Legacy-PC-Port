@@ -279,11 +279,12 @@ TEST_CASE("on-screen generators reclaim a full distant brood without offscreen s
     Generators generators;
     REQUIRE(generators.bind(device, layout, enemies, nullptr, {}, 1));
     const std::array party{EnemyView{.player = 0, .position = {0, 0, 30}}};
-    // Populate all 25 slots with live brood, not dying bodies or authored placements.
+    // Populate every slot with live brood, not dying bodies or authored placements, all
+    // of it behind the view that looks at the origin from twenty back.
     for (s32 i = 0; i < Enemies::kMost; ++i) {
         EnemySpawn spawn;
         spawn.generator = 0;
-        spawn.position = {200, 0, static_cast<f32>(i) * 10};
+        spawn.position = {200, 0, -static_cast<f32>(i) * 10};
         REQUIRE(enemies.spawn(spawn, party));
     }
     REQUIRE(enemies.count() == Enemies::kMost);

@@ -99,7 +99,7 @@ Enemies::Checkpoint varied() {
         body.state = static_cast<Enemies::State>(index % 4);
         body.kind = kGruntKind;
         body.tier = static_cast<s32>(index % 3) + 1;
-        body.algorithm = static_cast<s32>(index);
+        body.algorithm = static_cast<s32>(index % 32); // the ways stop at 31
         body.variant = 5;
         body.generator = 7;
         body.bred = true;
@@ -200,7 +200,7 @@ TEST_CASE("enemy pool wire preserves every slot field queue clock and all three 
     // Pin little-endian version, fixed native slot count, MT words and a full
     // 64-bit lifetime counter independently of the decoder under test.
     CHECK(std::vector<u8>(encoded->begin(), encoded->begin() + 8) ==
-          std::vector<u8>{4, 0, 0, 0, 25, 0, 0, 0});
+          std::vector<u8>{4, 0, 0, 0, static_cast<u8>(Enemies::kMost), 0, 0, 0}); // the slots
     const auto random = RandomCheckpoint::encode(state.random);
     REQUIRE(random);
     CHECK(std::equal(random->begin(), random->end(), encoded->begin() + 8));
@@ -232,7 +232,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
           "[netplay][rollback][enemy-pool-codec]") {
     const auto plain = EnemyPoolCheckpoint::encode(Enemies::Checkpoint{});
     REQUIRE(plain);
-    CHECK(plain->size() == 11648);
+    CHECK(plain->size() == 2648 + 360 * static_cast<usize>(Enemies::kMost)); // 360 a slot
     constexpr usize kPool = 8 + RandomCheckpoint::kBytes;
     constexpr usize kView = kPool + 84;
     constexpr usize kStocks = kView + 4;

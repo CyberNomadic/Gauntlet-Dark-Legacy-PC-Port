@@ -235,7 +235,9 @@ s32 resolvedWayOf(s32 kind, s32 strength, s32 way, bool mirrored);
  */
 class Enemies {
 public:
-    static constexpr s32 kMost = 25;
+    /** The pool: the original's twenty-five and room past it for a frenzied swarm; a level
+     * opens with its own cap, `widenPool` lifts it to the whole. */
+    static constexpr s32 kMost = 64;
     static constexpr f32 kBaseSight = 30.0f;
     static constexpr f32 kMostPush = 40.0f;
     static constexpr f32 kPushDecay = 0.8f;

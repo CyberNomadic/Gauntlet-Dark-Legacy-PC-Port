@@ -141,7 +141,9 @@ TEST_CASE("native generator history rewinds broods quotas presence and linked en
         Generators::LocalSnapshot generators;
         Enemies::LocalSnapshot enemies;
     };
-    std::array<Frame, 16> history;
+    // Sixteen frames of the whole pool are too much for the stack: on the heap.
+    const auto frames = std::make_unique<std::array<Frame, 16>>();
+    auto& history = *frames;
     const auto step = [&](s32 tick, bool wrong) {
         pool.players[0].position = {wrong ? -80.0f : static_cast<f32>(tick % 13), 0, 25};
         pool.generators.setPlayerCount(wrong ? 4 : 1 + (tick / 23) % 2);

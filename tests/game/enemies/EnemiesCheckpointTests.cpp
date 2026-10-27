@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <chrono>
 #include <iostream>
 #include <limits>
@@ -418,9 +419,16 @@ TEST_CASE("local enemy rewind copies native state across every one to eight tick
     for (s32 tick = 0; tick < 20; ++tick) {
         pool.step(tick);
     }
-    std::array<Enemies::LocalSnapshot, 8> history;
-    std::array<Enemies::LocalSnapshot, 8> nativeExpected;
-    std::array<Enemies::Checkpoint, 8> expected;
+    // Three records of the whole pool are too much for the stack: on the heap.
+    struct Records {
+        std::array<Enemies::LocalSnapshot, 8> history;
+        std::array<Enemies::LocalSnapshot, 8> nativeExpected;
+        std::array<Enemies::Checkpoint, 8> expected;
+    };
+    const auto records = std::make_unique<Records>();
+    auto& history = records->history;
+    auto& nativeExpected = records->nativeExpected;
+    auto& expected = records->expected;
     for (s32 offset = 0; offset < 8; ++offset) {
         const auto index = static_cast<usize>(offset);
         REQUIRE(pool.enemies.saveLocal(history[index]));

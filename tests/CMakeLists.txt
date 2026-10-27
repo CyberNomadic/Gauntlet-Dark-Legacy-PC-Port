@@ -860,6 +860,11 @@ target_compile_definitions(tests PRIVATE
     GDL_TEST_DATA_DIR="${GDL_DATA_DIR}")
 
 gdl_apply_compiler_options(tests)
+# The enemy pool is tens of kilobytes a copy and the rewind tests hold many: MSVC's
+# megabyte of stack is not enough, where the other platforms' eight is.
+if(MSVC)
+    target_link_options(tests PRIVATE /STACK:16777216)
+endif()
 
 # Shares bin/ with the game so the compiled shaders and dependency DLLs are found.
 set_target_properties(tests PROPERTIES
