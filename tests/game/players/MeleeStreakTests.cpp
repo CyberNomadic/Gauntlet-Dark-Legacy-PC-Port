@@ -1,4 +1,3 @@
-#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Types.h"
@@ -8,7 +7,6 @@
 namespace {
 using namespace gdl;
 using namespace gdl::game;
-using Catch::Approx;
 
 TEST_CASE("a run of close blows earns the narrator's praise once it pauses",
           "[game][players][streak]") {
