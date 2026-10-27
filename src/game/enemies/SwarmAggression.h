@@ -10,9 +10,10 @@ namespace gdl::game {
 /**
  * The swarm's answer to a run of close blows: as the longest run under way grows, the
  * generators breed sooner and keep more out, and the swarm walks and swings quicker and is
- * born tougher; held at the bravery line, a rage sets in that darkens the swarm to red and
- * puts an aura about it. The heat climbs toward the run and cools once it is over, so
- * nothing jumps; the rage comes slowly and goes faster than it came. Native state.
+ * born tougher; held at the bravery line, a rage sets in that darkens the swarm to red,
+ * puts an aura about it and frenzies the generators near the party, which breed past any
+ * quota. The heat climbs toward the run and cools once it is over, so nothing jumps; the
+ * rage comes slowly and goes faster than it came. Native state.
  */
 struct SwarmAggression {
     static constexpr s32 kFullRun = MeleeStreak::kBravery; ///< the run the heat is full at
@@ -20,6 +21,7 @@ struct SwarmAggression {
     static constexpr f32 kCool = 0.2f;         ///< heat a second once the run is over
     static constexpr f32 kRageSeconds = 20.0f; ///< at the bravery line, seconds to full rage
     static constexpr f32 kCalmSeconds = 8.0f;  ///< below it, seconds from full rage to none
+    static constexpr f32 kFrenzyReach = 60.0f; ///< how near the party a frenzied hut stands
     /** What full heat and full rage add to each measure, as shares of the plain one. */
     static constexpr f32 kBreedingHeat = 1.2f;
     static constexpr f32 kBreedingRage = 0.4f;
@@ -60,6 +62,9 @@ struct SwarmAggression {
     Color tint() const;
     /** How strong the aura about the swarm is, 0 to 1. */
     f32 aura() const { return rage; }
+    /** Whether the generators within `kFrenzyReach` of a player breed past any quota: from
+     * the moment the run holds at the bravery line until the rage has gone. */
+    bool frenzied() const { return rage > 0.0f; }
 };
 
 } // namespace gdl::game

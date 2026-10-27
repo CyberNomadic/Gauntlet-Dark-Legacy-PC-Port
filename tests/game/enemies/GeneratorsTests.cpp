@@ -2156,11 +2156,10 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     REQUIRE(generators.livingOf(0) == most);
     CHECK(generators.bredOf(0) == 0);
     SwarmAggression hot;
-    hot.heat = 1.0f;
-    hot.rage = 1.0f;
+    hot.heat = 1.0f; // full heat, no rage yet: twice the quota, no frenzy
     generators.setAggression(hot);
     generators.update(kTicks, enemies, party);
-    CHECK(generators.bredOf(0) == 1); // the quota is ten now
+    CHECK(generators.bredOf(0) == 1); // the quota is eight now
     const auto expected = [&](f32 ratio) {
         return static_cast<s32>(Generators::kCountdownScale * static_cast<f32>(interval) *
                                 (1.0f + ratio) / hot.breedingPace());
@@ -2176,6 +2175,30 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     generators.update(generators.countdownOf(0) + kTicks, enemies, party);
     generators.update(kTicks, enemies, party);
     CHECK(generators.bredOf(0) == 2);
+    // Held at the bravery line the swarm is frenzied: a generator near the party breeds
+    // past any quota, one far from it keeps to its quota.
+    for (s32 i = 0; i < 4; ++i) {
+        EnemySpawn spawn;
+        spawn.generator = 0;
+        spawn.position = {100, 0, static_cast<f32>(most + i) * 10};
+        REQUIRE(enemies.spawn(spawn, party));
+    }
+    generators.update(kTicks, enemies, party);
+    REQUIRE(generators.livingOf(0) == 10);
+    SwarmAggression frenzied;
+    frenzied.heat = 1.0f;
+    frenzied.rage = 1.0f;
+    REQUIRE(frenzied.frenzied());
+    REQUIRE(static_cast<s32>(static_cast<f32>(most) * frenzied.broodScale()) == 10);
+    generators.setAggression(frenzied);
+    generators.update(generators.countdownOf(0), enemies, party);
+    generators.update(kTicks, enemies, party);
+    CHECK(generators.bredOf(0) == 3);
+    const std::array farParty{EnemyView{.player = 0, .position = {0, 0, 200}}};
+    REQUIRE(glm::distance(farParty[0].position, Vec3{0}) > SwarmAggression::kFrenzyReach);
+    generators.update(generators.countdownOf(0), enemies, farParty);
+    generators.update(kTicks, enemies, farParty);
+    CHECK(generators.bredOf(0) == 3);
 }
 
 } // namespace

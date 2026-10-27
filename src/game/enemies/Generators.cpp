@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -1021,6 +1022,16 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
     if (ticks <= 0) {
         return;
     }
+    // How near the party stands to a spot, for the frenzy's reach.
+    const auto nearestPlayer = [players](const Vec3& position) {
+        f32 nearest = std::numeric_limits<f32>::max();
+        for (const EnemyView& view : players) {
+            if (!view.hidden) {
+                nearest = std::min(nearest, glm::distance(view.position, position));
+            }
+        }
+        return nearest;
+    };
     // Texture cycles belong to the archive, not to each placed generator or its
     // current damage state. Keep them running even when its brood cannot spawn.
     for (auto& bodies : m_sim.bodies) {
@@ -1052,10 +1063,14 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
         // do_items checks the living brood quota before generate_now ticks its timer.
         // A full brood freezes the remaining wait; a death frees a slot, not a free birth.
         // Patrol generators instead keep one sentry, with no ordinary quota or wait.
-        // An aggravated swarm's broods run past their quota for a while.
+        // An aggravated swarm's broods run past their quota for a while; a frenzied swarm's
+        // generators near the party breed past any quota at all.
         const auto quota =
             static_cast<s32>(static_cast<f32>(generator.most) * m_aggression.broodScale());
-        if (patrol ? generator.living > 0 : generator.most <= 0 || generator.living >= quota) {
+        const bool frenzied = m_aggression.frenzied() &&
+                              nearestPlayer(generator.position) <= SwarmAggression::kFrenzyReach;
+        if (patrol ? generator.living > 0
+                   : generator.most <= 0 || (!frenzied && generator.living >= quota)) {
             continue;
         }
         if (!patrol && generator.countdown > 0) {

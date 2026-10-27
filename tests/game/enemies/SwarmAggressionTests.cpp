@@ -38,6 +38,7 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     pass(aggression, 2.0f, SwarmAggression::kFullRun);
     CHECK(aggression.heat == Approx(1.0f).margin(0.01f));
     CHECK(aggression.rage == Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.01f));
+    CHECK(aggression.frenzied());
     pass(aggression, 60.0f, SwarmAggression::kFullRun + 30);
     CHECK(aggression.rage == 1.0f);
     CHECK(aggression.valid());
@@ -48,6 +49,7 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     pass(aggression, 30.0f, 0);
     CHECK(aggression.heat == 0.0f);
     CHECK(aggression.rage == 0.0f);
+    CHECK_FALSE(aggression.frenzied());
     // A frame that takes no time changes nothing.
     aggression.step(0.0f, SwarmAggression::kFullRun);
     CHECK(aggression.heat == 0.0f);
@@ -63,6 +65,7 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     CHECK(calm.healthScale() == 1.0f);
     CHECK(calm.tint() == Color::white());
     CHECK(calm.aura() == 0.0f);
+    CHECK_FALSE(calm.frenzied());
     SwarmAggression warm;
     warm.heat = 0.5f;
     CHECK(warm.breedingPace() == Approx(1.0f + 0.5f * SwarmAggression::kBreedingHeat));
@@ -78,6 +81,7 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     CHECK(hot.healthScale() == Approx(2.4f));
     CHECK(hot.tint() == SwarmAggression::kRageTint);
     CHECK(hot.aura() == 1.0f);
+    CHECK(hot.frenzied());
     SwarmAggression halfway;
     halfway.heat = 1.0f;
     halfway.rage = 0.5f;
