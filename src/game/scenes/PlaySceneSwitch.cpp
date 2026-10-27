@@ -11,7 +11,7 @@ void PlayScene::updateSwitchCutscene(s32 ticks, f32 seconds) {
     // DoWorldAnimSub checks Stop Time even while a trigger camera is active;
     // only looping tracks wait, so the one-shot target can still finish its shot.
     m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
-    m_world->updateTriggers(seconds, visitors(), true);
+    m_world->updateTriggers(seconds, visitors(), true, occupiedFloors());
     // World item placement still runs while controls and combat are held.
     // The shot can reveal a placed enemy that the follow camera has never seen.
     watchOpponents();

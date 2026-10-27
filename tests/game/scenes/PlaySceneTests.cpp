@@ -106,6 +106,104 @@ TEST_CASE("a closed play scene has no per-player state", "[game][screens]") {
     REQUIRE(scene.actorCount() == 0);
 }
 
+TEST_CASE("D1 bridge occupancy follows living enemy support and replays its death release",
+          "[game][screens][bridge-occupants][assets]") {
+    const auto root = unpackedRoot();
+    test::assetOrSkip("LEVELS/LEVELD1/WORLDS.PS2");
+    LevelCatalog levels;
+    REQUIRE(levels.load(root));
+    const auto level = levels.byName("D1");
+    REQUIRE(level);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *level));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.levels = &levels;
+    context.unpackedRoot = root;
+    const std::array party{PartyMember{0, CharacterSave{}}, PartyMember{1, CharacterSave{}}};
+    PlayOptions options;
+    options.welcome = false;
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    for (s32 frame = 0; frame < 600 && awaitingEntrance(scene); ++frame) {
+        REQUIRE(scene.update(1.0 / 60, {}) == PlayOutcome::Running);
+    }
+    REQUIRE_FALSE(awaitingEntrance(scene));
+    // Select an authored two-player fade bridge, then locate an actual triangle
+    // on its deck. No invented floor ID is inserted into the enemy's state.
+    s32 target = -1;
+    std::optional<FloorHit> support;
+    for (usize i = 0; i < world.triggers().size() && !support; ++i) {
+        const auto trigger = world.triggers().trigger(i);
+        if (!trigger.enabled || trigger.chained || trigger.target < 0 ||
+            trigger.minPlayers != 1 || (trigger.kind & 0x67U) != 0 ||
+            (trigger.kind & LevelTrigger::kFades) == 0) {
+            continue;
+        }
+        const std::array button{TriggerVisitor{.position = trigger.spot, .party = 0},
+                                TriggerVisitor{.position = trigger.spot + Vec3{1000, 0, 0},
+                                               .party = 1}};
+        world.updateTriggers(1, button);
+        REQUIRE(world.triggers().opened(trigger.target));
+        const Vec3 origin{world.scene().worldTransform(static_cast<usize>(trigger.target))[3]};
+        for (s32 x = -12; x <= 12 && !support; x += 2) {
+            for (s32 z = -12; z <= 12 && !support; z += 2) {
+                const Vec3 point = origin + Vec3{static_cast<f32>(x), 0, static_cast<f32>(z)};
+                const auto floor = world.collision().floorAt(point, 10, 20);
+                if (floor && floor->object == trigger.target) {
+                    support = floor;
+                    target = trigger.target;
+                }
+            }
+        }
+    }
+    REQUIRE(support);
+    CAPTURE(target, support->point.x, support->point.y, support->point.z);
+    auto& enemies = scene.enemies();
+    REQUIRE(enemies.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.algorithm = kStandCastWay;
+    spawn.position = support->point;
+    spawn.placed = true;
+    const auto enemy = enemies.spawn(spawn, {});
+    REQUIRE(enemy);
+    REQUIRE(enemies.alive(*enemy));
+    // This bridge fades but never moves: attachment state is intentionally empty.
+    // The trigger integration must query its static contact, not just floorOf().
+    REQUIRE_FALSE(world.collision().objectTransform(target));
+    REQUIRE(enemies.floorOf(*enemy) == -1);
+    const auto contact = world.collision().floorAt(enemies.positionOf(*enemy), 0.1f, 0.1f);
+    REQUIRE(contact);
+    REQUIRE(contact->object == target);
+    REQUIRE(scene.update(1.0 / 60, {}) == PlayOutcome::Running);
+    CHECK(world.triggers().opened(target));
+    CHECK(world.collision().solid(target));
+    CHECK(world.triggers().alphaOf(target) == 1);
+    PlayScene::LocalSnapshot beforeDeath;
+    REQUIRE(scene.saveLocal(beforeDeath));
+    const auto release = [&] {
+        enemies.hurt(*enemy, EnemyHit{.damage = 100000, .player = 0});
+        REQUIRE_FALSE(enemies.alive(*enemy));
+        // A dying body still rests on the bridge; it must no longer retain it.
+        const auto corpseFloor =
+            world.collision().floorAt(enemies.positionOf(*enemy), 0.1f, 0.1f);
+        REQUIRE(corpseFloor);
+        REQUIRE(corpseFloor->object == target);
+        REQUIRE(scene.update(1.0 / 60, {}) == PlayOutcome::Running);
+        CHECK_FALSE(world.triggers().opened(target));
+        CHECK_FALSE(world.collision().solid(target));
+        return scene.nativeAgreementDigest();
+    };
+    const auto expected = release();
+    REQUIRE(expected);
+    REQUIRE(scene.restoreLocal(beforeDeath));
+    REQUIRE(enemies.alive(*enemy));
+    CHECK(release() == expected);
+    scene.close();
+}
+
 TEST_CASE("G2 gold pad wakes Death at the native item-contact reach",
           "[game][screens][g2-death-gold][assets]") {
     const auto root = unpackedRoot();

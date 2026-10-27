@@ -65,7 +65,7 @@ void PlayScene::updateTowerRelics(s32 ticks, f32 seconds) {
         }
     }
     m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
-    m_world->updateTriggers(seconds, {});
+    m_world->updateTriggers(seconds, {}, false, occupiedFloors());
     for (const auto& opening : m_world->takeTriggerOpenings()) {
         m_audio.opening(opening);
     }

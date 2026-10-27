@@ -272,6 +272,8 @@ TEST_CASE("statue placement hashing includes native spawn payload and authored c
     different([](auto& placement) { placement.instance.collision[0].vertices[2].y = 4; });
     different([](auto& placement) { placement.onFloor = false; });
     different([](auto& placement) { placement.carried = 12; });
+    different([](auto& placement) { placement.support = 7; });
+    different([](auto& placement) { placement.supportLocal[3].x = 12; });
     different([](auto& placement) { placement.enemy = EnemySpawn{.kind = kDeathKind}; });
     auto death = original;
     death.enemy = EnemySpawn{.kind = kDeathKind};
@@ -315,5 +317,71 @@ TEST_CASE("statue native digests reject missing stale foreign and unloaded bindi
     CHECK_FALSE(second.statues.appendLocalDigest(unloadedSaved, saved));
     CHECK_FALSE(unloadedSaved.checkedFinish());
     CHECK_FALSE(second.statues.registerNativeResources(second.resources));
+}
+
+TEST_CASE("moving statue rewind retains its parent through idle waking and queued birth",
+          "[critter-statues-native-digest][statue-platform][local-rewind]") {
+    Pool pool(statueDigestFixture(), 0);
+    WorldCollision collision;
+    collision.build({CollisionTriangle{
+        .vertices = {Vec3{-20, 0, -20}, Vec3{20, 0, -20}, Vec3{0, 0, 20}}, .object = 7}});
+    collision.setMovingObjects(std::array<s32, 1>{7});
+    auto placement = placementAt(2, 3);
+    placement.support = 7;
+    placement.supportLocal =
+        itemPlacement(placement.instance.position, placement.instance.rotation);
+    REQUIRE(pool.statues.add(pool.device, pool.archive, placement, &collision));
+    REQUIRE(pool.statues.registerNativeResources(pool.resources));
+    const Mat4 carried =
+        glm::translate(Mat4{1}, Vec3{20, 5, -6}) * glm::rotate(Mat4{1}, 0.7f, Vec3{0, 1, 0});
+    collision.setObjectTransform(7, carried);
+    collision.setSolid(7, false); // moving trigger's collision does not sever the parent
+    pool.statues.syncFloors();
+    CHECK(glm::distance(pool.statues.positionOf(0), Vec3{carried * placement.supportLocal[3]}) <
+          0.0001f);
+    CHECK_FALSE(pool.statues.woken(0));
+    CHECK(pool.statues.figure(0).sequence() == CritterStatues::kIdleSequence);
+    CritterStatues::LocalSnapshot idle;
+    WorldCollision::LocalSnapshot floor;
+    pool.statues.saveLocal(idle);
+    collision.saveLocal(floor);
+    const auto idleHash = pool.digest();
+    const auto replay = [&] {
+        pool.statues.wake(0);
+        pool.statues.update(1, kStep, {});
+        REQUIRE(pool.statues.rising(0));
+        for (s32 tick = 0; tick < 6; ++tick) {
+            const Mat4 parent =
+                glm::translate(Mat4{1}, Vec3{static_cast<f32>(tick), 0, 0}) * carried;
+            collision.setObjectTransform(7, parent);
+            pool.statues.update(1, kStep, {});
+            if (pool.statues.count() != 0) {
+                CHECK(glm::distance(pool.statues.positionOf(0),
+                                    Vec3{parent * placement.supportLocal[3]}) < 0.0001f);
+            }
+        }
+        REQUIRE(pool.statues.count() == 0);
+        REQUIRE(pool.statues.checkpoint()); // queued definitions still match the fixed roster
+    };
+    replay();
+    CritterStatues::LocalSnapshot queued;
+    pool.statues.saveLocal(queued);
+    const auto queuedHash = pool.digest();
+    const auto born = pool.statues.takeRisen();
+    REQUIRE(born.size() == 1);
+    const Mat4 expected = *collision.objectTransform(7) * placement.supportLocal;
+    CHECK(glm::distance(born[0].instance.position, Vec3{expected[3]}) < 0.0001f);
+    const Mat4 facing = itemPlacement(born[0].instance.position, born[0].instance.rotation);
+    const Vec3 planar = glm::normalize(Vec3{expected[2].x, 0, expected[2].z});
+    CHECK(glm::distance(Vec3{facing[2]}, planar) < 0.0001f);
+    REQUIRE(collision.restoreLocal(floor));
+    REQUIRE(pool.statues.restoreLocal(idle));
+    CHECK(pool.digest() == idleHash);
+    replay();
+    CritterStatues::LocalSnapshot replayed;
+    pool.statues.saveLocal(replayed);
+    CHECK(pool.statues.equalLocal(queued, replayed));
+    CHECK(pool.digest() == queuedHash);
+    CHECK(pool.statues.takeRisen() == born);
 }
 } // namespace

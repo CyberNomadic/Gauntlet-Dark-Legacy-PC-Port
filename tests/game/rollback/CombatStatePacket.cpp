@@ -663,6 +663,7 @@ template <class A, class T> void field(A& a, T& v) {
         fields(a, v.kind, v.enemy, v.form, v.instance, v.radius, v.height, v.viewRadius, v.sight,
                v.activeOn, v.onFloor);
         optionalIndex(a, v.carried);
+        fields(a, v.support, v.supportLocal);
     } else if constexpr (std::is_same_v<V, EnemySpawn>) {
         fields(a, v.zigZagSide, v.kind, v.tier, v.algorithm, v.position, v.direction, v.clearance,
                v.generator, v.placed, v.patrolBirth, v.allBirthDirections, v.asleep,

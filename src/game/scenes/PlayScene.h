@@ -579,6 +579,8 @@ private:
     void throwWeapon(const PlayerActor& actor);
     u32 acceptedPlayers(const Inputs& inputs) const;
     std::vector<TriggerVisitor> visitors() const;
+    /** Living floor occupants retain bridges even while a cinematic holds controls. */
+    std::vector<s32> occupiedFloors() const;
     PartyPickups::Services pickupServices();
     void praiseStreaks(f32 seconds);
     /** Steps the meter by the frame's own clock and draws it for the local seats. */
@@ -648,19 +650,20 @@ private:
     std::optional<Mat4> m_presentedClip;
     std::optional<Mat4> m_presentedCanvas; ///< local pointer mapping, never simulation state
     std::optional<WorldCamera> m_previousCamera;
-    bool m_previousBossCamera = false;
     std::optional<WorldCamera> m_viewOverride;
     std::optional<SceneSelection> m_selection;
-    bool m_hudHidden = false;
     std::vector<PlayerRuntime> m_players;
     LevelSoundscape m_audio;
     SceneSoundEvents m_recordedAudio;
     ChallengeHud m_challengeHud;
     MechanicsFacade m_mechanics; ///< the additive mechanics' settings for this level
+    bool m_previousBossCamera = false;
+    bool m_hudHidden = false;
+    u8 m_localSeats = 0xF;
+    bool m_open = false;
     StreakMeter m_streakMeter;   ///< presentation only, never simulation state
     std::optional<std::chrono::steady_clock::time_point> m_streakFrame;
     std::optional<std::chrono::steady_clock::time_point> m_auraFrame; ///< the elemental show's
-    u8 m_localSeats = 0xF;
     const Texture* m_glowSheet = nullptr; ///< FONT32's glow, borrowed from the static set
     const Texture* m_runeFrame = nullptr;
     const Texture* m_runeColumn = nullptr;
@@ -700,7 +703,6 @@ private:
 
     ItemArchive m_weapons;              ///< shared weapon and effect assets
     LevelArrivalPresentation m_arrival; ///< borrows the weapons archive
-    bool m_open = false;
     PortalDeparture m_departure;
     PartyFigures m_figures;
     PartyNames m_names;

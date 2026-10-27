@@ -428,9 +428,9 @@ void LevelWorld::activateTrigger(s32 id, bool atOnce) {
 }
 
 void LevelWorld::updateTriggers(f32 seconds, std::span<const TriggerVisitor> visitors,
-                                bool cameraHeld) {
+                                bool cameraHeld, std::span<const s32> occupiedFloors) {
     m_triggers.setCameraHeld(cameraHeld);
-    m_triggers.update(seconds, visitors, m_worldAnimator, m_scene, &m_collision);
+    m_triggers.update(seconds, visitors, m_worldAnimator, m_scene, &m_collision, occupiedFloors);
     std::vector<RotatorCue> cues = m_rotators.update(seconds, visitors, m_scene);
     m_sim.rotatorCues.insert(m_sim.rotatorCues.end(), cues.begin(), cues.end());
     syncCollision();

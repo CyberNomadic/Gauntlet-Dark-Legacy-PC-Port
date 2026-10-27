@@ -8,6 +8,7 @@
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/math/PortableMath.h"
 
 #include "game/level/NativeStateResources.h"
 
@@ -85,8 +86,15 @@ bool validPlacement(const CritterStatues::Placement& p) {
         !bounded(p.instance.rotation) || p.instance.collision.size() > 4096 ||
         !bounded(p.radius, 0) || !bounded(p.height, 0) || !bounded(p.viewRadius, 0) ||
         !bounded(p.sight) || p.activeOn < -1'000'000 || p.activeOn > 1'000'000 ||
-        (p.carried && *p.carried > 1'000'000)) {
+        (p.carried && *p.carried > 1'000'000) || p.support < -1 || p.support > 1'000'000) {
         return false;
+    }
+    for (s32 column = 0; column < 4; ++column) {
+        for (s32 row = 0; row < 4; ++row) {
+            if (!bounded(p.supportLocal[column][row])) {
+                return false;
+            }
+        }
     }
     if (p.enemy) {
         const auto& e = *p.enemy;
@@ -108,8 +116,8 @@ bool validPlacement(const CritterStatues::Placement& p) {
 
 bool CritterStatues::Placement::operator==(const Placement& other) const {
     bool same = false;
-    visitNativeFields<11>(*this, [&](const auto&... left) {
-        visitNativeFields<11>(
+    visitNativeFields<13>(*this, [&](const auto&... left) {
+        visitNativeFields<13>(
             other, [&](const auto&... right) { same = (sameField(left, right) && ...); });
     });
     return same;
@@ -132,7 +140,7 @@ void visitNativeState(NativeStateDigest& digest, const CritterStatues::Placement
             digest.value(field);
         }
     };
-    visitNativeFields<11>(value, [&](const auto&... fields) { (append(fields), ...); });
+    visitNativeFields<13>(value, [&](const auto&... fields) { (append(fields), ...); });
 }
 
 void visitNativeState(NativeStateDigest& digest, const CritterStatues::Statue& value) {
@@ -432,6 +440,12 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
         return false;
     }
     statue->figure.play(kIdleSequence, true);
+    m_collision = collision;
+    if (placement.support >= 0 && m_collision != nullptr) {
+        if (const auto parent = m_collision->objectTransform(placement.support)) {
+            statue->figure.placeAt(*parent * placement.supportLocal);
+        }
+    }
     statue->instance = m_sim.nextInstance++;
     statue->archive = &archive;
     // Keep immutable art bindings available after the live statue rises.
@@ -444,6 +458,7 @@ bool CritterStatues::add(RenderDevice& device, ItemArchive& archive, const Place
 }
 
 void CritterStatues::clear() {
+    m_collision = nullptr;
     m_sim.statues.clear();
     m_prototypes.clear();
     m_sim.risen.clear();
@@ -451,6 +466,21 @@ void CritterStatues::clear() {
     m_sim.contactGridInverseWidth = 0;
     ++m_restoreGeneration;
     ++m_localEpoch;
+}
+
+void CritterStatues::syncFloors() {
+    if (m_collision == nullptr) {
+        return;
+    }
+    // Item nodes remain parented even while their supporting trigger disables
+    // collision. Carry the dormant body and its ACTIVE animation alike.
+    for (auto& statue : m_sim.statues) {
+        if (statue->placement.support >= 0) {
+            if (const auto parent = m_collision->objectTransform(statue->placement.support)) {
+                statue->figure.placeAt(*parent * statue->placement.supportLocal);
+            }
+        }
+    }
 }
 
 void CritterStatues::setContactGridBounds(const Vec3& minimum, const Vec3& maximum) {
@@ -589,6 +619,7 @@ std::vector<MissileTarget> CritterStatues::targets() const {
 }
 
 void CritterStatues::update(s32 ticks, f32 seconds, const Seen& seen) {
+    syncFloors();
     for (auto& statue : m_sim.statues) {
         // Out of view nothing happens to it: neither the waking nor its countdown.
         if (!statue->woken ||
@@ -620,7 +651,24 @@ void CritterStatues::update(s32 ticks, f32 seconds, const Seen& seen) {
 }
 
 std::vector<CritterStatues::Placement> CritterStatues::takeRisen() {
-    return std::exchange(m_sim.risen, {});
+    auto risen = std::exchange(m_sim.risen, {});
+    // Birth consumes the item's current world matrix, not its authored origin.
+    // Keep the queued definitions immutable so local rewind retains their node binding.
+    for (auto& placement : risen) {
+        if (placement.support < 0 || m_collision == nullptr) {
+            continue;
+        }
+        if (const auto parent = m_collision->objectTransform(placement.support)) {
+            const Mat4 stood = *parent * placement.supportLocal;
+            placement.instance.position = Vec3{stood[3]};
+            placement.instance.rotation = {0, -portable::atan2(stood[2].x, stood[2].z), 0};
+            if (placement.enemy) {
+                placement.enemy->position = placement.instance.position;
+                placement.enemy->direction = Vec3{stood[2]};
+            }
+        }
+    }
+    return risen;
 }
 
 void CritterStatues::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,

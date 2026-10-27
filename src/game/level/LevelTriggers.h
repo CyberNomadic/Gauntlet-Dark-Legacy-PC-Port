@@ -273,9 +273,11 @@ public:
     /** Permanently activates an id and its chain, animated or already at the endpoint. */
     void activate(s32 id, bool atOnce, WorldAnimator& animator, WorldScene& scene,
                   WorldCollision* collision);
-    /** Fires the triggers visitors stand in and carries the fades on by `seconds`. */
+    /** Fires the triggers visitors stand in and carries the fades on by `seconds`.
+     * Other occupied floors retain revealed momentary bridges, but never press switches. */
     void update(f32 seconds, std::span<const TriggerVisitor> visitors, WorldAnimator& animator,
-                WorldScene& scene, WorldCollision* collision);
+                WorldScene& scene, WorldCollision* collision,
+                std::span<const s32> occupiedFloors = {});
     /** Target motion only. Switch contacts, sounds and other trigger events are not replayed. */
     struct Motion {
         static constexpr usize kMaxTargets = 2048;

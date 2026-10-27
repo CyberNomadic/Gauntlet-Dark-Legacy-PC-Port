@@ -129,7 +129,7 @@ public:
     bool shutPortalGlow(s32 world, s32 gate);
     /** Fires the triggers the visitors stand in and carries the fields' fades on. */
     void updateTriggers(f32 seconds, std::span<const TriggerVisitor> visitors,
-                        bool cameraHeld = false);
+                        bool cameraHeld = false, std::span<const s32> occupiedFloors = {});
     const LevelTriggers& triggers() const { return m_triggers; }
     void activateTrigger(s32 id, bool atOnce);
     void shootTrigger(usize index) { m_triggers.shoot(index); }

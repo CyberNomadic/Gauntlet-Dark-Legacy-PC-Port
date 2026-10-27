@@ -3,6 +3,7 @@
 #include <cmath>
 #include <format>
 #include <set>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -960,6 +961,134 @@ TEST_CASE("fading a target hides and unblocks its entire subtree", "[game][world
         CHECK(f.scene.objectAlpha(i) == 0.0f);
         CHECK_FALSE(collision.solid(static_cast<s32>(i)));
     }
+}
+
+TEST_CASE("revealed momentary bridges wait for their final rider without pressing the pad",
+          "[game][world][triggers][bridge-occupants][triggers-local-rewind]") {
+    const bool enemy = GENERATE(false, true);
+    const s32 support = GENERATE(0, 1);
+    const f32 step = GENERATE(1.0f / 30, 1.0f / 60);
+    SwitchFixture f(R"({"info":0,"position":[20,0,0],
+      "params":[0,0,16,0,2,255,0,0,0,0,0,0]})",
+                    R"({"name":"WALL","position":[0,10,0],"flags":4096,"child":1},
+                       {"name":"WALL","position":[0,2,0]})");
+    WorldCollision collision;
+    const std::array button{TriggerVisitor{.position = Vec3{20, 0, 0}, .party = 0}};
+    const std::array rider{TriggerVisitor{.position = Vec3{0, 10, 0},
+                                         .floorObject = support,
+                                         .party = 1}};
+    const std::array floors{support};
+    const auto update = [&](bool occupied) {
+        f.triggers.update(step, !enemy && occupied ? std::span<const TriggerVisitor>{rider}
+                                                   : std::span<const TriggerVisitor>{},
+                          f.animator, f.scene, &collision,
+                          enemy && occupied ? std::span<const s32>{floors}
+                                            : std::span<const s32>{});
+    };
+    update(true); // An absent bridge cannot be summoned by a floor claim alone.
+    CHECK_FALSE(f.triggers.opened(0));
+    CHECK_FALSE(collision.solid(0));
+    CHECK_FALSE(f.triggers.trigger(0).fired);
+    f.triggers.update(1, button, f.animator, f.scene, &collision);
+    REQUIRE(f.triggers.opened(0));
+    REQUIRE(f.triggers.alphaOf(0) == 1);
+    f.triggers.takeOpenings();
+    f.triggers.takeSettled();
+    f.triggers.takeCameraCues();
+    for (s32 tick = 0; tick < 120; ++tick) {
+        update(true);
+        CHECK(f.triggers.opened(0));
+        CHECK(f.triggers.alphaOf(0) == 1);
+        CHECK(collision.solid(0));
+        CHECK(collision.solid(1));
+        CHECK_FALSE(f.triggers.trigger(0).fired);
+    }
+    CHECK(f.triggers.takeOpenings().empty());
+    CHECK(f.triggers.takeCameraCues().empty());
+    LevelTriggers::LocalSnapshot before;
+    LevelTriggers::LocalSnapshot released;
+    LevelTriggers::LocalSnapshot replayed;
+    f.triggers.saveLocal(before);
+    update(false); // Leaving, dying or losing support releases the bridge.
+    CHECK_FALSE(f.triggers.opened(0));
+    CHECK_FALSE(collision.solid(0));
+    CHECK_FALSE(collision.solid(1));
+    CHECK(f.triggers.alphaOf(0) < 1);
+    f.triggers.saveLocal(released);
+    REQUIRE(f.triggers.restoreLocal(before));
+    update(false);
+    f.triggers.saveLocal(replayed);
+    CHECK(f.triggers.equalLocal(released, replayed));
+}
+
+TEST_CASE("floor occupants do not retain ordinary lifts or hide-on-use fields",
+          "[game][world][triggers][bridge-occupants]") {
+    const s32 kind = GENERATE(0, 48);
+    SwitchFixture f(std::format(R"({{"info":0,"position":[20,0,0],
+      "params":[0,0,{},0,2,255,0,0,0,0,20,0]}})", kind));
+    WorldCollision collision;
+    const std::array button{TriggerVisitor{.position = Vec3{20, 0, 0}}};
+    const std::array floors{0};
+    f.triggers.update(1, button, f.animator, f.scene, &collision);
+    REQUIRE(f.triggers.opened(0));
+    f.triggers.update(1, {}, f.animator, f.scene, &collision, floors);
+    CHECK_FALSE(f.triggers.opened(0));
+    if (kind == 0) {
+        CHECK(f.height() == Approx(10));
+    } else {
+        CHECK(f.triggers.alphaOf(0) == 1);
+    }
+}
+
+TEST_CASE("D1 native two-player bridges retain players and enemy supports after pad release",
+          "[game][world][triggers][bridge-occupants][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELD1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const auto ref = catalog.byName("D1");
+    REQUIRE(ref);
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *ref));
+    world.setPlayerCount(2);
+    world.startTriggers({});
+    std::set<std::string> bridges;
+    for (usize i = 0; i < world.triggers().size(); ++i) {
+        const auto trigger = world.triggers().trigger(i);
+        if (!trigger.enabled || trigger.chained || trigger.target < 0 ||
+            trigger.minPlayers != 1 || (trigger.kind & 0x67U) != 0 ||
+            (trigger.kind & LevelTrigger::kFades) == 0) {
+            continue;
+        }
+        CAPTURE(trigger.instance, trigger.target, trigger.flags,
+                world.layout().objects()[static_cast<usize>(trigger.target)].name);
+        const std::array button{TriggerVisitor{.position = trigger.spot, .party = 0},
+                                TriggerVisitor{.position = trigger.spot + Vec3{1000, 0, 0},
+                                               .party = 1}};
+        world.updateTriggers(1, button);
+        REQUIRE(world.triggers().opened(trigger.target));
+        REQUIRE(world.collision().solid(trigger.target));
+        const std::array rider{TriggerVisitor{.position = trigger.spot + Vec3{1000, 0, 0},
+                                              .floorObject = trigger.target,
+                                              .party = 1}};
+        world.updateTriggers(1, rider);
+        CHECK(world.triggers().opened(trigger.target));
+        CHECK(world.collision().solid(trigger.target));
+        CHECK(world.triggers().alphaOf(trigger.target) == 1);
+        const std::array enemyFloor{trigger.target};
+        world.updateTriggers(1, {}, false, enemyFloor);
+        CHECK(world.triggers().opened(trigger.target));
+        CHECK(world.collision().solid(trigger.target));
+        CHECK_FALSE(world.triggers().trigger(i).fired);
+        world.updateTriggers(1, {});
+        CHECK_FALSE(world.triggers().opened(trigger.target));
+        CHECK_FALSE(world.collision().solid(trigger.target));
+        CHECK(world.triggers().alphaOf(trigger.target) == 0);
+        bridges.insert(world.layout().objects()[static_cast<usize>(trigger.target)].name);
+    }
+    const std::set<std::string> expected{"D1DRAWB1", "D1DRAWB4", "D1DRAWB66"};
+    CHECK(bridges == expected);
 }
 
 // Dispatch-only coverage: synthetic visitors at the marker test party-size variants,

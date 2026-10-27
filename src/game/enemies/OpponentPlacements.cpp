@@ -103,6 +103,8 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
                 statue.sight = placement.sight;
                 statue.activeOn = info.activeOn;
                 statue.carried = placement.carried;
+                statue.support = placement.support;
+                statue.supportLocal = placement.supportLocal;
                 ItemArchive* archive = critters.archiveFor(family);
                 if (archive != nullptr && statues.add(device, *archive, statue, collision)) {
                     continue;
@@ -133,6 +135,8 @@ OpponentPlacements::load(RenderDevice& device, const WorldLayout& layout,
             statue.viewRadius = placement.viewRadius;
             statue.sight = placement.sight;
             statue.activeOn = info.activeOn;
+            statue.support = placement.support;
+            statue.supportLocal = placement.supportLocal;
             ItemArchive* archive = enemies.archive(kDeathKind);
             if (archive != nullptr && statues.add(device, *archive, statue, collision)) {
                 if ((strength & 1) != 0) {

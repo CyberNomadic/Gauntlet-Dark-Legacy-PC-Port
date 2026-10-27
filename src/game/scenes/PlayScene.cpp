@@ -1477,7 +1477,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     if (m_device != nullptr) {
         m_sim.pickups.collect(*m_device, m_players, pickupServices());
     }
-    m_world->updateTriggers(seconds, visitors());
+    m_world->updateTriggers(seconds, visitors(), false, occupiedFloors());
     m_fixtures.syncFloors();
     m_opponents.syncFloors();
     m_transporters.syncFloors(m_world->collision());
@@ -1644,6 +1644,33 @@ std::vector<TriggerVisitor> PlayScene::visitors() const {
             visitor.floorObject = floor->object;
         }
         out.push_back(visitor);
+    }
+    return out;
+}
+
+std::vector<s32> PlayScene::occupiedFloors() const {
+    std::vector<s32> out;
+    for (const auto& visitor : visitors()) {
+        if (visitor.floorObject >= 0) {
+            out.push_back(visitor.floorObject);
+        }
+    }
+    const auto& enemies = m_opponents.enemies();
+    for (s32 enemy = 0; enemy < enemies.most(); ++enemy) {
+        if (enemies.alive(enemy)) {
+            const auto state = enemies.observe(enemy);
+            if (state && !state->asleep) {
+                if (const s32 floor = enemies.floorOf(enemy); floor >= 0) {
+                    out.push_back(floor);
+                } else if (const auto contact =
+                               m_world->collision().floorAt(enemies.positionOf(enemy), 0.1f, 0.1f)) {
+                    // floorOf retains moving-floor attachment only. Static fade
+                    // bridges still support a body (retail's floor_wobj); use
+                    // rememberFloor's feet-contact range, never a floor below a jump.
+                    out.push_back(contact->object);
+                }
+            }
+        }
     }
     return out;
 }

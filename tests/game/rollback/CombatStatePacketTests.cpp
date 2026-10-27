@@ -316,6 +316,8 @@ void decorate(Packet::State& state) {
     placement.activeOn = 4;
     placement.onFloor = false;
     placement.carried = 8;
+    placement.support = 17;
+    placement.supportLocal = glm::translate(Mat4{1}, Vec3{2, 3, 4});
     auto& statues = adapter.statues;
     statues.roster.push_back({1, placement});
     placement.onFloor = true;

@@ -50,6 +50,8 @@ public:
         f32 sight = 0.0f;      ///< approach wake radius; negative disables proximity waking
         s32 activeOn = 0; ///< the record's, in half ticks; nought for the sequence's own length
         std::optional<usize> carried; ///< the pickup the great one holds
+        s32 support = -1;     ///< AddItemSub's supporting world node, including moving decks
+        Mat4 supportLocal{1}; ///< fixed placement relative to that node
         bool operator==(const Placement& /*other*/) const;
         friend void visitNativeState(NativeStateDigest& digest, const Placement& value);
     };
@@ -73,6 +75,8 @@ public:
     bool add(RenderDevice& device, ItemArchive& archive, const Placement& placement,
              const WorldCollision* collision);
     void clear();
+    /** Carry idle and rising statues without advancing their activation clocks. */
+    void syncFloors();
     /** Bounds for the native 64-cell-wide item query preceding proximity waking.
      * Unconfigured/degenerate bounds leave the query in one cell. */
     void setContactGridBounds(const Vec3& minimum, const Vec3& maximum);
@@ -179,6 +183,7 @@ private:
         std::unique_ptr<ItemFigure> figure;
     };
     std::vector<Prototype> m_prototypes;
+    const WorldCollision* m_collision = nullptr; ///< borrowed for the stage lifetime
     struct Simulation {
         std::vector<std::optional<Statue>> statues;
         std::vector<Placement> risen;

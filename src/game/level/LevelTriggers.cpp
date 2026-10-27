@@ -1017,7 +1017,8 @@ void LevelTriggers::activate(s32 id, bool atOnce, WorldAnimator& animator, World
 }
 
 void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors,
-                           WorldAnimator& animator, WorldScene& scene, WorldCollision* collision) {
+                           WorldAnimator& animator, WorldScene& scene, WorldCollision* collision,
+                           std::span<const s32> occupiedFloors) {
     refreshEligibility(m_sim.playerCount >= 0 ? m_sim.playerCount
                                               : static_cast<s32>(visitors.size()));
     m_sim.emptyToggleDelay = visitors.empty() ? 0.0f : static_cast<f32>(visitors.size() - 1);
@@ -1027,7 +1028,24 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
     }
     std::vector<u32> contacts(m_sim.triggers.size(), 0);
     for (Target& target : m_sim.targets) {
-        target.pressed = false;
+        // ProcessItemWobjs (GC 0x80062A00) keeps a momentary fade's activation
+        // while did_generate (0x80063854) finds a player or live enemy on it.
+        // Retain an already revealed bridge only: standing over an absent one
+        // must not activate its button, chain, camera or whole-party requirement.
+        const auto supported = [&](s32 floor) {
+            return floor >= 0 &&
+                   std::ranges::find(target.subtree, static_cast<usize>(floor)) !=
+                       target.subtree.end();
+        };
+        const bool momentaryBridge =
+            (target.kind & (0x47U | LevelTrigger::kOscillates)) == 0 &&
+            (target.kind & LevelTrigger::kFades) != 0;
+        target.pressed =
+            target.open && momentaryBridge &&
+            (std::ranges::any_of(visitors, [&](const TriggerVisitor& visitor) {
+                 return supported(visitor.floorObject);
+             }) ||
+             std::ranges::any_of(occupiedFloors, supported));
         target.wholePartyReady = false;
     }
     for (usize i = 0; i < m_sim.triggers.size(); ++i) {

@@ -22,7 +22,6 @@
 #include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
-#include "game/enemies/SwarmAggression.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/bosses/LegendItems.h"
@@ -32,6 +31,7 @@
 #include "game/enemies/EnemyKinds.h"
 #include "game/enemies/EnemyMind.h"
 #include "game/enemies/LevelOpponents.h"
+#include "game/enemies/SwarmAggression.h"
 #include "game/hud/HelpMessages.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/LevelFixtures.h"
@@ -1484,6 +1484,110 @@ TEST_CASE("a placement set on a flying platform is seen and born where the platf
     opponents.watch(lookDownAt(riding), riding);
     CHECK(opponents.pendingPlacements() < waiting);
     CHECK(opponents.critters().count() >= 1);
+    opponents.close();
+}
+
+TEST_CASE("Mothership Death rides its crane while dormant and throughout its awakening",
+          "[level-opponents][critter-statues][statue-platform][k1-death-platform][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELK1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("K1")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    LevelOpponents opponents;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, {0, -1000, 0}, 0);
+    LevelOpponents::Resources resources{device, world, weapons, effects, audio, root, 1};
+    resources.standOnSight = true;
+    opponents.open(resources, players);
+    const auto& loaded = opponents.statues();
+    usize index = loaded.count();
+    for (usize candidate = 0; candidate < loaded.count(); ++candidate) {
+        const auto& placement = loaded.placement(candidate);
+        if (placement.enemy && placement.support >= 0) {
+            index = candidate;
+            break;
+        }
+    }
+    REQUIRE(index < loaded.count());
+    const auto placement = loaded.placement(index);
+    const Vec3 initial = loaded.positionOf(index);
+    CAPTURE(placement.support, placement.instance.position.x, placement.instance.position.y,
+            placement.instance.position.z);
+    REQUIRE(world.collision().moving(placement.support));
+    const auto triggers = world.triggers().checkpoint();
+    REQUIRE(triggers);
+    const auto target = std::ranges::find_if(triggers->targets, [&](const auto& value) {
+        return std::ranges::find(value.subtree, static_cast<usize>(placement.support)) !=
+               value.subtree.end();
+    });
+    REQUIRE(target != triggers->targets.end());
+    const auto call = std::ranges::find(triggers->triggers, target->object, &LevelTrigger::target);
+    REQUIRE(call != triggers->triggers.end());
+    CAPTURE(call->id, call->instance, target->object);
+    world.startTriggers({});
+    world.activateTrigger(call->id, false);
+    constexpr f32 kStep = 1.0f / 30.0f;
+    for (s32 tick = 0; tick < 30; ++tick) {
+        world.update(kStep);
+        world.updateTriggers(kStep, {});
+        opponents.syncFloors();
+    }
+    const auto parent = world.collision().objectTransform(placement.support);
+    REQUIRE(parent);
+    const Vec3 expected{*parent * placement.supportLocal[3]};
+    CHECK(glm::distance(loaded.positionOf(index), expected) < 0.001f);
+    CHECK(glm::distance(expected, initial) > 1.0f);
+    CHECK_FALSE(loaded.woken(index));
+
+    // Use the exact loaded Death definition and art, without running unrelated
+    // level AI. Its native ACTIVE duration remains unchanged while the crane moves.
+    CritterStatues rising;
+    REQUIRE(rising.add(device, loaded.archive(index), placement, &world.collision()));
+    rising.wake(0);
+    rising.update(2, kStep, {});
+    REQUIRE(rising.rising(0));
+    const Vec3 wakePoint = rising.positionOf(0);
+    Vec3 birthPoint{};
+    Vec3 birthDirection{};
+    bool movedWhileRising = false;
+    for (s32 tick = 0; tick < 300 && rising.count() != 0; ++tick) {
+        world.update(kStep);
+        world.updateTriggers(kStep, {});
+        const auto now = world.collision().objectTransform(placement.support);
+        REQUIRE(now);
+        const Mat4 stood = *now * placement.supportLocal;
+        birthPoint = Vec3{stood[3]};
+        birthDirection = Vec3{stood[2]};
+        movedWhileRising = movedWhileRising || glm::distance(birthPoint, wakePoint) > 0.1f;
+        rising.update(2, kStep, {});
+        if (rising.count() != 0) {
+            CHECK(glm::distance(rising.positionOf(0), birthPoint) < 0.001f);
+        }
+    }
+    REQUIRE(rising.count() == 0);
+    CHECK(movedWhileRising);
+    const auto births = rising.takeRisen();
+    REQUIRE(births.size() == 1);
+    REQUIRE(births[0].enemy);
+    CHECK(glm::distance(births[0].instance.position, birthPoint) < 0.001f);
+    CHECK(glm::distance(births[0].enemy->position, birthPoint) < 0.001f);
+    CHECK(glm::distance(births[0].enemy->direction, birthDirection) < 0.001f);
+    const auto born = opponents.enemies().spawn(*births[0].enemy, {});
+    REQUIRE(born);
+    // AddItemSub lifts the statue 0.1 above its deck; placed enemy birth settles
+    // its feet on that deck instead, without changing the carried X/Z position.
+    const Vec3 live = opponents.enemies().positionOf(*born);
+    CHECK(live.x == Catch::Approx(birthPoint.x).margin(0.0001f));
+    CHECK(live.z == Catch::Approx(birthPoint.z).margin(0.0001f));
+    CHECK(live.y == Catch::Approx(birthPoint.y - ItemFigure::kFloorLift).margin(0.0001f));
+    CHECK(opponents.enemies().floorOf(*born) == placement.support);
+    rising.clear();
     opponents.close();
 }
 

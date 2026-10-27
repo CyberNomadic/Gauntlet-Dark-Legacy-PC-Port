@@ -824,6 +824,7 @@ void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRunti
     if (m_statues.count() == 0) {
         return;
     }
+    m_statues.syncFloors();
     // The placement's sight wakes it on approach; only its solid body stops a player.
     for (PlayerRuntime& player : players) {
         if (player.life == PlayerLife::Standing) {
@@ -1114,6 +1115,7 @@ LevelOpponents::critterObstacles(std::span<const CombatantObstacle> fixtures) co
 }
 
 void LevelOpponents::syncFloors() {
+    m_statues.syncFloors();
     m_enemies.syncFloors();
     m_critters.syncFloors();
     m_generators.syncFloors();
