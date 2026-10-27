@@ -2160,7 +2160,7 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     hot.rage = 1.0f;
     generators.setAggression(hot);
     generators.update(kTicks, enemies, party);
-    CHECK(generators.bredOf(0) == 1); // the quota is seven now
+    CHECK(generators.bredOf(0) == 1); // the quota is ten now
     const auto expected = [&](f32 ratio) {
         return static_cast<s32>(Generators::kCountdownScale * static_cast<f32>(interval) *
                                 (1.0f + ratio) / hot.breedingPace());

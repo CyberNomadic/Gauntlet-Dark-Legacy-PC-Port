@@ -21,16 +21,16 @@ struct SwarmAggression {
     static constexpr f32 kRageSeconds = 20.0f; ///< at the bravery line, seconds to full rage
     static constexpr f32 kCalmSeconds = 8.0f;  ///< below it, seconds from full rage to none
     /** What full heat and full rage add to each measure, as shares of the plain one. */
-    static constexpr f32 kBreedingHeat = 0.6f;
-    static constexpr f32 kBreedingRage = 0.2f;
-    static constexpr f32 kBroodHeat = 0.5f;
-    static constexpr f32 kBroodRage = 0.25f;
-    static constexpr f32 kSpeedHeat = 0.2f;
-    static constexpr f32 kSpeedRage = 0.1f;
-    static constexpr f32 kAttackHeat = 0.25f;
-    static constexpr f32 kAttackRage = 0.15f;
-    static constexpr f32 kHealthHeat = 0.4f;
-    static constexpr f32 kHealthRage = 0.3f;
+    static constexpr f32 kBreedingHeat = 1.2f;
+    static constexpr f32 kBreedingRage = 0.4f;
+    static constexpr f32 kBroodHeat = 1.0f;
+    static constexpr f32 kBroodRage = 0.5f;
+    static constexpr f32 kSpeedHeat = 0.4f;
+    static constexpr f32 kSpeedRage = 0.2f;
+    static constexpr f32 kAttackHeat = 0.5f;
+    static constexpr f32 kAttackRage = 0.3f;
+    static constexpr f32 kHealthHeat = 0.8f;
+    static constexpr f32 kHealthRage = 0.6f;
     static constexpr Color kRageTint = Color::rgba(165, 30, 30); ///< the swarm at full rage
 
     f32 heat = 0.0f; ///< how far the longest run has come toward the bravery line, eased

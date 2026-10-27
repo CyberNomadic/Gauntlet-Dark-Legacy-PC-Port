@@ -71,11 +71,11 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     SwarmAggression hot;
     hot.heat = 1.0f;
     hot.rage = 1.0f;
-    CHECK(hot.breedingPace() == Approx(1.8f));
-    CHECK(hot.broodScale() == Approx(1.75f));
-    CHECK(hot.speedScale() == Approx(1.3f));
-    CHECK(hot.attackPace() == Approx(1.4f));
-    CHECK(hot.healthScale() == Approx(1.7f));
+    CHECK(hot.breedingPace() == Approx(2.6f));
+    CHECK(hot.broodScale() == Approx(2.5f));
+    CHECK(hot.speedScale() == Approx(1.6f));
+    CHECK(hot.attackPace() == Approx(1.8f));
+    CHECK(hot.healthScale() == Approx(2.4f));
     CHECK(hot.tint() == SwarmAggression::kRageTint);
     CHECK(hot.aura() == 1.0f);
     SwarmAggression halfway;
