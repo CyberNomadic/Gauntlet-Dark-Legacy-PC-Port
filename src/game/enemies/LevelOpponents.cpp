@@ -14,8 +14,7 @@
 #include "engine/math/PortableMath.h"
 
 #include "game/characters/Progression.h"
-#include "game/effects/WeaponGlow.h"
-#include "game/effects/PotionEmission.h"
+#include "game/effects/ElementAura.h"
 #include "game/combat/DamageTypes.h"
 #include "game/effects/CritterCueEmission.h"
 #include "game/effects/DynamicLights.h"
@@ -1934,20 +1933,8 @@ void LevelOpponents::dropElementalPotion(const EnemyLoss& loss) {
     if (!m_resources.has_value()) {
         return;
     }
-    // It goes up in its element's burst, the way a potion of it breaks, and leaves that
-    // potion in a bag.
-    const PotionEmission::Look& look = PotionEmission::look(loss.element);
-    EffectTrees::Setting burst;
-    burst.seconds = 3;
-    burst.scale = Enemies::kElementalSize;
-    if (const u32 effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
-                                                         look.burst, loss.position, burst);
-        effect != 0) {
-        m_sim.cueEffects.push_back(effect);
-    }
-    if (!look.sound.empty()) {
-        m_resources->audio.playNamed(look.sound);
-    }
+    // It leaves the potion of its element in a bag, and no more: a burst would fill the
+    // screen and read as a potion's.
     Bag bag;
     bag.position = loss.position;
     bag.name = "POT_" + std::string{damage::colourOf(static_cast<u32>(loss.element))};
@@ -1958,21 +1945,24 @@ void LevelOpponents::markElementals() {
     if (!m_resources.has_value()) {
         return;
     }
-    constexpr f32 kGlowScale = 2.0f; ///< the hand's glow, grown to ring a body
     const auto centreOf = [this](s32 id) {
         return m_enemies.positionOf(id) + Vec3{0.0f, 0.5f * m_enemies.heightOf(id), 0.0f};
     };
-    const auto glow = [&](s32 element, const Vec3& centre) -> u32 {
-        const std::string tree = WeaponGlow::holdTree(static_cast<u32>(element));
-        if (tree.empty() || !m_resources->weapons.loaded() ||
-            !m_resources->weapons.trees.find(tree).has_value()) {
+    // The aura: the remake's own emitter in the element's manner, over the sprite the
+    // weapons archive holds in its colour.
+    const auto aura = [&](s32 id, s32 element, const Vec3& centre) -> u32 {
+        ItemArchive& weapons = m_resources->weapons;
+        if (!weapons.loaded()) {
             return 0;
         }
-        EffectTrees::Setting setting;
-        setting.persistent = true;
-        setting.scale = kGlowScale;
-        return m_resources->effects.startSet(m_resources->device, m_resources->weapons, tree,
-                                             centre, setting);
+        const auto sprite = weapons.textures.find(ElementAura::sprite(element));
+        if (!sprite.has_value()) {
+            return 0;
+        }
+        return m_resources->effects.startParticles(
+            m_resources->device, weapons,
+            ElementAura::descriptor(element, m_enemies.radiusOf(id), m_enemies.heightOf(id)),
+            *sprite, glm::translate(Mat4{1.0f}, centre));
     };
     for (usize i = 0; i < m_sim.elementMarks.size();) {
         ElementMark& mark = m_sim.elementMarks[i];
@@ -1988,7 +1978,7 @@ void LevelOpponents::markElementals() {
         }
         const Vec3 centre = centreOf(mark.enemy);
         if (mark.effect != 0 && !m_resources->effects.playing(mark.effect)) {
-            mark.effect = glow(m_enemies.elementOf(mark.enemy), centre);
+            mark.effect = aura(mark.enemy, m_enemies.elementOf(mark.enemy), centre);
         }
         if (mark.effect != 0) {
             m_resources->effects.placeAt(mark.effect, glm::translate(Mat4{1.0f}, centre));
@@ -2005,7 +1995,7 @@ void LevelOpponents::markElementals() {
                                 [&](const ElementMark& mark) { return mark.instance == instance; })) {
             continue;
         }
-        m_sim.elementMarks.push_back({instance, id, glow(element, centreOf(id))});
+        m_sim.elementMarks.push_back({instance, id, aura(id, element, centreOf(id))});
     }
 }
 

@@ -264,6 +264,8 @@ add_library(game STATIC
     party/PlayerFamiliar.cpp
     party/MikeyFigure.cpp
     effects/WeaponGlow.cpp
+    effects/ElementAura.h
+    effects/ElementAura.cpp
     camera/CameraMovementLimit.cpp
     level/SkorneArena.cpp
     level/FallingPiece.cpp

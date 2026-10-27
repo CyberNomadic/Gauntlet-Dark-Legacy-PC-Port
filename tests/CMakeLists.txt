@@ -310,6 +310,7 @@ add_executable(tests
     game/party/PlayerFamiliarTests.cpp
     game/party/MikeyFigureTests.cpp
     game/effects/WeaponGlowTests.cpp
+    game/effects/ElementAuraTests.cpp
     game/camera/CameraMovementLimitTests.cpp
     game/camera/FreeCameraTests.cpp
     game/players/NoclipMotionTests.cpp

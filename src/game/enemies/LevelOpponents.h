@@ -280,10 +280,10 @@ private:
     void releaseBag(const Bag& bag);
     /** Sends a bag up where it lies, to open where it lands. */
     void throwBag(Bag bag);
-    /** Keeps the glow on each elemental one, starting one for each found, stopping each
+    /** Keeps the aura on each elemental one, starting one for each found, stopping each
      * whose body is gone. */
     void markElementals();
-    /** An elemental one slain goes up in its element's burst and leaves its potion. */
+    /** An elemental one slain leaves its element's potion in a bag. */
     void dropElementalPotion(const EnemyLoss& loss);
     /** A great one slain lets what it carried go, a gargoyle its piece of the wings if it
      * carried nothing (CritterDropItem), with the lesson its kind teaches. */
@@ -355,7 +355,7 @@ private:
         bool operator==(const GeneratorReward&) const = default;
     };
     /** Mutable coordinator state; archives, services and playback handles stay outside. */
-    /** The glow of one of Aggressor Mode's elemental ones, kept while it lives. */
+    /** The aura of one of Aggressor Mode's elemental ones, kept while it lives. */
     struct ElementMark {
         u64 instance = 0;
         s32 enemy = -1;
