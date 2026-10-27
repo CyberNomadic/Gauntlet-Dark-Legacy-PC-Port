@@ -197,8 +197,11 @@ void PlayerAttacks::strikeTarget(const MissileTarget& target, f32 damage, u32 fl
         countCritterBlow(targets, players, owner.player(), source, critters, critter, stood);
     } else if (target.id >= kGeneratorTargetBase) {
         if (mechanicsOf(targets).generatorTakes(source)) {
-            targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, damage,
-                                              owner.player(), players);
+            const s32 hut = target.id - kGeneratorTargetBase;
+            const Generators& huts = targets.opponents.generators();
+            const bool stood = huts.standing(hut);
+            targets.opponents.strikeGenerator(hut, damage, owner.player(), players);
+            countGeneratorBlow(targets, players, owner.player(), source, huts, hut, stood);
         }
     } else if (target.id >= kEnemyTargetBase) {
         const s32 enemy = target.id - kEnemyTargetBase;

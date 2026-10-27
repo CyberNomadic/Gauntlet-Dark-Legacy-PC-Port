@@ -15,9 +15,10 @@ using namespace gdl::game;
 constexpr std::array kSources{BlowSource::Swing,  BlowSource::Shot,   BlowSource::SuperShot,
                               BlowSource::Potion, BlowSource::Turbo,  BlowSource::Charge,
                               BlowSource::Breath, BlowSource::Shield};
+constexpr std::array kOutcomes{BlowOutcome::Hurt, BlowOutcome::Killed, BlowOutcome::Destroyed};
 
-TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone build the run and "
-          "anything harms a generator",
+TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone count, as the original "
+          "counted them, and anything harms a generator",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 1> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -26,14 +27,19 @@ TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone build 
     CHECK_FALSE(off.meterShown());
     CHECK_FALSE(off.swarmAggravated());
     for (const BlowSource source : kSources) {
-        CAPTURE(static_cast<int>(source));
-        CHECK(off.blowBuildsRun(source, players[0], players) == (source == BlowSource::Swing));
+        for (const BlowOutcome outcome : kOutcomes) {
+            CAPTURE(static_cast<int>(source), static_cast<int>(outcome));
+            const bool original =
+                source == BlowSource::Swing && outcome != BlowOutcome::Destroyed;
+            CHECK(off.runEffect(source, outcome, players[0], players) ==
+                  (original ? RunEffect::CountAsOriginal : RunEffect::Nothing));
+        }
         CHECK(off.generatorTakes(source));
     }
 }
 
-TEST_CASE("in Aggressor Mode every blow builds the run and only swings and shots harm a "
-          "generator",
+TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, any other blow refreshes "
+          "the run, and only swings and shots harm a generator",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 1> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -44,7 +50,10 @@ TEST_CASE("in Aggressor Mode every blow builds the run and only swings and shots
     CHECK(MechanicsFacade::standard().aggressorMode());
     for (const BlowSource source : kSources) {
         CAPTURE(static_cast<int>(source));
-        CHECK(on.blowBuildsRun(source, players[0], players));
+        CHECK(on.runEffect(source, BlowOutcome::Hurt, players[0], players) == RunEffect::Refresh);
+        CHECK(on.runEffect(source, BlowOutcome::Killed, players[0], players) == RunEffect::Count);
+        CHECK(on.runEffect(source, BlowOutcome::Destroyed, players[0], players) ==
+              RunEffect::Count);
         CHECK(on.generatorTakes(source) ==
               (source == BlowSource::Swing || source == BlowSource::Shot));
     }
@@ -54,34 +63,44 @@ TEST_CASE("in Aggressor Mode every blow builds the run and only swings and shots
     CHECK(switched.settings() == MechanicsFacade::Settings{.aggressorMode = false});
 }
 
-TEST_CASE("blows struck under time stop, invulnerability or invisibility build no run",
+TEST_CASE("blows struck under time stop, invulnerability or invisibility do nothing for the run",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 2> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
     players[1].actor.spawn(1, {}, nullptr, Vec3{0, 0, 5}, 0);
     const MechanicsFacade on;
-    REQUIRE(on.blowBuildsRun(BlowSource::Shot, players[0], players));
-    REQUIRE(on.blowBuildsRun(BlowSource::Shot, players[1], players));
-    // Invulnerable, the first builds nothing; the second is not affected.
+    REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[0], players) ==
+            RunEffect::Count);
+    REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Hurt, players[1], players) ==
+            RunEffect::Refresh);
+    // Invulnerable, the first earns nothing; the second is not affected.
     players[0].actor.save().progress().inventory.addPowerup(powerup::kArmor,
                                                             powerup::kInvulnerable, 0, 1);
-    CHECK_FALSE(on.blowBuildsRun(BlowSource::Swing, players[0], players));
-    CHECK(on.blowBuildsRun(BlowSource::Swing, players[1], players));
-    // Invisible, the second builds nothing either.
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[0], players) ==
+          RunEffect::Nothing);
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Hurt, players[0], players) ==
+          RunEffect::Nothing);
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[1], players) ==
+          RunEffect::Count);
+    // Invisible, the second earns nothing either.
     players[1].actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kInvisible,
                                                             0, 1);
-    CHECK_FALSE(on.blowBuildsRun(BlowSource::Turbo, players[1], players));
-    // Time stopped by anyone, nobody's blows build a run.
+    CHECK(on.runEffect(BlowSource::Turbo, BlowOutcome::Killed, players[1], players) ==
+          RunEffect::Nothing);
+    // Time stopped by anyone, nobody's blows do anything.
     std::array<PlayerRuntime, 2> stopped;
     stopped[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
     stopped[1].actor.spawn(1, {}, nullptr, Vec3{0, 0, 5}, 0);
     stopped[1].actor.save().progress().inventory.addPowerup(powerup::kSpecial, powerup::kStopTime,
                                                             0, 1);
-    CHECK_FALSE(on.blowBuildsRun(BlowSource::Swing, stopped[0], stopped));
-    CHECK_FALSE(on.blowBuildsRun(BlowSource::Swing, stopped[1], stopped));
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, stopped[0], stopped) ==
+          RunEffect::Nothing);
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Hurt, stopped[1], stopped) ==
+          RunEffect::Nothing);
     // Out of the mode the original's swing counts regardless.
     const MechanicsFacade off{{.aggressorMode = false}};
-    CHECK(off.blowBuildsRun(BlowSource::Swing, stopped[1], stopped));
+    CHECK(off.runEffect(BlowSource::Swing, BlowOutcome::Hurt, stopped[1], stopped) ==
+          RunEffect::CountAsOriginal);
 }
 
 } // namespace

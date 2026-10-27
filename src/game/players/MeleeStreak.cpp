@@ -1,5 +1,6 @@
 #include "game/players/MeleeStreak.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "engine/core/Types.h"
@@ -25,6 +26,12 @@ void MeleeStreak::record(bool telling) {
     m_count += telling ? kTelling : kHurt;
     m_quiet = 0.0f;
     m_running = true;
+}
+
+void MeleeStreak::refresh() {
+    if (m_running) {
+        m_quiet = std::max(0.0f, m_quiet - kRefresh);
+    }
 }
 
 std::string_view MeleeStreak::step(f32 seconds) {

@@ -150,20 +150,24 @@ public:
     static constexpr f32 kHeldReach = MeleeSelection::kHeldReach;
     static constexpr f32 kLowEnemy = 4.0f; ///< the height under which an enemy is short
     static constexpr f32 kLowThing = 3.5f; ///< and anything else
-    /** A blow of `source` landed for `player` counts toward their run of close blows
-     * (`MeleeStreak`) when the mechanics say so: on an enemy only one taller than the short
-     * (hht > 2), telling when it killed or the body was not standing to take it; `stood` is
-     * whether it was. */
+    /** A blow of `source` landed for `player` does for their run of close blows
+     * (`MeleeStreak`) what the mechanics say: on an enemy only one taller than the short
+     * (hht > 2); a kill is one that stood (`stood`) and stands no more, and the original's
+     * telling blow one that killed or that the body was not standing to take. */
     static void countEnemyBlow(const Targets& targets, std::span<PlayerRuntime> players,
                                s32 player, BlowSource source, const Enemies& enemies, s32 id,
                                bool stood);
     static void countCritterBlow(const Targets& targets, std::span<PlayerRuntime> players,
                                  s32 player, BlowSource source, const Critters& critters,
                                  s32 id, bool stood);
-    /** A blow a sleeping boss does not take, or the last, tells for three. */
+    /** A blow a sleeping boss does not take, or the last, is the original's telling one. */
     static void countBossBlow(const Targets& targets, std::span<PlayerRuntime> players,
                               s32 player, BlowSource source, const BossView& before,
                               const Bosses& bosses);
+    /** A blow on generator `id`, destroyed when it `stood` and stands no more. */
+    static void countGeneratorBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                                   s32 player, BlowSource source, const Generators& huts,
+                                   s32 id, bool stood);
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     /** The same native contact, with generator presentation supplied by a
      * transaction-local publisher. A refusal requires complete caller undo. */

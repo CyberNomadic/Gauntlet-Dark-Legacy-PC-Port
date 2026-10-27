@@ -81,11 +81,10 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     SwarmAggression hot;
     hot.heat = 1.0f;
     hot.rage = 1.0f;
-    // The paces stop at their caps; the brood and the health do not.
-    CHECK(hot.breedingPace() == Approx(SwarmAggression::kBreedingCap));
+    CHECK(hot.breedingPace() == Approx(2.6f));
     CHECK(hot.broodScale() == Approx(2.5f));
-    CHECK(hot.speedScale() == Approx(SwarmAggression::kSpeedCap));
-    CHECK(hot.attackPace() == Approx(SwarmAggression::kAttackCap));
+    CHECK(hot.speedScale() == Approx(1.6f));
+    CHECK(hot.attackPace() == Approx(1.8f));
     CHECK(hot.healthScale() == Approx(2.4f));
     SwarmAggression mild;
     mild.heat = 0.5f;
@@ -108,11 +107,20 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     beyond.heat = 3.0f;
     beyond.rage = 2.0f;
     CHECK(beyond.valid());
-    CHECK(beyond.breedingPace() == Approx(SwarmAggression::kBreedingCap));
+    CHECK(beyond.breedingPace() == Approx(5.4f));
     CHECK(beyond.healthScale() == Approx(4.6f));
     CHECK(beyond.broodScale() == Approx(5.0f));
-    CHECK(beyond.speedScale() == Approx(SwarmAggression::kSpeedCap));
-    CHECK(beyond.attackPace() == Approx(SwarmAggression::kAttackCap));
+    CHECK(beyond.speedScale() == Approx(2.6f));
+    CHECK(beyond.attackPace() == Approx(3.1f));
+    // The paces stop at seven times, however long the run; the brood and the health do not.
+    SwarmAggression extreme;
+    extreme.heat = 20.0f;
+    extreme.rage = 10.0f;
+    CHECK(extreme.breedingPace() == Approx(SwarmAggression::kBreedingCap));
+    CHECK(extreme.speedScale() == Approx(SwarmAggression::kSpeedCap));
+    CHECK(extreme.attackPace() == Approx(SwarmAggression::kAttackCap));
+    CHECK(extreme.healthScale() == Approx(23.0f));
+    CHECK(extreme.broodScale() == Approx(26.0f));
     CHECK(beyond.tint() == SwarmAggression::kRageTint);
     CHECK(beyond.aura() == 1.0f);
     SwarmAggression wrong;

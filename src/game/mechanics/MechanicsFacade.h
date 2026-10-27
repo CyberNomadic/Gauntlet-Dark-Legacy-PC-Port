@@ -13,11 +13,26 @@ enum class BlowSource : u8 {
     Swing,     ///< a melee swing
     Shot,      ///< a thrown or fired weapon
     SuperShot, ///< the super shot
-    Potion,    ///< a potion's burst, cast or thrown
+    Potion,    ///< a potion's burst, cast or thrown, or its shield's ring
     Turbo,     ///< a turbo move's strike, the thunder hammer among them
     Charge,    ///< a charge or combo body blow
     Breath,    ///< a breath worn as a powerup
     Shield,    ///< a fire or lightning shield's touch
+};
+
+/** What a blow did to what it landed on. */
+enum class BlowOutcome : u8 {
+    Hurt,      ///< it stands, or was not standing to take it
+    Killed,    ///< the blow felled it
+    Destroyed, ///< a generator, to rubble
+};
+
+/** What a blow does for the striker's run of close blows (`MeleeStreak`). */
+enum class RunEffect : u8 {
+    Nothing,
+    Refresh,         ///< gives the run some of its quiet back; counts nothing
+    Count,           ///< counts one
+    CountAsOriginal, ///< counts as the original's swing did: one, or three when telling
 };
 
 /**
@@ -26,9 +41,10 @@ enum class BlowSource : u8 {
  * same questions without another hook. Settings only, never simulation state: a mechanic's
  * own state lives with the system that steps it.
  *
- * Aggressor Mode: the style meter over a run of close blows, every landed blow building it
- * but those struck under time stop, invulnerability or invisibility; the swarm aggravated by
- * the run; and the generators harmed by swings and shots alone.
+ * Aggressor Mode: the style meter over a run of close blows, counted in kills and generators
+ * destroyed, every landed blow giving the run some of its quiet back, none of it under time
+ * stop, invulnerability or invisibility; the swarm aggravated by the run; and the generators
+ * harmed by swings and shots alone.
  */
 class MechanicsFacade {
 public:
@@ -47,11 +63,12 @@ public:
     const Settings& settings() const { return m_settings; }
     bool aggressorMode() const { return m_settings.aggressorMode; }
 
-    /** Whether a blow of `source` landed by `striker` builds their run of close blows: in
-     * Aggressor Mode any blow, unless struck under time stop, invulnerability or
-     * invisibility; out of it the original's rule stands, swings alone. */
-    bool blowBuildsRun(BlowSource source, const PlayerRuntime& striker,
-                       std::span<const PlayerRuntime> players) const;
+    /** What a blow of `source` with `outcome`, landed by `striker`, does for their run. In
+     * Aggressor Mode a kill or a generator destroyed counts one and anything else landed
+     * refreshes the run, none of it under time stop, invulnerability or invisibility; out of
+     * the mode the original's rule stands, swings alone, as the original counted them. */
+    RunEffect runEffect(BlowSource source, BlowOutcome outcome, const PlayerRuntime& striker,
+                        std::span<const PlayerRuntime> players) const;
     /** Whether a blow of `source` harms a generator at all: in Aggressor Mode swings and
      * shots alone. */
     bool generatorTakes(BlowSource source) const;

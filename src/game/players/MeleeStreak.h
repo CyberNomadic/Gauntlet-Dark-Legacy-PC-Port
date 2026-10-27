@@ -38,12 +38,16 @@ public:
     static constexpr s32 kHeroic = 30;  ///< 0x1E
     static constexpr s32 kBravery = 45; ///< 0x2D
     static constexpr f32 kQuiet = 3.0f; ///< seconds after the last blow; the original's two
+    static constexpr f32 kRefresh = 1.0f; ///< of the quiet, given back by a blow not counted
     static constexpr f32 kWait = 3.0f;  ///< the most the praise waits for the narrator
     static constexpr std::string_view kHeroicVoice = "S_HEROIC";
     static constexpr std::string_view kBraveryVoice = "S_BRAVERY";
 
     /** A counted blow landed; `telling` when it killed or was not taken. */
     void record(bool telling);
+    /** A blow landed that is not counted: gives a run under way `kRefresh` of its quiet
+     * back, keeping it going; nothing without a run. */
+    void refresh();
     /** Runs the quiet on by `seconds`: the praise earned once it is over, else nothing. */
     std::string_view step(f32 seconds);
     s32 count() const { return m_count; }

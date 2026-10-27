@@ -40,9 +40,9 @@ struct SwarmAggression {
     static constexpr f32 kHealthHeat = 0.8f;
     static constexpr f32 kHealthRage = 0.6f;
     /** The most the paces reach, however long the run. */
-    static constexpr f32 kBreedingCap = 2.0f;
-    static constexpr f32 kSpeedCap = 1.4f;
-    static constexpr f32 kAttackCap = 1.5f;
+    static constexpr f32 kBreedingCap = 7.0f;
+    static constexpr f32 kSpeedCap = 7.0f;
+    static constexpr f32 kAttackCap = 7.0f;
     static constexpr Color kRageTint = Color::rgba(165, 30, 30); ///< the swarm at full rage
 
     f32 heat = 0.0f; ///< the longest run as a share of the bravery line, eased, past 1 beyond it

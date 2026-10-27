@@ -11,14 +11,21 @@ const MechanicsFacade& MechanicsFacade::standard() {
     return kStandard;
 }
 
-bool MechanicsFacade::blowBuildsRun(BlowSource source, const PlayerRuntime& striker,
-                                    std::span<const PlayerRuntime> players) const {
+RunEffect MechanicsFacade::runEffect(BlowSource source, BlowOutcome outcome,
+                                     const PlayerRuntime& striker,
+                                     std::span<const PlayerRuntime> players) const {
     if (!m_settings.aggressorMode) {
-        return source == BlowSource::Swing;
+        // The original counted its swings on the swarm, the great ones and the bosses alone.
+        return source == BlowSource::Swing && outcome != BlowOutcome::Destroyed
+                   ? RunEffect::CountAsOriginal
+                   : RunEffect::Nothing;
     }
     // Nothing struck while the swarm stands still or cannot strike back is earned.
     const PowerupEffects worn = PowerupEffects::of(striker.actor.save().progress().inventory);
-    return !PlayerPowerups::timeStopped(players) && !worn.invulnerable() && !worn.invisible();
+    if (PlayerPowerups::timeStopped(players) || worn.invulnerable() || worn.invisible()) {
+        return RunEffect::Nothing;
+    }
+    return outcome == BlowOutcome::Hurt ? RunEffect::Refresh : RunEffect::Count;
 }
 
 bool MechanicsFacade::generatorTakes(BlowSource source) const {

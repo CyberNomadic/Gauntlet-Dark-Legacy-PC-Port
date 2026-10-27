@@ -1557,15 +1557,14 @@ TEST_CASE("a charge throws down the enemy it runs into, once a charge",
     f.attacks.ramBarrels(0, f.players, f.targets);
     CHECK(enemies.healthOf(against) < whole - 20.0f); // thirty-two, less its armour
     CHECK(enemies.healthOf(afar) == whole);
-    // The charge's blow counts towards the run of close blows like a swing's.
-    const s32 counted = enemies.heightOf(against) > PlayerAttacks::kLowEnemy ? 1 : 0;
-    CHECK(f.players[0].streak.count() == counted);
+    // A charge that only hurts gives a run its quiet back; it counts nothing.
+    CHECK(f.players[0].streak.count() == 0);
     enemies.update(2, 1.0f / 30, {});
     CHECK(enemies.pushCountOf(against) == 1); // thrown down, back the way the charge went
     const f32 once = enemies.healthOf(against);
     f.attacks.ramBarrels(0, f.players, f.targets);
     CHECK(enemies.healthOf(against) == once); // not again in the same charge
-    CHECK(f.players[0].streak.count() == counted);
+    CHECK(f.players[0].streak.count() == 0);
     f.opponents.close();
 }
 
@@ -2463,9 +2462,8 @@ TEST_CASE("potion magic damages survivors once and drives knockdown through get-
     REQUIRE(f.opponents.enemies().healthOf(*enemy) < before);
     REQUIRE(f.opponents.enemies().healthOf(*enemy) > 0);
     const f32 after = f.opponents.enemies().healthOf(*enemy);
-    // The potion's blow counts towards its caster's run of close blows, once.
-    const s32 counted = f.opponents.enemies().heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0;
-    CHECK(f.players[0].streak.count() == counted);
+    // A survivor's hurt counts nothing toward the caster's run; a kill would.
+    CHECK(f.players[0].streak.count() == 0);
     f.opponents.enemies().update(2, 1.0f / 30, {});
     REQUIRE(f.opponents.enemies().animatorOf(*enemy)->action() == EnemyAction::HitReact2);
     bool gotUp = false;
@@ -2476,7 +2474,7 @@ TEST_CASE("potion magic damages survivors once and drives knockdown through get-
     }
     CHECK(gotUp);
     CHECK(f.opponents.enemies().healthOf(*enemy) == after);
-    CHECK(f.players[0].streak.count() == counted);
+    CHECK(f.players[0].streak.count() == 0);
     f.attacks.clear();
     f.opponents.close();
 }
@@ -4986,6 +4984,9 @@ TEST_CASE("a melee contact routes damage sound and impact once through level opp
     f.audio.open(root, &sounds, &info);
     REQUIRE(f.weapons.load(root / "WEAPONS"));
     f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    // The original's reading of the run: a swing that only hurts counts one.
+    const MechanicsFacade original{{.aggressorMode = false}};
+    f.targets.mechanics = &original;
     auto& enemies = f.opponents.enemies();
     // Keep the real level's sound roster, but place this melee fixture's actors
     // without a floor constraint so its geometry does not steer the contact.
@@ -5671,14 +5672,19 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-TEST_CASE("a shot that lands builds the run of close blows like a swing",
+TEST_CASE("a shot that lands gives the run its quiet back, and a shot that kills counts one",
           "[game][screens][player-attacks][streak][assets]") {
     const auto root =
         test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
     Fixture f;
     f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
     EnemyScales scales;
-    scales.health = 100;
+    bool kills = false;
+    SECTION("a hit on a body that stands") { scales.health = 100; }
+    SECTION("a kill") {
+        scales.health = 0.3f;
+        kills = true;
+    }
     auto& enemies = f.opponents.enemies();
     enemies.open(f.device, root, nullptr, 8, scales, 1);
     REQUIRE(enemies.loadKind(kGruntKind));
@@ -5689,6 +5695,10 @@ TEST_CASE("a shot that lands builds the run of close blows like a swing",
     const auto enemy = enemies.spawn(spawn, {});
     REQUIRE(enemy);
     const f32 whole = enemies.healthOf(*enemy);
+    // A run under way, two of its three quiet seconds gone.
+    f.players[0].streak.record(false);
+    REQUIRE(f.players[0].streak.step(2.0f).empty());
+    REQUIRE(f.players[0].streak.quiet() == 2.0f);
     MissileLaunch shot;
     shot.owner = 3;
     shot.position = Vec3{0, 1, 0};
@@ -5700,12 +5710,21 @@ TEST_CASE("a shot that lands builds the run of close blows like a swing",
         f.attacks.updateProjectiles(1.0f / 30, f.players, f.targets);
     }
     REQUIRE(enemies.healthOf(*enemy) < whole);
-    CHECK(f.players[0].streak.count() == (enemies.heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0));
+    const bool tall = enemies.heightOf(*enemy) > PlayerAttacks::kLowEnemy;
+    if (kills) {
+        CHECK_FALSE(enemies.alive(*enemy));
+        CHECK(f.players[0].streak.count() == (tall ? 2 : 1));
+        CHECK(f.players[0].streak.quiet() == (tall ? 0.0f : 2.0f));
+    } else {
+        CHECK(enemies.alive(*enemy));
+        CHECK(f.players[0].streak.count() == 1);
+        CHECK(f.players[0].streak.quiet() == Approx(tall ? 2.0f - MeleeStreak::kRefresh : 2.0f));
+    }
     f.attacks.clear();
     f.opponents.close();
 }
 
-TEST_CASE("a turbo strike that lands builds the run of close blows like a swing",
+TEST_CASE("a turbo strike that kills counts one toward the run of close blows",
           "[game][screens][player-attacks][streak][assets]") {
     const auto root = turboAssets();
     writeTextFile(root / "pdata/WAR.json", R"({"height":6,"width":2,
@@ -5718,7 +5737,7 @@ TEST_CASE("a turbo strike that lands builds the run of close blows like a swing"
     REQUIRE(f.classes.load(root / "pdata"));
     f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
     EnemyScales scales;
-    scales.health = 100;
+    scales.health = 0.3f; // a body the strike fells
     auto& enemies = f.opponents.enemies();
     enemies.open(f.device, root, nullptr, 8, scales, 1);
     REQUIRE(enemies.loadKind(kGruntKind));
@@ -5740,6 +5759,7 @@ TEST_CASE("a turbo strike that lands builds the run of close blows like a swing"
         f.effects.update(1.0f / 30);
     }
     REQUIRE(enemies.healthOf(*enemy) < whole);
+    CHECK_FALSE(enemies.alive(*enemy));
     CHECK(f.players[0].streak.count() == (enemies.heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0));
     f.attacks.clear();
     f.opponents.close();
