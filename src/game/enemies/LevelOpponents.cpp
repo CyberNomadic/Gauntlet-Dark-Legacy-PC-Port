@@ -1947,7 +1947,7 @@ void LevelOpponents::drawElementals(RenderDevice& device, const Mat4& clip,
                           m_enemies.radiusOf(id), m_enemies.heightOf(id)});
     }
     m_auras.step(bodies, seconds);
-    m_auras.draw(device, clip, camera);
+    m_auras.draw(device, clip, camera, &m_resources->weapons);
 }
 
 void LevelOpponents::dropCarried(const CombatLoss& loss, std::span<const PlayerRuntime> players,

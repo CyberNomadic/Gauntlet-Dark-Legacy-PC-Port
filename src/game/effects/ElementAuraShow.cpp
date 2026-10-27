@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <numbers>
+#include <string>
+
+#include "engine/core/Log.h"
 
 namespace gdl::game {
 
@@ -16,6 +20,7 @@ constexpr f32 kPi = std::numbers::pi_v<f32>;
 constexpr f32 kDrop = -22.0f;    ///< the drips' fall, units a second squared
 constexpr f32 kEmberLift = 4.0f; ///< the embers' lift, units a second squared
 constexpr f32 kRayRise = 0.3f;   ///< seconds a ray takes to reach its full length
+constexpr ElementAura::Cell kWhole{0.0f, 0.0f, 1.0f, 1.0f}; ///< a retail sprite, all of it
 constexpr s32 kFire = 1;
 constexpr s32 kElectric = 2;
 constexpr s32 kHoly = 3;
@@ -164,9 +169,9 @@ void ElementAuraShow::advance(Aura& aura, f32 seconds) {
     u32& random = aura.random;
     switch (body.element) {
     case kFire:
-        owe(aura, 0, 16.0f, Kind::Tongue, seconds);
+        owe(aura, 0, 36.0f, Kind::Tongue, seconds);
         owe(aura, 1, 12.0f, Kind::Ember, seconds);
-        owe(aura, 2, 2.5f, Kind::Smoke, seconds);
+        owe(aura, 2, 14.0f, Kind::Puff, seconds);
         break;
     case kElectric:
         // Static crackles all over; the arcs come in bursts, a few at a time.
@@ -226,14 +231,13 @@ void ElementAuraShow::bear(Aura& aura, Kind kind) {
     piece.phase = between(random, 0.0f, 2.0f * kPi);
     const f32 lot = unit(random);
     switch (kind) {
-    case Kind::Tongue: { // a flame licks up off the skin, swaying
+    case Kind::Tongue: { // a flame licks up off the skin through the flipbook's life, swaying
         const Vec3 direction = shellDirection(random, -0.2f, 0.85f);
-        piece.life = between(random, 0.45f, 0.7f);
-        piece.size = (1.3f + 0.7f * lot) * scale;
+        piece.life = static_cast<f32>(kFlameFrames) / kFlameRate;
+        piece.size = (1.0f + 0.5f * lot) * scale;
         piece.origin = onShell(body, direction, 0.9f);
-        piece.velocity = Vec3{0.0f, (4.5f + 2.0f * lot) * scale, 0.0f} +
-                         Vec3{direction.x, 0.0f, direction.z} * 0.6f * scale;
-        piece.frame = static_cast<u8>(nextRandom(random) % ElementAura::kFlames);
+        piece.velocity = Vec3{0.0f, (2.5f + 1.5f * lot) * scale, 0.0f} +
+                         Vec3{direction.x, 0.0f, direction.z} * 0.5f * scale;
         break;
     }
     case Kind::Ember: { // a spark flies up and away, lifting as it goes
@@ -244,12 +248,12 @@ void ElementAuraShow::bear(Aura& aura, Kind kind) {
         piece.velocity = Vec3{direction.x * 2.0f, 4.0f + 3.0f * lot, direction.z * 2.0f} * scale;
         break;
     }
-    case Kind::Smoke: { // a puff off the top, drifting up and growing
-        const Vec3 direction = shellDirection(random, 0.75f, 1.0f);
-        piece.life = between(random, 1.1f, 1.5f);
-        piece.size = 1.0f * scale;
-        piece.origin = onShell(body, direction, 0.8f);
-        piece.velocity = Vec3{direction.x * 0.5f, 2.2f, direction.z * 0.5f} * scale;
+    case Kind::Puff: { // a soft breath of fire rolls up off the body and grows
+        const Vec3 direction = shellDirection(random, -0.4f, 0.9f);
+        piece.life = between(random, 0.45f, 0.6f);
+        piece.size = (1.4f + 0.6f * lot) * scale;
+        piece.origin = onShell(body, direction, 0.95f);
+        piece.velocity = Vec3{direction.x * 0.8f, 2.5f + 1.5f * lot, direction.z * 0.8f} * scale;
         break;
     }
     case Kind::Static: // a crackle on the skin, there and gone
@@ -271,14 +275,14 @@ void ElementAuraShow::bear(Aura& aura, Kind kind) {
         piece.origin = onShell(body, shellDirection(random, -0.2f, 0.6f), 1.0f);
         piece.velocity = Vec3{0.0f, -0.5f * scale, 0.0f};
         break;
-    case Kind::Ray: { // light breaks out from within, any way at all
+    case Kind::Ray: { // light breaks out from within, any way but down into the floor
         const Vec3 axes = axesOf(body);
         piece.life = 0.9f;
         piece.origin = centreOf(body) + Vec3{between(random, -0.45f, 0.45f) * axes.x,
                                              between(random, -0.55f, 0.55f) * axes.y,
                                              between(random, -0.45f, 0.45f) * axes.z};
         piece.velocity = anyDirection(random);
-        if (piece.velocity.y < -0.15f) { // never down into the floor
+        if (piece.velocity.y < -0.15f) {
             piece.velocity.y = -piece.velocity.y;
         }
         piece.size = (1.8f + 2.2f * lot) * scale;
@@ -359,8 +363,8 @@ Vec3 ElementAuraShow::placeOf(const Body& body, const Piece& piece) {
         local.y += 0.5f * kEmberLift * age * age;
         local.x += std::sin(age * 9.0f + piece.phase) * 0.3f * scale;
         break;
-    case Kind::Smoke:
-        local.x += std::sin(age * 1.3f + piece.phase) * 0.4f * scale;
+    case Kind::Puff:
+        local.x += std::sin(age * 3.0f + piece.phase) * 0.2f * scale;
         break;
     case Kind::Wisp:
         local.x += std::sin(age * 2.2f + piece.phase) * 0.35f * scale;
@@ -381,7 +385,41 @@ Vec3 ElementAuraShow::placeOf(const Body& body, const Piece& piece) {
     return body.feet + local;
 }
 
-void ElementAuraShow::draw(RenderDevice& device, const Mat4& clip, const CameraFrame& camera) {
+void ElementAuraShow::bindRetail(RenderDevice& device, ItemArchive* weapons) {
+    const bool same = weapons == m_retail.archive;
+    if (same && (m_retail.tried || weapons == nullptr)) {
+        return;
+    }
+    m_retail = {};
+    m_retail.archive = weapons;
+    if (weapons == nullptr || !weapons->loaded()) {
+        return;
+    }
+    m_retail.tried = true;
+    TextureSet& textures = weapons->textures;
+    const auto first = textures.find(kFlameFrame);
+    const auto last =
+        textures.find(std::string{kFlameFrame} + "+" + std::to_string(kFlameFrames - 1));
+    const auto puff = textures.find(kPuffSprite);
+    if (!first.has_value() || !last.has_value() || *last != *first + kFlameFrames - 1 ||
+        !puff.has_value()) {
+        log::warn("Element aura: the weapons archive lacks the fire potion's flames");
+        return;
+    }
+    try {
+        for (u32 frame = 0; frame < kFlameFrames; ++frame) {
+            m_retail.flames[frame] = &textures.texture(device, *first + frame);
+        }
+        m_retail.puff = &textures.texture(device, *puff);
+    } catch (const std::exception& error) {
+        log::warn("Element aura: {}", error.what());
+        m_retail.flames = {};
+        m_retail.puff = nullptr;
+    }
+}
+
+void ElementAuraShow::draw(RenderDevice& device, const Mat4& clip, const CameraFrame& camera,
+                           ItemArchive* weapons) {
     if (m_auras.empty()) {
         return;
     }
@@ -389,6 +427,8 @@ void ElementAuraShow::draw(RenderDevice& device, const Mat4& clip, const CameraF
     if (atlas == nullptr) {
         return;
     }
+    bindRetail(device, weapons);
+    const bool retail = retailFire();
     Frame frame;
     frame.right = camera.right;
     frame.up = camera.up;
@@ -396,30 +436,44 @@ void ElementAuraShow::draw(RenderDevice& device, const Mat4& clip, const CameraF
     const Vec3 flat{camera.right.x, 0.0f, camera.right.z};
     const f32 flatLength = glm::length(flat);
     frame.upright = flatLength > 1.0e-4f ? flat / flatLength : Vec3{1.0f, 0.0f, 0.0f};
-    m_additive.clear();
-    m_additive.begin(PrimitiveTopology::TriangleList);
-    m_alpha.clear();
-    m_alpha.begin(PrimitiveTopology::TriangleList);
+    const auto open = [](ImmediateBatch& batch) {
+        batch.clear();
+        batch.begin(PrimitiveTopology::TriangleList);
+    };
+    open(m_additive);
+    open(m_puffs);
+    for (ImmediateBatch& batch : m_flames) {
+        open(batch);
+    }
     for (const Aura& aura : m_auras) {
-        drawAura(aura, frame);
+        drawAura(aura, frame, retail);
     }
     m_additive.end();
-    m_alpha.end();
-    DrawState soft;
-    soft.blend = BlendMode::Alpha;
-    soft.depthWrite = false;
-    soft.alphaTest = DrawState::kTranslucentAlphaTest;
-    if (!m_alpha.empty()) {
-        device.draw(m_alpha, *atlas, clip, soft); // the smoke, behind the flames
+    m_puffs.end();
+    for (ImmediateBatch& batch : m_flames) {
+        batch.end();
     }
-    DrawState lit = soft;
+    DrawState lit;
     lit.blend = BlendMode::Additive;
+    lit.depthWrite = false;
+    lit.alphaTest = DrawState::kTranslucentAlphaTest;
     if (!m_additive.empty()) {
         device.draw(m_additive, *atlas, clip, lit);
     }
+    if (!retail) {
+        return;
+    }
+    if (!m_puffs.empty()) {
+        device.draw(m_puffs, *m_retail.puff, clip, lit);
+    }
+    for (u32 frame = 0; frame < kFlameFrames; ++frame) {
+        if (!m_flames[frame].empty()) {
+            device.draw(m_flames[frame], *m_retail.flames[frame], clip, lit);
+        }
+    }
 }
 
-void ElementAuraShow::drawAura(const Aura& aura, const Frame& frame) {
+void ElementAuraShow::drawAura(const Aura& aura, const Frame& frame, bool retail) {
     const Body& body = aura.body;
     const f32 scale = scaleOf(body);
     const Vec3 centre = body.feet + centreOf(body);
@@ -461,15 +515,21 @@ void ElementAuraShow::drawAura(const Aura& aura, const Frame& frame) {
         const f32 t = std::clamp(piece.age / piece.life, 0.0f, 1.0f);
         const Vec3 at = placeOf(body, piece);
         switch (piece.kind) {
-        case Kind::Tongue: { // standing up off its base, flickering through the frames
-            const f32 width = piece.size * (1.0f - 0.45f * t);
-            const f32 height = 2.2f * width;
-            const u32 frameNow = piece.frame + static_cast<u32>(piece.age / 0.07f);
-            quad(m_additive, at + up * (0.5f * height), frame.upright * (0.5f * width),
-                 up * (0.5f * height),
-                 toneMix(Vec3{1.0f, 1.0f, 0.85f}, Vec3{1.0f, 0.45f, 0.2f}, t,
-                         t < 0.65f ? 1.0f : (1.0f - t) / 0.35f),
-                 ElementAura::cell(ElementAura::flame(frameNow)));
+        case Kind::Tongue: { // standing up off its base, playing the flipbook once through
+            const f32 width = piece.size;
+            const f32 height = 2.0f * width; // the frames stand twice as tall as wide
+            const u32 frameNow =
+                std::min(static_cast<u32>(piece.age * kFlameRate), kFlameFrames - 1);
+            const Vec3 base = at + up * (0.5f * height);
+            if (retail) {
+                quad(m_flames[frameNow], base, frame.upright * (0.5f * width), up * (0.5f * height),
+                     tone(1.0f, 1.0f, 1.0f, 1.0f), kWhole);
+            } else { // the atlas's own tongues, flickering through its frames and fading
+                quad(m_additive, base, frame.upright * (0.5f * width), up * (0.5f * height),
+                     toneMix(Vec3{1.0f, 1.0f, 0.85f}, Vec3{1.0f, 0.45f, 0.2f}, t,
+                             t < 0.65f ? 1.0f : (1.0f - t) / 0.35f),
+                     ElementAura::cell(ElementAura::flame(frameNow / 2)));
+            }
             break;
         }
         case Kind::Ember: {
@@ -480,10 +540,12 @@ void ElementAuraShow::drawAura(const Aura& aura, const Frame& frame) {
                  glowCell);
             break;
         }
-        case Kind::Smoke: {
-            const f32 half = 0.5f * piece.size * (1.0f + 1.6f * t);
-            quad(m_alpha, at, frame.right * half, frame.up * half,
-                 tone(0.25f, 0.22f, 0.2f, 0.35f * (1.0f - t) * std::min(1.0f, 4.0f * t)), glowCell);
+        case Kind::Puff: { // a breath of fire, swelling as it rises and reddening away
+            const f32 half = 0.5f * piece.size * (1.0f + 0.6f * t);
+            const Color colour = toneMix(Vec3{1.0f, 0.75f, 0.35f}, Vec3{0.8f, 0.2f, 0.05f}, t,
+                                         std::min(1.0f, 5.0f * t) * (1.0f - t));
+            quad(retail ? m_puffs : m_additive, at, frame.right * half, frame.up * half, colour,
+                 retail ? kWhole : glowCell);
             break;
         }
         case Kind::Arc: { // a wide faint glow under a thin bright core, flickering out
@@ -562,11 +624,15 @@ void ElementAuraShow::drawAura(const Aura& aura, const Frame& frame) {
 void ElementAuraShow::clear() {
     m_auras.clear();
     m_additive.clear();
-    m_alpha.clear();
+    m_puffs.clear();
+    for (ImmediateBatch& batch : m_flames) {
+        batch.clear();
+    }
 }
 
 void ElementAuraShow::release() {
     m_atlas.release();
+    m_retail = {};
 }
 
 usize ElementAuraShow::pieces() const {

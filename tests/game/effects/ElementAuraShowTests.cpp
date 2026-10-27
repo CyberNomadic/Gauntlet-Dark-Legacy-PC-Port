@@ -1,14 +1,17 @@
 #include <algorithm>
 #include <array>
+#include <set>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine/assets/ItemArchive.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 #include "engine/world/WorldCamera.h"
 
 #include "FakeRenderDevice.h"
+#include "TestSupport.h"
 #include "game/effects/ElementAura.h"
 #include "game/effects/ElementAuraShow.h"
 
@@ -48,17 +51,18 @@ TEST_CASE("each element's show keeps its own kinds of piece about its body",
     const Body& lightning = bodies[1];
     const Body& holy = bodies[2];
     const Body& acid = bodies[3];
-    // Fire: tongues lick up off the skin, embers fly, smoke rises off the top.
+    // Fire: tongues lick up off the skin, embers fly, breath puffs roll up off the body.
     CHECK(show.pieces(Kind::Tongue) > 0);
     CHECK(show.pieces(Kind::Ember) > 0);
-    CHECK(show.pieces(Kind::Smoke) > 0);
+    CHECK(show.pieces(Kind::Puff) > 0);
     for (const Vec3& at : show.placesOf(fire.instance, Kind::Tongue)) {
         CHECK(shells(fire, at) > 0.4f);
         CHECK(shells(fire, at) < 2.5f);
         CHECK(at.y >= fire.feet.y - 0.5f);
     }
-    for (const Vec3& at : show.placesOf(fire.instance, Kind::Smoke)) {
-        CHECK(at.y > fire.feet.y + 0.5f * fire.height);
+    for (const Vec3& at : show.placesOf(fire.instance, Kind::Puff)) {
+        CHECK(shells(fire, at) > 0.5f);
+        CHECK(shells(fire, at) < 3.0f);
     }
     CHECK(show.placesOf(lightning.instance, Kind::Tongue).empty());
     // Lightning: arcs jag over the shell between two of its points; static crackles on it.
@@ -140,7 +144,7 @@ TEST_CASE("an aura follows its body and goes when the body does, within the most
     CHECK(show.pieces() > 0);
 }
 
-TEST_CASE("the show draws every element over its atlas, additive but for the smoke, no depth written",
+TEST_CASE("the show draws every element over its atlas, additive, writing no depth",
           "[game][effects][aggression][elemental]") {
     test::FakeRenderDevice device;
     ElementAuraShow show;
@@ -155,18 +159,16 @@ TEST_CASE("the show draws every element over its atlas, additive but for the smo
     show.draw(device, Mat4{1.0f}, camera);
     REQUIRE_FALSE(device.draws.empty());
     CHECK(device.texturesCreated == 1);
-    bool additive = false;
-    bool soft = false;
+    CHECK_FALSE(show.retailFire()); // no archive: the atlas's own flames
     u8 brightest = 0;
     u8 mostOpaque = 0;
     usize vertices = 0;
     for (const auto& draw : device.draws) {
         CHECK(draw.texture == device.draws.front().texture);
+        CHECK(draw.blend() == BlendMode::Additive);
         CHECK_FALSE(draw.state.depthWrite);
         CHECK(draw.state.depthTest);
         CHECK(draw.state.alphaTest > 0.0f);
-        additive = additive || draw.blend() == BlendMode::Additive;
-        soft = soft || draw.blend() == BlendMode::Alpha;
         for (const ImmediateVertex& vertex : draw.vertices) {
             ++vertices;
             brightest = std::max({brightest, vertex.color.r, vertex.color.g, vertex.color.b});
@@ -184,11 +186,9 @@ TEST_CASE("the show draws every element over its atlas, additive but for the smo
             CHECK(near);
         }
     }
-    CHECK(additive);
-    CHECK(soft);
     CHECK(vertices % 6 == 0); // quads and strips, two triangles each
-    CHECK(vertices >= 120); // twenty quads at the least
-    CHECK(brightest >= 200); // colours 0 to 255, bright enough to show
+    CHECK(vertices >= 120);   // twenty quads at the least
+    CHECK(brightest >= 200);  // colours 0 to 255, bright enough to show
     CHECK(mostOpaque >= 200);
     // Cleared, it draws nothing; released, it makes its atlas again.
     show.clear();
@@ -199,6 +199,41 @@ TEST_CASE("the show draws every element over its atlas, additive but for the smo
     show.step(bodies, 1.0f / 30.0f);
     show.draw(device, Mat4{1.0f}, camera);
     CHECK(device.texturesCreated == 2);
+}
+
+TEST_CASE("fire burns with the weapons archive's fire potion flames and breath puffs",
+          "[game][effects][aggression][elemental][assets]") {
+    const auto directory = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path();
+    test::FakeRenderDevice device;
+    ItemArchive weapons;
+    REQUIRE(weapons.load(directory));
+    ElementAuraShow show;
+    const std::array<Body, 1> fire{Body{1, 1, Vec3{0.0f}, kRadius, kHeight}};
+    for (s32 frame = 0; frame < 30; ++frame) {
+        show.step(fire, 1.0f / 30.0f);
+    }
+    const CameraFrame camera = CameraFrame::at(Vec3{0.0f, 20.0f, -40.0f});
+    show.draw(device, Mat4{1.0f}, camera, &weapons);
+    REQUIRE(show.retailFire());
+    REQUIRE_FALSE(device.draws.empty());
+    std::set<const Texture*> textures;
+    for (const auto& draw : device.draws) {
+        textures.insert(draw.texture);
+        CHECK(draw.blend() == BlendMode::Additive);
+        CHECK_FALSE(draw.state.depthWrite);
+    }
+    // The atlas for the halo and embers, the puff, and flames at more than one frame.
+    CHECK(textures.size() >= 4);
+    CHECK(textures.size() <= 2 + ElementAuraShow::kFlameFrames);
+    // Without the archive the show burns over its atlas alone again.
+    device.draws.clear();
+    show.draw(device, Mat4{1.0f}, camera, nullptr);
+    CHECK_FALSE(show.retailFire());
+    std::set<const Texture*> own;
+    for (const auto& draw : device.draws) {
+        own.insert(draw.texture);
+    }
+    CHECK(own.size() == 1);
 }
 
 } // namespace
