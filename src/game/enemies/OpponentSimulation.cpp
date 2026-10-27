@@ -26,6 +26,8 @@ std::vector<MissileStop> OpponentSimulation::advance(const Frame& frame,
         m_placements->activate(
             [&](const auto& row) { m_enemies.spawn(row.spawn, {}, m_generators.obstacles()); });
     }
+    m_generators.setAggression(frame.aggression);
+    m_enemies.setAggression(frame.aggression);
     m_generators.update(frame.ticks, m_enemies, frame.players, frame.fixtures, frame.timeStopped);
     auto boxes = m_generators.enemyObstacles();
     boxes.insert(boxes.end(), frame.fixtures.begin(), frame.fixtures.end());

@@ -17,6 +17,7 @@
 #include "engine/world/WorldCollision.h"
 
 #include "FakeRenderDevice.h"
+#include "game/enemies/SwarmAggression.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/app/Scenario.h"
@@ -3857,6 +3858,39 @@ TEST_CASE("a shrunk swarm takes the low swing, as PlayerMotion judges a scaled-d
     CHECK(lowOf(*small));
     enemies.setShrink(EnemyShrink::kWhole);
     CHECK_FALSE(lowOf(*big));
+}
+
+
+TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][streak][aggression][assets]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), nullptr, 2, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    const f32 calmPace = enemies.paceOf(kGruntKind);
+    REQUIRE(calmPace > 0.0f);
+    EnemySpawn spawn;
+    spawn.placed = true;
+    spawn.position = {0, 0, 0};
+    const auto calm = enemies.spawn(spawn, {});
+    REQUIRE(calm.has_value());
+    const auto calmBody = enemies.observe(*calm);
+    REQUIRE(calmBody.has_value());
+    SwarmAggression hot;
+    hot.heat = 1.0f;
+    hot.rage = 0.5f;
+    enemies.setAggression(hot);
+    CHECK(enemies.paceOf(kGruntKind) == Approx(calmPace * hot.speedScale()));
+    spawn.position = {40, 0, 0};
+    const auto tough = enemies.spawn(spawn, {});
+    REQUIRE(tough.has_value());
+    const auto toughBody = enemies.observe(*tough);
+    REQUIRE(toughBody.has_value());
+    CHECK(toughBody->fullHealth == Approx(calmBody->fullHealth * hot.healthScale()));
+    CHECK(toughBody->health == Approx(calmBody->health * hot.healthScale()));
+    // The one born calm keeps the health it was born with.
+    CHECK(enemies.observe(*calm)->fullHealth == calmBody->fullHealth);
+    enemies.setAggression({});
+    CHECK(enemies.paceOf(kGruntKind) == Approx(calmPace));
 }
 
 } // namespace

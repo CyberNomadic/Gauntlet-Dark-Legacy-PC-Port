@@ -79,7 +79,7 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     const auto& [clouds, deathShots, carried, bags, bagSeed, barrelRams, rockHits, hitStreak,
                  lessons, critterEffects, moveEffects, cueEffects, deathEffects, deathContact,
                  deathSound, yells, yellClocks, hearers, shrink, critterExperienceOwed,
-                 generatorRewards, unseen, borrowedRoster] = values;
+                 generatorRewards, unseen, borrowedRoster, aggression] = values;
     const auto rows = [&digest]<usize N>(const auto& list) {
         digest.wide(list.size());
         for (const auto& row : list) {
@@ -118,6 +118,7 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     rows.template operator()<3>(generatorRewards);
     digest.value(unseen);
     rows.template operator()<4>(borrowedRoster);
+    digest.value(aggression);
 }
 
 bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const {
@@ -1146,6 +1147,16 @@ void LevelOpponents::advanceCritters(s32 ticks, f32 seconds, std::span<const Ene
     }
 }
 
+s32 LevelOpponents::longestRun(std::span<const PlayerRuntime> players) {
+    s32 longest = 0;
+    for (const PlayerRuntime& runtime : players) {
+        if (!runtime.departed && runtime.streak.running()) {
+            longest = std::max(longest, runtime.streak.count());
+        }
+    }
+    return longest;
+}
+
 void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> players,
                             std::span<const Obstacle> fixtures, const Events& events,
                             std::span<const MissileStop> stops,
@@ -1161,6 +1172,10 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     const LevelInfo* level = m_resources->world.level();
     const f32 missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1.0f;
     const bool timeStopped = PlayerPowerups::timeStopped(players);
+    // The swarm answers the party's longest run of close blows, held still with time.
+    if (!timeStopped) {
+        m_sim.aggression.step(seconds, longestRun(players));
+    }
     // fn_8004646C checks the live critter pool before ordinary enemy bodies,
     // both for route probes and check_enemy_pos's generator-birth clearance.
     auto combatants = m_critters.targets(true);
@@ -1169,7 +1184,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     m_enemies.setCombatantBodies(combatants);
     auto inTheWay = OpponentSimulation{m_generators, m_enemies, m_enemyMissiles}.advance(
         {ticks, seconds, views, fixtures, stops, m_critters.targets(true), m_bosses.targets(),
-         &m_resources->world.collision(), missileSpeed, timeStopped},
+         &m_resources->world.collision(), missileSpeed, timeStopped, m_sim.aggression},
         events.blastScenery, [this] { playBirths(); });
     landEnemyMissiles(players, events);
     playEnemyCues();

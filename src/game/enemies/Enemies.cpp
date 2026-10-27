@@ -6,11 +6,13 @@
 #include <initializer_list>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <tuple>
 
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
 #include "engine/math/PortableMath.h"
+#include "engine/world/SelectionHighlight.h"
 
 #include "game/combat/BodyContact.h"
 #include "game/combat/Damage.h"
@@ -117,6 +119,9 @@ constexpr s32 kDogKind = 18;
 constexpr s32 kLeaderWay = 12;
 constexpr s32 kAcidKind = 21;
 constexpr f32 kShadowReach = 1.0f; ///< a shadow finds its floor within this of the feet
+constexpr Color kAuraRim = Color::rgba(235, 25, 25); ///< an enraged swarm's rim
+constexpr Color kAuraWash = Color::rgba(170, 0, 0);  ///< and the wash over its faces
+constexpr f32 kAuraBeat = 0.12f; ///< radians a tick: the aura beats about once a second
 
 constexpr f32 kCheckpointMagnitude = 1'000'000;
 constexpr s32 kCheckpointCounter = 100'000'000;
@@ -1121,7 +1126,7 @@ const TreeInfo* Enemies::treeOf(s32 kind, s32 tier) const {
 }
 
 f32 Enemies::paceOf(s32 kind) const {
-    return enemyKind(kind).pace * m_simulation.scales.speed;
+    return enemyKind(kind).pace * m_simulation.scales.speed * m_aggression.speedScale();
 }
 
 Vec3 Enemies::bodyCentre(const Enemy& enemy) {
@@ -1260,9 +1265,12 @@ void Enemies::initialise(Enemy& enemy, const EnemySpawn& spawn, const EnemyKind&
     // 5564; do_enemy_move zeroes its step): not the variants, nor one that sleeps first.
     enemy.stunTicks =
         spawn.placed && !spawn.asleep && spawn.tier < kArcherStrength ? kPlacedStun : 0;
-    // Death alone is not scaled by the level; the swarm has a third of its kind's health a
-    // tier, and hits softer as it loses its kind's full share.
-    const f32 scale = spawn.kind != kDeathKind ? m_simulation.scales.health : 1.0f;
+    // Death alone is not scaled by the level nor born tougher to an aggravated swarm; the
+    // swarm has a third of its kind's health a tier, and hits softer as it loses its kind's
+    // full share.
+    const f32 scale = spawn.kind != kDeathKind
+                          ? m_simulation.scales.health * m_aggression.healthScale()
+                          : 1.0f;
     enemy.fullHealth = kind.health * scale;
     enemy.health =
         spawn.kind < kSwarmKindCount ? kind.healthAtTier(enemy.tier) * scale : enemy.fullHealth;
@@ -1656,7 +1664,11 @@ void Enemies::step(f32 seconds, std::span<const EnemyView> players,
         if (enemy.animator.entering()) {
             enemy.animator.request(EnemyAction::Walk);
         }
-        enemy.animator.updateCaptured(kMotionTicks, kMotionSeconds, enemy.contact >= 0);
+        // An aggravated swarm swings quicker, so its blow lands sooner.
+        const f32 swingSeconds = enemy.animator.swinging()
+                                     ? kMotionSeconds * m_aggression.attackPace()
+                                     : kMotionSeconds;
+        enemy.animator.updateCaptured(kMotionTicks, swingSeconds, enemy.contact >= 0);
         if (enemy.kind == kVeilingKind) {
             veil(enemy, kMotionTicks);
         }
@@ -3000,6 +3012,20 @@ std::optional<Enemies::Presentation> Enemies::presentation(s32 id) const {
 void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                    const Texture* hitFlash, ItemArchive* weapons, const CameraFrame* camera,
                    f32 presentationAlpha, TreeModel::Pass pass) {
+    // Past the bravery line the swarm darkens to red and an aura, beating with the ticks,
+    // marks each body out the way the console's selection is, in its red.
+    const f32 aura = m_aggression.aura();
+    std::optional<SelectionHighlight> rage;
+    if (aura > 0.0f) {
+        const f32 beat =
+            0.5f + 0.5f * std::sin(static_cast<f32>(m_simulation.frame) * kAuraBeat);
+        const f32 strength = aura * (0.6f + 0.4f * beat);
+        rage.emplace(camera != nullptr ? camera->position : Vec3{0.0f},
+                     kAuraRim.withAlpha(static_cast<u8>(std::lround(255.0f * strength))),
+                     kAuraWash.withAlpha(static_cast<u8>(std::lround(90.0f * strength))),
+                     SelectionHighlight::kRimWidth * (1.0f + 0.6f * aura * beat));
+    }
+    const Color tint = m_aggression.tint();
     for (s32 i = 0; i < m_simulation.most; ++i) {
         const Enemy& enemy = m_simulation.enemies[static_cast<usize>(i)];
         if (enemy.state == State::Inactive || !enemy.animator.bound() ||
@@ -3019,8 +3045,10 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         found.textures->apply(body, *found.tree, statue ? 0 : player.sequence(),
                               statue ? 0 : visualFrame,
                               found.textures->presentationOffset(presentationAlpha));
-        body.setAppearance((enemy.killed && enemy.kind != kDeathKind) || enemy.flashSeconds > 0);
-        if (enemy.flashSeconds > 0) {
+        const bool flashing = enemy.flashSeconds > 0;
+        body.setAppearance((enemy.killed && enemy.kind != kDeathKind) || flashing,
+                           flashing || enemy.kind == kDeathKind ? Color::white() : tint);
+        if (flashing) {
             body.setMaskedTexture(hitFlash);
         }
         if (enemy.killed && !enemy.deathSkin.empty()) {
@@ -3070,7 +3098,11 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         if (alpha <= 0.0f) {
             continue; // gone from sight altogether
         }
-        body.setHighlight(i == m_highlightedId ? m_highlight : nullptr);
+        const SelectionHighlight* mark = i == m_highlightedId ? m_highlight : nullptr;
+        if (mark == nullptr && rage.has_value() && !enemy.killed && enemy.kind != kDeathKind) {
+            mark = &*rage;
+        }
+        body.setHighlight(mark);
         if (enemy.kind == kDeathKind && enemy.state == State::Asleep) {
             body.draw(device, clip, model, lighting, {}, camera, 1, pass);
         } else {

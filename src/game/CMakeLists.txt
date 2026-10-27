@@ -191,6 +191,8 @@ add_library(game STATIC
     enemies/EnemyMissiles.cpp
     enemies/Enemies.cpp
     enemies/Generators.cpp
+    enemies/SwarmAggression.h
+    enemies/SwarmAggression.cpp
     critters/CritterData.cpp
     enemies/NativeCritterData.cpp
     critters/CritterMovement.cpp

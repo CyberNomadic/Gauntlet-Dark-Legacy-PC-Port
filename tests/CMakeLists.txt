@@ -423,6 +423,7 @@ add_executable(tests
     game/enemies/EnemyMissilesTests.cpp
     game/enemies/EnemiesTests.cpp
     game/enemies/GeneratorsTests.cpp
+    game/enemies/SwarmAggressionTests.cpp
     game/critters/CrittersTests.cpp
     game/critters/CombatantTests.cpp
     game/critters/CombatantCheckpointTests.cpp

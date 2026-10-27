@@ -28,6 +28,7 @@
 #include "game/enemies/EnemyFeedback.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/enemies/EnemyMind.h"
+#include "game/enemies/SwarmAggression.h"
 #include "game/level/HazardSurfaces.h"
 #include "game/level/ItemFigure.h"
 #include "game/party/PlayerMissiles.h"
@@ -260,6 +261,10 @@ public:
     void setHazards(const HazardSurfaces* hazards) { m_hazards = hazards; }
     /** What the camera takes in, for what is on screen; none takes everything in. */
     void setView(std::optional<ViewVolume> view) { m_simulation.view = view; }
+    /** The swarm's aggression for the coming step, births and drawing: quicker, tougher,
+     * and past the bravery line red with an aura. Set before each step; not kept. */
+    void setAggression(const SwarmAggression& aggression) { m_aggression = aggression; }
+    const SwarmAggression& aggression() const { return m_aggression; }
     /** The scale the party's enemy shrinkers hold the swarm at (`EnemyShrink`): shown and
      * shadowed at it, taking double and dealing half while under one. */
     void setShrink(f32 scale) { m_simulation.shrink = scale; }
@@ -662,6 +667,7 @@ private:
     };
     Figure bodyOf(const Enemy& enemy);
     Figure bodyOf(const Appearance& appearance);
+    SwarmAggression m_aggression;                    ///< this step's, from the simulation
     s32 m_highlightedId = -1;                        ///< the developer console's selection
     const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     void move(Enemy& enemy, s32 slot, s32 ticks, f32 seconds, const Vec3& step,

@@ -1052,8 +1052,10 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
         // do_items checks the living brood quota before generate_now ticks its timer.
         // A full brood freezes the remaining wait; a death frees a slot, not a free birth.
         // Patrol generators instead keep one sentry, with no ordinary quota or wait.
-        if (patrol ? generator.living > 0
-                   : generator.most <= 0 || generator.living >= generator.most) {
+        // An aggravated swarm's broods run past their quota for a while.
+        const auto quota =
+            static_cast<s32>(static_cast<f32>(generator.most) * m_aggression.broodScale());
+        if (patrol ? generator.living > 0 : generator.most <= 0 || generator.living >= quota) {
             continue;
         }
         if (!patrol && generator.countdown > 0) {
@@ -1111,9 +1113,11 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
             continue;
         }
         // The next takes longer, the countdown stretched by a share that grows a birth at a
-        // time and wraps.
-        generator.countdown = static_cast<s32>(
-            kCountdownScale * static_cast<f32>(generator.interval) * (1.0f + generator.ratio));
+        // time and wraps, and cut by the swarm's aggression.
+        generator.countdown = static_cast<s32>(kCountdownScale *
+                                               static_cast<f32>(generator.interval) *
+                                               (1.0f + generator.ratio) /
+                                               m_aggression.breedingPace());
         generator.ratio += 1.0f / (2.0f * static_cast<f32>(generator.most));
         if (generator.ratio > 1.0f) {
             generator.ratio = 0.0f;

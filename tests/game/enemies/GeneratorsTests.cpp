@@ -15,6 +15,7 @@
 #include "engine/world/WorldCollision.h"
 
 #include "FakeRenderDevice.h"
+#include "game/enemies/SwarmAggression.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/app/Scenario.h"
@@ -2119,4 +2120,62 @@ TEST_CASE("Desert C1 births retain the roster and a clear path from each authore
     // These snake pits are not the worm-generator exception.
     CHECK(generators.enemyObstacles().size() == generators.obstacles().size());
 }
+
+TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood out",
+          "[game][generators][streak][aggression]") {
+    const auto root = test::scratchDirectory("generator-aggression");
+    writeGeneratorArchive(root);
+    writeTextFile(root / "world.json", R"({
+      "objects":[{"name":"GROUND","position":[0,0,0]}],
+      "itemInfos":[{"type":3,"name":"GRU","radius":2,"height":5,"hitPoints":10}],
+      "itemInstances":[{"info":0,"minPlayers":1,"position":[0,0,0],
+                        "params":[1,0,7,0,4,0,5,0,0,0,0,0]}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(root));
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, root, nullptr, Enemies::kMost, {}, 1);
+    Generators generators;
+    REQUIRE(generators.bind(device, layout, enemies, nullptr, {}, 1));
+    const s32 most = generators.mostOf(0);
+    const s32 interval = generators.intervalOf(0);
+    REQUIRE(most == 4);
+    REQUIRE(interval == 5);
+    ViewVolume view;
+    view.position = {-35, 0, -20};
+    generators.setView(view);
+    const std::array party{EnemyView{.player = 0, .position = {0, 0, 30}}};
+    // A full brood, standing well away from the hut's exits.
+    for (s32 i = 0; i < most; ++i) {
+        EnemySpawn spawn;
+        spawn.generator = 0;
+        spawn.position = {100, 0, static_cast<f32>(i) * 10};
+        REQUIRE(enemies.spawn(spawn, party));
+    }
+    generators.update(kTicks, enemies, party); // counts the brood, then holds to the quota
+    REQUIRE(generators.livingOf(0) == most);
+    CHECK(generators.bredOf(0) == 0);
+    SwarmAggression hot;
+    hot.heat = 1.0f;
+    hot.rage = 1.0f;
+    generators.setAggression(hot);
+    generators.update(kTicks, enemies, party);
+    CHECK(generators.bredOf(0) == 1); // the quota is seven now
+    const auto expected = [&](f32 ratio) {
+        return static_cast<s32>(Generators::kCountdownScale * static_cast<f32>(interval) *
+                                (1.0f + ratio) / hot.breedingPace());
+    };
+    CHECK(generators.countdownOf(0) == expected(0.0f));
+    CHECK(generators.countdownOf(0) < static_cast<s32>(Generators::kCountdownScale) * interval);
+    generators.update(generators.countdownOf(0), enemies, party);
+    generators.update(kTicks, enemies, party);
+    CHECK(generators.bredOf(0) == 2);
+    CHECK(generators.countdownOf(0) == expected(1.0f / (2.0f * static_cast<f32>(most))));
+    // Calm again, the brood past its quota breeds no more until it thins.
+    generators.setAggression({});
+    generators.update(generators.countdownOf(0) + kTicks, enemies, party);
+    generators.update(kTicks, enemies, party);
+    CHECK(generators.bredOf(0) == 2);
+}
+
 } // namespace

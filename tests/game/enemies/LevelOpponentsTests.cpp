@@ -21,6 +21,7 @@
 #include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
+#include "game/enemies/SwarmAggression.h"
 #include "TestSupport.h"
 #include "fixtures/NativeModelFixture.h"
 #include "game/bosses/LegendItems.h"
@@ -3722,3 +3723,70 @@ TEST_CASE("the vermin generator's alpha-textured skull pile is blended by its al
     CHECK(device.draws.size() == solids + blended); // the whole, in one pass
     opponents.close();
 }
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+using Catch::Approx;
+
+TEST_CASE("the swarm's aggression follows the party's longest run of close blows",
+          "[level-opponents][streak][aggression][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELH1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("H1")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 2> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
+    players[1].actor.spawn(1, {}, nullptr, Vec3{0}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    events.blast = [](const Vec3&, f32, f32) {};
+    events.fallen = [](const Vec3&) {};
+    events.spew = [](const CombatSpew&) {};
+    events.legend = [](const LegendEvent&) {};
+    events.shake = [] {};
+    events.help = [](s32, usize) { return false; };
+    events.destroyedGenerator = [](s32) {};
+    CHECK(LevelOpponents::longestRun(players) == 0);
+    // The longest run under way counts, a departed player's not at all.
+    for (s32 blow = 0; blow < 15; ++blow) {
+        players[1].streak.record(true);
+    }
+    players[0].streak.record(false);
+    CHECK(LevelOpponents::longestRun(players) == 45);
+    players[1].departed = true;
+    CHECK(LevelOpponents::longestRun(players) == 1);
+    players[1].departed = false;
+    for (s32 frame = 0; frame < 120; ++frame) {
+        opponents.update(1, 1.0f / 60, players, {}, events);
+    }
+    CHECK(opponents.aggression().heat == Approx(1.0f).margin(0.02f));
+    CHECK(opponents.aggression().rage ==
+          Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.02f));
+    CHECK(opponents.enemies().aggression() == opponents.aggression());
+    // The run over, the swarm cools.
+    players[1].streak.step(MeleeStreak::kQuiet + 0.5f);
+    players[0].streak.step(MeleeStreak::kQuiet + 0.5f);
+    CHECK(LevelOpponents::longestRun(players) == 0);
+    for (s32 frame = 0; frame < 60; ++frame) {
+        opponents.update(1, 1.0f / 60, players, {}, events);
+    }
+    CHECK(opponents.aggression().heat == Approx(1.0f - SwarmAggression::kCool).margin(0.02f));
+    CHECK(opponents.aggression().rage == 0.0f);
+    opponents.close();
+}
+
+} // namespace

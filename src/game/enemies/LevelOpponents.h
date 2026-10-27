@@ -82,6 +82,10 @@ public:
     const PlacedEnemies& placements() const { return m_placements; }
     /** Original load-time tuning, unaffected by later changes to game options. */
     f32 difficultyGain() const { return m_resources ? m_resources->difficultyGain : 1.0f; }
+    /** The swarm's answer to the party's run of close blows, as of the last update. */
+    const SwarmAggression& aggression() const { return m_sim.aggression; }
+    /** The longest run of close blows under way among the players still in the party. */
+    static s32 longestRun(std::span<const PlayerRuntime> players);
     /** Recorder attachment preflight, never a gameplay decision or mixer poll.
      * Paused/silent legacy Death contact has no logical birth to carry across. */
     bool hasLegacyAudio() const {
@@ -367,6 +371,7 @@ private:
         std::vector<GeneratorReward> generatorRewards;
         std::array<bool, 4> unseen{};
         std::vector<LevelEnemy> borrowedRoster;
+        SwarmAggression aggression; ///< the swarm's answer to the party's run of close blows
         bool operator==(const Simulation&) const = default;
     };
 

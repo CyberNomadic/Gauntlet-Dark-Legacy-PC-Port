@@ -35,6 +35,7 @@ public:
         const WorldCollision* collision = nullptr;
         f32 missileSpeed = 1;
         bool timeStopped = false;
+        SwarmAggression aggression; ///< the swarm's answer to the party's run of blows
     };
 
     /** Call after native player/fixture motion, before processing opponent

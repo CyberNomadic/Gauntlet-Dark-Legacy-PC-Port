@@ -19,6 +19,7 @@
 #include "engine/world/WorldLighting.h"
 
 #include "game/enemies/Enemies.h"
+#include "game/enemies/SwarmAggression.h"
 #include "game/level/ItemFigure.h"
 #include "game/party/PlayerMissiles.h"
 
@@ -111,6 +112,9 @@ public:
     }
     /** Joined participants, including those waiting in the tower but not those who quit. */
     void setPlayerCount(s32 players) { m_sim.players = players; }
+    /** The swarm's aggression for the coming update: how much sooner the broods breed and
+     * how many more they keep out. Set before each update; not kept across them. */
+    void setAggression(const SwarmAggression& aggression) { m_aggression = aggression; }
     /** Obstacles supplied here are fixtures; the other generators are included internally. */
     void update(s32 ticks, Enemies& enemies, std::span<const EnemyView> players,
                 std::span<const Obstacle> obstacles = {}, bool timeStopped = false);
@@ -295,6 +299,7 @@ private:
     bool loadBodies(RenderDevice& device, Enemies& enemies, s32 kind, ItemArchive* realmItems,
                     std::span<TextureSet* const> lenders);
     static s32 stateFor(const Generator& generator, bool destroyed);
+    SwarmAggression m_aggression;                    ///< this update's, from the simulation
     s32 m_highlightedId = -1;                        ///< the developer console's selection
     const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
     bool seen(const Generator& generator) const;
