@@ -13,9 +13,10 @@ namespace gdl::game {
 /**
  * The narrator's praise for a run of close blows (pmotion.c 2695, player.c 2553): each blow on
  * an enemy taller than four or on a great one counts one, or three when it kills or is not
- * taken; two seconds after the last, a run of thirty earns `S_HEROIC` and one of forty-five
- * `S_BRAVERY`, and the count starts over. The original counted swings alone; the remake's
- * run takes shots, potions, turbo strikes and charges that land as well.
+ * taken; three quiet seconds after the last (the original's two), a run of thirty earns
+ * `S_HEROIC` and one of forty-five `S_BRAVERY`, and the count starts over. The original
+ * counted swings alone; the remake's run takes shots, potions, turbo strikes and charges
+ * that land as well.
  */
 class MeleeStreak {
     friend void visitNativeState(NativeStateDigest& /*digest*/, const MeleeStreak& /*value*/);
@@ -36,7 +37,7 @@ public:
     static constexpr s32 kTelling = 3;  ///< one that kills, or is not taken (damage_enemy's -1)
     static constexpr s32 kHeroic = 30;  ///< 0x1E
     static constexpr s32 kBravery = 45; ///< 0x2D
-    static constexpr f32 kQuiet = 2.0f; ///< seconds after the last blow
+    static constexpr f32 kQuiet = 3.0f; ///< seconds after the last blow; the original's two
     static constexpr f32 kWait = 3.0f;  ///< the most the praise waits for the narrator
     static constexpr std::string_view kHeroicVoice = "S_HEROIC";
     static constexpr std::string_view kBraveryVoice = "S_BRAVERY";
