@@ -18,6 +18,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/world/SampleLevel.h"
+#include "engine/world/WorldCamera.h"
 #include "engine/world/WorldLighting.h"
 
 #include "FakeRenderDevice.h"
@@ -3796,7 +3797,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-TEST_CASE("the level marks each elemental one with its glow while it lives",
+TEST_CASE("the level marks each elemental one with its aura while it lives",
           "[level-opponents][streak][aggression][elemental][assets]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELH1/WORLDS.PS2").parent_path().parent_path().parent_path();
@@ -3805,7 +3806,7 @@ TEST_CASE("the level marks each elemental one with its glow while it lives",
     REQUIRE(catalog.load(root));
     LevelWorld world;
     REQUIRE(world.load(device, root, *catalog.byName("H1")));
-    ItemArchive weapons;
+    ItemArchive weapons; // unloaded: the aura is the remake's own
     EffectTrees effects;
     LevelSoundscape audio;
     std::array<PlayerRuntime, 1> players;
@@ -3839,10 +3840,25 @@ TEST_CASE("the level marks each elemental one with its glow while it lives",
     const s32 element = opponents.enemies().elementOf(*id);
     REQUIRE(element != 0);
     CHECK(opponents.elementMarkCount() == 0);
+    const usize before = effects.count();
     opponents.update(1, 1.0f / 60, players, {}, events);
     CHECK(opponents.elementMarkCount() == 1);
-    opponents.update(1, 1.0f / 60, players, {}, events);
+    CHECK(effects.count() > before); // its aura started
+    for (s32 frame = 0; frame < 30; ++frame) {
+        opponents.update(1, 1.0f / 30, players, {}, events);
+        effects.update(1.0f / 30);
+    }
     CHECK(opponents.elementMarkCount() == 1); // one mark a body, not one an update
+    // Its motes are drawn about where it stands, additive over the aura's own glow.
+    device.draws.clear();
+    const CameraFrame camera = CameraFrame::at(spawn.position + Vec3{0.0f, 10.0f, -30.0f});
+    effects.draw(device, Mat4{1}, {}, &camera);
+    usize motes = 0;
+    for (const auto& draw : device.draws) {
+        CHECK(draw.blend() == BlendMode::Additive);
+        motes += draw.vertices.size() / 6;
+    }
+    CHECK(motes > 0);
     // Slain by another element, it leaves its mark behind and its potion in a bag.
     const usize bags = opponents.bagCount();
     opponents.strikeEnemy(*id, 1.0e6f, static_cast<u32>(element % 4 + 1), Vec3{0, 0, 1}, 0,

@@ -606,6 +606,7 @@ void LevelOpponents::close() {
     m_sim.unseen = {};
     m_levelNow.reset();
     clearDeaths();
+    m_aura.release();
     if (m_resources.has_value()) {
         m_combatantProjectiles.clear(m_resources->effects);
         for (const Bag& bag : m_sim.bags) {
@@ -1948,19 +1949,14 @@ void LevelOpponents::markElementals() {
     const auto centreOf = [this](s32 id) {
         return m_enemies.positionOf(id) + Vec3{0.0f, 0.5f * m_enemies.heightOf(id), 0.0f};
     };
-    // The aura: the remake's own emitter in the element's manner, over the sprite the
-    // weapons archive holds in its colour.
+    // The aura: the remake's own emitter in the element's manner, over its own glow sprite.
     const auto aura = [&](s32 id, s32 element, const Vec3& centre) -> u32 {
-        ItemArchive& weapons = m_resources->weapons;
-        if (!weapons.loaded()) {
-            return 0;
-        }
-        const auto sprite = weapons.textures.find(ElementAura::sprite(element));
-        if (!sprite.has_value()) {
+        const Texture* sprite = m_aura.sprite(m_resources->device);
+        if (sprite == nullptr) {
             return 0;
         }
         return m_resources->effects.startParticles(
-            m_resources->device, weapons,
+            m_resources->weapons,
             ElementAura::descriptor(element, m_enemies.radiusOf(id), m_enemies.heightOf(id)),
             *sprite, glm::translate(Mat4{1.0f}, centre));
     };

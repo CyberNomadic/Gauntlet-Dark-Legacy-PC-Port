@@ -17,6 +17,7 @@
 #include "game/critters/CritterStatues.h"
 #include "game/critters/Critters.h"
 #include "game/effects/EffectTrees.h"
+#include "game/effects/ElementAura.h"
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/enemies/Generators.h"
@@ -294,6 +295,7 @@ private:
     std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
     const MechanicsFacade* m_mechanics = nullptr; ///< never simulation state
+    ElementAura m_aura; ///< the elemental ones' glow sprite; never simulation state
     Generators m_generators;
     Critters m_critters;
     static constexpr usize kPlayerIds = 4;   ///< players are numbered 0 to 3

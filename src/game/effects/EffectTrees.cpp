@@ -807,8 +807,24 @@ u32 EffectTrees::startParticles(RenderDevice& device, ItemArchive& archive,
     return id;
 }
 
+u32 EffectTrees::startParticles(ItemArchive& archive, const ParticleDescriptor& descriptor,
+                                const Texture& sprite, const Mat4& attachment) {
+    if (m_nextInstance == 0) {
+        return 0;
+    }
+    auto effect = std::make_unique<Effect>();
+    effect->instance = m_nextInstance++;
+    effect->id = m_nextId++;
+    effect->archive = &archive;
+    initializeParticles(*effect, descriptor, sprite, std::nullopt, attachment, effect->id);
+    const u32 id = effect->id;
+    m_effects.push_back(std::move(effect));
+    return id;
+}
+
 void EffectTrees::initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
-                                      const Texture& texture, u32 textureSlot,
+                                      const Texture& texture,
+                                      std::optional<u32> textureSlot,
                                       const Mat4& attachment, u32 seed) {
     effect.name = descriptor.texture;
     effect.attachment = attachment;

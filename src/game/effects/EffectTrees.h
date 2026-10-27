@@ -312,6 +312,10 @@ public:
     u32 startParticles(RenderDevice& device, ItemArchive& archive,
                        const ParticleDescriptor& descriptor, u32 textureSlot,
                        const Mat4& attachment);
+    /** A code-made emitter over a sprite of the caller's own, outside any archive's set:
+     * no flipbook plays on it. The sprite must outlive the effect and its checkpoints. */
+    u32 startParticles(ItemArchive& archive, const ParticleDescriptor& descriptor,
+                       const Texture& sprite, const Mat4& attachment);
     bool playing(u32 id) const;
     /** Seconds before effect number `id` is over; nullopt when it is not playing. */
     std::optional<f32> remaining(u32 id) const;
@@ -356,7 +360,7 @@ private:
     static Checkpoint captureEffect(const EffectState& effect);
     static void initializeTree(Effect& value, const Setting& setting);
     static void initializeParticles(Effect& effect, const ParticleDescriptor& descriptor,
-                                    const Texture& texture, u32 textureSlot, const Mat4& attachment,
+                                    const Texture& texture, std::optional<u32> textureSlot, const Mat4& attachment,
                                     u32 seed);
     bool bindVisuals(Effect& effect);
     static f32 secondsLeftOf(const EffectState& effect);
