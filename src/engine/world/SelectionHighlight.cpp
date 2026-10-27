@@ -4,7 +4,7 @@
 
 namespace gdl {
 
-f32 SelectionHighlight::rimReach(const Mat4& clip, const Vec3& position) {
+f32 SelectionHighlight::rimReach(const Mat4& clip, const Vec3& position, f32 width) {
     constexpr f32 kFallback = 0.1f;
     const f32 depth = (clip * Vec4{position, 1.0f}).w;
     const f32 scale = std::abs(clip[1][1]);
@@ -13,7 +13,7 @@ f32 SelectionHighlight::rimReach(const Mat4& clip, const Vec3& position) {
     }
     // A step d across the view at depth w spans d * scale / w of the two the view's height
     // is in clip space.
-    return 2.0f * kRimWidth * depth / scale;
+    return 2.0f * width * depth / scale;
 }
 
 void SelectionHighlight::draw(RenderDevice& device, const Mat4& clip, const Mesh& mesh,
@@ -46,7 +46,7 @@ void SelectionHighlight::draw(RenderDevice& device, const Mat4& clip, const Mesh
             if (length > 1.0e-6f) {
                 normal /= length;
             }
-            m_batch.vertex(at + normal * rimReach(clip, at), kRim, vertex.uv);
+            m_batch.vertex(at + normal * rimReach(clip, at, m_rimWidth), m_rim, vertex.uv);
         }
     }
     m_batch.end();
@@ -57,7 +57,7 @@ void SelectionHighlight::draw(RenderDevice& device, const Mat4& clip, const Mesh
     for (const u32 index : part.indices) {
         const MeshVertex& vertex = mesh.vertices[index];
         const Vec3 at{placement * Vec4{vertex.position, 1.0f}};
-        m_batch.vertex(at + (m_eye - at) * kLift, kWash, vertex.uv);
+        m_batch.vertex(at + (m_eye - at) * kLift, m_wash, vertex.uv);
     }
     m_batch.end();
     device.draw(m_batch, texture, clip, state);

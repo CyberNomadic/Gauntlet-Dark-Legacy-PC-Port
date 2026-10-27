@@ -80,4 +80,43 @@ TEST_CASE("a selection highlight draws a part's rim pushed out and wound the oth
           Approx(2.0f * SelectionHighlight::rimReach(perspective, Vec3{0.0f, 0.0f, -10.0f})));
 }
 
+
+TEST_CASE("a highlight can mark a part out in other colours and another rim width",
+          "[world][selection][aggression]") {
+    Mesh mesh;
+    mesh.vertices = {
+        {.position = {0.0f, 0.0f, 10.0f}, .normal = {0.0f, 0.0f, -1.0f}, .uv = {0, 0}},
+        {.position = {2.0f, 0.0f, 10.0f}, .normal = {0.0f, 0.0f, -1.0f}, .uv = {1, 0}},
+        {.position = {0.0f, 2.0f, 10.0f}, .normal = {0.0f, 0.0f, -1.0f}, .uv = {0, 1}}};
+    const MeshPart part{.texture = 0, .indices = {0, 1, 2}};
+    test::FakeRenderDevice device;
+    constexpr std::array<u8, 4> kTexel{255, 255, 255, 255};
+    const auto skinTexture = device.createTexture(TextureDesc{1, 1, TextureFilter::Linear}, kTexel);
+    const Color rim = Color::rgba(235, 25, 25, 128);
+    const Color wash = Color::rgba(170, 0, 0, 40);
+    const f32 width = SelectionHighlight::kRimWidth * 2.0f;
+    const SelectionHighlight aura{Vec3{0.0f, 0.0f, 0.0f}, rim, wash, width};
+    CHECK(aura.rim() == rim);
+    CHECK(aura.wash() == wash);
+    CHECK(aura.rimWidth() == width);
+    const Mat4 clip{1.0f};
+    CHECK(SelectionHighlight::rimReach(clip, Vec3{0.0f, 0.0f, 10.0f}, width) ==
+          Approx(2.0f * width));
+    aura.draw(device, clip, mesh, part, Mat4{1.0f}, *skinTexture);
+    REQUIRE(device.draws.size() == 2);
+    const f32 reach = SelectionHighlight::rimReach(clip, Vec3{0.0f, 0.0f, 10.0f}, width);
+    CHECK(device.draws[0].vertices[0].position == Vec3{0.0f, 0.0f, 10.0f - reach});
+    for (const auto& vertex : device.draws[0].vertices) {
+        CHECK(vertex.color == rim);
+    }
+    for (const auto& vertex : device.draws[1].vertices) {
+        CHECK(vertex.color == wash);
+    }
+    // The plain one keeps the editor's orange and width.
+    const SelectionHighlight plain{Vec3{0.0f, 0.0f, 0.0f}};
+    CHECK(plain.rim() == SelectionHighlight::kRim);
+    CHECK(plain.wash() == SelectionHighlight::kWash);
+    CHECK(plain.rimWidth() == SelectionHighlight::kRimWidth);
+}
+
 } // namespace

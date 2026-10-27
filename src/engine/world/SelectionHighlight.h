@@ -23,20 +23,29 @@ public:
     static constexpr f32 kLift = 0.005f;            ///< of the way to the eye
 
     explicit SelectionHighlight(const Vec3& eye) : m_eye(eye) {}
+    /** The same marking in other colours and another rim width: an aura, say. */
+    SelectionHighlight(const Vec3& eye, Color rim, Color wash, f32 rimWidth = kRimWidth)
+        : m_eye(eye), m_rim(rim), m_wash(wash), m_rimWidth(rimWidth) {}
 
     const Vec3& eye() const { return m_eye; }
+    Color rim() const { return m_rim; }
+    Color wash() const { return m_wash; }
+    f32 rimWidth() const { return m_rimWidth; }
 
     /** Draws the rim and the wash of `part` of `mesh` placed by `placement`, the clear
      * texels of `texture` cut out of the wash. */
     void draw(RenderDevice& device, const Mat4& clip, const Mesh& mesh, const MeshPart& part,
               const Mat4& placement, const Texture& texture) const;
 
-    /** How far a point at `position` is pushed out for the rim: the rim's share of the
-     * view's height at that depth, in world units. */
-    static f32 rimReach(const Mat4& clip, const Vec3& position);
+    /** How far a point at `position` is pushed out for a rim `width` of the view's height:
+     * that share at the point's depth, in world units. */
+    static f32 rimReach(const Mat4& clip, const Vec3& position, f32 width = kRimWidth);
 
 private:
     Vec3 m_eye;
+    Color m_rim = kRim;
+    Color m_wash = kWash;
+    f32 m_rimWidth = kRimWidth;
     mutable ImmediateBatch m_batch;
 };
 
