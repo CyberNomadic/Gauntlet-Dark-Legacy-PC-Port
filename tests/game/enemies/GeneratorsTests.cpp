@@ -2192,14 +2192,34 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     REQUIRE(frenzied.frenzied());
     REQUIRE(static_cast<s32>(static_cast<f32>(most) * frenzied.broodScale()) == 10);
     generators.setAggression(frenzied);
-    generators.update(generators.countdownOf(0), enemies, party);
+    // The wait left is cut to the frenzy's, and the next is the frenzy's alone.
+    REQUIRE(generators.countdownOf(0) > SwarmAggression::kFrenzyTicks);
+    generators.update(SwarmAggression::kFrenzyTicks, enemies, party);
     generators.update(kTicks, enemies, party);
     CHECK(generators.bredOf(0) == 3);
+    CHECK(generators.countdownOf(0) == SwarmAggression::kFrenzyTicks);
+    // A grunt hut has three exits, and three children stand in them: two seconds of
+    // walking toward the party clears them.
+    for (s32 frame = 0; frame < 60; ++frame) {
+        enemies.update(kTicks, kStep, party);
+    }
+    // A full pool is no bar either: a birth takes a slot from a body far away.
+    for (s32 i = 0; enemies.count() < static_cast<usize>(Enemies::kMost); ++i) {
+        EnemySpawn filler;
+        filler.generator = 0;
+        filler.position = {100, 0, 300 + static_cast<f32>(i) * 10};
+        REQUIRE(enemies.spawn(filler, party));
+    }
+    generators.update(SwarmAggression::kFrenzyTicks, enemies, party);
+    generators.update(kTicks, enemies, party);
+    CHECK(generators.bredOf(0) == 4);
+    CHECK(enemies.count() == static_cast<usize>(Enemies::kMost));
+    // A hut far from the party keeps to its quota, frenzy or no.
     const std::array farParty{EnemyView{.player = 0, .position = {0, 0, 200}}};
     REQUIRE(glm::distance(farParty[0].position, Vec3{0}) > SwarmAggression::kFrenzyReach);
-    generators.update(generators.countdownOf(0), enemies, farParty);
+    generators.update(SwarmAggression::kFrenzyTicks + kTicks, enemies, farParty);
     generators.update(kTicks, enemies, farParty);
-    CHECK(generators.bredOf(0) == 3);
+    CHECK(generators.bredOf(0) == 4);
 }
 
 } // namespace

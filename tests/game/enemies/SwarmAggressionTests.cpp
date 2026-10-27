@@ -39,13 +39,17 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     CHECK(aggression.heat == Approx(1.0f).margin(0.01f));
     CHECK(aggression.rage == Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.01f));
     CHECK(aggression.frenzied());
+    // Past the line there is no end to either: the heat follows the run on, the rage grows.
     pass(aggression, 60.0f, SwarmAggression::kFullRun + 30);
-    CHECK(aggression.rage == 1.0f);
+    const f32 beyond = 75.0f / static_cast<f32>(SwarmAggression::kFullRun);
+    CHECK(aggression.heat == Approx(beyond).margin(0.01f));
+    CHECK(aggression.rage == Approx(0.1f + 60.0f / SwarmAggression::kRageSeconds).margin(0.02f));
     CHECK(aggression.valid());
     // The run over, the heat cools at its own pace and the rage goes faster than it came.
+    const f32 rage = aggression.rage;
     pass(aggression, 1.0f, 0);
-    CHECK(aggression.heat == Approx(1.0f - SwarmAggression::kCool).margin(0.01f));
-    CHECK(aggression.rage == Approx(1.0f - 1.0f / SwarmAggression::kCalmSeconds).margin(0.01f));
+    CHECK(aggression.heat == Approx(beyond - SwarmAggression::kCool).margin(0.01f));
+    CHECK(aggression.rage == Approx(rage - 1.0f / SwarmAggression::kCalmSeconds).margin(0.01f));
     pass(aggression, 30.0f, 0);
     CHECK(aggression.heat == 0.0f);
     CHECK(aggression.rage == 0.0f);
@@ -90,8 +94,20 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     CHECK(tint.g == 143);
     CHECK(tint.b == 143);
     CHECK(tint.a == 255);
+    // Beyond the line the measures keep growing; the colour and the aura are full.
+    SwarmAggression beyond;
+    beyond.heat = 3.0f;
+    beyond.rage = 2.0f;
+    CHECK(beyond.valid());
+    CHECK(beyond.breedingPace() == Approx(5.4f));
+    CHECK(beyond.healthScale() == Approx(4.6f));
+    CHECK(beyond.speedScale() == Approx(2.6f));
+    CHECK(beyond.tint() == SwarmAggression::kRageTint);
+    CHECK(beyond.aura() == 1.0f);
     SwarmAggression wrong;
-    wrong.heat = 1.5f;
+    wrong.heat = -1.0f;
+    CHECK_FALSE(wrong.valid());
+    wrong.heat = SwarmAggression::kMostMeasure * 2.0f;
     CHECK_FALSE(wrong.valid());
     CHECK(SwarmAggression::kFullRun == MeleeStreak::kBravery);
 }

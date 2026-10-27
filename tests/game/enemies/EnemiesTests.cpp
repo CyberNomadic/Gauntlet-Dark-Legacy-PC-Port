@@ -3891,6 +3891,14 @@ TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][st
     CHECK(enemies.observe(*calm)->fullHealth == calmBody->fullHealth);
     enemies.setAggression({});
     CHECK(enemies.paceOf(kGruntKind) == Approx(calmPace));
+    // The level's cap holds until a frenzy widens the pool to the whole.
+    CHECK(enemies.most() == 2);
+    spawn.position = {80, 0, 0};
+    CHECK_FALSE(enemies.spawn(spawn, {}).has_value());
+    enemies.widenPool();
+    CHECK(enemies.most() == Enemies::kMost);
+    CHECK(enemies.spawn(spawn, {}).has_value());
+    CHECK(enemies.count() == 3);
 }
 
 } // namespace

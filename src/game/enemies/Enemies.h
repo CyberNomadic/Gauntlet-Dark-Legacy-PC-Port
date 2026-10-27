@@ -422,6 +422,9 @@ public:
                   const CameraFrame* camera, TreeModel::Pass pass = TreeModel::Pass::All,
                   f32 alpha = 1, const Texture* deathSkin = nullptr, bool dying = false);
     usize count() const; ///< live, dying included
+    s32 most() const { return m_simulation.most; } ///< the slots in play, the level's cap
+    /** Lifts the cap to the whole pool for the rest of the level: a frenzied swarm's. */
+    void widenPool() { m_simulation.most = kMost; }
     s32 kindOf(s32 id) const;
     s32 tierOf(s32 id) const;
     s32 generatorOf(s32 id) const;

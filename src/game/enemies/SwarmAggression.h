@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
@@ -10,10 +12,12 @@ namespace gdl::game {
 /**
  * The swarm's answer to a run of close blows: as the longest run under way grows, the
  * generators breed sooner and keep more out, and the swarm walks and swings quicker and is
- * born tougher; held at the bravery line, a rage sets in that darkens the swarm to red,
- * puts an aura about it and frenzies the generators near the party, which breed past any
- * quota. The heat climbs toward the run and cools once it is over, so nothing jumps; the
- * rage comes slowly and goes faster than it came. Native state.
+ * born tougher, with no end to it: the longer the run, the more. Held at the bravery line,
+ * a rage sets in and grows for as long as the run holds: it darkens the swarm to red, puts
+ * an aura about it and frenzies the generators near the party, which spew births into the
+ * whole pool with no regard to any quota or the level's cap. The heat climbs toward the
+ * run and cools once it is over, so nothing jumps; the rage comes slowly and goes faster
+ * than it came. Native state.
  */
 struct SwarmAggression {
     static constexpr s32 kFullRun = MeleeStreak::kBravery; ///< the run the heat is full at
@@ -22,6 +26,8 @@ struct SwarmAggression {
     static constexpr f32 kRageSeconds = 20.0f; ///< at the bravery line, seconds to full rage
     static constexpr f32 kCalmSeconds = 8.0f;  ///< below it, seconds from full rage to none
     static constexpr f32 kFrenzyReach = 60.0f; ///< how near the party a frenzied hut stands
+    static constexpr s32 kFrenzyTicks = 3;     ///< ticks between a frenzied hut's births
+    static constexpr f32 kMostMeasure = 1.0e6f; ///< past this a heat or rage is corrupt
     /** What full heat and full rage add to each measure, as shares of the plain one. */
     static constexpr f32 kBreedingHeat = 1.2f;
     static constexpr f32 kBreedingRage = 0.4f;
@@ -35,8 +41,8 @@ struct SwarmAggression {
     static constexpr f32 kHealthRage = 0.6f;
     static constexpr Color kRageTint = Color::rgba(165, 30, 30); ///< the swarm at full rage
 
-    f32 heat = 0.0f; ///< how far the longest run has come toward the bravery line, eased
-    f32 rage = 0.0f; ///< how long it has been held there, 0 to 1
+    f32 heat = 0.0f; ///< the longest run as a share of the bravery line, eased, past 1 beyond it
+    f32 rage = 0.0f; ///< how long it has been held there, in `kRageSeconds`, without end
 
     bool operator==(const SwarmAggression&) const = default;
     template <class Digest> friend void visitNativeState(Digest& digest, const SwarmAggression& value) {
@@ -61,7 +67,7 @@ struct SwarmAggression {
     /** The swarm's colour, white through to `kRageTint` with the rage. */
     Color tint() const;
     /** How strong the aura about the swarm is, 0 to 1. */
-    f32 aura() const { return rage; }
+    f32 aura() const { return std::min(rage, 1.0f); }
     /** Whether the generators within `kFrenzyReach` of a player breed past any quota: from
      * the moment the run holds at the bravery line until the rage has gone. */
     bool frenzied() const { return rage > 0.0f; }

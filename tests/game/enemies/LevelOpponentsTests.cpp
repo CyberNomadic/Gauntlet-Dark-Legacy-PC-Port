@@ -3761,6 +3761,7 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
     events.help = [](s32, usize) { return false; };
     events.destroyedGenerator = [](s32) {};
     CHECK(LevelOpponents::longestRun(players) == 0);
+    REQUIRE(opponents.enemies().most() < Enemies::kMost);
     // The longest run under way counts, a departed player's not at all.
     for (s32 blow = 0; blow < 15; ++blow) {
         players[1].streak.record(true);
@@ -3777,6 +3778,7 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
     CHECK(opponents.aggression().rage ==
           Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.02f));
     CHECK(opponents.enemies().aggression() == opponents.aggression());
+    CHECK(opponents.enemies().most() == Enemies::kMost); // the frenzy opened the whole pool
     // The run over, the swarm cools.
     players[1].streak.step(MeleeStreak::kQuiet + 0.5f);
     players[0].streak.step(MeleeStreak::kQuiet + 0.5f);
