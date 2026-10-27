@@ -1556,11 +1556,15 @@ TEST_CASE("a charge throws down the enemy it runs into, once a charge",
     f.attacks.ramBarrels(0, f.players, f.targets);
     CHECK(enemies.healthOf(against) < whole - 20.0f); // thirty-two, less its armour
     CHECK(enemies.healthOf(afar) == whole);
+    // The charge's blow counts towards the run of close blows like a swing's.
+    const s32 counted = enemies.heightOf(against) > PlayerAttacks::kLowEnemy ? 1 : 0;
+    CHECK(f.players[0].streak.count() == counted);
     enemies.update(2, 1.0f / 30, {});
     CHECK(enemies.pushCountOf(against) == 1); // thrown down, back the way the charge went
     const f32 once = enemies.healthOf(against);
     f.attacks.ramBarrels(0, f.players, f.targets);
     CHECK(enemies.healthOf(against) == once); // not again in the same charge
+    CHECK(f.players[0].streak.count() == counted);
     f.opponents.close();
 }
 
@@ -2444,6 +2448,9 @@ TEST_CASE("potion magic damages survivors once and drives knockdown through get-
     REQUIRE(f.opponents.enemies().healthOf(*enemy) < before);
     REQUIRE(f.opponents.enemies().healthOf(*enemy) > 0);
     const f32 after = f.opponents.enemies().healthOf(*enemy);
+    // The potion's blow counts towards its caster's run of close blows, once.
+    const s32 counted = f.opponents.enemies().heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0;
+    CHECK(f.players[0].streak.count() == counted);
     f.opponents.enemies().update(2, 1.0f / 30, {});
     REQUIRE(f.opponents.enemies().animatorOf(*enemy)->action() == EnemyAction::HitReact2);
     bool gotUp = false;
@@ -2454,6 +2461,7 @@ TEST_CASE("potion magic damages survivors once and drives knockdown through get-
     }
     CHECK(gotUp);
     CHECK(f.opponents.enemies().healthOf(*enemy) == after);
+    CHECK(f.players[0].streak.count() == counted);
     f.attacks.clear();
     f.opponents.close();
 }
@@ -5643,3 +5651,83 @@ TEST_CASE("a weapon leaving the hand four units up still breaks a lying bottle",
     f.attacks.clear();
     f.fixtures.clear();
 }
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+
+TEST_CASE("a shot that lands builds the run of close blows like a swing",
+          "[game][screens][player-attacks][streak][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
+    Fixture f;
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    EnemyScales scales;
+    scales.health = 100;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 8, scales, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.kind = kGruntKind;
+    spawn.placed = true;
+    spawn.position = Vec3{0, 0, 6};
+    const auto enemy = enemies.spawn(spawn, {});
+    REQUIRE(enemy);
+    const f32 whole = enemies.healthOf(*enemy);
+    MissileLaunch shot;
+    shot.owner = 3;
+    shot.position = Vec3{0, 1, 0};
+    shot.velocity = Vec3{0, 0, 50};
+    shot.spec = &MissileSpec::of(0);
+    shot.damage = 20;
+    REQUIRE(f.arsenal.missiles().launch(shot));
+    for (s32 frame = 0; frame < 30 && enemies.healthOf(*enemy) == whole; ++frame) {
+        f.attacks.updateProjectiles(1.0f / 30, f.players, f.targets);
+    }
+    REQUIRE(enemies.healthOf(*enemy) < whole);
+    CHECK(f.players[0].streak.count() == (enemies.heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0));
+    f.attacks.clear();
+    f.opponents.close();
+}
+
+TEST_CASE("a turbo strike that lands builds the run of close blows like a swing",
+          "[game][screens][player-attacks][streak][assets]") {
+    const auto root = turboAssets();
+    writeTextFile(root / "pdata/WAR.json", R"({"height":6,"width":2,
+      "fight":[200,600],"speed":[200,600],"armor":[200,600],"magic":[200,600],
+      "moves":{"turboC1":0},"moveEffects":[{"tree":"BURST"}],"moveStrikes":[
+      {"type":2,"startFrame":1,"hitRadius":1,"arc":-1,"offset":[0,2,2],
+       "speedMin":30,"speedMax":30,"maxTime":6,"amount":70,"flags":64,
+       "effect":0,"hitEffect":0,"damageType":0}]})");
+    Fixture f;
+    REQUIRE(f.classes.load(root / "pdata"));
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    EnemyScales scales;
+    scales.health = 100;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 8, scales, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.kind = kGruntKind;
+    spawn.placed = true;
+    spawn.position = Vec3{0, 0, 8};
+    const auto enemy = enemies.spawn(spawn, {});
+    REQUIRE(enemy);
+    const f32 whole = enemies.healthOf(*enemy);
+    f.players[0].figure = PlayerFigure::load(f.device, root, f.players[0].actor.save(), false);
+    REQUIRE(f.players[0].figure);
+    f.players[0].turbo.add(100);
+    for (s32 frame = 0; frame < 30 && enemies.healthOf(*enemy) == whole; ++frame) {
+        f.players[0].figure->animate(0, 2, 1.0f / 30,
+                                     frame == 0 ? PlayerDeed::TurboFull : PlayerDeed::None);
+        f.attacks.updateTurbo(0, 2, 1.0f / 30, f.players, [](s32, usize) {});
+        f.attacks.updateStrikes(1.0f / 30, f.players, f.targets);
+        f.effects.update(1.0f / 30);
+    }
+    REQUIRE(enemies.healthOf(*enemy) < whole);
+    CHECK(f.players[0].streak.count() == (enemies.heightOf(*enemy) > PlayerAttacks::kLowEnemy ? 1 : 0));
+    f.attacks.clear();
+    f.opponents.close();
+}
+
+} // namespace

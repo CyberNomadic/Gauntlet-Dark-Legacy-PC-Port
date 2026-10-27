@@ -14,7 +14,8 @@ namespace gdl::game {
  * The narrator's praise for a run of close blows (pmotion.c 2695, player.c 2553): each blow on
  * an enemy taller than four or on a great one counts one, or three when it kills or is not
  * taken; two seconds after the last, a run of thirty earns `S_HEROIC` and one of forty-five
- * `S_BRAVERY`, and the count starts over.
+ * `S_BRAVERY`, and the count starts over. The original counted swings alone; the remake's
+ * run takes shots, potions, turbo strikes and charges that land as well.
  */
 class MeleeStreak {
     friend void visitNativeState(NativeStateDigest& /*digest*/, const MeleeStreak& /*value*/);

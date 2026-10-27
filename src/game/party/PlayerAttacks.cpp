@@ -178,6 +178,37 @@ void PlayerAttacks::clear() {
     m_resources.reset();
 }
 /** What a charge runs into is struck, once each charge. */
+namespace {
+
+void countBlow(std::span<PlayerRuntime> players, s32 player, bool telling) {
+    for (PlayerRuntime& runtime : players) {
+        if (runtime.actor.player() == player) {
+            runtime.streak.record(telling);
+            return;
+        }
+    }
+}
+
+} // namespace
+
+void PlayerAttacks::countEnemyBlow(std::span<PlayerRuntime> players, s32 player,
+                                   const Enemies& enemies, s32 id, bool stood) {
+    // Only a blow on something taller than the short counts towards the run (hht > 2).
+    if (enemies.heightOf(id) > kLowEnemy) {
+        countBlow(players, player, !stood || !enemies.alive(id));
+    }
+}
+
+void PlayerAttacks::countCritterBlow(std::span<PlayerRuntime> players, s32 player,
+                                     const Critters& critters, s32 id, bool stood) {
+    countBlow(players, player, !stood || !critters.alive(id) || critters.dying(id));
+}
+
+void PlayerAttacks::countBossBlow(std::span<PlayerRuntime> players, s32 player,
+                                  const BossView& before, const Bosses& bosses) {
+    countBlow(players, player, !before.alive || !before.awake || !bosses.view().alive);
+}
+
 void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
                                const Targets& targets) {
     if (!m_resources.has_value() || index >= players.size()) {
@@ -232,14 +263,20 @@ void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
     };
     for (const MissileTarget& target : targets.opponents.enemies().targets()) {
         ram(target, kEnemyTargetBase, [&](const MissileTarget& hit) {
+            const Enemies& enemies = targets.opponents.enemies();
+            const bool stood = enemies.alive(hit.id);
             targets.opponents.strikeEnemy(hit.id, blow, EnemyHit::kKnockDown, facing,
                                           actor.player(), players, true, hit.base);
+            countEnemyBlow(players, actor.player(), enemies, hit.id, stood);
         });
     }
     for (const MissileTarget& target : targets.opponents.critters().targets()) {
         ram(target, kCritterTargetBase, [&](const MissileTarget& hit) {
+            const Critters& critters = targets.opponents.critters();
+            const bool stood = critters.alive(hit.id) && !critters.dying(hit.id);
             targets.opponents.strikeCritter(hit.id, blow, EnemyHit::kKnockDown, facing,
                                             actor.player(), hit.base, true, players);
+            countCritterBlow(players, actor.player(), critters, hit.id, stood);
         });
     }
     targets.fixtures.settleBlasts(players, targets.fixtureEvents);
@@ -339,16 +376,22 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
     for (const MissileTarget& target : targets.opponents.enemies().targets()) {
         if (target.touches(actor.followPoint(), reach)) {
             once(static_cast<usize>(kEnemyTargetBase) + static_cast<usize>(target.id), false, [&] {
+                const Enemies& enemies = targets.opponents.enemies();
+                const bool stood = enemies.alive(target.id);
                 targets.opponents.strikeEnemy(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
                                               actor.player(), players, true, target.base);
+                countEnemyBlow(players, actor.player(), enemies, target.id, stood);
             });
         }
     }
     for (const MissileTarget& target : targets.opponents.critters().targets()) {
         if (target.touches(actor.followPoint(), reach)) {
             once(static_cast<usize>(kCritterTargetBase) + static_cast<usize>(target.id), true, [&] {
+                const Critters& critters = targets.opponents.critters();
+                const bool stood = critters.alive(target.id) && !critters.dying(target.id);
                 targets.opponents.strikeCritter(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
                                                 actor.player(), target.base, true, players);
+                countCritterBlow(players, actor.player(), critters, target.id, stood);
             });
         }
     }
@@ -884,7 +927,7 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
                 effectPoint.y += enemyKind(kind).attentionHeight;
             }
         }
-        strikeTarget(target, hit.damage, row.damageType, owner, players, targets);
+        strikeTarget(target, hit.damage, row.damageType, owner, players, targets, true);
         presentStrikeHit(source->actor, row, effectPoint, players);
     }
 }
@@ -2114,16 +2157,14 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         Bosses& bosses = targets.opponents.bosses();
         const BossView before = bosses.view();
         credit = bosses.hurt(hit, id - kBossTargetBase);
-        // A blow a sleeping boss does not take, or the last, tells for three.
-        players[index].streak.record(!before.alive || !before.awake || !bosses.view().alive);
+        countBossBlow(players, actor.player(), before, bosses);
     } else if (id >= kCritterTargetBase) {
         const s32 critter = id - kCritterTargetBase;
         const Critters& critters = targets.opponents.critters();
         const bool standing = critters.alive(critter) && !critters.dying(critter);
         credit = targets.opponents.strikeCritter(critter, damage, flags, direction, actor.player(),
                                                  point, true, players, target->node);
-        players[index].streak.record(!standing || !critters.alive(critter) ||
-                                     critters.dying(critter));
+        countCritterBlow(players, actor.player(), critters, critter, standing);
     } else if (id >= kGeneratorTargetBase) {
         if (!targets.opponents.strikeGenerator(id - kGeneratorTargetBase, damage, actor.player(),
                                                players, generators)) {
@@ -2135,10 +2176,7 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         const bool standing = enemies.alive(enemy);
         credit = targets.opponents.strikeEnemy(enemy, damage, flags, direction, actor.player(),
                                                players, true, point);
-        // Only a blow on something taller than the short counts towards the run (hht > 2).
-        if (target->height > kLowEnemy) {
-            players[index].streak.record(!standing || !enemies.alive(enemy));
-        }
+        countEnemyBlow(players, actor.player(), enemies, enemy, standing);
     } else {
         if (!targets.fixtures.strikeBarrel(static_cast<usize>(id), damage, actor.player(), players,
                                            targets.fixtureEvents, barrels)) {
@@ -2338,20 +2376,31 @@ bool PlayerAttacks::dispatchProjectileImpact(
                 hit.level = experienceLevel(actor.save().experience());
             }
         }
+        const Bosses& bosses = targets.opponents.bosses();
+        const BossView before = bosses.view();
         credit = targets.opponents.bosses().hurt(hit, impact.target - kBossTargetBase);
+        countBossBlow(players, impact.owner, before, bosses);
     } else if (impact.target >= kCritterTargetBase) {
-        credit = targets.opponents.strikeCritter(impact.target - kCritterTargetBase, impact.damage,
-                                                 impact.flags, impact.direction, impact.owner,
-                                                 impact.position, false, players, impact.node);
+        const s32 critter = impact.target - kCritterTargetBase;
+        const Critters& critters = targets.opponents.critters();
+        const bool stood = critters.alive(critter) && !critters.dying(critter);
+        credit = targets.opponents.strikeCritter(critter, impact.damage, impact.flags,
+                                                 impact.direction, impact.owner, impact.position,
+                                                 false, players, impact.node);
+        countCritterBlow(players, impact.owner, critters, critter, stood);
     } else if (impact.target >= kGeneratorTargetBase) {
         if (!targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
                                                impact.owner, players, generators)) {
             return false;
         }
     } else if (impact.target >= kEnemyTargetBase) {
-        credit = targets.opponents.strikeEnemy(impact.target - kEnemyTargetBase, impact.damage,
-                                               impact.flags, impact.direction, impact.owner,
-                                               players, false, impact.position);
+        const s32 enemy = impact.target - kEnemyTargetBase;
+        const Enemies& enemies = targets.opponents.enemies();
+        const bool stood = enemies.alive(enemy);
+        credit = targets.opponents.strikeEnemy(enemy, impact.damage, impact.flags,
+                                               impact.direction, impact.owner, players, false,
+                                               impact.position);
+        countEnemyBlow(players, impact.owner, enemies, enemy, stood);
     } else if (impact.target >= 0) {
         if (!targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
                                            impact.owner, players, targets.fixtureEvents, barrels)) {
@@ -2540,21 +2589,30 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                         hit.level = experienceLevel(player.actor.save().experience());
                     }
                 }
+                const Bosses& bosses = targets.opponents.bosses();
+                const BossView before = bosses.view();
                 const f32 credit =
                     targets.opponents.bosses().hurt(hit, target.id - kBossTargetBase);
+                countBossBlow(players, byPlayer, before, bosses);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else if (target.id >= kCritterTargetBase) {
                 const s32 id = target.id - kCritterTargetBase;
+                const Critters& critters = targets.opponents.critters();
+                const bool stood = critters.alive(id) && !critters.dying(id);
                 const f32 credit = targets.opponents.strikeCritter(
                     id, power, flags, direction, byPlayer, target.base, false, players);
+                countCritterBlow(players, byPlayer, critters, id, stood);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else if (target.id >= kGeneratorTargetBase) {
                 targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, power, byPlayer,
                                                   players);
             } else if (target.id >= kEnemyTargetBase) {
                 const s32 id = target.id - kEnemyTargetBase;
+                const Enemies& enemies = targets.opponents.enemies();
+                const bool stood = enemies.alive(id);
                 const f32 credit =
                     targets.opponents.strikeEnemy(id, power, flags, direction, byPlayer, players);
+                countEnemyBlow(players, byPlayer, enemies, id, stood);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else {
                 targets.fixtures.strikeBarrel(static_cast<usize>(target.id), power, byPlayer,

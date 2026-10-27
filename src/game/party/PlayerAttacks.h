@@ -144,6 +144,16 @@ public:
     static constexpr f32 kHeldReach = MeleeSelection::kHeldReach;
     static constexpr f32 kLowEnemy = 4.0f; ///< the height under which an enemy is short
     static constexpr f32 kLowThing = 3.5f; ///< and anything else
+    /** A blow landed for `player` counts toward their run of close blows (`MeleeStreak`),
+     * whatever landed it: on an enemy only one taller than the short (hht > 2), telling
+     * when it killed or the body was not standing to take it; `stood` is whether it was. */
+    static void countEnemyBlow(std::span<PlayerRuntime> players, s32 player,
+                               const Enemies& enemies, s32 id, bool stood);
+    static void countCritterBlow(std::span<PlayerRuntime> players, s32 player,
+                                 const Critters& critters, s32 id, bool stood);
+    /** A blow a sleeping boss does not take, or the last, tells for three. */
+    static void countBossBlow(std::span<PlayerRuntime> players, s32 player,
+                              const BossView& before, const Bosses& bosses);
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     /** The same native contact, with generator presentation supplied by a
      * transaction-local publisher. A refusal requires complete caller undo. */
@@ -187,8 +197,10 @@ private:
         const std::function<void(const MissileImpact&, f32)>& presentation = {},
         const LevelOpponents::GeneratorPublisher& generators = {},
         const LevelFixtures::BarrelPublisher& barrels = {});
+    /** `counted` blows build the owner's run of close blows: a turbo strike's, not a shield's. */
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
-                      std::span<PlayerRuntime> players, const Targets& targets);
+                      std::span<PlayerRuntime> players, const Targets& targets,
+                      bool counted = false);
     struct ItemArea {
         ItemAttack attack;
         usize actor = 0;
