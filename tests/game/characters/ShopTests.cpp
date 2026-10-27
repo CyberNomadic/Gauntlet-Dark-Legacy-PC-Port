@@ -837,6 +837,28 @@ TEST_CASE("retail piles grow from 20 to 64..208 pixels, largest first", "[shop][
     REQUIRE(tally.targetHeight(0) == 208);
 }
 
+TEST_CASE("retail tally order follows each player's relative gains rather than label order",
+          "[shop][results]") {
+    // fn_8009A0AC ranks clamped pile heights, with Gold/Experience/Kills breaking ties.
+    // Different gains on the same stage can therefore highlight each lane differently.
+    const std::array<s32, 3> maxima{999, 999, 999};
+    LevelTally first;
+    LevelTally second;
+    first.start({0, {600, 400, 900}}, maxima);
+    second.start({1, {400, 900, 600}}, maxima);
+    CHECK(first.order() == std::array<usize, 3>{2, 0, 1});
+    CHECK(second.order() == std::array<usize, 3>{1, 2, 0});
+    for (usize rank = 0; rank < 3; ++rank) {
+        CAPTURE(rank);
+        REQUIRE(first.growingRank() == rank);
+        const auto pile = first.order()[rank];
+        const auto ticks = static_cast<s32>(first.targetHeight(pile) - first.height(pile));
+        first.update(static_cast<f64>(ticks) / 60);
+        CHECK(first.height(pile) == first.targetHeight(pile));
+    }
+    CHECK(first.finished());
+}
+
 TEST_CASE("retail level-up stats reveal changes before accepting Continue", "[shop][results]") {
     // 80099410: no level change skips the page; promotion waits 90 ticks then 60 per change.
     auto save = shopper();

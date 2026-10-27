@@ -39,9 +39,12 @@ MenuInput shopInput(MenuInput input, const GameConfig& config, s32 player) {
     const auto source = playerInputSource(*input.devices, config, player);
     const auto& bindings = menuBindings(config, player);
     const auto pressed = [&](const auto& keys, const auto& buttons) {
-        return (source.keyboard &&
-                std::ranges::any_of(keys,
-                                    [&](Key key) { return input.devices->wasKeyPressed(key); })) ||
+        return (source.keyboard && std::ranges::any_of(keys,
+                                                       [&](Key key) {
+                                                           return key != Key::MouseLeft &&
+                                                                  key != Key::MouseRight &&
+                                                                  input.devices->wasKeyPressed(key);
+                                                       })) ||
                std::ranges::any_of(buttons, [&](PadButton button) {
                    return input.devices->wasPadButtonPressed(source.pad, button);
                });

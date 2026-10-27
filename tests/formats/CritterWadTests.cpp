@@ -106,11 +106,16 @@ TEST_CASE("critter TYPE decodes home radius separately from MOVE speed",
     put(kRecord + 0xA4, std::bit_cast<u32>(999.0f));
     put(kRecord + 0xAC, std::bit_cast<u32>(22.0f));
     put(kRecord + 0xCC, std::bit_cast<u32>(0.5f));
+    put(kRecord + 0xD4, std::bit_cast<u32>(10.0f));
+    put(kRecord + 0x100, std::bit_cast<u32>(1.0f));
+    put(kRecord + 0x104, std::bit_cast<u32>(9.0f));
+    put(kRecord + 0x108, std::bit_cast<u32>(7.0f));
     const auto file = parseCritterWad(bytes);
     REQUIRE(file.types.size() == 1);
     REQUIRE(file.types[0].defaultPos[1] == 999);
     REQUIRE(file.types[0].roamRadius == 22);
     REQUIRE(file.types[0].turnLimit == 0.5f);
+    REQUIRE(file.types[0].healthBarOffset == std::array<f32, 3>{1, 9, 7});
 }
 
 TEST_CASE("critter TYPE decodes the head and eye look-at nodes and their rates",

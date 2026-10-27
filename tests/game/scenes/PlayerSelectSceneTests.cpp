@@ -156,6 +156,34 @@ TEST_CASE("the select screen refuses to open without unpacked data", "[game][sel
     REQUIRE_FALSE(scene.isOpen());
 }
 
+TEST_CASE("a remapped mouse click joins only the pointed character lane",
+          "[game][select][mouse][assets]") {
+    test::FakeRenderDevice device;
+    Fixture f("select-mapped-mouse");
+    f.config.controls[0].customized = true;
+    f.config.controls[0].menu.select = {Key::MouseLeft};
+    f.config.controls[0].menu.start = {Key::MouseLeft};
+    PlayerSelectScene scene;
+    const auto context = f.context();
+    REQUIRE(scene.open(device, context, 0));
+    const auto projection = makeLetterboxProjection(640, 448, 1920, 1080);
+    const auto transform = makeVirtualScreenTransform(projection, 512, 384, 640, 448);
+    scene.render(device, projection, 640, 448);
+    const auto clip = transform * Vec4{280, 100, 0.5f, 1};
+    Input input;
+    input.setKey(Key::MouseLeft, true);
+    input.setPointer({(clip.x / clip.w + 1) / 2, (clip.y / clip.w + 1) / 2, true, true});
+    scene.step(1, scene.readInputs(input));
+    CHECK(scene.lane(0).state() == SelectLane::State::TopMenu);
+    CHECK(scene.lane(2).state() == SelectLane::State::TopMenu);
+    CHECK_FALSE(scene.lane(1).active());
+    CHECK_FALSE(scene.lane(3).active());
+    input.beginPoll();
+    scene.step(1, scene.readInputs(input));
+    CHECK(scene.lane(0).state() == SelectLane::State::TopMenu);
+    CHECK(scene.lane(2).state() == SelectLane::State::TopMenu);
+}
+
 TEST_CASE("controller players can type names without steering other lanes",
           "[game][select][multiplayer][assets]") {
     test::FakeRenderDevice device;

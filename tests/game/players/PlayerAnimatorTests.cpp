@@ -1832,6 +1832,52 @@ TEST_CASE("a strong press within a chain of swings makes the chain's power swing
     CHECK(playOut(kick, Action::LowKick, PlayerDeed::None) == Action::PowerLow);
 }
 
+TEST_CASE("automatic melee can count held close swings without changing manual press chains",
+          "[game][players][animation][melee][held-melee-chain]") {
+    const TreeInfo tree = meleeTree();
+    for (const bool enabled : {false, true}) {
+        for (const bool tapped : {false, true}) {
+            for (const s32 swings : {1, 2, 3}) {
+                CAPTURE(enabled, tapped, swings);
+                PlayerAnimator animator;
+                REQUIRE(animator.bind(tree, false));
+                const auto step = [&](PlayerDeed deed) {
+                    animator.update(PlayerMotion::Stand, kTicks, kStep, deed, enabled);
+                };
+                step(PlayerDeed::Melee);
+                REQUIRE(animator.action() == Action::Quick1);
+                for (s32 swing = 1; swing < swings; ++swing) {
+                    const auto previous = animator.action();
+                    if (tapped) {
+                        step(PlayerDeed::None);
+                    }
+                    for (s32 tick = 0; tick < 90 && animator.action() == previous; ++tick) {
+                        step(PlayerDeed::Melee);
+                    }
+                    REQUIRE(animator.action() != previous);
+                }
+                const bool fullChain = enabled || tapped;
+                CHECK(animator.meleeChain() == (fullChain ? swings : (swings == 1 ? 1 : 0)));
+                const auto previous = animator.action();
+                step(PlayerDeed::MeleeSlow);
+                for (s32 tick = 0; tick < 90 && animator.action() == previous; ++tick) {
+                    step(PlayerDeed::None);
+                }
+                if (fullChain || swings == 1) {
+                    const Action expected = swings == 1 ? Action::PowerClose
+                                            : swings == 2 ? Action::PowerMed
+                                                          : Action::Spin;
+                    CHECK(animator.action() == expected);
+                } else if (swings == 2) {
+                    CHECK(animator.action() == Action::Quick3);
+                } else {
+                    CHECK(animator.action() == Action::Quick2);
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("a strong press during kick recovery retains the low finisher window",
           "[game][players][animation][melee][alpha-melee-flow]") {
     const TreeInfo tree = meleeTree();

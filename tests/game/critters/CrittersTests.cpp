@@ -1649,13 +1649,13 @@ TEST_CASE("a golem's health hangs over it on its GMETER bar, turned to the camer
     REQUIRE(assets.meterFill >= 0);
     Combatant golem;
     REQUIRE(golem.spawn(assets, 0, Vec3{0.0f}, 0.0f, nullptr, EnemyScales{}, 'G'));
-    // Full, the fill runs its whole length, ten over the body (TYPE +0xD0).
+    // Full, the fill runs its whole length, nine over the body (TYPE +0x100).
     const CameraFrame eye = CameraFrame::at(Vec3{50.0f, 10.0f, 0.0f});
     auto meter = golem.meterPose(&eye);
     REQUIRE(meter.has_value());
     const auto fill = static_cast<usize>(assets.meterFill);
     CHECK(glm::length(Vec3{meter->second[fill][0]}) == Approx(1.0f));
-    CHECK(meter->first[3].y == Approx(assets.data.floorOffset() + 10.0f));
+    CHECK(meter->first[3].y == Approx(assets.data.floorOffset() + 9.0f));
     // It is turned about the upright toward the eye, standing off along x.
     CHECK(std::abs(meter->first[2].x) == Approx(1.0f).margin(0.01f));
     CHECK(meter->first[1].y == Approx(1.0f).margin(0.01f));
@@ -1680,6 +1680,20 @@ TEST_CASE("a golem's health hangs over it on its GMETER bar, turned to the camer
     golem.clear();
 }
 
+TEST_CASE("native ice bear meters use their authored body offsets",
+          "[game][enemies][meter][assets]") {
+    const auto root = unpackedRoot();
+    test::FakeRenderDevice device;
+    CombatantAssets assets;
+    REQUIRE(assets.load(device, root, Golem::definition('I'), 'I'));
+    CHECK(assets.data.meter().barOffset == Vec3{0, 9, 0});
+    Combatant bear;
+    REQUIRE(bear.spawn(assets, 0, Vec3{0}, 0, nullptr, {}, 'I'));
+    const auto pose = bear.meterPose(nullptr);
+    REQUIRE(pose);
+    CHECK(pose->first[3].y == Approx(assets.data.floorOffset() + 9));
+}
+
 TEST_CASE("generals carry a suppressible health meter without changing their native flags",
           "[meter][combat-settings][assets]") {
     const auto root = unpackedRoot();
@@ -1692,7 +1706,7 @@ TEST_CASE("generals carry a suppressible health meter without changing their nat
     REQUIRE(actor.spawn(assets, 0, Vec3{0}, 0, nullptr, {}, 'G'));
     const auto pose = actor.meterPose(nullptr);
     REQUIRE(pose.has_value());
-    CHECK(pose->first[3].y > assets.data.floorOffset());
+    CHECK(pose->first[3].y == Approx(assets.data.floorOffset() + 10.0f));
     actor.draw(device, Mat4{1}, {}, nullptr, nullptr, nullptr, -1, false);
     const auto bodyDraws = device.draws.size();
     device.draws.clear();

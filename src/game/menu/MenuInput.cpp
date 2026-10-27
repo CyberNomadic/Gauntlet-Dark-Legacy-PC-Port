@@ -36,7 +36,11 @@ bool typesText(Key key) {
 
 /** Whether `key` still steers the menu for `source`. */
 bool steers(Key key, const MenuInputSource& source) {
-    return source.keyboard && !(source.text && typesText(key));
+    // Primary/secondary mouse presses belong to hit testing, even if an older or
+    // customized profile also binds them to Select/Start/Back. Reading both paths
+    // would activate the keyboard's selection as well as the pointed player's lane.
+    return source.keyboard && key != Key::MouseLeft && key != Key::MouseRight &&
+           !(source.text && typesText(key));
 }
 
 bool anyKeyPressed(const Input& input, std::span<const Key> keys, const MenuInputSource& source) {

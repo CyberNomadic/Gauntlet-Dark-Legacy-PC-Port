@@ -195,7 +195,7 @@ TEST_CASE("a boss sleeps until the party comes near, then fights by its table, a
     REQUIRE(meter->advance == 256);
     REQUIRE(meter->leftInset == 44);
     REQUIRE(meter->rightInset == 53);
-    REQUIRE(meter->barOffset == Vec3{-4.0f, 4.0f, 0.0f});
+    REQUIRE(meter->barOffset == Vec3{0.0f});
     REQUIRE(bosses.archive() != nullptr);
     REQUIRE(bosses.archive()->textures.find("METER_FG1").has_value());
     // Beyond its threshold it sleeps: nothing moves.

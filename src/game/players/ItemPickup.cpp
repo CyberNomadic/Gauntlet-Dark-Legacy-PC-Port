@@ -196,6 +196,16 @@ ItemTaking takeItem(CharacterSave& save, const ItemOffer& offer, f32 powerupTime
     case ItemKind::SpecialPowerup: {
         inventory.addPowerup(offer.kind, offer.flags, static_cast<f32>(offer.amount),
                              offer.strength * powerupTime, activatePowerups);
+        // Inventory retains native manual activation for Turbo and Mikey. Auto-Use Item
+        // extends pickup activation to Turbo without consuming it on load or in the shop.
+        if (activatePowerups && offer.kind == powerup::kSpecial &&
+            (offer.flags & powerup::kTurbo) != 0) {
+            for (auto& slot : inventory.powerups) {
+                if (slot.kind == offer.kind && slot.flags == offer.flags && slot.held()) {
+                    slot.on = true;
+                }
+            }
+        }
         ItemTaking taking = taken(0, "SPECIALS", powerupSound(offer.kind, offer.flags));
         taking.message = powerupMessage(offer.kind, offer.flags);
         return taking;

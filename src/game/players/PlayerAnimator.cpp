@@ -505,7 +505,8 @@ u32 PlayerAnimator::sequenceOf(Action action) const {
                          : static_cast<u32>(m_sequences[index(Action::Ready)]);
 }
 
-void PlayerAnimator::update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerDeed deed) {
+void PlayerAnimator::update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerDeed deed,
+                             bool chainHeldMelee) {
     m_meleeBlow = MeleeBlow::None;
     if (!bound()) {
         return;
@@ -521,7 +522,12 @@ void PlayerAnimator::update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerD
         deed == PlayerDeed::Attack || deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow;
     const bool strongHeld = deed == PlayerDeed::StrongAttack || deed == PlayerDeed::MeleeSlow ||
                             deed == PlayerDeed::MeleeSlowLow;
-    m_quickPress = m_quickPress || (quickHeld && !m_quickHeld);
+    // The optional automatic-melee mode also carries held close swings through a
+    // combo. Manual controls retain the native fresh-press latch, and ranged
+    // attacks never advance a melee combo merely because their button is held.
+    const bool continuingMelee = chainHeldMelee &&
+                                 (deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow);
+    m_quickPress = m_quickPress || (quickHeld && !m_quickHeld) || continuingMelee;
     m_strongPress = m_strongPress || (strongHeld && !m_strongHeld);
     m_quickHeld = quickHeld;
     m_strongHeld = strongHeld;

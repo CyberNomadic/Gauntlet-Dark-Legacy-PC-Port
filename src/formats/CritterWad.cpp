@@ -216,7 +216,7 @@ CritterFile parseCritterWad(std::span<const u8> bytes) {
         type.maxHealth = readWadF32(bytes, at + 0xE4, kWhat);
         type.expValue = readWadF32(bytes, at + 0xE8, kWhat);
         type.wakeThreshold = readWadF32(bytes, at + 0xEC, kWhat);
-        type.healthBarOffset = readVec(bytes, at + 0xD0);
+        type.healthBarOffset = readVec(bytes, at + 0x100);
         type.hitSoundClose = readS16(bytes, at + 0xF4);
         type.hitSoundFar = readS16(bytes, at + 0xF6);
         type.meterPieces = readS16(bytes, at + 0xF8);

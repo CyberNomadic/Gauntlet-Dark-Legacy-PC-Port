@@ -1,17 +1,45 @@
 #include "engine/world/WorldAnimator.h"
 
-#include "engine/io/NativeStateDigest.h"
-
 #include <algorithm>
 #include <cmath>
 
 #include "engine/core/Types.h"
+#include "engine/io/NativeStateDigest.h"
 #include "engine/world/TreePose.h"
 
 namespace gdl {
 namespace {
 constexpr f32 kFrameSlack = 0.00001f;
+
+/** A spinning decoration crosses its loop seam, unlike a cart returning to its start.
+ * Check only at wraps: authored keys and native timing remain untouched. */
+bool continuousTurn(const TrackInfo& track, s32 frames) {
+    const u32 channels = track.flags & 0x1FFU;
+    if ((channels != 1 && channels != 2 && channels != 4) || track.frames.size() < 3 ||
+        track.values.size() != track.frames.size() || track.frames.front() != 0 ||
+        track.frames.back() != frames - 1) {
+        return false;
+    }
+    f32 turn = 0;
+    f32 fastest = 0;
+    for (usize key = 1; key < track.frames.size(); ++key) {
+        const f32 interval = static_cast<f32>(track.frames[key] - track.frames[key - 1]);
+        const f32 step = TreePose::wrapAngle(track.values[key] - track.values[key - 1]);
+        if (interval <= 0 || std::abs(step) >= TreePose::kHoldAngle || step == 0 ||
+            (turn != 0 && step * turn < 0)) {
+            return false;
+        }
+        turn += step;
+        fastest = std::max(fastest, std::abs(step) / interval);
+    }
+    const f32 seam = TreePose::wrapAngle(track.values.front() - track.values.back());
+    // K1's exported full turns omit a closing sample: their final-to-first seam
+    // can span two authored increments. A partial turn or a reversing reset is
+    // not a continuous spin, even if its endpoints happen to be close together.
+    return std::abs(turn) > kPi && seam * turn >= -kFrameSlack &&
+           std::abs(seam) <= fastest * 2.5f + kFrameSlack;
 }
+} // namespace
 
 void WorldAnimator::bind(const WorldLayout& layout) {
     clear();
@@ -272,7 +300,7 @@ void WorldAnimator::step(f32 seconds, WorldScene& scene, bool pauseLoops) {
             // A looping world track's final key closes the cycle; retain time past
             // that key rather than lengthening every loop by a caller-dependent amount.
             track.frame = last > 0.0f && track.frame >= last ? std::fmod(track.frame, last) : 0.0f;
-            track.presentationCut = true;
+            track.presentationCut = !continuousTurn(track.track, track.frames);
             m_cycleEvents.push_back({track.object, true});
         } else if (!restarted && std::floor(track.frame) <= 1) {
             m_cycleEvents.push_back({track.object, false});

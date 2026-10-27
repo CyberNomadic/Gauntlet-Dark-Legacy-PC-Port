@@ -18,6 +18,38 @@ using gdl::game::MenuInput;
 using gdl::game::MenuInputSource;
 using gdl::game::readMenuInput;
 
+TEST_CASE("bound mouse clicks remain pointer actions instead of global menu commands",
+          "[game][menu][mouse]") {
+    gdl::game::GameConfig config;
+    config.controls[0].customized = true;
+    auto& bindings = config.controls[0].menu;
+    bindings.select = {Key::MouseLeft, Key::Enter};
+    bindings.start = {Key::MouseLeft};
+    bindings.back = {Key::MouseRight};
+    bindings.up = {Key::MouseLeft};
+    bindings.down = {Key::MouseRight};
+    Input input;
+    input.setKey(Key::MouseLeft, true);
+    input.setKey(Key::MouseRight, true);
+    input.setPointer({0.6f, 0.2f, true, true});
+    const auto menu = gdl::game::readSharedMenuInput(input, config);
+    CHECK(menu.pointerPressed);
+    CHECK(menu.pointerHeld);
+    CHECK(menu.buttonPressed);
+    CHECK_FALSE(menu.select);
+    CHECK_FALSE(menu.start);
+    CHECK_FALSE(menu.back);
+    CHECK_FALSE(menu.up);
+    CHECK_FALSE(menu.down);
+    CHECK_FALSE(menu.upHeld);
+    CHECK_FALSE(menu.downHeld);
+    CHECK(gdl::game::readMovieMenuInput(input, config).start);
+    // A simultaneous real keyboard/pad command still reaches its owner.
+    input.setKey(Key::Enter, true);
+    CHECK(gdl::game::readSharedMenuInput(input, config).select);
+    CHECK(gdl::game::readPauseMenuInput(input, config, 0).select);
+}
+
 TEST_CASE("scroll continuation accepts fresh buttons on assigned devices without bindings",
           "[game][menu][scroll-input]") {
     const MenuBindings unbound{};

@@ -238,8 +238,11 @@ Combatant::meterPose(const CameraFrame* camera, f32 presentationAlpha) const {
         critter.definition == nullptr) {
         return std::nullopt;
     }
-    Mat4 placement = glm::translate(presentationModel(critter, presentationAlpha),
-                                    critter.definition->meter().barOffset);
+    const auto& meter = critter.definition->meter();
+    // Generals have no native world meter. Keep the port's added bar at its existing height;
+    // native golem/gargoyle bars instead use the authored TYPE +0x100 attachment offset.
+    const Vec3 offset = meter.inWorld ? meter.barOffset : Vec3{0.0f, 10.0f, 0.0f};
+    Mat4 placement = glm::translate(presentationModel(critter, presentationAlpha), offset);
     if (camera != nullptr) {
         placement = camera->face(placement, kMeterFacing);
     }

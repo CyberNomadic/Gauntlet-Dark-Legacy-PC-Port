@@ -103,6 +103,7 @@ public:
         bool pojo = false;
         std::vector<MissileLaunch> missiles; ///< static physics specs, no visual bindings
     };
+    enum class WeaponMode { Throw, Volley };
     struct WeaponCue {
         std::string_view name;                  ///< named level/common/ambient cue, when nonempty
         std::optional<u32> call = std::nullopt; ///< otherwise the bound figure's class voice call
@@ -118,7 +119,7 @@ public:
     prepareWeapon(const PlayerActor& actor, const PlayerFigure& figure, const Vec3& direction,
                   f32 scale, bool spreads, std::optional<Vec3> target = std::nullopt,
                   std::optional<MissileRelease> explicitRelease = std::nullopt,
-                  bool fixedFacing = false) const;
+                  bool fixedFacing = false, WeaponMode mode = WeaponMode::Throw) const;
     /** Borrows the native streak texture and tint; may populate the texture cache. */
     MissileStreak weaponStreak(const PlayerActor& actor, bool superShot = false);
     /** Existing plain-weapon texture bank clock, absent before the bank's first use. */
@@ -134,7 +135,7 @@ public:
     void launchWeapon(const PlayerActor& actor, PlayerFigure* body, const Vec3& direction,
                       f32 scale, bool spreads, std::optional<Vec3> target = std::nullopt,
                       std::optional<MissileRelease> explicitRelease = std::nullopt,
-                      bool fixedFacing = false);
+                      bool fixedFacing = false, WeaponMode mode = WeaponMode::Throw);
     void launchSuperShot(PlayerActor& actor, PlayerFigure* body,
                          std::optional<Vec3> target = std::nullopt);
     void launchGauntlet(const PlayerActor& actor, PlayerFigure* body, bool left);

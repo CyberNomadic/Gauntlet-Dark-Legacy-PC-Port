@@ -28,6 +28,11 @@ const PotionEmission::Look& PotionEmission::look(s32 kind) {
                         : 0];
 }
 
+Vec3 PotionEmission::shieldScale(f32 radius) {
+    const f32 footprint = std::clamp(radius / 12.0f, 0.33f, 1.0f);
+    return {footprint, 1.0f, footprint};
+}
+
 PotionEmission::Burst PotionEmission::burst(const Context& context) {
     Burst result;
     result.impact.position = context.position;

@@ -89,7 +89,8 @@ PartyMotion::Events PlayScene::motionEvents() {
             [this](usize flier, usize thrower, f32 blow) {
                 return m_attacks.comboImpact(flier, thrower, blow, m_players, attackTargets());
             },
-        .flying = [this](usize i) { return cheats(m_players[i].actor.player()).noclip; }};
+        .flying = [this](usize i) { return cheats(m_players[i].actor.player()).noclip; },
+        .chainHeldMelee = m_context.config != nullptr && m_context.config->combat.autoMelee};
 }
 
 /** How many of the party stand in the level. */

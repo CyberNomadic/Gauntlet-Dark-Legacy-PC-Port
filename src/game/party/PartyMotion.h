@@ -64,6 +64,8 @@ public:
         /** Whether the developer console holds a player's body aloft (noclip): it then
          * rides no floor, collides with nothing and never falls. */
         std::function<bool(usize)> flying;
+        /** Automatic-melee mode counts held close swings toward heavy finishers. */
+        bool chainHeldMelee = false;
     };
     static constexpr f32 kLostDepth = 4.5f;   ///< under the world's lowest point a body is lost
     static constexpr f32 kTurnFrames = 30.0f; ///< the rate a partial turn is taken at, a second

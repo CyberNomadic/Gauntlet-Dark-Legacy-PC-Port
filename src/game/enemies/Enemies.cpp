@@ -2655,7 +2655,10 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
     const s32 which = enemy.variant == kBomberStrength ? EnemyMissileKind::kBomb
                                                        : missileSlotOfWay(enemy.algorithm);
     EnemyMissileKind what = enemyMissileOf(enemy.kind, which).value_or(EnemyMissileKind::arrow());
-    what.flags |= static_cast<u32>(enemy.element); // an elemental one's missile is of its element
+    if (enemy.element != 0) {
+        // The low nibble is an element identifier, not independent elemental bits.
+        what.flags = (what.flags & ~Damage::kElement) | static_cast<u32>(enemy.element);
+    }
     // The trees are the kind's <PREFIX>_ARROW, _BOMB and _FBALL (InitEnemyMissiles); a kind
     // with no tree for the slot lets nothing go, and nothing goes at a player more than an
     // eighth of a turn off its facing (EnemyStartMissile).

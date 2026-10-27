@@ -377,7 +377,8 @@ public:
     void update(PlayerMotion motion, s32 ticks, f32 seconds, bool attack = false) {
         update(motion, ticks, seconds, attack ? PlayerDeed::Attack : PlayerDeed::None);
     }
-    void update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerDeed deed);
+    void update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerDeed deed,
+                bool chainHeldMelee = false);
     /** What the close attack knows of its nearest target, set before each update. */
     void setMelee(const MeleeSense& sense) { m_melee = sense; }
     /** The class of the partner making the combo this body is held or thrown in (which

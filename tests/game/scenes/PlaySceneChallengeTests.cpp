@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include "engine/assets/SoundSet.h"
 #include "engine/audio/AudioMixer.h"
 #include "engine/audio/SoundPlayer.h"
 
@@ -179,8 +180,8 @@ TEST_CASE("the secret coin hunt persists earned unlocks for regular and unsaved 
     scene.close();
 }
 
-TEST_CASE("running out of secret-world time returns without unlocking the class",
-          "[secret][assets]") {
+TEST_CASE("running out of secret-world time sounds every warning and returns without unlocking",
+          "[secret][secret-countdown][assets]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELS4/WORLDS.PS2").parent_path().parent_path().parent_path();
     test::FakeRenderDevice device;
@@ -193,6 +194,31 @@ TEST_CASE("running out of secret-world time returns without unlocking the class"
     GameContext context;
     context.levels = &levels;
     context.unpackedRoot = root;
+    AudioMixer mixer{48000};
+    SoundPlayer sounds{mixer};
+    context.sounds = &sounds;
+    SoundSet narrator;
+    SoundSet select;
+    REQUIRE(narrator.load(root / "AUDIO/VOICE2"));
+    REQUIRE(select.load(root / "AUDIO/SELECT"));
+    const auto warning = select.find("S_TIMEISRUNNING");
+    REQUIRE(warning);
+    std::array<usize, 6> calls{};
+    const SoundPlayer::Capture capture(&sounds, [&](const SoundPlayer::Event& event) {
+        if (event.kind != SoundPlayer::Event::Kind::Play) {
+            return;
+        }
+        if (event.bank == "SELECT" && event.call == *warning) {
+            ++calls[0];
+        }
+        for (usize second = 1; second < calls.size(); ++second) {
+            const auto call = narrator.find(std::format("S_COUNT{}", second));
+            REQUIRE(call);
+            if (event.bank == "VOICE2" && event.call == *call) {
+                ++calls[second];
+            }
+        }
+    });
     PlayScene scene;
     const std::array party{PartyMember{0, CharacterSave{}}};
     REQUIRE(scene.open(device, context, world, party));
@@ -206,6 +232,7 @@ TEST_CASE("running out of secret-world time returns without unlocking the class"
     CHECK(scene.challenge().remaining() == 0);
     CHECK(scene.challenge().coinsLeft() > 0);
     CHECK(scene.actor(0)->save().classUnlock == 0);
+    CHECK(calls == std::array<usize, 6>{1, 1, 1, 1, 1, 1});
     scene.close();
 }
 

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -79,6 +80,75 @@ TEST_CASE("a native turntable loop stops on pause and resumes only while its pla
     audio.close();
 }
 
+TEST_CASE("Ice Camp boiler switches retire every opening sound when their motion ends",
+          "[trigger-cues][ice-boiler-audio][assets]") {
+    const s32 instance = GENERATE(479, 492, 498);
+    const bool recorded = GENERATE(false, true);
+    const auto root = test::assetOrSkip("WDATA/ICE.WAD").parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    world.startTriggers({});
+    usize index = 0;
+    while (index < world.triggers().size() &&
+           world.triggers().trigger(index).instance != instance) {
+        ++index;
+    }
+    REQUIRE(index < world.triggers().size());
+    const auto& trigger = world.triggers().trigger(index);
+    const std::array visitors{TriggerVisitor{.position = trigger.spot}};
+    AudioMixer mixer{48000};
+    SoundPlayer sounds{mixer};
+    LevelSoundscape audio;
+    audio.open(root, &sounds, world.audio(), 'I');
+    SceneSoundEvents events;
+    if (recorded) {
+        events.open(1, &sounds);
+        audio.recordTo(&events);
+        events.beginTick(1);
+    }
+    TriggerCues cues;
+    SwitchCutscene cutscene;
+    const auto captureLoops = [&] {
+        TriggerCues::gatherAudio(world, audio);
+        audio.gatherLoops({}, {}, 1, false, &world.scene(), {}, {});
+        return events.endFrame();
+    };
+    world.updateTriggers(1.0f / 60, visitors);
+    REQUIRE(trigger.fired);
+    cues.handle(world, audio, &sounds, cutscene, {});
+    SceneSoundEvents::Frame frame;
+    if (recorded) {
+        frame = captureLoops();
+        if (instance != 479) {
+            REQUIRE_FALSE(frame.loops.empty());
+        }
+    } else if (instance != 479) {
+        REQUIRE(audio.fieldSound() != kNoSound);
+    }
+    for (s32 tick = 0; tick < 1200; ++tick) {
+        if (recorded) {
+            events.beginTick(static_cast<u64>(tick) + 2);
+        }
+        world.update(1.0f / 60);
+        world.updateTriggers(1.0f / 60, {});
+        cues.handle(world, audio, &sounds, cutscene, {});
+        if (recorded) {
+            frame = captureLoops();
+        }
+    }
+    CAPTURE(instance, trigger.target, recorded);
+    CHECK(world.triggers().settled(trigger.target));
+    CHECK(audio.fieldSound() == kNoSound);
+    CHECK(cues.turningSound() == kNoSound);
+    CHECK(frame.loops.empty());
+    events.close();
+    audio.recordTo(nullptr);
+    audio.close();
+}
+
 TEST_CASE("recorded turntables derive one desired voice and retract corrected activation",
           "[trigger-cues][trigger-audio-rewind][assets]") {
     const auto root =
@@ -121,8 +191,24 @@ TEST_CASE("recorded turntables derive one desired voice and retract corrected ac
     CHECK(physical == 0);
     const auto start = events.reconcileFrames(1, original);
     REQUIRE(start);
-    REQUIRE(start.actions.size() == 1);
-    CHECK(start.actions.front().kind == SceneSoundEvents::Ledger::ActionKind::StartLoop);
+    // This pad also completes its zero-travel boiler target. Its stop clunk is a
+    // separate one-shot, not a second turntable loop.
+    SoundSet bank;
+    REQUIRE(bank.load(root / "audio/ICE"));
+    const auto settledCall = bank.find("S_ELVMETSTPI");
+    REQUIRE(settledCall);
+    using ActionKind = SceneSoundEvents::Ledger::ActionKind;
+    REQUIRE(start.actions.size() == 2);
+    const auto turning = std::ranges::find(start.actions, ActionKind::StartLoop,
+                                           &SceneSoundEvents::Ledger::Action::kind);
+    REQUIRE(turning != start.actions.end());
+    REQUIRE(turning->event.loop);
+    CHECK(*turning->event.loop == original[0].loops.front().key);
+    const auto settled = std::ranges::find(start.actions, ActionKind::Present,
+                                           &SceneSoundEvents::Ledger::Action::kind);
+    REQUIRE(settled != start.actions.end());
+    CHECK(settled->event.payload.resource.bank == "ICE");
+    CHECK(settled->event.payload.resource.call == *settledCall);
     events.dispatch(start);
     const auto afterStart = physical;
     REQUIRE(afterStart > 0);
@@ -135,6 +221,7 @@ TEST_CASE("recorded turntables derive one desired voice and retract corrected ac
     REQUIRE(stop);
     REQUIRE(stop.actions.size() == 1);
     CHECK(stop.actions.front().kind == SceneSoundEvents::Ledger::ActionKind::StopLoop);
+    CHECK(stop.unretractable == std::vector{settled->event.id});
     events.dispatch(stop);
     CHECK(events.reconcileFrames(1, corrected).actions.empty());
     events.close();

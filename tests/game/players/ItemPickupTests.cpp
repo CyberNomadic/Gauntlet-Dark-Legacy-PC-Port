@@ -200,6 +200,25 @@ TEST_CASE("auto use applies to new pickups and preserves an existing slot's choi
     }
 }
 
+TEST_CASE("Turbo pickups follow Auto-Use while Mikey remains a manual transformation",
+          "[items][combat-settings][turbo-activation]") {
+    for (const bool activate : {false, true}) {
+        CharacterSave save;
+        const auto turbo = offer(ItemKind::SpecialPowerup, 0, powerup::kTurbo, 1);
+        REQUIRE(takeItem(save, turbo, 1, activate).took());
+        auto& slot = save.progress().inventory.powerups[0];
+        REQUIRE(slot.held());
+        CHECK(slot.on == activate);
+        slot.strength = 0;
+        slot.on = false;
+        REQUIRE(takeItem(save, turbo, 1, activate).took());
+        CHECK(slot.on == activate);
+        const auto mikey = offer(ItemKind::SpecialPowerup, 0, powerup::kMikey, 1);
+        REQUIRE(takeItem(save, mikey, 1, activate).took());
+        CHECK_FALSE(save.progress().inventory.powerups[1].on);
+    }
+}
+
 TEST_CASE("a runestone is kept once, a legend item by its realm, and gargoyle pieces are "
           "counted up to what the statues want",
           "[game][players][items]") {

@@ -144,7 +144,8 @@ public:
     static std::string_view actionsClassOf(const std::filesystem::path& root, s32 character);
     static std::filesystem::path costumeDirectory(const std::filesystem::path& root,
                                                   const CharacterSave& save);
-    void animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed = PlayerDeed::None);
+    void animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed = PlayerDeed::None,
+                 bool chainHeldMelee = false);
     /** Clears the last presentation interval when a scene tick may hold the figure. */
     void capturePresentation();
     u64 animationRevision() const { return m_action.revision; }

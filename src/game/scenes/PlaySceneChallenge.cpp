@@ -53,6 +53,8 @@ void PlayScene::beginChallenge() {
                   m_world->ref().name);
         return;
     }
+    // The eight-second warning belongs to SELECT; the numbered voices are VOICE2.
+    m_audio.borrowBank(m_context.unpackedRoot / "audio/SELECT");
     m_challengeHud.bind(*m_device, m_world->powerups());
     m_hud.setCountTextures(&m_world->items().textures);
 }
@@ -99,9 +101,9 @@ bool PlayScene::updateChallenge(f32 seconds) {
         constexpr s32 kTimeWarning = 8;
         constexpr s32 kCountdown = 5;
         if (second == kTimeWarning) {
-            m_audio.narrate("S_TIMEISRUNNING", LevelSoundscape::Narrator::Primary);
+            m_audio.playNamed("S_TIMEISRUNNING");
         } else if (second > 0 && second <= kCountdown) {
-            m_audio.narrate(std::format("S_COUNT{}", second), LevelSoundscape::Narrator::Primary);
+            m_audio.narrate(std::format("S_COUNT{}", second));
         }
     }
     m_challengeHud.step(seconds);

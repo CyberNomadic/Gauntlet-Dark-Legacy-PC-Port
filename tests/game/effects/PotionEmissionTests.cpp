@@ -61,6 +61,15 @@ void checkImpact(const MissileImpact& actual, const MissileImpact& expected) {
     CHECK(actual.liquid == expected.liquid);
 }
 
+TEST_CASE("potion shields keep their authored dome height at every magic power",
+          "[game][world][potion-emission]") {
+    const f32 radius = GENERATE(0.0f, 2.0f, 4.0f, 8.0f, 12.0f, 20.0f);
+    const auto scale = PotionEmission::shieldScale(radius);
+    CHECK(scale.x == Approx(std::clamp(radius / 12.0f, 0.33f, 1.0f)));
+    CHECK(scale.y == 1.0f);
+    CHECK(scale.z == scale.x);
+}
+
 TEST_CASE("pure potion descriptors preserve native colour artwork and independent harm power",
           "[game][world][potion-emission]") {
     const s32 kind = GENERATE(0, 1, 2, 3, 4);

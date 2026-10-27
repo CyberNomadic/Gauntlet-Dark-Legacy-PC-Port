@@ -710,6 +710,26 @@ TEST_CASE("switch camera cues occur on activation and expose target completion",
     CHECK(f.triggers.takeCameraCues().empty());
 }
 
+TEST_CASE("a zero-travel switch settles its opening cue once",
+          "[triggers][trigger-zero-travel][ice-boiler-audio]") {
+    // Ice Camp's boiler rotation uses a switch target with equal height endpoints.
+    SwitchFixture f(R"({"info":0,"position":[0,0,0],
+      "params":[0,0,2,16,0,0,5,0,0,0,0,0]})");
+    const std::array party{TriggerVisitor{.position = Vec3{0}}};
+    f.step(kStep, party);
+    const auto openings = f.triggers.takeOpenings();
+    REQUIRE(openings.size() == 1);
+    REQUIRE(f.triggers.settled(0));
+    const auto settled = f.triggers.takeSettled();
+    REQUIRE(settled.size() == 1);
+    CHECK(settled.front().target == openings.front().target);
+    CHECK(settled.front().sound == openings.front().sound);
+    CHECK(f.height() == Approx(10));
+    f.step(kStep, party);
+    CHECK(f.triggers.takeOpenings().empty());
+    CHECK(f.triggers.takeSettled().empty());
+}
+
 TEST_CASE("shake triggers report an activation edge even without a camera marker",
           "[triggers][switch-camera][shake]") {
     SwitchFixture f(R"({"info":0,"position":[0,0,0],
@@ -1890,12 +1910,15 @@ TEST_CASE("a visitor sets off a trigger, opening its chain, once", "[game][world
     }
     REQUIRE(f.animator.frame(0) == 3.0f);
     REQUIRE(f.animator.finished(0));
-    // Run to its end, the animated target is reported settled once; the plain one never is.
+    // Both targets finish once, including the chained target with no height travel.
     f.triggers.update(kStep, party, f.animator, f.scene, &f.collision);
     const std::vector<TriggerOpening> settled = f.triggers.takeSettled();
-    REQUIRE(settled.size() == 1);
-    REQUIRE(settled[0].target == 8);
-    REQUIRE_FALSE(settled[0].fades);
+    REQUIRE(settled.size() == 2);
+    CHECK(std::ranges::count(settled, 8, &TriggerOpening::target) == 1);
+    CHECK(std::ranges::count(settled, 9, &TriggerOpening::target) == 1);
+    for (const auto& target : settled) {
+        CHECK_FALSE(target.fades);
+    }
     f.triggers.update(kStep, party, f.animator, f.scene, &f.collision);
     REQUIRE(f.triggers.takeSettled().empty());
 }
@@ -2024,8 +2047,7 @@ ClassStats knightStats() {
 /** Walks `actor` at a trigger's spot for up to `ticks`, the trigger seeing the body as
  * PlayScene shows it: at the step's aim. True once the trigger fires. */
 bool walkToPull(PlayerActor& actor, LevelTriggers& triggers, const LevelTrigger& trigger,
-                WorldAnimator& animator, WorldScene& scene, WorldCollision& collision,
-                s32 ticks) {
+                WorldAnimator& animator, WorldScene& scene, WorldCollision& collision, s32 ticks) {
     for (s32 tick = 0; tick < ticks && !trigger.fired; ++tick) {
         const Vec3 away = trigger.spot - actor.position();
         actor.update(MoveInput{glm::normalize(Vec2{away.x, away.z}), 1.0f}, 0.0f, kStep,

@@ -16,6 +16,7 @@
 #include "engine/audio/AudioMixer.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/world/SampleLevel.h"
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
@@ -24,6 +25,7 @@
 #include "game/characters/Progression.h"
 #include "game/combat/Damage.h"
 #include "game/combat/DamageTypes.h"
+#include "game/effects/PotionEmission.h"
 #include "game/enemies/DeathTestSupport.h"
 #include "game/hud/HelpMessages.h"
 #include "game/level/Chests.h"
@@ -2479,6 +2481,63 @@ TEST_CASE("potion magic damages survivors once and drives knockdown through get-
     f.opponents.close();
 }
 
+TEST_CASE("one potion wakes and destroys an inactive placed Death without contact",
+          "[game][player-attacks][death-statue-potion][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/DEATH/ANIM.PS2").parent_path().parent_path().parent_path();
+    const s32 strength = GENERATE(0, 2);
+    const bool shield = GENERATE(false, true);
+    CAPTURE(strength, shield);
+    const auto stage = test::sampleLevel("death-statue-potion");
+    writeTextFile(stage / "world.json",
+                  R"({"objects":[{"name":"FLOOR","position":[0,0,0],"flags":4}],
+      "itemInfos":[{"type":4,"name":"DEATH","radius":1,"height":2}],
+      "itemInstances":[{"info":0,"position":[0,0,0],"params":[)" +
+                      std::to_string(strength) + R"(,0,3,0,0,0,128,191,0,0,0,0]}]})");
+    writeTextFile(stage / "collision.json", R"({"objects":[{"object":0,
+      "normals":[0,1,0],"vertices":[-50,0,-50,50,0,-50,0,0,150]}]})");
+    Fixture f;
+    LevelRef level;
+    level.name = "G1";
+    REQUIRE(f.world.load(f.device, stage, level));
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    auto& player = f.players[0];
+    player.actor.place({0, 0, 3});
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root}, f.players);
+    REQUIRE(f.opponents.statues().count() == 1);
+    REQUIRE_FALSE(f.opponents.statues().woken(0));
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    s32 losses = 0;
+    events.award = [&](s32 owner, s32, bool) {
+        CHECK(owner == player.actor.player());
+        ++losses;
+    };
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    events.help = [](s32, usize) { return true; };
+    f.opponents.update(2, 1.0f / 30, f.players, {}, events);
+    REQUIRE_FALSE(f.opponents.statues().woken(0));
+    player.actor.save().progress().inventory.addPotions(1, 1);
+    if (shield) {
+        f.attacks.shieldPotion(0, f.players);
+    } else {
+        f.attacks.usePotion(0, f.players);
+    }
+    REQUIRE(player.actor.save().progress().inventory.potions.empty());
+    for (s32 tick = 0; tick < 120; ++tick) {
+        f.attacks.updateProjectiles(1.0f / 30, f.players, f.targets);
+        f.attacks.updateShields(1.0f / 30, f.players, f.targets);
+        f.opponents.update(2, 1.0f / 30, f.players, {}, events);
+    }
+    CHECK(f.opponents.statues().count() == 0);
+    CHECK(losses == 1);
+    CHECK(f.opponents.enemies().targets().empty());
+    f.opponents.close();
+}
+
 TEST_CASE("scene projectile updates present retail world impacts once and preserve potion bursts",
           "[game][screens][player-attacks][projectile-impact][assets]") {
     const auto root =
@@ -3236,6 +3295,27 @@ TEST_CASE("a normal melee blow wakes a placed statue instead of dispatching it a
         if (i != *selected) {
             CHECK_FALSE(statues.woken(i));
         }
+    }
+}
+
+TEST_CASE("potion shield artwork keeps native height and uses its actual damaging radius",
+          "[game][player-attacks][potion-shield-scale][assets]") {
+    const auto root = test::assetOrSkip("WEAPONS/ANIM.PS2").parent_path().parent_path();
+    Fixture f;
+    REQUIRE(f.classes.load(root / "PDATA"));
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    auto& player = f.players[0];
+    const f32 radius = 0.25f * f.arsenal.potionPowerOf(player.actor, 1);
+    const Vec3 expected = PotionEmission::shieldScale(radius);
+    player.actor.save().progress().inventory.addPotions(1, 1);
+    f.attacks.shieldPotion(0, f.players);
+    REQUIRE(f.effects.count() > 0);
+    for (usize index = 0; index < f.effects.count(); ++index) {
+        const auto& effect = f.effects.effect(index);
+        CHECK(effect.scale == Approx(1));
+        CHECK(effect.stretch == expected);
+        REQUIRE(effect.light);
+        CHECK(effect.light->radius == Approx(radius * 1.5f));
     }
 }
 
@@ -4291,6 +4371,257 @@ TEST_CASE("automatic melee requires a forward creature inside the unheld swing b
     CHECK(inventory == before);
     CHECK(f.arsenal.missiles().count() == 0);
     enemies.close();
+}
+
+TEST_CASE("Pojo maps heavy input to its light attack at both close and ranged distances",
+          "[game][player-attacks][pojo-input][assets]") {
+    const auto root =
+        test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
+    const s32 mode = GENERATE(0, 1, 2, 3);
+    const s32 chain = GENERATE(0, 1, 2, 3);
+    CAPTURE(mode, chain);
+    Fixture f;
+    auto& actor = f.players[0].actor;
+    auto& inventory = actor.save().progress().inventory;
+    if (mode == 1 || mode == 3) {
+        inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 60, mode == 1);
+    } else if (mode == 2) {
+        inventory.permanentPojo = true;
+    }
+    const Inventory before = inventory;
+    const bool pojo = mode == 1 || mode == 2;
+    auto& enemies = f.opponents.enemies();
+    enemies.open(f.device, root, nullptr, 4, {}, 7);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    REQUIRE(enemies.spawn({.kind = kGruntKind, .tier = 3, .position = {}, .placed = true}, {}));
+    actor.place({0, 0, -2.5f});
+    REQUIRE(f.attacks.meleeSense(actor, true, f.targets).range == MeleeRange::Swing);
+    const auto light = f.attacks.attackDeed(actor, false, f.targets, true, chain);
+    CHECK((light == PlayerDeed::Melee || light == PlayerDeed::MeleeLow));
+    CHECK(f.attacks.attackDeed(actor, true, f.targets, true, chain) ==
+          (pojo ? light : light == PlayerDeed::MeleeLow ? PlayerDeed::MeleeSlowLow
+                                                      : PlayerDeed::MeleeSlow));
+    actor.place({0, 0, -50});
+    REQUIRE(f.attacks.meleeSense(actor, true, f.targets).range == MeleeRange::Beyond);
+    CHECK(f.attacks.attackDeed(actor, false, f.targets, true, chain) == PlayerDeed::Attack);
+    CHECK(f.attacks.attackDeed(actor, true, f.targets, true, chain) ==
+          (pojo ? PlayerDeed::Attack : PlayerDeed::StrongAttack));
+    CHECK(inventory == before);
+    enemies.close();
+}
+
+TEST_CASE("Pojo keeps attacking while approaching a golem with held mouse attack",
+          "[game][player-attacks][pojo-melee][assets]") {
+    const auto root = test::assetOrSkip("CRITTER/GOLEM.WAD").parent_path().parent_path();
+    const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+    CAPTURE(character);
+    Fixture f;
+    REQUIRE(f.classes.load(root / "PDATA"));
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    ItemArchive powerups;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    auto& player = f.players[0];
+    CharacterSave save;
+    save.character = character;
+    save.progress().inventory.permanentPojo = true;
+    player.actor.spawn(3, save, f.classes.stats(character), {0, 0, -20}, 0);
+    player.figure = PlayerFigure::load(f.device, root, save, false);
+    REQUIRE(player.figure);
+    player.figure->setCompanionPowerups(f.device, powerups, save.progress().inventory, &f.weapons);
+    REQUIRE(player.figure->pojoActive());
+    f.targets.players = f.players;
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
+    auto& critters = f.opponents.critters();
+    critters.open(f.device, root, nullptr, {}, 'G');
+    REQUIRE(critters.spawn(CombatantKind::Golem, {}, 0));
+    WorldCollision floor;
+    CollisionTriangle first;
+    first.vertices = {Vec3{-100, 0, -100}, Vec3{100, 0, -100}, Vec3{100, 0, 100}};
+    first.normal = {0, 1, 0};
+    first.object = 0;
+    CollisionTriangle second = first;
+    second.vertices = {Vec3{-100, 0, -100}, Vec3{100, 0, 100}, Vec3{-100, 0, 100}};
+    floor.build({first, second});
+    std::array<PlayInput, 4> inputs;
+    inputs[3].attack = true;
+    inputs[3].move = {{0, 1}, 1};
+    inputs[3].aimDirection = Vec3{0, 0, 1};
+    s32 melee = 0;
+    s32 throws = 0;
+    PartyMotion::Events events;
+    events.perform = [&](usize, PartyMotion::Action action) {
+        melee += action == PartyMotion::Action::Melee ? 1 : 0;
+        throws += action == PartyMotion::Action::ThrowWeapon ? 1 : 0;
+    };
+    events.select = [](usize, const SelectorInput&, s32) {};
+    events.advanceTurbo = [](usize, s32, f32) {};
+    events.attackDeed = [&](usize, bool strong, bool moved, const Vec3& facing) {
+        return f.attacks.attackDeed(player.actor, strong, f.targets, moved,
+                                    player.figure->animator().meleeChain(), facing);
+    };
+    events.meleeSense = [&](usize, bool held, const Vec3& facing) {
+        return f.attacks.meleeSense(player.actor, held, f.targets, facing);
+    };
+    events.resolveMovement = [&](usize, const Vec3& from, const Vec3& to) {
+        return f.opponents.resolveMovement(player.actor, from, to);
+    };
+    events.chainHeldMelee = true;
+    s32 initial = 0;
+    for (s32 tick = 0; tick < 360; ++tick) {
+        PartyMotion::step(f.players, inputs, false, 0, 2, 1.0f / 30, floor, events);
+        if (tick == 180) {
+            initial = melee + throws;
+        }
+    }
+    CAPTURE(player.figure->animator().action(), player.actor.position().z, melee, throws);
+    CHECK(melee + throws > initial + 2);
+    CHECK(melee > 0);
+    inputs[3].attack = false;
+    inputs[3].aimDirection.reset();
+    inputs[3].move = {{0, -1}, 1};
+    const f32 before = player.actor.position().z;
+    for (s32 tick = 0; tick < 90; ++tick) {
+        PartyMotion::step(f.players, inputs, false, 0, 2, 1.0f / 30, floor, events);
+    }
+    CHECK(player.actor.position().z < before - 5);
+    f.opponents.close();
+}
+
+TEST_CASE("temporary Pojo can exchange real golem blows then retreat and reapproach",
+          "[game][player-attacks][pojo-duel][assets]") {
+    constexpr s32 kJester = 7;
+    const auto root = test::assetOrSkip("CRITTER/GOLEM.WAD").parent_path().parent_path();
+    const bool automatic = GENERATE(false, true);
+    CAPTURE(automatic);
+    const auto stage = test::sampleLevel("pojo-golem-duel");
+    writeTextFile(stage / "world.json",
+                  R"({"objects":[{"name":"FLOOR","position":[0,0,0],"flags":4}]})");
+    writeTextFile(stage / "collision.json", R"({"objects":[{"object":0,
+      "normals":[0,1,0],"vertices":[-500,0,-500,500,0,-500,0,0,1500]}]})");
+    Fixture f;
+    LevelRef level;
+    level.name = "G2";
+    REQUIRE(f.world.load(f.device, stage, level));
+    REQUIRE(f.classes.load(root / "PDATA"));
+    REQUIRE(f.weapons.load(root / "WEAPONS"));
+    ItemArchive powerups;
+    REQUIRE(powerups.load(root / "POWERUPS"));
+    CharacterSave save;
+    save.character = kJester;
+    save.color = 2;
+    save.progress().experience = levelExperience(8);
+    // Extend the duel without changing native armor, stagger, attack or movement tuning.
+    save.progress().health = 9999;
+    save.progress().inventory.addPowerup(powerup::kSpecial, powerup::kPojo, 0, 60);
+    auto& player = f.players[0];
+    player.actor.spawn(0, save, f.classes.stats(kJester), {0, 0, -20}, 0);
+    player.figure = PlayerFigure::load(f.device, root, save, false);
+    REQUIRE(player.figure);
+    player.figure->setCompanionPowerups(f.device, powerups, save.progress().inventory, &f.weapons);
+    REQUIRE(player.figure->pojoActive());
+    f.targets.players = f.players;
+    f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root}, f.players);
+    auto& critters = f.opponents.critters();
+    critters.open(f.device, root, &f.world.collision(), {.health = 100}, 'G');
+    const auto golem = critters.spawn(CombatantKind::Golem, {}, std::numbers::pi_v<f32>);
+    REQUIRE(golem);
+    const f32 initialGolemHealth = critters.healthOf(*golem);
+    PlayerHealth health;
+    PlayerHealth::Events healthEvents{.block = [](f32, f32) {},
+                                      .sound = [](std::string_view) {},
+                                      .cry = [](std::string_view) {},
+                                      .named = [](std::string_view, f32) {},
+                                      .learnBlock = [] {},
+                                      .vibrate = [](s32) {}};
+    s32 hurt = 0;
+    s32 stagger = 0;
+    LevelOpponents::Events opponents;
+    opponents.hurt = [&](usize index, f32 damage, HurtKind kind, bool directed,
+                          const PlayerImpact& impact) {
+        ++hurt;
+        health.hurt(f.players[index], damage, kind, directed, false, 1, healthEvents, impact,
+                    false, f.classes.stats(kJester));
+        stagger += f.players[index].reaction != PlayerDeed::None ? 1 : 0;
+    };
+    opponents.settleBlasts = [] {};
+    opponents.advanceLegend = [](f32) {};
+    opponents.advanceVictory = [](s32, f32) {};
+    opponents.levels = [] {};
+    opponents.award = [](s32, s32, bool) {};
+    opponents.help = [](s32, usize) { return true; };
+    s32 melee = 0;
+    s32 throws = 0;
+    PartyMotion::Events motion;
+    motion.perform = [&](usize index, PartyMotion::Action action) {
+        if (action == PartyMotion::Action::Melee) {
+            ++melee;
+            f.attacks.melee(index, f.players, f.targets);
+        } else if (action == PartyMotion::Action::ThrowWeapon) {
+            ++throws;
+            f.arsenal.launchWeapon(player.actor, player.figure.get(), player.actor.facing(), 1,
+                                   true,
+                                   f.attacks.aim(player.actor, player.actor.facing(), f.targets,
+                                                 true),
+                                   std::nullopt, true);
+        }
+    };
+    motion.select = [](usize, const SelectorInput&, s32) {};
+    motion.advanceTurbo = [](usize, s32, f32) {};
+    motion.attackDeed = [&](usize, bool strong, bool moved, const Vec3& facing) {
+        return f.attacks.attackDeed(player.actor, strong, f.targets, moved,
+                                    player.figure->animator().meleeChain(), facing);
+    };
+    motion.automaticMeleeDeed = [&](usize, const Vec3& facing) {
+        return automatic ? f.attacks.automaticMeleeDeed(player.actor, f.targets, facing)
+                         : PlayerDeed::None;
+    };
+    motion.meleeSense = [&](usize, bool held, const Vec3& facing) {
+        return f.attacks.meleeSense(player.actor, held, f.targets, facing);
+    };
+    motion.resolveMovement = [&](usize, const Vec3& from, const Vec3& to) {
+        return f.opponents.resolveMovement(player.actor, from, to);
+    };
+    motion.chainHeldMelee = automatic;
+    std::array<PlayInput, 1> inputs;
+    const auto step = [&](bool attacking, f32 movement) {
+        const Vec3 delta = critters.positionOf(*golem) - player.actor.position();
+        const f32 distance = glm::length(Vec2{delta.x, delta.z});
+        const Vec3 facing = distance > 0 ? Vec3{delta.x, 0, delta.z} / distance : Vec3{0, 0, 1};
+        inputs[0].attack = attacking;
+        inputs[0].aimDirection = facing;
+        inputs[0].move = {{0, movement}, std::abs(movement)};
+        PartyMotion::step(f.players, inputs, false, 0, 2, 1.0f / 30, f.world.collision(), motion);
+        f.attacks.updateProjectiles(1.0f / 30, f.players, f.targets);
+        f.opponents.update(2, 1.0f / 30, f.players, {}, opponents);
+        f.effects.update(1.0f / 30);
+        player.actor.save().progress().inventory.advance(1.0f / 30);
+    };
+    for (s32 tick = 0; tick < 600; ++tick) {
+        step(true, tick < 30 ? 0.0f : 1.0f);
+    }
+    CAPTURE(melee, throws, hurt, stagger, critters.moveOf(*golem), player.actor.position().z);
+    REQUIRE(critters.alive(*golem));
+    CHECK(melee > 2);
+    CHECK(throws > 0);
+    CHECK(hurt > 0);
+    CHECK(stagger > 0);
+    CHECK(critters.healthOf(*golem) < initialGolemHealth);
+    CHECK(player.actor.save().health() < save.health());
+    const f32 beforeRetreat = glm::distance(player.actor.position(), critters.positionOf(*golem));
+    for (s32 tick = 0; tick < 120; ++tick) {
+        step(false, -1);
+    }
+    CHECK(glm::distance(player.actor.position(), critters.positionOf(*golem)) > beforeRetreat + 5);
+    const s32 previousMelee = melee;
+    const f32 previousHealth = critters.healthOf(*golem);
+    for (s32 tick = 0; tick < 300; ++tick) {
+        step(true, 1);
+    }
+    CHECK(melee > previousMelee + 2);
+    CHECK(critters.healthOf(*golem) < previousHealth);
+    CHECK(player.life == PlayerLife::Standing);
+    CHECK(player.figure->pojoActive());
+    f.opponents.close();
 }
 
 TEST_CASE("ordinary ranged prediction excludes diagonal melee between cardinal aim probes",

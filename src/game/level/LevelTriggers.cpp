@@ -1168,7 +1168,8 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
                 if (std::abs(goal - target.height) <= kHeightTolerance) {
                     target.height = goal;
                     target.settled = true;
-                    if (report && std::abs(distance) > kHeightTolerance) {
+                    // Equal endpoints still finish the opening sound's lifetime.
+                    if (report) {
                         m_sim.settled.push_back(openingOf(target, false));
                     }
                     if (!target.forced && target.open &&

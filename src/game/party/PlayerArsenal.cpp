@@ -243,7 +243,7 @@ std::optional<PlayerMissiles::WeaponThrow> PlayerArsenal::weaponThrow(const Play
 std::optional<PlayerArsenal::PreparedWeapon> PlayerArsenal::prepareWeapon(
     const PlayerActor& actor, const PlayerFigure& figure, const Vec3& direction, f32 scale,
     bool spreads, std::optional<Vec3> target, std::optional<MissileRelease> explicitRelease,
-    bool fixedFacing) const {
+    bool fixedFacing, WeaponMode mode) const {
     const auto& animator = figure.animator();
     const auto weapon = weaponThrow(actor, animator.attackSeconds());
     if (!weapon) {
@@ -265,6 +265,13 @@ std::optional<PlayerArsenal::PreparedWeapon> PlayerArsenal::prepareWeapon(
     const auto worn = PowerupEffects::of(actor.save().progress().inventory);
     prepared.soundFlags = worn.weapon;
     prepared.pojo = (worn.special & powerup::kPojo) != 0;
+    if (mode == WeaponMode::Volley) {
+        // PlyrSfxDoDamage type 10 keeps the weapon element and Super Shot, but removes
+        // fan modifiers. PlayerStartMissile mode zero launches from effectpos, not the hand.
+        prepared.weapon.flags = worn.weapon & ~(powerup::kThreeWayShot | powerup::kFiveWayShot);
+        prepared.weapon.shots = 1;
+        prepared.weapon.hand = prepared.pojo ? Vec3{0, -0.5f, -1.25f} : Vec3{0};
+    }
     prepared.missiles = PlayerMissiles::weaponLaunches(prepared.weapon);
     const auto& save = actor.save();
     if (!explicitRelease && (animator.released() || animator.strongReleased())) {
@@ -341,22 +348,23 @@ void PlayerArsenal::bindWeaponAppearance(const PlayerActor& actor, PlayerFigure&
     auto& launches = prepared.missiles;
     const auto& save = actor.save();
     const bool pojo = prepared.pojo;
+    const bool superShot = prepared.missiles.front().spec == &MissileSpec::superShot();
     // The volley shares its muzzle and visual resources. Native launch math is
     // also used by physics-only replay, which never borrows these assets.
     MissileLaunch launch = launches.front();
     launch.playerHitGap = PlayerMissiles::hitGap(&m_resources->weapons, launch.spec->impactTree);
     // FamiliarSpit[4] is WEAPONS/PHOENIX_FBALL, not the earned familiar's shot.
-    launch.model = pojo ? &m_phoenixShot : &figure.missile();
-    launch.archive = pojo ? &m_resources->weapons : figure.missileArchive();
-    launch.tree = pojo ? "PHOENIX_FBALL" : figure.missileTree();
+    launch.model = pojo ? &m_phoenixShot : (superShot ? &m_superShot : &figure.missile());
+    launch.archive = pojo || superShot ? &m_resources->weapons : figure.missileArchive();
+    launch.tree = pojo ? "PHOENIX_FBALL" : (superShot ? "SUPERARROW" : figure.missileTree());
     launch.streak = streak;
-    launch.textureLender = pojo ? nullptr : &m_resources->weapons.textures;
+    launch.textureLender = pojo || superShot ? nullptr : &m_resources->weapons.textures;
     // An elemental weapon's throw carries the element's WEAP_TW effect of the costume
     // colour's effects (PlayerStartMissile, combat.c 1030); the wizards and sorceresses
     // throw that effect alone, their weapon unseen.
     const std::string rider =
         WeaponGlow::throwTree(WeaponGlow::elementOf(PowerupEffects::of(save.progress().inventory)));
-    if (ItemArchive* effects = rider.empty() ? nullptr : figure.effects();
+    if (ItemArchive* effects = rider.empty() || superShot ? nullptr : figure.effects();
         effects != nullptr && effects->trees.find(rider).has_value()) {
         launch.riderArchive = effects;
         // The descriptor can outlive this helper; borrow the authenticated
@@ -407,20 +415,22 @@ Vec3 PlayerArsenal::weaponMuzzle(const MissileLaunch& first) const {
 void PlayerArsenal::launchWeapon(const PlayerActor& actor, PlayerFigure* body,
                                  const Vec3& direction, f32 scale, bool spreads,
                                  std::optional<Vec3> target,
-                                 std::optional<MissileRelease> explicitRelease, bool fixedFacing) {
+                                 std::optional<MissileRelease> explicitRelease, bool fixedFacing,
+                                 WeaponMode mode) {
     if (!m_resources || body == nullptr) {
         return;
     }
     PlayerFigure& figure = *body;
     auto prepared = prepareWeapon(actor, figure, direction, scale, spreads, target, explicitRelease,
-                                  fixedFacing);
+                                  fixedFacing, mode);
     if (!prepared || prepared->missiles.empty()) {
         return;
     }
-    bindWeaponAppearance(actor, figure, *prepared, weaponStreak(actor));
+    const bool superShot = prepared->missiles.front().spec == &MissileSpec::superShot();
+    bindWeaponAppearance(actor, figure, *prepared, weaponStreak(actor, superShot));
     const auto& launch = prepared->missiles.front();
     // An obstructed muzzle still produces a world impact, without a flying weapon.
-    const Vec3 clear = weaponMuzzle(launch);
+    const Vec3 clear = superShot ? launch.position : weaponMuzzle(launch);
     if (glm::distance(clear, launch.position) > 1e-4f) {
         presentImpact({.position = clear, .owner = launch.owner});
         return;

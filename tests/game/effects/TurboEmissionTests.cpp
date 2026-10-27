@@ -11,6 +11,7 @@
 #include "game/characters/Progression.h"
 #include "game/effects/DynamicLights.h"
 #include "game/effects/TurboEmission.h"
+#include "game/effects/WeaponGlow.h"
 #include "game/party/PlayerAttacks.h"
 #include "game/players/PowerupEffects.h"
 
@@ -381,6 +382,51 @@ struct NativeFixture {
     }
 };
 
+TEST_CASE("Archer turbo arrows retain Super Shot and elemental artwork without spending charges",
+          "[game][turbo-emission][turbo-item-visuals][assets]") {
+    const auto deed = GENERATE(PlayerDeed::TurboStrong, PlayerDeed::TurboFull);
+    const u32 flags = GENERATE(1U, 2U, 3U, 4U, powerup::kSuperShot);
+    NativeFixture fixture(3);
+    auto& player = fixture.players[0];
+    auto& inventory = player.actor.save().progress().inventory;
+    inventory.addPowerup(powerup::kWeapon, flags, 7, -1);
+    inventory.addPowerup(powerup::kWeapon, powerup::kFiveWayShot, 0, 30);
+    const auto held = inventory.powerups;
+    usize observed = 0;
+    for (s32 tick = 0; tick < 150; ++tick) {
+        player.figure->animate(0, 2, 1.0f / 30, tick == 0 ? deed : PlayerDeed::None);
+        const usize before = fixture.arsenal.missiles().count();
+        fixture.attacks.updateTurbo(0, 2, 1.0f / 30, fixture.players, [](s32, usize) {});
+        for (usize i = before; i < fixture.arsenal.missiles().count(); ++i) {
+            ++observed;
+            const auto& shot = fixture.arsenal.missiles().missile(i);
+            CHECK(shot.flags == flags); // No five-way fan on each bonus arrow.
+            REQUIRE(shot.streak.texture != nullptr);
+            const auto& visuals = fixture.arsenal.missiles().visuals();
+            const bool superShot = flags == powerup::kSuperShot;
+            CHECK(shot.spec == (superShot ? &MissileSpec::superShot() : &MissileSpec::of(3)));
+            const u32 effect = superShot ? shot.effect : shot.rider;
+            REQUIRE(effect != 0);
+            bool found = false;
+            for (usize n = 0; n < visuals.count(); ++n) {
+                if (visuals.effect(n).id == effect) {
+                    found = true;
+                    CHECK(visuals.effect(n).name ==
+                          (superShot ? "SUPERARROW" : WeaponGlow::throwTree(flags)));
+                }
+            }
+            REQUIRE(found);
+            if (superShot) {
+                CHECK(shot.rider == 0);
+                CHECK(shot.velocity.y == Approx(0));
+                CHECK(shot.streak.color == Color::rgba(255, 255, 255, 190));
+            }
+        }
+    }
+    CHECK(observed > 0);
+    CHECK(inventory.powerups == held);
+}
+
 TEST_CASE("authored turbo emissions match actual native dispatcher ordering and placement",
           "[game][turbo-emission][turbo-emission-native][assets]") {
     const s32 character = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
@@ -418,7 +464,8 @@ TEST_CASE("authored turbo emissions match actual native dispatcher ordering and 
                      const auto weapon =
                          fixture.arsenal.weaponThrow(player.actor, animator.attackSeconds());
                      REQUIRE(weapon);
-                     const auto emission = TurboEmission::volley(*weapon, direction, 0);
+                     auto emission = TurboEmission::volley(*weapon, direction, 0);
+                     emission.weapon.hand = Vec3{0}; // PlayerStartMissile mode zero.
                      const auto launches = PlayerMissiles::weaponLaunches(emission.weapon);
                      REQUIRE(launches.size() == 1);
                      volleys.push_back(launches.front());

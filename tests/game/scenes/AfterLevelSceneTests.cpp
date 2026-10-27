@@ -738,6 +738,32 @@ TEST_CASE("shop mouse targets rendered rows prices arrows and wheel in only the 
         scene.update(0, pointer({kLaneX + 60, rowY(2, 2) + 16})); // held, not a fresh click
         REQUIRE_FALSE(scene.session().lanes()[0].transacted);
     }
+    SECTION("a bound mouse press buys the pointed lane instead of the keyboard lane") {
+        GameConfig config;
+        config.controls[1].device = "keyboard";
+        config.controls[1].customized = true;
+        config.controls[1].menu.select = {Key::MouseLeft};
+        config.controls[1].menu.shopSell = {Key::MouseLeft};
+        config.controls[1].menu.shopExit = {Key::MouseLeft};
+        context.config = &config;
+        REQUIRE(scene.open(device, context, party, {}, {}, "G1", ShopVisit::Shop));
+        render();
+        const Vec4 clip = transform * Vec4{kLaneX + 60, rowY(0, 2) - 3, 0.5f, 1};
+        Input devices;
+        devices.setKey(Key::MouseLeft, true);
+        devices.setPointer({(clip.x / clip.w + 1) / 2, (clip.y / clip.w + 1) / 2, true, true});
+        ShopSession::Inputs inputs;
+        for (s32 seat = 0; seat < 4; ++seat) {
+            inputs[static_cast<usize>(seat)] = readPlayerMenuInput(devices, config, seat);
+        }
+        scene.update(0, inputs);
+        CHECK(scene.session().party()[0].save.gold == 4900);
+        CHECK(scene.session().party()[0].save.progress().inventory.keys == 2);
+        CHECK(scene.session().party()[1].save.gold == 5000);
+        CHECK(scene.session().party()[1].save.progress().inventory.keys == 1);
+        CHECK(scene.session().lanes()[1].phase == ShopPhase::Shopping);
+        CHECK_FALSE(scene.session().lanes()[1].transacted);
+    }
     SECTION("right click sells only a hit row and never an unpointed player's selection") {
         scene.update(0, pointer({kLaneX + 24, rowY(0, 2) + 3}, false, true));
         REQUIRE(scene.session().lanes()[0].feedback == ShopResult::Sold);

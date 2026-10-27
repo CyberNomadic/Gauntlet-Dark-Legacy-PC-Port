@@ -561,7 +561,8 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                 players[i].figure->setMelee(events.meleeSense(i, attackHeld, attackFacing));
             }
             players[i].figure->setCombo(players[i].combo.grabberClass, players[i].combo.rideAsked);
-            players[i].figure->animate(move.magnitude, ticks, seconds, deed);
+            players[i].figure->animate(move.magnitude, ticks, seconds, deed,
+                                       events.chainHeldMelee);
             players[i].figure->updateTrail(
                 PlayerFigure::bodyPlacement(players[i].capture.body().value_or(actor.transform()),
                                             actor.save(), powerups),

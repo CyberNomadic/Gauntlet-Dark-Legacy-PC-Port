@@ -3901,6 +3901,35 @@ TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][st
     CHECK(enemies.count() == 3);
 }
 
+TEST_CASE("elemental demon missiles replace rather than combine their native fire element",
+          "[enemies][aggression][elemental-missiles][assets]") {
+    const s32 element = GENERATE(0, 2, 4);
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), nullptr, 1, {}, 7);
+    REQUIRE(enemies.loadKind(2));
+    EnemySpawn spawn;
+    spawn.kind = 2;
+    spawn.tier = 3;
+    spawn.algorithm = kStandCastWay;
+    spawn.placed = true;
+    spawn.throwInterval = 0.2f;
+    const auto id = enemies.spawn(spawn, {});
+    REQUIRE(id);
+    auto state = enemies.checkpoint();
+    REQUIRE(state);
+    state->enemies[static_cast<usize>(*id)].element = element;
+    REQUIRE(enemies.restore(*state));
+    EnemyMissiles missiles;
+    const std::array party{playerAt(Vec3{0, 0, 20})};
+    for (s32 tick = 0; tick < 600 && missiles.count() == 0; ++tick) {
+        enemies.update(kTicks, kStep, party, {}, &missiles);
+    }
+    REQUIRE(missiles.count() > 0);
+    const u32 expected = element == 0 ? 1U : static_cast<u32>(element);
+    CHECK((missiles.missile(0).kind.flags & 0xFU) == expected);
+}
+
 TEST_CASE("an elemental one is born tougher and bigger, shrugs off its own element and leaves it "
           "in its loss",
           "[enemies][streak][aggression][elemental][assets]") {

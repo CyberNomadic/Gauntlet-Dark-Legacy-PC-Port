@@ -76,6 +76,33 @@ TEST_CASE("tower collection uses party union without replaying an already instal
     REQUIRE_FALSE(display.camera());
 }
 
+TEST_CASE("reloading a save replays only the relic ceremonies pending in that save",
+          "[game][tower-relics][tower-relic-save]") {
+    CharacterSave save;
+    REQUIRE(save.progress().relics.addRune(0));
+    const auto beforeCeremony = save.toJson();
+    TowerRelics::acknowledge(save.progress().relics, {TowerRelics::Kind::Rune, 0});
+    const auto afterCeremony = save.toJson();
+    MessageTable strings;
+    messages(strings);
+    TowerRelics display;
+    const auto reload = [&](const auto& serialized) {
+        const auto loaded = CharacterSave::fromJson(serialized);
+        const std::array party{loaded.progress().relics};
+        display.begin(party, strings);
+        CHECK(loaded.progress().relics.hasRune(0));
+    };
+    reload(beforeCeremony);
+    REQUIRE(display.active());
+    REQUIRE(display.current()->kind == TowerRelics::Kind::Rune);
+    reload(afterCeremony);
+    CHECK_FALSE(display.active());
+    CHECK(display.displayedRunes() == 1);
+    // Completing the ceremony changes the live save, not an older manual save.
+    reload(beforeCeremony);
+    CHECK(display.active());
+}
+
 TEST_CASE("tower ceremonies hold for speech then placement and complete once in order",
           "[game][tower-relics]") {
     std::array<Relics, 1> party;

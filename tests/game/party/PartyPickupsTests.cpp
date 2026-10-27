@@ -54,9 +54,15 @@ TEST_CASE("pickup contact is centered on the native body anchor rather than the 
     item.position.y = 9.5f;
     CHECK_FALSE(item.touchedBy(collectors[0]));
 
-    SECTION("fallen players cannot collect") { players[0].life = PlayerLife::Dying; }
-    SECTION("departed players cannot collect") { players[0].departed = true; }
-    SECTION("ghost players cannot collect") { players[0].ghost = true; }
+    SECTION("fallen players cannot collect") {
+        players[0].life = PlayerLife::Dying;
+    }
+    SECTION("departed players cannot collect") {
+        players[0].departed = true;
+    }
+    SECTION("ghost players cannot collect") {
+        players[0].ghost = true;
+    }
     item.position.y = 12;
     CHECK_FALSE(item.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
 }
@@ -113,13 +119,10 @@ TEST_CASE("native blue crystals beside Mausoleum and Cliffs walls can be collect
     PartyPickups pickups;
     bool feetReached = false;
     for (s32 tick = 0; tick < 180 && crystal.takeable(); ++tick) {
-        const Vec2 towards{destination.x - actor.position().x,
-                           destination.z - actor.position().z};
+        const Vec2 towards{destination.x - actor.position().x, destination.z - actor.position().z};
         REQUIRE(glm::length(towards) > 0);
-        actor.update(MoveInput{glm::normalize(towards), 1}, 0, 1.0f / 30,
-                     &world.collision());
-        feetReached |= crystal.touchedBy(
-            {actor.position(), actor.reach(), actor.height() * 0.5f});
+        actor.update(MoveInput{glm::normalize(towards), 1}, 0, 1.0f / 30, &world.collision());
+        feetReached |= crystal.touchedBy({actor.position(), actor.reach(), actor.height() * 0.5f});
         pickups.collect(device, players, services);
     }
     CAPTURE(level, instance, actor.position().x, actor.position().y, actor.position().z);
@@ -171,7 +174,7 @@ TEST_CASE("pickup reach includes the attempted step before a wall clips the play
     CHECK_FALSE(crystal.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
 }
 
-TEST_CASE("a native Turbo Boost pickup is carried until its owner activates the selector",
+TEST_CASE("with Auto-Use off a native Turbo Boost waits for its owner's selector activation",
           "[pickups][turbo-activation][assets][multiplayer]") {
     const auto root =
         test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
@@ -184,15 +187,16 @@ TEST_CASE("a native Turbo Boost pickup is carried until its owner activates the 
     PartyHud hud;
     LevelSoundscape audio;
     const ClassDataSet classes;
-    const PartyPickups::Services services{.world = world,
-                                          .fixtures = fixtures,
-                                          .hud = hud,
-                                          .audio = audio,
-                                          .classes = classes,
-                                          .sounds = nullptr,
-                                          .help = {},
-                                          .openMessage = {},
-                                          .challengeCoin = {}};
+    PartyPickups::Services services{.world = world,
+                                    .fixtures = fixtures,
+                                    .hud = hud,
+                                    .audio = audio,
+                                    .classes = classes,
+                                    .sounds = nullptr,
+                                    .help = {},
+                                    .openMessage = {},
+                                    .challengeCoin = {}};
+    services.autoActivateItems = false;
     std::array<PlayerRuntime, 2> players;
     const Vec3 spot{10.7f, 10.2f, -60.5f};
     players[0].actor.spawn(3, {}, nullptr, spot, 0);
@@ -264,18 +268,28 @@ TEST_CASE("world pickups honor auto use and remain available in the selector",
     std::array<PlayerRuntime, 1> players;
     const Vec3 spot{10.7f, 10.2f, -60.5f};
     players[0].actor.spawn(3, {}, nullptr, spot, 0);
+    const bool turbo = GENERATE(false, true);
     const auto& records = world.layout().itemInfos();
     const auto found = std::ranges::find_if(records, [](const auto& record) {
         return record.type == 1 && record.subtype == static_cast<s32>(ItemKind::WeaponPowerup);
     });
     REQUIRE(found != records.end());
-    REQUIRE(world.placeItem(device, found->name, spot));
+    REQUIRE(world.placeItem(device, turbo ? "TURBOPUP" : found->name, spot));
     PartyPickups pickups;
     pickups.collect(device, players, services);
     auto& inventory = players[0].actor.save().progress().inventory;
     REQUIRE(inventory.powerupCount() == 1);
     CHECK(inventory.powerups[0].on == activate);
     CHECK(hud.selector(3).selection() == 0);
+    if (turbo && activate) {
+        PlayerPowerups::update(players, 0.01f, PlayerPowerups::Clock::Level);
+        CHECK(players[0].turbo.held() == 100);
+        CHECK(inventory.powerupCount() == 0);
+        REQUIRE(players[0].turbo.spend(40));
+        PlayerPowerups::update(players, 0.01f, PlayerPowerups::Clock::Level);
+        CHECK(players[0].turbo.held() == 60);
+        return;
+    }
     hud.stepSelector(players[0].actor, SelectorInput{.up = true}, 32, audio);
     hud.stepSelector(players[0].actor, {}, 1, audio);
     hud.stepSelector(players[0].actor, SelectorInput{.up = true}, 1, audio);
@@ -435,7 +449,8 @@ TEST_CASE("the tower congratulates the party on the gargoyles' pieces before the
     CHECK_FALSE(PartyPickups::announceTowerUnlock(players, services));
 }
 
-TEST_CASE("Sumner does not authorize a tower crystal ceremony", "[pickups][sumner][tower-crystals]") {
+TEST_CASE("Sumner does not authorize a tower crystal ceremony",
+          "[pickups][sumner][tower-crystals]") {
     LevelWorld world;
     LevelFixtures fixtures;
     PartyHud hud;
@@ -446,16 +461,17 @@ TEST_CASE("Sumner does not authorize a tower crystal ceremony", "[pickups][sumne
     save.selectClass(kSumnerClass);
     save.progress().crystals[2] = LevelTriggers::crystalsNeeded(2);
     const PartyPickups::Services services{.world = world,
-                                         .fixtures = fixtures,
-                                         .hud = hud,
-                                         .audio = audio,
-                                         .classes = classes,
-                                         .help = {},
-                                         .openMessage = [](std::string_view, usize) {
-                                             FAIL("Sumner must not open a crystal ceremony");
-                                             return true;
-                                         },
-                                         .challengeCoin = {}};
+                                          .fixtures = fixtures,
+                                          .hud = hud,
+                                          .audio = audio,
+                                          .classes = classes,
+                                          .help = {},
+                                          .openMessage =
+                                              [](std::string_view, usize) {
+                                                  FAIL("Sumner must not open a crystal ceremony");
+                                                  return true;
+                                              },
+                                          .challengeCoin = {}};
     CHECK_FALSE(PartyPickups::announceTowerUnlock(players, services));
     CHECK(save.progress().crystals[2] == LevelTriggers::crystalsNeeded(2));
 }

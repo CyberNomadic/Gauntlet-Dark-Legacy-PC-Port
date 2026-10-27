@@ -18,6 +18,7 @@
 #include "game/combat/Damage.h"
 #include "game/combat/DamageTypes.h"
 #include "game/effects/DynamicLights.h"
+#include "game/effects/PotionEmission.h"
 #include "game/effects/WeaponGlow.h"
 #include "game/enemies/DeathRules.h"
 #include "game/enemies/EnemyKinds.h"
@@ -995,7 +996,6 @@ void PlayerAttacks::shieldPotion(usize index, std::span<PlayerRuntime> players) 
     const s32 kind = m_resources->arsenal.resolvePotionKind(stored);
     const auto look = static_cast<usize>(std::clamp(kind, 0, 4));
     const f32 power = m_resources->arsenal.potionPowerOf(actor, stored);
-    const f32 size = std::min(PlayerArsenal::kBurstPerPower * power, 1.0f);
     PotionShield shield;
     shield.actor = index;
     shield.radius = kShieldPotency * power;
@@ -1007,10 +1007,10 @@ void PlayerAttacks::shieldPotion(usize index, std::span<PlayerRuntime> players) 
     if (m_resources->weapons.loaded() &&
         m_resources->weapons.trees.find(kShieldTrees[look]).has_value()) {
         EffectTrees::Setting setting;
-        setting.scale = size;
+        setting.stretch = PotionEmission::shieldScale(shield.radius);
         setting.seconds = kShieldSeconds;
         setting.light = EffectTrees::Light{DynamicLights::ofPotion(static_cast<s32>(look)),
-                                           DynamicLights::kMagicRadiusPerPower * power};
+                                           DynamicLights::kMagicRadiusPerPower * shield.radius};
         shield.effect =
             m_resources->effects.startSet(m_resources->device, m_resources->weapons,
                                           kShieldTrees[look], actor.position(), setting);
@@ -1336,6 +1336,13 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
         constexpr s32 kBoss = 3;
         constexpr s32 kBarrel = 4;
         const auto& actor = players[shield.actor].actor;
+        for (const auto& statue : targets.opponents.statues().targets()) {
+            const Vec3 distance = statue.base - at;
+            if (portable::hypot(distance.x, distance.z) <= shield.radius + statue.radius &&
+                std::abs(distance.y) <= shield.radius + statue.height) {
+                targets.opponents.wakeStatue(static_cast<usize>(statue.id));
+            }
+        }
         // Its magic carries its bearer's class perk as a burst's does (start_magic's shield).
         if (const auto perk =
                 MagicPerk::of(actor.save().character, experienceLevel(actor.save().experience()))) {
@@ -1485,7 +1492,8 @@ void PlayerAttacks::updateTurbo(usize index, s32 ticks, f32 seconds,
                     }
                     m_resources->arsenal.launchWeapon(actor, figure, emission.weapon.direction,
                                                       emission.weapon.scale, emission.spreads,
-                                                      emission.weapon.target, release);
+                                                      emission.weapon.target, release, false,
+                                                      PlayerArsenal::WeaponMode::Volley);
                 }
             },
         .identifiedStrike =
@@ -1739,10 +1747,13 @@ bool PlayerAttacks::creatureStanding(const Targets& targets, s32 id) {
 
 PlayerDeed PlayerAttacks::attackDeed(const PlayerActor& actor, bool strong, const Targets& targets,
                                      bool moved, s32 chain, std::optional<Vec3> facing) const {
-    if (const auto item =
-            ItemAttack::select(PowerupEffects::of(actor.save().progress().inventory))) {
+    const auto worn = PowerupEffects::of(actor.save().progress().inventory);
+    if (const auto item = ItemAttack::select(worn)) {
         return item->deed;
     }
+    // Pojo's native input selector maps the heavy button to the light attack
+    // before choosing either a close strike or a fireball.
+    strong = strong && (worn.special & powerup::kPojo) == 0;
     const PlayerDeed ranged = strong ? PlayerDeed::StrongAttack : PlayerDeed::Attack;
     if (!m_resources) {
         return ranged;
@@ -2626,6 +2637,14 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                 direction /= length;
             }
             const s32 byPlayer = burst.impact.owner;
+            if (target.id >= kStatueTargetBase && target.id < kPlayerTargetBase) {
+                // Placed enemies are still items: fn_8005C1DC wakes them before
+                // their native ACTIVE sequence releases the actual creature.
+                // A continuing potion wave can then strike that new enemy too.
+                targets.opponents.wakeStatue(static_cast<usize>(target.id - kStatueTargetBase));
+                burst.struck = true;
+                continue;
+            }
             if (immuneToMagic(target.id, targets)) {
                 continue;
             }

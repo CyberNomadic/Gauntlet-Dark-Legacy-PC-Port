@@ -141,7 +141,9 @@ std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& wea
     launch.flags = weapon.flags;
     launch.multiplayer = weapon.multiplayer;
     launch.reach = reachFor(weapon.attackSeconds);
-    launch.spec = &MissileSpec::of(weapon.character);
+    const bool superShot =
+        (weapon.flags & powerup::kSuperShot) != 0 && (weapon.flags & 0x02000000U) == 0;
+    launch.spec = superShot ? &MissileSpec::superShot() : &MissileSpec::of(weapon.character);
     if (weapon.shots == 5) {
         launch.wallSound = MissileWallSound::FiveWay;
     } else if (weapon.shots == 3) {
@@ -153,7 +155,9 @@ std::vector<MissileLaunch> PlayerMissiles::weaponLaunches(const WeaponThrow& wea
     std::vector<MissileLaunch> launches;
     for (const Vec3& way : spread(facing, weapon.shots)) {
         launch.direction = way;
-        if (target) {
+        if (superShot) {
+            launch.velocity = way * launch.speed;
+        } else if (target) {
             const Vec3 aim =
                 TargetAssist::velocity(launch.position, *target, launch.speed, launch.spec->weight);
             // Each spread keeps its authored bearing instead of converging on the target.
@@ -519,10 +523,10 @@ void PlayerMissiles::update(f32 seconds, const WorldCollision* collision,
                 if (!contact) {
                     continue;
                 }
-                MissileImpact impact{missile.position, missile.owner, missile.potion,
-                                     missile.potency, missile.damage, target.id,
-                                     missile.spec->impactTree, missile.wallSound, missile.flags,
-                                     target.node};
+                MissileImpact impact{
+                    missile.position, missile.owner, missile.potion,           missile.potency,
+                    missile.damage,   target.id,     missile.spec->impactTree, missile.wallSound,
+                    missile.flags,    target.node};
                 // ProcessEffects normalizes the missile's flight velocity for
                 // CritterDamage. The owner may have moved since releasing it.
                 const f32 speed = glm::length(missile.velocity);

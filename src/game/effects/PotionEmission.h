@@ -39,6 +39,8 @@ struct PotionEmission {
      * not choose a gameplay colour for an unspecified potion. */
     static const Look& look(s32 kind);
     static Burst burst(const Context& context);
+    /** StartShieldFX scales only the footprint; the authored dome keeps its full height. */
+    static Vec3 shieldScale(f32 radius);
     /** Native bottle launch, with no model/archive/texture bindings. Its sound
      * and burst occur on impact, not at this release. Negative held ticks retain
      * native's uncharged throw; charge otherwise counts native wind-up ticks. */

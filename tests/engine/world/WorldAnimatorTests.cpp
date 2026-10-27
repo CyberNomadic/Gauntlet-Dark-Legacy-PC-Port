@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -10,6 +11,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/world/TreePose.h"
 #include "engine/world/WorldAnimator.h"
 #include "engine/world/WorldScene.h"
 
@@ -209,6 +211,101 @@ TEST_CASE("a held switch cycles its track and releases at the forward endpoint",
     }
     CHECK(animator.finished(0));
     CHECK(animator.frame(0) == 3);
+}
+
+/** Exercise the actual scene presentation seam without changing the native clock or pose. */
+void checkLoopPresentation(Fixture& fixture, bool continuous) {
+    fixture.animator.bind(fixture.layout);
+    fixture.animator.apply(fixture.scene);
+    const auto& animation = fixture.layout.animations().front();
+    const auto object = static_cast<usize>(animation.object);
+    const auto draw = [&](f32 alpha) {
+        fixture.device.draws.clear();
+        fixture.scene.draw(fixture.device, Mat4{1}, CameraFrame::at(Vec3{0}), alpha);
+        REQUIRE(fixture.device.draws.size() >= 4);
+        return fixture.device.draws[2].vertices[0].position;
+    };
+    for (s32 tick = 0; tick < animation.frames - 1; ++tick) {
+        const f32 frame = fixture.animator.frame(0);
+        fixture.scene.capturePresentation();
+        fixture.animator.step(kStep, fixture.scene);
+        const Mat4 expected = TreePose::localMatrix(TreePose::sample(animation.track, frame),
+                                                    fixture.layout.objects()[object].position);
+        CHECK(fixture.scene.localTransform(object) == expected);
+    }
+    REQUIRE(fixture.animator.frame(0) == 0);
+    REQUIRE(fixture.animator.cycleEvents().size() == 1);
+    CHECK(fixture.animator.cycleEvents().front().wrapped);
+    const Vec3 previous = draw(1);
+    fixture.scene.capturePresentation();
+    fixture.animator.step(kStep, fixture.scene);
+    CHECK(fixture.animator.frame(0) == 1);
+    const Vec3 current = draw(1);
+    REQUIRE(glm::distance(previous, current) > 0.001f);
+    if (continuous) {
+        CHECK(glm::distance(draw(0), previous) < 0.0001f);
+        CHECK(glm::distance(draw(0.5f), previous) > 0.001f);
+        CHECK(glm::distance(draw(0.5f), current) > 0.001f);
+    } else {
+        CHECK(draw(0) == current);
+        CHECK(draw(0.5f) == current);
+    }
+    // Explicit trigger teleports still cut even on a track eligible for loop blending.
+    fixture.scene.capturePresentation();
+    fixture.animator.fire(animation.object, true, true);
+    fixture.animator.apply(fixture.scene);
+    CHECK(draw(0) == draw(1));
+    fixture.scene.capturePresentation();
+    fixture.animator.hold(animation.object);
+    fixture.animator.apply(fixture.scene);
+    CHECK(draw(0) == draw(1));
+}
+
+TEST_CASE("full-turn world loops interpolate their seam without smoothing authored resets",
+          "[world][animation][presentation][fan-loop]") {
+    for (const s32 mode : {0, 1, 2, 3, 4}) {
+        CAPTURE(mode);
+        Fixture fixture("world-fan-loop");
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        auto& animation = const_cast<WorldAnimation&>(fixture.layout.animations().front());
+        animation.frames = 41;
+        animation.track.flags = mode == 3 ? 16U : 2U;
+        animation.track.frames.clear();
+        animation.track.values.clear();
+        for (u16 frame = 0; frame < 41; ++frame) {
+            animation.track.frames.push_back(frame);
+            const f32 span = mode == 2 ? 1.0f : kTwoPi;
+            const f32 angle = span * static_cast<f32>(frame) / 40.0f;
+            animation.track.values.push_back(TreePose::wrapAngle(mode == 1 ? -angle : angle));
+        }
+        if (mode == 4) {
+            animation.track.values[10] = animation.track.values[8]; // not a monotonic turn
+        }
+        checkLoopPresentation(fixture, mode < 2);
+    }
+}
+
+TEST_CASE("native Mothership full-turn fans retain interpolation across their loop seams",
+          "[world][animation][presentation][fan-loop][assets]") {
+    WorldLayout native;
+    REQUIRE(native.load(test::assetOrSkip("LEVELS/LEVELK1/WORLDS.PS2").parent_path()));
+    for (const auto* const name : {"K1NC_FAN", "K1NC#09", "K1NC_GROUP552", "K1NC#05"}) {
+        CAPTURE(name);
+        const auto object = std::ranges::find(native.objects(), name, &WorldObject::name);
+        REQUIRE(object != native.objects().end());
+        const auto index = static_cast<s32>(object - native.objects().begin());
+        const auto found = std::ranges::find(native.animations(), index, &WorldAnimation::object);
+        REQUIRE(found != native.animations().end());
+        Fixture fixture("native-world-fan-loop");
+        // Use the native keys on the test blade, so the regression measures presentation
+        // independently of a fan's repeated blade geometry or camera framing.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+        auto& animation = const_cast<WorldAnimation&>(fixture.layout.animations().front());
+        const s32 testObject = animation.object;
+        animation = *found;
+        animation.object = testObject;
+        checkLoopPresentation(fixture, std::string_view{name} != "K1NC#05");
+    }
 }
 
 TEST_CASE("one-shot animations stop at their last frame, backwards ones at their first",
