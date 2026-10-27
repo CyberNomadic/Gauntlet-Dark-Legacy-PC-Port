@@ -75,9 +75,9 @@ TEST_CASE("melee praise restores its exact count and fractional quiet timer",
     MeleeStreak replay;
     REQUIRE(replay.restore(saved));
     CHECK(replay.checkpoint() == saved);
-    CHECK(native.step(0.5f).empty());
-    CHECK(replay.step(0.5f).empty());
-    CHECK(native.step(0.26f) == MeleeStreak::kBraveryVoice);
+    CHECK(native.step(1.5f).empty());
+    CHECK(replay.step(1.5f).empty());
+    CHECK(native.step(0.26f) == MeleeStreak::kBraveryVoice); // past the three seconds
     CHECK(replay.step(0.26f) == MeleeStreak::kBraveryVoice);
     CHECK(replay.checkpoint() == native.checkpoint());
     CHECK(replay.step(4).empty());

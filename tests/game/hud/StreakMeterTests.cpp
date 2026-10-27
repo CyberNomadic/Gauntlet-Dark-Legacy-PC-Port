@@ -87,15 +87,15 @@ TEST_CASE("streak grades follow the narrator's thresholds and the bar climbs the
     CHECK(StreakMeter::bandProgress(100) == 1.0f);
     CHECK(StreakMeter::bandProgress(150) == 1.0f);
     // The climb through the grade sets the reach; the grade's quiet drains it to nothing,
-    // three seconds at D and one at S.
+    // three seconds at D and one and a half at S.
     const f32 full = StreakMeter::fillOf(13, 0.0f);
     CHECK(full == Approx(0.12f + 0.88f * 0.5f));
     CHECK(StreakMeter::fillOf(13, 1.5f) == Approx(full * 0.5f));
     CHECK(StreakMeter::fillOf(13, 3.0f) == 0.0f);
     CHECK(StreakMeter::fillOf(0, 0.0f) == 0.0f);
     CHECK(StreakMeter::fillOf(100, 0.0f) == 1.0f);
-    CHECK(StreakMeter::fillOf(100, 0.5f) == Approx(0.5f));
-    CHECK(StreakMeter::fillOf(100, 1.0f) == 0.0f);
+    CHECK(StreakMeter::fillOf(100, 0.75f) == Approx(0.5f));
+    CHECK(StreakMeter::fillOf(100, 1.5f) == 0.0f);
     CHECK(StreakMeter::shakeOf(-1) == 0.0f);
     CHECK(StreakMeter::shakeOf(4) > StreakMeter::shakeOf(1));
     CHECK(StreakMeter::letterScaleOf(4) > StreakMeter::letterScaleOf(0));

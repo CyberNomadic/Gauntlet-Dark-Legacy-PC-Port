@@ -10,7 +10,7 @@ namespace gdl::game {
 /**
  * The grades of a run of close blows in Aggressor Mode, D to S, shared by the meter that
  * shows them, the swarm that answers them and the quiet that ends the run: the higher the
- * grade, the less quiet the run survives, three seconds at D down to one at S.
+ * grade, the less quiet the run survives, three seconds at D down to one and a half at S.
  */
 struct StreakGrades {
     static constexpr s32 kCount = 5;
@@ -19,7 +19,7 @@ struct StreakGrades {
     static constexpr std::string_view kLetters = "DCBAS";
     static constexpr s32 kTop = kCounts[kCount - 1]; ///< S
     static constexpr f32 kLongestQuiet = 3.0f;       ///< the window at D
-    static constexpr f32 kShortestQuiet = 1.0f;      ///< and at S
+    static constexpr f32 kShortestQuiet = 1.5f;      ///< and at S
 
     /** The grade a count has reached: -1 before the first kill, else into `kLetters`. */
     static constexpr s32 gradeOf(s32 count) {

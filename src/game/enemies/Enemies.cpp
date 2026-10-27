@@ -29,7 +29,7 @@ void visitNativeState(NativeStateDigest& digest, const EnemyBlow& value) {
     digest.fields<8>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const EnemyLoss& value) {
-    digest.fields<7>(value);
+    digest.fields<8>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const EnemyBody& value) {
     digest.fields<4>(value);
@@ -38,7 +38,7 @@ void visitNativeState(NativeStateDigest& digest, const EnemyGeneratorEvent& valu
     digest.fields<2>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const EnemySpawn& value) {
-    digest.fields<15>(value);
+    digest.fields<16>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const EnemyDeathShot& value) {
     digest.fields<4>(value);
@@ -71,7 +71,7 @@ void visitNativeState(NativeStateDigest& digest, const Enemies::BodyState::Floor
     digest.fields<2>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const Enemies::BodyState& value) {
-    digest.fields<57>(value);
+    digest.fields<58>(value);
 }
 
 namespace {
@@ -394,7 +394,8 @@ s32 resolvedWayOf(s32 kind, s32 strength, s32 way, bool mirrored) {
 bool Enemies::BodyState::valid() const {
     if (state > State::Dying || presentationState > State::Dying || birth > Birth::Patrol ||
         !checkpointKind(kind) || tier < 1 || tier > 3 || algorithm < 0 || algorithm > 31 ||
-        !checkpointCounter(variant, 0) || !checkpointCounter(generator, -1) ||
+        !checkpointCounter(variant, 0) || element < 0 || element > 4 ||
+        !checkpointCounter(generator, -1) ||
         !checkpointPoint(position) || !checkpointPoint(birthPosition) ||
         !checkpointPoint(presentationPosition) || !checkpointPoint(push) ||
         !checkpointPoint(hurtDirection) || !checkpointMind(mind) || !checkpointPlayer(target) ||
@@ -1303,6 +1304,18 @@ std::optional<s32> Enemies::spawn(const EnemySpawn& spawn, std::span<const Enemy
     detachGenerator(enemy);
     const EnemyKind& kind = enemyKind(spawn.kind);
     initialise(enemy, spawn, kind);
+    // Aggressor Mode's elemental one, by the chance the birth carries: three and a half
+    // times as tough, half again as big, of one of the four elements.
+    enemy.element = 0;
+    if (spawn.kind < kSwarmKindCount && spawn.elementalChance > 0.0f &&
+        static_cast<f32>(m_simulation.random() % 10000U) < spawn.elementalChance * 10000.0f) {
+        enemy.element = 1 + static_cast<s32>(m_simulation.random() % 4U);
+        enemy.fullHealth *= kElementalHealth;
+        enemy.health *= kElementalHealth;
+        enemy.radius *= kElementalSize;
+        enemy.height *= kElementalSize;
+        enemy.reach *= kElementalSize;
+    }
     const TreeInfo* tree = treeOf(spawn.kind, enemy.tier);
     // A strength past the known variants (retail's unshipped F) keeps its tier's tree.
     if (enemy.variant != 0) {
@@ -1866,6 +1879,7 @@ void Enemies::resolveBlows(Enemy& enemy, s32 slot, std::span<const EnemyView> pl
         blow.kind = enemy.kind;
         blow.tier = enemy.tier;
         blow.damage = fightOf(enemy);
+        blow.flags |= static_cast<u32>(enemy.element); // an elemental one's blow is of its element
         blow.power = enemy.animator.powerStruck();
         // Shrunk, it deals half, as a low blow, and its power blow is no more (fn_8004DF58).
         if (EnemyShrink::shrunk(m_simulation.shrink)) {
@@ -2464,6 +2478,9 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
     if (enemy.kind == kItKind) {
         return 0; // nothing harms IT (damage_enemy)
     }
+    if (enemy.element != 0 && (hit.flags & Damage::kElement) == static_cast<u32>(enemy.element)) {
+        return 0; // an elemental one shrugs off its own element
+    }
     const EnemyKind& kind = enemyKind(enemy.kind);
     f32 amount = hit.damage;
     // damage_enemy credits healing before level scaling, armor and shrink effects.
@@ -2550,6 +2567,7 @@ f32 Enemies::hurt(s32 id, const EnemyHit& hit) {
         loss.killed = killed;
         loss.experience = killed ? kind.experienceKill : kind.experienceHit;
         loss.position = bodyCentre(enemy);
+        loss.element = enemy.element;
         m_simulation.losses.push_back(loss);
     }
     return credited;
@@ -2636,8 +2654,8 @@ void Enemies::shoot(Enemy& enemy, s32 slot, std::span<const EnemyView> players,
     // when it keeps nothing.
     const s32 which = enemy.variant == kBomberStrength ? EnemyMissileKind::kBomb
                                                        : missileSlotOfWay(enemy.algorithm);
-    const EnemyMissileKind what =
-        enemyMissileOf(enemy.kind, which).value_or(EnemyMissileKind::arrow());
+    EnemyMissileKind what = enemyMissileOf(enemy.kind, which).value_or(EnemyMissileKind::arrow());
+    what.flags |= static_cast<u32>(enemy.element); // an elemental one's missile is of its element
     // The trees are the kind's <PREFIX>_ARROW, _BOMB and _FBALL (InitEnemyMissiles); a kind
     // with no tree for the slot lets nothing go, and nothing goes at a player more than an
     // eighth of a turn off its facing (EnemyStartMissile).
@@ -3091,7 +3109,7 @@ void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& 
         }
         const Mat4 model = glm::scale(
             portable::rotate(glm::translate(Mat4{1.0f}, position), yaw, Vec3{0.0f, 1.0f, 0.0f}),
-            Vec3{m_simulation.shrink});
+            Vec3{m_simulation.shrink * sizeOf(enemy)});
         f32 alpha = enemy.kind == kDeathKind && enemy.killed
                         ? std::max(0.0f, 1.0f - enemy.deathSeconds / DeathRules::kFadeSeconds)
                         : 1.0f;
@@ -3145,7 +3163,7 @@ void Enemies::drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& ey
         const f32 shown = 1.0f - enemy.veil / kVeiled;
         if (shown > 0.0f) {
             stock->shadows[tier].draw(device, clip, eye, ground, normal, lighting, shown,
-                                      m_simulation.shrink);
+                                      m_simulation.shrink * sizeOf(enemy));
         }
     }
 }
@@ -3172,7 +3190,7 @@ std::optional<Enemies::Observation> Enemies::observe(s32 id) const {
     }
     Observation result{enemy.instance, enemy.health, enemy.fullHealth, enemy.state == State::Asleep,
                        enemy.flashSeconds > 0};
-    result.scale = m_simulation.shrink;
+    result.scale = m_simulation.shrink * sizeOf(enemy);
     result.alpha = opacityOf(id);
     if (enemy.killed && enemy.algorithm == kSuicideWay) {
         result.alpha = 0; // the explosion replaces the body immediately
@@ -3254,6 +3272,16 @@ s32 Enemies::stunTicksOf(s32 id) const {
 
 s32 Enemies::variantOf(s32 id) const {
     return m_simulation.enemies[static_cast<usize>(id)].variant;
+}
+f32 Enemies::sizeOf(const BodyState& body) {
+    return body.element != 0 ? kElementalSize : 1.0f;
+}
+s32 Enemies::elementOf(s32 id) const {
+    return m_simulation.enemies[static_cast<usize>(id)].element;
+}
+u64 Enemies::instanceOf(s32 id) const {
+    return id >= 0 && id < m_simulation.most ? m_simulation.enemies[static_cast<usize>(id)].instance
+                                             : 0;
 }
 
 const EnemyAnimator* Enemies::animatorOf(s32 id) const {

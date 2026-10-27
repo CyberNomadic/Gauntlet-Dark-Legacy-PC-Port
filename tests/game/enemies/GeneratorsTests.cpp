@@ -2191,15 +2191,18 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     SwarmAggression frenzied;
     frenzied.heat = 1.0f;
     frenzied.rage = 1.0f;
+    frenzied.run = SwarmAggression::kFullRun; // a run under way: the frenzy
     REQUIRE(frenzied.frenzied());
     REQUIRE(static_cast<s32>(static_cast<f32>(most) * frenzied.broodScale()) == 10);
     generators.setAggression(frenzied);
-    // The wait left is cut to the frenzy's, and the next is the frenzy's alone.
-    REQUIRE(generators.countdownOf(0) > SwarmAggression::kFrenzyTicks);
-    generators.update(SwarmAggression::kFrenzyTicks, enemies, party);
+    // The frenzy lifts the quota alone: the waits are the rank's.
+    generators.update(generators.countdownOf(0), enemies, party);
     generators.update(kTicks, enemies, party);
     CHECK(generators.bredOf(0) == 3);
-    CHECK(generators.countdownOf(0) == SwarmAggression::kFrenzyTicks);
+    CHECK(generators.countdownOf(0) ==
+          static_cast<s32>(Generators::kCountdownScale * static_cast<f32>(interval) *
+                           (1.0f + 2.0f / (2.0f * static_cast<f32>(most))) /
+                           frenzied.breedingPace()));
     CHECK(generators.frenziedHuts() == 1); // for the spike tracer's line
     CHECK(generators.birthsTried() == 1);
     // A grunt hut has three exits, and three children stand in them: two seconds of
@@ -2214,14 +2217,14 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
         filler.position = {100, 0, 300 + static_cast<f32>(i) * 10};
         REQUIRE(enemies.spawn(filler, party));
     }
-    generators.update(SwarmAggression::kFrenzyTicks, enemies, party);
+    generators.update(generators.countdownOf(0), enemies, party);
     generators.update(kTicks, enemies, party);
     CHECK(generators.bredOf(0) == 4);
     CHECK(enemies.count() == static_cast<usize>(Enemies::kMost));
     // A hut far from the party keeps to its quota, frenzy or no.
     const std::array farParty{EnemyView{.player = 0, .position = {0, 0, 200}}};
     REQUIRE(glm::distance(farParty[0].position, Vec3{0}) > SwarmAggression::kFrenzyReach);
-    generators.update(SwarmAggression::kFrenzyTicks + kTicks, enemies, farParty);
+    generators.update(generators.countdownOf(0) + kTicks, enemies, farParty);
     generators.update(kTicks, enemies, farParty);
     CHECK(generators.bredOf(0) == 4);
 }

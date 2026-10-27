@@ -64,13 +64,13 @@ TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, nothing
         CHECK(on.generatorTakes(source) ==
               (source == BlowSource::Swing || source == BlowSource::Shot));
     }
-    // Three seconds at D, a half second less a grade, one at S.
+    // Three seconds at D, three eighths less a grade, one and a half at S.
     CHECK(on.quietWindow(0) == StreakGrades::kLongestQuiet);
     CHECK(on.quietWindow(1) == StreakGrades::kLongestQuiet);
     CHECK(on.quietWindow(24) == StreakGrades::kLongestQuiet);
-    CHECK(on.quietWindow(25) == Approx(2.5f));
-    CHECK(on.quietWindow(50) == Approx(2.0f));
-    CHECK(on.quietWindow(75) == Approx(1.5f));
+    CHECK(on.quietWindow(25) == Approx(2.625f));
+    CHECK(on.quietWindow(50) == Approx(2.25f));
+    CHECK(on.quietWindow(75) == Approx(1.875f));
     CHECK(on.quietWindow(100) == StreakGrades::kShortestQuiet);
     CHECK(on.quietWindow(1000) == StreakGrades::kShortestQuiet);
     CHECK(StreakGrades::kLongestQuiet == MeleeStreak::kQuiet); // the longest a run survives

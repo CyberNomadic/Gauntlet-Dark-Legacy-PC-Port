@@ -7,13 +7,14 @@ namespace gdl::game {
 
 bool SwarmAggression::valid() const {
     return std::isfinite(heat) && heat >= 0.0f && heat <= kMostMeasure && std::isfinite(rage) &&
-           rage >= 0.0f && rage <= kMostMeasure;
+           rage >= 0.0f && rage <= kMostMeasure && run >= 0;
 }
 
-void SwarmAggression::step(f32 seconds, s32 run) {
+void SwarmAggression::step(f32 seconds, s32 longest) {
     if (!(seconds > 0.0f)) {
         return;
     }
+    run = std::max(longest, 0);
     // The run over, the swarm is itself again at once.
     if (run <= 0) {
         heat = 0.0f;
@@ -25,6 +26,14 @@ void SwarmAggression::step(f32 seconds, s32 run) {
                          : std::max(target, heat - kCool * seconds);
     rage = run >= kFullRun ? std::min(kMostMeasure, rage + seconds / kRageSeconds) : 0.0f;
     heat = std::min(heat, kMostMeasure);
+}
+
+f32 SwarmAggression::elementalChance() const {
+    if (run <= 0) {
+        return 0.0f;
+    }
+    const s32 grade = std::max(StreakGrades::gradeOf(run), 0);
+    return kElementalChanceAtD + kElementalChanceStep * static_cast<f32>(grade);
 }
 
 Color SwarmAggression::tint() const {

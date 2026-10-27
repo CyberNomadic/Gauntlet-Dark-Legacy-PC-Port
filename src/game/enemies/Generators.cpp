@@ -1076,9 +1076,6 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
                    : generator.most <= 0 || (!frenzied && generator.living >= quota)) {
             continue;
         }
-        if (frenzied) {
-            generator.countdown = std::min(generator.countdown, SwarmAggression::kFrenzyTicks);
-        }
         if (!patrol && generator.countdown > 0) {
             generator.countdown -= ticks;
             continue;
@@ -1116,6 +1113,7 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
                          : visible || patrol ? EnemySpawn::Priority::Offscreen
                                              : EnemySpawn::Priority::FreeSlotOnly;
         spawn.generator = static_cast<s32>(g);
+        spawn.elementalChance = frenzied ? m_aggression.elementalChance() : 0.0f;
         if (generator.algorithm == kZigZagWay) {
             spawn.zigZagSide = (generator.bred & 1) == 0 ? 1 : -1;
         }
@@ -1137,12 +1135,11 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
             continue;
         }
         // The next takes longer, the countdown stretched by a share that grows a birth at a
-        // time and wraps, and cut by the swarm's aggression; a frenzied hut barely waits.
-        generator.countdown = frenzied ? SwarmAggression::kFrenzyTicks
-                                       : static_cast<s32>(kCountdownScale *
-                                                          static_cast<f32>(generator.interval) *
-                                                          (1.0f + generator.ratio) /
-                                                          m_aggression.breedingPace());
+        // time and wraps, and cut by the swarm's aggression.
+        generator.countdown = static_cast<s32>(kCountdownScale *
+                                               static_cast<f32>(generator.interval) *
+                                               (1.0f + generator.ratio) /
+                                               m_aggression.breedingPace());
         generator.ratio += 1.0f / (2.0f * static_cast<f32>(generator.most));
         if (generator.ratio > 1.0f) {
             generator.ratio = 0.0f;

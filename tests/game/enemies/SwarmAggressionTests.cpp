@@ -37,6 +37,7 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     CHECK(aggression.rage == 0.0f);
     // At the line the heat is full, and the rage comes slowly.
     pass(aggression, 2.0f, SwarmAggression::kFullRun);
+    CHECK(aggression.run == SwarmAggression::kFullRun);
     CHECK(aggression.heat == Approx(1.0f).margin(0.01f));
     CHECK(aggression.rage == Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.01f));
     CHECK(aggression.frenzied());
@@ -51,14 +52,16 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     aggression.step(1.0f / 60.0f, SwarmAggression::kFullRun - 1);
     CHECK(aggression.heat == Approx(beyond - SwarmAggression::kCool / 60.0f).margin(0.001f));
     CHECK(aggression.rage == 0.0f);
-    CHECK_FALSE(aggression.frenzied());
+    CHECK(aggression.frenzied()); // any run under way
     // The run over, the swarm is itself again at once.
     pass(aggression, 60.0f, SwarmAggression::kFullRun + 30);
     REQUIRE(aggression.rage > 1.0f);
     aggression.step(1.0f / 60.0f, 0);
+    CHECK(aggression.run == 0);
     CHECK(aggression.heat == 0.0f);
     CHECK(aggression.rage == 0.0f);
     CHECK_FALSE(aggression.frenzied());
+    CHECK(aggression.elementalChance() == 0.0f);
     // A frame that takes no time changes nothing.
     aggression.step(0.0f, SwarmAggression::kFullRun);
     CHECK(aggression.heat == 0.0f);
@@ -83,6 +86,7 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     SwarmAggression hot;
     hot.heat = 1.0f;
     hot.rage = 1.0f;
+    hot.run = SwarmAggression::kFullRun;
     CHECK(hot.breedingPace() == Approx(2.6f));
     CHECK(hot.broodScale() == Approx(2.5f));
     CHECK(hot.speedScale() == Approx(1.6f));
@@ -125,8 +129,25 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     CHECK(extreme.broodScale() == Approx(26.0f));
     CHECK(beyond.tint() == SwarmAggression::kRageTint);
     CHECK(beyond.aura() == 1.0f);
+    // The odds of an elemental one: one in fifty at D, one in ten at S, none without a run.
+    SwarmAggression running;
+    CHECK(running.elementalChance() == 0.0f);
+    running.run = 1;
+    CHECK(running.elementalChance() == Approx(0.02f));
+    running.run = 25;
+    CHECK(running.elementalChance() == Approx(0.04f));
+    running.run = 99;
+    CHECK(running.elementalChance() == Approx(0.08f));
+    running.run = 100;
+    CHECK(running.elementalChance() == Approx(0.10f));
+    running.run = 500;
+    CHECK(running.elementalChance() == Approx(0.10f));
+    CHECK(running.frenzied());
     SwarmAggression wrong;
     wrong.heat = -1.0f;
+    CHECK_FALSE(wrong.valid());
+    wrong.heat = 0.0f;
+    wrong.run = -1;
     CHECK_FALSE(wrong.valid());
     wrong.heat = SwarmAggression::kMostMeasure * 2.0f;
     CHECK_FALSE(wrong.valid());

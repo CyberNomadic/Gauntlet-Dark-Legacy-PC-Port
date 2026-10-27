@@ -99,6 +99,7 @@ struct EnemyLoss {
     s32 experience = 0;
     bool killed = false;
     Vec3 position{0.0f, 0.0f, 0.0f};
+    s32 element = 0; ///< an elemental one's element, 0 for a plain body
     bool operator==(const EnemyLoss&) const = default;
 };
 
@@ -156,6 +157,7 @@ struct EnemySpawn {
     bool asleep = false;             ///< a placement of no strength waits to be woken
     f32 throwInterval = 1.0f;        ///< seconds, before the level's missile-rate scale
     Priority priority = Priority::Offscreen; ///< replacement permission, independent of strength
+    f32 elementalChance = 0.0f; ///< the odds a swarm birth is an elemental one (Aggressor Mode)
     /** A placement's own sight radius, before the level's scale (the float after its strength
      * and way, SetItem items.c 5569); nought for the kind's thirty. */
     f32 sight = 0.0f;
@@ -446,6 +448,14 @@ public:
     s32 algorithmOf(s32 id) const;
     s32 pushCountOf(s32 id) const;
     s32 variantOf(s32 id) const;   ///< the strength it was placed at, four and over for a variant
+    s32 elementOf(s32 id) const;   ///< an elemental one's element, 0 for a plain body
+    u64 instanceOf(s32 id) const;  ///< the lifetime the slot holds, 0 when none
+    /** Aggressor Mode's elemental one: born to a frenzied hut by chance, three and a half
+     * times as tough and half again as big, immune to its own element, dealing it. */
+    static constexpr f32 kElementalHealth = 3.5f;
+    static constexpr f32 kElementalSize = 1.5f;
+    struct BodyState;
+    static f32 sizeOf(const BodyState& body);
     f32 sightOf(s32 id) const;     ///< how far it sees, at the level's scale
     s32 stunTicksOf(s32 id) const; ///< ticks it still stands still after appearing
     /** How solid it shows: one, or less while a veiling kind fades. */
@@ -477,6 +487,7 @@ public:
         s32 tier = 1;
         s32 algorithm = 0;
         s32 variant = 0; ///< the strength placed at: 4 an archer, 5 a bomber, 6 a suicide
+        s32 element = 0; ///< Aggressor Mode's elemental one: 1 fire, 2 electric, 3 light, 4 acid
         s32 generator = -1;
         bool bred = false; ///< a generator bred it
         Birth birth = Birth::Brood;

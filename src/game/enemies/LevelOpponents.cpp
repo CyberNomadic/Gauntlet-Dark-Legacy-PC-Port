@@ -14,6 +14,9 @@
 #include "engine/math/PortableMath.h"
 
 #include "game/characters/Progression.h"
+#include "game/effects/WeaponGlow.h"
+#include "game/effects/PotionEmission.h"
+#include "game/combat/DamageTypes.h"
 #include "game/effects/CritterCueEmission.h"
 #include "game/effects/DynamicLights.h"
 #include "game/effects/EnemyFeedbackEmission.h"
@@ -79,7 +82,7 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     const auto& [clouds, deathShots, carried, bags, bagSeed, barrelRams, rockHits, hitStreak,
                  lessons, critterEffects, moveEffects, cueEffects, deathEffects, deathContact,
                  deathSound, yells, yellClocks, hearers, shrink, critterExperienceOwed,
-                 generatorRewards, unseen, borrowedRoster, aggression] = values;
+                 generatorRewards, unseen, borrowedRoster, aggression, elementMarks] = values;
     const auto rows = [&digest]<usize N>(const auto& list) {
         digest.wide(list.size());
         for (const auto& row : list) {
@@ -119,6 +122,7 @@ void LevelOpponents::appendFollowupValues(NativeStateDigest& digest, const Simul
     digest.value(unseen);
     rows.template operator()<4>(borrowedRoster);
     digest.value(aggression);
+    rows.template operator()<3>(elementMarks);
 }
 
 bool LevelOpponents::appendNativeFollowupDigest(NativeStateDigest& digest) const {
@@ -611,11 +615,17 @@ void LevelOpponents::close() {
         for (const CritterEffect& cue : m_sim.critterEffects) {
             m_resources->effects.stop(cue.effect);
         }
+        for (const ElementMark& mark : m_sim.elementMarks) {
+            if (mark.effect != 0) {
+                m_resources->effects.stop(mark.effect);
+            }
+        }
         for (const u32 effect : m_sim.cueEffects) {
             m_resources->effects.stop(effect);
         }
     }
     m_sim.critterEffects.clear();
+    m_sim.elementMarks.clear();
     m_sim.bags.clear();
     m_sim.moveEffects.clear();
     m_sim.cueEffects.clear();
@@ -1189,6 +1199,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         {ticks, seconds, views, fixtures, stops, m_critters.targets(true), m_bosses.targets(),
          &m_resources->world.collision(), missileSpeed, timeStopped, m_sim.aggression},
         events.blastScenery, [this] { playBirths(); });
+    markElementals();
     landEnemyMissiles(players, events);
     playEnemyCues();
     // What blows itself up goes up with the bomb's bang; one struck down stops crying out
@@ -1500,6 +1511,9 @@ bool LevelOpponents::awardEnemyLosses(const Events& events, const FeedbackPublis
     }
     for (const EnemyLoss& loss : m_enemies.takeLosses()) {
         events.award(loss.player, loss.experience, loss.killed);
+        if (loss.killed && loss.element != 0) {
+            dropElementalPotion(loss);
+        }
     }
     for (const GeneratorReward& reward : m_sim.generatorRewards) {
         // combat.c awards generator experience with AddExp's kill flag clear.
@@ -1900,6 +1914,101 @@ void LevelOpponents::awardBossLosses(std::span<const PlayerRuntime> players, con
     }
 }
 
+void LevelOpponents::throwBag(Bag bag) {
+    EffectTrees::Setting settings;
+    settings.seconds = 3;
+    bag.effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
+                                               "BAG_THROW", bag.position, settings);
+    m_sim.bagSeed = m_sim.bagSeed * 1664525U + 1013904223U;
+    constexpr f32 kMinSpin = 0.261799388f;
+    constexpr f32 kSpinRange = 1.04719758f;
+    bag.spin = kMinSpin + kSpinRange * static_cast<f32>(m_sim.bagSeed >> 8) / 16777216.0f;
+    if (bag.effect != 0) {
+        m_sim.bags.push_back(std::move(bag));
+    } else {
+        releaseBag(bag); // Missing optional artwork must not lose the reward.
+    }
+}
+
+void LevelOpponents::dropElementalPotion(const EnemyLoss& loss) {
+    if (!m_resources.has_value()) {
+        return;
+    }
+    // It goes up in its element's burst, the way a potion of it breaks, and leaves that
+    // potion in a bag.
+    const PotionEmission::Look& look = PotionEmission::look(loss.element);
+    EffectTrees::Setting burst;
+    burst.seconds = 3;
+    burst.scale = Enemies::kElementalSize;
+    if (const u32 effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
+                                                         look.burst, loss.position, burst);
+        effect != 0) {
+        m_sim.cueEffects.push_back(effect);
+    }
+    if (!look.sound.empty()) {
+        m_resources->audio.playNamed(look.sound);
+    }
+    Bag bag;
+    bag.position = loss.position;
+    bag.name = "POT_" + std::string{damage::colourOf(static_cast<u32>(loss.element))};
+    throwBag(std::move(bag));
+}
+
+void LevelOpponents::markElementals() {
+    if (!m_resources.has_value()) {
+        return;
+    }
+    constexpr f32 kGlowScale = 2.0f; ///< the hand's glow, grown to ring a body
+    const auto centreOf = [this](s32 id) {
+        return m_enemies.positionOf(id) + Vec3{0.0f, 0.5f * m_enemies.heightOf(id), 0.0f};
+    };
+    const auto glow = [&](s32 element, const Vec3& centre) -> u32 {
+        const std::string tree = WeaponGlow::holdTree(static_cast<u32>(element));
+        if (tree.empty() || !m_resources->weapons.loaded() ||
+            !m_resources->weapons.trees.find(tree).has_value()) {
+            return 0;
+        }
+        EffectTrees::Setting setting;
+        setting.persistent = true;
+        setting.scale = kGlowScale;
+        return m_resources->effects.startSet(m_resources->device, m_resources->weapons, tree,
+                                             centre, setting);
+    };
+    for (usize i = 0; i < m_sim.elementMarks.size();) {
+        ElementMark& mark = m_sim.elementMarks[i];
+        const bool held = m_enemies.alive(mark.enemy) &&
+                          m_enemies.instanceOf(mark.enemy) == mark.instance &&
+                          m_enemies.elementOf(mark.enemy) != 0;
+        if (!held) {
+            if (mark.effect != 0) {
+                m_resources->effects.stop(mark.effect);
+            }
+            m_sim.elementMarks.erase(m_sim.elementMarks.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        const Vec3 centre = centreOf(mark.enemy);
+        if (mark.effect != 0 && !m_resources->effects.playing(mark.effect)) {
+            mark.effect = glow(m_enemies.elementOf(mark.enemy), centre);
+        }
+        if (mark.effect != 0) {
+            m_resources->effects.placeAt(mark.effect, glm::translate(Mat4{1.0f}, centre));
+        }
+        ++i;
+    }
+    for (s32 id = 0; id < m_enemies.most(); ++id) {
+        const s32 element = m_enemies.elementOf(id);
+        if (element == 0 || !m_enemies.alive(id)) {
+            continue;
+        }
+        const u64 instance = m_enemies.instanceOf(id);
+        if (std::ranges::any_of(m_sim.elementMarks,
+                                [&](const ElementMark& mark) { return mark.instance == instance; })) {
+            continue;
+        }
+        m_sim.elementMarks.push_back({instance, id, glow(element, centreOf(id))});
+    }
+}
+
 void LevelOpponents::dropCarried(const CombatLoss& loss, std::span<const PlayerRuntime> players,
                                  const Events& events) {
     if (!m_resources.has_value()) {
@@ -1921,19 +2030,7 @@ void LevelOpponents::dropCarried(const CombatLoss& loss, std::span<const PlayerR
     if (!bag.item && bag.name.empty()) {
         return;
     }
-    EffectTrees::Setting settings;
-    settings.seconds = 3;
-    bag.effect = m_resources->effects.startSet(m_resources->device, m_resources->weapons,
-                                               "BAG_THROW", bag.position, settings);
-    m_sim.bagSeed = m_sim.bagSeed * 1664525U + 1013904223U;
-    constexpr f32 kMinSpin = 0.261799388f;
-    constexpr f32 kSpinRange = 1.04719758f;
-    bag.spin = kMinSpin + kSpinRange * static_cast<f32>(m_sim.bagSeed >> 8) / 16777216.0f;
-    if (bag.effect != 0) {
-        m_sim.bags.push_back(std::move(bag));
-    } else {
-        releaseBag(bag); // Missing optional artwork must not lose the reward.
-    }
+    throwBag(bag);
     if (!events.help) {
         return;
     }

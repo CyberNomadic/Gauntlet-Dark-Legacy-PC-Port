@@ -3901,4 +3901,74 @@ TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][st
     CHECK(enemies.count() == 3);
 }
 
+TEST_CASE("an elemental one is born tougher and bigger, shrugs off its own element and leaves it "
+          "in its loss",
+          "[enemies][streak][aggression][elemental][assets]") {
+    test::FakeRenderDevice device;
+    Enemies enemies;
+    enemies.open(device, unpackedRoot(), nullptr, 4, {}, 1);
+    REQUIRE(enemies.loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.placed = true;
+    spawn.position = {0, 0, 0};
+    const auto plain = enemies.spawn(spawn, {});
+    REQUIRE(plain.has_value());
+    CHECK(enemies.elementOf(*plain) == 0);
+    const auto plainBody = enemies.observe(*plain);
+    REQUIRE(plainBody.has_value());
+    const auto measure = [&](s32 id) {
+        const auto bodies = enemies.targets();
+        const auto body = std::ranges::find_if(
+            bodies, [&](const MissileTarget& target) { return target.id == id; });
+        REQUIRE(body != bodies.end());
+        return std::pair{body->radius, body->height};
+    };
+    const auto [plainRadius, plainHeight] = measure(*plain);
+    // Certain odds: the next is elemental, of one of the four elements.
+    spawn.position = {40, 0, 0};
+    spawn.elementalChance = 1.0f;
+    const auto elemental = enemies.spawn(spawn, {});
+    REQUIRE(elemental.has_value());
+    const s32 element = enemies.elementOf(*elemental);
+    CHECK(element >= 1);
+    CHECK(element <= 4);
+    const auto body = enemies.observe(*elemental);
+    REQUIRE(body.has_value());
+    CHECK(body->fullHealth == Approx(plainBody->fullHealth * Enemies::kElementalHealth));
+    CHECK(body->health == Approx(plainBody->health * Enemies::kElementalHealth));
+    CHECK(body->scale == Approx(Enemies::kElementalSize));
+    const auto [radius, height] = measure(*elemental);
+    CHECK(radius == Approx(plainRadius * Enemies::kElementalSize));
+    CHECK(height == Approx(plainHeight * Enemies::kElementalSize));
+    CHECK(enemies.instanceOf(*elemental) != 0);
+    // Its own element does nothing to it; another hurts it.
+    EnemyHit own;
+    own.damage = 10;
+    own.flags = static_cast<u32>(element);
+    own.player = 0;
+    CHECK(enemies.hurt(*elemental, own) == 0.0f);
+    CHECK(enemies.healthOf(*elemental) == body->health);
+    EnemyHit other;
+    other.damage = 10;
+    other.flags = static_cast<u32>(element % 4 + 1);
+    other.player = 0;
+    CHECK(enemies.hurt(*elemental, other) > 0.0f);
+    CHECK(enemies.healthOf(*elemental) < body->health);
+    (void)enemies.takeLosses();
+    // Slain, its loss names its element.
+    other.damage = 1.0e6f;
+    enemies.hurt(*elemental, other);
+    CHECK_FALSE(enemies.alive(*elemental));
+    const auto losses = enemies.takeLosses();
+    REQUIRE(losses.size() == 1);
+    CHECK(losses[0].killed);
+    CHECK(losses[0].element == element);
+    // No odds, no elemental one.
+    spawn.position = {80, 0, 0};
+    spawn.elementalChance = 0.0f;
+    const auto third = enemies.spawn(spawn, {});
+    REQUIRE(third.has_value());
+    CHECK(enemies.elementOf(*third) == 0);
+}
+
 } // namespace

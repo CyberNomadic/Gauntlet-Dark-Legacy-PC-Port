@@ -101,6 +101,7 @@ Enemies::Checkpoint varied() {
         body.tier = static_cast<s32>(index % 3) + 1;
         body.algorithm = static_cast<s32>(index % 32); // the ways stop at 31
         body.variant = 5;
+        body.element = static_cast<s32>(index % 5);
         body.generator = 7;
         body.bred = true;
         body.birth = Enemies::Birth::Patrol;
@@ -160,7 +161,7 @@ Enemies::Checkpoint varied() {
     state.enemies.back().animator->current = EnemyAction::Dying;
     state.blows = {
         {1, kGruntKind, 2, 3.5f, true, 0x87654321, {1, 2, 3}, EnemyMeleeWard::HealthVamp}};
-    state.losses = {{2, kRatKind, 3, 1, 37, true, {3, 2, 1}}};
+    state.losses = {{2, kRatKind, 3, 1, 37, true, {3, 2, 1}, 4}};
     state.bursts = {{{4, 5, 6}, 7.5f, 3, kGruntKind, true, 91}};
     state.births = {{{-8, 9, -10}, kGruntKind, 3}, {{11, -12, 13}, kRatKind, 1}};
     state.cues = {{EnemyCue::Kind::Yell, kRatKind, {7, 8, 9}}};
@@ -232,7 +233,7 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
           "[netplay][rollback][enemy-pool-codec]") {
     const auto plain = EnemyPoolCheckpoint::encode(Enemies::Checkpoint{});
     REQUIRE(plain);
-    CHECK(plain->size() == 2648 + 360 * static_cast<usize>(Enemies::kMost)); // 360 a slot
+    CHECK(plain->size() == 2648 + 364 * static_cast<usize>(Enemies::kMost)); // 364 a slot
     constexpr usize kPool = 8 + RandomCheckpoint::kBytes;
     constexpr usize kView = kPool + 84;
     constexpr usize kStocks = kView + 4;
@@ -261,10 +262,11 @@ TEST_CASE("enemy pool wire rejects malformed lengths enums booleans RNG and floa
     reject(kBlows + static_cast<usize>(3 * 4), EnemyPoolCheckpoint::kMaxEvents + 1);
     reject(kBody + 8, 4);           // state past Dying
     reject(kBody + 8, 256);         // do not narrow an invalid u32 into enum zero
-    reject(kBody + 32, 2);          // bred boolean
-    reject(kBody + 36, 3);          // birth past Patrol
-    reject(kBody + 40, 0x7F800000); // infinite health
-    reject(kBody + 108, 2);         // floor presence
+    reject(kBody + 28, 5);          // element past acid
+    reject(kBody + 36, 2);          // bred boolean
+    reject(kBody + 40, 3);          // birth past Patrol
+    reject(kBody + 44, 0x7F800000); // infinite health
+    reject(kBody + 112, 2);         // floor presence
     auto zeroRandom = *plain;
     std::fill(zeroRandom.begin() + 8, zeroRandom.begin() + 8 + static_cast<std::ptrdiff_t>(624 * 4),
               u8{0});

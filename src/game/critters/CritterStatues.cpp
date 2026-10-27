@@ -18,8 +18,8 @@ constexpr f32 kItemQueryPadding = 15.0f;
 
 bool sameSpawn(const EnemySpawn& a, const EnemySpawn& b) {
     bool same = false;
-    visitNativeFields<15>(a, [&](const auto&... left) {
-        visitNativeFields<15>(
+    visitNativeFields<16>(a, [&](const auto&... left) {
+        visitNativeFields<16>(
             b, [&](const auto&... right) { same = std::tie(left...) == std::tie(right...); });
     });
     return same;

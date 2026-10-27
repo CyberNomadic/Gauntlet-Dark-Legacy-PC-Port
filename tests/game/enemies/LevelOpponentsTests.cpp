@@ -3791,3 +3791,67 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
 }
 
 } // namespace
+
+namespace {
+using namespace gdl;
+using namespace gdl::game;
+
+TEST_CASE("the level marks each elemental one with its glow while it lives",
+          "[level-opponents][streak][aggression][elemental][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELH1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("H1")));
+    ItemArchive weapons;
+    EffectTrees effects;
+    LevelSoundscape audio;
+    std::array<PlayerRuntime, 1> players;
+    players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
+    LevelOpponents opponents;
+    opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    LevelOpponents::Events events;
+    events.settleBlasts = [] {};
+    events.advanceLegend = [](f32) {};
+    events.advanceVictory = [](s32, f32) {};
+    events.levels = [] {};
+    events.award = [](s32, s32, bool) {};
+    events.hurt = [](usize, f32, HurtKind, bool, const PlayerImpact&) {};
+    events.blast = [](const Vec3&, f32, f32) {};
+    events.fallen = [](const Vec3&) {};
+    events.spew = [](const CombatSpew&) {};
+    events.legend = [](const LegendEvent&) {};
+    events.shake = [] {};
+    events.help = [](s32, usize) { return false; };
+    events.destroyedGenerator = [](s32) {};
+    REQUIRE(opponents.enemies().loadKind(kGruntKind));
+    EnemySpawn spawn;
+    spawn.kind = kGruntKind;
+    spawn.placed = true;
+    REQUIRE(world.startPoint(0));
+    spawn.position = world.startPoint(0)->position; // standing room, as the party's
+    spawn.elementalChance = 1.0f;
+    spawn.priority = EnemySpawn::Priority::Visible; // the level's own swarm fills the pool
+    const auto id = opponents.enemies().spawn(spawn, {});
+    REQUIRE(id.has_value());
+    const s32 element = opponents.enemies().elementOf(*id);
+    REQUIRE(element != 0);
+    CHECK(opponents.elementMarkCount() == 0);
+    opponents.update(1, 1.0f / 60, players, {}, events);
+    CHECK(opponents.elementMarkCount() == 1);
+    opponents.update(1, 1.0f / 60, players, {}, events);
+    CHECK(opponents.elementMarkCount() == 1); // one mark a body, not one an update
+    // Slain by another element, it leaves its mark behind and its potion in a bag.
+    const usize bags = opponents.bagCount();
+    opponents.strikeEnemy(*id, 1.0e6f, static_cast<u32>(element % 4 + 1), Vec3{0, 0, 1}, 0,
+                          players);
+    REQUIRE_FALSE(opponents.enemies().alive(*id));
+    opponents.update(1, 1.0f / 60, players, {}, events);
+    CHECK(opponents.elementMarkCount() == 0);
+    CHECK(opponents.bagCount() >= bags); // the bag's artwork is optional; the reward is not
+    opponents.close();
+}
+
+} // namespace

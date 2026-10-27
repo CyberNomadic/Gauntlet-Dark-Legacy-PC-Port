@@ -12,13 +12,14 @@ namespace gdl::game {
 /**
  * The swarm's answer to a run of close blows: as the longest run under way grows, the
  * generators breed sooner and keep more out, and the swarm walks and swings quicker and is
- * born tougher, with no end to it: the longer the run, the more. Held at S,
- * a rage sets in and grows for as long as the run holds: it darkens the swarm to red, puts
- * an aura about it and frenzies the generators near the party, which spew births into the
- * whole pool with no regard to any quota or the level's cap. The heat climbs toward the
- * run so nothing jumps, the rage comes slowly, and the moment the run is over all of it
- * goes: the swarm is back to its own measures at once. The walking, the swinging and the
- * breeding are capped; the health and the brood are not. Native state.
+ * born tougher, with no end to it: the longer the run, the more. Any run under way
+ * frenzies the generators near the party, which breed into the whole pool with no regard
+ * to any quota or the level's cap, paced by the rank alone, and now and then bring forth
+ * an elemental one, the oftener the higher the grade. Held at S, a rage sets in and grows
+ * for as long as the run holds: it darkens the swarm to red and puts an aura about it. The
+ * heat climbs toward the run so nothing jumps, the rage comes slowly, and the moment the
+ * run is over all of it goes: the swarm is back to its own measures at once. The walking,
+ * the swinging and the breeding are capped; the health and the brood are not. Native state.
  */
 struct SwarmAggression {
     static constexpr s32 kFullRun = StreakGrades::kTop; ///< the run the heat is full at: S
@@ -26,7 +27,10 @@ struct SwarmAggression {
     static constexpr f32 kCool = 0.2f;         ///< heat a second toward a shorter run
     static constexpr f32 kRageSeconds = 20.0f; ///< at the bravery line, seconds to full rage
     static constexpr f32 kFrenzyReach = 60.0f; ///< how near the party a frenzied hut stands
-    static constexpr s32 kFrenzyTicks = 3;     ///< ticks between a frenzied hut's births
+    /** The odds a frenzied hut's birth is an elemental one: one in fifty at D, two in a
+     * hundred more each grade, one in ten at S. */
+    static constexpr f32 kElementalChanceAtD = 0.02f;
+    static constexpr f32 kElementalChanceStep = 0.02f;
     static constexpr f32 kMostMeasure = 1.0e6f; ///< past this a heat or rage is corrupt
     /** What full heat and full rage add to each measure, as shares of the plain one. */
     static constexpr f32 kBreedingHeat = 1.2f;
@@ -45,18 +49,19 @@ struct SwarmAggression {
     static constexpr f32 kAttackCap = 5.0f;
     static constexpr Color kRageTint = Color::rgba(165, 30, 30); ///< the swarm at full rage
 
-    f32 heat = 0.0f; ///< the longest run as a share of the bravery line, eased, past 1 beyond it
-    f32 rage = 0.0f; ///< how long it has been held there, in `kRageSeconds`; 0 the moment it is not
+    f32 heat = 0.0f; ///< the longest run as a share of S, eased, past 1 beyond it
+    f32 rage = 0.0f; ///< how long it has been held at S, in `kRageSeconds`; 0 the moment it is not
+    s32 run = 0;     ///< the longest run under way as of the last step, 0 for none
 
     bool operator==(const SwarmAggression&) const = default;
     template <class Digest> friend void visitNativeState(Digest& digest, const SwarmAggression& value) {
-        digest.template fields<2>(value);
+        digest.template fields<3>(value);
     }
 
     bool valid() const;
-    /** Moves on by `seconds` toward `run`, the longest run of close blows under way (0 for
-     * none). */
-    void step(f32 seconds, s32 run);
+    /** Moves on by `seconds` toward `longest`, the longest run of close blows under way (0
+     * for none). */
+    void step(f32 seconds, s32 longest);
 
     /** How much sooner a generator breeds: its countdown is divided by this. */
     f32 breedingPace() const {
@@ -78,9 +83,12 @@ struct SwarmAggression {
     Color tint() const;
     /** How strong the aura about the swarm is, 0 to 1. */
     f32 aura() const { return std::min(rage, 1.0f); }
-    /** Whether the generators within `kFrenzyReach` of a player breed past any quota: from
-     * the moment the run holds at the bravery line until the rage has gone. */
-    bool frenzied() const { return rage > 0.0f; }
+    /** Whether the generators within `kFrenzyReach` of a player breed past any quota: while
+     * a run is under way. */
+    bool frenzied() const { return run > 0; }
+    /** The odds a frenzied hut's birth is an elemental one, by the run's grade; none
+     * without a run. */
+    f32 elementalChance() const;
 };
 
 } // namespace gdl::game
