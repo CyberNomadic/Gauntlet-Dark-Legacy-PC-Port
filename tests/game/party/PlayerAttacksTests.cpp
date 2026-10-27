@@ -30,6 +30,7 @@
 #include "game/level/SafeRocks.h"
 #include "game/party/BodyCollision.h"
 #include "game/party/PartyMotion.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/party/PlayerAttacks.h"
 #include "game/party/PlayerHealth.h"
 #include "game/players/ComboMove.h"
@@ -2278,6 +2279,15 @@ TEST_CASE("Jester turbo damage reaches bosses great creatures and generators",
     const f32 bossHealth = bosses.view().health;
     const f32 golemHealth = critters.healthOf(*golem);
     const f32 generatorHealth = generators.healthOf(0);
+    // Aggressor Mode, the standard, guards the generators from a turbo strike; the
+    // original's rule, out of the mode, lets it through.
+    const MechanicsFacade original{{.aggressorMode = false}};
+    bool guarded = true;
+    SECTION("Aggressor Mode guards the generators") {}
+    SECTION("the original's rule lets the strike through") {
+        f.targets.mechanics = &original;
+        guarded = false;
+    }
     player.turbo.add(100);
     for (s32 frame = 0; frame < 45; ++frame) {
         player.figure->animate(0, 2, 1.0f / 30,
@@ -2287,7 +2297,12 @@ TEST_CASE("Jester turbo damage reaches bosses great creatures and generators",
     }
     CHECK(bosses.view().health < bossHealth);
     CHECK(critters.healthOf(*golem) < golemHealth);
-    CHECK(generators.healthOf(0) < generatorHealth);
+    if (guarded) {
+        CHECK(generators.healthOf(0) == generatorHealth);
+    } else {
+        CHECK(generators.healthOf(0) < generatorHealth);
+    }
+    f.targets.mechanics = nullptr;
     f.attacks.clear();
     f.opponents.close();
 }

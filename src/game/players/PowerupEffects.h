@@ -87,6 +87,7 @@ struct PowerupEffects {
     /** How many weapons a throw lets fly: one, or three or five spread fifteen degrees apart. */
     s32 shots() const;
     bool invisible() const { return (special & powerup::kInvisible) != 0; }
+    bool invulnerable() const { return (armor & powerup::kInvulnerable) != 0; }
     bool xray() const { return (special & powerup::kXRay) != 0; }
     bool grown() const { return (special & powerup::kGrowth) != 0; }
     bool levitating() const { return (special & powerup::kLevitation) != 0; }

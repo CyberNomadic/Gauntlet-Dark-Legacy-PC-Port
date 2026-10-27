@@ -180,10 +180,14 @@ void PlayerAttacks::clear() {
 /** What a charge runs into is struck, once each charge. */
 namespace {
 
-void countBlow(std::span<PlayerRuntime> players, s32 player, bool telling) {
+/** Records a blow of `source` for `player`, when the mechanics let it build their run. */
+void countBlow(const MechanicsFacade& mechanics, std::span<PlayerRuntime> players, s32 player,
+               BlowSource source, bool telling) {
     for (PlayerRuntime& runtime : players) {
         if (runtime.actor.player() == player) {
-            runtime.streak.record(telling);
+            if (mechanics.blowBuildsRun(source, runtime, players)) {
+                runtime.streak.record(telling);
+            }
             return;
         }
     }
@@ -191,22 +195,27 @@ void countBlow(std::span<PlayerRuntime> players, s32 player, bool telling) {
 
 } // namespace
 
-void PlayerAttacks::countEnemyBlow(std::span<PlayerRuntime> players, s32 player,
-                                   const Enemies& enemies, s32 id, bool stood) {
+void PlayerAttacks::countEnemyBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                                   s32 player, BlowSource source, const Enemies& enemies,
+                                   s32 id, bool stood) {
     // Only a blow on something taller than the short counts towards the run (hht > 2).
     if (enemies.heightOf(id) > kLowEnemy) {
-        countBlow(players, player, !stood || !enemies.alive(id));
+        countBlow(mechanicsOf(targets), players, player, source, !stood || !enemies.alive(id));
     }
 }
 
-void PlayerAttacks::countCritterBlow(std::span<PlayerRuntime> players, s32 player,
-                                     const Critters& critters, s32 id, bool stood) {
-    countBlow(players, player, !stood || !critters.alive(id) || critters.dying(id));
+void PlayerAttacks::countCritterBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                                     s32 player, BlowSource source, const Critters& critters,
+                                     s32 id, bool stood) {
+    countBlow(mechanicsOf(targets), players, player, source,
+              !stood || !critters.alive(id) || critters.dying(id));
 }
 
-void PlayerAttacks::countBossBlow(std::span<PlayerRuntime> players, s32 player,
-                                  const BossView& before, const Bosses& bosses) {
-    countBlow(players, player, !before.alive || !before.awake || !bosses.view().alive);
+void PlayerAttacks::countBossBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                                  s32 player, BlowSource source, const BossView& before,
+                                  const Bosses& bosses) {
+    countBlow(mechanicsOf(targets), players, player, source,
+              !before.alive || !before.awake || !bosses.view().alive);
 }
 
 void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
@@ -267,7 +276,8 @@ void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
             const bool stood = enemies.alive(hit.id);
             targets.opponents.strikeEnemy(hit.id, blow, EnemyHit::kKnockDown, facing,
                                           actor.player(), players, true, hit.base);
-            countEnemyBlow(players, actor.player(), enemies, hit.id, stood);
+            countEnemyBlow(targets, players, actor.player(), BlowSource::Charge, enemies, hit.id,
+                           stood);
         });
     }
     for (const MissileTarget& target : targets.opponents.critters().targets()) {
@@ -276,7 +286,8 @@ void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
             const bool stood = critters.alive(hit.id) && !critters.dying(hit.id);
             targets.opponents.strikeCritter(hit.id, blow, EnemyHit::kKnockDown, facing,
                                             actor.player(), hit.base, true, players);
-            countCritterBlow(players, actor.player(), critters, hit.id, stood);
+            countCritterBlow(targets, players, actor.player(), BlowSource::Charge, critters,
+                             hit.id, stood);
         });
     }
     targets.fixtures.settleBlasts(players, targets.fixtureEvents);
@@ -359,8 +370,11 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
         const auto id = static_cast<s32>(g);
         if (generators.standing(id) &&
             generators.boxOf(id).touchedBy(actor.position(), actor.radius(), kRamReach)) {
-            once(static_cast<usize>(kGeneratorTargetBase) + g, true,
-                 [&] { targets.opponents.strikeGenerator(id, blow, actor.player(), players); });
+            once(static_cast<usize>(kGeneratorTargetBase) + g, true, [&] {
+                if (mechanicsOf(targets).generatorTakes(BlowSource::Charge)) {
+                    targets.opponents.strikeGenerator(id, blow, actor.player(), players);
+                }
+            });
         }
     }
     // A body run into is thrown down (PlayerMotion_DamageTarget, 0x20) within the sweep's
@@ -380,7 +394,8 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
                 const bool stood = enemies.alive(target.id);
                 targets.opponents.strikeEnemy(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
                                               actor.player(), players, true, target.base);
-                countEnemyBlow(players, actor.player(), enemies, target.id, stood);
+                countEnemyBlow(targets, players, actor.player(), BlowSource::Charge, enemies,
+                               target.id, stood);
             });
         }
     }
@@ -391,7 +406,8 @@ bool PlayerAttacks::comboImpact(usize flier, usize thrower, f32 blow,
                 const bool stood = critters.alive(target.id) && !critters.dying(target.id);
                 targets.opponents.strikeCritter(target.id, bodyBlow, EnemyHit::kKnockDown, facing,
                                                 actor.player(), target.base, true, players);
-                countCritterBlow(players, actor.player(), critters, target.id, stood);
+                countCritterBlow(targets, players, actor.player(), BlowSource::Charge, critters,
+                                 target.id, stood);
             });
         }
     }
@@ -927,7 +943,8 @@ void PlayerAttacks::dispatchStrikeHit(const StrikeHit& hit, std::span<PlayerRunt
                 effectPoint.y += enemyKind(kind).attentionHeight;
             }
         }
-        strikeTarget(target, hit.damage, row.damageType, owner, players, targets, true);
+        strikeTarget(target, hit.damage, row.damageType, owner, players, targets,
+                     BlowSource::Turbo);
         presentStrikeHit(source->actor, row, effectPoint, players);
     }
 }
@@ -1233,7 +1250,7 @@ void PlayerAttacks::updateArmour(f32 seconds, std::span<PlayerRuntime> players,
         };
         if (fire) {
             strikeTarget(*target, kFireShieldDamage * seconds * kFramesPerSecond * grown,
-                         kFireElement, actor, players, targets);
+                         kFireElement, actor, players, targets, BlowSource::Shield);
             pulseKill();
             continue;
         }
@@ -1242,7 +1259,7 @@ void PlayerAttacks::updateArmour(f32 seconds, std::span<PlayerRuntime> players,
             })) {
             continue;
         }
-        strikeTarget(*target, kLightningShieldDamage * grown, kShockFlags, actor, players, targets);
+        strikeTarget(*target, kLightningShieldDamage * grown, kShockFlags, actor, players, targets, BlowSource::Shield);
         pulseKill();
         runtime.shockGaps.push_back({target->id, kShockGap});
         // The spark leaves the shield on the arm and points at what it struck.
@@ -1312,9 +1329,12 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
             if (!fresh(kEnemy, id)) {
                 continue;
             }
-            const Vec3 struck = targets.opponents.enemies().positionOf(id);
+            const Enemies& enemies = targets.opponents.enemies();
+            const Vec3 struck = enemies.positionOf(id);
+            const bool stood = enemies.alive(id);
             const f32 credit = targets.opponents.strikeEnemy(id, shield.damage, shield.flags,
                                                              struck - at, actor.player(), players);
+            countEnemyBlow(targets, players, actor.player(), BlowSource::Potion, enemies, id, stood);
             healHit(actor.player(), shield.flags, credit, struck, players, targets);
         }
         for (const s32 id : targets.opponents.critters().reachedBy(
@@ -1327,13 +1347,17 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
             if (const f32 length = glm::length(direction); length > 0) {
                 direction /= length; // CritterExpCollide normalizes the radial XZ direction.
             }
+            const Critters& critters = targets.opponents.critters();
+            const bool stood = critters.alive(id) && !critters.dying(id);
             const f32 credit =
                 targets.opponents.strikeCritter(id, shield.damage, shield.flags, direction,
                                                 actor.player(), std::nullopt, false, players);
+            countCritterBlow(targets, players, actor.player(), BlowSource::Potion, critters, id,
+                             stood);
             healHit(actor.player(), shield.flags, credit, struck, players, targets);
         }
         for (const s32 id : targets.opponents.generators().within(at, shield.radius)) {
-            if (fresh(kGenerator, id)) {
+            if (fresh(kGenerator, id) && mechanicsOf(targets).generatorTakes(BlowSource::Potion)) {
                 targets.opponents.strikeGenerator(id, shield.damage, actor.player());
             }
         }
@@ -1344,7 +1368,10 @@ void PlayerAttacks::updateShields(f32 seconds, std::span<PlayerRuntime> players,
             hit.player = actor.player();
             hit.level = experienceLevel(actor.save().experience());
             hit.direction = *targets.opponents.bosses().position() - at;
+            const Bosses& bosses = targets.opponents.bosses();
+            const BossView before = bosses.view();
             const f32 credit = targets.opponents.bosses().hurt(hit);
+            countBossBlow(targets, players, actor.player(), BlowSource::Potion, before, bosses);
             healHit(actor.player(), shield.flags, credit, *targets.opponents.bosses().position(),
                     players, targets);
         }
@@ -2157,14 +2184,15 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         Bosses& bosses = targets.opponents.bosses();
         const BossView before = bosses.view();
         credit = bosses.hurt(hit, id - kBossTargetBase);
-        countBossBlow(players, actor.player(), before, bosses);
+        countBossBlow(targets, players, actor.player(), BlowSource::Swing, before, bosses);
     } else if (id >= kCritterTargetBase) {
         const s32 critter = id - kCritterTargetBase;
         const Critters& critters = targets.opponents.critters();
         const bool standing = critters.alive(critter) && !critters.dying(critter);
         credit = targets.opponents.strikeCritter(critter, damage, flags, direction, actor.player(),
                                                  point, true, players, target->node);
-        countCritterBlow(players, actor.player(), critters, critter, standing);
+        countCritterBlow(targets, players, actor.player(), BlowSource::Swing, critters, critter,
+                         standing);
     } else if (id >= kGeneratorTargetBase) {
         if (!targets.opponents.strikeGenerator(id - kGeneratorTargetBase, damage, actor.player(),
                                                players, generators)) {
@@ -2176,7 +2204,8 @@ bool PlayerAttacks::melee(usize index, std::span<PlayerRuntime> players, const T
         const bool standing = enemies.alive(enemy);
         credit = targets.opponents.strikeEnemy(enemy, damage, flags, direction, actor.player(),
                                                players, true, point);
-        countEnemyBlow(players, actor.player(), enemies, enemy, standing);
+        countEnemyBlow(targets, players, actor.player(), BlowSource::Swing, enemies, enemy,
+                       standing);
     } else {
         if (!targets.fixtures.strikeBarrel(static_cast<usize>(id), damage, actor.player(), players,
                                            targets.fixtureEvents, barrels)) {
@@ -2355,6 +2384,8 @@ bool PlayerAttacks::dispatchProjectileImpact(
     if (strikeSwitch(impact.target, impact.flags)) {
         return true;
     }
+    const BlowSource source =
+        (impact.flags & powerup::kSuperShot) != 0 ? BlowSource::SuperShot : BlowSource::Shot;
     f32 credit = 0.0f;
     if (impact.target >= kWallTargetBase) {
         targets.fixtures.strikeWall(static_cast<usize>(impact.target - kWallTargetBase),
@@ -2379,7 +2410,7 @@ bool PlayerAttacks::dispatchProjectileImpact(
         const Bosses& bosses = targets.opponents.bosses();
         const BossView before = bosses.view();
         credit = targets.opponents.bosses().hurt(hit, impact.target - kBossTargetBase);
-        countBossBlow(players, impact.owner, before, bosses);
+        countBossBlow(targets, players, impact.owner, source, before, bosses);
     } else if (impact.target >= kCritterTargetBase) {
         const s32 critter = impact.target - kCritterTargetBase;
         const Critters& critters = targets.opponents.critters();
@@ -2387,10 +2418,12 @@ bool PlayerAttacks::dispatchProjectileImpact(
         credit = targets.opponents.strikeCritter(critter, impact.damage, impact.flags,
                                                  impact.direction, impact.owner, impact.position,
                                                  false, players, impact.node);
-        countCritterBlow(players, impact.owner, critters, critter, stood);
+        countCritterBlow(targets, players, impact.owner, source, critters, critter, stood);
     } else if (impact.target >= kGeneratorTargetBase) {
-        if (!targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase, impact.damage,
-                                               impact.owner, players, generators)) {
+        if (mechanicsOf(targets).generatorTakes(source) &&
+            !targets.opponents.strikeGenerator(impact.target - kGeneratorTargetBase,
+                                               impact.damage, impact.owner, players,
+                                               generators)) {
             return false;
         }
     } else if (impact.target >= kEnemyTargetBase) {
@@ -2400,7 +2433,7 @@ bool PlayerAttacks::dispatchProjectileImpact(
         credit = targets.opponents.strikeEnemy(enemy, impact.damage, impact.flags,
                                                impact.direction, impact.owner, players, false,
                                                impact.position);
-        countEnemyBlow(players, impact.owner, enemies, enemy, stood);
+        countEnemyBlow(targets, players, impact.owner, source, enemies, enemy, stood);
     } else if (impact.target >= 0) {
         if (!targets.fixtures.strikeBarrel(static_cast<usize>(impact.target), impact.damage,
                                            impact.owner, players, targets.fixtureEvents, barrels)) {
@@ -2593,7 +2626,7 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                 const BossView before = bosses.view();
                 const f32 credit =
                     targets.opponents.bosses().hurt(hit, target.id - kBossTargetBase);
-                countBossBlow(players, byPlayer, before, bosses);
+                countBossBlow(targets, players, byPlayer, BlowSource::Potion, before, bosses);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else if (target.id >= kCritterTargetBase) {
                 const s32 id = target.id - kCritterTargetBase;
@@ -2601,18 +2634,22 @@ void PlayerAttacks::updatePotions(f32 seconds, std::span<PlayerRuntime> players,
                 const bool stood = critters.alive(id) && !critters.dying(id);
                 const f32 credit = targets.opponents.strikeCritter(
                     id, power, flags, direction, byPlayer, target.base, false, players);
-                countCritterBlow(players, byPlayer, critters, id, stood);
+                countCritterBlow(targets, players, byPlayer, BlowSource::Potion, critters, id,
+                                 stood);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else if (target.id >= kGeneratorTargetBase) {
-                targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, power, byPlayer,
-                                                  players);
+                if (mechanicsOf(targets).generatorTakes(BlowSource::Potion)) {
+                    targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, power,
+                                                      byPlayer, players);
+                }
             } else if (target.id >= kEnemyTargetBase) {
                 const s32 id = target.id - kEnemyTargetBase;
                 const Enemies& enemies = targets.opponents.enemies();
                 const bool stood = enemies.alive(id);
                 const f32 credit =
                     targets.opponents.strikeEnemy(id, power, flags, direction, byPlayer, players);
-                countEnemyBlow(players, byPlayer, enemies, id, stood);
+                countEnemyBlow(targets, players, byPlayer, BlowSource::Potion, enemies, id,
+                               stood);
                 healHit(byPlayer, flags, credit, target.base, players, targets);
             } else {
                 targets.fixtures.strikeBarrel(static_cast<usize>(target.id), power, byPlayer,

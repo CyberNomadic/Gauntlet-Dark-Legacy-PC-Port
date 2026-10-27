@@ -141,7 +141,8 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
                 area.attack.reaches(parent, target, area.elapsed, area.lifetime, kind)) {
                 area.hit.push_back(target.id);
                 strikeTarget(target, area.attack.damageAt(area.elapsed, area.lifetime),
-                             area.attack.flags, player.actor, players, targets);
+                             area.attack.flags, player.actor, players, targets,
+                             BlowSource::Breath);
             }
         }
     }
@@ -157,7 +158,7 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
 
 void PlayerAttacks::strikeTarget(const MissileTarget& target, f32 damage, u32 flags,
                                  const PlayerActor& owner, std::span<PlayerRuntime> players,
-                                 const Targets& targets, bool counted) {
+                                 const Targets& targets, BlowSource source) {
     // ProcessEffects' area query (CritterExpCollide) returns a horizontal unit
     // vector, not distance from the owner; that input is accumulated verbatim.
     const Vec3 away = target.base - owner.position();
@@ -186,29 +187,25 @@ void PlayerAttacks::strikeTarget(const MissileTarget& target, f32 damage, u32 fl
         const Bosses& bosses = targets.opponents.bosses();
         const BossView before = bosses.view();
         targets.opponents.bosses().hurt(hit, target.id - kBossTargetBase);
-        if (counted) {
-            countBossBlow(players, owner.player(), before, bosses);
-        }
+        countBossBlow(targets, players, owner.player(), source, before, bosses);
     } else if (target.id >= kCritterTargetBase) {
         const s32 critter = target.id - kCritterTargetBase;
         const Critters& critters = targets.opponents.critters();
         const bool stood = critters.alive(critter) && !critters.dying(critter);
         targets.opponents.strikeCritter(critter, damage, flags, direction, owner.player(),
                                         target.base, false, players);
-        if (counted) {
-            countCritterBlow(players, owner.player(), critters, critter, stood);
-        }
+        countCritterBlow(targets, players, owner.player(), source, critters, critter, stood);
     } else if (target.id >= kGeneratorTargetBase) {
-        targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, damage, owner.player(),
-                                          players);
+        if (mechanicsOf(targets).generatorTakes(source)) {
+            targets.opponents.strikeGenerator(target.id - kGeneratorTargetBase, damage,
+                                              owner.player(), players);
+        }
     } else if (target.id >= kEnemyTargetBase) {
         const s32 enemy = target.id - kEnemyTargetBase;
         const Enemies& enemies = targets.opponents.enemies();
         const bool stood = enemies.alive(enemy);
         targets.opponents.strikeEnemy(enemy, damage, flags, direction, owner.player(), players);
-        if (counted) {
-            countEnemyBlow(players, owner.player(), enemies, enemy, stood);
-        }
+        countEnemyBlow(targets, players, owner.player(), source, enemies, enemy, stood);
     } else {
         targets.fixtures.strikeBarrel(static_cast<usize>(target.id), damage, owner.player(),
                                       players, targets.fixtureEvents);

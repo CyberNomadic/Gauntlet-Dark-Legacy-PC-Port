@@ -12,6 +12,7 @@
 #include "game/combat/MeleeGeometry.h"
 #include "game/effects/TurboEmission.h"
 #include "game/enemies/LevelOpponents.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/level/LevelFixtures.h"
 #include "game/party/MoveStrikes.h"
 #include "game/party/PlayerArsenal.h"
@@ -55,7 +56,12 @@ public:
         /** An accepted melee blow on a creature, identified by its attacker's input slot. */
         std::function<void(s32)>
             meleeHit{}; // NOLINT(readability-redundant-member-init): preserve aggregate callers
+        /** The additive mechanics' answers; the standard ones when null. */
+        const MechanicsFacade* mechanics = nullptr;
     };
+    static const MechanicsFacade& mechanicsOf(const Targets& targets) {
+        return targets.mechanics != nullptr ? *targets.mechanics : MechanicsFacade::standard();
+    }
     void bind(const Resources& resources);
     void clear();
     void ramBarrels(usize index, std::span<PlayerRuntime> players, const Targets& targets);
@@ -144,16 +150,20 @@ public:
     static constexpr f32 kHeldReach = MeleeSelection::kHeldReach;
     static constexpr f32 kLowEnemy = 4.0f; ///< the height under which an enemy is short
     static constexpr f32 kLowThing = 3.5f; ///< and anything else
-    /** A blow landed for `player` counts toward their run of close blows (`MeleeStreak`),
-     * whatever landed it: on an enemy only one taller than the short (hht > 2), telling
-     * when it killed or the body was not standing to take it; `stood` is whether it was. */
-    static void countEnemyBlow(std::span<PlayerRuntime> players, s32 player,
-                               const Enemies& enemies, s32 id, bool stood);
-    static void countCritterBlow(std::span<PlayerRuntime> players, s32 player,
-                                 const Critters& critters, s32 id, bool stood);
+    /** A blow of `source` landed for `player` counts toward their run of close blows
+     * (`MeleeStreak`) when the mechanics say so: on an enemy only one taller than the short
+     * (hht > 2), telling when it killed or the body was not standing to take it; `stood` is
+     * whether it was. */
+    static void countEnemyBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                               s32 player, BlowSource source, const Enemies& enemies, s32 id,
+                               bool stood);
+    static void countCritterBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                                 s32 player, BlowSource source, const Critters& critters,
+                                 s32 id, bool stood);
     /** A blow a sleeping boss does not take, or the last, tells for three. */
-    static void countBossBlow(std::span<PlayerRuntime> players, s32 player,
-                              const BossView& before, const Bosses& bosses);
+    static void countBossBlow(const Targets& targets, std::span<PlayerRuntime> players,
+                              s32 player, BlowSource source, const BossView& before,
+                              const Bosses& bosses);
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     /** The same native contact, with generator presentation supplied by a
      * transaction-local publisher. A refusal requires complete caller undo. */
@@ -197,10 +207,11 @@ private:
         const std::function<void(const MissileImpact&, f32)>& presentation = {},
         const LevelOpponents::GeneratorPublisher& generators = {},
         const LevelFixtures::BarrelPublisher& barrels = {});
-    /** `counted` blows build the owner's run of close blows: a turbo strike's, not a shield's. */
+    /** A blow of `source` on whatever `target` is: the mechanics say whether it builds the
+     * owner's run and whether a generator takes it. */
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
                       std::span<PlayerRuntime> players, const Targets& targets,
-                      bool counted = false);
+                      BlowSource source);
     struct ItemArea {
         ItemAttack attack;
         usize actor = 0;

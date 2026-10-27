@@ -39,6 +39,7 @@
 #include "game/hud/PartyHud.h"
 #include "game/hud/RuneMeter.h"
 #include "game/hud/StreakMeter.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/level/ExitPortals.h"
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelTransporters.h"
@@ -653,7 +654,8 @@ private:
     LevelSoundscape m_audio;
     SceneSoundEvents m_recordedAudio;
     ChallengeHud m_challengeHud;
-    StreakMeter m_streakMeter; ///< presentation only, never simulation state
+    MechanicsFacade m_mechanics; ///< the additive mechanics' settings for this level
+    StreakMeter m_streakMeter;   ///< presentation only, never simulation state
     std::optional<std::chrono::steady_clock::time_point> m_streakFrame;
     u8 m_localSeats = 0xF;
     const Texture* m_glowSheet = nullptr; ///< FONT32's glow, borrowed from the static set

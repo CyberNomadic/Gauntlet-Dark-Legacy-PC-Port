@@ -324,6 +324,8 @@ add_library(game STATIC
     hud/StatusBox.cpp
     hud/StreakMeter.h
     hud/StreakMeter.cpp
+    mechanics/MechanicsFacade.h
+    mechanics/MechanicsFacade.cpp
     hud/PowerupSelector.h
     hud/PowerupSelector.cpp
     hud/HelpMessages.h

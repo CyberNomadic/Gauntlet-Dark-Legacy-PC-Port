@@ -63,6 +63,8 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
                      std::span<const PartyMember> party, const PlayOptions& options) {
     close();
     m_context = context;
+    m_mechanics.configure({.aggressorMode = context.config == nullptr ||
+                                            context.config->game.aggressorMode});
     m_device = &device;
     m_world = &world;
     // A character menu can replace the party without replacing the shared tower.
@@ -168,6 +170,7 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     m_opponents.open({device, world, m_weapons, m_effects, m_audio, context.unpackedRoot,
                       context.config != nullptr ? context.config->difficulty.gain() : 1.0f, true},
                      m_players);
+    m_opponents.setMechanics(&m_mechanics);
     // Native texture names may cross from arena items into the boss archive. Bind only
     // after that archive is loaded; fixtures are cleared before opponents on close.
     ItemArchive* bossArchive = m_opponents.bosses().archive();
@@ -621,7 +624,8 @@ PlayerAttacks::Targets PlayScene::attackTargets() {
                 hurt(index, damage, kind, true, impact);
             },
             m_bossSequence.occupiedHand(),
-            [this](s32 player) { emitOutput(RumbleOutput{player, 0, ControlFeedback::MeleeHit}); }};
+            [this](s32 player) { emitOutput(RumbleOutput{player, 0, ControlFeedback::MeleeHit}); },
+            &m_mechanics};
 }
 
 LevelFixtures::Events PlayScene::fixtureEvents() {
@@ -1820,7 +1824,7 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
         m_opponents.meter().draw(m_canvas, device);
         m_bossSequence.victory().drawCaption(m_canvas, m_messages.text(), m_hud.strings(), width,
                                              height);
-        if (config.game.streakMeter) {
+        if (m_mechanics.meterShown()) {
             drawStreakMeter();
         }
     }

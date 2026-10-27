@@ -442,6 +442,7 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 rules->autoMelee = run.config.combat.autoMelee;
                 rules->autoActivateItems = run.config.combat.autoActivateItems;
                 rules->expandedShop = run.config.game.expandedShop;
+                rules->aggressorMode = run.config.game.aggressorMode;
                 rules->autoAim = run.config.combat.autoAim;
             }
             if (!identity || !run.identityInputs ||
@@ -468,7 +469,8 @@ void OnlineRun::update(const SessionInputs::Frame& devices, const MenuInput& men
                 run.nativeSetup = NativePlaySetup::create(
                     run.config, session.room()->settings, *profiles, run.options,
                     {rules.scene, rules.autoMelee, rules.autoActivateItems, rules.expandedShop,
-                     rules.autoAim, identity.build, identity.content, identity.data});
+                     rules.autoAim, identity.build, identity.content, identity.data,
+                     rules.aggressorMode});
             }
             if (!run.nativeSetup || !session.confirmNativeSetup(run.nativeSetup->digest())) {
                 status(*run.device, "Online party setup disagrees. Escape exits.");

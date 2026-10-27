@@ -1172,9 +1172,12 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     const LevelInfo* level = m_resources->world.level();
     const f32 missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1.0f;
     const bool timeStopped = PlayerPowerups::timeStopped(players);
-    // The swarm answers the party's longest run of close blows, held still with time.
+    // The swarm answers the party's longest run of close blows, held still with time, when
+    // the mechanics have it; otherwise it only cools.
     if (!timeStopped) {
-        m_sim.aggression.step(seconds, longestRun(players));
+        const MechanicsFacade& mechanics =
+            m_mechanics != nullptr ? *m_mechanics : MechanicsFacade::standard();
+        m_sim.aggression.step(seconds, mechanics.swarmAggravated() ? longestRun(players) : 0);
     }
     // fn_8004646C checks the live critter pool before ordinary enemy bodies,
     // both for route probes and check_enemy_pos's generator-birth clearance.

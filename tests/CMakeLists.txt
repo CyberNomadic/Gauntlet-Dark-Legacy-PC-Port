@@ -459,6 +459,7 @@ add_executable(tests
     game/camera/StartCameraTests.cpp
     game/hud/StatusBoxTests.cpp
     game/hud/StreakMeterTests.cpp
+    game/mechanics/MechanicsFacadeTests.cpp
     game/hud/PickupHudTests.cpp
     game/hud/BossMeterTests.cpp
     game/hud/ChallengeHudTests.cpp

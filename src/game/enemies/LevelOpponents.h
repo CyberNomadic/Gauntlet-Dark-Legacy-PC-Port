@@ -23,6 +23,7 @@
 #include "game/enemies/PlacedEnemies.h"
 #include "game/hud/BossMeter.h"
 #include "game/level/LevelWorld.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/party/PlayerHealth.h"
 namespace gdl::game {
 struct EnemyFeedbackEmission;
@@ -82,6 +83,8 @@ public:
     const PlacedEnemies& placements() const { return m_placements; }
     /** Original load-time tuning, unaffected by later changes to game options. */
     f32 difficultyGain() const { return m_resources ? m_resources->difficultyGain : 1.0f; }
+    /** The additive mechanics' answers, borrowed; the standard ones when null. */
+    void setMechanics(const MechanicsFacade* mechanics) { m_mechanics = mechanics; }
     /** The swarm's answer to the party's run of close blows, as of the last update. */
     const SwarmAggression& aggression() const { return m_sim.aggression; }
     /** The longest run of close blows under way among the players still in the party. */
@@ -281,6 +284,7 @@ private:
     void refreshBorrowedRoster();
     std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
+    const MechanicsFacade* m_mechanics = nullptr; ///< never simulation state
     Generators m_generators;
     Critters m_critters;
     static constexpr usize kPlayerIds = 4;   ///< players are numbered 0 to 3

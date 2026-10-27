@@ -97,15 +97,15 @@ TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings]
     f.right();
     CHECK(f.config.game.autoSave);
     f.release();
-    CHECK(f.config.game.streakMeter);
-    CHECK(f.menu.menu().definition().items[5].text == "Streak Meter");
+    CHECK(f.config.game.aggressorMode);
+    CHECK(f.menu.menu().definition().items[5].text == "Aggressor Mode");
     f.focus(6);
     f.right();
-    CHECK_FALSE(f.config.game.streakMeter);
+    CHECK_FALSE(f.config.game.aggressorMode);
     f.release();
     f.fail = true;
     f.right();
-    CHECK_FALSE(f.config.game.streakMeter);
+    CHECK_FALSE(f.config.game.aggressorMode);
     CHECK(f.writes == 3);
 }
 

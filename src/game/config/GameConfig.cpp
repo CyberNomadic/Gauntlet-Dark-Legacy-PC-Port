@@ -198,7 +198,7 @@ void GameConfig::mergeJson(std::string_view json) {
     if (root.contains("game")) {
         read(root.at("game"), "expandedShop", game.expandedShop);
         read(root.at("game"), "autoSave", game.autoSave);
-        read(root.at("game"), "streakMeter", game.streakMeter);
+        read(root.at("game"), "aggressorMode", game.aggressorMode);
         read(root.at("game"), "difficulty", difficulty.level);
         const auto& options = root.at("game");
         if (options.contains("combat")) {
@@ -375,7 +375,7 @@ std::string GameConfig::toJson() const {
     root["game"] = {
         {"expandedShop", game.expandedShop},
         {"autoSave", game.autoSave},
-        {"streakMeter", game.streakMeter},
+        {"aggressorMode", game.aggressorMode},
         {"difficulty", difficulty.level},
         {"combat",
          {{"autoMelee", combat.autoMelee},

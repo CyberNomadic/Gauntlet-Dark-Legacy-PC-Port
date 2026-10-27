@@ -35,6 +35,7 @@ public:
         std::string build;   ///< executable/simulation compatibility identifier
         std::string content; ///< native asset tree identifier
         std::string data;    ///< resolved gameplay/text data identifier
+        bool aggressorMode = true;
     };
 
     /** Returns null for invalid or oversized input; never truncates it. The

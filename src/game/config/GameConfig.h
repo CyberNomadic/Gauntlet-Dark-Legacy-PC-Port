@@ -87,7 +87,7 @@ struct CombatConfig {
 struct GameOptionsConfig {
     bool expandedShop = false;
     bool autoSave = false;
-    bool streakMeter = true; ///< the style meter over a run of close blows
+    bool aggressorMode = true; ///< the meter over a run of close blows and the swarm it stirs
 };
 
 /** Where characters are saved: a `saves` folder beside the game when the directory is
