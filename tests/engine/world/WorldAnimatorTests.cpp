@@ -287,8 +287,9 @@ TEST_CASE("full-turn world loops interpolate their seam without smoothing author
 
 TEST_CASE("native Mothership full-turn fans retain interpolation across their loop seams",
           "[world][animation][presentation][fan-loop][assets]") {
+    const auto directory = test::assetOrSkip("LEVELS/LEVELK1/WORLDS.PS2").parent_path();
     WorldLayout native;
-    REQUIRE(native.load(test::assetOrSkip("LEVELS/LEVELK1/WORLDS.PS2").parent_path()));
+    REQUIRE(native.load(directory));
     for (const auto* const name : {"K1NC_FAN", "K1NC#09", "K1NC_GROUP552", "K1NC#05"}) {
         CAPTURE(name);
         const auto object = std::ranges::find(native.objects(), name, &WorldObject::name);
