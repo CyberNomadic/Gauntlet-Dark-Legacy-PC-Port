@@ -3763,11 +3763,11 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
     CHECK(LevelOpponents::longestRun(players) == 0);
     REQUIRE(opponents.enemies().most() < Enemies::kMost);
     // The longest run under way counts, a departed player's not at all.
-    for (s32 blow = 0; blow < 15; ++blow) {
-        players[1].streak.record(true);
+    for (s32 kill = 0; kill < SwarmAggression::kFullRun; ++kill) {
+        players[1].streak.record(false);
     }
     players[0].streak.record(false);
-    CHECK(LevelOpponents::longestRun(players) == 45);
+    CHECK(LevelOpponents::longestRun(players) == SwarmAggression::kFullRun);
     players[1].departed = true;
     CHECK(LevelOpponents::longestRun(players) == 1);
     players[1].departed = false;

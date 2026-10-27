@@ -7,6 +7,8 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
+#include "game/players/StreakGrades.h"
+
 namespace gdl {
 class Canvas;
 class StringTable;
@@ -36,10 +38,10 @@ struct StreakView {
  */
 class StreakMeter {
 public:
-    static constexpr s32 kGrades = 5;
-    /** Blows that reach each grade: D, C, B, A (the heroic line) and S (the bravery line). */
-    static constexpr std::array<s32, kGrades> kGradeCounts{1, 10, 20, 30, 45};
-    static constexpr std::string_view kLetters = "DCBAS";
+    static constexpr s32 kGrades = StreakGrades::kCount;
+    /** The kills that reach each grade, D to S. */
+    static constexpr std::array<s32, kGrades> kGradeCounts = StreakGrades::kCounts;
+    static constexpr std::string_view kLetters = StreakGrades::kLetters;
     static constexpr std::array<Color, kGrades> kGradeColors{
         Color::rgba(150, 160, 190), Color::rgba(90, 200, 110), Color::rgba(80, 150, 255),
         Color::rgba(200, 90, 255), Color::rgba(255, 200, 40)};
@@ -69,7 +71,7 @@ public:
     static s32 gradeOf(s32 count);
     /** How far a count has climbed through its grade toward the next, 0 to 1; S is full. */
     static f32 bandProgress(s32 count);
-    /** The bar's share: the climb through the grade, drained as the quiet runs out. */
+    /** The bar's share: the climb through the grade, drained as the grade's quiet runs out. */
     static f32 fillOf(s32 count, f32 quiet);
     /** How hard a grade shakes, in pixels of jitter. */
     static f32 shakeOf(s32 grade);

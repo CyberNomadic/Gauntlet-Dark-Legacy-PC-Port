@@ -5672,7 +5672,7 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
-TEST_CASE("a shot that lands gives the run its quiet back, and a shot that kills counts one",
+TEST_CASE("a shot that only hurts does nothing for the run; a shot that kills counts one",
           "[game][screens][player-attacks][streak][assets]") {
     const auto root =
         test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
@@ -5718,7 +5718,7 @@ TEST_CASE("a shot that lands gives the run its quiet back, and a shot that kills
     } else {
         CHECK(enemies.alive(*enemy));
         CHECK(f.players[0].streak.count() == 1);
-        CHECK(f.players[0].streak.quiet() == Approx(tall ? 2.0f - MeleeStreak::kRefresh : 2.0f));
+        CHECK(f.players[0].streak.quiet() == 2.0f); // a hurt gives nothing back
     }
     f.attacks.clear();
     f.opponents.close();

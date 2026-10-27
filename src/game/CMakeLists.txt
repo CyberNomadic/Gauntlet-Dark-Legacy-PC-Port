@@ -379,6 +379,7 @@ add_library(game STATIC
     effects/HeadGem.cpp
     effects/BodyGlow.cpp
     players/MeleeStreak.cpp
+    players/StreakGrades.h
     players/ExitWait.cpp
     party/PowerupCompanion.cpp
     effects/WeaponTrail.cpp

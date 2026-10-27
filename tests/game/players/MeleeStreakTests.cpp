@@ -38,23 +38,26 @@ TEST_CASE("a run of close blows earns the narrator's praise once it pauses",
     CHECK(streak.step(3.5f).empty());
 }
 
-TEST_CASE("a blow that is not counted gives a run under way a second of its quiet back",
+TEST_CASE("a run survives only the quiet it is given, at most the longest",
           "[game][players][streak]") {
     MeleeStreak streak;
-    streak.refresh(); // no run: nothing
-    CHECK_FALSE(streak.running());
-    CHECK(streak.quiet() == 0.0f);
     streak.record(false);
-    CHECK(streak.step(2.0f).empty());
-    REQUIRE(streak.quiet() == 2.0f);
-    streak.refresh();
-    CHECK(streak.quiet() == Approx(2.0f - MeleeStreak::kRefresh));
-    CHECK(streak.count() == 1); // not counted
-    streak.refresh();
-    streak.refresh();
-    CHECK(streak.quiet() == 0.0f); // never below nought
-    CHECK(streak.step(MeleeStreak::kQuiet + 0.1f).empty());
+    CHECK(streak.step(0.9f, 1.0f).empty());
+    CHECK(streak.running());
+    CHECK(streak.step(0.2f, 1.0f).empty()); // past the second: over
+    CHECK_FALSE(streak.running());
     CHECK(streak.count() == 0);
+    // A window past the longest is the longest.
+    streak.record(false);
+    CHECK(streak.step(MeleeStreak::kQuiet + 0.05f, 10.0f).empty());
+    CHECK_FALSE(streak.running());
+    // The original's two, and the longest by default.
+    streak.record(false);
+    CHECK(streak.step(2.05f, MeleeStreak::kOriginalQuiet).empty());
+    CHECK_FALSE(streak.running());
+    streak.record(false);
+    CHECK(streak.step(2.05f).empty());
+    CHECK(streak.running());
 }
 
 } // namespace

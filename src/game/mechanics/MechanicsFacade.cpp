@@ -2,7 +2,9 @@
 
 #include "game/party/PlayerPowerups.h"
 #include "game/party/PlayerRuntime.h"
+#include "game/players/MeleeStreak.h"
 #include "game/players/PowerupEffects.h"
+#include "game/players/StreakGrades.h"
 
 namespace gdl::game {
 
@@ -20,12 +22,19 @@ RunEffect MechanicsFacade::runEffect(BlowSource source, BlowOutcome outcome,
                    ? RunEffect::CountAsOriginal
                    : RunEffect::Nothing;
     }
-    // Nothing struck while the swarm stands still or cannot strike back is earned.
+    if (outcome == BlowOutcome::Hurt) {
+        return RunEffect::Nothing; // only a kill counts
+    }
+    // Nothing felled while the swarm stands still or cannot strike back is earned.
     const PowerupEffects worn = PowerupEffects::of(striker.actor.save().progress().inventory);
     if (PlayerPowerups::timeStopped(players) || worn.invulnerable() || worn.invisible()) {
         return RunEffect::Nothing;
     }
-    return outcome == BlowOutcome::Hurt ? RunEffect::Refresh : RunEffect::Count;
+    return RunEffect::Count;
+}
+
+f32 MechanicsFacade::quietWindow(s32 count) const {
+    return m_settings.aggressorMode ? StreakGrades::quietWindow(count) : MeleeStreak::kOriginalQuiet;
 }
 
 bool MechanicsFacade::generatorTakes(BlowSource source) const {

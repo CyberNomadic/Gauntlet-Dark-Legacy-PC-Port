@@ -7,6 +7,7 @@
 
 #include "game/enemies/SwarmAggression.h"
 #include "game/players/MeleeStreak.h"
+#include "game/players/StreakGrades.h"
 
 namespace {
 using namespace gdl;
@@ -41,7 +42,8 @@ TEST_CASE("the swarm's heat climbs toward the run under way and cools once it is
     CHECK(aggression.frenzied());
     // Past the line there is no end to either: the heat follows the run on, the rage grows.
     pass(aggression, 60.0f, SwarmAggression::kFullRun + 30);
-    const f32 beyond = 75.0f / static_cast<f32>(SwarmAggression::kFullRun);
+    const f32 beyond = static_cast<f32>(SwarmAggression::kFullRun + 30) /
+                       static_cast<f32>(SwarmAggression::kFullRun);
     CHECK(aggression.heat == Approx(beyond).margin(0.01f));
     CHECK(aggression.rage == Approx(0.1f + 60.0f / SwarmAggression::kRageSeconds).margin(0.02f));
     CHECK(aggression.valid());
@@ -107,12 +109,12 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     beyond.heat = 3.0f;
     beyond.rage = 2.0f;
     CHECK(beyond.valid());
-    CHECK(beyond.breedingPace() == Approx(5.4f));
+    CHECK(beyond.breedingPace() == Approx(SwarmAggression::kBreedingCap)); // 5.4 capped
     CHECK(beyond.healthScale() == Approx(4.6f));
     CHECK(beyond.broodScale() == Approx(5.0f));
     CHECK(beyond.speedScale() == Approx(2.6f));
     CHECK(beyond.attackPace() == Approx(3.1f));
-    // The paces stop at seven times, however long the run; the brood and the health do not.
+    // The paces stop at five times, however long the run; the brood and the health do not.
     SwarmAggression extreme;
     extreme.heat = 20.0f;
     extreme.rage = 10.0f;
@@ -128,7 +130,7 @@ TEST_CASE("the swarm's measures grow with the heat and the rage within sane boun
     CHECK_FALSE(wrong.valid());
     wrong.heat = SwarmAggression::kMostMeasure * 2.0f;
     CHECK_FALSE(wrong.valid());
-    CHECK(SwarmAggression::kFullRun == MeleeStreak::kBravery);
+    CHECK(SwarmAggression::kFullRun == StreakGrades::kTop);
 }
 
 } // namespace

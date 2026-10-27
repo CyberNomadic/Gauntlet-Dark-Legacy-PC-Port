@@ -30,7 +30,6 @@ enum class BlowOutcome : u8 {
 /** What a blow does for the striker's run of close blows (`MeleeStreak`). */
 enum class RunEffect : u8 {
     Nothing,
-    Refresh,         ///< gives the run some of its quiet back; counts nothing
     Count,           ///< counts one
     CountAsOriginal, ///< counts as the original's swing did: one, or three when telling
 };
@@ -42,9 +41,9 @@ enum class RunEffect : u8 {
  * own state lives with the system that steps it.
  *
  * Aggressor Mode: the style meter over a run of close blows, counted in kills and generators
- * destroyed, every landed blow giving the run some of its quiet back, none of it under time
- * stop, invulnerability or invisibility; the swarm aggravated by the run; and the generators
- * harmed by swings and shots alone.
+ * destroyed alone, none of them under time stop, invulnerability or invisibility, the run
+ * surviving less quiet the higher its grade; the swarm aggravated by the run; and the
+ * generators harmed by swings and shots alone.
  */
 class MechanicsFacade {
 public:
@@ -64,11 +63,14 @@ public:
     bool aggressorMode() const { return m_settings.aggressorMode; }
 
     /** What a blow of `source` with `outcome`, landed by `striker`, does for their run. In
-     * Aggressor Mode a kill or a generator destroyed counts one and anything else landed
-     * refreshes the run, none of it under time stop, invulnerability or invisibility; out of
-     * the mode the original's rule stands, swings alone, as the original counted them. */
+     * Aggressor Mode a kill or a generator destroyed counts one and nothing else does, none
+     * of it under time stop, invulnerability or invisibility; out of the mode the original's
+     * rule stands, swings alone, as the original counted them. */
     RunEffect runEffect(BlowSource source, BlowOutcome outcome, const PlayerRuntime& striker,
                         std::span<const PlayerRuntime> players) const;
+    /** The quiet a run of `count` survives, in seconds: in Aggressor Mode a step shorter each
+     * grade, three seconds at D down to one at S; out of it the original's two. */
+    f32 quietWindow(s32 count) const;
     /** Whether a blow of `source` harms a generator at all: in Aggressor Mode swings and
      * shots alone. */
     bool generatorTakes(BlowSource source) const;

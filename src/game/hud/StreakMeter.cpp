@@ -93,7 +93,7 @@ f32 StreakMeter::fillOf(s32 count, f32 quiet) {
     }
     // The climb through the grade sets the bar's reach; the quiet drains it to nothing.
     const f32 reach = 0.12f + 0.88f * bandProgress(count);
-    const f32 life = std::clamp(1.0f - quiet / MeleeStreak::kQuiet, 0.0f, 1.0f);
+    const f32 life = std::clamp(1.0f - quiet / StreakGrades::quietWindow(count), 0.0f, 1.0f);
     return reach * life;
 }
 

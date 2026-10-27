@@ -190,7 +190,6 @@ void applyRunEffect(const MechanicsFacade& mechanics, std::span<PlayerRuntime> p
         }
         switch (mechanics.runEffect(source, outcome, runtime, players)) {
         case RunEffect::Nothing: break;
-        case RunEffect::Refresh: runtime.streak.refresh(); break;
         case RunEffect::Count: runtime.streak.record(false); break;
         case RunEffect::CountAsOriginal: runtime.streak.record(telling); break;
         }

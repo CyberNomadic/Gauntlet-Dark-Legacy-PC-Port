@@ -28,18 +28,12 @@ void MeleeStreak::record(bool telling) {
     m_running = true;
 }
 
-void MeleeStreak::refresh() {
-    if (m_running) {
-        m_quiet = std::max(0.0f, m_quiet - kRefresh);
-    }
-}
-
-std::string_view MeleeStreak::step(f32 seconds) {
+std::string_view MeleeStreak::step(f32 seconds, f32 quiet) {
     if (!m_running) {
         return {};
     }
     m_quiet += seconds;
-    if (m_quiet <= kQuiet) {
+    if (m_quiet <= std::clamp(quiet, 0.0f, kQuiet)) {
         return {};
     }
     std::string_view praise;

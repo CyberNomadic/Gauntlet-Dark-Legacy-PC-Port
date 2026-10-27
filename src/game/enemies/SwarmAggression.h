@@ -5,14 +5,14 @@
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
-#include "game/players/MeleeStreak.h"
+#include "game/players/StreakGrades.h"
 
 namespace gdl::game {
 
 /**
  * The swarm's answer to a run of close blows: as the longest run under way grows, the
  * generators breed sooner and keep more out, and the swarm walks and swings quicker and is
- * born tougher, with no end to it: the longer the run, the more. Held at the bravery line,
+ * born tougher, with no end to it: the longer the run, the more. Held at S,
  * a rage sets in and grows for as long as the run holds: it darkens the swarm to red, puts
  * an aura about it and frenzies the generators near the party, which spew births into the
  * whole pool with no regard to any quota or the level's cap. The heat climbs toward the
@@ -21,7 +21,7 @@ namespace gdl::game {
  * breeding are capped; the health and the brood are not. Native state.
  */
 struct SwarmAggression {
-    static constexpr s32 kFullRun = MeleeStreak::kBravery; ///< the run the heat is full at
+    static constexpr s32 kFullRun = StreakGrades::kTop; ///< the run the heat is full at: S
     static constexpr f32 kRise = 0.5f;         ///< heat a second toward a longer run
     static constexpr f32 kCool = 0.2f;         ///< heat a second toward a shorter run
     static constexpr f32 kRageSeconds = 20.0f; ///< at the bravery line, seconds to full rage
@@ -40,9 +40,9 @@ struct SwarmAggression {
     static constexpr f32 kHealthHeat = 0.8f;
     static constexpr f32 kHealthRage = 0.6f;
     /** The most the paces reach, however long the run. */
-    static constexpr f32 kBreedingCap = 7.0f;
-    static constexpr f32 kSpeedCap = 7.0f;
-    static constexpr f32 kAttackCap = 7.0f;
+    static constexpr f32 kBreedingCap = 5.0f;
+    static constexpr f32 kSpeedCap = 5.0f;
+    static constexpr f32 kAttackCap = 5.0f;
     static constexpr Color kRageTint = Color::rgba(165, 30, 30); ///< the swarm at full rage
 
     f32 heat = 0.0f; ///< the longest run as a share of the bravery line, eased, past 1 beyond it

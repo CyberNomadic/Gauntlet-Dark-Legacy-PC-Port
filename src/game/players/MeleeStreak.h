@@ -13,10 +13,10 @@ namespace gdl::game {
 /**
  * The narrator's praise for a run of close blows (pmotion.c 2695, player.c 2553): each blow on
  * an enemy taller than four or on a great one counts one, or three when it kills or is not
- * taken; three quiet seconds after the last (the original's two), a run of thirty earns
- * `S_HEROIC` and one of forty-five `S_BRAVERY`, and the count starts over. The original
- * counted swings alone; the remake's run takes shots, potions, turbo strikes and charges
- * that land as well.
+ * taken; once the quiet after the last outlasts the window the scene gives the run (the
+ * original's two seconds; Aggressor Mode's three at D down to one at S), a run of thirty
+ * earns `S_HEROIC` and one of forty-five `S_BRAVERY`, and the count starts over. What
+ * counts is the mechanics' to say: the original's swings, or Aggressor Mode's kills.
  */
 class MeleeStreak {
     friend void visitNativeState(NativeStateDigest& /*digest*/, const MeleeStreak& /*value*/);
@@ -37,21 +37,19 @@ public:
     static constexpr s32 kTelling = 3;  ///< one that kills, or is not taken (damage_enemy's -1)
     static constexpr s32 kHeroic = 30;  ///< 0x1E
     static constexpr s32 kBravery = 45; ///< 0x2D
-    static constexpr f32 kQuiet = 3.0f; ///< seconds after the last blow; the original's two
-    static constexpr f32 kRefresh = 1.0f; ///< of the quiet, given back by a blow not counted
+    static constexpr f32 kQuiet = 3.0f;         ///< the longest quiet a run survives
+    static constexpr f32 kOriginalQuiet = 2.0f; ///< the original's, out of Aggressor Mode
     static constexpr f32 kWait = 3.0f;  ///< the most the praise waits for the narrator
     static constexpr std::string_view kHeroicVoice = "S_HEROIC";
     static constexpr std::string_view kBraveryVoice = "S_BRAVERY";
 
     /** A counted blow landed; `telling` when it killed or was not taken. */
     void record(bool telling);
-    /** A blow landed that is not counted: gives a run under way `kRefresh` of its quiet
-     * back, keeping it going; nothing without a run. */
-    void refresh();
-    /** Runs the quiet on by `seconds`: the praise earned once it is over, else nothing. */
-    std::string_view step(f32 seconds);
+    /** Runs the quiet on by `seconds`; the run is over once it outlasts `quiet` (at most
+     * `kQuiet`): the praise earned then, else nothing. */
+    std::string_view step(f32 seconds, f32 quiet = kQuiet);
     s32 count() const { return m_count; }
-    /** Seconds since the last blow; the run ends past `kQuiet`. */
+    /** Seconds since the last blow; the run ends past the quiet it is given. */
     f32 quiet() const { return m_quiet; }
     bool running() const { return m_running; }
 

@@ -1,16 +1,20 @@
 #include <array>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/core/Types.h"
 
 #include "game/mechanics/MechanicsFacade.h"
 #include "game/party/PlayerRuntime.h"
+#include "game/players/MeleeStreak.h"
 #include "game/players/PowerupEffects.h"
+#include "game/players/StreakGrades.h"
 
 namespace {
 using namespace gdl;
 using namespace gdl::game;
+using Catch::Approx;
 
 constexpr std::array kSources{BlowSource::Swing,  BlowSource::Shot,   BlowSource::SuperShot,
                               BlowSource::Potion, BlowSource::Turbo,  BlowSource::Charge,
@@ -18,7 +22,7 @@ constexpr std::array kSources{BlowSource::Swing,  BlowSource::Shot,   BlowSource
 constexpr std::array kOutcomes{BlowOutcome::Hurt, BlowOutcome::Killed, BlowOutcome::Destroyed};
 
 TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone count, as the original "
-          "counted them, and anything harms a generator",
+          "counted them, the run has its two seconds and anything harms a generator",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 1> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -36,10 +40,13 @@ TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone count,
         }
         CHECK(off.generatorTakes(source));
     }
+    for (const s32 count : {0, 1, 50, 100, 500}) {
+        CHECK(off.quietWindow(count) == MeleeStreak::kOriginalQuiet);
+    }
 }
 
-TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, any other blow refreshes "
-          "the run, and only swings and shots harm a generator",
+TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, nothing else does, the "
+          "run's quiet shrinks with the grade, and only swings and shots harm a generator",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 1> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -50,20 +57,30 @@ TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, any oth
     CHECK(MechanicsFacade::standard().aggressorMode());
     for (const BlowSource source : kSources) {
         CAPTURE(static_cast<int>(source));
-        CHECK(on.runEffect(source, BlowOutcome::Hurt, players[0], players) == RunEffect::Refresh);
+        CHECK(on.runEffect(source, BlowOutcome::Hurt, players[0], players) == RunEffect::Nothing);
         CHECK(on.runEffect(source, BlowOutcome::Killed, players[0], players) == RunEffect::Count);
         CHECK(on.runEffect(source, BlowOutcome::Destroyed, players[0], players) ==
               RunEffect::Count);
         CHECK(on.generatorTakes(source) ==
               (source == BlowSource::Swing || source == BlowSource::Shot));
     }
+    // Three seconds at D, a half second less a grade, one at S.
+    CHECK(on.quietWindow(0) == StreakGrades::kLongestQuiet);
+    CHECK(on.quietWindow(1) == StreakGrades::kLongestQuiet);
+    CHECK(on.quietWindow(24) == StreakGrades::kLongestQuiet);
+    CHECK(on.quietWindow(25) == Approx(2.5f));
+    CHECK(on.quietWindow(50) == Approx(2.0f));
+    CHECK(on.quietWindow(75) == Approx(1.5f));
+    CHECK(on.quietWindow(100) == StreakGrades::kShortestQuiet);
+    CHECK(on.quietWindow(1000) == StreakGrades::kShortestQuiet);
+    CHECK(StreakGrades::kLongestQuiet == MeleeStreak::kQuiet); // the longest a run survives
     MechanicsFacade switched;
     switched.configure({.aggressorMode = false});
     CHECK_FALSE(switched.aggressorMode());
     CHECK(switched.settings() == MechanicsFacade::Settings{.aggressorMode = false});
 }
 
-TEST_CASE("blows struck under time stop, invulnerability or invisibility do nothing for the run",
+TEST_CASE("kills under time stop, invulnerability or invisibility count nothing",
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 2> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
@@ -71,14 +88,12 @@ TEST_CASE("blows struck under time stop, invulnerability or invisibility do noth
     const MechanicsFacade on;
     REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[0], players) ==
             RunEffect::Count);
-    REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Hurt, players[1], players) ==
-            RunEffect::Refresh);
+    REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[1], players) ==
+            RunEffect::Count);
     // Invulnerable, the first earns nothing; the second is not affected.
     players[0].actor.save().progress().inventory.addPowerup(powerup::kArmor,
                                                             powerup::kInvulnerable, 0, 1);
     CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[0], players) ==
-          RunEffect::Nothing);
-    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Hurt, players[0], players) ==
           RunEffect::Nothing);
     CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[1], players) ==
           RunEffect::Count);
@@ -87,7 +102,7 @@ TEST_CASE("blows struck under time stop, invulnerability or invisibility do noth
                                                             0, 1);
     CHECK(on.runEffect(BlowSource::Turbo, BlowOutcome::Killed, players[1], players) ==
           RunEffect::Nothing);
-    // Time stopped by anyone, nobody's blows do anything.
+    // Time stopped by anyone, nobody's kills count.
     std::array<PlayerRuntime, 2> stopped;
     stopped[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
     stopped[1].actor.spawn(1, {}, nullptr, Vec3{0, 0, 5}, 0);
@@ -95,7 +110,7 @@ TEST_CASE("blows struck under time stop, invulnerability or invisibility do noth
                                                             0, 1);
     CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, stopped[0], stopped) ==
           RunEffect::Nothing);
-    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Hurt, stopped[1], stopped) ==
+    CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Destroyed, stopped[1], stopped) ==
           RunEffect::Nothing);
     // Out of the mode the original's swing counts regardless.
     const MechanicsFacade off{{.aggressorMode = false}};

@@ -15,6 +15,7 @@
 #include "FakeRenderDevice.h"
 #include "game/hud/StreakMeter.h"
 #include "game/players/MeleeStreak.h"
+#include "game/players/StreakGrades.h"
 
 namespace {
 using namespace gdl;
@@ -73,24 +74,28 @@ TEST_CASE("streak grades follow the narrator's thresholds and the bar climbs the
           "[game][hud][streak]") {
     CHECK(StreakMeter::gradeOf(0) == -1);
     CHECK(StreakMeter::gradeOf(1) == 0);
-    CHECK(StreakMeter::gradeOf(9) == 0);
-    CHECK(StreakMeter::gradeOf(10) == 1);
-    CHECK(StreakMeter::gradeOf(20) == 2);
-    CHECK(StreakMeter::gradeOf(MeleeStreak::kHeroic) == 3);
-    CHECK(StreakMeter::gradeOf(MeleeStreak::kBravery) == 4);
+    CHECK(StreakMeter::gradeOf(24) == 0);
+    CHECK(StreakMeter::gradeOf(25) == 1);
+    CHECK(StreakMeter::gradeOf(50) == 2);
+    CHECK(StreakMeter::gradeOf(75) == 3);
+    CHECK(StreakMeter::gradeOf(100) == 4);
     CHECK(StreakMeter::gradeOf(200) == 4);
     CHECK(StreakMeter::kLetters[4] == 'S');
+    CHECK(StreakMeter::kGradeCounts == StreakGrades::kCounts);
     CHECK(StreakMeter::bandProgress(0) == 0.0f);
-    CHECK(StreakMeter::bandProgress(15) == Approx(0.5f));
-    CHECK(StreakMeter::bandProgress(45) == 1.0f);
-    CHECK(StreakMeter::bandProgress(99) == 1.0f);
-    // The climb through the grade sets the reach; the quiet drains it to nothing.
-    const f32 full = StreakMeter::fillOf(15, 0.0f);
+    CHECK(StreakMeter::bandProgress(13) == Approx(0.5f));
+    CHECK(StreakMeter::bandProgress(100) == 1.0f);
+    CHECK(StreakMeter::bandProgress(150) == 1.0f);
+    // The climb through the grade sets the reach; the grade's quiet drains it to nothing,
+    // three seconds at D and one at S.
+    const f32 full = StreakMeter::fillOf(13, 0.0f);
     CHECK(full == Approx(0.12f + 0.88f * 0.5f));
-    CHECK(StreakMeter::fillOf(15, MeleeStreak::kQuiet * 0.5f) == Approx(full * 0.5f));
-    CHECK(StreakMeter::fillOf(15, MeleeStreak::kQuiet) == 0.0f);
+    CHECK(StreakMeter::fillOf(13, 1.5f) == Approx(full * 0.5f));
+    CHECK(StreakMeter::fillOf(13, 3.0f) == 0.0f);
     CHECK(StreakMeter::fillOf(0, 0.0f) == 0.0f);
-    CHECK(StreakMeter::fillOf(45, 0.0f) == 1.0f);
+    CHECK(StreakMeter::fillOf(100, 0.0f) == 1.0f);
+    CHECK(StreakMeter::fillOf(100, 0.5f) == Approx(0.5f));
+    CHECK(StreakMeter::fillOf(100, 1.0f) == 0.0f);
     CHECK(StreakMeter::shakeOf(-1) == 0.0f);
     CHECK(StreakMeter::shakeOf(4) > StreakMeter::shakeOf(1));
     CHECK(StreakMeter::letterScaleOf(4) > StreakMeter::letterScaleOf(0));
@@ -123,7 +128,7 @@ TEST_CASE("a run brings the meter in and every blow punches it while a new grade
     f.meter.animate(0.05f);
     CHECK(f.meter.look(0).punch == Approx(0.75f));
     const f32 shakeBefore = f.meter.look(0).shake;
-    f.see(0, 10, true);
+    f.see(0, 25, true);
     look = f.meter.look(0);
     CHECK(look.grade == 1);
     CHECK(look.rankFlash == StreakMeter::kRankFlash);
@@ -145,13 +150,13 @@ TEST_CASE("a run brings the meter in and every blow punches it while a new grade
 TEST_CASE("the run's end lingers the verdict then the meter fades and forgets the run",
           "[game][hud][streak]") {
     Fixture f;
-    f.see(0, 12, true, 12);
+    f.see(0, 30, true, 30);
     f.pass(0.5f);
-    f.see(0, 0, false, 12);
+    f.see(0, 0, false, 30);
     auto look = f.meter.look(0);
     CHECK(look.ended);
     CHECK(look.grade == 1);
-    CHECK(look.count == 12);
+    CHECK(look.count == 30);
     CHECK(look.punch == 1.0f);
     f.pass(StreakMeter::kLinger * 0.5f);
     look = f.meter.look(0);
@@ -166,7 +171,7 @@ TEST_CASE("the run's end lingers the verdict then the meter fades and forgets th
     CHECK_FALSE(look.ended);
     CHECK(look.grade == -1);
     CHECK(look.count == 0);
-    CHECK(look.best == 12);
+    CHECK(look.best == 30);
     CHECK_FALSE(f.meter.visible());
     // A seat no longer watched leaves without a verdict.
     f.see(1, 5, true);
@@ -229,14 +234,14 @@ TEST_CASE("the meter draws each local seat's run stacked in the upper left",
     }
     // A second seat's meter goes under the first; a record announcement adds its shower.
     const std::array<StreakView, 2> both{StreakView{0, 12, 0.0f, true, 12},
-                                         StreakView{1, 46, 0.0f, true, 46}};
+                                         StreakView{1, 100, 0.0f, true, 100}};
     f.meter.observe(both);
     f.pass(0.5f);
     const usize two = f.drawn();
     CHECK(two > single);
     const Vec2 twoRows = f.lowest();
     CHECK(twoRows.y > oneRow.y + static_cast<f32>(StreakMeter::kRowHeight) * 0.5f);
-    f.see(1, 46, true, 46); // the first seat gone, the second row climbs
+    f.see(1, 100, true, 100); // the first seat gone, the second row climbs
     f.pass(1.0f);
     CHECK(f.drawn() > 0);
     CHECK(f.lowest().y < twoRows.y - static_cast<f32>(StreakMeter::kRowHeight) * 0.5f);

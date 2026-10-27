@@ -433,7 +433,8 @@ void PlayScene::praiseStreaks(f32 seconds) {
         // The record follows the run as it grows, so the meter can announce it live.
         s32& best = runtime.actor.save().progress().lifetime.bestStreak;
         best = std::max(best, runtime.streak.count());
-        const std::string_view praise = runtime.streak.step(seconds);
+        const std::string_view praise =
+            runtime.streak.step(seconds, m_mechanics.quietWindow(runtime.streak.count()));
         if (!praise.empty() && !wizard && m_audio.narrationRoom(MeleeStreak::kWait)) {
             const auto audioScope =
                 m_audio.soundScope({34, 0, 1, static_cast<u8>(runtime.actor.player())}, 2);
