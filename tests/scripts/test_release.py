@@ -13,7 +13,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "release"))
 from installer.install import retry_locked
-from publish_release import changelog, check_publication, main as publish_main, publication_is_prerelease, require_green_ci, require_new_version, validated_assets
+from publish_release import RETAINED_RELEASES, changelog, check_publication, main as publish_main, publication_is_prerelease, prune_releases, require_green_ci, require_new_version, retired_releases, validated_assets
 from release import build_release, check_frozen_installer, dependency_notices, digest, installer_notices, make_payload, networking_notices, project_notices, public_runtime_files
 from installer.releases import runtime_name
 
@@ -85,6 +85,13 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual([name for _, name in files], [
             "gauntlet.exe", "data/config.json", "data/text/en.json", "licenses/lz4.txt"])
         self.assertEqual(files[-1][0], self.root / "data/licenses/lz4.txt")
+
+    def test_public_runtime_keeps_native_music_dependency_notices(self):
+        names = [f"data/licenses/{name}.txt" for name in ("amuse", "fmt", "boost-nowide")]
+        planned = [(self.root / name, Path(name)) for name in names]
+        self.assertEqual(
+            public_runtime_files(planned, set(names)),
+            [(self.root / name, name.removeprefix("data/")) for name in names])
 
     def test_dependency_notices_use_configured_triplet_and_install_directory(self):
         binary = self.root / "build"
@@ -274,7 +281,11 @@ class ReleaseTests(unittest.TestCase):
 
     def test_preflight_is_read_only_and_publication_creates_but_never_updates(self):
         def answer(command, **_):
-            return "completed\tsuccess\n" if "workflows/ci.yml" in command[2] else ""
+            if "workflows/ci.yml" in command[2]:
+                return "completed\tsuccess\n"
+            if "tag_name, (.draft" in command[-1]:
+                return "v0.1.0-alpha.1\tfalse\n"
+            return ""
         with mock.patch.dict(os.environ, {
                 "GITHUB_EVENT_NAME": "push", "GITHUB_REF": f"refs/tags/{self.tag}",
                 "RELEASE_TAG": self.tag, "GITHUB_SHA": "abc123"}), mock.patch(
@@ -295,11 +306,31 @@ class ReleaseTests(unittest.TestCase):
                     self.assertNotIn("--generate-notes", command)
                 publish.side_effect = inspect_notes
                 publish_main([])
-            publish.assert_called_once()
+            publish.assert_called_once() # one release up: nothing to retire
             command = publish.call_args.args[0]
             self.assertEqual(command[:4], ["gh", "release", "create", self.tag])
             self.assertIn("--verify-tag", command)
             self.assertNotIn("--clobber", command)
+
+    def test_only_the_newest_ten_versions_stay_published(self):
+        rows = [(f"v1.{minor}.0-alpha.3", False) for minor in range(12)]
+        rows += [("v0.9.0", False), ("v2.0.0-alpha.1", True), ("nightly", False)]
+        retired = retired_releases(rows)
+        self.assertEqual(RETAINED_RELEASES, 10)
+        # The twelve alphas and the stable 0.9.0 are thirteen versions: the three oldest go,
+        # oldest last; the draft is neither counted nor deleted and a tag with no version stays.
+        self.assertEqual(retired, ["v1.1.0-alpha.3", "v1.0.0-alpha.3", "v0.9.0"])
+        self.assertEqual(retired_releases(rows, keep=13), [])
+        self.assertEqual(retired_releases([], keep=1), [])
+        listing = "\n".join(f"{tag}\t{str(draft).lower()}" for tag, draft in rows) + "\n"
+        with mock.patch("publish_release.subprocess.check_output", return_value=listing) as query, mock.patch(
+                "publish_release.subprocess.run") as delete:
+            self.assertEqual(prune_releases(), retired)
+            self.assertIn("--paginate", query.call_args.args[0])
+            self.assertEqual([call.args[0] for call in delete.call_args_list],
+                             [["gh", "release", "delete", tag, "--yes"] for tag in retired])
+            for call in delete.call_args_list:
+                self.assertNotIn("--cleanup-tag", call.args[0])
 
     def test_release_waits_for_green_ci_on_the_tagged_commit(self):
         # A run still going is polled; success releases, anything else refuses.
@@ -343,8 +374,10 @@ class ReleaseTests(unittest.TestCase):
                 f"# {tag[1:]}\n\n## Added\n\n## Fixed\n\n- Reviewed changes.\n", encoding="utf-8")
             with self.subTest(tag=tag), mock.patch("publish_release.check_publication", return_value=tag), mock.patch(
                     "publish_release.validated_assets", return_value=[self.root / "setup.exe"]), mock.patch(
+                    "publish_release.subprocess.check_output", return_value=f"{tag}\tfalse\n"), mock.patch(
                     "publish_release.subprocess.run") as publish:
                 publish_main([])
+                publish.assert_called_once()
                 command = publish.call_args.args[0]
                 self.assertEqual(command[:4], ["gh", "release", "create", tag])
                 self.assertEqual("--prerelease" in command, prerelease)
@@ -366,8 +399,10 @@ class ReleaseTests(unittest.TestCase):
         policy.write_text(json.dumps({"version": self.tag[1:], "prerelease": False}), encoding="utf-8")
         with mock.patch("publish_release.check_publication", return_value=self.tag), mock.patch(
                 "publish_release.validated_assets", return_value=[self.root / "setup.exe"]), mock.patch(
+                "publish_release.subprocess.check_output", return_value=f"{self.tag}\tfalse\n"), mock.patch(
                 "publish_release.subprocess.run") as publish:
             publish_main([])
+        publish.assert_called_once()
         command = publish.call_args.args[0]
         self.assertEqual(command[:4], ["gh", "release", "create", self.tag])
         self.assertIn("--latest", command)

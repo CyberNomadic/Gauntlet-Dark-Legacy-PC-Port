@@ -1,4 +1,8 @@
-"""CI-only publication of both verified installers; never overwrite an existing release."""
+"""CI-only publication of both verified installers; never overwrite an existing release.
+
+Once a version is published, only the newest RETAINED_RELEASES stay on GitHub: every older
+release is deleted, its tag kept, so the releases page holds the versions worth downloading.
+"""
 
 import argparse
 import json
@@ -12,6 +16,8 @@ from release import ROOT, digest, validate_tag
 from installer.install import payload_inventory
 from installer.releases import runtime_name
 from installer.versions import is_prerelease, version_order
+
+RETAINED_RELEASES = 10
 
 
 def require_new_version(tag, existing_tags):
@@ -108,6 +114,31 @@ def publication_is_prerelease(tag):
     return policy["prerelease"]
 
 
+def retired_releases(rows, keep=RETAINED_RELEASES):
+    """The tags of the published releases past the `keep` newest versions, oldest last.
+    `rows` pair each release's tag with whether it is a draft; drafts are never counted
+    nor deleted, and a tag that is not a version is left alone."""
+    published = sorted((tag for tag, draft in rows if not draft and version_order(tag) is not None),
+                       key=version_order, reverse=True)
+    return published[keep:]
+
+
+def prune_releases(keep=RETAINED_RELEASES):
+    """Deletes every published release past the `keep` newest, keeping its tag."""
+    listed = subprocess.check_output(
+        ["gh", "api", "--paginate", "repos/{owner}/{repo}/releases", "--jq",
+         ".[] | [.tag_name, (.draft | tostring)] | @tsv"],
+        cwd=ROOT, text=True).splitlines()
+    rows = []
+    for line in listed:
+        tag, _, draft = line.partition("\t")
+        rows.append((tag, draft == "true"))
+    retired = retired_releases(rows, keep)
+    for tag in retired:
+        subprocess.run(["gh", "release", "delete", tag, "--yes"], cwd=ROOT, check=True)
+    return retired
+
+
 def validated_assets(folder, tag):
     """Require both platform packages and their exact checksum inventories before publishing."""
     assets = []
@@ -150,6 +181,8 @@ def main(argv=None):
         subprocess.run(["gh", "release", "create", tag, "--verify-tag", *(["--prerelease"] if prerelease else ["--latest"]),
                         "--title", f"Gauntlet Dark Legacy {tag}", "--notes-file", str(path),
                         *map(str, assets)], cwd=ROOT, check=True)
+    for retired in prune_releases():
+        print(f"Retired release {retired}; its tag remains")
 
 
 if __name__ == "__main__":
